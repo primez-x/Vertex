@@ -1,5 +1,13 @@
 # Implementation status
 
+The subsequent workspace document-history integration passes all three focused
+tests in both Debug and Release. Successful edit, undo and redo publication now
+swaps the document and its ordered event history together. Validation checks
+the retained baseline, complete revision coverage, unique event IDs and actual
+navigation provenance; rejected tickets preserve both states. This is an internal
+document transition log, not the persisted workspace lifecycle ledger. The full
+integrated suite below predates this addition.
+
 The v24e full integrated build passes 60/60 tests in Debug (74.01 seconds) and
 Release (16.08 seconds). All 196 recorded source inputs remain unchanged across
 the builds/tests, and 116 executable hashes are recorded. Recovery checks cover

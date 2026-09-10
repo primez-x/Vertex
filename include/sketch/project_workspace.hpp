@@ -1,12 +1,14 @@
 #pragma once
 
 #include "sketch/document.hpp"
+#include "sketch/workspace_document_history.hpp"
 
 #include <cstdint>
 #include <memory>
 #include <string>
 
 namespace sketch {
+namespace detail { struct WorkspaceDocumentState; }
 
 class ProjectWorkspace;
 
@@ -47,6 +49,7 @@ public:
     [[nodiscard]] const std::string& identity() const noexcept;
     [[nodiscard]] std::uint64_t epoch() const noexcept;
     [[nodiscard]] DocumentSnapshot snapshot() const;
+    [[nodiscard]] WorkspaceDocumentHistory document_history() const;
     [[nodiscard]] PreparedWorkspaceEdit prepare(const Command& command) const;
     [[nodiscard]] PreparedWorkspaceEdit prepare_undo() const;
     [[nodiscard]] PreparedWorkspaceEdit prepare_redo() const;
@@ -57,7 +60,7 @@ private:
     [[nodiscard]] PreparedWorkspaceEdit prepare_impl(
         Operation operation, const Command* command) const;
 
-    std::unique_ptr<Document> document_;
+    std::unique_ptr<detail::WorkspaceDocumentState> state_;
     const std::string identity_;
     std::uint64_t epoch_ = 0;
 };

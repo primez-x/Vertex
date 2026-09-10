@@ -44,12 +44,17 @@ void check_publication() {
     require(workspace.epoch() == 1 && workspace.snapshot().revision() == committed &&
                 workspace.snapshot().entities().at("label").properties.at("text") == "First",
             "publication must use sealed candidate exactly once");
+    require(workspace.document_history().events.size() == 1,
+            "successful publication must include exactly one history event");
+    validate_workspace_document_history(workspace.snapshot(), workspace.document_history());
     const auto digest = document_snapshot_digest(workspace.snapshot());
     rejected([&] { (void)workspace.commit(first); });
     rejected([&] { (void)first.preview(); });
     rejected([&] { (void)workspace.commit(stale); });
     require(workspace.epoch() == 1 && document_snapshot_digest(workspace.snapshot()) == digest,
             "rejected commits must preserve complete current state");
+    require(workspace.document_history().events.size() == 1 && foreign.document_history().events.empty(),
+            "rejected tickets cannot append events to either workspace");
     auto undo = workspace.prepare_undo();
     (void)workspace.commit(undo);
     require(workspace.epoch() == 2 && workspace.snapshot().entities() == initial.entities(),
@@ -61,6 +66,14 @@ void check_publication() {
     require(workspace.epoch() == 3 &&
                 workspace.snapshot().entities().at("label").properties.at("text") == "First",
             "moved redo ticket must publish original retained IDs and values");
+    const auto history = workspace.document_history();
+    require(history.events.size() == 3 && history.events[1].kind == WorkspaceDocumentEventKind::undo &&
+                history.events[2].kind == WorkspaceDocumentEventKind::redo,
+            "document navigation must publish ordered typed events");
+    validate_workspace_document_history(workspace.snapshot(), history);
+    auto detached_history = history;
+    detached_history.events.clear();
+    require(workspace.document_history() == history, "history snapshots must be detached");
     require(document_snapshot_digest(document.snapshot()) == document_snapshot_digest(initial),
             "workspace must not retain mutable access to source Document");
 }
