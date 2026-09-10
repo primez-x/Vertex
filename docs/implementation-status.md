@@ -25,8 +25,13 @@ The version-one workspace-history codec now preserves global navigation,
 immutable input references, explicit pointer clearing, independent counters and
 opaque extensions. Unknown positive outer or nested versions preserve the whole
 bounded envelope. Encoding and decoding share wire admission checks; aggregate
-work rejection precedes owner replay. Cross-record generation checks and archive
-loading remain pending. See `workspace-history-format.md` for the wire contract.
+work rejection precedes owner replay. The recovery-ledger validator now checks
+record uniqueness, required history, archive role, document anchors and exact
+cross-record epoch/content/checkpoint agreement. Unknown kinds or versions and
+role mismatches preserve the complete opaque ledger. Combined borrowed document,
+wrapper and payload budgets precede copies and replay. See
+`workspace-history-format.md` and `recovery-ledger.md` for the value contracts.
+SQLite v4 persistence and archive loading remain pending.
 
 Workspace navigation now orders document commands, session activation and
 discard and finish in one in-memory history. Undo/redo restores exact archived drafts,
@@ -56,9 +61,9 @@ Capture grants no save acknowledgement or filesystem ownership authority.
 Persisted counters, desktop routing, background I/O and save watermarks remain
 to be connected.
 
-The v24l full integrated checkpoint passes 69/69 tests in Debug (78.30 seconds)
-and Release (15.73 seconds). All 217
-recorded source inputs remained unchanged across those builds/tests, and 134
+The v24m full integrated checkpoint passes 70/70 tests in Debug (78.13 seconds)
+and Release (15.81 seconds). All 220
+recorded source inputs remained unchanged across those builds/tests, and 136
 executable hashes are recorded. Recovery checks cover
 all 18 action kinds, both modes, phases, construction, receipt encoding,
 commits, exact checkpoint/history behavior, source bindings, active/recovery-copy
@@ -83,6 +88,10 @@ workspace finish suites pass in Debug and Release after this change. The v24k
 full-suite checkpoint includes Revise Input, combined slot validation and
 aggregate resource admission. The later v24l checkpoint adds the workspace-history
 wire codec, malformed-record checks and encoder/decoder admission regressions.
+The v24m checkpoint additionally covers aggregate ledger validation in both
+drawing modes, including cross-record corruption, opaque preservation and
+cumulative resource limits. Independent source review found no actionable
+issues in the internal ledger validator; disk persistence was outside that scope.
 The in-memory finish implementation passed independent source review. Subsequent
 test-only additions verify mixed finish/edit navigation across the baseline and
 validate the Document history projection after navigation; the finish suite was

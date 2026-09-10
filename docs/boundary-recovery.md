@@ -379,12 +379,16 @@ evidence of a saved or restart-recoverable aggregate project.
 
 This record codec does not establish archive validity by itself: record
 uniqueness, workspace-history relationships, archive role and the aggregate
-digest still require the enclosing ledger validator. Source freshness is
+digest require enclosing validation. The internal `recovery_ledger.hpp`
+validator now implements uniqueness, relationships, role handling, document
+anchors and shared-counter agreement; aggregate disk hashing is still pending.
+See `recovery-ledger.md` for its contract and remaining storage work. Source freshness is
 checked separately against the target document; stale records remain readable.
 The enclosing workspace must reserve record and ledger overhead when admitting
 live edits. A checkpoint that fits its standalone budget does not by itself
-prove that the combined archive fits its budget; this integration gate remains
-open until aggregate admission is implemented and tested at the limits.
+prove that the combined archive fits its budget. Ledger decoding now performs
+combined admission, but live-edit admission and storage publication still need
+to use that boundary; this integration gate remains open.
 
 Known record envelopes validate positive integer schema and replay versions,
 required fields, field types, references, and resource limits. Missing,
