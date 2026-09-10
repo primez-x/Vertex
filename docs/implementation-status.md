@@ -15,7 +15,13 @@ unrecorded edits, revision provenance and reachable redo. Each finish is also
 reconstructed and compared with its actual document delta. Historical prefixes
 retain their original editability restrictions, including abandoned unsupported
 history; a review regression covers restrictions before and after a finish.
-Aggregate admission, generation checks, codecs and archive loading remain pending.
+Aggregate typed-state admission now runs before combined recovery validation.
+It charges shared inputs once, distinct copies separately, and bounds retained
+document data and estimated validation work. Raw preflight rejects oversized
+borrowed fields and incompatible action payloads before copying them; bounded
+JSON counting avoids a full serialized temporary. Allocation-sensitive tests
+cover oversized escaped JSON and classification/option payloads.
+Generation checks, wire codecs and archive loading remain pending.
 
 Workspace navigation now orders document commands, session activation and
 discard and finish in one in-memory history. Undo/redo restores exact archived drafts,
@@ -45,9 +51,9 @@ Capture grants no save acknowledgement or filesystem ownership authority.
 Persisted counters, desktop routing, background I/O and save watermarks remain
 to be connected.
 
-The v24j full integrated checkpoint passes 67/67 tests in Debug (78.95 seconds)
-and Release (16.88 seconds). All 211
-recorded source inputs remained unchanged across those builds/tests, and 130
+The v24k full integrated checkpoint passes 68/68 tests in Debug (77.58 seconds)
+and Release (16.34 seconds). All 214
+recorded source inputs remained unchanged across those builds/tests, and 132
 executable hashes are recorded. Recovery checks cover
 all 18 action kinds, both modes, phases, construction, receipt encoding,
 commits, exact checkpoint/history behavior, source bindings, active/recovery-copy
@@ -68,8 +74,9 @@ Explicit Revise Input is implemented in memory: canonical replay regenerates
 IDs, preserves local history/counter floors and opaque extensions, and records
 the original retired namespace and finish event on a fresh activation bound to
 the current document. It leaves the retired input intact. Focused replay and
-workspace finish suites pass in Debug and Release after this change. The v24j
-full-suite checkpoint includes Revise Input and combined slot validation.
+workspace finish suites pass in Debug and Release after this change. The v24k
+full-suite checkpoint includes Revise Input, combined slot validation and
+aggregate resource admission.
 The in-memory finish implementation passed independent source review. Subsequent
 test-only additions verify mixed finish/edit navigation across the baseline and
 validate the Document history projection after navigation; the finish suite was

@@ -7,6 +7,8 @@
 #include <initializer_list>
 #include <limits>
 #include <set>
+#include <ostream>
+#include <streambuf>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -75,10 +77,28 @@ void add_budget(std::size_t& value, std::size_t amount,
     if (value > maximum) invalid(std::string(label) + " exceeds the recovery resource budget");
 }
 
-void enforce_budget(const Json& value, const BoundaryAuthoringRecoveryLimits& limits) {
+class CountingJsonBuffer final : public std::streambuf {
+public:
+    explicit CountingJsonBuffer(std::size_t limit) : limit_(limit) {}
+    std::size_t count{};
+private:
+    std::size_t limit_;
+    std::streamsize xsputn(const char*, std::streamsize amount) override {
+        if (amount < 0) invalid("negative JSON serialization length");
+        add_budget(count, static_cast<std::size_t>(amount), limit_, "recovery JSON bytes");
+        return amount;
+    }
+    int_type overflow(int_type value) override {
+        if (!traits_type::eq_int_type(value, traits_type::eof()))
+            add_budget(count, 1, limit_, "recovery JSON bytes");
+        return traits_type::not_eof(value);
+    }
+};
+std::size_t enforce_budget(const Json& value, const BoundaryAuthoringRecoveryLimits& limits) {
     validate_limits(limits);
     std::size_t value_count = 0;
     std::size_t string_bytes = 0;
+    std::size_t minimum_bytes = 0;
 
     struct Frame { const Json* value; std::size_t depth; };
     std::vector<Frame> pending{{&value, 0}};
@@ -87,29 +107,39 @@ void enforce_budget(const Json& value, const BoundaryAuthoringRecoveryLimits& li
         const auto& node = *frame.value;
         if (frame.depth > limits.max_json_depth) invalid("recovery JSON depth exceeds its budget");
         add_budget(value_count, 1, limits.max_json_values, "recovery JSON values");
+        add_budget(minimum_bytes, 1, limits.max_encoded_bytes, "minimum JSON bytes");
         if (node.is_discarded() || node.is_binary() ||
             (node.is_number_float() && !std::isfinite(node.get<double>())))
             invalid("recovery JSON contains a nonportable value");
         if (node.is_string()) {
             add_budget(string_bytes, node.get_ref<const std::string&>().size(),
                        limits.max_string_bytes, "recovery JSON strings");
+            add_budget(minimum_bytes, node.get_ref<const std::string&>().size(),
+                       limits.max_encoded_bytes, "minimum JSON bytes");
         }
         if (node.is_structured()) {
             // Reject breadth before allocating the traversal stack.
             const auto remaining = limits.max_json_values - std::min(value_count, limits.max_json_values);
             if (pending.size() > remaining || node.size() > remaining - pending.size())
                 invalid("recovery JSON values exceed their budget");
+            const auto bytes_remaining = limits.max_encoded_bytes - minimum_bytes;
+            if (pending.size() > bytes_remaining || node.size() > bytes_remaining - pending.size())
+                invalid("recovery JSON breadth exceeds its byte budget");
             for (const auto& child : node.items()) {
-                if (node.is_object()) add_budget(string_bytes, child.key().size(),
-                                                 limits.max_string_bytes, "recovery JSON strings");
+                if (node.is_object()) {
+                    add_budget(string_bytes, child.key().size(), limits.max_string_bytes, "recovery JSON strings");
+                    add_budget(minimum_bytes, child.key().size(), limits.max_encoded_bytes, "minimum JSON bytes");
+                }
                 pending.push_back({&child.value(), frame.depth + 1});
             }
         }
     }
-    const auto serialized = value.dump();
-    if (serialized.size() > limits.max_encoded_bytes) {
-        invalid("recovery JSON size exceeds its budget");
-    }
+    CountingJsonBuffer buffer(limits.max_encoded_bytes);
+    std::ostream output(&buffer);
+    output.exceptions(std::ios::badbit | std::ios::failbit);
+    try { output << value; }
+    catch (const std::ios_base::failure&) { invalid("recovery JSON size exceeds its budget"); }
+    return buffer.count;
 }
 
 std::string read_string(const Json& value, std::string_view label) {
@@ -672,6 +702,66 @@ BoundaryAuthoringAction read_action(const Json& value,
     return result;
 }
 
+void preflight_action_fields(const BoundaryAuthoringAction& action,
+                             const BoundaryAuthoringRecoveryLimits& limits) {
+    bool classification = false, point = false, receipt = false, dimension = false, chain = false;
+    switch (action.kind) {
+    case BoundaryAuthoringActionKind::set_classification:
+    case BoundaryAuthoringActionKind::classify_current_chain:
+    case BoundaryAuthoringActionKind::classify_last_chain: classification = true; break;
+    case BoundaryAuthoringActionKind::anchor: point = true; break;
+    case BoundaryAuthoringActionKind::pen_up:
+    case BoundaryAuthoringActionKind::pen_down: break;
+    case BoundaryAuthoringActionKind::line_heading:
+    case BoundaryAuthoringActionKind::line_rise_run:
+    case BoundaryAuthoringActionKind::line_relative_turn:
+    case BoundaryAuthoringActionKind::line_closure:
+    case BoundaryAuthoringActionKind::line_to_point:
+    case BoundaryAuthoringActionKind::arc_chord_angle:
+    case BoundaryAuthoringActionKind::arc_chord_height:
+    case BoundaryAuthoringActionKind::arc_chord_length:
+    case BoundaryAuthoringActionKind::arc_start_tangent: receipt = true; break;
+    case BoundaryAuthoringActionKind::manual_dimension:
+    case BoundaryAuthoringActionKind::automatic_dimension: dimension = true; break;
+    case BoundaryAuthoringActionKind::close_chain: chain = true; break;
+    default: invalid("unknown action kind during resource preflight");
+    }
+    if (action.classification.has_value() != classification || action.point.has_value() != point ||
+        action.receipt.has_value() != receipt || action.dimension.has_value() != dimension ||
+        action.chain.has_value() != chain)
+        invalid("action has incompatible optional payloads");
+    std::size_t strings = 0;
+    const auto text = [&](const std::string& value) {
+        add_budget(strings, value.size(), std::min(limits.max_string_bytes, limits.max_encoded_bytes), "action raw strings");
+    };
+    const auto receipt_strings = [&](const ConstructionReceipt& r) {
+        text(r.segment_id);
+        for (const auto* q : {&r.distance, &r.rise, &r.run, &r.height, &r.arc_length})
+            if (*q) text((*q)->original_expression);
+        for (const auto* a : {&r.heading, &r.turn, &r.angle, &r.tangent, &r.sweep})
+            if (*a) { text((*a)->original_expression); text((*a)->normalized_expression); }
+    };
+    const auto dimension_strings = [&](const BoundaryDimension& d) { text(d.id); text(d.boundary_id); text(d.segment_id); };
+    if (action.generated_ids.size() > limits.max_generated_ids_per_action ||
+        action.generated_ids.size() > limits.max_json_values || action.generated_ids.size() > limits.max_encoded_bytes / 3)
+        invalid("action identity collection exceeds preallocation budget");
+    for (const auto& id : action.generated_ids) text(id);
+    if (action.classification) text(*action.classification);
+    if (action.receipt) receipt_strings(*action.receipt);
+    if (action.dimension) dimension_strings(*action.dimension);
+    if (action.chain) {
+        const auto& c = *action.chain;
+        if (c.edges.size() > limits.max_chain_edges || c.dimensions.size() > limits.max_dimensions_per_chain ||
+            c.edges.size() > limits.max_json_values || c.dimensions.size() > limits.max_json_values ||
+            c.edges.size() > limits.max_encoded_bytes / 64 || c.dimensions.size() > limits.max_encoded_bytes / 64)
+            invalid("action chain collection exceeds preallocation budget");
+        text(c.boundary_id); text(c.type); text(c.classification);
+        for (const auto& edge : c.edges) {
+            text(edge.segment_id); text(edge.start_vertex_id); text(edge.end_vertex_id); receipt_strings(edge.receipt);
+        }
+        for (const auto& d : c.dimensions) dimension_strings(d);
+    }
+}
 void validate_checkpoint_resource_shape(const BoundaryAuthoringCheckpoint& checkpoint,
                                         const BoundaryAuthoringRecoveryLimits& limits) {
     if (checkpoint.actions.size() > limits.max_actions) {
@@ -682,6 +772,7 @@ void validate_checkpoint_resource_shape(const BoundaryAuthoringCheckpoint& check
     }
     std::size_t total_generated_ids = 0;
     for (const auto& action : checkpoint.actions) {
+        preflight_action_fields(action, limits);
         if (action.generated_ids.size() > limits.max_generated_ids_per_action) {
             invalid("action generated identity count exceeds its recovery budget");
         }
@@ -826,8 +917,8 @@ std::size_t scaled_bytes(std::size_t count, std::size_t size) {
 
 BoundaryAuthoringResourceUsage measure_wire(const Json& value,
                                             const BoundaryAuthoringResourcePolicy& policy) {
-    enforce_budget(value, policy);
     BoundaryAuthoringResourceUsage usage;
+    usage.encoded_bytes = enforce_budget(value, policy);
     struct Item { const Json* value; std::size_t depth; };
     std::vector<Item> stack{{&value, 0}};
     while (!stack.empty()) {
@@ -843,16 +934,26 @@ BoundaryAuthoringResourceUsage measure_wire(const Json& value,
             }
         }
     }
-    usage.encoded_bytes = value.dump().size();
     return usage;
 }
 }
 
-BoundaryAuthoringResourceUsage authoring_context_usage(
+BoundaryAuthoringResourceUsage measure_authoring_recovery_json(
+    const nlohmann::json& value, const BoundaryAuthoringResourcePolicy& policy) {
+    return measure_wire(value, policy);
+}
+
+namespace {
+BoundaryAuthoringResourceUsage measure_context_wire(
     const BoundaryAuthoringOptions& options, BoundaryAuthoringMode mode,
     std::string_view identity, const Json& extensions,
     const BoundaryAuthoringResourcePolicy& policy) {
     if (!extensions.is_object()) invalid("recovery extensions must be an object");
+    std::size_t raw_strings = 0;
+    for (const std::string_view value : {identity, std::string_view(options.default_boundary_type),
+        std::string_view(options.boundary_id_prefix), std::string_view(options.vertex_id_prefix),
+        std::string_view(options.segment_id_prefix), std::string_view(options.dimension_id_prefix)})
+        add_budget(raw_strings, value.size(), std::min(policy.max_string_bytes, policy.max_encoded_bytes), "context raw strings");
     // Check the caller-owned tree before copying it into the context. This
     // iterative walk rejects excessive depth before JSON copy/dump recursion.
     enforce_budget(extensions, policy);
@@ -867,17 +968,12 @@ BoundaryAuthoringResourceUsage authoring_context_usage(
     // Float serialization is bounded by 32 bytes per finite double, including
     // sign/exponent. Reserve pointer changes and counter width permanently.
     add_budget(usage.encoded_bytes, 64, policy.max_encoded_bytes, "recovery context");
-    usage.retained_history_bytes = scaled_bytes(usage.encoded_bytes, 8);
-    add_budget(usage.retained_history_bytes, sizeof(BoundaryAuthoringSession),
-               policy.max_retained_history_bytes, "context retained bytes");
-    usage.materialization_bytes = usage.retained_history_bytes;
-    usage.operation_bytes = usage.retained_history_bytes;
-    validate_authoring_usage(usage, policy);
     return usage;
 }
 
-BoundaryAuthoringResourceUsage authoring_action_usage(
+BoundaryAuthoringResourceUsage measure_action_wire(
     const BoundaryAuthoringAction& action, const BoundaryAuthoringResourcePolicy& policy) {
+    preflight_action_fields(action, policy);
     auto usage = measure_wire(write_action(action), policy);
     usage.json_depth += 2; // envelope / actions / action
     add_budget(usage.encoded_bytes, 1, policy.max_encoded_bytes, "action delimiter");
@@ -895,6 +991,27 @@ BoundaryAuthoringResourceUsage authoring_action_usage(
             !boundary_authoring_recovery_checked_add(usage.replay_work, 1, usage.replay_work))
             invalid("closure work overflow");
     }
+    return usage;
+}
+}
+
+BoundaryAuthoringResourceUsage authoring_context_usage(
+    const BoundaryAuthoringOptions& options, BoundaryAuthoringMode mode,
+    std::string_view identity, const Json& extensions,
+    const BoundaryAuthoringResourcePolicy& policy) {
+    auto usage = measure_context_wire(options, mode, identity, extensions, policy);
+    usage.retained_history_bytes = scaled_bytes(usage.encoded_bytes, 8);
+    add_budget(usage.retained_history_bytes, sizeof(BoundaryAuthoringSession),
+               policy.max_retained_history_bytes, "context retained bytes");
+    usage.materialization_bytes = usage.retained_history_bytes;
+    usage.operation_bytes = usage.retained_history_bytes;
+    validate_authoring_usage(usage, policy);
+    return usage;
+}
+
+BoundaryAuthoringResourceUsage authoring_action_usage(
+    const BoundaryAuthoringAction& action, const BoundaryAuthoringResourcePolicy& policy) {
+    auto usage = measure_action_wire(action, policy);
     // Fixed action storage plus generous dynamic allocation/DOM headroom.
     usage.materialization_bytes = scaled_bytes(usage.encoded_bytes, 8);
     add_budget(usage.materialization_bytes, sizeof(BoundaryAuthoringAction),
@@ -914,14 +1031,17 @@ BoundaryAuthoringResourceUsage authoring_action_usage(
     return usage;
 }
 
-void validate_authoring_checkpoint_raw(const BoundaryAuthoringCheckpoint& checkpoint,
-                                      const BoundaryAuthoringResourcePolicy& policy) {
+BoundaryAuthoringResourceUsage measure_authoring_checkpoint_raw(
+    const BoundaryAuthoringCheckpoint& checkpoint,
+    const BoundaryAuthoringResourcePolicy& policy) {
     validate_limits(policy);
     validate_checkpoint_resource_shape(checkpoint, policy);
-    auto usage = authoring_context_usage(checkpoint.options, checkpoint.mode,
-                                        checkpoint.identity_namespace, checkpoint.extensions, policy);
+    auto usage = measure_context_wire(checkpoint.options, checkpoint.mode,
+                                      checkpoint.identity_namespace, checkpoint.extensions, policy);
+    usage.action_count = checkpoint.actions.size();
+    validate_authoring_usage(usage, policy);
     for (const auto& action : checkpoint.actions) {
-        const auto delta = authoring_action_usage(action, policy);
+        const auto delta = measure_action_wire(action, policy);
         add_budget(usage.encoded_bytes, delta.encoded_bytes, policy.max_encoded_bytes, "wire bytes");
         add_budget(usage.json_values, delta.json_values, policy.max_json_values, "wire values");
         add_budget(usage.string_bytes, delta.string_bytes, policy.max_string_bytes, "wire strings");
@@ -930,6 +1050,12 @@ void validate_authoring_checkpoint_raw(const BoundaryAuthoringCheckpoint& checkp
         usage.json_depth = std::max(usage.json_depth, delta.json_depth);
         validate_authoring_usage(usage, policy);
     }
+    return usage;
+}
+
+void validate_authoring_checkpoint_raw(const BoundaryAuthoringCheckpoint& checkpoint,
+                                      const BoundaryAuthoringResourcePolicy& policy) {
+    (void)measure_authoring_checkpoint_raw(checkpoint, policy);
 }
 } // namespace detail
 

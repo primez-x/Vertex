@@ -14,6 +14,10 @@ namespace detail {
 // borrowed tree before callers copy it or interpret a known schema.
 void validate_authoring_recovery_json(const nlohmann::json&,
                                       const BoundaryAuthoringResourcePolicy&);
+// Conservative raw wire accounting for an enclosing recovery JSON tree. The
+// returned usage has no live-history memory guarantees.
+[[nodiscard]] BoundaryAuthoringResourceUsage measure_authoring_recovery_json(
+    const nlohmann::json&, const BoundaryAuthoringResourcePolicy&);
 [[nodiscard]] BoundaryAuthoringResourceUsage authoring_context_usage(
     const BoundaryAuthoringOptions&, BoundaryAuthoringMode, std::string_view,
     const nlohmann::json&, const BoundaryAuthoringResourcePolicy&);
@@ -23,6 +27,11 @@ void validate_authoring_usage(const BoundaryAuthoringResourceUsage&,
                               const BoundaryAuthoringResourcePolicy&);
 void validate_authoring_checkpoint_raw(const BoundaryAuthoringCheckpoint&,
                                       const BoundaryAuthoringResourcePolicy&);
+// Conservative raw wire accounting for a typed checkpoint. Only encoded
+// bytes, JSON values/string bytes/depth, generated IDs, replay work, and
+// action count are reported; live-history memory is not measured or guaranteed.
+[[nodiscard]] BoundaryAuthoringResourceUsage measure_authoring_checkpoint_raw(
+    const BoundaryAuthoringCheckpoint&, const BoundaryAuthoringResourcePolicy&);
 [[nodiscard]] std::size_t authoring_dynamic_bytes(const ConstructionReceipt&);
 [[nodiscard]] std::size_t authoring_dynamic_bytes(const IdentifiedSegment&);
 [[nodiscard]] std::size_t authoring_dynamic_bytes(const BoundaryDimension&);

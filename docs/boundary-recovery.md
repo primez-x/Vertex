@@ -452,6 +452,22 @@ canonical boundary result with the actual saved delta. Prefix reconstruction
 preserves historical read-only restrictions; later unsupported history does not
 retroactively invalidate a previously permitted finish. This still grants no
 archive-load authority without aggregate admission, generation and wire checks.
+The aggregate typed-state preflight now precedes combined validation through
+`validate_workspace_recovery`. It bounds event/input/action counts, estimated
+JSON storage, strings/values, retained document rows and asset bytes, and a
+conservative repeated-validation work charge. Immutable input objects are counted
+once; active copies and distinct reference payloads are also charged. Defaults
+include 10,000 events, 1,000 input objects, 100,000 actions, 64 MiB estimated JSON,
+2,000,000 JSON values, 16 MiB strings and 20,000,000 construction-work units.
+Document limits include 10,000 revisions, 250,000 entity rows, 100,000 asset rows
+and 512 MiB of asset bytes across retained revisions. The combined work ceiling
+is 200,000,000 accounting units. These interacting ceilings are engineering
+limits, not promises that every configuration at an individual ceiling fits,
+nor an RSS or timing certification. They do not replace wire-parser limits.
+Raw measurement checks borrowed fields before constructing JSON, rejects action
+fields incompatible with their kind, and counts serialized bytes through a
+bounded sink rather than allocating the entire encoded string. Generation and
+wire-format checks remain required before archive loading.
 Opaque extension representations are compared through canonical JSON for
 sharing and no-op classification. Regressions reject conflating integer `1`
 with floating `1.0`, both in the active envelope and nested checkpoint
