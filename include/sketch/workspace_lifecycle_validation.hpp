@@ -1,0 +1,20 @@
+#pragma once
+
+#include "sketch/project_workspace.hpp"
+
+namespace sketch {
+// Validates the complete Document history/baseline, lifecycle event ordering,
+// structural payload presence, exact Document-event projection, and replayed
+// navigation stacks and operation registry. Throws invalid_argument on invalid
+// input. Does not validate archived input contents, source/session bindings,
+// active/retired slots, or storage admission; grants no mutation authority.
+void validate_workspace_lifecycle_order(
+    const DocumentSnapshot&, const WorkspaceDocumentHistory&,
+    const std::vector<WorkspaceLifecycleEvent>&, const WorkspaceNavigationState&);
+// Validates canonical input owners, direct backward references, pointer
+// overrides and retired finish provenance. Per-owner policy only; aggregate
+// admission and replay of active/retired slots are separate requirements.
+void validate_workspace_archival_inputs(
+    const std::vector<WorkspaceLifecycleEvent>&,
+    const BoundaryAuthoringResourcePolicy& = boundary_authoring_default_resource_policy);
+}

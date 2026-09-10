@@ -430,6 +430,12 @@ the origin namespace and finish event on the new activation. It preserves the
 original retired view and rejects replacement of an unresolved active session.
 Untrusted persisted-event validation, aggregate history budgets and disk codecs remain
 unimplemented. The runtime types are not a certified persisted schema.
+The first validation prerequisites now exist separately: lifecycle order checks
+replay navigation and require an exact complete Document-event projection;
+archival checks validate canonical payload owners, direct backward references,
+pointer overrides and preceding finish provenance. Neither entry point alone
+validates the active/retired slot state machine, historical source bindings or
+aggregate limits, and neither grants permission to load an archive.
 Opaque extension representations are compared through canonical JSON for
 sharing and no-op classification. Regressions reject conflating integer `1`
 with floating `1.0`, both in the active envelope and nested checkpoint
