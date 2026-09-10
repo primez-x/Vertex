@@ -188,6 +188,10 @@ public:
     // history. This is not an independent project copy or a way around
     // read-only/history rules; workspace publication still requires its CAS.
     [[nodiscard]] static Document fork(const DocumentSnapshot& source);
+    // Validates the complete source, then reconstructs a private retained prefix
+    // with its original identity, navigation, names and derived editability.
+    // A later save marker is omitted. This does not rebind any live workspace.
+    [[nodiscard]] static Document fork_at_revision(const DocumentSnapshot& source, Revision revision);
 
     // Revalidates the complete captured history, then applies the command to
     // a private document. Neither the source nor any live document is changed.

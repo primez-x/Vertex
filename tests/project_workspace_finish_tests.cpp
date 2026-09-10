@@ -1,4 +1,5 @@
 #include "sketch/project_workspace.hpp"
+#include "sketch/workspace_slot_validation.hpp"
 #include "sketch/document_digest.hpp"
 #include "support/noninteractive_errors.hpp"
 
@@ -33,13 +34,20 @@ BoundaryActiveRecovery input(const DocumentSnapshot& source, BoundaryAuthoringMo
 void activate(ProjectWorkspace& workspace, const BoundaryActiveRecovery& active) {
     auto ticket = workspace.prepare_boundary_checkpoint(active); (void)workspace.commit(ticket);
 }
+void validate_slots(const ProjectWorkspace& workspace) {
+    const auto s = workspace.capture();
+    validate_workspace_lifecycle_slots(s.document(), s.document_history(), s.lifecycle_history(), s.navigation(),
+        s.active_boundary(), s.retired_boundaries(), s.resource_policy());
+}
 void undo(ProjectWorkspace& workspace) {
     auto ticket = workspace.prepare_undo(); (void)workspace.commit(ticket);
     validate_workspace_document_history(workspace.snapshot(), workspace.document_history());
+    validate_slots(workspace);
 }
 void redo(ProjectWorkspace& workspace) {
     auto ticket = workspace.prepare_redo(); (void)workspace.commit(ticket);
     validate_workspace_document_history(workspace.snapshot(), workspace.document_history());
+    validate_slots(workspace);
 }
 template<class F> void unchanged_rejection(ProjectWorkspace& workspace, F&& operation) {
     const auto before = workspace.capture(); const auto digest = document_snapshot_digest(before.document());

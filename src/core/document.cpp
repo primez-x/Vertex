@@ -652,6 +652,21 @@ Document Document::fork(const DocumentSnapshot& source) {
     return restore(source);
 }
 
+Document Document::fork_at_revision(const DocumentSnapshot& source, Revision revision) {
+    (void)fork(source);
+    if (revision >= source.history_.size())
+        document_error(DocumentErrorCode::invalid_history, "requested revision is not retained");
+    auto prefix = source;
+    prefix.history_.resize(static_cast<std::size_t>(revision) + 1);
+    prefix.revision_ = revision;
+    if (prefix.saved_revision_ && *prefix.saved_revision_ > revision) prefix.saved_revision_.reset();
+    for (auto it = prefix.named_revisions_.begin(); it != prefix.named_revisions_.end();) {
+        if (it->second > revision) it = prefix.named_revisions_.erase(it);
+        else ++it;
+    }
+    return restore(std::move(prefix));
+}
+
 DocumentSnapshot Document::preview_command(const DocumentSnapshot& source, const Command& command) {
     auto candidate = fork(source);
     candidate.apply(command);

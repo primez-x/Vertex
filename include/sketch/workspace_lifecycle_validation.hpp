@@ -22,4 +22,9 @@ void validate_workspace_archival_inputs(
 void validate_workspace_recovery_sources(
     const DocumentSnapshot&, const std::vector<WorkspaceLifecycleEvent>&,
     const std::optional<BoundaryActiveRecovery>& active);
+// Rebuilds each finish's geometric effect from its archived input and compares
+// the retained document delta. No live document or workspace is modified.
+void validate_workspace_finish_deltas(
+    const DocumentSnapshot&, const std::vector<WorkspaceLifecycleEvent>&,
+    const BoundaryAuthoringResourcePolicy& = boundary_authoring_default_resource_policy);
 }

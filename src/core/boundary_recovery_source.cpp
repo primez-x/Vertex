@@ -27,7 +27,10 @@ BoundaryRecoverySource capture_boundary_recovery_source(
 
 void validate_historical_boundary_recovery_source(
     const DocumentSnapshot& snapshot, const BoundaryRecoverySource& source) {
-    try { (void)Document::fork(snapshot); }
+    try {
+        const auto prefix = Document::fork_at_revision(snapshot, source.revision);
+        if (!prefix.is_editable()) throw std::invalid_argument("Historical boundary source was read-only");
+    }
     catch (const DocumentError& error) {
         throw std::invalid_argument(std::string("Invalid historical recovery document: ") + error.what());
     }

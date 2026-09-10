@@ -1,4 +1,6 @@
 #include "sketch/workspace_lifecycle_validation.hpp"
+#include "sketch/boundary_commit.hpp"
+#include "sketch/document_digest.hpp"
 
 #include <stdexcept>
 #include <cmath>
@@ -16,6 +18,37 @@ void validate_payload(const WorkspaceLifecycleEvent& event,
         throw std::invalid_argument("Workspace lifecycle event payload does not match its kind");
     }
 }
+}
+
+void validate_workspace_finish_deltas(const DocumentSnapshot& snapshot,
+    const std::vector<WorkspaceLifecycleEvent>& events, const BoundaryAuthoringResourcePolicy& policy) {
+    try { (void)Document::fork(snapshot); }
+    catch (const DocumentError& error) { throw std::invalid_argument(error.what()); }
+    for (const auto& event : events) {
+        if (event.kind != WorkspaceLifecycleKind::boundary_finish) continue;
+        if (!event.input || !event.input->value || event.after_revision >= snapshot.history().size() ||
+            event.before_revision >= event.after_revision || event.after_revision - event.before_revision != 1)
+            throw std::invalid_argument("Finish delta has invalid input or revision bounds");
+        const auto& input = *event.input->value;
+        if (input.source.revision != event.before_revision)
+            throw std::invalid_argument("Finish delta uses stale input");
+        validate_historical_boundary_recovery_source(snapshot, input.source);
+        const auto session = BoundaryAuthoringSession::from_recovery_checkpoint(input.checkpoint, policy);
+        if (session.phase() != BoundaryAuthoringPhase::completed || session.accepted_chains().empty())
+            throw std::invalid_argument("Finish delta input is incomplete");
+        const auto& before = snapshot.history()[static_cast<std::size_t>(event.before_revision)];
+        const auto& after = snapshot.history()[static_cast<std::size_t>(event.after_revision)];
+        if (after.source_revision || after.name || after.action != "Finish boundary" || before.assets != after.assets)
+            throw std::invalid_argument("Finish delta changes unrelated document state");
+        for (const auto& [id, asset] : before.assets)
+            if (asset.metadata.dump() != after.assets.at(id).metadata.dump())
+                throw std::invalid_argument("Finish delta changes asset metadata representation");
+        const auto prefix = Document::fork_at_revision(snapshot, event.before_revision);
+        const auto preview = preview_boundary_commit(prefix.snapshot(),
+            {session.options(), session.accepted_chains(), input.source.context, "Finish boundary"});
+        if (!preview.accepted() || preview.candidate_digest() != entity_map_digest(after.entities))
+            throw std::invalid_argument("Finish geometry does not match its archived input");
+    }
 }
 
 void validate_workspace_recovery_sources(const DocumentSnapshot& snapshot,

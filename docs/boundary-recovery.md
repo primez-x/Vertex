@@ -428,7 +428,7 @@ Explicit Revise Input now validates and replays retired input with a fresh
 namespace, rebinds the original context to the current document, and records
 the origin namespace and finish event on the new activation. It preserves the
 original retired view and rejects replacement of an unresolved active session.
-Untrusted persisted-event validation, aggregate history budgets and disk codecs remain
+Aggregate history budgets, persisted generation checks and disk codecs remain
 unimplemented. The runtime types are not a certified persisted schema.
 The first validation prerequisites now exist separately: lifecycle order checks
 replay navigation and require an exact complete Document-event projection;
@@ -442,6 +442,16 @@ Workspace source validation applies it to activation, archived and active input,
 requiring activation to bind its event revision and prohibiting future sources.
 Later movement or deletion of a layer does not invalidate genuine historical
 provenance, but the existing current-source check still rejects it for finish.
+The combined slot validator now invokes these prerequisites, replays active and
+retired slots, enforces observed counter floors and restoration provenance, and
+reconciles final state with every reachable redo operation. It accounts for
+unrecorded pointer/semantic updates while their original source was current,
+including updates immediately before a later document edit made that source stale.
+Finish validation reconstructs the retained document prefix and compares the
+canonical boundary result with the actual saved delta. Prefix reconstruction
+preserves historical read-only restrictions; later unsupported history does not
+retroactively invalidate a previously permitted finish. This still grants no
+archive-load authority without aggregate admission, generation and wire checks.
 Opaque extension representations are compared through canonical JSON for
 sharing and no-op classification. Regressions reject conflating integer `1`
 with floating `1.0`, both in the active envelope and nested checkpoint

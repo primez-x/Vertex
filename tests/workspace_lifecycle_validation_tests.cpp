@@ -1,4 +1,5 @@
 #include "sketch/workspace_lifecycle_validation.hpp"
+#include "sketch/workspace_slot_validation.hpp"
 #include "support/noninteractive_errors.hpp"
 #include <iostream>
 #include <stdexcept>
@@ -12,6 +13,8 @@ void validate(const ProjectWorkspace& workspace) {
         snapshot.lifecycle_history(), snapshot.navigation());
     validate_workspace_archival_inputs(snapshot.lifecycle_history(), snapshot.resource_policy());
     validate_workspace_recovery_sources(snapshot.document(), snapshot.lifecycle_history(), snapshot.active_boundary());
+    validate_workspace_lifecycle_slots(snapshot.document(), snapshot.document_history(), snapshot.lifecycle_history(),
+        snapshot.navigation(), snapshot.active_boundary(), snapshot.retired_boundaries(), snapshot.resource_policy());
 }
 void commit(ProjectWorkspace& workspace, PreparedWorkspaceEdit ticket) {
     (void)workspace.commit(ticket); validate(workspace);
