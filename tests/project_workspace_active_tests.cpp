@@ -115,6 +115,16 @@ void check_publication_and_detachment() {
 
     rejected([&] { (void)workspace.prepare_boundary_checkpoint(expected_first); },
              "an exact checkpoint repeat must be rejected");
+    auto undo_activation = workspace.prepare_undo();
+    (void)workspace.commit(undo_activation);
+    require(!workspace.active_boundary() && workspace.snapshot().revision() == document_before.revision(),
+            "undo activation must remove the draft without navigating the document");
+    rejected([&] { (void)workspace.prepare_boundary_checkpoint(expected_first); },
+             "an archived session must be restored through lifecycle navigation, not reactivated as new");
+    auto redo_activation = workspace.prepare_redo();
+    (void)workspace.commit(redo_activation);
+    require(workspace.active_boundary() == std::optional{expected_first},
+            "redo activation must restore the exact removed input");
 }
 
 void check_pointer_replacement_and_ticket_invalidation() {
@@ -344,11 +354,86 @@ void check_aggregate_capture() {
                 document_snapshot_digest(detached_after_destruction.document()) == original_digest,
             "background capture must remain usable after its workspace is destroyed");
 }
+void check_shared_lifecycle_inputs() {
+    auto document = fixture();
+    ProjectWorkspace workspace(document.snapshot());
+    auto session = make_session();
+    session.set_pointer({8, 9});
+    const auto source = capture_boundary_recovery_source(workspace.snapshot(), context());
+    const auto first = active_record(source, session);
+    auto activation = workspace.prepare_boundary_checkpoint(first);
+    (void)workspace.commit(activation);
+    auto discard = workspace.prepare_discard_boundary();
+    (void)workspace.commit(discard);
+    const auto discarded_epoch = workspace.epoch();
+    rejected([&] { (void)workspace.prepare_boundary_checkpoint(first); },
+             "discarded input cannot bypass restoration by reusing its namespace");
+    require(workspace.epoch() == discarded_epoch && !workspace.active_boundary(),
+            "rejected reactivation must preserve discarded state");
+    const auto archived = *workspace.capture().lifecycle_history().back().input;
+    auto undo_discard = workspace.prepare_undo();
+    (void)workspace.commit(undo_discard);
+    auto undo_activation = workspace.prepare_undo();
+    (void)workspace.commit(undo_activation);
+    const auto removed = *workspace.capture().lifecycle_history().back().input;
+    require(removed.owner_event_id == archived.owner_event_id && removed.value == archived.value,
+            "activation and discard must share an identical archived semantic input");
+    auto redo_activation = workspace.prepare_redo();
+    (void)workspace.commit(redo_activation);
+    auto cleared = *workspace.active_boundary();
+    cleared.checkpoint.pointer.reset();
+    auto clear_pointer = workspace.prepare_boundary_checkpoint(cleared);
+    (void)workspace.commit(clear_pointer);
+    require(workspace.can_redo(), "clearing only the pointer must preserve lifecycle redo");
+    auto new_discard = workspace.prepare_discard_boundary();
+    (void)workspace.commit(new_discard);
+    const auto repeated = *workspace.capture().lifecycle_history().back().input;
+    require(repeated.owner_event_id == archived.owner_event_id && repeated.value == archived.value &&
+                repeated.pointer_override.has_value() && !repeated.pointer_override->has_value(),
+            "new discard must share the owner while recording explicit pointer absence");
+    auto restore = workspace.prepare_undo();
+    (void)workspace.commit(restore);
+    require(workspace.active_boundary() == std::optional{cleared},
+            "shared lifecycle input must restore the exact cleared pointer");
+}
+void check_extension_representation() {
+    for (bool nested : {false, true}) {
+        auto document = fixture();
+        ProjectWorkspace workspace(document.snapshot());
+        auto session = make_session();
+        const auto source = capture_boundary_recovery_source(workspace.snapshot(), context());
+        auto input = active_record(source, session);
+        (nested ? input.checkpoint.extensions : input.extensions)["number"] = 1;
+        auto activation = workspace.prepare_boundary_checkpoint(input);
+        (void)workspace.commit(activation);
+        auto discard = workspace.prepare_discard_boundary();
+        (void)workspace.commit(discard);
+        const auto original_owner = workspace.capture().lifecycle_history().back().input->value;
+        auto undo = workspace.prepare_undo();
+        (void)workspace.commit(undo);
+        (nested ? input.checkpoint.extensions : input.extensions)["number"] = 1.0;
+        auto replacement = workspace.prepare_boundary_checkpoint(input);
+        (void)workspace.commit(replacement);
+        require(!workspace.can_redo() && workspace.edited_generation() == 4,
+                "extension representation changes must be semantic changes, not numeric no-ops");
+        auto discard_changed = workspace.prepare_discard_boundary();
+        (void)workspace.commit(discard_changed);
+        require(workspace.capture().lifecycle_history().back().input->value != original_owner,
+                "different extension representations cannot share an archival owner");
+        auto restore = workspace.prepare_undo();
+        (void)workspace.commit(restore);
+        const auto restored = *workspace.active_boundary();
+        require((nested ? restored.checkpoint.extensions : restored.extensions).at("number").is_number_float(),
+                "restoration must preserve the actual extension number representation");
+    }
+}
 }  // namespace
 
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        check_extension_representation();
+        check_shared_lifecycle_inputs();
         check_publication_and_detachment();
         check_pointer_replacement_and_ticket_invalidation();
         check_immutable_binding_and_monotonic_counters();

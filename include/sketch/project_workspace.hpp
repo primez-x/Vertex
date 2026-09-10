@@ -3,6 +3,7 @@
 #include "sketch/document.hpp"
 #include "sketch/workspace_document_history.hpp"
 #include "sketch/boundary_active_recovery.hpp"
+#include "sketch/workspace_navigation.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -12,6 +13,30 @@ namespace sketch {
 namespace detail { struct WorkspaceDocumentState; }
 
 class ProjectWorkspace;
+
+enum class WorkspaceLifecycleKind { document_edit, boundary_activate, boundary_discard, undo, redo, clear_redo };
+struct WorkspaceSessionIdentity {
+    BoundaryRecoverySource source;
+    std::string identity_namespace;
+    BoundaryAuthoringMode mode{};
+    BoundaryAuthoringCounters initial_counters;
+};
+// Only the owner event contains a full immutable input. Repeat executions can
+// share that owner and override its pointer, including explicitly clearing it.
+struct WorkspaceArchivedInput {
+    std::string owner_event_id;
+    std::shared_ptr<const BoundaryActiveRecovery> value;
+    std::optional<std::optional<Vec2>> pointer_override;
+};
+struct WorkspaceLifecycleEvent {
+    std::string event_id;
+    std::uint64_t sequence{};
+    WorkspaceLifecycleKind kind{};
+    Revision before_revision{}, after_revision{};
+    std::optional<WorkspaceNavigationTarget> target;
+    std::optional<WorkspaceSessionIdentity> session;
+    std::optional<WorkspaceArchivedInput> input;
+};
 
 // Detached owner-thread capture for background readers. Its document, draft,
 // history and counters describe the same workspace state. It grants neither
@@ -30,13 +55,16 @@ public:
     [[nodiscard]] std::uint64_t edited_generation() const noexcept { return edited_generation_; }
     [[nodiscard]] std::uint64_t checkpoint_generation() const noexcept { return checkpoint_generation_; }
     [[nodiscard]] const BoundaryAuthoringResourcePolicy& resource_policy() const noexcept { return resource_policy_; }
+    [[nodiscard]] const WorkspaceNavigationState& navigation() const noexcept { return navigation_; }
+    [[nodiscard]] const std::vector<WorkspaceLifecycleEvent>& lifecycle_history() const noexcept { return lifecycle_history_; }
 
 private:
     friend class ProjectWorkspace;
     ProjectWorkspaceSnapshot(const DocumentSnapshot&, const WorkspaceDocumentHistory&,
         const std::optional<BoundaryActiveRecovery>&, const std::string&,
         std::uint64_t epoch, std::uint64_t edited_generation, std::uint64_t checkpoint_generation,
-        const BoundaryAuthoringResourcePolicy&);
+        const BoundaryAuthoringResourcePolicy&, const WorkspaceNavigationState&,
+        const std::vector<WorkspaceLifecycleEvent>&);
 
     DocumentSnapshot document_;
     WorkspaceDocumentHistory history_;
@@ -46,6 +74,8 @@ private:
     std::uint64_t edited_generation_;
     std::uint64_t checkpoint_generation_;
     BoundaryAuthoringResourcePolicy resource_policy_;
+    WorkspaceNavigationState navigation_;
+    std::vector<WorkspaceLifecycleEvent> lifecycle_history_;
 };
 
 // A sealed, instance-bound candidate. Returned snapshots are detached values.
@@ -69,8 +99,8 @@ private:
     std::unique_ptr<State> state_;
 };
 
-// Document and active-checkpoint mutation authority. Recovery ledger and persistence
-// coordination are separate, pending layers of the workspace contract.
+// Document, active-checkpoint and activation/discard navigation authority.
+// Finish, persisted-ledger validation and storage coordination remain pending.
 // Confined to its owning application thread: member calls must not overlap.
 // Storage workers receive detached snapshots, never the workspace itself.
 class ProjectWorkspace final {
@@ -99,16 +129,18 @@ public:
     // This does not finish, discard, rebind, or load a stale recovered session.
     [[nodiscard]] PreparedWorkspaceEdit prepare_boundary_checkpoint(
         const BoundaryActiveRecovery& checkpoint) const;
+    [[nodiscard]] PreparedWorkspaceEdit prepare_discard_boundary() const;
+    [[nodiscard]] bool can_undo() const noexcept;
+    [[nodiscard]] bool can_redo() const noexcept;
     [[nodiscard]] PreparedWorkspaceEdit prepare(const Command& command) const;
     [[nodiscard]] PreparedWorkspaceEdit prepare_undo() const;
     [[nodiscard]] PreparedWorkspaceEdit prepare_redo() const;
     Revision commit(PreparedWorkspaceEdit& edit);
 
 private:
-    enum class Operation { apply, undo, redo };
     [[nodiscard]] std::unique_ptr<PreparedWorkspaceEdit::State> prepare_state() const;
-    [[nodiscard]] PreparedWorkspaceEdit prepare_impl(
-        Operation operation, const Command* command) const;
+    [[nodiscard]] PreparedWorkspaceEdit prepare_document_edit(const Command&) const;
+    [[nodiscard]] PreparedWorkspaceEdit prepare_navigation(bool redo) const;
 
     std::unique_ptr<detail::WorkspaceDocumentState> state_;
     const std::string identity_;

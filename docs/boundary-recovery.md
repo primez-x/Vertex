@@ -101,8 +101,8 @@ thread; this is not a concurrent container or an I/O-worker interface.
 Focused Debug/Release tests cover publication, rejected tickets, preview
 isolation, exact Document navigation, read-only enforcement and invalid-history
 construction (`artifacts/reviews/workspace-publication-*-v1-tests.log`). This
-initial API does not yet contain a recovery ledger or lifecycle operations,
-and the desktop has not migrated to it. Publication's source-reviewed swap
+API now also has the in-memory activation/discard navigation described below;
+persisted-ledger validation and desktop migration remain pending. Publication's source-reviewed swap
 boundary is not a claim of universal allocation-failure safety throughout
 Document construction and destruction.
 
@@ -412,6 +412,21 @@ remain to be implemented.
 
 ## One history authority and lifecycle operations
 
+The in-memory workspace now implements document commands, activation, discard,
+undo/redo and semantic redo-clear barriers through one candidate bundle. Its
+snapshots carry navigation and lifecycle events alongside the document-event
+projection. Five focused tests pass in Debug and Release. Cross-operation input
+sharing was corrected after a failing retention regression; repeated discard and
+undo activation now reference the same immutable semantic input, with exact
+pointer overrides. Reused session namespaces must be restored through navigation,
+not submitted as new activations. Finish/retired-slot navigation, untrusted
+persisted-event validation, aggregate history budgets and disk codecs remain
+unimplemented. The runtime types are not a certified persisted schema.
+Opaque extension representations are compared through canonical JSON for
+sharing and no-op classification. Regressions reject conflating integer `1`
+with floating `1.0`, both in the active envelope and nested checkpoint
+extensions, and verify exact restoration after discard.
+
 Implementation detail for the pending lifecycle ledger: baseline command
 references must distinguish an original command revision from a physical
 Document snapshot target. Undo/redo append revisions, so `source_revision` may
@@ -422,14 +437,14 @@ include imported redo, repeated navigation, later branches, named revisions and
 ordinary edits whose messages are "undo" or "redo". This helper does not yet
 implement global lifecycle navigation.
 
-The lifecycle ledger will use typed baseline-command references and post-fence
+The runtime lifecycle history uses typed baseline-command references and post-fence
 event IDs. First session activation is an undoable lifecycle operation; otherwise
 undoing an older discard could overwrite a newly started session. A session
 slot must distinguish active input from retired finish input. Undo activation
 archives the exact removed slot, and redo restores its status, so navigating
 activation around an undone finish cannot turn retired input into active input.
 
-Local checkpoint updates will not retain a full checkpoint in every global
+Local checkpoint updates do not retain a full checkpoint in every global
 event. The current active checkpoint already contains local normalized history.
 A semantic update appends a constant-size, non-undoable redo-clear barrier only
 when global redo is nonempty. Pointer-only updates need no ledger event and

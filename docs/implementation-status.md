@@ -1,42 +1,40 @@
 # Implementation status
 
-The subsequent aggregate workspace capture passes both focused workspace tests
-in Debug and Release. It carries detached document, draft, document history,
-identity, epoch, content generations and the actual resource policy in one value.
-Tests retain it across edits and owner destruction and mutate copies to check
-isolation. This is worker input preparation, not a persisted archive or a save
-acknowledgement token. The full suite below predates this capture addition.
+Workspace navigation now orders document commands, session activation and
+discard in one in-memory history. Undo/redo restores exact archived drafts,
+including stale source bindings; pointer-only changes preserve redo and semantic
+draft changes clear it. Baseline command identities remain separate from
+Document snapshot targets, so abandoned physical redo cannot bypass global
+ordering. Five focused workspace/history tests pass in Debug and Release.
 
-Baseline navigation now derives original command identities separately from
-Document snapshot targets, preserving both imported undo and redo stacks after
-repeated navigation. Four focused workspace/history tests pass in Debug and
-Release. The global lifecycle ledger, activation/discard/finish navigation and
-compact archival-input references are specified but remain unimplemented.
+Lifecycle inputs share immutable owners across operations. A source review
+identified duplicate copies across discard and undo activation; the failing
+regression now passes with shared ownership and exact pointer overrides,
+including explicit pointer absence. Previously used session namespaces cannot
+be submitted as new activations to bypass restoration. Finish/retired-input
+navigation, persisted event replay validation and aggregate resource admission
+remain pending; this runtime history is not a supported archive wire format.
+The final extension regression also passes in both builds: integer and floating
+extension representations are compared canonically, so archival sharing cannot
+substitute `1` for `1.0`. The five affected tests were rerun after this fix.
 
-The subsequent workspace document-history integration passes all three focused
-tests in both Debug and Release. Successful edit, undo and redo publication now
-swaps the document and its ordered event history together. Validation checks
-the retained baseline, complete revision coverage, unique event IDs and actual
-navigation provenance; rejected tickets preserve both states. This is an internal
-document transition log, not the persisted workspace lifecycle ledger. The full
-integrated suite below includes this addition.
-
-Workspace document publications also advance independent edited and checkpoint
-generation counters. Both begin at zero for the imported baseline; undo/redo
-advance them and rejected tickets preserve them. Focused workspace tests pass
-in Debug and Release. Active-checkpoint publication now distinguishes pointer-only
-updates from semantic changes and preserves draft state across Document edits
-and navigation. Five focused tests pass in both configurations. Persisted
-counters, desktop pointer routing and save acknowledgement watermarks remain
+Aggregate workspace capture carries document, active draft, document and
+lifecycle histories, navigation, identity, epoch, content generations and the
+actual resource policy. Current document/draft values are detached; archival
+inputs are shared immutable values. Captures survive edits and owner destruction.
+Capture grants no save acknowledgement or filesystem ownership authority.
+Persisted counters, desktop routing, background I/O and save watermarks remain
 to be connected.
 
-The v24g full integrated build passes 62/62 tests in Debug (71.76 seconds) and
-Release (15.38 seconds). All 200 recorded source inputs remain unchanged across
-the builds/tests, and 120 executable hashes are recorded. Recovery checks cover
+The v24h full integrated checkpoint, before the final extension-comparison fix,
+passes 64/64 tests in Debug (71.87 seconds) and Release (15.08 seconds). All 204
+recorded source inputs remained unchanged across those builds/tests, and 124
+executable hashes are recorded. Recovery checks cover
 all 18 action kinds, both modes, phases, construction, receipt encoding,
 commits, exact checkpoint/history behavior, source bindings, active/recovery-copy
 records, historical baseline fences, sealed workspace document publication and
-active-checkpoint publication with pointer/semantic generation separation.
+active-checkpoint publication, global activation/discard navigation and
+pointer/semantic generation separation.
 The earlier v24d checkpoint also passed eighteen offscreen boundary
 canvas/input/workflow checks at DPR 1, 1.5 and 2 across both builds.
 These are local incremental builds and regression checks, not reproducible-build
@@ -44,9 +42,9 @@ or production performance certification.
 
 The workspace publication API passed independent source review. It has private
 candidate documents, instance/epoch/full-source checks, detached previews and
-no mutable Document escape. It is not yet wired into the desktop or a recovery
-ledger. The record codecs and baseline validator are prerequisites; aggregate
-v4 persistence, lifecycle ordering, autosave and restart recovery remain open.
+no mutable Document escape. It is not yet wired into the desktop or a persisted
+recovery archive. The record codecs and baseline validator are prerequisites; aggregate
+v4 persistence, finish lifecycle ordering, autosave and restart recovery remain open.
 
 Save acknowledgement integration must bind a sealed publication to workspace
 identity, owner correlation, role, destination, epoch, both content generations
