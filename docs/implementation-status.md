@@ -7,6 +7,12 @@ Tests retain it across edits and owner destruction and mutate copies to check
 isolation. This is worker input preparation, not a persisted archive or a save
 acknowledgement token. The full suite below predates this capture addition.
 
+Baseline navigation now derives original command identities separately from
+Document snapshot targets, preserving both imported undo and redo stacks after
+repeated navigation. Four focused workspace/history tests pass in Debug and
+Release. The global lifecycle ledger, activation/discard/finish navigation and
+compact archival-input references are specified but remain unimplemented.
+
 The subsequent workspace document-history integration passes all three focused
 tests in both Debug and Release. Successful edit, undo and redo publication now
 swaps the document and its ordered event history together. Validation checks

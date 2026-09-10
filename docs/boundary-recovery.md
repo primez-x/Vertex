@@ -412,6 +412,45 @@ remain to be implemented.
 
 ## One history authority and lifecycle operations
 
+Implementation detail for the pending lifecycle ledger: baseline command
+references must distinguish an original command revision from a physical
+Document snapshot target. Undo/redo append revisions, so `source_revision` may
+name a navigation snapshot rather than the original command. The implemented
+`derive_workspace_baseline_navigation` replays the validated retained prefix
+and pairs stable command identities with both physical baseline stacks. Tests
+include imported redo, repeated navigation, later branches, named revisions and
+ordinary edits whose messages are "undo" or "redo". This helper does not yet
+implement global lifecycle navigation.
+
+The lifecycle ledger will use typed baseline-command references and post-fence
+event IDs. First session activation is an undoable lifecycle operation; otherwise
+undoing an older discard could overwrite a newly started session. A session
+slot must distinguish active input from retired finish input. Undo activation
+archives the exact removed slot, and redo restores its status, so navigating
+activation around an undone finish cannot turn retired input into active input.
+
+Local checkpoint updates will not retain a full checkpoint in every global
+event. The current active checkpoint already contains local normalized history.
+A semantic update appends a constant-size, non-undoable redo-clear barrier only
+when global redo is nonempty. Pointer-only updates need no ledger event and
+preserve redo. Global redo is authoritative even when Document retains an
+inaccessible older physical redo prefix; callers must not fall back to raw
+Document redo availability after a workspace branch has been abandoned.
+
+Full lifecycle inputs are retained only when an execution removes a previously
+unarchived semantic state, such as discard, finish or undo activation. Repeated
+restoration uses a backward reference directly to its full input owner. A
+pointer-only change before redo discard records a pointer override, including
+explicit absence, rather than another copy of the action timeline. These
+owners and references remain inline in `workspace_history`; no additional
+recovery row or second history authority is introduced. Validation must reject
+missing/forward/wrong-session references, enforce restored slot status and
+counter floors, and reconcile the final active checkpoint with reachable redo
+obligations. These lifecycle payload and transition rules are design details
+for implementation, not an already supported wire format. Epoch/generations
+cannot be inferred from global event count because checkpoint updates and save
+acknowledgements also advance them.
+
 `workspace_history` begins with an immutable baseline fence containing the
 document ID, baseline head revision, source digest, and exact Document undo
 and redo revision-ID stacks. Existing Document history is imported in its

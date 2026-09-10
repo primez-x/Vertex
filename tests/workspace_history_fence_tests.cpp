@@ -38,9 +38,47 @@ void check() {
     if (current.history().back().undo_stack != document.snapshot().history().back().undo_stack)
         throw std::runtime_error("fence validation mutated navigation");
 }
+void check_command_identity_mapping() {
+    auto document = Document::create();
+    auto empty = derive_workspace_baseline_navigation(document.snapshot(),
+        capture_workspace_history_fence(document.snapshot()));
+    if (!empty.undo_stack.empty() || !empty.redo_stack.empty())
+        throw std::runtime_error("empty baseline invented a command identity");
+    document.apply(NameRevision{0, "Name"});
+    document.apply(ApplyEntityChanges{.expected_revision = 1,
+        .entity_changes = {EntityChange::upsert(Entity::create("label", {{"text", "A"}}))},
+        .message = "undo"});
+    document.undo(2);
+    const auto early = capture_workspace_history_fence(document.snapshot());
+    document.redo(3);
+    document.apply(NameRevision{4, "Later"});
+    document.undo(5);
+    document.undo(6);
+    const auto navigated = capture_workspace_history_fence(document.snapshot());
+    document.apply(ApplyEntityChanges{.expected_revision = 7,
+        .entity_changes = {EntityChange::upsert(Entity::create("label", {{"text", "Branch"}}))},
+        .message = "redo"});
+    const auto current = document.snapshot();
+    const auto early_map = derive_workspace_baseline_navigation(current, early);
+    if (early_map.undo_stack != std::vector<WorkspaceBaselineCommandReference>{{1, 0}} ||
+        early_map.redo_stack != std::vector<WorkspaceBaselineCommandReference>{{2, 2}})
+        throw std::runtime_error("historical baseline lost original command identities");
+    const auto map = derive_workspace_baseline_navigation(current, navigated);
+    if (map.undo_stack != std::vector<WorkspaceBaselineCommandReference>{{1, 0}} ||
+        map.redo_stack != std::vector<WorkspaceBaselineCommandReference>{{5, 5}, {2, 6}})
+        throw std::runtime_error("navigation snapshot was mistaken for an original command");
+    const auto branch = derive_workspace_baseline_navigation(current,
+        capture_workspace_history_fence(current));
+    if (branch.undo_stack != std::vector<WorkspaceBaselineCommandReference>{{1, 0}, {8, 7}} ||
+        !branch.redo_stack.empty())
+        throw std::runtime_error("new branch failed to retain command lineage and clear redo");
+    auto forged = navigated;
+    std::swap(forged.redo_stack[0], forged.redo_stack[1]);
+    rejected([&] { (void)derive_workspace_baseline_navigation(current, forged); });
+}
 }
 int main() {
     sketch::testing::noninteractive_errors();
-    try { check(); } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
+    try { check(); check_command_identity_mapping(); } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
     return 0;
 }

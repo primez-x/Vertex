@@ -35,4 +35,39 @@ void validate_workspace_history_fence(const DocumentSnapshot& snapshot,
         throw std::invalid_argument("History fence source digest does not match retained baseline");
     }
 }
+
+WorkspaceBaselineNavigation derive_workspace_baseline_navigation(
+    const DocumentSnapshot& snapshot, const WorkspaceHistoryFence& fence) {
+    validate_workspace_history_fence(snapshot, fence);
+    std::vector<Revision> undo;
+    std::vector<Revision> redo;
+    for (std::size_t index = 1; index <= static_cast<std::size_t>(fence.baseline_revision); ++index) {
+        const auto& record = snapshot.history()[index];
+        if (!record.source_revision) {
+            // Action messages are user text; an ordinary edit may be named
+            // "undo" or "redo". Navigation is identified by provenance.
+            undo.push_back(record.revision);
+            redo.clear();
+        } else if (record.action == "undo" && !undo.empty()) {
+            redo.push_back(undo.back());
+            undo.pop_back();
+        } else if (record.action == "redo" && !redo.empty()) {
+            undo.push_back(redo.back());
+            redo.pop_back();
+        } else {
+            throw std::invalid_argument("Baseline command navigation is inconsistent");
+        }
+    }
+    if (undo.size() != fence.undo_stack.size() || redo.size() != fence.redo_stack.size()) {
+        throw std::invalid_argument("Baseline command and snapshot stacks disagree");
+    }
+    WorkspaceBaselineNavigation result;
+    result.undo_stack.reserve(undo.size());
+    result.redo_stack.reserve(redo.size());
+    for (std::size_t index = 0; index < undo.size(); ++index)
+        result.undo_stack.push_back({undo[index], fence.undo_stack[index]});
+    for (std::size_t index = 0; index < redo.size(); ++index)
+        result.redo_stack.push_back({redo[index], fence.redo_stack[index]});
+    return result;
+}
 }
