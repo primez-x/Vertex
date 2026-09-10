@@ -1,0 +1,29 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "windows-debug",
+      "displayName": "Windows native debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/windows-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BUILD_TESTING": "ON"
+      }
+    },
+    {
+      "name": "windows-release",
+      "inherits": "windows-debug",
+      "binaryDir": "${sourceDir}/build/windows-release",
+      "cacheVariables": {"CMAKE_BUILD_TYPE": "Release"}
+    }
+  ],
+  "buildPresets": [
+    {"name": "windows-debug", "configurePreset": "windows-debug"},
+    {"name": "windows-release", "configurePreset": "windows-release"}
+  ],
+  "testPresets": [
+    {"name": "windows-debug", "configurePreset": "windows-debug", "output": {"outputOnFailure": true}},
+    {"name": "windows-release", "configurePreset": "windows-release", "output": {"outputOnFailure": true}}
+  ]
+}

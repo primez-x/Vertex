@@ -1,0 +1,987 @@
+#include "sketch/visualization/native_model_view.hpp"
+
+#include "sketch/architecture.hpp"
+#include "sketch/building_entity.hpp"
+#include "sketch/document.hpp"
+
+#include <AIS_InteractiveContext.hxx>
+#include <AIS_SelectionScheme.hxx>
+#include <AIS_Shape.hxx>
+#include <Aspect_DisplayConnection.hxx>
+#include <Aspect_Handle.hxx>
+#include <OpenGl_GraphicDriver.hxx>
+#include <Quantity_Color.hxx>
+#include <Standard_Failure.hxx>
+#include <TopoDS_Shape.hxx>
+#include <V3d_View.hxx>
+#include <V3d_Viewer.hxx>
+#include <WNT_Window.hxx>
+
+#include <QApplication>
+#include <QByteArray>
+#include <QGuiApplication>
+#include <QLabel>
+#include <QMouseEvent>
+#include <QPaintEngine>
+#include <QPaintEvent>
+#include <QResizeEvent>
+#include <QShowEvent>
+#include <QWheelEvent>
+
+#include <algorithm>
+#include <cmath>
+#include <exception>
+#include <initializer_list>
+#include <limits>
+#include <map>
+#include <memory>
+#include <optional>
+#include <set>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+namespace sketch::visualization {
+namespace {
+
+using Json = nlohmann::json;
+
+void append_entity_content(std::string& result, const Entity& entity) {
+    result.append(entity.id);
+    result.push_back('\0');
+    result.append(entity.type);
+    result.push_back('\0');
+    result.append(entity.required ? "required" : "optional");
+    result.push_back('\0');
+    result.append(entity.properties.dump());
+    result.push_back('\0');
+    result.append(entity.extensions.dump());
+    result.push_back('\0');
+}
+
+std::string entity_content(const Entity& entity,
+                           const std::vector<const Entity*>& hosted_openings = {}) {
+    std::string canonical;
+    append_entity_content(canonical, entity);
+    for (const auto* opening : hosted_openings) {
+        if (opening != nullptr) {
+            append_entity_content(canonical, *opening);
+        }
+    }
+    return canonical;
+}
+
+const Json* property(const Json& object, std::initializer_list<const char*> names) {
+    if (!object.is_object()) {
+        return nullptr;
+    }
+    for (const auto* name : names) {
+        const auto found = object.find(name);
+        if (found != object.end()) {
+            return &*found;
+        }
+    }
+    return nullptr;
+}
+
+bool finite_number(const Json& value, double& output, std::string_view label,
+                   std::string& error) {
+    if (!value.is_number()) {
+        error = std::string(label) + " must be a finite number";
+        return false;
+    }
+    try {
+        output = value.get<double>();
+    } catch (const Json::exception&) {
+        error = std::string(label) + " must be a finite number";
+        return false;
+    }
+    if (!std::isfinite(output)) {
+        error = std::string(label) + " must be a finite number";
+        return false;
+    }
+    return true;
+}
+
+bool required_number(const Json& object, std::initializer_list<const char*> names,
+                     double& output, std::string_view label, std::string& error) {
+    const auto* value = property(object, names);
+    if (value == nullptr) {
+        error = std::string(label) + " is required";
+        return false;
+    }
+    return finite_number(*value, output, label, error);
+}
+
+bool required_string(const Json& object, std::initializer_list<const char*> names,
+                     std::string& output, std::string_view label, std::string& error) {
+    const auto* value = property(object, names);
+    if (value == nullptr || !value->is_string()) {
+        error = std::string(label) + " is required and must be a non-empty string";
+        return false;
+    }
+    try {
+        output = value->get<std::string>();
+    } catch (const Json::exception&) {
+        error = std::string(label) + " is required and must be a non-empty string";
+        return false;
+    }
+    if (output.empty()) {
+        error = std::string(label) + " is required and must be a non-empty string";
+        return false;
+    }
+    return true;
+}
+
+bool required_point(const Json& value, Vec2& output, std::string_view label,
+                    std::string& error) {
+    if (!value.is_array() || value.size() != 2) {
+        error = std::string(label) + " must be [x, y]";
+        return false;
+    }
+    if (!finite_number(value[0], output.x, std::string(label) + "[0]", error) ||
+        !finite_number(value[1], output.y, std::string(label) + "[1]", error)) {
+        return false;
+    }
+    return true;
+}
+
+bool required_segment(const Json& value, Segment& output, std::string_view label,
+                      std::string& error) {
+    if (!value.is_object()) {
+        error = std::string(label) + " must be an object";
+        return false;
+    }
+    const auto* start = property(value, {"start"});
+    const auto* end = property(value, {"end"});
+    if (start == nullptr || end == nullptr) {
+        error = std::string(label) + " requires start and end points";
+        return false;
+    }
+    if (!required_point(*start, output.start, std::string(label) + ".start", error) ||
+        !required_point(*end, output.end, std::string(label) + ".end", error)) {
+        return false;
+    }
+    return required_number(value, {"sweep_radians"}, output.sweep_radians,
+                           std::string(label) + ".sweep_radians", error);
+}
+
+bool required_boundary(const Json& value, Boundary& output, std::string_view label,
+                       std::string& error) {
+    if (!value.is_array() || value.empty()) {
+        error = std::string(label) + " must be a non-empty segment array";
+        return false;
+    }
+    output.clear();
+    output.reserve(value.size());
+    for (std::size_t index = 0; index < value.size(); ++index) {
+        Segment segment;
+        if (!required_segment(value[index], segment,
+                              std::string(label) + "[" + std::to_string(index) + "]", error)) {
+            return false;
+        }
+        output.push_back(segment);
+    }
+    return true;
+}
+
+bool read_wall(const Entity& entity, const std::vector<const Entity*>& opening_entities,
+               Wall& output, std::string& error) {
+    if (!entity.properties.is_object()) {
+        error = "properties must be an object";
+        return false;
+    }
+    output = Wall{};
+    output.id = entity.id;
+    const auto* baseline = property(entity.properties, {"baseline"});
+    if (baseline == nullptr ||
+        !required_segment(*baseline, output.baseline, "baseline", error)) {
+        return false;
+    }
+    if (!required_number(entity.properties, {"thickness_m", "thickness"}, output.thickness,
+                         "thickness_m", error) ||
+        !required_number(entity.properties, {"height_m", "height"}, output.height, "height_m",
+                         error) ||
+        !required_number(entity.properties, {"elevation_m", "elevation"}, output.elevation,
+                         "elevation_m", error)) {
+        return false;
+    }
+
+    output.openings.reserve(opening_entities.size());
+    for (const auto* opening_entity : opening_entities) {
+        if (opening_entity == nullptr || !opening_entity->properties.is_object()) {
+            error = "hosted opening properties must be an object";
+            return false;
+        }
+        HostedOpening opening;
+        opening.id = opening_entity->id;
+        if (!required_number(opening_entity->properties, {"offset_m", "offset"}, opening.offset,
+                             "offset_m", error) ||
+            !required_number(opening_entity->properties, {"width_m", "width"}, opening.width,
+                             "width_m", error) ||
+            !required_number(opening_entity->properties, {"sill_m", "sill"}, opening.sill,
+                             "sill_m", error) ||
+            !required_number(opening_entity->properties, {"height_m", "height"}, opening.height,
+                             "height_m", error)) {
+            return false;
+        }
+        output.openings.push_back(opening);
+    }
+    return true;
+}
+
+bool read_slab(const Entity& entity, Slab& output, std::string& error) {
+    if (!entity.properties.is_object()) {
+        error = "properties must be an object";
+        return false;
+    }
+    output = Slab{};
+    output.id = entity.id;
+    const auto* boundary = property(entity.properties, {"boundary"});
+    const auto* holes = property(entity.properties, {"holes"});
+    if (boundary == nullptr ||
+        !required_boundary(*boundary, output.boundary, "boundary", error)) {
+        return false;
+    }
+    if (holes == nullptr || !holes->is_array()) {
+        error = "holes is required and must be an array of segment arrays";
+        return false;
+    }
+    output.holes.reserve(holes->size());
+    for (std::size_t index = 0; index < holes->size(); ++index) {
+        Boundary hole;
+        if (!required_boundary((*holes)[index], hole,
+                               "holes[" + std::to_string(index) + "]", error)) {
+            return false;
+        }
+        output.holes.push_back(std::move(hole));
+    }
+    return required_number(entity.properties, {"thickness_m", "thickness"}, output.thickness,
+                           "thickness_m", error) &&
+           required_number(entity.properties, {"elevation_m", "elevation"}, output.elevation,
+                           "elevation_m", error);
+}
+
+bool read_wall_id(const Entity& entity, std::string& wall_id, std::string& error) {
+    if (!entity.properties.is_object()) {
+        error = "properties must be an object";
+        return false;
+    }
+    return required_string(entity.properties, {"wall_id"}, wall_id, "wall_id", error);
+}
+
+void append_unique(std::vector<std::string>& messages, std::string message) {
+    if (std::find(messages.begin(), messages.end(), message) == messages.end()) {
+        messages.push_back(std::move(message));
+    }
+}
+
+QString status_text(std::string_view title, const std::vector<std::string>& messages) {
+    QString result = QString::fromUtf8(title.data(), static_cast<int>(title.size()));
+    for (const auto& message : messages) {
+        result += QStringLiteral("\n• ");
+        result += QString::fromStdString(message);
+    }
+    return result;
+}
+
+QString exception_text(const std::exception& error) {
+    const auto* message = error.what();
+    return (message != nullptr && *message != '\0') ? QString::fromUtf8(message)
+                                                      : QStringLiteral("unknown failure");
+}
+
+bool is_ignored_hierarchy_type(std::string_view type) {
+    static constexpr std::string_view ignored[] = {
+        "property",          "building",        "floor",       "layer",      "label",
+        "sheet",             "view",            "constraint",  "annotation", "dimension",
+        "boundary",          "measurement_boundary", "room_boundary"};
+    return std::find(std::begin(ignored), std::end(ignored), type) != std::end(ignored);
+}
+
+bool is_pending_geometry_type(std::string_view type) {
+    static constexpr std::string_view pending[] = {"room"};
+    return std::find(std::begin(pending), std::end(pending), type) != std::end(pending);
+}
+
+struct NativeInputPoint {
+    int x{};
+    int y{};
+};
+
+qreal input_device_pixel_ratio(const QWidget& widget) noexcept {
+    const auto ratio = widget.devicePixelRatioF();
+    return std::isfinite(ratio) && ratio > 0.0 ? ratio : 1.0;
+}
+
+NativeInputPoint map_input_point(const QWidget& widget, const QPointF& logical_point,
+                                 int native_width = 0, int native_height = 0) noexcept {
+    const auto ratio = input_device_pixel_ratio(widget);
+    if (native_width <= 0) {
+        native_width = std::max(1, qRound(widget.width() * ratio));
+    }
+    if (native_height <= 0) {
+        native_height = std::max(1, qRound(widget.height() * ratio));
+    }
+
+    const auto native_x = qBound(0, qRound(logical_point.x() * ratio), native_width - 1);
+    // QMouseEvent::position() is widget-local with a top-left origin. OCCT's
+    // AIS picker and direct V3d mouse helpers use that same pixel convention:
+    // AIS selection flips Y internally when projecting, while V3d_View::Convert
+    // performs the corresponding top-left to view-space conversion for
+    // Pan/ZoomAtPoint. Keep the adapter's point top-left and let each OCCT API
+    // apply its own view-space conversion.
+    const auto top_left_y = qBound(0, qRound(logical_point.y() * ratio), native_height - 1);
+    return NativeInputPoint{native_x, top_left_y};
+}
+
+}  // namespace
+
+class NativeModelView::Impl {
+public:
+    struct CachedSolid {
+        // Exact equality avoids reusing stale geometry after a hash collision.
+        std::string content;
+        TopoDS_Shape shape;
+        occ::handle<AIS_Shape> presentation;
+    };
+
+    NativeModelView* owner{};
+    QLabel* status_label{};
+    std::optional<DocumentSnapshot> snapshot;
+    std::optional<NativeModelView::VisibleEntityIds> visible_ids;
+    QString native_error;
+    QString geometry_status;
+    QString operation_error;
+    bool native_attempted{};
+    bool native_ready{};
+    bool has_fit{};
+
+    occ::handle<Aspect_DisplayConnection> display_connection;
+    occ::handle<OpenGl_GraphicDriver> graphic_driver;
+    occ::handle<V3d_Viewer> viewer;
+    occ::handle<V3d_View> view;
+    occ::handle<AIS_InteractiveContext> context;
+    occ::handle<WNT_Window> window;
+    std::map<std::string, CachedSolid, std::less<>> solids;
+
+    Qt::MouseButton navigation_button = Qt::NoButton;
+    QPoint navigation_start;
+    QPointF left_press;
+    bool left_pressed{};
+    bool left_moved{};
+
+    explicit Impl(NativeModelView* widget) : owner(widget) {}
+
+    NativeInputPoint input_point(const QPointF& logical_point) const {
+        int native_width = 0;
+        int native_height = 0;
+        if (!window.IsNull()) {
+            window->Size(native_width, native_height);
+        }
+        return map_input_point(*owner, logical_point, native_width, native_height);
+    }
+
+    qreal input_scale() const noexcept { return input_device_pixel_ratio(*owner); }
+
+    void fit_all() {
+        if (!native_ready || view.IsNull() || window.IsNull()) {
+            return;
+        }
+
+        // WNT_Window reports the physical client size. Refresh both the
+        // OpenGL viewport and the camera aspect immediately before fitting so
+        // a late QWidget/DPI resize cannot leave FitAll using an old aspect.
+        view->MustBeResized();
+        int native_width = 0;
+        int native_height = 0;
+        window->Size(native_width, native_height);
+        if (native_width <= 0 || native_height <= 0) {
+            show_operation_error(QStringLiteral(
+                "Native OCCT 3D viewport has no usable pixel dimensions"));
+            return;
+        }
+        view->FitAll(0.05, true);
+        has_fit = true;
+    }
+
+    void show_status(const QString& text) {
+        geometry_status = text;
+        operation_error.clear();
+        refresh_status_label();
+        if (!text.isEmpty() && owner->onError) {
+            owner->onError(text);
+        }
+    }
+
+    void show_native_error(const QString& text) {
+        native_error = text;
+        refresh_status_label();
+        if (owner->onError) {
+            owner->onError(text);
+        }
+    }
+
+    void show_operation_error(const QString& text) {
+        operation_error = text;
+        refresh_status_label();
+        if (owner->onError) {
+            owner->onError(text);
+        }
+    }
+
+    void refresh_status_label() {
+        const auto text = !native_error.isEmpty()
+                              ? native_error
+                              : (!geometry_status.isEmpty() ? geometry_status : operation_error);
+        status_label->setText(text);
+        status_label->setVisible(!text.isEmpty());
+        status_label->raise();
+        status_label->setGeometry(owner->rect().adjusted(12, 12, -12, -12));
+    }
+
+    void remove_solid(const std::string& id) {
+        const auto found = solids.find(id);
+        if (found == solids.end()) {
+            return;
+        }
+        if (native_ready && !found->second.presentation.IsNull()) {
+            context->Remove(found->second.presentation, false);
+        }
+        solids.erase(found);
+    }
+
+    void clear_solids() {
+        if (native_ready && !context.IsNull()) {
+            for (const auto& [id, solid] : solids) {
+                (void)id;
+                if (!solid.presentation.IsNull()) {
+                    context->Remove(solid.presentation, false);
+                }
+            }
+        }
+        solids.clear();
+        has_fit = false;
+    }
+
+    void rebuild_snapshot() {
+        if (!native_ready || !snapshot.has_value()) {
+            return;
+        }
+
+        std::vector<std::string> errors;
+        std::vector<std::string> pending;
+        const auto& entities = snapshot->entities();
+        std::set<std::string, std::less<>> wall_ids;
+        for (const auto& [id, entity] : entities) {
+            if (entity.type == "wall") {
+                wall_ids.insert(id);
+            }
+        }
+
+        std::map<std::string, std::vector<const Entity*>, std::less<>> openings_by_wall;
+        for (const auto& [id, entity] : entities) {
+            if (entity.type != "opening") {
+                continue;
+            }
+            std::string wall_id;
+            std::string relation_error;
+            if (!read_wall_id(entity, wall_id, relation_error)) {
+                append_unique(pending, "opening '" + id + "': " + relation_error);
+            } else if (!wall_ids.contains(wall_id)) {
+                append_unique(pending, "opening '" + id + "' references missing wall '" + wall_id + "'");
+            } else {
+                openings_by_wall[wall_id].push_back(&entity);
+            }
+        }
+
+        std::set<std::string, std::less<>> supported_ids;
+        const bool had_solids = !solids.empty();
+        bool changed = false;
+        for (const auto& [id, entity] : entities) {
+            if (entity.type != "wall" && entity.type != "slab" &&
+                !can_recognize_building_entity_type(entity.type)) {
+                if (entity.type == "opening") {
+                    continue;
+                }
+                if (is_pending_geometry_type(entity.type)) {
+                    append_unique(pending, "entity '" + id + "' of type '" + entity.type +
+                                             "' has no native solid representation yet");
+                } else if (!is_ignored_hierarchy_type(entity.type)) {
+                    append_unique(pending, "entity '" + id + "' of unsupported type '" + entity.type +
+                                             "' is pending native geometry");
+                }
+                continue;
+            }
+
+            supported_ids.insert(id);
+            const auto hosted = entity.type == "wall"
+                                    ? openings_by_wall[id]
+                                    : std::vector<const Entity*>{};
+            auto content = entity_content(entity, hosted);
+            const auto cached = solids.find(id);
+            if (cached != solids.end() && cached->second.content == content) {
+                const bool visible = !visible_ids || visible_ids->contains(id);
+                if (visible != static_cast<bool>(context->IsDisplayed(cached->second.presentation))) {
+                    if (visible) context->Display(cached->second.presentation, false);
+                    else context->Erase(cached->second.presentation, false);
+                    changed = true;
+                }
+                continue;
+            }
+
+            std::string parse_error;
+            TopoDS_Shape shape;
+            try {
+                if (entity.type == "wall") {
+                    Wall wall;
+                    if (!read_wall(entity, hosted, wall, parse_error)) {
+                        append_unique(errors, "wall '" + id + "': " + parse_error);
+                        remove_solid(id);
+                        changed = true;
+                        continue;
+                    }
+                    shape = make_wall(wall);
+                } else if (entity.type == "slab") {
+                    Slab slab;
+                    if (!read_slab(entity, slab, parse_error)) {
+                        append_unique(errors, "slab '" + id + "': " + parse_error);
+                        remove_solid(id);
+                        changed = true;
+                        continue;
+                    }
+                    shape = make_slab(slab);
+                } else {
+                    shape = make_building_shape(decode_building_entity(entity));
+                }
+                if (shape.IsNull()) {
+                    append_unique(errors, entity.type + " '" + id + "' produced a null solid");
+                    remove_solid(id);
+                    changed = true;
+                    continue;
+                }
+
+                auto presentation = occ::handle<AIS_Shape>(new AIS_Shape(shape));
+                presentation->SetColor(entity.type == "wall"
+                                            ? Quantity_Color(0.84, 0.66, 0.32, Quantity_TOC_RGB)
+                                            : Quantity_Color(0.46, 0.70, 0.86, Quantity_TOC_RGB));
+                presentation->SetDisplayMode(AIS_Shaded);
+
+                remove_solid(id);
+                if (!visible_ids || visible_ids->contains(id)) context->Display(presentation, false);
+                solids.emplace(id, CachedSolid{std::move(content), std::move(shape), presentation});
+                changed = true;
+            } catch (const std::exception& error) {
+                append_unique(errors, entity.type + " '" + id + "': " + error.what());
+                remove_solid(id);
+                changed = true;
+            } catch (...) {
+                append_unique(errors, entity.type + " '" + id + "': unknown OCCT failure");
+                remove_solid(id);
+                changed = true;
+            }
+        }
+
+        for (auto it = solids.begin(); it != solids.end();) {
+            if (!supported_ids.contains(it->first)) {
+                if (native_ready && !it->second.presentation.IsNull()) {
+                    context->Remove(it->second.presentation, false);
+                }
+                it = solids.erase(it);
+                changed = true;
+            } else {
+                ++it;
+            }
+        }
+
+        const bool has_visible_solids = std::any_of(solids.begin(), solids.end(), [this](const auto& entry) {
+            return context->IsDisplayed(entry.second.presentation);
+        });
+        if (has_visible_solids && (!has_fit || (!had_solids && changed))) {
+            fit_all();
+        } else if (solids.empty()) {
+            has_fit = false;
+        }
+        if (changed) {
+            viewer->Redraw();
+        }
+
+        std::vector<std::string> status_messages;
+        status_messages.reserve(errors.size() + pending.size());
+        for (auto& message : errors) {
+            status_messages.push_back(std::move(message));
+        }
+        for (auto& message : pending) {
+            status_messages.push_back(std::move(message));
+        }
+        if (status_messages.empty()) {
+            show_status(QString());
+        } else if (!errors.empty()) {
+            show_status(status_text("3D geometry is incomplete:", status_messages));
+        } else {
+            show_status(status_text("3D geometry pending:", status_messages));
+        }
+    }
+
+    void initialize_native_view() {
+        if (native_attempted || native_ready) {
+            return;
+        }
+        native_attempted = true;
+        try {
+            const auto platform_name = QGuiApplication::platformName().toLower();
+            if (platform_name == QStringLiteral("offscreen") ||
+                platform_name == QStringLiteral("minimal")) {
+                show_native_error(QStringLiteral(
+                                      "Native OCCT 3D view unavailable on Qt platform '%1'")
+                                      .arg(platform_name));
+                return;
+            }
+            owner->setAttribute(Qt::WA_NativeWindow, true);
+            owner->setAttribute(Qt::WA_PaintOnScreen, true);
+            owner->setAttribute(Qt::WA_NoSystemBackground, true);
+            owner->setAttribute(Qt::WA_OpaquePaintEvent, true);
+            const auto native_id = owner->winId();
+            if (native_id == 0) {
+                throw std::runtime_error("Qt did not provide a native window handle");
+            }
+            display_connection = occ::handle<Aspect_DisplayConnection>(new Aspect_DisplayConnection());
+            graphic_driver = occ::handle<OpenGl_GraphicDriver>(
+                new OpenGl_GraphicDriver(display_connection, true));
+            if (graphic_driver.IsNull()) {
+                throw std::runtime_error("Open CASCADE OpenGL driver could not be created");
+            }
+            viewer = occ::handle<V3d_Viewer>(new V3d_Viewer(graphic_driver));
+            context = occ::handle<AIS_InteractiveContext>(new AIS_InteractiveContext(viewer));
+            view = occ::handle<V3d_View>(viewer->CreateView());
+            if (view.IsNull() || context.IsNull()) {
+                throw std::runtime_error("Open CASCADE viewer context could not be created");
+            }
+#ifdef _WIN32
+            const auto aspect_handle = reinterpret_cast<Aspect_Handle>(native_id);
+#else
+            const auto aspect_handle = static_cast<Aspect_Handle>(native_id);
+#endif
+            window = occ::handle<WNT_Window>(new WNT_Window(aspect_handle));
+            view->SetWindow(window);
+            // Qt owns visibility. Mapping the external HWND here overrides
+            // WA_DontShowOnScreen and can expose automated test windows.
+            viewer->SetDefaultLights();
+            viewer->SetLightOn();
+            view->SetBackgroundColor(Quantity_Color(0.09, 0.11, 0.14, Quantity_TOC_RGB));
+            view->SetShadingModel(Graphic3d_TypeOfShadingModel_Phong);
+            view->SetProj(V3d_XposYnegZpos, false);
+            view->MustBeResized();
+            native_ready = true;
+            native_error.clear();
+            operation_error.clear();
+            if (snapshot.has_value()) {
+                rebuild_snapshot();
+            } else {
+                refresh_status_label();
+            }
+            view->Redraw();
+        } catch (const Standard_Failure& error) {
+            show_native_error(QStringLiteral("Native OCCT 3D view unavailable: ") +
+                              exception_text(error));
+        } catch (const std::exception& error) {
+            show_native_error(QStringLiteral("Native OCCT 3D view unavailable: ") +
+                              exception_text(error));
+        } catch (...) {
+            show_native_error(QStringLiteral("Native OCCT 3D view unavailable: unknown failure"));
+        }
+    }
+
+    void select_at(const NativeInputPoint point) {
+        if (!native_ready || context.IsNull() || view.IsNull()) {
+            return;
+        }
+        const auto x = point.x;
+        const auto y = point.y;
+        context->MoveTo(x, y, view, false);
+        context->ClearSelected(false);
+        context->SelectDetected(AIS_SelectionScheme_Replace);
+        const auto selected = context->FirstSelectedObject();
+        QString selected_id;
+        if (!selected.IsNull()) {
+            for (const auto& [id, solid] : solids) {
+                if (solid.presentation == selected) {
+                    selected_id = QString::fromStdString(id);
+                    break;
+                }
+            }
+        }
+        if (owner->onEntitySelected) {
+            owner->onEntitySelected(selected_id);
+        }
+        viewer->Redraw();
+    }
+
+    bool export_view_image(const QString& path) {
+        if (!native_ready || view.IsNull()) {
+            show_operation_error(QStringLiteral(
+                "Native OCCT 3D view is not ready; show the viewport before exporting an image"));
+            return false;
+        }
+        if (!native_error.isEmpty() || !geometry_status.isEmpty()) {
+            // The framebuffer cannot represent the complete current model.
+            // Keep the existing geometry diagnostic and never export stale or
+            // partial solids as a successful image.
+            refresh_status_label();
+            return false;
+        }
+        if (path.trimmed().isEmpty()) {
+            show_operation_error(QStringLiteral("3D view image export requires a destination path"));
+            return false;
+        }
+        const QByteArray encoded_path = path.toUtf8();
+        try {
+            if (!view->Dump(encoded_path.constData(), Graphic3d_BT_RGB)) {
+                show_operation_error(QStringLiteral(
+                    "OCCT could not export the 3D framebuffer (check the path and image codec)"));
+                return false;
+            }
+        } catch (const Standard_Failure& error) {
+            show_operation_error(QStringLiteral("OCCT 3D framebuffer export failed: ") +
+                                 exception_text(error));
+            return false;
+        } catch (const std::exception& error) {
+            show_operation_error(QStringLiteral("3D framebuffer export failed: ") +
+                                 exception_text(error));
+            return false;
+        } catch (...) {
+            show_operation_error(QStringLiteral("3D framebuffer export failed: unknown failure"));
+            return false;
+        }
+        operation_error.clear();
+        refresh_status_label();
+        return true;
+    }
+};
+
+NativeModelView::NativeModelView(QWidget* parent)
+    : QWidget(parent), m_impl(std::make_unique<Impl>(this)) {
+    setFocusPolicy(Qt::StrongFocus);
+    setMouseTracking(true);
+    setMinimumSize(480, 360);
+    setAttribute(Qt::WA_NativeWindow, true);
+    setAttribute(Qt::WA_PaintOnScreen, true);
+    setAttribute(Qt::WA_NoSystemBackground, true);
+    setAttribute(Qt::WA_OpaquePaintEvent, true);
+
+    m_impl->status_label = new QLabel(this);
+    m_impl->status_label->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    m_impl->status_label->setWordWrap(true);
+    m_impl->status_label->setTextFormat(Qt::PlainText);
+    m_impl->status_label->setStyleSheet(
+        QStringLiteral("QLabel { color: #ffd166; background: rgba(15, 20, 28, 220); "
+                       "border: 1px solid #7e6b32; padding: 8px; }"));
+    m_impl->status_label->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    m_impl->status_label->hide();
+}
+
+NativeModelView::~NativeModelView() {
+    if (m_impl->native_ready && !m_impl->context.IsNull()) {
+        m_impl->context->RemoveAll(false);
+    }
+    if (!m_impl->view.IsNull()) {
+        m_impl->view->Remove();
+    }
+    if (!m_impl->viewer.IsNull()) {
+        m_impl->viewer->Remove();
+    }
+}
+
+void NativeModelView::setSnapshot(const DocumentSnapshot& snapshot,
+                                 std::optional<VisibleEntityIds> visible_ids) {
+    m_impl->visible_ids = std::move(visible_ids);
+    m_impl->snapshot = snapshot;
+    if (isVisible()) {
+        m_impl->initialize_native_view();
+    }
+    if (m_impl->native_ready) {
+        // A previously initialized hidden viewport may still be exported.
+        // Keep its derived geometry synchronized with the current snapshot.
+        m_impl->rebuild_snapshot();
+    }
+}
+
+void NativeModelView::fitAll() {
+    if (!m_impl->native_ready || m_impl->view.IsNull()) {
+        return;
+    }
+    m_impl->fit_all();
+}
+
+bool NativeModelView::exportViewImage(const QString& path) {
+    return m_impl->export_view_image(path);
+}
+
+bool NativeModelView::isReady() const noexcept {
+    return m_impl->native_ready && m_impl->native_error.isEmpty() &&
+           m_impl->geometry_status.isEmpty() && m_impl->operation_error.isEmpty();
+}
+
+QString NativeModelView::lastError() const {
+    if (!m_impl->native_error.isEmpty()) {
+        return m_impl->native_error;
+    }
+    if (!m_impl->geometry_status.isEmpty()) {
+        return m_impl->geometry_status;
+    }
+    return m_impl->operation_error;
+}
+
+void NativeModelView::setEntitySelectedCallback(std::function<void(QString)> callback) {
+    onEntitySelected = std::move(callback);
+}
+
+void NativeModelView::setErrorCallback(std::function<void(QString)> callback) {
+    onError = std::move(callback);
+}
+
+void NativeModelView::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    m_impl->initialize_native_view();
+    m_impl->refresh_status_label();
+}
+
+void NativeModelView::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    if (!m_impl->status_label->isHidden()) {
+        m_impl->status_label->setGeometry(rect().adjusted(12, 12, -12, -12));
+    }
+    if (m_impl->native_ready && !m_impl->view.IsNull()) {
+        m_impl->view->MustBeResized();
+        m_impl->view->Redraw();
+    }
+}
+
+void NativeModelView::paintEvent(QPaintEvent* event) {
+    (void)event;
+    if (m_impl->native_ready && !m_impl->view.IsNull()) {
+        m_impl->view->Redraw();
+    }
+}
+
+void NativeModelView::mousePressEvent(QMouseEvent* event) {
+    if (!m_impl->native_ready || m_impl->view.IsNull()) {
+        event->ignore();
+        return;
+    }
+    const auto logical_point = event->position();
+    const auto point = m_impl->input_point(logical_point);
+    setFocus();
+    if (event->button() == Qt::RightButton) {
+        m_impl->navigation_button = Qt::RightButton;
+        m_impl->navigation_start = QPoint(point.x, point.y);
+        m_impl->view->StartRotation(point.x, point.y, 0.4);
+        setCursor(Qt::ClosedHandCursor);
+        event->accept();
+        return;
+    }
+    if (event->button() == Qt::MiddleButton) {
+        m_impl->navigation_button = Qt::MiddleButton;
+        m_impl->navigation_start = QPoint(point.x, point.y);
+        m_impl->view->Pan(0, 0, 1.0, true);
+        setCursor(Qt::ClosedHandCursor);
+        event->accept();
+        return;
+    }
+    if (event->button() == Qt::LeftButton) {
+        m_impl->left_pressed = true;
+        m_impl->left_moved = false;
+        m_impl->left_press = logical_point;
+        event->accept();
+        return;
+    }
+    QWidget::mousePressEvent(event);
+}
+
+void NativeModelView::mouseMoveEvent(QMouseEvent* event) {
+    if (!m_impl->native_ready || m_impl->view.IsNull()) {
+        event->ignore();
+        return;
+    }
+    const auto logical_point = event->position();
+    const auto point = m_impl->input_point(logical_point);
+    if (m_impl->navigation_button == Qt::RightButton) {
+        m_impl->view->Rotation(point.x, point.y);
+        event->accept();
+        return;
+    }
+    if (m_impl->navigation_button == Qt::MiddleButton) {
+        const auto delta = QPoint(point.x, point.y) - m_impl->navigation_start;
+        // V3d::Pan accepts view-plane displacement (positive y is up),
+        // unlike picking/rotation/zoom mouse positions measured from the top.
+        m_impl->view->Pan(delta.x(), -delta.y(), 1.0, false);
+        event->accept();
+        return;
+    }
+    if (m_impl->left_pressed) {
+        const auto delta = logical_point - m_impl->left_press;
+        if (delta.manhattanLength() >= QApplication::startDragDistance()) {
+            m_impl->left_moved = true;
+        }
+        if (!m_impl->context.IsNull()) {
+            m_impl->context->MoveTo(point.x, point.y, m_impl->view, false);
+            m_impl->viewer->RedrawImmediate();
+        }
+        event->accept();
+        return;
+    }
+    if (!m_impl->context.IsNull()) {
+        m_impl->context->MoveTo(point.x, point.y, m_impl->view, false);
+        m_impl->viewer->RedrawImmediate();
+    }
+    QWidget::mouseMoveEvent(event);
+}
+
+void NativeModelView::mouseReleaseEvent(QMouseEvent* event) {
+    const auto point = m_impl->input_point(event->position());
+    if (event->button() == m_impl->navigation_button) {
+        m_impl->navigation_button = Qt::NoButton;
+        unsetCursor();
+        event->accept();
+        return;
+    }
+    if (event->button() == Qt::LeftButton && m_impl->left_pressed) {
+        const auto was_click = !m_impl->left_moved;
+        m_impl->left_pressed = false;
+        m_impl->left_moved = false;
+        if (was_click) {
+            m_impl->select_at(point);
+        }
+        event->accept();
+        return;
+    }
+    QWidget::mouseReleaseEvent(event);
+}
+
+void NativeModelView::wheelEvent(QWheelEvent* event) {
+    if (!m_impl->native_ready || m_impl->view.IsNull()) {
+        event->ignore();
+        return;
+    }
+    int delta = event->angleDelta().y();
+    if (delta == 0) {
+        delta = event->pixelDelta().y() * 8;
+    }
+    if (delta != 0) {
+        const auto point = m_impl->input_point(event->position());
+        const auto movement = std::clamp(delta / 8, -120, 120);
+        const auto native_movement = qRound(static_cast<qreal>(movement) * m_impl->input_scale());
+        m_impl->view->StartZoomAtPoint(point.x, point.y);
+        m_impl->view->ZoomAtPoint(point.x, point.y, point.x, point.y + native_movement);
+        event->accept();
+        return;
+    }
+    QWidget::wheelEvent(event);
+}
+
+QPaintEngine* NativeModelView::paintEngine() const {
+    return nullptr;
+}
+
+}  // namespace sketch::visualization

@@ -1,0 +1,522 @@
+#include "sketch/project_organization.hpp"
+
+#include <algorithm>
+#include <array>
+#include <set>
+#include <string>
+#include <string_view>
+#include <utility>
+
+namespace sketch {
+namespace {
+
+struct OptionalReference {
+    bool present = false;
+    bool valid = true;
+    std::string id;
+};
+
+struct Resolution {
+    bool valid = false;
+    DrawingContext context;
+    std::string parent_id;
+    std::vector<std::string> issues;
+};
+
+const nlohmann::json* property_value(const Entity& entity, std::string_view key) {
+    if (!entity.properties.is_object()) {
+        return nullptr;
+    }
+    const auto iterator = entity.properties.find(std::string(key));
+    if (iterator == entity.properties.end()) {
+        return nullptr;
+    }
+    return &iterator.value();
+}
+
+OptionalReference read_reference(const Entity& entity, std::string_view key) {
+    const auto* value = property_value(entity, key);
+    if (value == nullptr) {
+        return {};
+    }
+
+    OptionalReference result;
+    result.present = true;
+    if (!value->is_string()) {
+        result.valid = false;
+        return result;
+    }
+
+    result.id = value->get<std::string>();
+    result.valid = !result.id.empty();
+    return result;
+}
+
+std::string display_name(const Entity& entity) {
+    const auto* value = property_value(entity, "name");
+    if (value != nullptr && value->is_string()) {
+        const auto& name = value->get_ref<const std::string&>();
+        if (!name.empty()) {
+            return name;
+        }
+    }
+    if (!entity.type.empty()) {
+        return entity.type + " " + entity.id;
+    }
+    return entity.id;
+}
+
+void add_issue(std::vector<std::string>& issues, std::string message) {
+    if (std::find(issues.begin(), issues.end(), message) == issues.end()) {
+        issues.push_back(std::move(message));
+    }
+}
+
+void add_issues(std::vector<std::string>& destination,
+                const std::vector<std::string>& source) {
+    for (const auto& issue : source) {
+        add_issue(destination, issue);
+    }
+}
+
+bool is_placeable_type(std::string_view type) noexcept {
+    static constexpr std::array<std::string_view, 11> placeable{
+        "boundary", "measurement_boundary", "room_boundary", "wall", "opening", "room",
+        "slab", "roof", "stair", "column", "beam"};
+    return std::find(placeable.begin(), placeable.end(), type) != placeable.end();
+}
+
+class Resolver final {
+public:
+    explicit Resolver(const std::map<std::string, Entity, std::less<>>& entities)
+        : entities_(entities) {}
+
+    Resolution resolve(std::string_view id) {
+        const auto cached = resolved_.find(id);
+        if (cached != resolved_.end()) {
+            return cached->second;
+        }
+
+        const std::string key(id);
+        if (visiting_.contains(key)) {
+            Resolution cycle;
+            add_issue(cycle.issues, "organization cycle includes entity '" + key + "'");
+            return cycle;
+        }
+
+        const auto entity = entities_.find(id);
+        if (entity == entities_.end()) {
+            Resolution missing;
+            add_issue(missing.issues, "organization reference targets missing entity '" + key + "'");
+            return missing;
+        }
+
+        visiting_.insert(key);
+        Resolution result = resolve_entity(entity->second);
+        visiting_.erase(key);
+
+        if (!result.valid) {
+            result.context = {};
+            result.parent_id.clear();
+        }
+        const auto [inserted, unused] = resolved_.emplace(key, std::move(result));
+        (void)unused;
+        return inserted->second;
+    }
+
+private:
+    const std::map<std::string, Entity, std::less<>>& entities_;
+    std::map<std::string, Resolution, std::less<>> resolved_;
+    std::set<std::string, std::less<>> visiting_;
+
+    static std::string entity_label(const Entity& entity) {
+        return entity.type + " '" + entity.id + "'";
+    }
+
+    const Entity* find_target(const OptionalReference& reference,
+                              std::string_view expected_type,
+                              const Entity& entity,
+                              std::string_view key,
+                              std::vector<std::string>& issues) const {
+        if (!reference.valid) {
+            add_issue(issues, entity_label(entity) + " has malformed " + std::string(key));
+            return nullptr;
+        }
+        const auto target = entities_.find(reference.id);
+        if (target == entities_.end()) {
+            add_issue(issues, entity_label(entity) + " references missing " +
+                               std::string(expected_type) + " '" + reference.id + "' via " +
+                               std::string(key));
+            return nullptr;
+        }
+        if (target->second.type != expected_type) {
+            add_issue(issues, entity_label(entity) + " references '" + reference.id + "' via " +
+                               std::string(key) + ", expected type " +
+                               std::string(expected_type) + " but found " + target->second.type);
+            return nullptr;
+        }
+        return &target->second;
+    }
+
+    bool require_reference(const Entity& entity,
+                           std::string_view key,
+                           std::string_view expected_type,
+                           std::string& parent_id,
+                           Resolution& parent,
+                           std::vector<std::string>& issues) {
+        const auto reference = read_reference(entity, key);
+        if (!reference.present) {
+            add_issue(issues, entity_label(entity) + " is missing required " + std::string(key));
+            return false;
+        }
+        const auto* target = find_target(reference, expected_type, entity, key, issues);
+        if (target == nullptr) {
+            return false;
+        }
+
+        parent_id = target->id;
+        parent = resolve(target->id);
+        if (!parent.valid) {
+            add_issue(issues, entity_label(entity) + " depends on unresolved " +
+                               std::string(key) + " '" + target->id + "'");
+            add_issues(issues, parent.issues);
+            return false;
+        }
+        return true;
+    }
+
+    void check_optional_matches(const Entity& entity,
+                                std::string_view key,
+                                std::string_view expected_type,
+                                std::string_view expected_id,
+                                std::vector<std::string>& issues) {
+        const auto reference = read_reference(entity, key);
+        if (!reference.present) {
+            return;
+        }
+        const auto* target = find_target(reference, expected_type, entity, key, issues);
+        if (target == nullptr) {
+            return;
+        }
+        if (reference.id != expected_id) {
+            add_issue(issues, entity_label(entity) + " has redundant " + std::string(key) +
+                               " '" + reference.id + "' but hierarchy resolves to '" +
+                               std::string(expected_id) + "'");
+            return;
+        }
+
+        const auto target_resolution = resolve(target->id);
+        if (!target_resolution.valid) {
+            add_issue(issues, entity_label(entity) + " has unresolved " + std::string(key) +
+                               " '" + target->id + "'");
+            add_issues(issues, target_resolution.issues);
+        }
+    }
+
+    void reject_reference(const Entity& entity,
+                          std::string_view key,
+                          std::string_view expected_type,
+                          std::vector<std::string>& issues) {
+        const auto reference = read_reference(entity, key);
+        if (!reference.present) {
+            return;
+        }
+        (void)find_target(reference, expected_type, entity, key, issues);
+        add_issue(issues, entity_label(entity) + " cannot use " + std::string(key) +
+                           " as an organizational parent");
+    }
+
+    Resolution resolve_property(const Entity& entity) {
+        Resolution result;
+        result.valid = true;
+        result.context.property_id = entity.id;
+        reject_reference(entity, "property_id", "property", result.issues);
+        reject_reference(entity, "building_id", "building", result.issues);
+        reject_reference(entity, "floor_id", "floor", result.issues);
+        reject_reference(entity, "layer_id", "layer", result.issues);
+        reject_reference(entity, "wall_id", "wall", result.issues);
+        if (!result.issues.empty()) {
+            result.valid = false;
+        }
+        return result;
+    }
+
+    Resolution resolve_building(const Entity& entity) {
+        Resolution result;
+        result.valid = true;
+        reject_reference(entity, "building_id", "building", result.issues);
+        reject_reference(entity, "floor_id", "floor", result.issues);
+        reject_reference(entity, "layer_id", "layer", result.issues);
+        reject_reference(entity, "wall_id", "wall", result.issues);
+
+        std::string property_id;
+        Resolution property;
+        if (!require_reference(entity, "property_id", "property", property_id, property,
+                                result.issues)) {
+            result.valid = false;
+            return result;
+        }
+        result.context = property.context;
+        result.context.building_id = entity.id;
+        result.parent_id = property_id;
+        if (!result.issues.empty()) {
+            result.valid = false;
+        }
+        return result;
+    }
+
+    Resolution resolve_floor(const Entity& entity) {
+        Resolution result;
+        result.valid = true;
+        reject_reference(entity, "floor_id", "floor", result.issues);
+        reject_reference(entity, "layer_id", "layer", result.issues);
+        reject_reference(entity, "wall_id", "wall", result.issues);
+
+        std::string building_id;
+        Resolution building;
+        if (!require_reference(entity, "building_id", "building", building_id, building,
+                                result.issues)) {
+            result.valid = false;
+            return result;
+        }
+        result.context = building.context;
+        result.context.floor_id = entity.id;
+        result.parent_id = building_id;
+        check_optional_matches(entity, "property_id", "property", result.context.property_id,
+                               result.issues);
+        if (!result.issues.empty()) {
+            result.valid = false;
+        }
+        return result;
+    }
+
+    Resolution resolve_layer(const Entity& entity) {
+        Resolution result;
+        result.valid = true;
+        reject_reference(entity, "layer_id", "layer", result.issues);
+        reject_reference(entity, "wall_id", "wall", result.issues);
+
+        std::string floor_id;
+        Resolution floor;
+        if (!require_reference(entity, "floor_id", "floor", floor_id, floor, result.issues)) {
+            result.valid = false;
+            return result;
+        }
+        result.context = floor.context;
+        result.context.layer_id = entity.id;
+        result.parent_id = floor_id;
+        check_optional_matches(entity, "building_id", "building", result.context.building_id,
+                               result.issues);
+        check_optional_matches(entity, "property_id", "property", result.context.property_id,
+                               result.issues);
+        if (!result.issues.empty()) {
+            result.valid = false;
+        }
+        return result;
+    }
+
+    Resolution resolve_opening(const Entity& entity) {
+        Resolution result;
+        result.valid = true;
+
+        std::string wall_id;
+        Resolution wall;
+        if (!require_reference(entity, "wall_id", "wall", wall_id, wall, result.issues)) {
+            result.valid = false;
+            return result;
+        }
+        result.context = wall.context;
+        result.parent_id = wall_id;
+        check_optional_matches(entity, "property_id", "property", result.context.property_id,
+                               result.issues);
+        check_optional_matches(entity, "building_id", "building", result.context.building_id,
+                               result.issues);
+        check_optional_matches(entity, "floor_id", "floor", result.context.floor_id,
+                               result.issues);
+        check_optional_matches(entity, "layer_id", "layer", result.context.layer_id,
+                               result.issues);
+        if (!result.issues.empty()) {
+            result.valid = false;
+        }
+        return result;
+    }
+
+    Resolution resolve_object(const Entity& entity) {
+        Resolution result;
+        result.valid = true;
+        reject_reference(entity, "wall_id", "wall", result.issues);
+        const auto layer = read_reference(entity, "layer_id");
+        const auto floor = read_reference(entity, "floor_id");
+        const auto building = read_reference(entity, "building_id");
+        const auto property = read_reference(entity, "property_id");
+
+        if (layer.present) {
+            std::string layer_id;
+            Resolution layer_resolution;
+            if (!require_reference(entity, "layer_id", "layer", layer_id, layer_resolution,
+                                    result.issues)) {
+                result.valid = false;
+                return result;
+            }
+            result.context = layer_resolution.context;
+            result.parent_id = layer_id;
+            check_optional_matches(entity, "floor_id", "floor", result.context.floor_id,
+                                   result.issues);
+            check_optional_matches(entity, "building_id", "building",
+                                   result.context.building_id, result.issues);
+            check_optional_matches(entity, "property_id", "property",
+                                   result.context.property_id, result.issues);
+            if (!result.issues.empty()) {
+                result.valid = false;
+            }
+            return result;
+        }
+
+        if (floor.present) {
+            std::string floor_id;
+            Resolution floor_resolution;
+            if (!require_reference(entity, "floor_id", "floor", floor_id, floor_resolution,
+                                    result.issues)) {
+                result.valid = false;
+                return result;
+            }
+            check_optional_matches(entity, "building_id", "building",
+                                   floor_resolution.context.building_id, result.issues);
+            check_optional_matches(entity, "property_id", "property",
+                                   floor_resolution.context.property_id, result.issues);
+            add_issue(result.issues, entity_label(entity) +
+                                      " has a floor but no layer_id; drawing context is incomplete");
+            result.valid = false;
+            return result;
+        }
+
+        if (building.present) {
+            std::string building_id;
+            Resolution building_resolution;
+            if (!require_reference(entity, "building_id", "building", building_id,
+                                    building_resolution, result.issues)) {
+                result.valid = false;
+                return result;
+            }
+            check_optional_matches(entity, "property_id", "property",
+                                   building_resolution.context.property_id, result.issues);
+            add_issue(result.issues, entity_label(entity) +
+                                      " has a building but no floor_id/layer_id; drawing context is incomplete");
+            result.valid = false;
+            return result;
+        }
+
+        if (property.present) {
+            std::string property_id;
+            Resolution property_resolution;
+            if (!require_reference(entity, "property_id", "property", property_id,
+                                    property_resolution, result.issues)) {
+                result.valid = false;
+                return result;
+            }
+            add_issue(result.issues, entity_label(entity) +
+                                      " has a property_id but no building_id/floor_id/layer_id; drawing context is incomplete");
+            result.valid = false;
+            return result;
+        }
+
+        if (is_placeable_type(entity.type)) {
+            add_issue(result.issues, entity_label(entity) +
+                                      " has no organizational placement; drawing context is unavailable");
+            result.valid = false;
+        }
+        if (!result.issues.empty()) {
+            result.valid = false;
+        }
+        return result;
+    }
+
+    Resolution resolve_entity(const Entity& entity) {
+        if (entity.type == "property") {
+            return resolve_property(entity);
+        }
+        if (entity.type == "building") {
+            return resolve_building(entity);
+        }
+        if (entity.type == "floor") {
+            return resolve_floor(entity);
+        }
+        if (entity.type == "layer") {
+            return resolve_layer(entity);
+        }
+        if (entity.type == "opening") {
+            return resolve_opening(entity);
+        }
+        return resolve_object(entity);
+    }
+};
+
+}  // namespace
+
+bool DrawingContext::complete() const noexcept {
+    return !property_id.empty() && !building_id.empty() && !floor_id.empty() &&
+           !layer_id.empty();
+}
+
+std::optional<DrawingContext> ProjectOrganization::drawing_context(
+    std::string_view entity_id) const {
+    const auto entity = nodes.find(entity_id);
+    if (entity == nodes.end() || !entity->second.issues.empty() ||
+        !entity->second.context.complete()) {
+        return std::nullopt;
+    }
+    return entity->second.context;
+}
+
+ProjectOrganization organize_project(const DocumentSnapshot& snapshot) {
+    ProjectOrganization result;
+    Resolver resolver(snapshot.entities());
+
+    for (const auto& [id, entity] : snapshot.entities()) {
+        OrganizationNode node;
+        node.id = id;
+        node.type = entity.type;
+        node.name = display_name(entity);
+        result.nodes.emplace(id, std::move(node));
+    }
+
+    for (const auto& [id, entity] : snapshot.entities()) {
+        const auto resolution = resolver.resolve(id);
+        auto& node = result.nodes.at(id);
+        node.context = resolution.context;
+        node.parent_id = resolution.parent_id;
+        node.issues = resolution.issues;
+        if (!resolution.valid) {
+            node.context = {};
+            node.parent_id.clear();
+        }
+    }
+
+    for (const auto& [id, unused] : result.nodes) {
+        (void)unused;
+        auto& node = result.nodes.at(id);
+        if (node.parent_id.empty()) {
+            result.roots.push_back(id);
+            continue;
+        }
+        const auto parent = result.nodes.find(node.parent_id);
+        if (parent == result.nodes.end()) {
+            add_issue(node.issues, "organization parent '" + node.parent_id +
+                                  "' is not present in the index");
+            node.parent_id.clear();
+            node.context = {};
+            result.roots.push_back(id);
+            continue;
+        }
+        parent->second.children.push_back(id);
+    }
+
+    std::sort(result.roots.begin(), result.roots.end());
+    for (auto& [unused, node] : result.nodes) {
+        (void)unused;
+        std::sort(node.children.begin(), node.children.end());
+    }
+    return result;
+}
+
+}  // namespace sketch

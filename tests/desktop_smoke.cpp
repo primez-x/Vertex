@@ -1,0 +1,584 @@
+#include "sketch/desktop/main_window.hpp"
+
+#include "sketch/document.hpp"
+#include "sketch/building_entity.hpp"
+#include "sketch/desktop/building_object_dialog.hpp"
+#include "support/noninteractive_errors.hpp"
+#include "../src/desktop/plan_canvas.hpp"
+
+#include <QApplication>
+#include <QLabel>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QToolButton>
+#include <QTemporaryDir>
+#include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <iostream>
+#include <limits>
+#include <memory>
+#include <string_view>
+
+namespace {
+
+[[noreturn]] void fail(std::string_view message) {
+    std::cerr << "desktop_smoke: " << message << '\n';
+    std::exit(1);
+}
+
+void require(bool condition, std::string_view message) {
+    if (!condition) {
+        fail(message);
+    }
+}
+
+QTreeWidgetItem* navigator_item(sketch::desktop::MainWindow& window, const QString& id) {
+    auto* tree = window.findChild<QTreeWidget*>(QStringLiteral("projectNavigator"));
+    require(tree != nullptr, "project navigator must exist");
+    QTreeWidgetItem* result = nullptr;
+    for (QTreeWidgetItemIterator item(tree); *item; ++item) {
+        if ((*item)->data(0, Qt::UserRole).toString() == id) {
+            require(result == nullptr, "navigator must list each identity exactly once");
+            result = *item;
+        }
+    }
+    return result;
+}
+
+void test_organization_context() {
+    sketch::desktop::MainWindow window;
+    const auto second_building = window.createBuilding("property-1", "Workshop");
+    require(!second_building.isEmpty(), "create a second building");
+    const auto second_floor = window.createFloor(second_building, "Upper floor");
+    require(!second_floor.isEmpty(), "create a floor with a default layer atomically");
+    const auto layer = window.activeLayerId();
+    require(!layer.isEmpty() && layer != "layer-1", "new floor activates its own drawing layer");
+    auto* drawing_context = window.findChild<QLabel*>(QStringLiteral("drawingContext"));
+    require(drawing_context && drawing_context->wordWrap() &&
+                drawing_context->text().contains("Workshop") && drawing_context->text().contains("Upper floor"),
+            "the full active drawing context must remain readable beside a narrow layer selector");
+    const auto wall = window.createStraightWall({1.0, 2.0}, {6.0, 2.0});
+    require(!wall.isEmpty(), "draw on the selected floor");
+    const auto snapshot = window.document().snapshot();
+    require(snapshot.entities().at(wall.toStdString()).properties.at("floor_id") == second_floor.toStdString() &&
+                snapshot.entities().at(wall.toStdString()).properties.at("layer_id") == layer.toStdString(),
+            "new walls must use the active drawing context");
+    auto* item = navigator_item(window, wall);
+    require(item && item->parent() && item->parent()->data(0, Qt::UserRole).toString() == layer,
+            "navigator shows the wall under its actual layer");
+    require(window.renameOrganizationEntity(second_floor, "Studio"), "rename the actual floor");
+    require(navigator_item(window, second_floor)->text(0) == "Studio", "navigator reflects semantic names");
+    require(window.document().snapshot().entities().at(wall.toStdString()) == snapshot.entities().at(wall.toStdString()),
+            "organization rename must not transform or rewrite object geometry");
+    require(window.undoCommand() && window.redoCommand(), "organization rename participates in history");
+    require(!window.setActiveLayer("missing-layer"), "missing layer cannot become active");
+    require(window.setActiveLayer("layer-1"), "switch to original building's layer");
+    const auto original_floor_wall = window.createStraightWall({0.0, 0.0}, {4.0, 0.0});
+    require(window.document().snapshot().entities().at(original_floor_wall.toStdString()).properties.at("floor_id") == "floor-1",
+            "context selection changes subsequent authoring only");
+    const auto boundary = window.createBoundary({{{0.0, 0.0}, {4.0, 0.0}, 0.0},
+        {{4.0, 0.0}, {4.0, 3.0}, 0.0}, {{4.0, 3.0}, {0.0, 3.0}, 0.0}, {{0.0, 3.0}, {0.0, 0.0}, 0.0}});
+    require(!boundary.isEmpty() && window.setActiveLayer(layer), "retain selected source while changing drawing context");
+    const auto mismatch_revision = window.document().revision();
+    require(window.createSlabFromSelectedBoundary("150 mm", "0 m").isEmpty() &&
+                window.document().revision() == mismatch_revision,
+            "cross-context slab from selected boundary must fail without mutation");
+    const auto preview_revision = window.document().revision();
+    require(window.renameOrganizationEntity(second_building, "Workshop annex"), "intervening organization edit");
+    const auto intervening_revision = window.document().revision();
+    require(window.createStraightWall({0.0, 0.0}, {2.0, 0.0}, "interior", preview_revision).isEmpty() &&
+                !window.renameOrganizationEntity(second_floor, "Stale rename", preview_revision) &&
+                window.document().revision() == intervening_revision,
+            "authoring and rename reject a preview revision invalidated by another command");
+    const auto disposable_layer = window.createLayer(second_floor, "Temporary");
+    require(!disposable_layer.isEmpty(), "create an independent layer");
+    window.document().apply(sketch::ApplyEntityChanges{
+        .expected_revision = window.document().revision(),
+        .entity_changes = {sketch::EntityChange::erase(disposable_layer.toStdString())},
+        .message = "remove empty active layer",
+    });
+    const auto revision = window.document().revision();
+    require(window.createStraightWall({0.0, 0.0}, {1.0, 0.0}).isEmpty() &&
+                window.document().revision() == revision,
+            "deleted active context blocks drawing instead of choosing another floor");
+    require(window.undoCommand() && window.setActiveLayer(disposable_layer), "restored layer can be explicitly reactivated");
+    QTemporaryDir directory;
+    require(directory.isValid(), "organization fixture needs a temporary directory");
+    const auto path = directory.filePath("organization.bldproj");
+    require(window.saveProjectAs(path) && window.openProject(path), "multiple buildings and floors save and reopen");
+    require(window.activeLayerId().isEmpty(), "multi-layer reopen requires an explicit drawing context");
+    require(navigator_item(window, wall) && navigator_item(window, second_floor)->text(0) == "Studio",
+            "reopened hierarchy preserves objects and names");
+    require(window.selectEntity(wall) && window.activeLayerId() == layer,
+            "selecting a reopened object resolves its real drawing context");
+}
+
+void test_six_form_authoring_and_quantity_history() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    const std::vector<BuildingObject> objects{
+        RectangularColumn{"workflow-column", {1.0, 2.0, 0.0}, 0.4, 0.6, 3.0, 0.2},
+        CircularColumn{"workflow-round", {3.0, 2.0, 0.0}, 0.25, 3.0},
+        Beam{"workflow-beam", {1.0, 2.0, 3.0}, {4.0, 2.0, 3.0}, {0.0, 0.0, 1.0}, 0.2, 0.3},
+        StairFlight{"workflow-stair", {5.0, 0.0, 0.0}, 0.0, 4, 0.8, 0.25, 1.0, StairLanding{0.6, 0.15}},
+        SlopedRoofPanel{"workflow-shed", {0.0, 0.0, 4.0}, 0.0, 4.0, 3.0, 1.0, std::atan(0.25), 0.2, 0.1},
+        GableRoof{"workflow-gable", {8.0, 0.0, 4.0}, 0.2, 5.0, 4.0, 1.0, std::atan(0.5), 0.2, 0.1},
+    };
+    std::vector<QString> identities;
+    for (const auto& object : objects) {
+        auto entity = encode_building_entity(object, {{"fixture_metadata", "retained"}});
+        const auto id = window.commitBuildingObject(entity, window.document().revision());
+        require(!id.isEmpty() && navigator_item(window, id), "each building form is authorable and navigable");
+        identities.push_back(id);
+        const auto before = window.document().snapshot().entities().at(id.toStdString());
+        auto edit = before;
+        const auto key = before.type == "column" ? "height_m" : before.type == "beam" ? "width_m" :
+                         before.type == "stair" ? "width_m" : "thickness_m";
+        edit.properties[key] = edit.properties.at(key).get<double>() * 1.1;
+        require(!window.commitBuildingObject(edit, window.document().revision(), true).isEmpty(),
+                "each building form supports an atomic dimension edit");
+        require(window.undoCommand() && window.document().snapshot().entities().at(id.toStdString()) == before,
+                "each form's undo restores exact geometry and metadata");
+        require(window.redoCommand() && window.selectEntity(id), "each form's edit can be redone and selected");
+    }
+    desktop::BuildingObjectDialog dialog(std::nullopt, false);
+    auto* width = dialog.findChild<QLineEdit*>(QStringLiteral("buildingObjectWidth"));
+    require(width != nullptr, "exact-entry fixture needs the column width field");
+    width->setText(QStringLiteral("1/3 ft"));
+    require(dialog.submit() && dialog.candidate(), "fractional building input submits");
+    const auto exact_id = window.commitBuildingObject(*dialog.candidate(), window.document().revision());
+    require(!exact_id.isEmpty(), "exact entry commits through the same document command");
+    auto original = window.document().snapshot().entities().at(exact_id.toStdString());
+    original.properties["future_dimension"] = 42;
+    original.properties["quantity_entries"]["/future_dimension"] = {{"version", 99}, {"opaque", "retain"}};
+    window.document().apply(ApplyEntityChanges{
+        .expected_revision = window.document().revision(),
+        .entity_changes = {EntityChange::upsert(original)},
+        .message = "optional future quantity metadata fixture",
+    });
+    const auto receipt = original.properties.at("quantity_entries").at("/width_m");
+    require(receipt.at("original_expression") == "1/3 ft" && receipt.at("exact_metres").at("numerator") == 127 &&
+                receipt.at("exact_metres").at("denominator") == 1250, "exact rational and expression reach the document");
+    desktop::BuildingObjectDialog edit_dialog(original, true);
+    edit_dialog.findChild<QLineEdit*>(QStringLiteral("buildingObjectHeight"))->setText("3500 mm");
+    require(edit_dialog.submit() && edit_dialog.candidate(), "edit another dimension through the dialog");
+    require(!window.commitBuildingObject(*edit_dialog.candidate(), window.document().revision(), true).isEmpty(),
+            "edited quantity records merge through the command boundary");
+    require(window.document().snapshot().entities().at(exact_id.toStdString()).properties.at("quantity_entries").at("/width_m") == receipt,
+            "editing height retains the original width expression");
+    require(window.document().snapshot().entities().at(exact_id.toStdString()).properties.at("quantity_entries").at("/future_dimension") ==
+                original.properties.at("quantity_entries").at("/future_dimension"),
+            "unrelated edits preserve unknown optional quantity metadata");
+    require(window.undoCommand() && window.redoCommand(), "exact entries participate in undo and redo");
+    require(window.selectEntity(exact_id), "reselect exact object");
+    auto programmatic = window.document().snapshot().entities().at(exact_id.toStdString());
+    programmatic.properties["width_m"] = 0.2;
+    require(!window.commitBuildingObject(programmatic, window.document().revision(), true).isEmpty(),
+            "programmatic dimension edit remains supported");
+    require(!window.document().snapshot().entities().at(exact_id.toStdString()).properties.at("quantity_entries").contains("/width_m"),
+            "programmatic change must invalidate the stale width receipt");
+    require(window.undoCommand() && window.selectEntity(exact_id), "undo restores the exact entry");
+    auto forged = window.document().snapshot().entities().at(exact_id.toStdString());
+    forged.properties["quantity_entries"]["/width_m"]["original_expression"] = "1/2 ft";
+    const auto revision = window.document().revision();
+    require(window.commitBuildingObject(forged, revision, true).isEmpty() && window.document().revision() == revision,
+            "inconsistent quantity provenance rejects the entire edit");
+    forged = window.document().snapshot().entities().at(exact_id.toStdString());
+    forged.properties["quantity_entries"]["/version"] = {
+        {"version", 1}, {"original_expression", "1 m"}, {"entered_unit", "m"},
+        {"exact_metres", {{"numerator", 1}, {"denominator", 1}}}};
+    require(window.commitBuildingObject(forged, revision, true).isEmpty() && window.document().revision() == revision,
+            "quantity provenance cannot describe a dimensionless schema version as metres");
+    forged = window.document().snapshot().entities().at(exact_id.toStdString());
+    forged.properties["base_center_m"][0] = -1.0;
+    forged.properties["quantity_entries"]["/base_center_m/0"] = {
+        {"version", 1}, {"original_expression", "-1 m"}, {"entered_unit", "m"},
+        {"exact_metres", {{"numerator", std::numeric_limits<std::uint64_t>::max()}, {"denominator", 1}}}};
+    require(window.commitBuildingObject(forged, revision, true).isEmpty() && window.document().revision() == revision,
+            "oversized unsigned quantity numerators cannot wrap into a valid signed measurement");
+    QTemporaryDir directory;
+    require(directory.isValid(), "six-form fixture needs a temporary directory");
+    const auto path = directory.filePath("six-forms.bldproj");
+    require(window.saveProjectAs(path) && window.openProject(path), "all forms save and reopen");
+    auto* plan = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
+    require(plan != nullptr, "shared plan/PDF scene is available");
+    for (const auto& id : identities) {
+        require(navigator_item(window, id) && window.selectEntity(id), "every reopened form remains selectable");
+        require(std::any_of(plan->entities().begin(), plan->entities().end(), [&](const auto& entry) {
+            return entry.id == id && !entry.segments.empty();
+        }), "each reopened form appears in the shared vector output scene");
+    }
+    require(window.selectEntity({}), "clear selection before keyboard-style navigator selection");
+    auto* tree = window.findChild<QTreeWidget*>(QStringLiteral("projectNavigator"));
+    tree->setCurrentItem(navigator_item(window, identities.front()));
+    QApplication::processEvents();
+    require(window.selectedEntityId() == identities.front(),
+            "navigator current-item selection must update the workspace without a mouse click");
+    tree->setCurrentItem(navigator_item(window, identities.back()));
+    require(window.openProject(path), "open while a navigator selection callback is queued");
+    QApplication::processEvents();
+    require(window.selectedEntityId().isEmpty(), "queued selection from an old document must not affect a reopened document");
+    require(window.document().snapshot().entities().at(exact_id.toStdString()).properties.at("quantity_entries").at("/width_m") == receipt,
+            "fractional input survives save/reopen without losing provenance");
+    require(window.exportDraftPdf(directory.filePath("six-forms.pdf")), "the six-form scene exports through the shared PDF renderer");
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    sketch::testing::noninteractive_errors();
+    QApplication application(argc, argv);
+    test_organization_context();
+    test_six_form_authoring_and_quantity_history();
+    auto document = std::make_shared<sketch::Document>(sketch::Document::create());
+    sketch::desktop::MainWindow window(document);
+
+    require(window.workspaceDocumentsShareDocument(),
+            "measurement and architectural workspaces must share one document");
+    require(window.document().snapshot().entities().contains("property-1"),
+            "a new document must create the property scaffold before objects");
+    require(window.document().snapshot().entities().contains("floor-1"),
+            "a new document must create the floor scaffold before objects");
+
+    const auto boundary_id = window.createBoundary(
+        sketch::Boundary{{{{0.0, 0.0}, {3.0, 0.0}, 0.0},
+                          {{3.0, 0.0}, {3.0, 2.0}, 0.0},
+                          {{3.0, 2.0}, {0.0, 2.0}, 0.0},
+                          {{0.0, 2.0}, {0.0, 0.0}, 0.0}}});
+    require(!boundary_id.isEmpty(), "closed boundary should be accepted as a document command");
+
+    auto* calculation_status = window.findChild<QLabel*>(QStringLiteral("calculationStatus"));
+    auto* base_area = window.findChild<QLabel*>(QStringLiteral("calculationBaseArea"));
+    auto* net_area = window.findChild<QLabel*>(QStringLiteral("calculationNetArea"));
+    auto* factored_area = window.findChild<QLabel*>(QStringLiteral("calculationFactoredArea"));
+    auto* perimeter_value = window.findChild<QLabel*>(QStringLiteral("calculationPerimeter"));
+    auto* rounding_value = window.findChild<QLabel*>(QStringLiteral("calculationRounding"));
+    auto* building_total = window.findChild<QLabel*>(QStringLiteral("calculationBuildingTotal"));
+    auto* living_total = window.findChild<QLabel*>(QStringLiteral("calculationLivingTotal"));
+    require(calculation_status != nullptr && base_area != nullptr && net_area != nullptr &&
+                factored_area != nullptr && perimeter_value != nullptr && rounding_value != nullptr &&
+                building_total != nullptr && living_total != nullptr,
+            "calculation inspector labels should be available for a selected boundary");
+    require(!calculation_status->text().contains(QStringLiteral("blocked"), Qt::CaseInsensitive),
+            "a classified boundary should have an active calculation profile rule");
+    require(base_area->text().contains(QStringLiteral("64.58")) &&
+                net_area->text().contains(QStringLiteral("64.58")) &&
+                factored_area->text().contains(QStringLiteral("64.58")),
+            "selected boundary should show base, net, and factored area in default imperial units");
+    require(!perimeter_value->text().isEmpty() && perimeter_value->text() != QStringLiteral("—"),
+            "selected boundary should show its perimeter");
+    require(rounding_value->text().contains(QStringLiteral("unrounded"), Qt::CaseInsensitive) &&
+                rounding_value->text().contains(QStringLiteral("difference"), Qt::CaseInsensitive),
+            "selected boundary should show the area rounding explanation");
+
+    require(window.editSelectedFactor(QStringLiteral("3/4")),
+            "exact rational area factor should be editable from the inspector API");
+    const auto factor_snapshot = window.document().snapshot();
+    const auto& factor_entities = factor_snapshot.entities();
+    const auto factor_entity = factor_entities.find(boundary_id.toStdString());
+    require(factor_entity != factor_entities.end() &&
+                factor_entity->second.properties.at("factor_expression") == "3/4" &&
+                factor_entity->second.properties.at("factor_numerator").get<std::int64_t>() == 3 &&
+                factor_entity->second.properties.at("factor_denominator").get<std::int64_t>() == 4 &&
+                std::abs(factor_entity->second.properties.at("factor").get<double>() - 0.75) < 1e-12,
+            "factor edit should preserve the expression, rational components, and numeric value");
+    require(factored_area->text().contains(QStringLiteral("48.44")),
+            "factored area should apply the exact rational factor");
+    require(window.undoCommand(), "factor edit should be undoable");
+    const auto factor_undo_snapshot = window.document().snapshot();
+    const auto& factor_undo_entities = factor_undo_snapshot.entities();
+    const auto factor_undo = factor_undo_entities.find(boundary_id.toStdString());
+    require(factor_undo != factor_undo_entities.end() &&
+                factor_undo->second.properties.at("factor_numerator").get<std::int64_t>() == 1,
+            "undo should restore the original area factor");
+    require(window.redoCommand(), "factor edit should be redoable");
+    require(window.selectEntity(boundary_id), "boundary should be reselected after factor history");
+    const auto factor_redo_snapshot = window.document().snapshot();
+    const auto& factor_redo_entities = factor_redo_snapshot.entities();
+    const auto factor_redo = factor_redo_entities.find(boundary_id.toStdString());
+    require(factor_redo != factor_redo_entities.end() &&
+                factor_redo->second.properties.at("factor_expression") == "3/4",
+            "redo should restore the exact factor expression");
+
+    require(window.editSelectedClassification(QStringLiteral("unassigned")),
+            "boundary classification should be editable through the shared command path");
+    require(calculation_status->text().contains(QStringLiteral("blocked"), Qt::CaseInsensitive) &&
+                calculation_status->text().contains(QStringLiteral("no calculation profile rule"),
+                                                     Qt::CaseInsensitive),
+            "unknown classification should visibly block totals");
+    const auto profile_before_snapshot = window.document().snapshot();
+    const auto& profile_before_entities = profile_before_snapshot.entities();
+    const auto profile_before = profile_before_entities.at("property-1");
+    const auto profile_version_before =
+        profile_before.properties.at("calculation_profile").at("version").get<unsigned>();
+    require(window.setSelectedCalculationRule(true, true),
+            "calculation profile rule should be assignable explicitly");
+    const auto profile_after_snapshot = window.document().snapshot();
+    const auto& profile_after_entities = profile_after_snapshot.entities();
+    const auto profile_after = profile_after_entities.at("property-1");
+    require(profile_after.properties.at("calculation_profile").at("version").get<unsigned>() ==
+                profile_version_before + 1 &&
+                profile_after.properties.at("calculation_profile").at("classifications")
+                        .at("unassigned")
+                        .at("building_total")
+                        .get<bool>() &&
+                profile_after.properties.at("calculation_profile").at("classifications")
+                        .at("unassigned")
+                        .at("living_total")
+                        .get<bool>(),
+            "profile edits should version and persist explicit building and living rules");
+    require(!calculation_status->text().contains(QStringLiteral("blocked"), Qt::CaseInsensitive) &&
+                !building_total->text().contains(QStringLiteral("—")) &&
+                !living_total->text().contains(QStringLiteral("—")),
+            "assigned profile rules should restore building and living totals");
+    const auto overlapping_boundary_id = window.createBoundary(
+        sketch::Boundary{{{{0.5, 0.5}, {1.5, 0.5}, 0.0},
+                          {{1.5, 0.5}, {1.5, 1.5}, 0.0},
+                          {{1.5, 1.5}, {0.5, 1.5}, 0.0},
+                          {{0.5, 1.5}, {0.5, 0.5}, 0.0}}});
+    require(!overlapping_boundary_id.isEmpty(), "overlapping test boundary should be created");
+    require(calculation_status->text().contains(QStringLiteral("overlap"), Qt::CaseInsensitive) &&
+                base_area->text() == QStringLiteral("—") && building_total->text() == QStringLiteral("—"),
+            "overlapping boundaries should block totals instead of showing plausible values");
+    require(window.undoCommand(), "overlapping test boundary should be undoable");
+    require(window.selectEntity(boundary_id), "original boundary should be selectable after overlap undo");
+    require(!calculation_status->text().contains(QStringLiteral("blocked"), Qt::CaseInsensitive),
+            "undoing the overlap should restore valid totals");
+    window.setMetricUnits(true);
+    require(base_area->text().contains(QStringLiteral("6.00 m²")) &&
+                factored_area->text().contains(QStringLiteral("4.50 m²")),
+            "calculation values should refresh in metric display units");
+    window.setMetricUnits(false);
+
+    const auto wall_id = window.createStraightWall({0.0, 0.0}, {3.0, 0.0}, "exterior");
+    require(!wall_id.isEmpty(), "straight wall should be accepted as a document command");
+    require(window.selectEntity(wall_id), "created wall should be selectable");
+    require(window.editSelectedClassification("party"),
+            "wall classification should be editable from the inspector API");
+    require(window.editSelectedHeight("8 ft"),
+            "wall height should parse and update through the inspector API");
+    require(window.editSelectedThickness("6 in"),
+            "wall thickness should parse and update through the inspector API");
+
+    require(window.undoCommand(), "wall property edit should be undoable");
+    require(window.redoCommand(), "wall property edit should be redoable");
+
+    // Hosted openings are separate semantic entities. The wall preview is
+    // passed through the architecture kernel before the atomic document
+    // command is applied, so an out-of-bounds opening must leave the revision
+    // untouched.
+    require(window.selectEntity(wall_id), "wall should remain selected for hosted opening creation");
+    const auto revision_before_invalid_opening = window.document().revision();
+    require(window.createHostedOpening(QStringLiteral("door"), QStringLiteral("1 m"),
+                                       QStringLiteral("20 m"), QStringLiteral("0 m"),
+                                       QStringLiteral("2 m"))
+                .isEmpty(),
+            "an opening outside the host wall must be rejected by the kernel preview");
+    require(window.document().revision() == revision_before_invalid_opening,
+            "rejected opening preview must not mutate the document");
+
+    const auto opening_id = window.createHostedOpening(
+        QStringLiteral("door"), QStringLiteral("0.25 m"), QStringLiteral("0.5 m"),
+        QStringLiteral("0 m"), QStringLiteral("2 m"));
+    require(!opening_id.isEmpty(), "a hosted door should be accepted on the selected wall");
+    require(window.selectEntity(opening_id), "created opening should be selectable");
+    require(window.editSelectedLength("0.6 m"),
+            "opening width should use the quantity parser and inspector command");
+    require(window.editSelectedHeight("1.9 m"),
+            "opening height should use the quantity parser and inspector command");
+    require(window.editSelectedClassification("window"),
+            "opening classification should distinguish door and window semantics");
+
+    require(window.selectEntity(boundary_id), "closed boundary should be selectable for slab creation");
+    const auto revision_before_invalid_slab = window.document().revision();
+    require(window.createSlabFromSelectedBoundary("0 m", "0 m").isEmpty(),
+            "a zero thickness slab must be rejected before the document command");
+    require(window.document().revision() == revision_before_invalid_slab,
+            "rejected slab preview must not mutate the document");
+    const auto slab_id = window.createSlabFromSelectedBoundary("0.15 m", "0 m");
+    require(!slab_id.isEmpty(), "a slab should be created from the selected closed boundary");
+    require(window.selectEntity(slab_id), "created slab should be selectable");
+    require(window.editSelectedThickness("0.2 m"),
+            "slab thickness should use the quantity parser and kernel preview");
+    require(window.undoCommand(), "slab thickness edit should be undoable");
+    const auto slab_undo_snapshot = window.document().snapshot();
+    const auto& slab_undo_entities = slab_undo_snapshot.entities();
+    const auto slab_after_undo = slab_undo_entities.find(slab_id.toStdString());
+    require(slab_after_undo != slab_undo_entities.end() &&
+                slab_after_undo->second.properties.at("thickness_m").get<double>() < 0.16,
+            "undo should restore the previous slab thickness");
+    require(window.redoCommand(), "slab thickness edit should be redoable");
+
+    const auto architectural_snapshot = window.document().snapshot();
+    const auto& architectural_entities = architectural_snapshot.entities();
+    const auto opening = architectural_entities.find(opening_id.toStdString());
+    require(opening != architectural_entities.end() && opening->second.type == "opening",
+            "opening must be persisted as a semantic opening entity");
+    require(opening->second.properties.at("wall_id").get<std::string>() == wall_id.toStdString(),
+            "opening must retain its host wall reference");
+    require(opening->second.properties.at("width_m").get<double>() > 0.59,
+            "opening width must be stored in canonical metres");
+    const auto slab = architectural_entities.find(slab_id.toStdString());
+    require(slab != architectural_entities.end() && slab->second.type == "slab",
+            "slab must be persisted as a semantic slab entity");
+    require(slab->second.properties.at("boundary").is_array() &&
+                slab->second.properties.at("holes").is_array(),
+            "slab must persist its boundary and holes arrays");
+    require(slab->second.properties.at("thickness_m").get<double>() > 0.19,
+            "slab thickness must be stored in canonical metres");
+
+    window.setMetricUnits(true);
+    require(window.metricUnits(), "metric display toggle should be observable");
+    window.setWorkspace(sketch::desktop::Workspace::architectural);
+    require(window.workspace() == sketch::desktop::Workspace::architectural,
+            "architectural workspace should be selectable");
+    window.setWorkspace(sketch::desktop::Workspace::measurement);
+
+    QTemporaryDir temporary_directory;
+    require(temporary_directory.isValid(), "smoke test needs a temporary directory");
+    const auto project_path =
+        std::filesystem::path(temporary_directory.path().toStdWString()) / "desktop-smoke.bldproj";
+    const auto project_path_qstring = QString::fromStdWString(project_path.wstring());
+    const auto pdf_path =
+        std::filesystem::path(temporary_directory.path().toStdWString()) / "desktop-smoke.pdf";
+    const auto pdf_path_qstring = QString::fromStdWString(pdf_path.wstring());
+    auto column = sketch::encode_building_entity(
+        sketch::RectangularColumn{"", {1.0, 2.0, 0.0}, 0.3, 0.4, 3.0, 0.0},
+        {{"private_note", "preserve this"}});
+    column.properties["future_attribute"] = "preserve this too";
+    const auto column_id = window.commitBuildingObject(column, window.document().revision());
+    require(!column_id.isEmpty(), "building object must commit through the workspace command");
+    require(navigator_item(window, column_id) != nullptr,
+            "new building object must be selectable through the project navigator");
+    auto* create_object_button = window.findChild<QToolButton*>(QStringLiteral("createBuildingObject"));
+    auto* edit_object_button = window.findChild<QPushButton*>(QStringLiteral("editBuildingObject"));
+    require(create_object_button && create_object_button->isEnabled() &&
+                edit_object_button && !edit_object_button->isHidden() && edit_object_button->isEnabled(),
+            "building object tools must be available for the current editable selection");
+    auto* plan_widget = window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas"));
+    auto* plan = dynamic_cast<sketch::desktop::PlanCanvas*>(plan_widget);
+    require(plan != nullptr, "measurement canvas must expose its derived drawing geometry");
+    const auto plan_column = std::find_if(plan->entities().begin(), plan->entities().end(),
+        [&](const auto& entity) { return entity.id == column_id; });
+    require(plan_column != plan->entities().end() && !plan_column->segments.empty(),
+            "new building object must appear in the shared plan/PDF geometry");
+    require(plan_column->segments.size() == 4 &&
+                std::all_of(plan_column->segments.begin(), plan_column->segments.end(),
+                    [](const auto& segment) { return segment.sweep_radians == 0.0; }),
+            "shared plan/PDF rectangle must have exactly four straight edges");
+    double min_x = 1e9, max_x = -1e9, min_y = 1e9, max_y = -1e9;
+    for (const auto& segment : plan_column->segments) {
+        for (const auto& point : {segment.start, segment.end}) {
+            min_x = std::min(min_x, point.x); max_x = std::max(max_x, point.x);
+            min_y = std::min(min_y, point.y); max_y = std::max(max_y, point.y);
+        }
+    }
+    require(std::abs(min_x - 0.85) < 1e-7 && std::abs(max_x - 1.15) < 1e-7 &&
+                std::abs(min_y - 1.8) < 1e-7 && std::abs(max_y - 2.2) < 1e-7,
+            "column plan must use its real dimensions and world placement");
+    auto edited_column = column;
+    edited_column.properties["height_m"] = 3.5;
+    edited_column.extensions = nlohmann::json::object();
+    edited_column.properties.erase("future_attribute");
+    require(!window.commitBuildingObject(edited_column, window.document().revision(), true).isEmpty(),
+            "building object dimensions must be editable");
+    const auto edited_column_snapshot = window.document().snapshot();
+    const auto& stored_column = edited_column_snapshot.entities().at(column_id.toStdString());
+    require(stored_column.properties.at("height_m") == 3.5 &&
+                stored_column.properties.at("future_attribute") == "preserve this too" &&
+                stored_column.extensions.at("private_note") == "preserve this",
+            "geometry edit must preserve unknown semantic fields and extensions");
+    const auto stale_column_revision = window.document().revision();
+    require(window.undoCommand(), "building object edit must be undoable");
+    require(window.document().snapshot().entities().at(column_id.toStdString()).properties.at("height_m") == 3.0,
+            "undo restores exact prior building dimensions");
+    require(window.selectEntity(column_id), "reselect building object after undo");
+    const auto before_stale = window.document().revision();
+    require(window.commitBuildingObject(edited_column, stale_column_revision, true).isEmpty() &&
+                window.document().revision() == before_stale,
+            "stale object dialog must fail atomically");
+    require(window.redoCommand(), "building object edit must be redoable");
+    require(window.selectEntity(column_id), "reselect building object after redo");
+    auto invalid_column = edited_column;
+    invalid_column.properties["height_m"] = -1.0;
+    const auto before_invalid_column = window.document().revision();
+    require(window.commitBuildingObject(invalid_column, before_invalid_column, true).isEmpty() &&
+                window.document().revision() == before_invalid_column,
+            "invalid building geometry must not mutate the document");
+    require(window.commitBuildingObject(column, before_invalid_column).isEmpty(),
+            "object creation must reject an existing identity");
+    const auto revision_before_pdf = window.document().revision();
+    require(window.exportDraftPdf(pdf_path_qstring), "draft PDF export should succeed locally");
+    require(std::filesystem::file_size(pdf_path) > 0, "draft PDF should be nonempty");
+    require(window.document().revision() == revision_before_pdf,
+            "draft output must not mutate the semantic document");
+    require(window.saveProjectAs(project_path_qstring),
+            "save-as should persist the current snapshot");
+    require(!window.document().dirty(), "saving the current head should clear dirty state");
+    require(window.openProject(project_path_qstring),
+            "saved project should reopen through the real project store");
+    const auto reopened = window.document().snapshot();
+    require(reopened.entities().at(column_id.toStdString()).properties.at("height_m") == 3.5 &&
+                reopened.entities().at(column_id.toStdString()).extensions.at("private_note") == "preserve this",
+            "save/reopen must preserve edited building object dimensions and metadata");
+    require(reopened.entities().contains(wall_id.toStdString()),
+            "reopened project should preserve the semantic wall entity");
+    require(reopened.entities().contains(opening_id.toStdString()),
+            "reopened project should preserve the hosted opening entity");
+    require(reopened.entities().contains(slab_id.toStdString()),
+            "reopened project should preserve the slab entity");
+    require(reopened.entities().at(opening_id.toStdString()).properties.at("wall_id") ==
+                wall_id.toStdString(),
+            "reopened opening should keep the host reference");
+    require(reopened.entities().at(boundary_id.toStdString()).properties.at("factor_expression") ==
+                "3/4" &&
+                reopened.entities().at("property-1").properties.at("calculation_profile")
+                        .at("classifications")
+                        .at("unassigned")
+                        .at("living_total")
+                        .get<bool>(),
+            "save and reopen should preserve the exact factor and versioned profile rule");
+    require(window.selectEntity(boundary_id), "reopened boundary should be selectable");
+    require(edit_object_button->isHidden(), "building object editor must hide for a measurement boundary");
+    require(!calculation_status->text().contains(QStringLiteral("blocked"), Qt::CaseInsensitive) &&
+                base_area->text().contains(QStringLiteral("6.00 m²")) &&
+                factored_area->text().contains(QStringLiteral("4.50 m²")),
+            "calculation inspector should refresh from the reopened document");
+
+    auto malformed = window.document().snapshot().entities().at(column_id.toStdString());
+    malformed.properties["form"] = "unsupported-form";
+    window.document().apply(sketch::ApplyEntityChanges{
+        .expected_revision = window.document().revision(),
+        .entity_changes = {sketch::EntityChange::upsert(malformed)},
+        .message = "exercise unsupported loaded geometry",
+    });
+    require(window.selectEntity(column_id), "select malformed loaded building object");
+    const auto protected_output =
+        QString::fromStdWString((project_path.parent_path() / "must-not-exist.pdf").wstring());
+    require(!window.exportDraftPdf(protected_output) && !window.showPrintPreview() &&
+                !std::filesystem::exists(std::filesystem::path(protected_output.toStdWString())),
+            "invalid plan geometry must block output before creating a file or print dialog");
+    auto* plan_error = window.findChild<QLabel*>(QStringLiteral("planGeometryError"));
+    require(plan_error && !plan_error->isHidden() && !plan_error->text().isEmpty(),
+            "a missing building projection must be visible in the workspace");
+    for (int index = 1; index + 1 < argc; ++index) {
+        if (std::string_view(argv[index]) == "--capture-invalid-plan") {
+            window.setAttribute(Qt::WA_DontShowOnScreen, true);
+            window.resize(1366, 768);
+            window.show();
+            QCoreApplication::processEvents();
+            require(window.grab().save(QString::fromLocal8Bit(argv[index + 1])),
+                    "invalid-plan workspace capture must be written");
+            window.hide();
+        }
+    }
+    require(window.undoCommand(), "undo restores renderable building geometry");
+    require(plan_error->isHidden(), "geometry error must clear after the valid object is restored");
+    return 0;
+}

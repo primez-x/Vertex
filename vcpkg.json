@@ -1,0 +1,10 @@
+{
+  "name": "property-studio-native-dependencies",
+  "version-string": "0.1.0",
+  "builtin-baseline": "0397b75952a7c874b68a7d4f9baf8d3c5951b371",
+  "dependencies": [
+    { "name": "opencascade", "default-features": false, "features": ["freetype"] },
+    { "name": "eigen3", "default-features": false },
+    { "name": "boost-graph", "default-features": false }
+  ]
+}

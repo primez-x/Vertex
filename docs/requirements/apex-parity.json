@@ -1,0 +1,1906 @@
+{
+  "schema_version": "1.0",
+  "ledger_id": "offline-measurement-architectural-production",
+  "title": "Production requirements: Apex 7 parity, modern improvements, and architectural authoring",
+  "scope": {
+    "platform": "Windows 11 x64",
+    "units": [
+      "imperial",
+      "metric"
+    ],
+    "markets": [
+      "residential",
+      "light_commercial"
+    ],
+    "workspaces": [
+      "measurement",
+      "architectural"
+    ],
+    "production_gate": "all_requirements_and_all_named_gates_must_pass",
+    "implementation_status_initial": "not_started"
+  },
+  "status_vocabulary": {
+    "evidence_status": [
+      "documented",
+      "needs_evidence"
+    ],
+    "implementation_status": [
+      "not_started",
+      "in_progress",
+      "verified"
+    ]
+  },
+  "default_source_refs": [
+    "task_plan"
+  ],
+  "source_catalog": {
+    "task_plan": {
+      "kind": "task_required",
+      "authority": "user_approved_plan",
+      "url": null,
+      "description": "The requirements and scope approved in the project conversation."
+    },
+    "apex_draw_first": {
+      "kind": "official_apex_evidence",
+      "authority": "ApexSketch v7 documentation",
+      "url": "https://apexwin.com/support/ApexSketchv7/ApexSketchv7-DrawFirst.pdf",
+      "description": "Official Draw First workflow reference."
+    },
+    "apex_define_first": {
+      "kind": "official_apex_evidence",
+      "authority": "ApexSketch v7 documentation",
+      "url": "https://www.apexwin.com/support/ApexSketchv7/ApexSketchv7-DefineFirst.pdf",
+      "description": "Official Define First workflow reference."
+    },
+    "apex_auto_subtract": {
+      "kind": "official_apex_evidence",
+      "authority": "ApexSketch v7 documentation",
+      "url": "https://apexwin.com/support/ApexSketchv7/ApexSketchv7-DrawFirst-Auto-Subtract.pdf",
+      "description": "Official Auto-Subtract behavior reference."
+    },
+    "qt_licensing": {
+      "kind": "official_component_evidence",
+      "authority": "Qt documentation",
+      "url": "https://doc.qt.io/qt-6/licensing.html",
+      "description": "Qt licensing reference; exact shipped modules remain to be qualified."
+    },
+    "qt_lgpl_obligations": {
+      "kind": "official_component_evidence",
+      "authority": "Qt documentation",
+      "url": "https://www.qt.io/development/open-source-lgpl-obligations",
+      "description": "Qt LGPL distribution obligations reference."
+    },
+    "occt_qt_sample": {
+      "kind": "official_component_evidence",
+      "authority": "Open CASCADE documentation",
+      "url": "https://dev.opencascade.org/doc/occt-7.8.0/overview/html/samples_qt_iesample.html",
+      "description": "OCCT and Qt integration reference."
+    },
+    "planegcs_source": {
+      "kind": "official_component_evidence",
+      "authority": "PlaneGCS source",
+      "url": "https://github.com/FreeCAD/FreeCAD/blob/main/src/Mod/Sketcher/App/planegcs/GCS.h",
+      "description": "PlaneGCS constraint API reference; application qualification remains required."
+    },
+    "ifc_mvd": {
+      "kind": "official_interchange_evidence",
+      "authority": "buildingSMART documentation",
+      "url": "https://technical.buildingsmart.org/standards/ifc/mvd/mvd-database/",
+      "description": "IFC model-view definition reference."
+    },
+    "appcontainer": {
+      "kind": "official_platform_evidence",
+      "authority": "Microsoft documentation",
+      "url": "https://learn.microsoft.com/en-us/windows/win32/secauthz/appcontainer-isolation",
+      "description": "Windows AppContainer isolation reference."
+    },
+    "proj_network": {
+      "kind": "official_component_evidence",
+      "authority": "PROJ documentation",
+      "url": "https://proj.org/en/stable/usage/network.html",
+      "description": "PROJ network behavior reference."
+    }
+  },
+  "requirements": [
+    {
+      "id": "CORE-OFF-001",
+      "area": "offline",
+      "requirement": "Drawing, editing, calculating, saving, recovering, printing, and exporting work with networking disabled.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "On a clean Windows machine with network adapters disabled, complete the full authoring and output workflow without a network error or account prompt.",
+      "package": 8,
+      "blocker": null
+    },
+    {
+      "id": "CORE-OFF-002",
+      "area": "offline",
+      "requirement": "The application has no account, activation server, subscription, or online entitlement dependency.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Static dependency review and a network-denied run show no entitlement check, sign-in requirement, or remote service needed for the required workflows.",
+      "package": 8,
+      "blocker": null
+    },
+    {
+      "id": "CORE-OFF-003",
+      "area": "offline",
+      "requirement": "Installation is offline-capable and bundles required runtime components, fonts, help, libraries, resources, and optional local-assistance assets.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Install from the offline installer and portable package on a clean machine with networking disabled, then open bundled help and complete a project workflow.",
+      "package": 8,
+      "blocker": null
+    },
+    {
+      "id": "CORE-OWN-001",
+      "area": "ownership",
+      "requirement": "Deliver the original application source privately with reproducible Windows build instructions, fixtures, and build configuration.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "The delivered source archive builds the shipped artifacts on a documented Windows environment from a clean checkout without a hosted build service.",
+      "package": 8,
+      "blocker": null,
+      "implementation_sources": [
+        "third_party/dependencies.json"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "CORE-OWN-002",
+      "area": "ownership",
+      "requirement": "Provide a documented, versioned .bldproj project format whose geometry, classifications, assets, metadata, history, and migrations are inspectable locally.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Format documentation and the CLI describe schema versions, required fields, asset references, migration behavior, and preservation rules; a fixture round-trips through the documented format.",
+      "package": 3,
+      "blocker": null,
+      "implementation_sources": [
+        "src/core/project_store.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "CORE-SCOPE-001",
+      "area": "scope",
+      "requirement": "The production application targets Windows 11 x64, supports imperial and metric units, and serves residential and light-commercial projects.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Supported OS, unit profiles, and representative residential and light-commercial fixtures are listed and pass the final acceptance workflow.",
+      "package": 1,
+      "blocker": null
+    },
+    {
+      "id": "CORE-SCOPE-002",
+      "area": "scope",
+      "requirement": "Measurement and Architectural are separate workspaces over one shared project and authoritative document model.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "A project created in Measurement can be opened in Architectural, and edits, calculations, links, and saved revisions remain consistent in both workspaces.",
+      "package": 5,
+      "blocker": null,
+      "implementation_sources": [
+        "src/desktop/main_window.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "CORE-DOC-001",
+      "area": "document_model",
+      "requirement": "One semantic document model is authoritative for property/site, buildings, storeys, levels, layers, objects, boundaries, annotations, schedules, sheets, phases, and alternatives.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Plans, calculations, projections, schedules, exports, and printing consume the same document revision and stable entity IDs.",
+      "package": 3,
+      "blocker": null,
+      "implementation_sources": [
+        "src/core/document.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "CORE-DOC-002",
+      "area": "document_model",
+      "requirement": "Typed links distinguish architectural walls, room boundaries, and appraisal measurement boundaries, with explicit ownership and no unconstrained bidirectional cycles.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Independent, wall-derived, and measurement-driven relationships can be created, frozen, disconnected, undone, and rejected when cyclic or ambiguous.",
+      "package": 3,
+      "blocker": null
+    },
+    {
+      "id": "CORE-DOC-003",
+      "area": "document_model",
+      "requirement": "Save serializes an immutable snapshot at revision R into a validated standalone project while preserving the prior destination file.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Interleaved edits during save produce a file containing exactly the reported saved revision; a failed replacement leaves the previous valid file recoverable.",
+      "package": 3,
+      "blocker": null,
+      "implementation_sources": [
+        "src/core/project_store.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "CORE-DOC-004",
+      "area": "document_model",
+      "requirement": "Every authoritative output carries an OutputFingerprint for document revision, profiles, assets, fonts, views, and processing components.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Changing a fingerprint input either regenerates output or produces a visible stale-output block; matching inputs reproduce the same output identity.",
+      "package": 3,
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/output_fingerprint.hpp",
+        "src/core/output_fingerprint.cpp"
+      ],
+      "implementation_note": "Core digest/manifest/currentness checks are implemented and tested; output pipeline wiring and production acceptance remain open. Serialized identity excludes private entity and asset payloads."
+    },
+    {
+      "id": "CORE-DOC-005",
+      "area": "document_model",
+      "requirement": "All edits use typed serialized commands over immutable snapshots; accepted compound operations commit atomically and are reversible.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "A compound edit either commits as one revision with one undo entry or leaves the previous revision unchanged; stale worker results cannot overwrite newer edits.",
+      "package": 3,
+      "blocker": null,
+      "implementation_sources": [
+        "src/core/document.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "CORE-DOC-006",
+      "area": "precision",
+      "requirement": "Entered quantities and units remain distinct from derived values, with analytical geometry, explicit tolerances, and display rounding that never changes measurement truth.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Fixtures retain entered dimensions and calculate within the documented tolerance after display-format changes, save/reopen, and unit conversion.",
+      "package": 3,
+      "blocker": null,
+      "implementation_sources": [
+        "src/core/quantity.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "CORE-DOC-007",
+      "area": "precision",
+      "requirement": "BRep geometry, meshes, projections, render pixels, and calculation caches are derived data and cannot become independent document authorities.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Rebuilding or deleting derived caches leaves semantic geometry intact and all consumers regenerate from the document snapshot.",
+      "package": 3,
+      "blocker": null,
+      "implementation_sources": [
+        "src/architecture/architecture.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "CORE-DOC-008",
+      "area": "document_model",
+      "requirement": "Migrations are copy-based and reversible, preserve originals and unknown data, and block unsafe editing or authoritative output for unsupported required features.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Each schema migration preserves the source fixture, reports unsupported content, and can be validated or rolled back without data loss.",
+      "package": 3,
+      "blocker": null,
+      "implementation_sources": [
+        "src/core/project_store.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "CORE-DOC-009",
+      "area": "document_model",
+      "requirement": "Provide a documented JSON-and-assets exchange representation plus local inspect, validate, extract, and migrate CLI operations.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "The CLI validates a good fixture, rejects malformed or incomplete data with actionable diagnostics, extracts assets, and produces a migration report.",
+      "package": 3,
+      "blocker": null,
+      "implementation_sources": [
+        "src/cli/main.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "CORE-DOC-010",
+      "area": "architecture",
+      "requirement": "Apex exchange, CAD exchange, devices, georeferencing, and appraisal integrations attach through replaceable versioned adapters.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "A disabled or failed adapter does not prevent project open, deterministic editing, calculation, save, print, or export; manifests report protocol and capability versions.",
+      "package": 3,
+      "blocker": null
+    },
+    {
+      "id": "COMP-LIC-001",
+      "area": "licensing",
+      "requirement": "Qualify exact source revisions, build options, transitive dependencies, and distribution obligations for every shipped component before release.",
+      "source_urls": [
+        "https://doc.qt.io/qt-6/licensing.html",
+        "https://www.qt.io/development/open-source-lgpl-obligations"
+      ],
+      "source_refs": [
+        "task_plan",
+        "qt_licensing",
+        "qt_lgpl_obligations"
+      ],
+      "evidence_status": "needs_evidence",
+      "implementation_status": "in_progress",
+      "acceptance": "A signed-off dependency inventory includes source hashes, SPDX licenses, notices, corresponding source or relink instructions, and an SBOM for each installer and portable package.",
+      "package": 2,
+      "blocker": "Exact revisions, transitive packages, and final build configuration must be selected and license-reviewed before distribution.",
+      "implementation_sources": [
+        "third_party/dependencies.json"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "COMP-LIC-002",
+      "area": "licensing",
+      "requirement": "Original application code remains clearly separated from third-party code, with contribution provenance suitable for later private sale or optional open source release.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Repository provenance, contributor rights, notices, and third-party source locations are complete and reviewable without relying on a hosted service.",
+      "package": 2,
+      "blocker": null,
+      "implementation_sources": [
+        "third_party/dependencies.json"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "COMP-LIC-003",
+      "area": "licensing",
+      "requirement": "The baseline excludes GPL/AGPL application dependencies, noncommercial restrictions, and mandatory paid runtime SDKs; applicable LGPL components meet their obligations.",
+      "source_urls": [
+        "https://doc.qt.io/qt-6/licensing.html",
+        "https://www.qt.io/development/open-source-lgpl-obligations"
+      ],
+      "source_refs": [
+        "task_plan",
+        "qt_licensing",
+        "qt_lgpl_obligations"
+      ],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Automated and manual dependency review finds no prohibited baseline dependency and verifies the selected dynamic-linking and relink path.",
+      "package": 2,
+      "blocker": null
+    },
+    {
+      "id": "COMP-GEO-001",
+      "area": "components",
+      "requirement": "Use a qualified Open CASCADE Technology layer for solid geometry, tessellation, and visualization with the original application model above it.",
+      "source_urls": [
+        "https://dev.opencascade.org/doc/occt-7.8.0/overview/html/samples_qt_iesample.html"
+      ],
+      "source_refs": [
+        "task_plan",
+        "occt_qt_sample"
+      ],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Pinned OCCT builds render and regenerate representative residential and light-commercial solids, sections, and meshes without making render data authoritative.",
+      "package": 2,
+      "blocker": null,
+      "implementation_sources": [
+        "src/architecture/architecture.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "COMP-GEO-002",
+      "area": "components",
+      "requirement": "Use PlaneGCS/Eigen behind an application-owned planar constraint adapter; Ceres is not the planar solver substitute.",
+      "source_urls": [
+        "https://github.com/FreeCAD/FreeCAD/blob/main/src/Mod/Sketcher/App/planegcs/GCS.h"
+      ],
+      "source_refs": [
+        "task_plan",
+        "planegcs_source"
+      ],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "The adapter reports degrees of freedom, redundancy, and conflict diagnostics for the application fixtures and contains no Ceres dependency for planar solving.",
+      "package": 2,
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/constraints.hpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "COMP-IO-001",
+      "area": "components",
+      "requirement": "Use isolated local workers for reviewed IFC and DXF parsing/export components, with adapter manifests and no dependency on a hosted service.",
+      "source_urls": [
+        "https://technical.buildingsmart.org/standards/ifc/mvd/mvd-database/"
+      ],
+      "source_refs": [
+        "task_plan",
+        "ifc_mvd"
+      ],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Worker versions, formats, capabilities, resources, and failure behavior are recorded; worker failure leaves the core project usable.",
+      "package": 2,
+      "blocker": null
+    },
+    {
+      "id": "COMP-IO-002",
+      "area": "components",
+      "requirement": "Use reviewed Qt PDF and Print Support modules for vector output and printing, with an explicit module allowlist.",
+      "source_urls": [
+        "https://doc.qt.io/qt-6/licensing.html"
+      ],
+      "source_refs": [
+        "task_plan",
+        "qt_licensing"
+      ],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "The exact Qt module set builds offline, is license-audited, and produces the same vector scene used by preview and supported output formats.",
+      "package": 2,
+      "blocker": null
+    },
+    {
+      "id": "COMP-IO-003",
+      "area": "components",
+      "requirement": "Use PROJ with bundled local resources and networking disabled for georeferencing.",
+      "source_urls": [
+        "https://proj.org/en/stable/usage/network.html"
+      ],
+      "source_refs": [
+        "task_plan",
+        "proj_network"
+      ],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Required coordinate operations complete from bundled resources while a network monitor confirms no download or remote callback.",
+      "package": 2,
+      "blocker": null
+    },
+    {
+      "id": "GEO-BASE-001",
+      "area": "geometry",
+      "requirement": "Represent lines, arcs, holes, winding, tangency, and topology as analytical geometry rather than screen strokes.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Independent analytical and high-precision fixtures agree within the documented area and coordinate tolerances after save/reopen.",
+      "package": 4,
+      "blocker": null,
+      "implementation_sources": [
+        "src/core/geometry.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "GEO-BASE-002",
+      "area": "geometry",
+      "requirement": "Construct and edit true curves using chord length, arc length, arc height, and angle inputs.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Each curve input mode produces the expected analytical arc, preserves its defining parameters, and edits without converting to a faceted stroke.",
+      "package": 4,
+      "blocker": null,
+      "implementation_sources": [
+        "src/core/geometry.cpp",
+        "tests/curve_construction_tests.cpp"
+      ],
+      "implementation_note": "Analytical chord/angle, chord/height, chord/arc-length and start-tangent construction tested; full interactive curve editing remains open."
+    },
+    {
+      "id": "GEO-BASE-003",
+      "area": "geometry",
+      "requirement": "Support rise-and-run entry, relative turns, explicit angles, and unit-aware direction input.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Fixtures entered in imperial and metric units reproduce expected endpoints and headings with documented tolerance.",
+      "package": 4,
+      "blocker": null
+    },
+    {
+      "id": "GEO-BASE-004",
+      "area": "geometry",
+      "requirement": "Provide alignment, snapping, point jumping, automatic closure, and bay-window completion while retaining exact geometry.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Keyboard and pointer fixtures show each behavior, expose the resulting constraint or closure, and reopen without drift.",
+      "package": 4,
+      "blocker": null
+    },
+    {
+      "id": "GEO-CON-001",
+      "area": "constraints",
+      "requirement": "Support editable parallel, perpendicular, horizontal, vertical, coincident, and fixed-length relationships.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Constraint fixtures report intended degrees of freedom and preserve each relation through supported edits and save/reopen.",
+      "package": 4,
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/constraint_entity.hpp",
+        "src/core/constraint_entity.cpp",
+        "src/core/constraint_integrity.cpp",
+        "tests/constraint_entity_tests.cpp",
+        "tests/constraint_integrity_tests.cpp",
+        "include/sketch/constraint_authoring.hpp",
+        "src/core/constraint_authoring.cpp",
+        "src/desktop/constraint_dialog.cpp",
+        "tests/constraint_authoring_tests.cpp",
+        "tests/constraint_dialog_tests.cpp"
+      ],
+      "implementation_note": "Seven persistent straight-wall endpoint relations now have add/edit/remove controls, source-bound solver previews and atomic Apply in both workspaces. V14 integrated tests pass Debug/Release; final hardening and independent service/UI review remain. Boundary vertex and curve relations remain open."
+    },
+    {
+      "id": "GEO-CON-002",
+      "area": "constraints",
+      "requirement": "Preview dimension changes with an explicit anchored endpoint and an explicit choice about moving connected geometry.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "A 12-foot-to-14-foot edit previews both supported anchoring choices, shows dependent movement, and commits only after selection.",
+      "package": 4,
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/constraint_authoring.hpp",
+        "src/core/constraint_authoring.cpp",
+        "src/desktop/constraint_dialog.cpp",
+        "tests/constraint_authoring_tests.cpp",
+        "tests/constraint_dialog_tests.cpp"
+      ],
+      "implementation_note": "Both workspaces preview straight-wall length changes with start/end anchor and explicit connected-movement choice. Candidate and source digests bind Apply; keyboard, invalidation and comparison captures are covered. Boundary/curve editing and full production qualification remain open."
+    },
+    {
+      "id": "GEO-CON-003",
+      "area": "constraints",
+      "requirement": "Detect redundant, contradictory, underconstrained, and near-singular constraint states with understandable diagnostics; never silently relax locked measurements.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Conflict fixtures identify the offending relations, offer only explicit user-confirmed repairs, and leave the previous valid revision intact on rejection.",
+      "package": 4,
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/constraints.hpp",
+        "src/core/constraints.cpp",
+        "src/core/constraint_integrity.cpp",
+        "tests/constraints_tests.cpp",
+        "tests/constraint_integrity_tests.cpp",
+        "include/sketch/constraint_authoring.hpp",
+        "src/core/constraint_authoring.cpp",
+        "src/desktop/constraint_dialog.cpp",
+        "tests/constraint_authoring_tests.cpp",
+        "tests/constraint_dialog_tests.cpp"
+      ],
+      "implementation_note": "Independent document checks enforce locks and preserve unknown-history semantics read-only. Interactive previews expose solver conflicts; locked-length and frozen-neighbor failures leave state intact. Complete singularity/conflict-repair workflows remain open."
+    },
+    {
+      "id": "GEO-CON-004",
+      "area": "constraints",
+      "requirement": "Prevent unintended mirrored solutions, winding changes, topology changes, and unstable alternate branches during solve.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Branch and mirrored-solution fixtures either retain the intended branch or ask for an explicit alternative selection.",
+      "package": 4,
+      "blocker": null,
+      "implementation_sources": [
+        "src/core/constraint_integrity.cpp",
+        "src/core/constraints.cpp",
+        "tests/constraint_integrity_tests.cpp",
+        "tests/constraints_tests.cpp",
+        "include/sketch/constraint_authoring.hpp",
+        "src/core/constraint_authoring.cpp",
+        "src/desktop/constraint_dialog.cpp",
+        "tests/constraint_authoring_tests.cpp",
+        "tests/constraint_dialog_tests.cpp"
+      ],
+      "implementation_note": "Wall reversal remapping, closed-loop winding and crossing/overlap checks protect current straight-wall candidate solves; scaled, translated and orthogonal-edit fixtures are added. General branch selection, boundary identity and curve topology remain incomplete."
+    },
+    {
+      "id": "GEO-CON-005",
+      "area": "constraints",
+      "requirement": "Failed geometric edits preserve the previous valid document state and produce a reversible error result.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Injected solver failures and impossible dimensions leave geometry, calculations, history, and saved revision unchanged.",
+      "package": 4,
+      "blocker": null,
+      "implementation_sources": [
+        "src/core/document.cpp",
+        "src/core/constraint_integrity.cpp",
+        "src/core/wall_semantics.cpp",
+        "tests/constraint_integrity_tests.cpp",
+        "tests/test_cli.py",
+        "include/sketch/constraint_authoring.hpp",
+        "src/core/constraint_authoring.cpp",
+        "src/desktop/constraint_dialog.cpp",
+        "tests/constraint_authoring_tests.cpp",
+        "tests/constraint_dialog_tests.cpp"
+      ],
+      "implementation_note": "Persisted validation and source-bound preview/Apply reject invalid, stale, foreign and modified candidates without partial mutation. Modal commands also reject context changes during prompts. Broader geometry and recovery qualification remain open."
+    },
+    {
+      "id": "GEO-CON-006",
+      "area": "constraints",
+      "requirement": "Model levels and floor-to-floor relationships through an explicit vertical dependency graph.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Changing a level elevation previews and applies expected dependent changes across plans, sections, and 3D without cycles.",
+      "package": 4,
+      "blocker": null
+    },
+    {
+      "id": "APX-WF-001",
+      "area": "apex_parity",
+      "requirement": "Provide a modern Draw First workflow with the documented Apex behavior and equivalent efficient completion path.",
+      "source_urls": [
+        "https://apexwin.com/support/ApexSketchv7/ApexSketchv7-DrawFirst.pdf"
+      ],
+      "source_refs": [
+        "task_plan",
+        "apex_draw_first"
+      ],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "A Draw First fixture creates, closes, edits, classifies, calculates, saves, reopens, and prints with expected geometry and command behavior.",
+      "package": 4,
+      "blocker": null
+    },
+    {
+      "id": "APX-WF-002",
+      "area": "apex_parity",
+      "requirement": "Provide a modern Define First workflow with the documented Apex behavior and equivalent efficient completion path.",
+      "source_urls": [
+        "https://www.apexwin.com/support/ApexSketchv7/ApexSketchv7-DefineFirst.pdf"
+      ],
+      "source_refs": [
+        "task_plan",
+        "apex_define_first"
+      ],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "A Define First fixture defines an area, enters its geometry, edits it, calculates it, and preserves the expected boundary semantics through save/reopen.",
+      "package": 4,
+      "blocker": null
+    },
+    {
+      "id": "APX-WF-003",
+      "area": "apex_parity",
+      "requirement": "Build areas from existing geometry and preserve unfinished sketches for later completion.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Existing walls or segments can become a measurement area without duplication, and an unfinished fixture reopens with its edit state intact.",
+      "package": 4,
+      "blocker": null
+    },
+    {
+      "id": "APX-KEY-001",
+      "area": "apex_parity",
+      "requirement": "Support keyboard distance-and-direction entry with predictable focus, commit, cancel, and repeat behavior.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Recorded keyboard fixtures create and edit geometry without pointer input and reproduce the documented endpoint and heading results.",
+      "package": 4,
+      "blocker": null
+    },
+    {
+      "id": "APX-KEY-002",
+      "area": "apex_parity",
+      "requirement": "Accept fractional inches, feet-and-inches, metric units, and unit-aware precision input without lossy intermediate rounding.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Equivalent imperial and metric entries create equivalent analytical geometry and preserve the original entered quantity and unit.",
+      "package": 4,
+      "blocker": null,
+      "implementation_sources": [
+        "src/core/quantity.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "APX-KEY-003",
+      "area": "apex_parity",
+      "requirement": "Preserve efficient keyboard semantics and provide an Apex-compatible shortcut preset alongside customizable shortcuts.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Shortcut fixtures pass under the Apex preset, conflicts are reported, and user-customized bindings persist in a workspace.",
+      "package": 5,
+      "blocker": null
+    },
+    {
+      "id": "APX-KEY-004",
+      "area": "apex_parity",
+      "requirement": "Support point jumping, automatic closure, and bay-window completion as explicit geometry operations.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Each operation is observable in command history, produces the expected topology, and is undoable.",
+      "package": 4,
+      "blocker": null
+    },
+    {
+      "id": "APX-CURVE-001",
+      "area": "apex_parity",
+      "requirement": "Expose curved wall and boundary construction through actual curve geometry, including chord, arc length, arc height, and angle definitions.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Curve fixtures calculate correct area and perimeter, retain defining parameters, render smoothly, and remain editable after save/reopen.",
+      "package": 4,
+      "blocker": null
+    },
+    {
+      "id": "APX-EDIT-001",
+      "area": "apex_parity",
+      "requirement": "Support selection and clipboard operations for geometry, areas, annotations, and architectural objects.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Copy, cut, paste, multi-select, and selection filtering preserve semantic links and produce undoable commands.",
+      "package": 4,
+      "blocker": null,
+      "implementation_sources": [
+        "src/desktop/main_window.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "APX-EDIT-002",
+      "area": "apex_parity",
+      "requirement": "Support rotation and flipping of supported geometry, areas, references, annotations, and architectural objects with explicit pivot behavior.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Transform fixtures preserve analytical dimensions, typed links, and expected handedness, and can be undone exactly.",
+      "package": 4,
+      "blocker": null
+    },
+    {
+      "id": "APX-EDIT-003",
+      "area": "apex_parity",
+      "requirement": "Support vertex insertion and cloning for applicable boundaries, walls, and objects without breaking constraints or area topology.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Insertion and clone fixtures preserve valid topology, report any new degrees of freedom, and reopen identically.",
+      "package": 4,
+      "blocker": null
+    },
+    {
+      "id": "APX-EDIT-004",
+      "area": "apex_parity",
+      "requirement": "Support reopening, redefining, and deleting areas and supported objects while retaining explicit history and relationships.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Lifecycle fixtures cover reopen, redefine, delete, cancel, and restore with calculations and links matching the committed revision.",
+      "package": 4,
+      "blocker": null
+    },
+    {
+      "id": "APX-EDIT-005",
+      "area": "apex_parity",
+      "requirement": "Every committed operation, including classification, calibration, and compound edits, supports complete undo and redo.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "A mixed command sequence returns byte-equivalent semantic state after undo-all and redo-all, including derived recalculation state.",
+      "package": 4,
+      "blocker": null,
+      "implementation_sources": [
+        "src/desktop/main_window.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "APX-AREA-001",
+      "area": "calculations",
+      "requirement": "Detect, aggregate, and subtract areas from analytical boundaries with explicit grouping and hole behavior.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Nested, adjacent, overlapping, and disconnected area fixtures produce independently inspectable totals and deductions.",
+      "package": 4,
+      "blocker": null,
+      "implementation_sources": [
+        "src/calculations/calculations.cpp",
+        "tests/calculation_tests.cpp"
+      ],
+      "implementation_note": "Analytical calculation and union subtraction are implemented; automatic area detection and complete Apex workflows remain open."
+    },
+    {
+      "id": "APX-AREA-002",
+      "area": "calculations",
+      "requirement": "Support classifications, base area, factors, net area, and explicit measurement profiles.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Changing classification or factor produces a visible, attributed calculation revision without altering boundary geometry.",
+      "package": 4,
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/calculations.hpp",
+        "src/calculations/calculations.cpp",
+        "tests/calculation_tests.cpp"
+      ],
+      "implementation_note": "Custom versioned profiles, rational factors and base/net area are implemented; profile inspector and standards fixtures remain open."
+    },
+    {
+      "id": "APX-AREA-003",
+      "area": "calculations",
+      "requirement": "Report perimeter, living-area totals, building totals, and other required area aggregates with configurable rounding.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Reference fixtures match independently calculated perimeter and totals within the documented tolerance, with rounding shown separately.",
+      "package": 4,
+      "blocker": null,
+      "implementation_sources": [
+        "src/calculations/calculations.cpp",
+        "tests/calculation_tests.cpp"
+      ],
+      "implementation_note": "Unrounded aggregation, explicit building/living classifications and display rounding are implemented; production output parity remains open."
+    },
+    {
+      "id": "APX-AREA-004",
+      "area": "calculations",
+      "requirement": "Make every total inspectable through boundary, deduction, classification, factor, rounding, and provenance details, including documented Auto-Subtract behavior.",
+      "source_urls": [
+        "https://apexwin.com/support/ApexSketchv7/ApexSketchv7-DrawFirst-Auto-Subtract.pdf"
+      ],
+      "source_refs": [
+        "task_plan",
+        "apex_auto_subtract"
+      ],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "The calculation inspector identifies every contributing object and applies the same-type Auto-Subtract rule from the compatibility fixture, with no hidden deduction.",
+      "package": 4,
+      "blocker": null
+    },
+    {
+      "id": "APX-ANNO-001",
+      "area": "apex_parity",
+      "requirement": "Provide editable text and label libraries with per-instance content, style, placement, and visibility.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Text library fixtures create, edit, filter, hide, and save labels without changing calculation classifications silently.",
+      "package": 6,
+      "blocker": null
+    },
+    {
+      "id": "APX-ANNO-002",
+      "area": "apex_parity",
+      "requirement": "Provide editable dimensions with placement, visibility, styles, references, and independent output-scale behavior.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Dimension fixtures remain associated with semantic geometry through supported edits, print at the selected output scale, and can be undone.",
+      "package": 6,
+      "blocker": null
+    },
+    {
+      "id": "APX-ANNO-003",
+      "area": "apex_parity",
+      "requirement": "Support editable drawing styles, fills, and visibility controls for areas, objects, and output views.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Style and fill changes affect presentation only, persist across save/reopen, and do not alter analytical geometry.",
+      "package": 6,
+      "blocker": null
+    },
+    {
+      "id": "APX-SYM-001",
+      "area": "apex_parity",
+      "requirement": "Provide an equivalent editable, scalable symbol catalog with more than 200 usable symbols.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "The catalog count exceeds 200, each symbol has preview/scale/placement metadata, and representative symbols survive save, print, and export.",
+      "package": 6,
+      "blocker": null
+    },
+    {
+      "id": "APX-TRACE-001",
+      "area": "apex_parity",
+      "requirement": "Import PDF and raster reference images as project assets for tracing and calibrated presentation.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "PDF and common raster fixtures import offline with asset identity, page selection, and explicit fidelity/error reporting.",
+      "package": 6,
+      "blocker": null
+    },
+    {
+      "id": "APX-TRACE-002",
+      "area": "apex_parity",
+      "requirement": "Calibrate a reference image against a known measurement and preserve calibration provenance.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "A known 100 mm fixture measures within 0.1 mm numerically after calibration, save/reopen, and view transform changes.",
+      "package": 6,
+      "blocker": null
+    },
+    {
+      "id": "APX-TRACE-003",
+      "area": "apex_parity",
+      "requirement": "Trace over references and support resize, rotate, flip, intensity adjustment, and show/hide controls without changing source assets.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Reference transforms are independently undoable, remain linked to the source asset, and preserve measured geometry.",
+      "package": 6,
+      "blocker": null
+    },
+    {
+      "id": "APX-DOC-001",
+      "area": "apex_parity",
+      "requirement": "Support multipage projects with subject information, area attributes, page-level presentation, and shared project data.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "A multipage fixture preserves subject and area metadata, page order, independent view settings, and linked model references after save/reopen.",
+      "package": 6,
+      "blocker": null
+    },
+    {
+      "id": "APX-DOC-002",
+      "area": "apex_parity",
+      "requirement": "Support local save, import, export, and declared legacy-version exchange workflows with fidelity reports.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Each supported format has a fixture, documented subset, round-trip comparison, and explicit report for data that cannot be preserved.",
+      "package": 6,
+      "blocker": null,
+      "implementation_sources": [
+        "src/desktop/main_window.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "APX-DOC-003",
+      "area": "apex_parity",
+      "requirement": "Provide page layouts, print preview, PDF output, and image output with independent output scale.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Layout fixtures preview and export at the selected page size and scale, and output fingerprints identify all influencing inputs.",
+      "package": 6,
+      "blocker": null,
+      "implementation_sources": [
+        "src/desktop/main_window.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "APX-UI-001",
+      "area": "workspace",
+      "requirement": "Provide pan, zoom, grid, independent output scale, and responsive overview navigation without rebuilding the whole interface.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Navigation fixtures retain input responsiveness while derived geometry rendering updates asynchronously and view state persists.",
+      "package": 5,
+      "blocker": null,
+      "implementation_sources": [
+        "src/desktop/main_window.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "APX-UI-002",
+      "area": "workspace",
+      "requirement": "Provide visibility filters, overview map, light/dark themes, and saved workspace configurations.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Workspace fixtures save and restore filters, theme, overview, and panel state without changing document geometry.",
+      "package": 5,
+      "blocker": null,
+      "implementation_sources": [
+        "src/core/project_visibility.cpp",
+        "src/visualization/native_model_view.cpp"
+      ],
+      "implementation_note": "Derived floor/layer masks and native presentation/picking filtering pass focused Debug/Release tests. Navigator and plan integration are in progress; overview, themes, saved workspace profiles and complete acceptance remain open."
+    },
+    {
+      "id": "APX-UI-003",
+      "area": "workspace",
+      "requirement": "Provide a searchable command palette, customizable quick-access commands, shortcut editing, and view tabs.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Every exposed command is searchable, can be bound where supported, reports conflicts, and remains available from keyboard and pointer paths.",
+      "package": 5,
+      "blocker": null,
+      "implementation_sources": [
+        "src/desktop/main_window.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "APX-INPUT-001",
+      "area": "field_input",
+      "requirement": "Support mouse, keyboard, active pen, and touch input for precision drawing and editing.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Recorded mouse/keyboard, real pen, and real touch fixtures complete core draw/edit operations with correct focus, pressure-independent geometry, and undo.",
+      "package": 6,
+      "blocker": null,
+      "implementation_sources": [
+        "src/desktop/main_window.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "APX-INPUT-002",
+      "area": "field_input",
+      "requirement": "Support DISTO measurement input through an adapter that targets an explicitly selected field and retains units and provenance.",
+      "source_urls": [],
+      "evidence_status": "needs_evidence",
+      "implementation_status": "not_started",
+      "acceptance": "At least one selected DISTO model/transport fixture records a reading in the intended field without silently overwriting another measurement.",
+      "package": 6,
+      "blocker": "Exact DISTO model, firmware, transport, and available test hardware must be identified and exercised."
+    },
+    {
+      "id": "APX-SPEC-001",
+      "area": "specialized_modules",
+      "requirement": "Provide survey and metes-and-bounds workflows with traverse geometry, acreage calculation, closure diagnostics, and output.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Survey fixtures import or enter bearings/distances, report closure and acreage, preserve traverse provenance, and export the declared result.",
+      "package": 6,
+      "blocker": null
+    },
+    {
+      "id": "APX-SPEC-002",
+      "area": "specialized_modules",
+      "requirement": "Provide the Pro georeferencing workflow with explicit coordinate reference, control points, residuals, and offline resources.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "A georeferencing fixture records control points and residuals, applies the selected transform, and reopens without a network request.",
+      "package": 6,
+      "blocker": null
+    },
+    {
+      "id": "APX-INT-001",
+      "area": "integrations",
+      "requirement": "Provide appraisal-software integrations through isolated, versioned adapters with explicit field mapping and failure behavior.",
+      "source_urls": [],
+      "evidence_status": "needs_evidence",
+      "implementation_status": "not_started",
+      "acceptance": "Each supported appraisal application/version has an exchange fixture, field mapping, round-trip or one-way fidelity report, and offline failure test.",
+      "package": 6,
+      "blocker": "Actual target appraisal applications, versions, exchange formats, and available caller interfaces are not yet identified."
+    },
+    {
+      "id": "APX-INT-002",
+      "area": "integrations",
+      "requirement": "Document and implement caller protocols for external integrations without coupling them to the drawing engine.",
+      "source_urls": [],
+      "evidence_status": "needs_evidence",
+      "implementation_status": "not_started",
+      "acceptance": "Each caller protocol has a versioned adapter contract, capability negotiation, timeout/error semantics, and a recorded compatibility fixture.",
+      "package": 6,
+      "blocker": "Caller protocols and exact external integration contracts require discovery from representative applications and observed exchanges."
+    },
+    {
+      "id": "APX-NATIVE-AX5-001",
+      "area": "compatibility",
+      "requirement": "Import and preserve supported native Apex v5 projects with geometry, curves, classifications, dimensions, labels, symbols, imagery, and metadata where representable.",
+      "source_urls": [],
+      "evidence_status": "needs_evidence",
+      "implementation_status": "not_started",
+      "acceptance": "Representative Apex v5 fixtures open with a field-by-field fidelity report and round-trip or preservation result for every supported data class.",
+      "package": 6,
+      "blocker": "Representative native Apex v5 files and format evidence are required; PDF tracing cannot satisfy this row."
+    },
+    {
+      "id": "APX-NATIVE-AX7-001",
+      "area": "compatibility",
+      "requirement": "Import, edit, and preserve supported native Apex v7 projects with geometry, curves, classifications, dimensions, labels, symbols, imagery, and metadata where representable.",
+      "source_urls": [],
+      "evidence_status": "needs_evidence",
+      "implementation_status": "not_started",
+      "acceptance": "Representative Apex v7 fixtures open, edit, save, and export with a field-by-field fidelity report and no silent loss of required content.",
+      "package": 6,
+      "blocker": "Representative native Apex v7 files and format evidence are required; PDF tracing cannot satisfy this row."
+    },
+    {
+      "id": "APX-NATIVE-LEGACY-001",
+      "area": "compatibility",
+      "requirement": "Export declared legacy Apex-compatible versions with explicit subset, loss, and round-trip behavior.",
+      "source_urls": [],
+      "evidence_status": "needs_evidence",
+      "implementation_status": "not_started",
+      "acceptance": "Each declared legacy export has a real consumer fixture, output comparison, and visible report for unsupported or transformed content.",
+      "package": 6,
+      "blocker": "Target legacy versions and consumer fixtures are not yet available."
+    },
+    {
+      "id": "APX-COMPAT-001",
+      "area": "compatibility",
+      "requirement": "Audit Apex Standard, Pro, and enabled modules rather than infer feature scope from purchase price or public documentation alone.",
+      "source_urls": [
+        "https://apexwin.com/support/ApexSketchv7/ApexSketchv7-DrawFirst.pdf",
+        "https://www.apexwin.com/support/ApexSketchv7/ApexSketchv7-DefineFirst.pdf"
+      ],
+      "source_refs": [
+        "task_plan",
+        "apex_draw_first",
+        "apex_define_first"
+      ],
+      "evidence_status": "needs_evidence",
+      "implementation_status": "not_started",
+      "acceptance": "The ledger records the installed edition/module inventory, observed behavior, settings, version, and fixture for every required capability.",
+      "package": 1,
+      "blocker": "Installed Apex editions, enabled modules, settings, and version information must be collected."
+    },
+    {
+      "id": "APX-COMPAT-002",
+      "area": "compatibility",
+      "requirement": "Compare representative Apex projects and expected outputs across geometry, curves, classifications, dimensions, labels, symbols, imagery, metadata, calculations, and print/export.",
+      "source_urls": [],
+      "evidence_status": "needs_evidence",
+      "implementation_status": "not_started",
+      "acceptance": "A compatibility report compares paired source/replacement projects and outputs, identifies any loss, and leaves no required mismatch unclassified.",
+      "package": 1,
+      "blocker": "Representative projects, source outputs, and acceptance expectations are not yet available."
+    },
+    {
+      "id": "ARCH-MOD-001",
+      "area": "architecture",
+      "requirement": "Author straight, curved, sloped, and composite walls with joins, thickness, materials, and stable semantic identity.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Wall fixtures create and edit each type in plan, elevation, section, and 3D while preserving joins, quantities, and links.",
+      "package": 4,
+      "blocker": null,
+      "implementation_sources": [
+        "src/architecture/architecture.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "ARCH-MOD-002",
+      "area": "architecture",
+      "requirement": "Author hosted doors, windows, and openings with type/instance properties and wall relationships.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Opening fixtures host, move, resize, replace, schedule, and export without losing wall geometry or handedness data.",
+      "package": 4,
+      "blocker": null,
+      "implementation_sources": [
+        "src/architecture/architecture.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "ARCH-MOD-003",
+      "area": "architecture",
+      "requirement": "Author floors, ceilings, foundations, and their materials, levels, boundaries, and quantities.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Floor-system fixtures appear correctly in plans, sections, elevations, and 3D and contribute the declared schedule quantities.",
+      "package": 4,
+      "blocker": null,
+      "implementation_sources": [
+        "src/architecture/architecture.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "ARCH-MOD-004",
+      "area": "architecture",
+      "requirement": "Author beams and columns suitable for residential and light-commercial building documentation.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Beam and column fixtures support creation, placement, property editing, section display, schedules, and save/reopen.",
+      "package": 4,
+      "blocker": null,
+      "implementation_sources": [
+        "src/architecture/building_objects.cpp",
+        "src/architecture/building_entity.cpp",
+        "src/architecture/building_plan_projection.cpp",
+        "src/desktop/building_object_dialog.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/building_object_tests.cpp",
+        "tests/building_object_dialog_tests.cpp",
+        "tests/building_plan_projection_tests.cpp",
+        "tests/desktop_smoke.cpp"
+      ],
+      "implementation_note": "Rectangular/circular columns and arbitrary-axis beams have semantic solids, parameter editors, and exact top-down plan projections. Section display, schedules and production acceptance remain open."
+    },
+    {
+      "id": "ARCH-MOD-005",
+      "area": "architecture",
+      "requirement": "Author flat, shed, gable, and hip roof forms with slopes, joins, openings where supported, and materials.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Roof fixtures produce correct plan, elevation, section, and editable 3D representations and retain defining parameters.",
+      "package": 4,
+      "blocker": null,
+      "implementation_sources": [
+        "src/architecture/building_objects.cpp",
+        "src/architecture/building_entity.cpp",
+        "src/architecture/building_plan_projection.cpp",
+        "src/desktop/building_object_dialog.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/building_object_tests.cpp",
+        "tests/building_object_dialog_tests.cpp",
+        "tests/building_plan_projection_tests.cpp",
+        "tests/desktop_smoke.cpp"
+      ],
+      "implementation_note": "Sloped panels and gable roofs have semantic solids, parameter editors, and exact top-down plan projections. Flat/hip roof authoring, joins, openings, materials and coordinated production views remain open."
+    },
+    {
+      "id": "ARCH-MOD-006",
+      "area": "architecture",
+      "requirement": "Author stairs, landings, and railings with level connections and editable dimensions.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Stair fixtures validate supported dimensions, display in all required views, and save/reopen with connected levels intact.",
+      "package": 4,
+      "blocker": null,
+      "implementation_sources": [
+        "src/architecture/building_objects.cpp",
+        "src/architecture/building_entity.cpp",
+        "src/architecture/building_plan_projection.cpp",
+        "src/desktop/building_object_dialog.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/building_object_tests.cpp",
+        "tests/building_object_dialog_tests.cpp",
+        "tests/building_plan_projection_tests.cpp",
+        "tests/desktop_smoke.cpp"
+      ],
+      "implementation_note": "Straight stair flights with optional landings have semantic solids, parameter editors, and exact top-down projections. Railings, level connections, remaining forms and coordinated production acceptance remain open."
+    },
+    {
+      "id": "ARCH-MOD-007",
+      "area": "architecture",
+      "requirement": "Provide levels, reference grids, floor-to-floor alignment, and basic site/terrain tools.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Level, grid, and site fixtures coordinate plans, sections, elevations, and 3D without ambiguous vertical references.",
+      "package": 4,
+      "blocker": null
+    },
+    {
+      "id": "ARCH-MOD-008",
+      "area": "architecture",
+      "requirement": "Provide reusable assemblies with separate type and instance properties, materials, and quantity behavior.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Changing a type updates its instances according to explicit rules while instance overrides remain visible and undoable.",
+      "package": 4,
+      "blocker": null
+    },
+    {
+      "id": "ARCH-MOD-009",
+      "area": "architecture",
+      "requirement": "Model rooms and architectural boundaries separately from appraisal measurement boundaries, with explicit relationships where desired.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "A room can relate to, follow, or remain independent from a measurement boundary without silently conflating classifications or geometry.",
+      "package": 4,
+      "blocker": null
+    },
+    {
+      "id": "ARCH-MOD-010",
+      "area": "architecture",
+      "requirement": "Support existing, demolished, and proposed phases across the model, views, calculations, schedules, and sheets.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Phase fixtures show the selected state consistently in every required view and can be changed through undoable commands.",
+      "package": 4,
+      "blocker": null
+    },
+    {
+      "id": "ARCH-MOD-011",
+      "area": "architecture",
+      "requirement": "Support mutually exclusive remodeling alternatives over a shared existing model with clear comparison state.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Alternative fixtures switch, compare, save, and print without contaminating one another or changing the shared existing state.",
+      "package": 4,
+      "blocker": null
+    },
+    {
+      "id": "ARCH-3D-001",
+      "area": "architecture",
+      "requirement": "Provide editable 3D authoring over the same semantic objects used by measurement and 2D documentation.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "A 3D edit changes the shared object and is visible in linked plan/elevation/section views, schedules, calculations, and save/reopen.",
+      "package": 5,
+      "blocker": null,
+      "implementation_sources": [
+        "src/visualization/native_model_view.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/native_view_tests.cpp"
+      ],
+      "implementation_note": "Native solids, selection, linked inspector edits and navigation are implemented; full 3D authoring/gizmos and remaining object types remain open."
+    },
+    {
+      "id": "ARCH-VIEW-001",
+      "area": "architecture",
+      "requirement": "Provide coordinated plans, elevations, and sections that edit and display the same building objects.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "A representative wall/opening/roof edit in any view updates the other views and retains stable references.",
+      "package": 5,
+      "blocker": null
+    },
+    {
+      "id": "ARCH-VIEW-002",
+      "area": "architecture",
+      "requirement": "Sections support cut depth, line treatment, material hatching, annotations, and detail overlays.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Section fixtures render and print the selected cut and presentation settings and preserve them in the project.",
+      "package": 5,
+      "blocker": null
+    },
+    {
+      "id": "ARCH-SCH-001",
+      "area": "architecture",
+      "requirement": "Provide door/window, room, and material schedules with the required marks, properties, dimensions, counts, areas, deductions, and net quantities.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Schedules generated from a representative project match the semantic model and update after accepted object edits.",
+      "package": 5,
+      "blocker": null
+    },
+    {
+      "id": "ARCH-SCH-002",
+      "area": "architecture",
+      "requirement": "Editable schedule cells issue normal document commands; calculated cells are read-only and expose their source.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Editing a permitted cell creates history and updates the model; editing a calculated cell is prevented with a source explanation.",
+      "package": 5,
+      "blocker": null
+    },
+    {
+      "id": "ARCH-SHEET-001",
+      "area": "architecture",
+      "requirement": "Provide coordinated sheets with title blocks, revisions, callouts, schedules, and independently scaled viewports.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Sheet fixtures preserve viewport scale, linked annotations, schedules, title-block data, and revision information through print/export.",
+      "package": 5,
+      "blocker": null
+    },
+    {
+      "id": "ARCH-EDIT-001",
+      "area": "architecture",
+      "requirement": "Every supported architectural object supports creation, selection, property editing, appropriate transforms, duplication, deletion, undo/redo, and save/reopen.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Object-family fixtures execute the complete lifecycle and compare semantic, geometric, view, schedule, and persistence state.",
+      "package": 5,
+      "blocker": null
+    },
+    {
+      "id": "ARCH-REL-001",
+      "area": "architecture",
+      "requirement": "Plans, elevations, sections, 3D, calculations, schedules, and sheets use explicit stable references to the same semantic objects.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Deleting or changing a referenced feature produces a visible issue or controlled update rather than silently retargeting an annotation or schedule row.",
+      "package": 5,
+      "blocker": null
+    },
+    {
+      "id": "ARCH-OUTPUT-001",
+      "area": "architecture",
+      "requirement": "Support complete residential and light-commercial remodel documentation from existing conditions through alternatives and coordinated output.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "End-to-end residential and light-commercial remodel fixtures produce editable model, comparison views, schedules, and sheets from one project.",
+      "package": 5,
+      "blocker": null
+    },
+    {
+      "id": "UX-WORK-001",
+      "area": "workspace",
+      "requirement": "Use a canvas-centered workspace with compact tool rail, expandable navigator, contextual inspector, and cursor-adjacent measurement panel.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Representative workflows expose relevant controls in context, keep the canvas dominant, and preserve panel layout in saved workspaces.",
+      "package": 5,
+      "blocker": null,
+      "implementation_sources": [
+        "src/desktop/main_window.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "UX-WORK-002",
+      "area": "workspace",
+      "requirement": "Selecting a wall, area, reference, or architectural object exposes its relevant dimensions, relationships, styling, calibration, classifications, or calculations without unrelated modal dialogs.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Selection fixtures show contextual properties and commit edits through normal commands with clear validation errors.",
+      "package": 5,
+      "blocker": null,
+      "implementation_sources": [
+        "src/desktop/main_window.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "UX-WORK-003",
+      "area": "workspace",
+      "requirement": "Provide split plan/3D views, view tabs, saved workspaces, light/dark themes, and a high-contrast field mode.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Workspace and theme fixtures restore view arrangement and remain usable at supported DPI scales without changing document data.",
+      "package": 5,
+      "blocker": null,
+      "implementation_sources": [
+        "src/desktop/main_window.cpp",
+        "src/visualization/native_model_view.cpp"
+      ],
+      "implementation_note": "Plan/3D split and view tabs are implemented; saved workspaces and complete theme/field modes remain open."
+    },
+    {
+      "id": "UX-ACCESS-001",
+      "area": "accessibility",
+      "requirement": "Support keyboard navigation, predictable focus, accessible properties and commands, high contrast, and layouts from 1366x768 through 4K at 100%, 150%, and 200% scaling.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Accessibility and DPI fixtures complete core workflows without clipped controls, lost focus, inaccessible properties, or unreadable contrast.",
+      "package": 8,
+      "blocker": null
+    },
+    {
+      "id": "UX-INPUT-001",
+      "area": "field_input",
+      "requirement": "Provide pen/touch-specific controls and an on-screen measurement keypad while preserving keyboard precision paths.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Real pen/touch fixtures enter and commit measurements through the keypad, preserve units/provenance, and remain undoable.",
+      "package": 5,
+      "blocker": null
+    },
+    {
+      "id": "ASSIST-001",
+      "area": "assisted_workflows",
+      "requirement": "Provide optional offline suggested tracing from plans or reference images.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "A local model or deterministic assistant suggests trace geometry on a fixture without network access and labels every suggestion unverified.",
+      "package": 7,
+      "blocker": null
+    },
+    {
+      "id": "ASSIST-002",
+      "area": "assisted_workflows",
+      "requirement": "Provide optional offline dimension extraction from supported plans and references.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Extracted dimensions are visibly provisional, include source location/confidence, and require acceptance before becoming document commands.",
+      "package": 7,
+      "blocker": null
+    },
+    {
+      "id": "ASSIST-003",
+      "area": "assisted_workflows",
+      "requirement": "Provide optional assisted label placement and natural-language commands through the same command and permission model as manual edits.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Suggestions preview as normal typed commands, identify affected entities, require acceptance, and are fully undoable.",
+      "package": 7,
+      "blocker": null
+    },
+    {
+      "id": "ASSIST-004",
+      "area": "assisted_workflows",
+      "requirement": "Assistance never silently invents measurements, changes classifications, or modifies accepted geometry; disabling it does not affect deterministic workflows.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Assistance-off and malformed-suggestion tests complete draw/edit/calculate/save/print/export, and unaccepted suggestions leave no semantic changes.",
+      "package": 7,
+      "blocker": null
+    },
+    {
+      "id": "ASSIST-005",
+      "area": "assisted_workflows",
+      "requirement": "Distributed assistance assets and processing libraries have offline resource paths, provenance, and license records.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "The offline package contains or explicitly omits optional assets, reports missing local resources, and passes the same source/license audit as core dependencies.",
+      "package": 7,
+      "blocker": null
+    },
+    {
+      "id": "REC-001",
+      "area": "recovery",
+      "requirement": "Provide local autosave, recoverable history, and crash/power-loss recovery with explicit edited, autosaved, and saved states.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Crash and power-interruption fixtures recover the last valid revision, identify the session and checksum, and never silently overwrite the saved source.",
+      "package": 3,
+      "blocker": null
+    },
+    {
+      "id": "REC-002",
+      "area": "recovery",
+      "requirement": "Provide named revisions and comparison views for semantic, geometric, calculation, and presentation changes.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Two named revisions can be compared and restored without losing later work or changing the original revision.",
+      "package": 3,
+      "blocker": null,
+      "implementation_sources": [
+        "src/core/document.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "REC-003",
+      "area": "recovery",
+      "requirement": "Provide portable project packages and reusable templates containing required assets, profiles, and documentation references.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "A package copied to another offline Windows machine opens with all required assets and produces the same calculated and output fingerprints.",
+      "package": 3,
+      "blocker": null
+    },
+    {
+      "id": "REC-004",
+      "area": "recovery",
+      "requirement": "Detect external changes and enforce exclusive editing ownership, with read-only or independent-copy behavior for a second opening.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Concurrent-open and external-change fixtures prevent silent overwrite and make the selected read-only/copy path explicit.",
+      "package": 3,
+      "blocker": null,
+      "implementation_sources": [
+        "src/core/project_store.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "REC-005",
+      "area": "recovery",
+      "requirement": "Failure-injection tests cover transaction, serialization, flush, replacement, recovery, migration, disk exhaustion, file locks, damaged assets, stale recovery, and newer schemas.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Each injected failure has an expected recoverable result, evidence log, and no corrupted authoritative project is presented as valid.",
+      "package": 8,
+      "blocker": null,
+      "implementation_sources": [
+        "src/core/project_store.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "IO-IFC-001",
+      "area": "interchange",
+      "requirement": "Support the declared IFC4 ADD2 TC1 Reference View 1.2 interchange target with editable reconstruction where reliable and identifiable reference preservation otherwise.",
+      "source_urls": [
+        "https://technical.buildingsmart.org/standards/ifc/mvd/mvd-database/"
+      ],
+      "source_refs": [
+        "task_plan",
+        "ifc_mvd"
+      ],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Representative IFC fixtures export/import with a fidelity report for geometry, types, properties, materials, relationships, and unreconstructed content.",
+      "package": 6,
+      "blocker": null
+    },
+    {
+      "id": "IO-DXF-001",
+      "area": "interchange",
+      "requirement": "Support a declared DXF R2013 subset covering lines, arcs, polylines, text, dimensions, hatches, and blocks.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Subset fixtures round-trip supported entities and report unsupported entities without blocking native project use.",
+      "package": 6,
+      "blocker": null
+    },
+    {
+      "id": "IO-PDF-001",
+      "area": "interchange",
+      "requirement": "Treat PDF and raster underlays as calibrated reference assets, and distinguish editable extraction from simple tracing or image display.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Import reports whether content is editable, traceable, or image-only and preserves calibration and source provenance.",
+      "package": 6,
+      "blocker": null
+    },
+    {
+      "id": "IO-OUTPUT-001",
+      "area": "output",
+      "requirement": "Preview, PDF, SVG, and printing consume one vector scene; raster imagery and shaded 3D are explicitly identified raster content.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "Paired output fixtures compare scene geometry, scale, text, dimensions, and raster placement across preview and exported/printed results.",
+      "package": 8,
+      "blocker": null,
+      "implementation_sources": [
+        "src/desktop/plan_canvas.cpp",
+        "src/desktop/main_window.cpp"
+      ],
+      "implementation_note": "Draft PDF/print use one canvas geometry renderer; full vector-scene/fingerprint pipeline and SVG remain open."
+    },
+    {
+      "id": "IO-OUTPUT-002",
+      "area": "output",
+      "requirement": "Support Letter, Legal, Tabloid, A4, A3, and architectural sheet sizes with independent scale and printer calibration verification.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Each sheet fixture reports numeric page dimensions and a physical/driver scaling check separately from PDF geometry.",
+      "package": 8,
+      "blocker": null
+    },
+    {
+      "id": "IO-OUTPUT-003",
+      "area": "output",
+      "requirement": "Block authoritative output or clearly mark drafts when calculations, required references, assets, or fingerprints are stale or incomplete.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Stale-calculation, missing-asset, broken-link, and incomplete-drawing fixtures cannot silently produce an authoritative file.",
+      "package": 8,
+      "blocker": null
+    },
+    {
+      "id": "SEC-WORKER-001",
+      "area": "security",
+      "requirement": "Run untrusted import workers in Windows AppContainer without network capabilities, with Job Object limits, brokered inputs, controlled temporary storage, and fixed search paths.",
+      "source_urls": [
+        "https://learn.microsoft.com/en-us/windows/win32/secauthz/appcontainer-isolation"
+      ],
+      "source_refs": [
+        "task_plan",
+        "appcontainer"
+      ],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "A worker security fixture verifies token/container policy, network denial, resource limits, path restrictions, and controlled parent termination.",
+      "package": 8,
+      "blocker": null
+    },
+    {
+      "id": "SEC-WORKER-002",
+      "area": "security",
+      "requirement": "Contain malformed imports, path traversal, decompression bombs, DLL/module planting, child-process escape, timeouts, and worker crashes.",
+      "source_urls": [
+        "https://learn.microsoft.com/en-us/windows/win32/secauthz/appcontainer-isolation"
+      ],
+      "source_refs": [
+        "task_plan",
+        "appcontainer"
+      ],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Adversarial fixtures terminate or reject safely, leave the core project usable, and produce actionable local diagnostics without network access.",
+      "package": 8,
+      "blocker": null
+    },
+    {
+      "id": "SEC-PROJ-001",
+      "area": "security",
+      "requirement": "Disable PROJ networking and custom network callbacks; missing coordinate resources produce a local diagnostic instead of an attempted download.",
+      "source_urls": [
+        "https://proj.org/en/stable/usage/network.html"
+      ],
+      "source_refs": [
+        "task_plan",
+        "proj_network"
+      ],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Network-denied georeferencing fixtures either use bundled resources or fail locally with no network request.",
+      "package": 8,
+      "blocker": null
+    },
+    {
+      "id": "OPS-PERF-001",
+      "area": "quality",
+      "requirement": "Target 95th-percentile navigation frame time at or below 16.7 ms on agreed reference hardware for representative workloads.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Recorded 50,000-entity, 10,000-object/one-million-triangle, and 20-sheet/250 MB workloads meet the measured target or produce an explicit unresolved gate failure.",
+      "package": 8,
+      "blocker": null
+    },
+    {
+      "id": "OPS-PERF-002",
+      "area": "quality",
+      "requirement": "Target input feedback at or below 50 ms and ordinary edits at or below 250 ms, with expensive regeneration in cancellable background work.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Instrumented drawing and editing fixtures report latency percentiles and cancel a long regeneration without losing the valid revision.",
+      "package": 8,
+      "blocker": null
+    },
+    {
+      "id": "OPS-PERF-003",
+      "area": "quality",
+      "requirement": "Target representative project open/save at or below five seconds while preserving snapshot and asset integrity.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Instrumented representative projects report open/save time, revision identity, and manifest validation result.",
+      "package": 8,
+      "blocker": null
+    },
+    {
+      "id": "OPS-QA-001",
+      "area": "quality",
+      "requirement": "Validate geometry, calculations, constraints, units, factors, rounding, topology, and persistence through independent analytical fixtures.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "The verification suite covers lines, arcs, holes, overlaps, winding, tangency, units, area tolerance max(1e-6 m2, 1e-8 times reference area), and constraint branches.",
+      "package": 9,
+      "blocker": null,
+      "implementation_sources": [
+        "tests/project_store_tests.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "OPS-QA-002",
+      "area": "quality",
+      "requirement": "Pass an integrated residential production fixture exercising measurement, architectural authoring, editable 3D, plans, elevations, sections, schedules, alternatives, revisions, sheets, save/reopen, print, and export.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "The fixture completes the full workflow and its expected semantic, calculation, output, recovery, and fidelity assertions pass.",
+      "package": 9,
+      "blocker": null
+    },
+    {
+      "id": "OPS-QA-003",
+      "area": "quality",
+      "requirement": "Pass an integrated light-commercial production fixture exercising multiple levels, assemblies, structural objects, schedules, quantities, sheets, and coordinated views.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "The fixture completes the full workflow and its expected semantic, calculation, output, recovery, and fidelity assertions pass.",
+      "package": 9,
+      "blocker": null
+    },
+    {
+      "id": "OPS-QA-004",
+      "area": "quality",
+      "requirement": "Complete Create, measure, model in 3D, use optional assistance, edit, calculate, revise, save, reopen, recover, print, and export on a clean offline Windows machine.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "in_progress",
+      "acceptance": "The packaged application completes the workflow with networking disabled, and the same workflow passes with assistance disabled.",
+      "package": 9,
+      "blocker": null,
+      "implementation_sources": [
+        "tests/desktop_smoke.cpp"
+      ],
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+    },
+    {
+      "id": "OPS-QA-005",
+      "area": "quality",
+      "requirement": "Verify real pen/touch input, keyboard navigation, focus behavior, accessible properties, themes, high contrast, and supported DPI layouts.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Recorded device and accessibility fixtures complete the core workflows at 100%, 150%, and 200% scaling without usability blockers.",
+      "package": 9,
+      "blocker": null
+    },
+    {
+      "id": "OPS-PACK-001",
+      "area": "packaging",
+      "requirement": "Deliver signed or otherwise integrity-verifiable offline installer and portable Windows packages with no hidden network prerequisite.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "Clean-machine installation, launch, repair/recovery, uninstall behavior, and package hashes are recorded with networking disabled.",
+      "package": 8,
+      "blocker": null
+    },
+    {
+      "id": "OPS-PACK-002",
+      "area": "packaging",
+      "requirement": "Deliver offline help, keyboard/workflow reference, source/build kit, dependency sources/notices/SBOM, format and adapter documentation, fixtures, and verification reports.",
+      "source_urls": [],
+      "evidence_status": "documented",
+      "implementation_status": "not_started",
+      "acceptance": "The handoff inventory contains every required artifact, opens locally, and is sufficient for a clean Windows rebuild and review.",
+      "package": 8,
+      "blocker": null
+    }
+  ]
+}

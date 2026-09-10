@@ -1,0 +1,12 @@
+* text=auto eol=lf
+*.cpp text eol=lf
+*.h text eol=lf
+*.hpp text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.py text eol=lf
+*.ps1 text eol=crlf
+# Preserve upstream license text, including its original whitespace.
+assets/fonts/OFL.txt -text -whitespace
+third_party/nlohmann-json-LICENSE.MIT -text -whitespace
+third_party/planegcs/upstream/LICENSE -text -whitespace

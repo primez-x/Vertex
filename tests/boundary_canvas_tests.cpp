@@ -1,0 +1,400 @@
+#include "../src/desktop/plan_canvas.hpp"
+
+#include "support/noninteractive_errors.hpp"
+
+#include <QApplication>
+#include <QDir>
+#include <QEventLoop>
+#include <QFontDatabase>
+#include <QFontMetrics>
+#include <QImage>
+#include <QKeyEvent>
+#include <QMouseEvent>
+#include <QPainter>
+
+#include <algorithm>
+#include <cmath>
+#include <iostream>
+#include <numbers>
+#include <stdexcept>
+#include <string_view>
+#include <vector>
+
+namespace {
+
+using sketch::Boundary;
+using sketch::Segment;
+using sketch::Vec2;
+using sketch::desktop::CanvasLabel;
+using sketch::desktop::BoundaryDraftLabel;
+using sketch::desktop::BoundaryDraftPreview;
+using sketch::desktop::CanvasEntity;
+using sketch::desktop::CanvasTool;
+using sketch::desktop::PlanCanvas;
+
+const auto background = QColor(24, 29, 37);
+
+void require(bool condition, std::string_view message) {
+    if (!condition) {
+        throw std::runtime_error(std::string(message));
+    }
+}
+
+void process_events() {
+    QApplication::processEvents(QEventLoop::AllEvents, 50);
+}
+
+QImage render(PlanCanvas& canvas, bool fit_to_content) {
+    QImage image(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+    image.fill(background.rgba());
+    QPainter painter(&image);
+    canvas.renderScene(painter, QRectF(image.rect()), fit_to_content, background);
+    return image;
+}
+
+bool images_equal(const QImage& left, const QImage& right) {
+    if (left.size() != right.size() || left.format() != right.format() ||
+        left.sizeInBytes() != right.sizeInBytes()) {
+        return false;
+    }
+    return std::equal(left.constBits(), left.constBits() + left.sizeInBytes(), right.constBits());
+}
+
+int differing_pixels(const QImage& left, const QImage& right, QRect region) {
+    if (left.size() != right.size()) return 0;
+    region = region.intersected(left.rect());
+    region = region.intersected(right.rect());
+    int result = 0;
+    for (int y = region.top(); y <= region.bottom(); ++y) {
+        for (int x = region.left(); x <= region.right(); ++x) {
+            if (left.pixel(x, y) != right.pixel(x, y)) ++result;
+        }
+    }
+    return result;
+}
+
+QRect bright_pixel_bounds(const QImage& image, QRect region) {
+    region = region.intersected(image.rect());
+    int left = region.right() + 1;
+    int top = region.bottom() + 1;
+    int right = region.left() - 1;
+    int bottom = region.top() - 1;
+    for (int y = region.top(); y <= region.bottom(); ++y) {
+        for (int x = region.left(); x <= region.right(); ++x) {
+            const auto color = image.pixelColor(x, y);
+            if (color.red() > 180 && color.green() > 150 && color.blue() > 80 &&
+                color.red() > color.blue() + 45) {
+                left = std::min(left, x);
+                top = std::min(top, y);
+                right = std::max(right, x);
+                bottom = std::max(bottom, y);
+            }
+        }
+    }
+    return left <= right && top <= bottom ? QRect(QPoint(left, top), QPoint(right, bottom))
+                                          : QRect{};
+}
+
+void save_capture(const QString& directory, const QString& filename, const QImage& image) {
+    if (directory.isEmpty()) return;
+    require(QDir().mkpath(directory), "boundary canvas capture directory must be writable");
+    require(image.save(QDir(directory).filePath(filename), "PNG"),
+            "boundary canvas capture must be written");
+}
+
+QPointF fit_screen_point(const PlanCanvas& canvas, Vec2 point) {
+    // This mirrors fitView() for the seeded [-2,2] square used below. It lets
+    // the image oracle inspect the arc and label separately without exposing
+    // the canvas's view transform as public state.
+    constexpr double width = 4.0;
+    constexpr double height = 4.0;
+    constexpr double padding = 4.0 * 0.12 + 0.25;
+    const auto scale = std::min(static_cast<double>(canvas.width()) /
+                                    (width + padding * 2.0),
+                                static_cast<double>(canvas.height()) /
+                                    (height + padding * 2.0));
+    const auto viewport = QRectF(canvas.rect());
+    return {viewport.center().x() + point.x * scale,
+            viewport.center().y() - point.y * scale};
+}
+
+void send_key(PlanCanvas& canvas, int key, Qt::KeyboardModifiers modifiers) {
+    QKeyEvent press(QEvent::KeyPress, key, modifiers);
+    QApplication::sendEvent(&canvas, &press);
+    QKeyEvent release(QEvent::KeyRelease, key, modifiers);
+    QApplication::sendEvent(&canvas, &release);
+}
+
+void test_boundary_draft_rendering_and_history() {
+    PlanCanvas canvas;
+    const auto expected_dpr_text = qEnvironmentVariable("SKETCH_BOUNDARY_CANVAS_EXPECTED_DPR");
+    if (!expected_dpr_text.isEmpty()) {
+        bool parsed = false;
+        const auto expected_dpr = expected_dpr_text.toDouble(&parsed);
+        require(parsed && std::isfinite(expected_dpr) && expected_dpr > 0.0,
+                "expected display scale must be finite and positive");
+        require(std::abs(canvas.devicePixelRatioF() - expected_dpr) < 0.001,
+                "effective canvas display scale must match the requested capture scale");
+    }
+    std::cout << "Effective canvas DPR: " << canvas.devicePixelRatioF() << '\n';
+    canvas.resize(640, 480);
+    canvas.setGridEnabled(false);
+    canvas.setEntities({CanvasEntity{
+        QStringLiteral("base-rectangle"),
+        QStringLiteral("measurement_boundary"),
+        Boundary{
+            Segment{{-2.0, -2.0}, {2.0, -2.0}, 0.0},
+            Segment{{2.0, -2.0}, {2.0, 2.0}, 0.0},
+            Segment{{2.0, 2.0}, {-2.0, 2.0}, 0.0},
+            Segment{{-2.0, 2.0}, {-2.0, -2.0}, 0.0},
+        },
+        0.08,
+        false,
+    }});
+    canvas.show();
+    process_events();
+    canvas.fitView();
+    canvas.setTool(CanvasTool::boundary);
+    canvas.clearPreview();
+
+    const auto output_clean = render(canvas, true);
+    const auto screen_clean = render(canvas, false);
+    canvas.setGridEnabled(true);
+    canvas.setSelectedId(QStringLiteral("base-rectangle"));
+    require(images_equal(output_clean, render(canvas, true)),
+            "printed geometry must ignore editing grid and selection styling");
+    require(!images_equal(screen_clean, render(canvas, false)),
+            "editing grid and selection must still be visible onscreen");
+    canvas.setGridEnabled(false);
+    canvas.setSelectedId({});
+    std::vector<CanvasLabel> committed_labels{
+        CanvasLabel{QStringLiteral("dimension-outside"), {8.0, 5.0},
+                    QStringLiteral("Committed 7.25 m"), false},
+    };
+    canvas.setLabels(committed_labels);
+    require(canvas.labels().size() == 1 &&
+                canvas.labels().front().id == QStringLiteral("dimension-outside") &&
+                canvas.labels().front().text == QStringLiteral("Committed 7.25 m"),
+            "setLabels must retain the committed annotation value");
+    committed_labels.front().text = QStringLiteral("mutated caller label");
+    require(canvas.labels().front().text == QStringLiteral("Committed 7.25 m"),
+            "setLabels must retain an owned committed-label copy");
+    const auto output_with_label = render(canvas, true);
+    auto selected_labels = canvas.labels();
+    selected_labels.front().selected = true;
+    canvas.setLabels(std::move(selected_labels));
+    require(images_equal(output_with_label, render(canvas, true)),
+            "printed dimensions must ignore selection highlighting");
+    canvas.setLabels({CanvasLabel{QStringLiteral("dimension-outside"), {8.0, 5.0},
+                                  QStringLiteral("Committed 7.25 m"), false}});
+    // The committed label is deliberately outside the seeded rectangle. Its
+    // bright text must still appear in the fit-to-content output, and the
+    // label position must participate in the output transform.
+    const auto outside_label_region = QRect(470, 10, 170, 140);
+    require(differing_pixels(output_clean, output_with_label, outside_label_region) > 20,
+            "fit-to-content output must render committed labels outside geometry");
+    require(!bright_pixel_bounds(output_with_label, outside_label_region).isEmpty(),
+            "committed output label must contain readable bright text pixels");
+    canvas.setLabels({});
+    require(canvas.labels().empty(), "setLabels(empty) must clear committed annotations");
+    require(images_equal(output_clean, render(canvas, true)),
+            "clearing committed labels must restore the geometry-only output");
+    canvas.setLabels({CanvasLabel{QStringLiteral("dimension-outside"), {8.0, 5.0},
+                                  QStringLiteral("Committed 7.25 m"), false}});
+    require(images_equal(output_with_label, render(canvas, true)),
+            "replacing committed labels with the same value must be deterministic");
+
+    // Keep the legacy overlays populated too: the output oracle must cover
+    // both old and new transient paths.
+    canvas.setBoundaryPreview({{-1.5, -1.25}, {-1.0, 0.0}});
+    canvas.setWallPreview(std::make_pair(Vec2{0.0, -1.0}, Vec2{0.0, 1.0}));
+    const auto output_before = render(canvas, true);
+    require(images_equal(output_with_label, output_before),
+            "fit-to-content output must ignore legacy transient overlays");
+    const auto screen_before = render(canvas, false);
+
+    BoundaryDraftPreview draft;
+    draft.segments = Boundary{
+        Segment{{-1.0, 0.0}, {1.0, 0.0}, -std::numbers::pi},
+    };
+    draft.labels = {BoundaryDraftLabel{{0.0, 1.5}, QStringLiteral("2.00 m")}};
+    draft.anchor = Vec2{-1.5, -1.25};
+    draft.pen_position = Vec2{1.0, 0.0};
+    draft.rubber_band = Segment{{1.0, 0.0}, {1.75, 0.75}, 0.0};
+    draft.instruction = QStringLiteral("Draft boundary  •  place the next dimension");
+
+    canvas.setBoundaryDraftPreview(draft);
+    process_events();
+    require(canvas.boundaryDraftPreview().has_value(),
+            "boundary draft preview getter must expose the stored value");
+    require(canvas.boundaryDraftPreview()->labels.size() == 1 &&
+                canvas.boundaryDraftPreview()->segments.size() == 1,
+            "boundary draft preview getter must retain labels and analytical segments");
+    draft.labels.front().text = QStringLiteral("mutated caller value");
+    require(canvas.boundaryDraftPreview()->labels.front().text == QStringLiteral("2.00 m"),
+            "boundary draft setter must retain an owned value copy");
+
+    const auto screen_draft = render(canvas, false);
+    const auto arc_top = fit_screen_point(canvas, {0.0, 1.0});
+    const auto arc_bottom = fit_screen_point(canvas, {0.0, -1.0});
+    const auto arc_region_top = QRectF(arc_top.x() - 120.0, arc_top.y() - 18.0,
+                                      240.0, 42.0).toAlignedRect();
+    const auto arc_region_bottom = QRectF(arc_bottom.x() - 120.0, arc_bottom.y() - 18.0,
+                                         240.0, 42.0).toAlignedRect();
+    require(std::max(differing_pixels(screen_before, screen_draft, arc_region_top),
+                     differing_pixels(screen_before, screen_draft, arc_region_bottom)) > 20,
+            "onscreen draft image must contain the analytical arc");
+    const auto label_center = fit_screen_point(canvas, {0.0, 1.5});
+    const auto label_region = QRectF(label_center.x() - 60.0, label_center.y() - 24.0,
+                                    120.0, 48.0).toAlignedRect();
+    require(differing_pixels(screen_before, screen_draft, label_region) > 20,
+            "onscreen draft image must contain the dimension label");
+    const auto normal_label_bounds = bright_pixel_bounds(screen_draft, label_region);
+    require(!normal_label_bounds.isEmpty(),
+            "dimension label must contain readable bright text pixels");
+
+    const auto output_after = render(canvas, true);
+    require(images_equal(output_with_label, output_after),
+            "fit-to-content output must ignore every transient draft overlay");
+
+    const auto capture_directory = qEnvironmentVariable(
+        "SKETCH_BOUNDARY_CANVAS_CAPTURE_DIR",
+        qEnvironmentVariable("SKETCH_BOUNDARY_CAPTURE_DIR"));
+    const auto normal_grab = canvas.grab();
+    require(!normal_grab.isNull(), "normal boundary draft capture must be available");
+    save_capture(capture_directory, QStringLiteral("boundary-draft-normal.png"),
+                 normal_grab.toImage());
+    save_capture(capture_directory, QStringLiteral("boundary-output-before.png"), output_before);
+    save_capture(capture_directory, QStringLiteral("boundary-output-after.png"), output_after);
+
+    canvas.zoomBy(1.5);
+    process_events();
+    const auto zoomed_screen = render(canvas, false);
+    const auto zoomed_grab = canvas.grab();
+    require(!zoomed_grab.isNull(), "150 percent boundary draft capture must be available");
+    save_capture(capture_directory, QStringLiteral("boundary-draft-150.png"), zoomed_grab.toImage());
+    const auto zoomed_output = render(canvas, true);
+    require(images_equal(output_before, zoomed_output),
+            "fit-to-content output must stay unchanged after interactive zoom");
+
+    // The label font is screen-space text, so zooming changes its position but
+    // not its pixel footprint.
+    const auto zoom_label_center = QPointF(canvas.rect().center().x(),
+                                           canvas.rect().center().y() - 1.5 *
+                                               (static_cast<double>(canvas.height()) /
+                                                (4.0 + 2.0 * (4.0 * 0.12 + 0.25))) * 1.5);
+    const auto zoom_label_region = QRectF(zoom_label_center.x() - 60.0,
+                                          zoom_label_center.y() - 24.0, 120.0, 48.0)
+                                             .toAlignedRect();
+    const auto zoom_label_bounds = bright_pixel_bounds(zoomed_screen, zoom_label_region);
+    require(!zoom_label_bounds.isEmpty() &&
+                std::abs(normal_label_bounds.width() - zoom_label_bounds.width()) <= 2 &&
+                std::abs(normal_label_bounds.height() - zoom_label_bounds.height()) <= 2,
+            "dimension label must remain readable at 150 percent zoom");
+
+    int undo_requests = 0;
+    int redo_requests = 0;
+    canvas.setDraftUndoRequested([&] { ++undo_requests; });
+    canvas.setDraftRedoRequested([&] { ++redo_requests; });
+    send_key(canvas, Qt::Key_Z, Qt::ControlModifier);
+    send_key(canvas, Qt::Key_Y, Qt::ControlModifier);
+    require(undo_requests == 1 && redo_requests == 1,
+            "Ctrl+Z and Ctrl+Y must reach the registered draft callbacks");
+    canvas.setDraftUndoRequested(std::function<void()>{});
+    canvas.setDraftRedoRequested(std::function<void()>{});
+    send_key(canvas, Qt::Key_Z, Qt::ControlModifier);
+    send_key(canvas, Qt::Key_Y, Qt::ControlModifier);
+    require(undo_requests == 1 && redo_requests == 1,
+            "unregistered undo and redo callbacks must not intercept shortcuts");
+
+    canvas.clearPreview();
+    require(!canvas.boundaryDraftPreview().has_value(),
+            "clearPreview must clear the document-independent draft value");
+    require(canvas.labels().size() == 1 &&
+                canvas.labels().front().text == QStringLiteral("Committed 7.25 m"),
+            "clearPreview must preserve committed annotations");
+
+    PlanCanvas labels_only;
+    labels_only.resize(640, 480);
+    labels_only.setGridEnabled(false);
+    labels_only.setLabels({CanvasLabel{QStringLiteral("labels-only"), {42.0, -17.0},
+                                       QStringLiteral("Only committed label"), false}});
+    const auto labels_only_output = render(labels_only, true);
+    require(!bright_pixel_bounds(labels_only_output, labels_only_output.rect()).isEmpty(),
+            "fit-to-content output must remain valid for a labels-only canvas");
+    canvas.setLabels({});
+    require(canvas.labels().empty(), "committed-label clear must leave an empty label set");
+}
+
+void test_effective_cursor_matches_click() {
+    PlanCanvas canvas;
+    canvas.resize(640, 480);
+    canvas.setTool(CanvasTool::boundary);
+    std::optional<Vec2> preview;
+    std::optional<Vec2> placed;
+    canvas.setCursorMoved([&](Vec2 point) { preview = point; });
+    canvas.setPointClicked([&](Vec2 point) { placed = point; });
+    canvas.setSnapEnabled(false);
+    require(!preview, "snap toggle before pointer input must not invent a cursor");
+    canvas.setSnapEnabled(true);
+    const auto position = QRectF(canvas.rect()).center() + QPointF(27.0, 31.0);
+    QMouseEvent move(QEvent::MouseMove, position, position, Qt::NoButton,
+                     Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &move);
+    require(preview && preview->x == 0.25 && preview->y == -0.5,
+            "off-grid cursor must preview the snapped point");
+    const auto click = [&] {
+        QMouseEvent press(QEvent::MouseButtonPress, position, position, Qt::LeftButton,
+                          Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &press);
+        require(placed && preview && placed->x == preview->x && placed->y == preview->y,
+                "placed point must exactly match the effective cursor");
+    };
+    click();
+    canvas.setSnapEnabled(false);
+    require(preview && preview->x == 27.0 / 80.0 && preview->y == -31.0 / 80.0,
+            "disabling snap must refresh the stationary cursor to raw coordinates");
+    click();
+    canvas.setSnapEnabled(true);
+    require(preview && preview->x == 0.25 && preview->y == -0.5,
+            "enabling snap must refresh the stationary cursor");
+    click();
+    // A press can arrive without an intervening move (for example pen input).
+    // The coordinate shown to the tool must already agree inside its callback.
+    canvas.setPointClicked([&](Vec2 point) {
+        require(preview && preview->x == point.x && preview->y == point.y,
+                "press must publish its effective cursor before placing the point");
+        placed = point;
+    });
+    const auto next_position = QRectF(canvas.rect()).center() + QPointF(-47.0, -53.0);
+    QMouseEvent next_press(QEvent::MouseButtonPress, next_position, next_position,
+                           Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &next_press);
+    require(placed && placed->x == -0.5 && placed->y == 0.75,
+            "press without preceding motion must use its own snapped coordinates");
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    sketch::testing::noninteractive_errors();
+    QApplication application(argc, argv);
+    try {
+        const auto font_id = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"));
+        require(font_id >= 0, "bundled capture font must load");
+        const auto families = QFontDatabase::applicationFontFamilies(font_id);
+        require(!families.isEmpty(), "bundled capture font must expose a family");
+        QApplication::setFont(QFont(families.front(), 10));
+        const QFontMetrics metrics(QApplication::font());
+        for (const auto character : QStringLiteral("2.00 m Draft boundary • place the next dimension")) {
+            require(metrics.inFont(character), "capture font must contain each rendered character");
+        }
+        test_boundary_draft_rendering_and_history();
+        test_effective_cursor_matches_click();
+        std::cout << "Boundary canvas tests passed\n";
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << "boundary_canvas_tests: " << error.what() << '\n';
+        return 1;
+    }
+}

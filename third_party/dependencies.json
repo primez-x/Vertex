@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "production_license_audit": "incomplete",
+  "bundled_assets": [
+    {
+      "name": "Inter",
+      "version": "4.1",
+      "license": "OFL-1.1",
+      "path": "assets/fonts/Inter.ttf",
+      "sha256": "29160a80ff49ddcab2c97711247e08b1fab27a484a329ce8b813d820dc559031",
+      "license_path": "assets/fonts/OFL.txt",
+      "source": "https://github.com/google/fonts/tree/0b58fb370093f9a9f4ff785d94405710b79de67c/ofl/inter"
+    }
+  ],
+  "bootstrap_dependencies": [
+    {
+      "name": "SQLite",
+      "version": "3.53.4",
+      "license": "Public-Domain",
+      "url": "https://www.sqlite.org/2026/sqlite-amalgamation-3530400.zip",
+      "filename": "sqlite-amalgamation-3530400.zip",
+      "sha256": "1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d",
+      "upstream_sha3_256": "628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e",
+      "provenance": "https://www.sqlite.org/download.html",
+      "kind": "zip",
+      "destination": "sqlite"
+    },
+    {
+      "name": "nlohmann-json",
+      "version": "3.12.0",
+      "license": "MIT",
+      "url": "https://raw.githubusercontent.com/nlohmann/json/55f93686c01528224f448c19128836e7df245f72/single_include/nlohmann/json.hpp",
+      "commit": "55f93686c01528224f448c19128836e7df245f72",
+      "filename": "json-3.12.0.hpp",
+      "sha256": "aaf127c04cb31c406e5b04a63f1ae89369fccde6d8fa7cdda1ed4f32dfc5de63",
+      "kind": "file",
+      "destination": "json/include/nlohmann/json.hpp"
+    }
+  ],
+  "native_package_manager": {
+    "name": "vcpkg",
+    "repository": "https://github.com/microsoft/vcpkg.git",
+    "commit": "0397b75952a7c874b68a7d4f9baf8d3c5951b371"
+  }
+}
