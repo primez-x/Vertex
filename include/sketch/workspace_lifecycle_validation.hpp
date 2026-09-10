@@ -17,4 +17,9 @@ void validate_workspace_lifecycle_order(
 void validate_workspace_archival_inputs(
     const std::vector<WorkspaceLifecycleEvent>&,
     const BoundaryAuthoringResourcePolicy& = boundary_authoring_default_resource_policy);
+// Checks historical bindings for activation, archived and current input, with
+// activation bound to its event revision. Does not replay session slots.
+void validate_workspace_recovery_sources(
+    const DocumentSnapshot&, const std::vector<WorkspaceLifecycleEvent>&,
+    const std::optional<BoundaryActiveRecovery>& active);
 }

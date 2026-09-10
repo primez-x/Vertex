@@ -469,10 +469,14 @@ std::optional<DrawingContext> ProjectOrganization::drawing_context(
 }
 
 ProjectOrganization organize_project(const DocumentSnapshot& snapshot) {
-    ProjectOrganization result;
-    Resolver resolver(snapshot.entities());
+    return organize_project(snapshot.entities());
+}
 
-    for (const auto& [id, entity] : snapshot.entities()) {
+ProjectOrganization organize_project(const std::map<std::string, Entity, std::less<>>& entities) {
+    ProjectOrganization result;
+    Resolver resolver(entities);
+
+    for (const auto& [id, entity] : entities) {
         OrganizationNode node;
         node.id = id;
         node.type = entity.type;
@@ -480,7 +484,7 @@ ProjectOrganization organize_project(const DocumentSnapshot& snapshot) {
         result.nodes.emplace(id, std::move(node));
     }
 
-    for (const auto& [id, entity] : snapshot.entities()) {
+    for (const auto& [id, entity] : entities) {
         const auto resolution = resolver.resolve(id);
         auto& node = result.nodes.at(id);
         node.context = resolution.context;

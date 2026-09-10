@@ -6,8 +6,11 @@ It rejects malformed IDs, sequences, targets, payload presence and revision
 coverage. A separate archival-input validator checks canonical owners, direct
 backward references, payload substitution, finite pointer overrides and retired
 finish provenance. A mixed-workflow and corruption suite passes in Debug and
-Release. These are prerequisites: full active/retired slot replay, historical
-source bindings, aggregate admission, codecs and archive loading remain pending.
+Release. Historical source validation now checks the retained revision digest
+and its original drawing context; workspace validation checks activation,
+archived and active bindings and rejects sources from future revisions. This
+does not make a historically valid draft current for finishing. Full active/
+retired slot replay, aggregate admission, codecs and archive loading remain pending.
 
 Workspace navigation now orders document commands, session activation and
 discard and finish in one in-memory history. Undo/redo restores exact archived drafts,

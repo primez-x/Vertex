@@ -44,5 +44,9 @@ struct ProjectOrganization {
 // Hosted openings inherit their wall's placement; all other non-container
 // objects resolve their explicit layer/floor/building/property references.
 [[nodiscard]] ProjectOrganization organize_project(const DocumentSnapshot& snapshot);
+// The same resolver for a retained revision's entity map. Derived indexing only;
+// callers remain responsible for validating the enclosing document/history.
+[[nodiscard]] ProjectOrganization organize_project(
+    const std::map<std::string, Entity, std::less<>>& entities);
 
 }  // namespace sketch

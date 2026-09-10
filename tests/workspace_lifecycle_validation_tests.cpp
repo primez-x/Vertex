@@ -11,6 +11,7 @@ void validate(const ProjectWorkspace& workspace) {
     validate_workspace_lifecycle_order(snapshot.document(), snapshot.document_history(),
         snapshot.lifecycle_history(), snapshot.navigation());
     validate_workspace_archival_inputs(snapshot.lifecycle_history(), snapshot.resource_policy());
+    validate_workspace_recovery_sources(snapshot.document(), snapshot.lifecycle_history(), snapshot.active_boundary());
 }
 void commit(ProjectWorkspace& workspace, PreparedWorkspaceEdit ticket) {
     (void)workspace.commit(ticket); validate(workspace);
@@ -90,6 +91,11 @@ void run() {
         auto replacement = *input.value; replacement.extensions["substitution"] = true;
         input.value = std::make_shared<const BoundaryActiveRecovery>(replacement);
     });
+    auto source_events = captured.lifecycle_history();
+    for (auto& event : source_events) if (event.session) {
+        event.session->source.authoring_digest = "forged"; break;
+    }
+    rejects([&] { validate_workspace_recovery_sources(captured.document(), source_events, captured.active_boundary()); });
     require(captured.lifecycle_history().size() > 10, "mixed fixture did not exercise lifecycle history");
 }
 }

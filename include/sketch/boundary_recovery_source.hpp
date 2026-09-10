@@ -36,5 +36,11 @@ enum class BoundaryRecoverySourceStatus {
 // A current source still requires the normal commit validation and authority.
 [[nodiscard]] BoundaryRecoverySourceStatus inspect_boundary_recovery_source(
     const DocumentSnapshot& snapshot, const BoundaryRecoverySource& source);
+// Validates the full retained document and the source at its original revision,
+// including that revision's drawing context. Later edits may make this valid
+// historical source stale for drawing. This never grants finish authority.
+// Throws invalid_argument for invalid provenance or retained history.
+void validate_historical_boundary_recovery_source(
+    const DocumentSnapshot& snapshot, const BoundaryRecoverySource& source);
 
 }  // namespace sketch

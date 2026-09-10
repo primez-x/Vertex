@@ -2,6 +2,8 @@
 
 #include <stdexcept>
 #include <cmath>
+#include <set>
+#include <tuple>
 #include <unordered_set>
 #include <utility>
 
@@ -14,6 +16,31 @@ void validate_payload(const WorkspaceLifecycleEvent& event,
         throw std::invalid_argument("Workspace lifecycle event payload does not match its kind");
     }
 }
+}
+
+void validate_workspace_recovery_sources(const DocumentSnapshot& snapshot,
+    const std::vector<WorkspaceLifecycleEvent>& events, const std::optional<BoundaryActiveRecovery>& active) {
+    using Key = std::tuple<std::string, Revision, std::string, std::string, std::string, std::string, std::string>;
+    std::set<Key> checked;
+    const auto validate = [&](const BoundaryRecoverySource& source, Revision latest) {
+        if (source.revision > latest) throw std::invalid_argument("Boundary source comes from a future revision");
+        const auto& context = source.context;
+        Key key{source.document_id, source.revision, source.authoring_digest,
+            context.property_id, context.building_id, context.floor_id, context.layer_id};
+        if (checked.insert(std::move(key)).second) validate_historical_boundary_recovery_source(snapshot, source);
+    };
+    for (const auto& event : events) {
+        if (event.session) {
+            if (event.session->source.revision != event.before_revision)
+                throw std::invalid_argument("Activation source was not current at activation");
+            validate(event.session->source, event.before_revision);
+        }
+        if (event.input) {
+            if (!event.input->value) throw std::invalid_argument("Source input payload is missing");
+            validate(event.input->value->source, event.before_revision);
+        }
+    }
+    if (active) validate(active->source, snapshot.revision());
 }
 
 void validate_workspace_archival_inputs(const std::vector<WorkspaceLifecycleEvent>& events,

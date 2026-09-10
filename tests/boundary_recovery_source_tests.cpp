@@ -11,6 +11,11 @@ using namespace sketch;
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
+template<class F> void rejected(F operation, const char* message) {
+    try { operation(); }
+    catch (const std::invalid_argument&) { return; }
+    throw std::runtime_error(message);
+}
 Document fixture() {
     return Document::create({
         {"p", "property", {{"name", "Property"}}},
@@ -70,10 +75,59 @@ void check_binding() {
     require(document_authoring_source_digest_v1(original) == source.authoring_digest,
             "inspection must not mutate source snapshots");
 }
+void check_historical_binding() {
+    auto document = fixture();
+    const auto original = document.snapshot();
+    const auto source = capture_boundary_recovery_source(original, {"p", "b", "f", "l"});
+
+    auto later_floor = Entity{"f2", "floor", {{"building_id", "b"}}};
+    auto moved_layer = original.entities().at("l");
+    moved_layer.properties["floor_id"] = "f2";
+    document.apply(ApplyEntityChanges{.expected_revision = document.revision(),
+        .entity_changes = {EntityChange::upsert(later_floor), EntityChange::upsert(moved_layer)},
+        .message = "Move layer"});
+    document.apply(ApplyEntityChanges{.expected_revision = document.revision(),
+        .entity_changes = {EntityChange::erase("l")}, .message = "Delete original layer"});
+    document.apply(NameRevision{document.revision(), "Later name"});
+    document.mark_saved(document.revision());
+    const auto current = document.snapshot();
+    const auto current_digest = document_snapshot_digest(current);
+
+    validate_historical_boundary_recovery_source(current, source);
+    require(document_snapshot_digest(current) == current_digest,
+            "historical validation must not mutate the retained document");
+    require(inspect_boundary_recovery_source(current, source) ==
+                BoundaryRecoverySourceStatus::stale_revision,
+            "historical acceptance must preserve the current binding's stale revision status");
+
+    auto foreign = fixture();
+    rejected([&] { validate_historical_boundary_recovery_source(foreign.snapshot(), source); },
+             "historical validation accepted a foreign document");
+
+    auto unretained = source;
+    unretained.revision = current.revision() + 1;
+    rejected([&] { validate_historical_boundary_recovery_source(current, unretained); },
+             "historical validation accepted an unretained revision");
+
+    auto forged_digest = source;
+    forged_digest.authoring_digest[0] = forged_digest.authoring_digest[0] == 'a' ? 'b' : 'a';
+    rejected([&] { validate_historical_boundary_recovery_source(current, forged_digest); },
+             "historical validation accepted a forged digest");
+
+    auto wrong_context = source;
+    wrong_context.context.floor_id = "f2";
+    rejected([&] { validate_historical_boundary_recovery_source(current, wrong_context); },
+             "historical validation accepted the wrong original drawing context");
+
+    auto malformed = current;
+    const_cast<std::vector<RevisionRecord>&>(malformed.history()).back().undo_stack.push_back(999);
+    rejected([&] { validate_historical_boundary_recovery_source(malformed, source); },
+             "historical validation accepted malformed retained history");
+}
 }
 int main() {
     sketch::testing::noninteractive_errors();
-    try { check_binding(); }
+    try { check_binding(); check_historical_binding(); }
     catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

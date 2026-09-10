@@ -25,6 +25,23 @@ BoundaryRecoverySource capture_boundary_recovery_source(
             document_authoring_source_digest_v1(snapshot), context};
 }
 
+void validate_historical_boundary_recovery_source(
+    const DocumentSnapshot& snapshot, const BoundaryRecoverySource& source) {
+    try { (void)Document::fork(snapshot); }
+    catch (const DocumentError& error) {
+        throw std::invalid_argument(std::string("Invalid historical recovery document: ") + error.what());
+    }
+    if (source.document_id != snapshot.document_id() || source.revision >= snapshot.history().size())
+        throw std::invalid_argument("Historical boundary source references a foreign or missing revision");
+    if (document_authoring_source_digest_v1_at_revision(snapshot, source.revision) != source.authoring_digest)
+        throw std::invalid_argument("Historical boundary source digest does not match retained history");
+    if (!source.context.complete()) throw std::invalid_argument("Historical drawing context is incomplete");
+    const auto& record = snapshot.history()[static_cast<std::size_t>(source.revision)];
+    const auto context = organize_project(record.entities).drawing_context(source.context.layer_id);
+    if (!context || *context != source.context)
+        throw std::invalid_argument("Historical drawing context does not match its original layer");
+}
+
 BoundaryRecoverySourceStatus inspect_boundary_recovery_source(
     const DocumentSnapshot& snapshot, const BoundaryRecoverySource& source) {
     if (!snapshot.is_editable()) return BoundaryRecoverySourceStatus::read_only;

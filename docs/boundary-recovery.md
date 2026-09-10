@@ -436,6 +436,12 @@ archival checks validate canonical payload owners, direct backward references,
 pointer overrides and preceding finish provenance. Neither entry point alone
 validates the active/retired slot state machine, historical source bindings or
 aggregate limits, and neither grants permission to load an archive.
+Historical source validation additionally checks the complete retained document,
+the original revision digest and that revision's resolved drawing context.
+Workspace source validation applies it to activation, archived and active input,
+requiring activation to bind its event revision and prohibiting future sources.
+Later movement or deletion of a layer does not invalidate genuine historical
+provenance, but the existing current-source check still rejects it for finish.
 Opaque extension representations are compared through canonical JSON for
 sharing and no-op classification. Regressions reject conflating integer `1`
 with floating `1.0`, both in the active envelope and nested checkpoint
