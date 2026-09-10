@@ -46,6 +46,8 @@ ProjectWorkspace::~ProjectWorkspace() = default;
 
 const std::string& ProjectWorkspace::identity() const noexcept { return identity_; }
 std::uint64_t ProjectWorkspace::epoch() const noexcept { return epoch_; }
+std::uint64_t ProjectWorkspace::edited_generation() const noexcept { return edited_generation_; }
+std::uint64_t ProjectWorkspace::checkpoint_generation() const noexcept { return checkpoint_generation_; }
 DocumentSnapshot ProjectWorkspace::snapshot() const { return state_->document->snapshot(); }
 WorkspaceDocumentHistory ProjectWorkspace::document_history() const { return state_->history; }
 
@@ -107,6 +109,10 @@ Revision ProjectWorkspace::commit(PreparedWorkspaceEdit& edit) {
     if (epoch_ == std::numeric_limits<std::uint64_t>::max()) {
         throw std::overflow_error("workspace epoch is exhausted");
     }
+    if (edited_generation_ == std::numeric_limits<std::uint64_t>::max() ||
+        checkpoint_generation_ == std::numeric_limits<std::uint64_t>::max()) {
+        throw std::overflow_error("workspace content generation is exhausted");
+    }
     {
         // Complete all allocating validation and dispose its JSON snapshots
         // before publication. Full history and saved markers are part of CAS.
@@ -118,6 +124,8 @@ Revision ProjectWorkspace::commit(PreparedWorkspaceEdit& edit) {
     const Revision revision = state.candidate->document->revision();
     state_.swap(state.candidate);
     ++epoch_;
+    ++edited_generation_;
+    ++checkpoint_generation_;
     state.consumed = true;
     // The consumed ticket retains the retired Document. Its destruction must
     // not run here: JSON disposal can allocate even after successful mutation.

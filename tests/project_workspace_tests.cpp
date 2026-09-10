@@ -28,6 +28,8 @@ void check_publication() {
     auto document = Document::create({{"label", "label", {{"text", "Original"}}}});
     const auto initial = document.snapshot();
     ProjectWorkspace workspace(initial), foreign(initial);
+    require(workspace.edited_generation() == 0 && workspace.checkpoint_generation() == 0,
+            "new workspace generations must start at zero");
     require(workspace.identity() != foreign.identity(), "instances need independent identities");
     auto command = edit(initial, "First");
     auto first = workspace.prepare(command);
@@ -46,6 +48,8 @@ void check_publication() {
             "publication must use sealed candidate exactly once");
     require(workspace.document_history().events.size() == 1,
             "successful publication must include exactly one history event");
+    require(workspace.edited_generation() == 1 && workspace.checkpoint_generation() == 1,
+            "document publication must advance both content generations");
     validate_workspace_document_history(workspace.snapshot(), workspace.document_history());
     const auto digest = document_snapshot_digest(workspace.snapshot());
     rejected([&] { (void)workspace.commit(first); });
@@ -55,6 +59,9 @@ void check_publication() {
             "rejected commits must preserve complete current state");
     require(workspace.document_history().events.size() == 1 && foreign.document_history().events.empty(),
             "rejected tickets cannot append events to either workspace");
+    require(workspace.edited_generation() == 1 && workspace.checkpoint_generation() == 1 &&
+                foreign.edited_generation() == 0 && foreign.checkpoint_generation() == 0,
+            "rejected tickets must preserve generations");
     auto undo = workspace.prepare_undo();
     (void)workspace.commit(undo);
     require(workspace.epoch() == 2 && workspace.snapshot().entities() == initial.entities(),
@@ -71,6 +78,8 @@ void check_publication() {
                 history.events[2].kind == WorkspaceDocumentEventKind::redo,
             "document navigation must publish ordered typed events");
     validate_workspace_document_history(workspace.snapshot(), history);
+    require(workspace.edited_generation() == 3 && workspace.checkpoint_generation() == 3,
+            "undo and redo each advance generations rather than rewinding them");
     auto detached_history = history;
     detached_history.events.clear();
     require(workspace.document_history() == history, "history snapshots must be detached");

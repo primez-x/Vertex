@@ -48,6 +48,10 @@ public:
 
     [[nodiscard]] const std::string& identity() const noexcept;
     [[nodiscard]] std::uint64_t epoch() const noexcept;
+    // Independent monotonic content counters. Navigation advances them too;
+    // imported document revisions are baseline state, not new workspace edits.
+    [[nodiscard]] std::uint64_t edited_generation() const noexcept;
+    [[nodiscard]] std::uint64_t checkpoint_generation() const noexcept;
     [[nodiscard]] DocumentSnapshot snapshot() const;
     [[nodiscard]] WorkspaceDocumentHistory document_history() const;
     [[nodiscard]] PreparedWorkspaceEdit prepare(const Command& command) const;
@@ -63,6 +67,8 @@ private:
     std::unique_ptr<detail::WorkspaceDocumentState> state_;
     const std::string identity_;
     std::uint64_t epoch_ = 0;
+    std::uint64_t edited_generation_ = 0;
+    std::uint64_t checkpoint_generation_ = 0;
 };
 
 }  // namespace sketch

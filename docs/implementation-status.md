@@ -8,6 +8,12 @@ navigation provenance; rejected tickets preserve both states. This is an interna
 document transition log, not the persisted workspace lifecycle ledger. The full
 integrated suite below predates this addition.
 
+Workspace document publications also advance independent edited and checkpoint
+generation counters. Both begin at zero for the imported baseline; undo/redo
+advance them and rejected tickets preserve them. Focused workspace tests pass
+in Debug and Release. Pointer-only transitions, persisted counters and save
+acknowledgement watermarks remain to be connected.
+
 The v24e full integrated build passes 60/60 tests in Debug (74.01 seconds) and
 Release (16.08 seconds). All 196 recorded source inputs remain unchanged across
 the builds/tests, and 116 executable hashes are recorded. Recovery checks cover
