@@ -28,6 +28,7 @@ void check_publication() {
     auto document = Document::create({{"label", "label", {{"text", "Original"}}}});
     const auto initial = document.snapshot();
     ProjectWorkspace workspace(initial), foreign(initial);
+    require(!workspace.active_boundary(), "a document-only workspace has no active boundary");
     require(workspace.edited_generation() == 0 && workspace.checkpoint_generation() == 0,
             "new workspace generations must start at zero");
     require(workspace.identity() != foreign.identity(), "instances need independent identities");
@@ -107,10 +108,29 @@ void check_rejections() {
     require(no_undo && empty.epoch() == 0 && empty.snapshot().revision() == 0,
             "failed navigation preparation must leave authoritative state unchanged");
 }
+void check_checkpoint_policy() {
+    auto document = Document::create({
+        {"p", "property", {{"name", "Property"}}},
+        {"b", "building", {{"property_id", "p"}}},
+        {"f", "floor", {{"building_id", "b"}}},
+        {"l", "layer", {{"floor_id", "f"}}}});
+    auto policy = boundary_authoring_default_resource_policy;
+    policy.max_actions = 0;
+    ProjectWorkspace workspace(document.snapshot(), policy);
+    BoundaryAuthoringSession session(BoundaryAuthoringMode::draw_first);
+    (void)session.anchor({0, 0});
+    BoundaryActiveRecovery checkpoint{
+        capture_boundary_recovery_source(document.snapshot(), {"p", "b", "f", "l"}),
+        session.recovery_checkpoint()};
+    rejected([&] { (void)workspace.prepare_boundary_checkpoint(checkpoint); });
+    require(!workspace.active_boundary() && workspace.epoch() == 0 &&
+                workspace.edited_generation() == 0 && workspace.checkpoint_generation() == 0,
+            "workspace must enforce its caller-supplied checkpoint policy before publication");
+}
 }
 int main() {
     sketch::testing::noninteractive_errors();
-    try { check_publication(); check_rejections(); }
+    try { check_publication(); check_rejections(); check_checkpoint_policy(); }
     catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
     return 0;
 }

@@ -11,15 +11,19 @@ integrated suite below includes this addition.
 Workspace document publications also advance independent edited and checkpoint
 generation counters. Both begin at zero for the imported baseline; undo/redo
 advance them and rejected tickets preserve them. Focused workspace tests pass
-in Debug and Release. Pointer-only transitions, persisted counters and save
-acknowledgement watermarks remain to be connected.
+in Debug and Release. Active-checkpoint publication now distinguishes pointer-only
+updates from semantic changes and preserves draft state across Document edits
+and navigation. Five focused tests pass in both configurations. Persisted
+counters, desktop pointer routing and save acknowledgement watermarks remain
+to be connected.
 
-The v24f full integrated build passes 61/61 tests in Debug (71.42 seconds) and
-Release (14.94 seconds). All 199 recorded source inputs remain unchanged across
-the builds/tests, and 118 executable hashes are recorded. Recovery checks cover
+The v24g full integrated build passes 62/62 tests in Debug (71.76 seconds) and
+Release (15.38 seconds). All 200 recorded source inputs remain unchanged across
+the builds/tests, and 120 executable hashes are recorded. Recovery checks cover
 all 18 action kinds, both modes, phases, construction, receipt encoding,
 commits, exact checkpoint/history behavior, source bindings, active/recovery-copy
-records, historical baseline fences and sealed workspace document publication.
+records, historical baseline fences, sealed workspace document publication and
+active-checkpoint publication with pointer/semantic generation separation.
 The earlier v24d checkpoint also passed eighteen offscreen boundary
 canvas/input/workflow checks at DPR 1, 1.5 and 2 across both builds.
 These are local incremental builds and regression checks, not reproducible-build

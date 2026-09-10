@@ -54,6 +54,7 @@ struct BoundaryAuthoringOptions {
     bool automatic_dimension_placement{};
     std::uint32_t automatic_placement_version{1};
     double geometry_tolerance_metres{default_geometry_tolerance_metres};
+    bool operator==(const BoundaryAuthoringOptions&) const = default;
 };
 
 // These are next-ID values, rather than allocation counts. They are retained

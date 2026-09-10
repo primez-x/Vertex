@@ -106,6 +106,26 @@ and the desktop has not migrated to it. Publication's source-reviewed swap
 boundary is not a claim of universal allocation-failure safety throughout
 Document construction and destruction.
 
+The workspace also owns an optional active checkpoint in the same candidate
+bundle. `prepare_boundary_checkpoint` validates canonical replay and the
+enclosing record under the workspace's resource policy before retaining a
+detached copy. A replacement requires a current source, the same source,
+namespace and mode, and nondecreasing identity counters. Exact repeats reject.
+First capture and semantic changes advance edited and checkpoint generations;
+pointer-only replacement advances checkpoint generation and epoch only. Local
+draft undo/redo changes the checkpoint without adding a Document revision.
+Document edits and navigation retain the active checkpoint unchanged, including
+its original source binding; a now-stale draft cannot be silently reattached
+even when undo restores identical geometry. Finish, discard, stale-session load
+and explicit rebinding are still pending lifecycle operations. This staging API
+is not yet connected to desktop pointer input and has no frame-rate claim.
+
+Focused tests cover sealed checkpoint copies, detached getters, pointer and
+semantic publication, local undo/redo, stale and foreign tickets, malformed
+records, identity/counter rejection, policy limits and preservation across
+Document navigation. Source review found no unresolved publication defect;
+allocation-failure execution with populated active state remains unverified.
+
 A command is prepared against an immutable snapshot. Preparation uses the
 validated `Document::fork(snapshot)` helper, validates the candidate document
 and recovery state, and captures the expected workspace identity,

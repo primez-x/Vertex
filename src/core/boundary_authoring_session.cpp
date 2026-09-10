@@ -322,14 +322,7 @@ bool BoundaryAuthoringCheckpoint::operator==(
     };
     return version == other.version && replay_version == other.replay_version &&
            mode == other.mode &&
-           options.default_boundary_type == other.options.default_boundary_type &&
-           options.boundary_id_prefix == other.options.boundary_id_prefix &&
-           options.vertex_id_prefix == other.options.vertex_id_prefix &&
-           options.segment_id_prefix == other.options.segment_id_prefix &&
-           options.dimension_id_prefix == other.options.dimension_id_prefix &&
-           options.automatic_dimension_placement == other.options.automatic_dimension_placement &&
-           options.automatic_placement_version == other.options.automatic_placement_version &&
-           options.geometry_tolerance_metres == other.options.geometry_tolerance_metres &&
+           options == other.options &&
            identity_namespace == other.identity_namespace && equal_point(pointer, other.pointer) &&
            actions == other.actions && history_position == other.history_position &&
            counters == other.counters && extensions == other.extensions;
