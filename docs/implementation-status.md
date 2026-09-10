@@ -46,7 +46,13 @@ The workspace publication API passed independent source review. It has private
 candidate documents, instance/epoch/full-source checks, detached previews and
 no mutable Document escape. It is not yet wired into the desktop or a persisted
 recovery archive. The record codecs and baseline validator are prerequisites; aggregate
-v4 persistence, explicit Revise Input, autosave and restart recovery remain open.
+v4 persistence, autosave and restart recovery remain open.
+Explicit Revise Input is implemented in memory: canonical replay regenerates
+IDs, preserves local history/counter floors and opaque extensions, and records
+the original retired namespace and finish event on a fresh activation bound to
+the current document. It leaves the retired input intact. Focused replay and
+workspace finish suites pass in Debug and Release after this change; the v24i
+full-suite checkpoint above predates Revise Input.
 The in-memory finish implementation passed independent source review. Subsequent
 test-only additions verify mixed finish/edit navigation across the baseline and
 validate the Document history projection after navigation; the finish suite was

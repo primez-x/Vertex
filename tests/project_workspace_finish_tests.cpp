@@ -160,6 +160,40 @@ void check_mixed_document_navigation() {
             workspace.capture().retired_boundaries().empty(),
             "mixed round trip preserves exact finished entities and lifecycle status");
 }
+void check_revise_input() {
+    auto document = fixture(); ProjectWorkspace workspace(document.snapshot());
+    const auto original = input(workspace.snapshot(), BoundaryAuthoringMode::draw_first);
+    const auto ns = original.checkpoint.identity_namespace;
+    activate(workspace, original);
+    auto finish = workspace.prepare_finish_boundary(); (void)workspace.commit(finish);
+    const auto old_geometry = workspace.snapshot().entities();
+    undo(workspace);
+    const auto before = workspace.capture();
+    auto revise = workspace.prepare_revise_boundary(ns);
+    require(!workspace.active_boundary() && workspace.epoch() == before.epoch(), "revise preparation is isolated");
+    (void)workspace.commit(revise);
+    const auto revised = *workspace.active_boundary();
+    require(revised.checkpoint.identity_namespace != ns && revised.checkpoint.counters == original.checkpoint.counters &&
+            revised.checkpoint.extensions.dump() == original.checkpoint.extensions.dump() &&
+            revised.extensions.dump() == original.extensions.dump(), "revise regenerates identity and preserves opaque data");
+    require(inspect_boundary_recovery_source(workspace.snapshot(), revised.source) == BoundaryRecoverySourceStatus::current &&
+            workspace.retired_boundary(ns) == std::optional{original} && !workspace.can_redo(),
+            "revise rebinds current source, preserves retired input and clears old finish redo");
+    const auto captured = workspace.capture();
+    require(captured.lifecycle_history().back().session->revised_from_namespace == ns &&
+            captured.lifecycle_history().back().session->revised_from_finish_event_id.has_value(),
+            "revision activation records origin provenance");
+    unchanged_rejection(workspace, [&] { (void)workspace.prepare_revise_boundary(ns); });
+    undo(workspace); redo(workspace);
+    require(workspace.active_boundary() == std::optional{revised}, "revision activation round trip retains fresh identities");
+    auto second = workspace.prepare_finish_boundary(); (void)workspace.commit(second);
+    const auto revised_geometry = workspace.snapshot();
+    for (const auto& [id, entity] : revised_geometry.entities()) {
+        if (entity.type == "boundary" || entity.type == "dimension")
+            require(!old_geometry.contains(id), "revised finish must not reuse old geometry IDs");
+    }
+    require(workspace.retired_boundary(ns) == std::optional{original}, "revised finish retains original retired view");
+}
 void check_invalid_inputs_and_tickets() {
     auto document = fixture(); const auto source = document.snapshot(); ProjectWorkspace empty(source);
     unchanged_rejection(empty, [&] { (void)empty.prepare_finish_boundary(); });
@@ -186,7 +220,7 @@ void check_invalid_inputs_and_tickets() {
 
 int main() {
     sketch::testing::noninteractive_errors();
-    try { check_finish_round_trip(); check_multiple_retired_inputs(); check_mixed_document_navigation(); check_invalid_inputs_and_tickets(); }
+    try { check_finish_round_trip(); check_multiple_retired_inputs(); check_mixed_document_navigation(); check_revise_input(); check_invalid_inputs_and_tickets(); }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
     return 0;
 }

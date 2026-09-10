@@ -264,6 +264,21 @@ PreparedWorkspaceEdit ProjectWorkspace::prepare_discard_boundary() const {
     return PreparedWorkspaceEdit(std::move(state));
 }
 
+PreparedWorkspaceEdit ProjectWorkspace::prepare_revise_boundary(std::string_view identity_namespace) const {
+    if (state_->active) throw std::invalid_argument("revise requires resolving the active boundary first");
+    const auto found = state_->retired.find(identity_namespace);
+    if (found == state_->retired.end()) throw std::invalid_argument("retired boundary input is missing");
+    auto revised = *retired_boundary(identity_namespace);
+    revised.checkpoint = BoundaryAuthoringSession::revise_recovery_checkpoint(
+        revised.checkpoint, resource_policy_).recovery_checkpoint();
+    revised.source = capture_boundary_recovery_source(state_->document->snapshot(), revised.source.context);
+    auto ticket = prepare_boundary_checkpoint(revised);
+    auto& session = *ticket.state_->candidate->lifecycle.back().session;
+    session.revised_from_namespace = std::string(identity_namespace);
+    session.revised_from_finish_event_id = found->second.finish_event_id;
+    return ticket;
+}
+
 PreparedWorkspaceEdit ProjectWorkspace::prepare_finish_boundary() const {
     if (!state_->active) throw std::invalid_argument("there is no active boundary to finish");
     const auto source = state_->document->snapshot();

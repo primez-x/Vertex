@@ -424,7 +424,11 @@ in one Document revision. Undo retains its exact input as retired; redo restores
 the original geometry and dimension IDs without recommitting. Activation
 navigation preserves retired status, including multiple retired inputs across
 branches. Retired input cannot be submitted as an ordinary new activation.
-Explicit Revise Input, untrusted persisted-event validation, aggregate history budgets and disk codecs remain
+Explicit Revise Input now validates and replays retired input with a fresh
+namespace, rebinds the original context to the current document, and records
+the origin namespace and finish event on the new activation. It preserves the
+original retired view and rejects replacement of an unresolved active session.
+Untrusted persisted-event validation, aggregate history budgets and disk codecs remain
 unimplemented. The runtime types are not a certified persisted schema.
 Opaque extension representations are compared through canonical JSON for
 sharing and no-op classification. Regressions reject conflating integer `1`

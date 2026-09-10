@@ -1921,6 +1921,30 @@ void BoundaryAuthoringSession::restore_recovery_checkpoint(
     publish_restored(std::move(candidate));
 }
 
+BoundaryAuthoringSession BoundaryAuthoringSession::revise_recovery_checkpoint(
+    const BoundaryAuthoringCheckpoint& checkpoint, BoundaryAuthoringResourcePolicy policy) {
+    // Authenticate all original receipts and identifiers before treating their
+    // semantic payloads as instructions for a new session.
+    (void)from_recovery_checkpoint(checkpoint, policy);
+    BoundaryAuthoringSession candidate(checkpoint.mode, checkpoint.options, policy);
+    if (candidate.identity_namespace_ == checkpoint.identity_namespace)
+        invalid("revised session identity collides with the original");
+    candidate.recovery_extensions_ = checkpoint.extensions.dump();
+    candidate.base_resource_usage_ = detail::authoring_context_usage(
+        candidate.options_, candidate.mode_, candidate.identity_namespace_,
+        checkpoint.extensions, policy);
+    for (const auto& action : checkpoint.actions) {
+        candidate.set_counters(action.counters_before);
+        candidate.apply_recovery_action(action);
+    }
+    candidate.set_counters(checkpoint.counters);
+    while (candidate.history_position() > checkpoint.history_position) {
+        if (!candidate.undo()) invalid("revised history could not reach its saved position");
+    }
+    candidate.pointer_ = checkpoint.pointer;
+    return candidate;
+}
+
 BoundaryAuthoringSession BoundaryAuthoringSession::from_recovery_checkpoint(
     const BoundaryAuthoringCheckpoint& checkpoint, BoundaryAuthoringResourcePolicy policy) {
     BoundaryAuthoringSession result(checkpoint.mode, checkpoint.options, policy);

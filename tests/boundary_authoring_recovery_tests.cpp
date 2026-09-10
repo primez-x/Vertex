@@ -80,6 +80,24 @@ void round_trip_view(const BoundaryAuthoringSession& source, std::string_view me
     const auto restored = BoundaryAuthoringSession::from_recovery_checkpoint(*decoded.checkpoint);
     require(restored.view() == source.view(), message);
     require(restored.recovery_checkpoint() == checkpoint, message);
+    const auto revised = BoundaryAuthoringSession::revise_recovery_checkpoint(checkpoint);
+    const auto fresh = revised.recovery_checkpoint();
+    require(fresh.identity_namespace != checkpoint.identity_namespace &&
+            fresh.history_position == checkpoint.history_position && fresh.counters == checkpoint.counters &&
+            fresh.actions.size() == checkpoint.actions.size() && revised.phase() == source.phase() &&
+            fresh.extensions.dump() == checkpoint.extensions.dump(),
+            "fresh replay preserves history, phase, counters and extensions");
+    require(BoundaryAuthoringSession::from_recovery_checkpoint(fresh).view() == revised.view(),
+            "fresh replay emits a canonically restorable checkpoint");
+    for (std::size_t i = 0; i < fresh.actions.size(); ++i) {
+        require(fresh.actions[i].kind == checkpoint.actions[i].kind &&
+                fresh.actions[i].generated_ids.size() == checkpoint.actions[i].generated_ids.size(),
+                "fresh replay preserves action semantics and allocation counts");
+        for (const auto& id : fresh.actions[i].generated_ids)
+            require(id.find(fresh.identity_namespace) != std::string::npos &&
+                    id.find(checkpoint.identity_namespace) == std::string::npos,
+                    "fresh replay never retains generated source IDs");
+    }
     require(encode_boundary_authoring_recovery(*decoded.checkpoint).dump() == encoded.dump(),
             "recovery round-trip must be deterministic");
 }

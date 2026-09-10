@@ -269,6 +269,12 @@ public:
     [[nodiscard]] static BoundaryAuthoringSession from_recovery_checkpoint(
         const BoundaryAuthoringCheckpoint& checkpoint,
         BoundaryAuthoringResourcePolicy policy = boundary_authoring_default_resource_policy);
+    // Validate the original checkpoint, then replay its measurements into a
+    // fresh namespace. Preserves local undo/redo and allocation high-water marks;
+    // regenerated topology and dimension IDs never alias the original session.
+    [[nodiscard]] static BoundaryAuthoringSession revise_recovery_checkpoint(
+        const BoundaryAuthoringCheckpoint& checkpoint,
+        BoundaryAuthoringResourcePolicy policy = boundary_authoring_default_resource_policy);
 
     // Fault injection is a test-only seam for proving the transaction's strong
     // exception guarantee. Hooks are never serialized and are not invoked by

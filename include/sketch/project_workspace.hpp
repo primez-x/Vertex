@@ -22,6 +22,8 @@ struct WorkspaceSessionIdentity {
     std::string identity_namespace;
     BoundaryAuthoringMode mode{};
     BoundaryAuthoringCounters initial_counters;
+    std::optional<std::string> revised_from_namespace;
+    std::optional<std::string> revised_from_finish_event_id;
 };
 // Only the owner event contains a full immutable input. Repeat executions can
 // share that owner and override its pointer, including explicitly clearing it.
@@ -142,6 +144,9 @@ public:
     // Requires an already completed, classified current-source checkpoint.
     // Does not synthesize closure, classification, or replacement identities.
     [[nodiscard]] PreparedWorkspaceEdit prepare_finish_boundary() const;
+    // Explicitly starts fresh input from a retained retired view, bound to the
+    // current document and original context. The retired view stays available.
+    [[nodiscard]] PreparedWorkspaceEdit prepare_revise_boundary(std::string_view identity_namespace) const;
     [[nodiscard]] bool can_undo() const noexcept;
     [[nodiscard]] bool can_redo() const noexcept;
     [[nodiscard]] PreparedWorkspaceEdit prepare(const Command& command) const;
