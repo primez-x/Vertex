@@ -24,6 +24,15 @@ struct PreparedWorkspaceEdit::State {
     bool advances_edited_generation = true;
 };
 
+ProjectWorkspaceSnapshot::ProjectWorkspaceSnapshot(
+    const DocumentSnapshot& document, const WorkspaceDocumentHistory& history,
+    const std::optional<BoundaryActiveRecovery>& active, const std::string& identity,
+    std::uint64_t epoch, std::uint64_t edited_generation, std::uint64_t checkpoint_generation,
+    const BoundaryAuthoringResourcePolicy& policy)
+    : document_(document), history_(history), active_(active), identity_(identity),
+      epoch_(epoch), edited_generation_(edited_generation), checkpoint_generation_(checkpoint_generation),
+      resource_policy_(policy) {}
+
 PreparedWorkspaceEdit::PreparedWorkspaceEdit(std::unique_ptr<State> state) noexcept
     : state_(std::move(state)) {}
 
@@ -52,6 +61,10 @@ std::uint64_t ProjectWorkspace::epoch() const noexcept { return epoch_; }
 std::uint64_t ProjectWorkspace::edited_generation() const noexcept { return edited_generation_; }
 std::uint64_t ProjectWorkspace::checkpoint_generation() const noexcept { return checkpoint_generation_; }
 DocumentSnapshot ProjectWorkspace::snapshot() const { return state_->document->snapshot(); }
+ProjectWorkspaceSnapshot ProjectWorkspace::capture() const {
+    return ProjectWorkspaceSnapshot(state_->document->snapshot(), state_->history, state_->active,
+        identity_, epoch_, edited_generation_, checkpoint_generation_, resource_policy_);
+}
 WorkspaceDocumentHistory ProjectWorkspace::document_history() const { return state_->history; }
 std::optional<BoundaryActiveRecovery> ProjectWorkspace::active_boundary() const { return state_->active; }
 

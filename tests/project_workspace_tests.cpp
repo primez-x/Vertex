@@ -117,6 +117,8 @@ void check_checkpoint_policy() {
     auto policy = boundary_authoring_default_resource_policy;
     policy.max_actions = 0;
     ProjectWorkspace workspace(document.snapshot(), policy);
+    require(workspace.capture().resource_policy() == policy,
+            "worker capture must retain the workspace's actual resource policy");
     BoundaryAuthoringSession session(BoundaryAuthoringMode::draw_first);
     (void)session.anchor({0, 0});
     BoundaryActiveRecovery checkpoint{

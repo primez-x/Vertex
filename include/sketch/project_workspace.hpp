@@ -13,6 +13,41 @@ namespace detail { struct WorkspaceDocumentState; }
 
 class ProjectWorkspace;
 
+// Detached owner-thread capture for background readers. Its document, draft,
+// history and counters describe the same workspace state. It grants neither
+// publication/acknowledgement authority nor filesystem ownership. Copies own
+// their data; readers never receive a reference to the mutable workspace.
+class ProjectWorkspaceSnapshot final {
+public:
+    ProjectWorkspaceSnapshot(const ProjectWorkspaceSnapshot&) = default;
+    ProjectWorkspaceSnapshot& operator=(const ProjectWorkspaceSnapshot&) = default;
+
+    [[nodiscard]] const DocumentSnapshot& document() const noexcept { return document_; }
+    [[nodiscard]] const WorkspaceDocumentHistory& document_history() const noexcept { return history_; }
+    [[nodiscard]] const std::optional<BoundaryActiveRecovery>& active_boundary() const noexcept { return active_; }
+    [[nodiscard]] const std::string& identity() const noexcept { return identity_; }
+    [[nodiscard]] std::uint64_t epoch() const noexcept { return epoch_; }
+    [[nodiscard]] std::uint64_t edited_generation() const noexcept { return edited_generation_; }
+    [[nodiscard]] std::uint64_t checkpoint_generation() const noexcept { return checkpoint_generation_; }
+    [[nodiscard]] const BoundaryAuthoringResourcePolicy& resource_policy() const noexcept { return resource_policy_; }
+
+private:
+    friend class ProjectWorkspace;
+    ProjectWorkspaceSnapshot(const DocumentSnapshot&, const WorkspaceDocumentHistory&,
+        const std::optional<BoundaryActiveRecovery>&, const std::string&,
+        std::uint64_t epoch, std::uint64_t edited_generation, std::uint64_t checkpoint_generation,
+        const BoundaryAuthoringResourcePolicy&);
+
+    DocumentSnapshot document_;
+    WorkspaceDocumentHistory history_;
+    std::optional<BoundaryActiveRecovery> active_;
+    std::string identity_;
+    std::uint64_t epoch_;
+    std::uint64_t edited_generation_;
+    std::uint64_t checkpoint_generation_;
+    BoundaryAuthoringResourcePolicy resource_policy_;
+};
+
 // A sealed, instance-bound candidate. Returned snapshots are detached values.
 // Ticket access, moves and destruction must be serialized with commit on the
 // owning thread. A consumed ticket retains the full retired Document until
@@ -55,6 +90,7 @@ public:
     [[nodiscard]] std::uint64_t edited_generation() const noexcept;
     [[nodiscard]] std::uint64_t checkpoint_generation() const noexcept;
     [[nodiscard]] DocumentSnapshot snapshot() const;
+    [[nodiscard]] ProjectWorkspaceSnapshot capture() const;
     [[nodiscard]] WorkspaceDocumentHistory document_history() const;
     [[nodiscard]] std::optional<BoundaryActiveRecovery> active_boundary() const;
     // Stages a current-source checkpoint without changing document geometry.

@@ -286,6 +286,64 @@ void check_invalid_codec_and_stale_source_rollback() {
     require(workspace.active_boundary() == before_stale,
             "document redo preserves the original draft and source");
 }
+
+void check_aggregate_capture() {
+    auto document = fixture();
+    ProjectWorkspace workspace(document.snapshot());
+    auto session = make_session();
+    const auto source = capture_boundary_recovery_source(workspace.snapshot(), context());
+    const auto initial = workspace.capture();
+    auto checkpoint = active_record(source, session);
+    auto ticket = workspace.prepare_boundary_checkpoint(checkpoint);
+    (void)workspace.commit(ticket);
+    auto captured = workspace.capture();
+    const auto copied = captured;
+    require(captured.identity() == workspace.identity() && captured.epoch() == 1 &&
+                captured.edited_generation() == 1 && captured.checkpoint_generation() == 1 &&
+                captured.active_boundary() == workspace.active_boundary() &&
+                captured.document_history() == workspace.document_history() &&
+                captured.resource_policy() == boundary_authoring_default_resource_policy,
+            "capture must contain one complete current workspace generation");
+    require(initial.epoch() == 0 && !initial.active_boundary(),
+            "a retained capture must not observe later workspace publication");
+    const auto original_digest = document_snapshot_digest(captured.document());
+    checkpoint.checkpoint.pointer = Vec2{14, 15};
+    auto pointer_ticket = workspace.prepare_boundary_checkpoint(checkpoint);
+    (void)workspace.commit(pointer_ticket);
+    const auto pointer_capture = workspace.capture();
+    require(pointer_capture.epoch() == 2 && pointer_capture.edited_generation() == 1 &&
+                pointer_capture.checkpoint_generation() == 2 && captured.epoch() == 1 &&
+                captured.active_boundary() == copied.active_boundary(),
+            "pointer capture must retain associated counters without changing older captures");
+    const_cast<std::optional<BoundaryActiveRecovery>&>(captured.active_boundary())
+        ->source.document_id = "tampered detached capture";
+    const_cast<std::map<std::string, Entity, std::less<>>&>(captured.document().entities())
+        .at("label").properties["text"] = "tampered detached capture";
+    require(document_snapshot_digest(workspace.snapshot()) == original_digest &&
+                document_snapshot_digest(copied.document()) == original_digest &&
+                copied.active_boundary()->source == source &&
+                workspace.active_boundary()->source == source,
+            "capture and its copies must own detached document and recovery data");
+    auto edit = workspace.prepare(edit_label(workspace.snapshot(), "later"));
+    (void)workspace.commit(edit);
+    const auto edited = workspace.capture();
+    require(edited.document_history().events.size() == 1 &&
+                edited.document().revision() == 1 && edited.epoch() == 3 &&
+                edited.edited_generation() == 2 && edited.checkpoint_generation() == 3 &&
+                edited.active_boundary()->source == source,
+            "capture must pair document history and stale active provenance with the new generation");
+    validate_workspace_document_history(edited.document(), edited.document_history());
+    const auto detached_after_destruction = [&] {
+        ProjectWorkspace temporary(document.snapshot());
+        auto active = temporary.prepare_boundary_checkpoint(active_record(source, session));
+        (void)temporary.commit(active);
+        return temporary.capture();
+    }();
+    require(detached_after_destruction.epoch() == 1 &&
+                detached_after_destruction.active_boundary()->source == source &&
+                document_snapshot_digest(detached_after_destruction.document()) == original_digest,
+            "background capture must remain usable after its workspace is destroyed");
+}
 }  // namespace
 
 int main() {
@@ -295,6 +353,7 @@ int main() {
         check_pointer_replacement_and_ticket_invalidation();
         check_immutable_binding_and_monotonic_counters();
         check_invalid_codec_and_stale_source_rollback();
+        check_aggregate_capture();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

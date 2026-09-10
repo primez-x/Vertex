@@ -126,6 +126,14 @@ records, identity/counter rejection, policy limits and preservation across
 Document navigation. Source review found no unresolved publication defect;
 allocation-failure execution with populated active state remains unverified.
 
+`ProjectWorkspace::capture()` returns one detached `ProjectWorkspaceSnapshot`
+containing the document, active checkpoint, document-event history, instance
+identity, epoch, content generations and resource policy. Owner-thread capture
+keeps those fields associated with one state before handoff to a worker. Copies
+remain usable after workspace destruction and do not expose mutable workspace
+data. Capture is neither the v4 archive codec nor authority to acknowledge a
+save; role, destination and ownership correlation remain separate prerequisites.
+
 A command is prepared against an immutable snapshot. Preparation uses the
 validated `Document::fork(snapshot)` helper, validates the candidate document
 and recovery state, and captures the expected workspace identity,

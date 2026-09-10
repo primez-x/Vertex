@@ -1,5 +1,12 @@
 # Implementation status
 
+The subsequent aggregate workspace capture passes both focused workspace tests
+in Debug and Release. It carries detached document, draft, document history,
+identity, epoch, content generations and the actual resource policy in one value.
+Tests retain it across edits and owner destruction and mutate copies to check
+isolation. This is worker input preparation, not a persisted archive or a save
+acknowledgement token. The full suite below predates this capture addition.
+
 The subsequent workspace document-history integration passes all three focused
 tests in both Debug and Release. Successful edit, undo and redo publication now
 swaps the document and its ordered event history together. Validation checks
