@@ -412,15 +412,19 @@ remain to be implemented.
 
 ## One history authority and lifecycle operations
 
-The in-memory workspace now implements document commands, activation, discard,
+The in-memory workspace now implements document commands, activation, discard, finish,
 undo/redo and semantic redo-clear barriers through one candidate bundle. Its
 snapshots carry navigation and lifecycle events alongside the document-event
-projection. Five focused tests pass in Debug and Release. Cross-operation input
+projection. Seven focused tests pass in Debug and Release. Cross-operation input
 sharing was corrected after a failing retention regression; repeated discard and
 undo activation now reference the same immutable semantic input, with exact
 pointer overrides. Reused session namespaces must be restored through navigation,
-not submitted as new activations. Finish/retired-slot navigation, untrusted
-persisted-event validation, aggregate history budgets and disk codecs remain
+not submitted as new activations. Finish commits the owned completed checkpoint
+in one Document revision. Undo retains its exact input as retired; redo restores
+the original geometry and dimension IDs without recommitting. Activation
+navigation preserves retired status, including multiple retired inputs across
+branches. Retired input cannot be submitted as an ordinary new activation.
+Explicit Revise Input, untrusted persisted-event validation, aggregate history budgets and disk codecs remain
 unimplemented. The runtime types are not a certified persisted schema.
 Opaque extension representations are compared through canonical JSON for
 sharing and no-op classification. Regressions reject conflating integer `1`

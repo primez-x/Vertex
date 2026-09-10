@@ -1,6 +1,7 @@
 #include "sketch/project_workspace.hpp"
 
 #include "sketch/document_digest.hpp"
+#include "sketch/boundary_commit.hpp"
 
 #include <limits>
 #include <stdexcept>
@@ -14,6 +15,7 @@ struct WorkspaceDocumentState {
     std::optional<BoundaryActiveRecovery> active;
     WorkspaceNavigationState navigation;
     std::vector<WorkspaceLifecycleEvent> lifecycle;
+    WorkspaceRetiredBoundaries retired;
 };
 }
 
@@ -50,18 +52,30 @@ const WorkspaceArchivedInput* last_input(const detail::WorkspaceDocumentState& s
     return nullptr;
 }
 WorkspaceArchivedInput archive_input(const detail::WorkspaceDocumentState& state,
-                                     const std::string& owner) {
-    if (!state.active) throw std::invalid_argument("there is no active boundary to archive");
+                                     const BoundaryActiveRecovery& input, const std::string& owner) {
     for (auto it = state.lifecycle.rbegin(); it != state.lifecycle.rend(); ++it) {
-        if (it->input && same_semantics(*it->input->value, *state.active)) {
+        if (it->input && same_semantics(*it->input->value, input)) {
             auto reference = *it->input;
-            reference.pointer_override.emplace(state.active->checkpoint.pointer);
+            reference.pointer_override.emplace(input.checkpoint.pointer);
+            reference.status = WorkspaceInputStatus::active;
+            reference.finish_event_id.reset();
             return reference;
         }
     }
-    return {owner, std::make_shared<const BoundaryActiveRecovery>(*state.active), std::nullopt};
+    return {owner, std::make_shared<const BoundaryActiveRecovery>(input), std::nullopt};
 }
 void restore_input(detail::WorkspaceDocumentState& state, const WorkspaceArchivedInput& input) {
+    const auto& identity_namespace = input.value->checkpoint.identity_namespace;
+    if (state.retired.contains(identity_namespace))
+        throw std::invalid_argument("restoration would overwrite retired boundary input");
+    if (input.status == WorkspaceInputStatus::retired) {
+        if (!input.finish_event_id || (state.active && state.active->checkpoint.identity_namespace == identity_namespace))
+            throw std::invalid_argument("retired restoration has inconsistent session status");
+        state.retired.emplace(identity_namespace, input);
+        return;
+    }
+    if (input.status != WorkspaceInputStatus::active || input.finish_event_id)
+        throw std::invalid_argument("active restoration has inconsistent session status");
     if (state.active) throw std::invalid_argument("restoration would overwrite an active boundary");
     state.active.emplace(*input.value);
     if (input.pointer_override) state.active->checkpoint.pointer = *input.pointer_override;
@@ -90,10 +104,10 @@ ProjectWorkspaceSnapshot::ProjectWorkspaceSnapshot(
     const std::optional<BoundaryActiveRecovery>& active, const std::string& identity,
     std::uint64_t epoch, std::uint64_t edited_generation, std::uint64_t checkpoint_generation,
     const BoundaryAuthoringResourcePolicy& policy, const WorkspaceNavigationState& navigation,
-    const std::vector<WorkspaceLifecycleEvent>& lifecycle)
+    const std::vector<WorkspaceLifecycleEvent>& lifecycle, const WorkspaceRetiredBoundaries& retired)
     : document_(document), history_(history), active_(active), identity_(identity),
       epoch_(epoch), edited_generation_(edited_generation), checkpoint_generation_(checkpoint_generation),
-      resource_policy_(policy), navigation_(navigation), lifecycle_history_(lifecycle) {}
+      resource_policy_(policy), navigation_(navigation), lifecycle_history_(lifecycle), retired_(retired) {}
 
 PreparedWorkspaceEdit::PreparedWorkspaceEdit(std::unique_ptr<State> state) noexcept
     : state_(std::move(state)) {}
@@ -127,10 +141,17 @@ DocumentSnapshot ProjectWorkspace::snapshot() const { return state_->document->s
 ProjectWorkspaceSnapshot ProjectWorkspace::capture() const {
     return ProjectWorkspaceSnapshot(state_->document->snapshot(), state_->history, state_->active,
         identity_, epoch_, edited_generation_, checkpoint_generation_, resource_policy_,
-        state_->navigation, state_->lifecycle);
+        state_->navigation, state_->lifecycle, state_->retired);
 }
 WorkspaceDocumentHistory ProjectWorkspace::document_history() const { return state_->history; }
 std::optional<BoundaryActiveRecovery> ProjectWorkspace::active_boundary() const { return state_->active; }
+std::optional<BoundaryActiveRecovery> ProjectWorkspace::retired_boundary(std::string_view identity_namespace) const {
+    const auto found = state_->retired.find(identity_namespace);
+    if (found == state_->retired.end()) return std::nullopt;
+    std::optional<BoundaryActiveRecovery> result{*found->second.value};
+    if (found->second.pointer_override) result->checkpoint.pointer = *found->second.pointer_override;
+    return std::optional<BoundaryActiveRecovery>(result);
+}
 
 PreparedWorkspaceEdit ProjectWorkspace::prepare(const Command& command) const {
     return prepare_document_edit(command);
@@ -158,6 +179,7 @@ std::unique_ptr<PreparedWorkspaceEdit::State> ProjectWorkspace::prepare_state() 
     state->candidate->active = state_->active;
     state->candidate->navigation = state_->navigation;
     state->candidate->lifecycle = state_->lifecycle;
+    state->candidate->retired = state_->retired;
     return state;
 }
 
@@ -234,9 +256,36 @@ PreparedWorkspaceEdit ProjectWorkspace::prepare_discard_boundary() const {
     auto state = prepare_state();
     auto& candidate = *state->candidate;
     auto event = next_event(candidate, WorkspaceLifecycleKind::boundary_discard);
-    event.input = archive_input(candidate, event.event_id);
+    event.input = archive_input(candidate, *candidate.active, event.event_id);
     candidate.navigation = record_workspace_operation(candidate.navigation, event.event_id,
         WorkspaceOperationKind::boundary_discard);
+    candidate.active.reset();
+    candidate.lifecycle.push_back(std::move(event));
+    return PreparedWorkspaceEdit(std::move(state));
+}
+
+PreparedWorkspaceEdit ProjectWorkspace::prepare_finish_boundary() const {
+    if (!state_->active) throw std::invalid_argument("there is no active boundary to finish");
+    const auto source = state_->document->snapshot();
+    if (inspect_boundary_recovery_source(source, state_->active->source) != BoundaryRecoverySourceStatus::current)
+        throw std::invalid_argument("boundary finish source is not current");
+    const auto session = BoundaryAuthoringSession::from_recovery_checkpoint(
+        state_->active->checkpoint, resource_policy_);
+    if (session.phase() != BoundaryAuthoringPhase::completed || session.accepted_chains().empty())
+        throw std::invalid_argument("finish requires a completed boundary checkpoint");
+    auto state = prepare_state();
+    auto& candidate = *state->candidate;
+    const BoundaryCommitIntent intent{session.options(), session.accepted_chains(),
+        candidate.active->source.context, "Finish boundary"};
+    const auto preview = preview_boundary_commit(candidate.document->snapshot(), intent);
+    if (!preview.accepted())
+        throw std::invalid_argument(preview.diagnostics().empty() ? "boundary finish was rejected" : preview.diagnostics().front());
+    auto event = next_event(candidate, WorkspaceLifecycleKind::boundary_finish);
+    event.input = archive_input(candidate, *candidate.active, event.event_id);
+    event.after_revision = apply_boundary_commit(*candidate.document, preview);
+    append_document_event(candidate, event, WorkspaceDocumentEventKind::edit);
+    candidate.navigation = record_workspace_operation(candidate.navigation, event.event_id,
+        WorkspaceOperationKind::boundary_finish);
     candidate.active.reset();
     candidate.lifecycle.push_back(std::move(event));
     return PreparedWorkspaceEdit(std::move(state));
@@ -270,12 +319,20 @@ PreparedWorkspaceEdit ProjectWorkspace::prepare_navigation(bool redo) const {
             const WorkspaceSessionIdentity* session = nullptr;
             for (const auto& origin : candidate.lifecycle)
                 if (origin.event_id == id && origin.session) { session = &*origin.session; break; }
-            if (!session || !candidate.active || candidate.active->source != session->source ||
-                candidate.active->checkpoint.identity_namespace != session->identity_namespace ||
-                candidate.active->checkpoint.mode != session->mode)
-                throw std::invalid_argument("activation navigation does not match the active session");
-            event.input = archive_input(candidate, event.event_id);
-            candidate.active.reset();
+            if (!session) throw std::invalid_argument("activation origin is missing");
+            if (candidate.active && candidate.active->source == session->source &&
+                candidate.active->checkpoint.identity_namespace == session->identity_namespace &&
+                candidate.active->checkpoint.mode == session->mode) {
+                event.input = archive_input(candidate, *candidate.active, event.event_id);
+                candidate.active.reset();
+            } else {
+                const auto retired = candidate.retired.find(session->identity_namespace);
+                if (retired == candidate.retired.end() || retired->second.value->source != session->source ||
+                    retired->second.value->checkpoint.mode != session->mode)
+                    throw std::invalid_argument("activation navigation does not match a retained session");
+                event.input = retired->second;
+                candidate.retired.erase(retired);
+            }
         }
         break;
     case WorkspaceOperationKind::boundary_discard: {
@@ -284,7 +341,7 @@ PreparedWorkspaceEdit ProjectWorkspace::prepare_navigation(bool redo) const {
         if (redo) {
             if (!candidate.active || !same_semantics(*input->value, *candidate.active))
                 throw std::invalid_argument("discard redo does not match the restored session");
-            event.input = archive_input(candidate, event.event_id);
+            event.input = archive_input(candidate, *candidate.active, event.event_id);
             candidate.active.reset();
         } else {
             event.input = *input;
@@ -292,8 +349,29 @@ PreparedWorkspaceEdit ProjectWorkspace::prepare_navigation(bool redo) const {
         }
         break;
     }
-    case WorkspaceOperationKind::boundary_finish:
-        throw std::logic_error("finish lifecycle is not yet implemented");
+    case WorkspaceOperationKind::boundary_finish: {
+        const auto* input = last_input(candidate, transition.target);
+        if (!input) throw std::invalid_argument("finish restoration input is missing");
+        const auto& finish_id = std::get<std::string>(transition.target.identity);
+        const auto& identity_namespace = input->value->checkpoint.identity_namespace;
+        if (redo) {
+            const auto retired = candidate.retired.find(identity_namespace);
+            if (retired == candidate.retired.end() || retired->second.finish_event_id != finish_id)
+                throw std::invalid_argument("finish redo does not match retired input");
+            event.input = retired->second;
+            event.after_revision = candidate.document->redo(event.before_revision);
+            candidate.retired.erase(retired);
+        } else {
+            event.input = *input;
+            event.input->status = WorkspaceInputStatus::retired;
+            event.input->finish_event_id = finish_id;
+            event.after_revision = candidate.document->undo(event.before_revision);
+            restore_input(candidate, *event.input);
+        }
+        append_document_event(candidate, event,
+            redo ? WorkspaceDocumentEventKind::redo : WorkspaceDocumentEventKind::undo);
+        break;
+    }
     }
     candidate.navigation = std::move(transition.state);
     candidate.lifecycle.push_back(std::move(event));

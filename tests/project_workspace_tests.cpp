@@ -102,6 +102,7 @@ void check_rejections() {
     try { ProjectWorkspace bad(malformed); } catch (const DocumentError&) { invalid = true; }
     require(invalid, "workspace construction must validate retained history");
     ProjectWorkspace empty(Document::create().snapshot());
+    rejected([&] { (void)empty.prepare_finish_boundary(); });
     bool no_undo = false;
     try { (void)empty.prepare_undo(); }
     catch (const DocumentError& error) { no_undo = error.code() == DocumentErrorCode::no_undo; }

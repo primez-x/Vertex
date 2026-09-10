@@ -1,18 +1,20 @@
 # Implementation status
 
 Workspace navigation now orders document commands, session activation and
-discard in one in-memory history. Undo/redo restores exact archived drafts,
+discard and finish in one in-memory history. Undo/redo restores exact archived drafts,
 including stale source bindings; pointer-only changes preserve redo and semantic
 draft changes clear it. Baseline command identities remain separate from
 Document snapshot targets, so abandoned physical redo cannot bypass global
-ordering. Five focused workspace/history tests pass in Debug and Release.
+ordering. Seven focused workspace/history tests pass in Debug and Release.
 
 Lifecycle inputs share immutable owners across operations. A source review
 identified duplicate copies across discard and undo activation; the failing
 regression now passes with shared ownership and exact pointer overrides,
 including explicit pointer absence. Previously used session namespaces cannot
-be submitted as new activations to bypass restoration. Finish/retired-input
-navigation, persisted event replay validation and aggregate resource admission
+be submitted as new activations to bypass restoration. Finish publishes one
+Document revision; undo retains non-finalizable retired input, and redo restores
+the original geometry and dimension IDs. Multiple retired inputs survive branches
+and activation navigation. Persisted event replay validation and aggregate resource admission
 remain pending; this runtime history is not a supported archive wire format.
 The final extension regression also passes in both builds: integer and floating
 extension representations are compared canonically, so archival sharing cannot
@@ -26,9 +28,9 @@ Capture grants no save acknowledgement or filesystem ownership authority.
 Persisted counters, desktop routing, background I/O and save watermarks remain
 to be connected.
 
-The v24h full integrated checkpoint, before the final extension-comparison fix,
-passes 64/64 tests in Debug (71.87 seconds) and Release (15.08 seconds). All 204
-recorded source inputs remained unchanged across those builds/tests, and 124
+The v24i full integrated checkpoint passes 65/65 tests in Debug (72.90 seconds)
+and Release (15.13 seconds). All 205
+recorded source inputs remained unchanged across those builds/tests, and 126
 executable hashes are recorded. Recovery checks cover
 all 18 action kinds, both modes, phases, construction, receipt encoding,
 commits, exact checkpoint/history behavior, source bindings, active/recovery-copy
@@ -44,7 +46,11 @@ The workspace publication API passed independent source review. It has private
 candidate documents, instance/epoch/full-source checks, detached previews and
 no mutable Document escape. It is not yet wired into the desktop or a persisted
 recovery archive. The record codecs and baseline validator are prerequisites; aggregate
-v4 persistence, finish lifecycle ordering, autosave and restart recovery remain open.
+v4 persistence, explicit Revise Input, autosave and restart recovery remain open.
+The in-memory finish implementation passed independent source review. Subsequent
+test-only additions verify mixed finish/edit navigation across the baseline and
+validate the Document history projection after navigation; the finish suite was
+rerun in both configurations after those additions.
 
 Save acknowledgement integration must bind a sealed publication to workspace
 identity, owner correlation, role, destination, epoch, both content generations
