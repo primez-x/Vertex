@@ -21,7 +21,12 @@ document data and estimated validation work. Raw preflight rejects oversized
 borrowed fields and incompatible action payloads before copying them; bounded
 JSON counting avoids a full serialized temporary. Allocation-sensitive tests
 cover oversized escaped JSON and classification/option payloads.
-Generation checks, wire codecs and archive loading remain pending.
+The version-one workspace-history codec now preserves global navigation,
+immutable input references, explicit pointer clearing, independent counters and
+opaque extensions. Unknown positive outer or nested versions preserve the whole
+bounded envelope. Encoding and decoding share wire admission checks; aggregate
+work rejection precedes owner replay. Cross-record generation checks and archive
+loading remain pending. See `workspace-history-format.md` for the wire contract.
 
 Workspace navigation now orders document commands, session activation and
 discard and finish in one in-memory history. Undo/redo restores exact archived drafts,
@@ -37,8 +42,8 @@ including explicit pointer absence. Previously used session namespaces cannot
 be submitted as new activations to bypass restoration. Finish publishes one
 Document revision; undo retains non-finalizable retired input, and redo restores
 the original geometry and dimension IDs. Multiple retired inputs survive branches
-and activation navigation. Persisted event replay validation and aggregate resource admission
-remain pending; this runtime history is not a supported archive wire format.
+and activation navigation. Persisted event replay validation and aggregate resource
+admission are implemented as core APIs; SQLite archive integration remains pending.
 The final extension regression also passes in both builds: integer and floating
 extension representations are compared canonically, so archival sharing cannot
 substitute `1` for `1.0`. The five affected tests were rerun after this fix.
@@ -51,9 +56,9 @@ Capture grants no save acknowledgement or filesystem ownership authority.
 Persisted counters, desktop routing, background I/O and save watermarks remain
 to be connected.
 
-The v24k full integrated checkpoint passes 68/68 tests in Debug (77.58 seconds)
-and Release (16.34 seconds). All 214
-recorded source inputs remained unchanged across those builds/tests, and 132
+The v24l full integrated checkpoint passes 69/69 tests in Debug (78.30 seconds)
+and Release (15.73 seconds). All 217
+recorded source inputs remained unchanged across those builds/tests, and 134
 executable hashes are recorded. Recovery checks cover
 all 18 action kinds, both modes, phases, construction, receipt encoding,
 commits, exact checkpoint/history behavior, source bindings, active/recovery-copy
@@ -76,7 +81,8 @@ the original retired namespace and finish event on a fresh activation bound to
 the current document. It leaves the retired input intact. Focused replay and
 workspace finish suites pass in Debug and Release after this change. The v24k
 full-suite checkpoint includes Revise Input, combined slot validation and
-aggregate resource admission.
+aggregate resource admission. The later v24l checkpoint adds the workspace-history
+wire codec, malformed-record checks and encoder/decoder admission regressions.
 The in-memory finish implementation passed independent source review. Subsequent
 test-only additions verify mixed finish/edit navigation across the baseline and
 validate the Document history projection after navigation; the finish suite was
