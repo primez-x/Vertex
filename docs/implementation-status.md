@@ -6,7 +6,7 @@ swaps the document and its ordered event history together. Validation checks
 the retained baseline, complete revision coverage, unique event IDs and actual
 navigation provenance; rejected tickets preserve both states. This is an internal
 document transition log, not the persisted workspace lifecycle ledger. The full
-integrated suite below predates this addition.
+integrated suite below includes this addition.
 
 Workspace document publications also advance independent edited and checkpoint
 generation counters. Both begin at zero for the imported baseline; undo/redo
@@ -14,9 +14,9 @@ advance them and rejected tickets preserve them. Focused workspace tests pass
 in Debug and Release. Pointer-only transitions, persisted counters and save
 acknowledgement watermarks remain to be connected.
 
-The v24e full integrated build passes 60/60 tests in Debug (74.01 seconds) and
-Release (16.08 seconds). All 196 recorded source inputs remain unchanged across
-the builds/tests, and 116 executable hashes are recorded. Recovery checks cover
+The v24f full integrated build passes 61/61 tests in Debug (71.42 seconds) and
+Release (14.94 seconds). All 199 recorded source inputs remain unchanged across
+the builds/tests, and 118 executable hashes are recorded. Recovery checks cover
 all 18 action kinds, both modes, phases, construction, receipt encoding,
 commits, exact checkpoint/history behavior, source bindings, active/recovery-copy
 records, historical baseline fences and sealed workspace document publication.
@@ -30,6 +30,15 @@ candidate documents, instance/epoch/full-source checks, detached previews and
 no mutable Document escape. It is not yet wired into the desktop or a recovery
 ledger. The record codecs and baseline validator are prerequisites; aggregate
 v4 persistence, lifecycle ordering, autosave and restart recovery remain open.
+
+Save acknowledgement integration must bind a sealed publication to workspace
+identity, owner correlation, role, destination, epoch, both content generations
+and the authoring source digest before accepting a storage receipt. The current
+desktop save path is synchronous and still directly marks its shared Document
+saved. `SaveReceipt` contains only revision, file hash and backup path, so it
+cannot establish those workspace bindings on its own. The future queue must
+preserve stale successful files without clearing current dirty state; owner
+metadata remains correlation data, never proof of a filesystem reservation.
 
 Compact persistent history replaces the former deep semantic snapshots. The
 unchanged old-engine corpus (13 fixtures, 66 positions, all eighteen actions)
