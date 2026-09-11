@@ -161,6 +161,16 @@ public:
                                                 Vec2 position);
     [[nodiscard]] QString createAnnotationSymbol(const QString& symbol_id,
                                                  Vec2 position);
+    // Updates one persisted annotation child through the same typed Document
+    // command/history path as creation and deletion. Coordinates are metres;
+    // rotation is expressed in degrees for UI/API ergonomics.
+    [[nodiscard]] bool editAnnotation(const QString& annotation_id,
+                                      const QString& content,
+                                      const QString& x_metres,
+                                      const QString& y_metres,
+                                      const QString& rotation_degrees,
+                                      const QString& scale,
+                                      bool visible);
     [[nodiscard]] bool deleteAnnotation(const QString& annotation_id);
     [[nodiscard]] bool undoCommand();
     [[nodiscard]] bool redoCommand();

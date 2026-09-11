@@ -778,15 +778,33 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
 
     painter.save();
     painter.setRenderHint(QPainter::TextAntialiasing, true);
-    const QFontMetricsF metrics(painter.font());
     for (const auto& label : m_labels) {
         if (label.text.isEmpty() || !std::isfinite(label.position.x) ||
             !std::isfinite(label.position.y)) {
             continue;
         }
+        QFont font = painter.font();
+        const auto text_height = std::isfinite(label.text_height_metres) &&
+                                         label.text_height_metres > 0.0
+                                     ? label.text_height_metres
+                                     : 0.15;
+        const auto instance_scale = std::isfinite(label.scale) && label.scale > 0.0
+                                        ? label.scale
+                                        : 1.0;
+        const auto pixel_height = std::clamp(text_height * scale * instance_scale, 8.0, 96.0);
+        font.setPixelSize(static_cast<int>(std::lround(pixel_height)));
+        painter.setFont(font);
+        const QFontMetricsF metrics(font);
         auto bounds = metrics.boundingRect(label.text);
-        bounds.moveCenter(to_screen(label.position));
+        bounds.moveCenter(QPointF(0.0, 0.0));
         bounds.adjust(-5.0, -3.0, 5.0, 3.0);
+        const auto center = to_screen(label.position);
+        painter.save();
+        painter.translate(center);
+        if (std::isfinite(label.rotation_radians)) {
+            // Model coordinates are y-up while the Qt viewport is y-down.
+            painter.rotate(-label.rotation_radians * 180.0 / 3.14159265358979323846);
+        }
         painter.setPen(Qt::NoPen);
         painter.setBrush(output ? background : QColor(20, 25, 34, 225));
         painter.drawRoundedRect(bounds, 3.0, 3.0);
@@ -795,6 +813,7 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
                               : label.selected ? QColor(112, 222, 255) : QColor(255, 239, 172));
         painter.setBrush(Qt::NoBrush);
         painter.drawText(bounds, Qt::AlignCenter, label.text);
+        painter.restore();
     }
     painter.restore();
 }

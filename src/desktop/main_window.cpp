@@ -1863,6 +1863,81 @@ public:
         }
     }
 
+    bool editAnnotation(const QString& annotation_id, const QString& content,
+                        const QString& x_metres, const QString& y_metres,
+                        const QString& rotation_degrees, const QString& scale,
+                        bool visible) {
+        try {
+            if (!m_document->is_editable()) {
+                throw std::invalid_argument("This document is read-only.");
+            }
+            const auto parse_finite = [](const QString& text, const char* name) {
+                bool ok = false;
+                const auto value = text.trimmed().toDouble(&ok);
+                if (!ok || !std::isfinite(value)) throw std::invalid_argument(name);
+                return value;
+            };
+            const auto x = parse_finite(x_metres, "Annotation X must be finite metres.");
+            const auto y = parse_finite(y_metres, "Annotation Y must be finite metres.");
+            const auto rotation = parse_finite(
+                rotation_degrees, "Annotation rotation must be finite degrees.");
+            const auto instance_scale = parse_finite(scale, "Annotation scale must be finite.");
+            if (!(instance_scale > 0.0) || instance_scale > 100.0) {
+                throw std::invalid_argument("Annotation scale must be greater than zero and no more than 100.");
+            }
+            const auto source = authoringSnapshot();
+            auto annotation = std::find_if(source.entities().begin(), source.entities().end(),
+                                            [](const auto& entry) {
+                                                return entry.second.type == kAnnotationEntityType;
+                                            });
+            if (annotation == source.entities().end()) {
+                throw std::invalid_argument("The project has no annotation state entity.");
+            }
+            auto state = decode_annotation_entity(annotation->second);
+            const auto wanted = annotation_id.trimmed().toStdString();
+            bool found = false;
+            for (auto& label : state.labels) {
+                if (label.id != wanted) continue;
+                const auto replacement = content.trimmed();
+                if (replacement.isEmpty()) {
+                    throw std::invalid_argument("Label text cannot be empty.");
+                }
+                label.content = replacement.toStdString();
+                label.placement.position = {x, y};
+                label.placement.rotation_radians = rotation * std::numbers::pi / 180.0;
+                label.placement.scale = instance_scale;
+                label.visible = visible;
+                found = true;
+                break;
+            }
+            if (!found) {
+                for (auto& symbol : state.symbols) {
+                    if (symbol.id != wanted) continue;
+                    symbol.placement.position = {x, y};
+                    symbol.placement.rotation_radians = rotation * std::numbers::pi / 180.0;
+                    symbol.placement.scale = instance_scale;
+                    symbol.visible = visible;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) throw std::invalid_argument("Annotation was not found.");
+            const auto command = ApplyEntityChanges{
+                source.revision(),
+                {EntityChange::upsert(make_annotation_entity(annotation->second.id, state))},
+                {}, "Edit annotation"};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            m_selected_id = annotation_id.trimmed();
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Edit annotation: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     bool deleteAnnotation(const QString& annotation_id) {
         try {
             if (!m_document->is_editable()) {
@@ -4655,6 +4730,38 @@ private:
         inspector_layout->addWidget(m_delete_annotation_button);
         QObject::connect(m_delete_annotation_button, &QPushButton::clicked, owner,
                          [this] { (void)deleteAnnotation(m_selected_id); });
+        m_annotation_group = new QGroupBox(QStringLiteral("Annotation properties"), inspector_body);
+        m_annotation_group->setObjectName(QStringLiteral("annotationProperties"));
+        auto* annotation_layout = new QFormLayout(m_annotation_group);
+        m_annotation_content_edit = new QLineEdit(m_annotation_group);
+        m_annotation_content_edit->setObjectName(QStringLiteral("annotationContent"));
+        annotation_layout->addRow(QStringLiteral("Text"), m_annotation_content_edit);
+        m_annotation_x_edit = new QLineEdit(m_annotation_group);
+        m_annotation_x_edit->setObjectName(QStringLiteral("annotationX"));
+        annotation_layout->addRow(QStringLiteral("X (m)"), m_annotation_x_edit);
+        m_annotation_y_edit = new QLineEdit(m_annotation_group);
+        m_annotation_y_edit->setObjectName(QStringLiteral("annotationY"));
+        annotation_layout->addRow(QStringLiteral("Y (m)"), m_annotation_y_edit);
+        m_annotation_rotation_edit = new QLineEdit(m_annotation_group);
+        m_annotation_rotation_edit->setObjectName(QStringLiteral("annotationRotation"));
+        annotation_layout->addRow(QStringLiteral("Rotation (deg)"), m_annotation_rotation_edit);
+        m_annotation_scale_edit = new QLineEdit(m_annotation_group);
+        m_annotation_scale_edit->setObjectName(QStringLiteral("annotationScale"));
+        annotation_layout->addRow(QStringLiteral("Scale"), m_annotation_scale_edit);
+        m_annotation_visible_check = new QCheckBox(QStringLiteral("Visible"), m_annotation_group);
+        m_annotation_visible_check->setObjectName(QStringLiteral("annotationVisible"));
+        annotation_layout->addRow(m_annotation_visible_check);
+        m_apply_annotation_button = new QPushButton(QStringLiteral("Apply annotation"), m_annotation_group);
+        m_apply_annotation_button->setObjectName(QStringLiteral("applyAnnotation"));
+        annotation_layout->addRow(m_apply_annotation_button);
+        m_annotation_group->setVisible(false);
+        inspector_layout->addWidget(m_annotation_group);
+        QObject::connect(m_apply_annotation_button, &QPushButton::clicked, owner, [this] {
+            (void)editAnnotation(m_selected_id, m_annotation_content_edit->text(),
+                                 m_annotation_x_edit->text(), m_annotation_y_edit->text(),
+                                 m_annotation_rotation_edit->text(), m_annotation_scale_edit->text(),
+                                 m_annotation_visible_check->isChecked());
+        });
         m_constraint_button = new QPushButton(QStringLiteral("Dimensions and constraints…"), inspector_body);
         m_constraint_button->setObjectName(QStringLiteral("editWallConstraints"));
         inspector_layout->addWidget(m_constraint_button);
@@ -5042,7 +5149,10 @@ private:
                     annotation_child_ids.push_back(label.id);
                     all_labels.push_back({id_from(label.id), label.placement.position,
                                           QString::fromStdString(label.content),
-                                          id_from(label.id) == m_selected_id});
+                                          id_from(label.id) == m_selected_id,
+                                          label.placement.rotation_radians,
+                                          label.placement.scale,
+                                          label.style.text_height_metres});
                 }
                 for (const auto& symbol : state.symbols) {
                     if (!symbol.visible) continue;
@@ -5602,6 +5712,8 @@ private:
         const auto editable = m_document->is_editable();
         const auto inspector_snapshot = m_document->snapshot();
         std::optional<QString> annotation_context;
+        std::optional<LabelInstance> selected_annotation_label;
+        std::optional<SymbolInstance> selected_annotation_symbol;
         if (!entity.has_value() && !m_selected_id.isEmpty()) {
             const auto wanted = m_selected_id.toStdString();
             for (const auto& [id, candidate] : inspector_snapshot.entities()) {
@@ -5613,6 +5725,7 @@ private:
                         state.labels.begin(), state.labels.end(),
                         [&](const auto& value) { return value.id == wanted; });
                     if (label != state.labels.end()) {
+                        selected_annotation_label = *label;
                         annotation_context = QStringLiteral("Label\n%1")
                             .arg(QString::fromStdString(label->content));
                         break;
@@ -5621,6 +5734,7 @@ private:
                         state.symbols.begin(), state.symbols.end(),
                         [&](const auto& value) { return value.id == wanted; });
                     if (symbol != state.symbols.end()) {
+                        selected_annotation_symbol = *symbol;
                         annotation_context = QStringLiteral("Symbol\n%1")
                             .arg(QString::fromStdString(symbol->symbol_id));
                         break;
@@ -5643,8 +5757,52 @@ private:
         m_edit_object_button->setEnabled(editable && building_object);
         m_delete_annotation_button->setVisible(annotation_context.has_value());
         m_delete_annotation_button->setEnabled(editable && annotation_context.has_value());
+        m_annotation_group->setVisible(annotation_context.has_value());
+        m_annotation_group->setEnabled(editable && annotation_context.has_value());
         if (annotation_context.has_value()) {
             m_inspector_context->setText(*annotation_context);
+            {
+                QSignalBlocker blocker(m_annotation_content_edit);
+                m_annotation_content_edit->setText(selected_annotation_label.has_value()
+                                                       ? QString::fromStdString(selected_annotation_label->content)
+                                                       : QString{});
+            }
+            {
+                QSignalBlocker blocker(m_annotation_x_edit);
+                const auto position = selected_annotation_label.has_value()
+                                          ? selected_annotation_label->placement.position
+                                          : selected_annotation_symbol->placement.position;
+                m_annotation_x_edit->setText(QString::number(position.x, 'g', 12));
+            }
+            {
+                QSignalBlocker blocker(m_annotation_y_edit);
+                const auto position = selected_annotation_label.has_value()
+                                          ? selected_annotation_label->placement.position
+                                          : selected_annotation_symbol->placement.position;
+                m_annotation_y_edit->setText(QString::number(position.y, 'g', 12));
+            }
+            {
+                QSignalBlocker blocker(m_annotation_rotation_edit);
+                const auto radians = selected_annotation_label.has_value()
+                                         ? selected_annotation_label->placement.rotation_radians
+                                         : selected_annotation_symbol->placement.rotation_radians;
+                m_annotation_rotation_edit->setText(
+                    QString::number(radians * 180.0 / std::numbers::pi, 'g', 12));
+            }
+            {
+                QSignalBlocker blocker(m_annotation_scale_edit);
+                const auto instance_scale = selected_annotation_label.has_value()
+                                                ? selected_annotation_label->placement.scale
+                                                : selected_annotation_symbol->placement.scale;
+                m_annotation_scale_edit->setText(QString::number(instance_scale, 'g', 12));
+            }
+            {
+                QSignalBlocker blocker(m_annotation_visible_check);
+                m_annotation_visible_check->setChecked(selected_annotation_label.has_value()
+                                                           ? selected_annotation_label->visible
+                                                           : selected_annotation_symbol->visible);
+            }
+            m_annotation_content_edit->setEnabled(editable && selected_annotation_label.has_value());
             m_geometry_form->setRowVisible(m_length_edit, false);
             m_geometry_form->setRowVisible(m_classification_combo, false);
             m_geometry_form->setRowVisible(m_height_edit, false);
@@ -6431,6 +6589,14 @@ private:
     QToolButton* m_object_button{};
     QPushButton* m_edit_object_button{};
     QPushButton* m_delete_annotation_button{};
+    QGroupBox* m_annotation_group{};
+    QLineEdit* m_annotation_content_edit{};
+    QLineEdit* m_annotation_x_edit{};
+    QLineEdit* m_annotation_y_edit{};
+    QLineEdit* m_annotation_rotation_edit{};
+    QLineEdit* m_annotation_scale_edit{};
+    QCheckBox* m_annotation_visible_check{};
+    QPushButton* m_apply_annotation_button{};
     QPushButton* m_constraint_button{};
     QToolButton* m_grid_button{};
     QToolButton* m_snap_button{};
@@ -6626,6 +6792,14 @@ QString MainWindow::createAnnotationLabel(const QString& template_id, const QStr
 
 QString MainWindow::createAnnotationSymbol(const QString& symbol_id, Vec2 position) {
     return m_impl->createAnnotationSymbol(symbol_id, position);
+}
+
+bool MainWindow::editAnnotation(const QString& annotation_id, const QString& content,
+                                const QString& x_metres, const QString& y_metres,
+                                const QString& rotation_degrees, const QString& scale,
+                                bool visible) {
+    return m_impl->editAnnotation(annotation_id, content, x_metres, y_metres,
+                                  rotation_degrees, scale, visible);
 }
 
 bool MainWindow::deleteAnnotation(const QString& annotation_id) {

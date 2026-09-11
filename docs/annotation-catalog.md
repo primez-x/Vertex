@@ -36,10 +36,12 @@ scaffold. Visible labels and symbol previews are projected into the shared
 desktop vector canvas and persisted output. The desktop Annotations command
 creates template-backed labels and catalog-backed symbols through normal
 Document history; navigator rows and canvas hit testing expose their stable
-child IDs, and deletion is undoable.
+child IDs, deletion is undoable, and the inspector edits label text or either
+annotation kind's position, rotation, scale, and visibility through typed
+history.
 
 This is a bounded semantic and authoring slice for APX-ANNO-001, APX-ANNO-003
-and APX-SYM-001, **not completed parity**. Style editing, font layout,
+and APX-SYM-001, **not completed parity**. Font/color/style editing,
 visibility/override inspectors, polished assets, and production visual QA
 remain open.
 Headless tests check every catalog preview, instance edits and JSON roundtrip,

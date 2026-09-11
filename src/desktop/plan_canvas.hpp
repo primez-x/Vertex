@@ -38,6 +38,9 @@ struct CanvasLabel {
     Vec2 position{};
     QString text;
     bool selected{false};
+    double rotation_radians{};
+    double scale{1.0};
+    double text_height_metres{0.15};
 };
 
 struct BoundaryDraftLabel {

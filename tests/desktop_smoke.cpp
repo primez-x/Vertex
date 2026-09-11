@@ -294,6 +294,18 @@ int main(int argc, char** argv) {
         window.document().snapshot().entities().at("annotations-1"));
     require(annotation_state.labels.size() == 1 && annotation_state.symbols.size() == 1,
             "annotation authoring should update the typed annotation entity");
+    require(window.editAnnotation(label_id, QStringLiteral("Primary bedroom suite"),
+                                  QStringLiteral("3.25"), QStringLiteral("2.5"),
+                                  QStringLiteral("30"), QStringLiteral("1.5"), true),
+            "annotation editing should use the typed command path");
+    annotation_state = decode_annotation_entity(
+        window.document().snapshot().entities().at("annotations-1"));
+    require(annotation_state.labels.front().content == "Primary bedroom suite" &&
+                std::abs(annotation_state.labels.front().placement.position.x - 3.25) < 1e-9 &&
+                std::abs(annotation_state.labels.front().placement.position.y - 2.5) < 1e-9 &&
+                std::abs(annotation_state.labels.front().placement.scale - 1.5) < 1e-9 &&
+                annotation_state.labels.front().visible,
+            "annotation editing should persist text, position, scale, and visibility");
     require(window.selectEntity(label_id), "a persisted annotation child should be selectable");
     require(window.deleteAnnotation(label_id), "annotation deletion should be undoable");
     annotation_state = decode_annotation_entity(

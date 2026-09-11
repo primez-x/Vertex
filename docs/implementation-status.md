@@ -41,9 +41,10 @@ limits, and offline PROJ declarations. These APIs are tested in isolation, and
 visible persisted labels/symbol previews now use the shared desktop vector
 renderer. The desktop Annotations command creates template-backed labels and
 catalog-backed symbols through typed Document history; stable child IDs are
-available in the navigator/canvas for selection and undoable deletion. Style
-inspectors, polished assets, OS sandbox launch, and production integration
-evidence remain open.
+available in the navigator/canvas for selection, undoable deletion, and
+inspector edits to text, position, rotation, scale, and visibility. Font/color
+style inspectors, polished assets, OS sandbox launch, and production
+integration evidence remain open.
 
 The coordinated sheet/view graph now has a versioned `sheet_view_model` entity
 codec at the Document boundary. Document creation, command admission and
