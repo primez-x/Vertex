@@ -123,7 +123,8 @@ add_library(sketch_document src/core/document.cpp src/core/document_digest.cpp s
   src/core/annotation_entity_codec.cpp)
 target_include_directories(sketch_document PUBLIC include)
 target_link_libraries(sketch_document PUBLIC sketch_json PRIVATE sketch_wall_semantics sketch_boundary_receipts
-  sketch_sheet_view_model sketch_annotation_catalog bcrypt)
+  sketch_sheet_view_model sketch_annotation_catalog sketch_assembly_model sketch_model_phases
+  sketch_room_relationships bcrypt)
 add_library(sketch_project_organization src/core/project_organization.cpp)
 target_link_libraries(sketch_project_organization PUBLIC sketch_document)
 add_library(sketch_project_visibility src/core/project_visibility.cpp)

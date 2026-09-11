@@ -1,5 +1,7 @@
 #include "sketch/document.hpp"
 #include "sketch/document_digest.hpp"
+#include "sketch/model_phases.hpp"
+#include "sketch/room_relationships.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <cstdlib>
@@ -413,6 +415,60 @@ void test_current_architecture_types_and_boundary_links_are_structurally_validat
             "architecture reference failures must not advance the revision");
 }
 
+void test_embedded_architectural_models_are_validated_at_document_boundary() {
+    const auto phases = sketch::ModelPhases::create({"wall-1"}, {"wall-1"}, {}).to_json();
+    auto document = Document::create({
+        entity("wall-1", "wall"),
+        entity("phases-1", "model_phases", {{"model", phases}}),
+    });
+    require(document.snapshot().entities().contains("phases-1"),
+            "a valid model phases entity should be admitted by the document");
+
+    const auto revision = document.revision();
+    const auto missing_entity_phases = sketch::ModelPhases::create({"wall-1", "missing-wall"},
+        {"wall-1", "missing-wall"}, {}).to_json();
+    require_error(
+        [&] {
+            document.apply(ApplyEntityChanges{
+                .expected_revision = revision,
+                .entity_changes = {EntityChange::upsert(
+                    entity("phases-1", "model_phases", {{"model", missing_entity_phases}}))},
+            });
+        },
+        DocumentErrorCode::dangling_reference,
+        "model phases must reject entity IDs absent from the document");
+    require(document.revision() == revision,
+            "a rejected model phases reference must not advance the revision");
+
+    require_error(
+        [&] {
+            (void)Document::create({entity("assemblies-1", "assembly_model")});
+        },
+        DocumentErrorCode::invalid_entity,
+        "assembly model entities must carry a validated embedded model");
+
+    const auto relationships = sketch::RoomRelationshipSnapshot::create(
+        {{"room-edge-1", sketch::RoomReferenceKind::room_boundary}}, {}).to_json();
+    auto relationships_document = Document::create({
+        entity("room-edge-1", "room_boundary"),
+        entity("relationships-1", "room_relationships", {{"model", relationships}}),
+    });
+    require(relationships_document.snapshot().entities().contains("relationships-1"),
+            "room relationship snapshots should be admitted when target roles match");
+
+    const auto wrong_role = sketch::RoomRelationshipSnapshot::create(
+        {{"wall-1", sketch::RoomReferenceKind::room_boundary}}, {}).to_json();
+    require_error(
+        [&] {
+            (void)Document::create({
+                entity("wall-1", "wall"),
+                entity("relationships-1", "room_relationships", {{"model", wrong_role}}),
+            });
+        },
+        DocumentErrorCode::invalid_entity,
+        "room relationship references must match their declared semantic role");
+}
+
 void test_command_preview_replays_history_without_mutating_source() {
     auto document = Document::create({entity("site", "property")});
     document.apply(ApplyEntityChanges{.expected_revision = 0,
@@ -527,6 +583,7 @@ int main() {
         test_asset_references_are_structurally_validated_atomically();
         test_persisted_string_bounds_are_enforced_before_mutation();
         test_current_architecture_types_and_boundary_links_are_structurally_validated();
+        test_embedded_architectural_models_are_validated_at_document_boundary();
         test_command_preview_replays_history_without_mutating_source();
         test_command_preview_rejects_invalid_stale_and_read_only_sources();
         test_validated_document_fork_preserves_authority_and_isolation();

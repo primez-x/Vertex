@@ -35,8 +35,11 @@ The next foundation slice adds immutable room-versus-measurement relationship
 validation, existing/demolished/proposed phase state with mutually exclusive
 remodel alternatives, deterministic geometry-operation helpers, and a
 performance-report harness that computes declared percentile thresholds without
-claiming hardware qualification. Their downstream Document, view, schedule,
-sheet, and acceptance integrations remain open.
+claiming hardware qualification. Room relationship, model phase, and assembly
+records are now admitted as typed Document entities: embedded models are decoded
+at the boundary, referenced entities are checked atomically, and role mismatches
+are rejected without advancing history. Desktop editors, view/schedule/sheet
+propagation, and production acceptance evidence remain open.
 
 The current foundation also has a strict typed annotation Document entity and
 semantic annotation/style records with a 216-entry parametric symbol catalog,

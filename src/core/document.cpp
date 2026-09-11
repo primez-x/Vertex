@@ -1,4 +1,7 @@
 #include "sketch/document.hpp"
+#include "sketch/assembly_model.hpp"
+#include "sketch/model_phases.hpp"
+#include "sketch/room_relationships.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/constraint_integrity.hpp"
@@ -179,6 +182,31 @@ void validate_entity(const Entity& entity) {
             document_error(DocumentErrorCode::invalid_entity,
                            std::string("invalid annotation entity: ") + error.what());
         }
+    }
+    const auto validate_embedded_model = [&](auto decoder, std::string_view name) {
+        if (!entity.properties.contains("model")) {
+            document_error(DocumentErrorCode::invalid_entity,
+                           std::string(name) + " entity requires a model object");
+        }
+        try {
+            decoder(entity.properties.at("model"));
+        } catch (const std::exception& error) {
+            document_error(DocumentErrorCode::invalid_entity,
+                           std::string("invalid ") + std::string(name) + " entity: " + error.what());
+        }
+    };
+    if (entity.type == "assembly_model") {
+        validate_embedded_model([](const nlohmann::json& model) {
+            (void)AssemblyModel::from_json(model);
+        }, "assembly model");
+    } else if (entity.type == "model_phases") {
+        validate_embedded_model([](const nlohmann::json& model) {
+            (void)ModelPhases::from_json(model);
+        }, "model phases");
+    } else if (entity.type == "room_relationships") {
+        validate_embedded_model([](const nlohmann::json& model) {
+            (void)RoomRelationshipSnapshot::from_json(model);
+        }, "room relationships");
     }
 }
 
@@ -366,6 +394,56 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
             }
         }
     }
+    for (const auto& [id, entity] : entities) {
+        if (entity.type == "model_phases") {
+            try {
+                const auto model = ModelPhases::from_json(entity.properties.at("model"));
+                for (const auto& member : model.active_state()) {
+                    if (!entities.contains(member.first)) {
+                        document_error(DocumentErrorCode::dangling_reference,
+                                       "model phases " + id + " references missing entity " + member.first);
+                    }
+                }
+                const auto encoded = model.to_json();
+                for (const auto& member : encoded.at("entity_ids")) {
+                    const auto member_id = member.get<std::string>();
+                    if (!entities.contains(member_id)) {
+                        document_error(DocumentErrorCode::dangling_reference,
+                                       "model phases " + id + " references missing entity " + member_id);
+                    }
+                }
+            } catch (const DocumentError&) {
+                throw;
+            } catch (const std::exception& error) {
+                document_error(DocumentErrorCode::invalid_entity,
+                               "invalid model phases entity " + id + ": " + error.what());
+            }
+        } else if (entity.type == "room_relationships") {
+            try {
+                const auto model = RoomRelationshipSnapshot::from_json(entity.properties.at("model"));
+                for (const auto& reference : model.references()) {
+                    const auto target = entities.find(reference.id);
+                    if (target == entities.end()) {
+                        document_error(DocumentErrorCode::dangling_reference,
+                                       "room relationships " + id + " references missing entity " + reference.id);
+                    }
+                    const auto expected = reference.kind == RoomReferenceKind::room_boundary
+                        ? "room_boundary" : reference.kind == RoomReferenceKind::appraisal_measurement_boundary
+                        ? "measurement_boundary" : "wall";
+                    if (target->second.type != expected) {
+                        document_error(DocumentErrorCode::invalid_entity,
+                                       "room relationships " + id + " reference " + reference.id +
+                                       " has type " + target->second.type + ", expected " + expected);
+                    }
+                }
+            } catch (const DocumentError&) {
+                throw;
+            } catch (const std::exception& error) {
+                document_error(DocumentErrorCode::invalid_entity,
+                               "invalid room relationships entity " + id + ": " + error.what());
+            }
+        }
+    }
     std::optional<std::string> unsupported_boundary;
     try { unsupported_boundary = validate_boundary_integrity(entities); }
     catch (const std::exception& error) {
@@ -542,12 +620,13 @@ std::string sha256_hex(std::span<const std::byte> bytes) {
 }
 
 bool is_known_entity_type(std::string_view type) noexcept {
-    static constexpr std::array<std::string_view, 23> known{
+    static constexpr std::array<std::string_view, 26> known{
         "property",             "building", "floor",  "layer", "boundary",
         "measurement_boundary", "room_boundary", "wall", "opening", "room",
         "slab",                 "roof",     "stair",  "column", "beam",
         "label",                "sheet",    "view",   "constraint", "dimension",
-        "sheet_view_model",    "annotation_state", "reference_asset"};
+        "sheet_view_model",    "annotation_state", "reference_asset",
+        "assembly_model",      "model_phases", "room_relationships"};
     return std::find(known.begin(), known.end(), type) != known.end();
 }
 

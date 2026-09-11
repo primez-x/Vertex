@@ -79,6 +79,17 @@ slab:
   holes:[[...segments]], thickness_m, elevation_m
 ```
 
+The same Document boundary also admits the architectural semantic records that
+span workspaces. An `assembly_model` entity stores an
+`sketch.assemblies.v1` model, a `model_phases` entity stores a
+`sketch.model_phases` model, and a `room_relationships` entity stores a
+`schema_version: 1` relationship snapshot. Each record places its typed JSON
+under `properties.model`. Admission decodes the model before mutation, checks
+every referenced entity in the candidate snapshot, and verifies that room
+references target the declared `room_boundary`, `measurement_boundary`, or
+`wall` role. A failed decode or reference check rejects the whole command and
+leaves the prior revision unchanged.
+
 Coordinates and arcs remain metres and radians in the model. QPainter receives
 a calibrated view transform only; pixels and rounded labels never enter the
 document. The inspector edits wall length, classification, height, and
