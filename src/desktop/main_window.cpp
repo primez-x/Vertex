@@ -28,6 +28,7 @@
 #include "sketch/project_visibility.hpp"
 #include "sketch/quantity.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
+#include "sketch/annotation_entity_codec.hpp"
 #include "sketch/visualization/native_model_view.hpp"
 
 #include <QAction>
@@ -1031,6 +1032,7 @@ void ensure_project_scaffold(Document& document) {
                                         false,
                                         json::object()}),
             EntityChange::upsert(make_sheet_view_entity("sheet-view-1", default_sheet_view_model())),
+            EntityChange::upsert(make_annotation_entity("annotations-1", AnnotationState{})),
         },
         .message = "create project scaffold",
     });
@@ -4759,6 +4761,45 @@ private:
                                                 read_number(entity.properties, "thickness_m", 0.08),
                                                 id_from(id) == m_selected_id});
         }
+        // Presentation annotations are kept in a typed entity, but their
+        // child IDs are still rendered as ordinary retained canvas values so
+        // both interactive and persisted output use the same vector path.
+        std::vector<std::string> annotation_child_ids;
+        for (const auto& [id, entity] : snapshot.entities()) {
+            if (entity.type != kAnnotationEntityType) continue;
+            try {
+                const auto state = decode_annotation_entity(entity);
+                const auto catalog = default_symbol_catalog();
+                for (const auto& label : state.labels) {
+                    if (!label.visible) continue;
+                    annotation_child_ids.push_back(label.id);
+                    all_labels.push_back({id_from(label.id), label.placement.position,
+                                          QString::fromStdString(label.content),
+                                          id_from(label.id) == m_selected_id});
+                }
+                for (const auto& symbol : state.symbols) {
+                    if (!symbol.visible) continue;
+                    const auto definition = std::find_if(
+                        catalog.begin(), catalog.end(), [&](const auto& candidate) {
+                            return candidate.id == symbol.symbol_id;
+                        });
+                    if (definition == catalog.end()) {
+                        throw std::invalid_argument("annotation symbol definition is missing");
+                    }
+                    Boundary preview;
+                    for (const auto& stroke : placed_symbol_preview(*definition, symbol.placement)) {
+                        preview.push_back({stroke.start, stroke.end, 0.0});
+                    }
+                    annotation_child_ids.push_back(symbol.id);
+                    all_geometry.push_back({id_from(symbol.id), QStringLiteral("symbol"),
+                                            std::move(preview), 0.0,
+                                            id_from(symbol.id) == m_selected_id});
+                }
+            } catch (const std::exception& error) {
+                append_geometry_error(QStringLiteral("Annotations %1: %2")
+                                           .arg(id_from(id), QString::fromUtf8(error.what())));
+            }
+        }
         // Measurement always retains its plan geometry. Build all three
         // architectural presentations from the same snapshot so persisted
         // sheet viewports can render independently of the active workspace.
@@ -4836,7 +4877,11 @@ private:
         // Every supported entity above has been parsed and validated before
         // the view mask is applied. Hidden invalid geometry therefore keeps
         // the output error visible and cannot become a way around validation.
-        const auto visible_ids = visible_project_entities(snapshot, m_view_filter);
+        auto visible_ids = visible_project_entities(snapshot, m_view_filter);
+        // Annotation children are presentation records nested under the
+        // validated annotation entity rather than standalone Document
+        // entities, so they inherit the parent's fail-open visibility.
+        for (const auto& id : annotation_child_ids) visible_ids.insert(id);
         std::vector<CanvasEntity> geometry;
         std::array<std::vector<CanvasEntity>, 3> visible_view_geometry;
         geometry.reserve(all_geometry.size());

@@ -255,6 +255,9 @@ int main(int argc, char** argv) {
     require(window.document().snapshot().entities().contains("sheet-view-1") &&
                 window.document().snapshot().entities().at("sheet-view-1").type == "sheet_view_model",
             "a new document must include a validated coordinated sheet/view model");
+    require(window.document().snapshot().entities().contains("annotations-1") &&
+                window.document().snapshot().entities().at("annotations-1").type == "annotation_state",
+            "a new document must include a validated annotation state");
     require(window.document().snapshot().entities().contains("floor-1"),
             "a new document must create the floor scaffold before objects");
     const auto seeded_sheet = window.document().snapshot().entities().at("sheet-view-1");

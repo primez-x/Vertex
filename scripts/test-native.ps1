@@ -16,7 +16,7 @@ $qtPrefix = Join-Path $projectRoot '.deps\qt\6.8.3\msvc2022_64'
 $outputDirectory = Join-Path $projectRoot 'artifacts\native-tests'
 New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
 $savedEnvironment = @{}
-foreach ($name in @('PATH','QT_PLUGIN_PATH','QT_QPA_PLATFORM','QT_ENABLE_HIGHDPI_SCALING','QT_SCREEN_SCALE_FACTORS','QT_SCALE_FACTOR')) {
+foreach ($name in @('PATH','QT_PLUGIN_PATH','QT_QPA_PLATFORM','QT_ENABLE_HIGHDPI_SCALING','QT_SCREEN_SCALE_FACTORS','QT_SCALE_FACTOR','SKETCH_TEST_ARTIFACT_DIR')) {
     $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name,'Process')
 }
 try {
@@ -28,6 +28,9 @@ try {
     foreach ($scale in $Scales) {
         $env:QT_SCALE_FACTOR = $scale
         foreach ($scenario in $Scenarios) {
+            $captureDirectory = Join-Path $outputDirectory "captures\$configName-$scale-$scenario"
+            New-Item -ItemType Directory -Force -Path $captureDirectory | Out-Null
+            $env:SKETCH_TEST_ARTIFACT_DIR = $captureDirectory
             $stdout = Join-Path $outputDirectory "$configName-$scale-$scenario.stdout.txt"
             $stderr = Join-Path $outputDirectory "$configName-$scale-$scenario.stderr.txt"
             $elapsed = [System.Diagnostics.Stopwatch]::StartNew()

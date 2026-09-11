@@ -4,6 +4,9 @@
 #include "sketch/visualization/native_model_view.hpp"
 #include "support/noninteractive_errors.hpp"
 #include <QApplication>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QImage>
 #include <QMouseEvent>
 #include <QTemporaryDir>
@@ -26,6 +29,13 @@ Frame capture(sketch::visualization::NativeModelView& view, const QString& path)
     const auto began = std::chrono::steady_clock::now();
     std::cerr << "Native capture started: " << path.section('/', -1).toStdString() << std::endl;
     check(view.exportViewImage(path), "Native framebuffer export failed");
+    const auto artifact_directory = qEnvironmentVariable("SKETCH_TEST_ARTIFACT_DIR");
+    if (!artifact_directory.isEmpty()) {
+        QDir().mkpath(artifact_directory);
+        const auto retained = QDir(artifact_directory).filePath(QFileInfo(path).fileName());
+        QFile::remove(retained);
+        check(QFile::copy(path, retained), "Native framebuffer artifact copy failed");
+    }
     QImage image(path);
     check(!image.isNull(), "Native framebuffer must be a readable image");
     const auto scan_began = std::chrono::steady_clock::now();

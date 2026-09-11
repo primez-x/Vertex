@@ -138,7 +138,8 @@ Automated native checks use `scripts/test-native.ps1` after building the desktop
 test targets. They render through hidden native HWNDs, exercise picking/panning
 and aspect changes, plus geometry edits with undo/redo, at device pixel ratios
 1, 1.5 and 2, and retain logs in
-`artifacts/native-tests`. Qt owns HWND visibility; the OCCT wrapper must not
+`artifacts/native-tests`, including retained PNG captures under the per-run
+`captures/` directories. Qt owns HWND visibility; the OCCT wrapper must not
 map a window that Qt has deliberately hidden. Geometry and architectural-form
 checks run in separate processes at each scale, each with a 15-second deadline.
 The executable requires `--expected-dpr` and checks the actual Qt device pixel

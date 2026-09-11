@@ -29,12 +29,16 @@ coordinates, and excessive collection sizes. IDs are limited to 256 bytes and
 label content to 65,536 bytes. Decode is atomic and returns a new state. The
 catalog is supplied separately; instance JSON does not serialize custom catalog
 definitions. Unknown JSON fields are ignored and are not retained; this is not
-an opaque forward-compatible document envelope.
+an opaque forward-compatible document envelope. The
+`sketch.annotation_entity` Document codec wraps this state in a strict typed
+entity, uses the deterministic catalog, and is included in the new-project
+scaffold. Visible labels and symbol previews are projected into the shared
+desktop vector canvas and persisted output; interactive annotation authoring,
+style inspectors, and production visual qualification remain open.
 
 This is a bounded semantic foundation for APX-ANNO-001, APX-ANNO-003 and
-APX-SYM-001, **not completed parity**. No document persistence integration, GUI
-editing, render/print/export adapter, font layout, selection, hit testing, or
-production visual QA is implemented here. Requirement acceptance still needs
-those integrations and representative save/print/export evidence. Headless tests
-check every catalog preview, instance edits and JSON roundtrip, filtering,
-placement mathematics, deterministic IDs, and malformed-data rejection.
+APX-SYM-001, **not completed parity**. GUI authoring, style editing, font
+layout, selection, hit testing, and production visual QA remain open.
+Headless tests check every catalog preview, instance edits and JSON roundtrip,
+typed Document admission, save/reopen, filtering, placement mathematics,
+deterministic IDs, and malformed-data rejection.

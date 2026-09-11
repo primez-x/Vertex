@@ -1,5 +1,6 @@
 #include "sketch/document.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
+#include "sketch/annotation_entity_codec.hpp"
 #include "sketch/constraint_integrity.hpp"
 #include "sketch/boundary_integrity.hpp"
 
@@ -169,6 +170,14 @@ void validate_entity(const Entity& entity) {
         } catch (const std::exception& error) {
             document_error(DocumentErrorCode::invalid_entity,
                            std::string("invalid sheet/view entity: ") + error.what());
+        }
+    }
+    if (entity.type == kAnnotationEntityType) {
+        try {
+            validate_annotation_entity(entity);
+        } catch (const std::exception& error) {
+            document_error(DocumentErrorCode::invalid_entity,
+                           std::string("invalid annotation entity: ") + error.what());
         }
     }
 }
@@ -532,12 +541,12 @@ std::string sha256_hex(std::span<const std::byte> bytes) {
 }
 
 bool is_known_entity_type(std::string_view type) noexcept {
-    static constexpr std::array<std::string_view, 21> known{
+    static constexpr std::array<std::string_view, 22> known{
         "property",             "building", "floor",  "layer", "boundary",
         "measurement_boundary", "room_boundary", "wall", "opening", "room",
         "slab",                 "roof",     "stair",  "column", "beam",
         "label",                "sheet",    "view",   "constraint", "dimension",
-        "sheet_view_model"};
+        "sheet_view_model",    "annotation_state"};
     return std::find(known.begin(), known.end(), type) != known.end();
 }
 

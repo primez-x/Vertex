@@ -32,13 +32,15 @@ performance-report harness that computes declared percentile thresholds without
 claiming hardware qualification. Their downstream Document, view, schedule,
 sheet, and acceptance integrations remain open.
 
-The current foundation also has semantic annotation and style records with a
-216-entry parametric symbol catalog, coordinated view/sheet records with
+The current foundation also has a strict typed annotation Document entity and
+semantic annotation/style records with a 216-entry parametric symbol catalog,
+coordinated view/sheet records with
 section presentation settings and independent page scales, and a fail-closed
 import-worker policy covering sandbox attestations, hostile inputs, resource
-limits, and offline PROJ declarations. These APIs are tested in isolation;
-polished assets, rendering, OS sandbox launch, and production integration
-evidence remain open.
+limits, and offline PROJ declarations. These APIs are tested in isolation, and
+visible persisted labels/symbol previews now use the shared desktop vector
+renderer; polished assets, interactive authoring, OS sandbox launch, and
+production integration evidence remain open.
 
 The coordinated sheet/view graph now has a versioned `sheet_view_model` entity
 codec at the Document boundary. Document creation, command admission and
