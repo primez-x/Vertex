@@ -296,7 +296,8 @@ bool is_ignored_hierarchy_type(std::string_view type) {
     static constexpr std::string_view ignored[] = {
         "property",          "building",        "floor",       "layer",      "label",
         "sheet",             "view",            "constraint",  "annotation", "dimension",
-        "boundary",          "measurement_boundary", "room_boundary"};
+        "annotation_state",  "sheet_view_model", "boundary", "measurement_boundary",
+        "room_boundary"};
     return std::find(std::begin(ignored), std::end(ignored), type) != std::end(ignored);
 }
 
