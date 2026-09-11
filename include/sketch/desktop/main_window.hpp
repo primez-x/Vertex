@@ -48,6 +48,16 @@ public:
                                          const QString& title,
                                          const QString& author,
                                          const QString& issue_date);
+    // Updates one persisted sheet viewport through typed validation and normal
+    // Document history. Coordinates and dimensions are millimetres; the scale
+    // denominator is the model-to-paper ratio (100 means 1:100).
+    [[nodiscard]] bool editSheetViewport(const QString& sheet_id,
+                                         const QString& viewport_id,
+                                         const QString& x_mm,
+                                         const QString& y_mm,
+                                         const QString& width_mm,
+                                         const QString& height_mm,
+                                         const QString& scale_denominator);
 
     [[nodiscard]] Workspace workspace() const noexcept;
     void setWorkspace(Workspace workspace);

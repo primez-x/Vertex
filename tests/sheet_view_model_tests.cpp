@@ -60,6 +60,19 @@ void coordination_and_isolation() {
                 changed_sheet.sheets().front().viewports == original.sheets().front().viewports,
             "sheet metadata edits must preserve coordinated viewport placement");
     require(original.to_json() == saved, "original sheet snapshot must remain immutable");
+    auto viewport = original.sheets().front().viewports.front();
+    viewport.bounds = {15, 15, 390, 267};
+    viewport.scale_denominator = 75;
+    const auto changed_viewport = original.with_viewport("a", viewport);
+    require(changed_viewport.sheets().front().viewports.front() == viewport,
+            "viewport bounds and scale should update through the typed model");
+    require(changed_viewport.sheets().front().callouts == original.sheets().front().callouts &&
+                changed_viewport.sheets().front().schedules == original.sheets().front().schedules,
+            "viewport edits must preserve sheet references and placements");
+    require(original.to_json() == saved, "original viewport snapshot must remain immutable");
+    rejects([&] { (void)original.with_viewport("unknown", viewport); });
+    viewport.id = "unknown";
+    rejects([&] { (void)original.with_viewport("a", viewport); });
     sheet.id = "unknown";
     rejects([&] { (void)original.with_sheet(sheet); });
     plan.id = "unknown";

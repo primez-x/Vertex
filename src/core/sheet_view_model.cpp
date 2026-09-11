@@ -197,6 +197,19 @@ SheetViewModel SheetViewModel::with_sheet(DrawingSheet replacement) const {
     return create(views_, std::move(changed), schedule_ids_);
 }
 
+SheetViewModel SheetViewModel::with_viewport(const std::string& sheet_id,
+                                             SheetViewport replacement) const {
+    auto changed = sheets_;
+    const auto sheet = std::find_if(changed.begin(), changed.end(),
+        [&](const auto& candidate) { return candidate.id == sheet_id; });
+    require(sheet != changed.end(), "cannot edit viewport on unknown drawing sheet");
+    const auto viewport = std::find_if(sheet->viewports.begin(), sheet->viewports.end(),
+        [&](const auto& candidate) { return candidate.id == replacement.id; });
+    require(viewport != sheet->viewports.end(), "cannot replace unknown sheet viewport");
+    *viewport = std::move(replacement);
+    return create(views_, std::move(changed), schedule_ids_);
+}
+
 nlohmann::json SheetViewModel::to_json() const {
     return {{"schema", "sketch.sheet_view_model"}, {"version", 1}, {"views", views_},
         {"sheets", sheets_}, {"schedule_ids", schedule_ids_}};

@@ -1239,6 +1239,96 @@ public:
         }
     }
 
+    [[nodiscard]] bool editSheetViewport(const QString& sheet_id, const QString& viewport_id,
+                                          const QString& x_mm, const QString& y_mm,
+                                          const QString& width_mm, const QString& height_mm,
+                                          const QString& scale_denominator) {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        try {
+            const auto parse_finite = [](const QString& text, const char* label) {
+                bool ok = false;
+                const auto value = text.trimmed().toDouble(&ok);
+                if (!ok || !std::isfinite(value))
+                    throw std::invalid_argument(std::string(label) + " must be a finite number");
+                return value;
+            };
+            const auto x = parse_finite(x_mm, "Viewport X");
+            const auto y = parse_finite(y_mm, "Viewport Y");
+            const auto width = parse_finite(width_mm, "Viewport width");
+            const auto height = parse_finite(height_mm, "Viewport height");
+            const auto scale = parse_finite(scale_denominator, "Viewport scale");
+            const auto source = authoringSnapshot();
+            const Entity* sheet_entity = nullptr;
+            std::optional<SheetViewModel> model;
+            const auto wanted_sheet = sheet_id.trimmed().toStdString();
+            const auto wanted_viewport = viewport_id.trimmed().toStdString();
+            for (const auto& [id, candidate] : source.entities()) {
+                (void)id;
+                if (candidate.type != kSheetViewEntityType) continue;
+                try {
+                    auto decoded = decode_sheet_view_entity(candidate);
+                    const bool sheet_matches = wanted_sheet.empty() ||
+                        std::any_of(decoded.sheets().begin(), decoded.sheets().end(),
+                            [&](const auto& sheet) { return sheet.id == wanted_sheet; });
+                    if (!sheet_matches) continue;
+                    const auto selected_sheet = wanted_sheet.empty()
+                        ? decoded.sheets().front().id : wanted_sheet;
+                    const auto sheet = std::find_if(decoded.sheets().begin(), decoded.sheets().end(),
+                        [&](const auto& candidate_sheet) { return candidate_sheet.id == selected_sheet; });
+                    if (sheet == decoded.sheets().end()) continue;
+                    const bool viewport_matches = wanted_viewport.empty() ||
+                        std::any_of(sheet->viewports.begin(), sheet->viewports.end(),
+                            [&](const auto& viewport) { return viewport.id == wanted_viewport; });
+                    if (viewport_matches) {
+                        model = std::move(decoded);
+                        sheet_entity = &candidate;
+                        break;
+                    }
+                } catch (const std::exception&) {
+                    if (wanted_sheet.empty() || wanted_viewport.empty()) throw;
+                }
+            }
+            if (sheet_entity == nullptr || !model || model->sheets().empty())
+                throw std::invalid_argument("Drawing sheet viewport was not found");
+            const auto selected_sheet_id = wanted_sheet.empty()
+                ? model->sheets().front().id : wanted_sheet;
+            const auto sheet = std::find_if(model->sheets().begin(), model->sheets().end(),
+                [&](const auto& candidate) { return candidate.id == selected_sheet_id; });
+            if (sheet == model->sheets().end())
+                throw std::invalid_argument("Drawing sheet identity was not found");
+            if (sheet->viewports.empty())
+                throw std::invalid_argument("Drawing sheet has no viewports");
+            const auto selected_viewport_id = wanted_viewport.empty()
+                ? sheet->viewports.front().id : wanted_viewport;
+            const auto viewport = std::find_if(sheet->viewports.begin(), sheet->viewports.end(),
+                [&](const auto& candidate) { return candidate.id == selected_viewport_id; });
+            if (viewport == sheet->viewports.end())
+                throw std::invalid_argument("Sheet viewport identity was not found");
+            auto replacement = *viewport;
+            replacement.bounds = {x, y, width, height};
+            replacement.scale_denominator = scale;
+            const auto updated_model = model->with_viewport(selected_sheet_id,
+                                                              std::move(replacement));
+            auto updated_entity = *sheet_entity;
+            updated_entity.properties = make_sheet_view_entity(
+                updated_entity.id, updated_model).properties;
+            const ApplyEntityChanges command{
+                source.revision(), {EntityChange::upsert(std::move(updated_entity))}, {},
+                "Edit drawing sheet viewport"};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Viewport edit: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     [[nodiscard]] Workspace workspace() const noexcept { return m_workspace; }
 
     void setWorkspace(Workspace workspace) {
@@ -2658,6 +2748,56 @@ public:
         }
     }
 
+    void showViewportSettings() {
+        const auto context = captureModalContext();
+        const auto source = authoringSnapshot();
+        const auto sheet_entity = std::find_if(source.entities().begin(), source.entities().end(),
+            [](const auto& entry) { return entry.second.type == kSheetViewEntityType; });
+        if (sheet_entity == source.entities().end()) {
+            setError(QStringLiteral("No typed drawing sheet is available."));
+            return;
+        }
+        try {
+            const auto model = decode_sheet_view_entity(sheet_entity->second);
+            if (model.sheets().empty() || model.sheets().front().viewports.empty())
+                throw std::invalid_argument("no sheet viewport is defined");
+            const auto& sheet = model.sheets().front();
+            const auto& viewport = sheet.viewports.front();
+            const auto number = [](double value) {
+                return QString::number(value, 'g', 12);
+            };
+            QDialog dialog(owner);
+            dialog.setWindowTitle(QStringLiteral("Viewport settings"));
+            dialog.setModal(true);
+            auto* form = new QFormLayout(&dialog);
+            auto* x = new QLineEdit(number(viewport.bounds.x_mm), &dialog);
+            auto* y = new QLineEdit(number(viewport.bounds.y_mm), &dialog);
+            auto* width = new QLineEdit(number(viewport.bounds.width_mm), &dialog);
+            auto* height = new QLineEdit(number(viewport.bounds.height_mm), &dialog);
+            auto* scale = new QLineEdit(number(viewport.scale_denominator), &dialog);
+            x->setObjectName(QStringLiteral("viewportX"));
+            y->setObjectName(QStringLiteral("viewportY"));
+            width->setObjectName(QStringLiteral("viewportWidth"));
+            height->setObjectName(QStringLiteral("viewportHeight"));
+            scale->setObjectName(QStringLiteral("viewportScale"));
+            form->addRow(QStringLiteral("X (mm)"), x);
+            form->addRow(QStringLiteral("Y (mm)"), y);
+            form->addRow(QStringLiteral("Width (mm)"), width);
+            form->addRow(QStringLiteral("Height (mm)"), height);
+            form->addRow(QStringLiteral("Scale denominator"), scale);
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+            form->addRow(buttons);
+            QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+            QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+            if (dialog.exec() != QDialog::Accepted || !modalContextUnchanged(context)) return;
+            (void)editSheetViewport(QString::fromStdString(sheet.id),
+                                    QString::fromStdString(viewport.id), x->text(), y->text(),
+                                    width->text(), height->text(), scale->text());
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Viewport settings: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
     void showCommandPalette() {
         QDialog dialog(owner);
         dialog.setWindowTitle(QStringLiteral("Command search"));
@@ -2690,6 +2830,7 @@ public:
             {QStringLiteral("Architectural workspace"), [this] { setWorkspace(Workspace::architectural); }},
             {QStringLiteral("Open schedules"), [this] { showSchedules(); }},
             {QStringLiteral("Edit drawing sheet settings"), [this] { showSheetSettings(); }},
+            {QStringLiteral("Edit sheet viewport settings"), [this] { showViewportSettings(); }},
             {QStringLiteral("Select tool"), [this] { setTool(CanvasTool::select); }},
             {QStringLiteral("Draw measurement boundary"), [this] { setTool(CanvasTool::boundary); }},
             {QStringLiteral("Define area before drawing"),
@@ -3415,6 +3556,7 @@ private:
         m_palette_action = toolbar->addAction(QStringLiteral("Commands"));
         m_schedule_action = toolbar->addAction(QStringLiteral("Schedules"));
         m_sheet_action = toolbar->addAction(QStringLiteral("Sheet settings"));
+        m_viewport_action = toolbar->addAction(QStringLiteral("Viewport settings"));
         m_about_action = toolbar->addAction(QStringLiteral("About"));
         toolbar->addSeparator();
         auto* theme_menu = new QMenu(owner);
@@ -3488,6 +3630,8 @@ private:
                          [this] { showSchedules(); });
         QObject::connect(m_sheet_action, &QAction::triggered, owner,
                          [this] { showSheetSettings(); });
+        QObject::connect(m_viewport_action, &QAction::triggered, owner,
+                         [this] { showViewportSettings(); });
         QObject::connect(m_about_action, &QAction::triggered, owner, [this] { showAbout(); });
         QObject::connect(m_unitsCombo, &QComboBox::currentIndexChanged, owner,
                          [this](int index) { setMetricUnits(index == 1); });
@@ -5421,6 +5565,7 @@ private:
     QAction* m_palette_action{};
     QAction* m_schedule_action{};
     QAction* m_sheet_action{};
+    QAction* m_viewport_action{};
     QAction* m_about_action{};
 };
 
@@ -5450,6 +5595,14 @@ bool MainWindow::editSheetMetadata(const QString& sheet_id, const QString& numbe
                                    const QString& project, const QString& title,
                                    const QString& author, const QString& issue_date) {
     return m_impl->editSheetMetadata(sheet_id, number, project, title, author, issue_date);
+}
+
+bool MainWindow::editSheetViewport(const QString& sheet_id, const QString& viewport_id,
+                                   const QString& x_mm, const QString& y_mm,
+                                   const QString& width_mm, const QString& height_mm,
+                                   const QString& scale_denominator) {
+    return m_impl->editSheetViewport(sheet_id, viewport_id, x_mm, y_mm, width_mm, height_mm,
+                                     scale_denominator);
 }
 
 Workspace MainWindow::workspace() const noexcept {

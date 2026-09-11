@@ -584,6 +584,19 @@ int main(int argc, char** argv) {
             "sheet metadata edit must persist in the canonical sheet/view entity");
     require(window.undoCommand() && window.redoCommand(),
             "sheet metadata edit must participate in normal document history");
+    require(window.editSheetViewport(QStringLiteral("sheet-1"), QStringLiteral("viewport-plan"),
+                                     QStringLiteral("15"), QStringLiteral("15"),
+                                     QStringLiteral("390"), QStringLiteral("267"),
+                                     QStringLiteral("75")),
+            "sheet viewport must commit through the typed Document command path");
+    const auto edited_viewport_entity = window.document().snapshot().entities().at("sheet-view-1");
+    require(edited_viewport_entity.properties.at("model").at("sheets").at(0)
+                    .at("viewports").at(0).at("bounds").at("width_mm") == 390.0 &&
+                edited_viewport_entity.properties.at("model").at("sheets").at(0)
+                    .at("viewports").at(0).at("scale_denominator") == 75.0,
+            "sheet viewport edit must persist bounds and independent scale");
+    require(window.undoCommand() && window.redoCommand(),
+            "sheet viewport edit must participate in normal document history");
     const auto revision_before_pdf = window.document().revision();
     require(window.exportDraftPdf(pdf_path_qstring), "draft PDF export should succeed locally");
     require(std::filesystem::file_size(pdf_path) > 0, "draft PDF should be nonempty");
