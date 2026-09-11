@@ -175,8 +175,10 @@ SheetViewModel default_sheet_view_model() {
     sheet.width_mm = 420.0;
     sheet.height_mm = 297.0;
     sheet.title_block = {"Untitled property", "Default plan", "", ""};
-    sheet.viewports.push_back({"viewport-plan", "view-plan", {10.0, 10.0, 400.0, 277.0}, 100.0});
-    sheet.schedules.push_back({"schedule-doors", "doors", {260.0, 220.0, 150.0, 65.0}});
+    sheet.viewports.push_back({"viewport-plan", "view-plan", {10.0, 10.0, 400.0, 100.0}, 100.0});
+    sheet.viewports.push_back({"viewport-elevation", "view-elevation", {10.0, 120.0, 195.0, 90.0}, 100.0});
+    sheet.viewports.push_back({"viewport-section", "view-section", {215.0, 120.0, 195.0, 90.0}, 100.0});
+    sheet.schedules.push_back({"schedule-doors", "doors", {10.0, 220.0, 190.0, 45.0}});
     return SheetViewModel::create({std::move(section_view), std::move(plan_view),
                                    std::move(elevation_view)}, {std::move(sheet)},
                                   {"doors", "windows", "rooms", "materials"});

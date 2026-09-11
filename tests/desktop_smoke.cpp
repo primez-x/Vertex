@@ -267,6 +267,18 @@ int main(int argc, char** argv) {
     require(has_view("view-plan", "plan") && has_view("view-elevation", "elevation") &&
                 has_view("view-section", "section"),
             "a new document must persist coordinated plan, elevation and section views");
+    const auto& seeded_viewports = seeded_sheet.properties.at("model")
+                                       .at("sheets").at(0).at("viewports");
+    const auto has_viewport = [&](const char* id, const char* view_id) {
+        return std::any_of(seeded_viewports.begin(), seeded_viewports.end(),
+                           [&](const auto& viewport) {
+                               return viewport.at("id") == id && viewport.at("view_id") == view_id;
+                           });
+    };
+    require(has_viewport("viewport-plan", "view-plan") &&
+                has_viewport("viewport-elevation", "view-elevation") &&
+                has_viewport("viewport-section", "view-section"),
+            "a new sheet must persist a viewport for each coordinated view");
     require(window.editArchitecturalViewPresentation(
                 QStringLiteral("view-plan"), QStringLiteral("1.5"), QStringLiteral("80"),
                 QStringLiteral("0.7"), QStringLiteral("0.25"), true,
@@ -617,10 +629,15 @@ int main(int argc, char** argv) {
                                      QStringLiteral("75")),
             "sheet viewport must commit through the typed Document command path");
     const auto edited_viewport_entity = window.document().snapshot().entities().at("sheet-view-1");
-    require(edited_viewport_entity.properties.at("model").at("sheets").at(0)
-                    .at("viewports").at(0).at("bounds").at("width_mm") == 390.0 &&
-                edited_viewport_entity.properties.at("model").at("sheets").at(0)
-                    .at("viewports").at(0).at("scale_denominator") == 75.0,
+    const auto& edited_viewports = edited_viewport_entity.properties.at("model")
+                                       .at("sheets").at(0).at("viewports");
+    const auto edited_viewport = std::find_if(
+        edited_viewports.begin(), edited_viewports.end(), [](const auto& viewport) {
+            return viewport.at("id") == "viewport-plan";
+        });
+    require(edited_viewport != edited_viewports.end() &&
+                edited_viewport->at("bounds").at("width_mm") == 390.0 &&
+                edited_viewport->at("scale_denominator") == 75.0,
             "sheet viewport edit must persist bounds and independent scale");
     require(window.undoCommand() && window.redoCommand(),
             "sheet viewport edit must participate in normal document history");

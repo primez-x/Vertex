@@ -5,8 +5,8 @@ ARCH-VIEW-001/002, ARCH-SHEET-001 and IO-OUTPUT-002. The
 `sheet_view_model` Document entity codec persists this graph through the
 versioned project format and reuses the same validation at create/load/command
 boundaries. New desktop projects start with validated plan, elevation and
-section views, a sheet, title block, and independently scaled viewport in that
-entity. Draft PDF, SVG, and print output now consumes the persisted sheet
+section views, a sheet with plan/elevation/section viewports, title block, and
+independently scaled viewports in that entity. Draft PDF, SVG, and print output now consumes the persisted sheet
 dimensions, viewport bounds/scales, title block and view-specific vector
 geometry derived from the same immutable document snapshot, regardless of the
 active workspace tab. Desktop sheet title-block/number and viewport
