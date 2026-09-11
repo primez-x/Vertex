@@ -285,7 +285,7 @@
         "include/sketch/output_fingerprint.hpp",
         "src/core/output_fingerprint.cpp"
       ],
-      "implementation_note": "Core digest/manifest/currentness checks are implemented and tested; output pipeline wiring and production acceptance remain open. Serialized identity excludes private entity and asset payloads."
+      "implementation_note": "Core digest/manifest/currentness checks are implemented and tested. PDF, SVG, and native 3D image exports now emit adjacent fingerprint manifests; stale-output blocking, print-job receipts, reproducibility fixtures, and production acceptance remain open. Serialized identity excludes private entity and asset payloads."
     },
     {
       "id": "CORE-DOC-005",
@@ -2202,7 +2202,7 @@
         "src/desktop/main_window.cpp",
         "tests/desktop_smoke.cpp"
       ],
-      "implementation_note": "Preview, draft PDF, draft SVG, and print use one canvas geometry renderer with a visible draft stamp; fingerprint/currentness wiring and authoritative output fixtures remain open."
+      "implementation_note": "Preview, draft PDF, draft SVG, and print use one canvas geometry renderer with a visible draft stamp. PDF, SVG, and native 3D image exports emit adjacent fingerprint manifests; currentness blocking, printer receipts, and authoritative output fixtures remain open."
     },
     {
       "id": "IO-OUTPUT-002",

@@ -12,6 +12,7 @@
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/architectural_document_adapter.hpp"
+#include "sketch/output_fingerprint.hpp"
 #include "sketch/calculations.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/project_workspace.hpp"
@@ -34,6 +35,7 @@
 #include <QCheckBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
@@ -53,6 +55,7 @@
 #include <QPdfWriter>
 #include <QPrintPreviewDialog>
 #include <QPrinter>
+#include <QSaveFile>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
@@ -87,6 +90,7 @@
 #include <numeric>
 #include <optional>
 #include <sstream>
+#include <span>
 #include <string>
 #include <string_view>
 #include <stdexcept>
@@ -107,6 +111,30 @@ QString id_from(std::string value) {
 std::string new_id(std::string_view prefix) {
     return std::string(prefix) + "-" +
            QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+}
+
+std::string digest_text(std::string_view value) {
+    const auto* bytes = reinterpret_cast<const std::byte*>(value.data());
+    return sha256_hex(std::span<const std::byte>(bytes, value.size()));
+}
+
+FingerprintResource fingerprint_resource(std::string id, std::string material,
+                                         json metadata = json::object()) {
+    return FingerprintResource{std::move(id), digest_text(material), std::move(metadata)};
+}
+
+FingerprintDependencyGroup fingerprint_resources(std::vector<FingerprintResource> resources) {
+    FingerprintDependencyGroup group;
+    group.state = FingerprintGroupState::resources;
+    group.resources = std::move(resources);
+    return group;
+}
+
+FingerprintDependencyGroup fingerprint_not_applicable(std::string reason) {
+    FingerprintDependencyGroup group;
+    group.state = FingerprintGroupState::not_applicable;
+    group.reason = std::move(reason);
+    return group;
 }
 
 json point_json(Vec2 point) {
@@ -1875,6 +1903,72 @@ public:
         refreshCanvases();
     }
 
+    [[nodiscard]] std::string currentExecutableDigest() const {
+        QFile executable(QCoreApplication::applicationFilePath());
+        if (!executable.open(QIODevice::ReadOnly)) {
+            throw std::runtime_error("the running application binary cannot be read for output fingerprinting");
+        }
+        const auto bytes = executable.readAll();
+        if (bytes.isEmpty()) {
+            throw std::runtime_error("the running application binary is empty");
+        }
+        const auto* bytes_data = reinterpret_cast<const std::byte*>(bytes.constData());
+        return sha256_hex(std::span<const std::byte>(bytes_data,
+                                                     static_cast<std::size_t>(bytes.size())));
+    }
+
+    [[nodiscard]] OutputFingerprintInputs outputFingerprintInputs() const {
+        const auto build_digest = currentExecutableDigest();
+        OutputFingerprintInputs inputs;
+        inputs.profiles = fingerprint_not_applicable(
+            "Calculation profiles are stored in the document head.");
+        inputs.fonts = fingerprint_not_applicable(
+            "Draft output uses the selected local Qt font without embedding font bytes.");
+        json view_descriptor{{"page_size", m_pageSizeCombo ? m_pageSizeCombo->currentText().toStdString()
+                                                               : std::string("A4")},
+                             {"hidden_floor_ids", std::vector<std::string>(
+                                  m_view_filter.hidden_floor_ids.begin(), m_view_filter.hidden_floor_ids.end())},
+                             {"hidden_layer_ids", std::vector<std::string>(
+                                  m_view_filter.hidden_layer_ids.begin(), m_view_filter.hidden_layer_ids.end())}};
+        inputs.views = fingerprint_resources({fingerprint_resource(
+            "plan-canvas-view", view_descriptor.dump(),
+            json{{"renderer", "PlanCanvas"}, {"descriptor_version", 1}})});
+        inputs.crs = fingerprint_not_applicable(
+            "Output is expressed in local project coordinates; no georeference is active.");
+        inputs.processing_components.state = FingerprintGroupState::resources;
+        for (const auto role : {std::string("kernel"), std::string("solver"),
+                                std::string("renderer"), std::string("adapters")}) {
+            FingerprintRole role_resource;
+            role_resource.state = FingerprintGroupState::resources;
+            role_resource.resources.push_back(fingerprint_resource(
+                "linked-" + role, build_digest, json{{"role", role}, {"identity", "application-build"}}));
+            inputs.processing_components.roles.emplace(role, std::move(role_resource));
+        }
+        inputs.application_build = fingerprint_resources({FingerprintResource{
+            "property-studio-executable", build_digest,
+            json{{"kind", "Windows-native-executable"}}}});
+        return inputs;
+    }
+
+    bool writeOutputFingerprint(const QString& output_path, const DocumentSnapshot& snapshot,
+                                QString output_kind) {
+        const auto fingerprint = make_output_fingerprint(snapshot, outputFingerprintInputs());
+        const auto payload = json{{"schema", "property-studio.output-fingerprint.v1"},
+                                  {"output_kind", output_kind.toStdString()},
+                                  {"output_file", QFileInfo(output_path).fileName().toStdString()},
+                                  {"fingerprint", serialize_output_fingerprint(fingerprint)}}.dump(2);
+        QSaveFile sidecar(output_path + QStringLiteral(".fingerprint.json"));
+        if (!sidecar.open(QIODevice::WriteOnly) ||
+            sidecar.write(QByteArray::fromStdString(payload)) !=
+                static_cast<qint64>(payload.size()) ||
+            !sidecar.commit()) {
+            setError(QStringLiteral("%1 export fingerprint could not be written beside the output.")
+                         .arg(output_kind));
+            return false;
+        }
+        return true;
+    }
+
     bool exportDraftPdf(const QString& path) {
         refreshOutput();
         if (!m_plan_geometry_error.isEmpty()) {
@@ -1904,6 +1998,9 @@ public:
             painter.end();
             if (!QFileInfo::exists(path) || QFileInfo(path).size() <= 0) {
                 setError(QStringLiteral("PDF export did not produce a file."));
+                return false;
+            }
+            if (!writeOutputFingerprint(path, m_document->snapshot(), QStringLiteral("pdf"))) {
                 return false;
             }
             clearError();
@@ -1951,6 +2048,9 @@ public:
                 setError(QStringLiteral("SVG export did not produce a file."));
                 return false;
             }
+            if (!writeOutputFingerprint(path, m_document->snapshot(), QStringLiteral("svg"))) {
+                return false;
+            }
             clearError();
             owner->statusBar()->showMessage(QStringLiteral("Draft SVG exported locally."), 5000);
             return true;
@@ -1990,6 +2090,15 @@ public:
         }
         if (!QFileInfo::exists(path) || QFileInfo(path).size() <= 0) {
             setError(QStringLiteral("Native OCCT 3D export did not produce an image."));
+            return false;
+        }
+        try {
+            if (!writeOutputFingerprint(path, m_document->snapshot(), QStringLiteral("native-3d-image"))) {
+                return false;
+            }
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Native OCCT 3D output fingerprint failed: %1")
+                         .arg(QString::fromUtf8(error.what())));
             return false;
         }
         clearError();

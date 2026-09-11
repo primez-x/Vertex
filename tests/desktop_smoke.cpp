@@ -528,13 +528,29 @@ int main(int argc, char** argv) {
     const auto revision_before_pdf = window.document().revision();
     require(window.exportDraftPdf(pdf_path_qstring), "draft PDF export should succeed locally");
     require(std::filesystem::file_size(pdf_path) > 0, "draft PDF should be nonempty");
+    const auto pdf_fingerprint_path = std::filesystem::path(pdf_path.wstring() + L".fingerprint.json");
+    require(std::filesystem::file_size(pdf_fingerprint_path) > 0,
+            "draft PDF must have an adjacent output fingerprint");
+    QFile pdf_fingerprint(QString::fromStdWString(pdf_fingerprint_path.wstring()));
+    require(pdf_fingerprint.open(QIODevice::ReadOnly | QIODevice::Text),
+            "draft PDF fingerprint should be readable");
+    const auto pdf_fingerprint_json = nlohmann::json::parse(pdf_fingerprint.readAll().toStdString());
+    require(pdf_fingerprint_json.at("output_kind") == "pdf" &&
+                pdf_fingerprint_json.at("fingerprint").at("digest_sha256").is_string(),
+            "draft PDF fingerprint must identify the output and digest");
+    pdf_fingerprint.close();
     require(window.exportDraftSvg(svg_path_qstring), "draft SVG export should succeed locally");
     require(std::filesystem::file_size(svg_path) > 0, "draft SVG should be nonempty");
+    const auto svg_fingerprint_path = std::filesystem::path(svg_path.wstring() + L".fingerprint.json");
+    require(std::filesystem::file_size(svg_fingerprint_path) > 0,
+            "draft SVG must have an adjacent output fingerprint");
     auto* page_size = window.findChild<QComboBox*>(QStringLiteral("outputPageSize"));
     require(page_size && page_size->count() == 5, "output sheet selector should expose five page sizes");
     page_size->setCurrentText(QStringLiteral("A3"));
     require(window.exportDraftPdf(pdf_path_qstring), "A3 draft PDF export should succeed locally");
     require(std::filesystem::file_size(pdf_path) > 0, "A3 draft PDF should be nonempty");
+    require(std::filesystem::file_size(pdf_fingerprint_path) > 0,
+            "A3 draft PDF must refresh its adjacent output fingerprint");
     require(window.document().revision() == revision_before_pdf,
             "draft output must not mutate the semantic document");
     require(window.saveProjectAs(project_path_qstring),

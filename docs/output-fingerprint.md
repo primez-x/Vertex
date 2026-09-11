@@ -3,8 +3,10 @@
 `OutputFingerprint` binds a derived output to an immutable document head and
 to the dependency identities used to produce it. The implementation is in
 `include/sketch/output_fingerprint.hpp` and
-`src/core/output_fingerprint.cpp`. The desktop preview, draft PDF, draft SVG,
-print, and native 3D pipelines still need to call it at their output boundaries.
+`src/core/output_fingerprint.cpp`. Draft PDF, draft SVG, and native 3D image
+exports now write an adjacent `<output>.fingerprint.json` manifest generated
+from the same document snapshot and view state used for rendering. Print
+preview remains transient and is still pending a printer-job receipt.
 
 Version 1 hashes a compact canonical JSON manifest. Its serialized document
 summary contains only:
@@ -70,7 +72,9 @@ nested manifest shape, all dependency states, role coverage, resource hashes,
 and the envelope digest. It cannot re-hash asset bytes because the bytes are
 deliberately absent; that guarantee is established by
 `make_output_fingerprint` and by currentness checks against a live snapshot.
-The desktop now exposes a draft SVG export through the same `PlanCanvas`
-vector renderer used by preview, draft PDF, and print. SVG is stamped as a
-draft and is intentionally not treated as authoritative until fingerprint and
-currentness checks are wired at the output boundary.
+The desktop exposes a draft SVG export through the same `PlanCanvas` vector
+renderer used by preview, draft PDF, and print. SVG is stamped as a draft and
+its sidecar records the document head, page/filter view descriptor, linked
+processing roles, and running Windows executable digest. Sidecar currentness
+can be checked with `check_output_fingerprint_current`; the output remains a
+draft until production output qualification and printer evidence are complete.

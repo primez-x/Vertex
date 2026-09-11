@@ -220,11 +220,12 @@ behavior and the scaled capture runner.
 
 PDF export and print preview use the canvas's shared QPainter geometry renderer
 with an independent fit-to-content paper transform and a white background.
-They stamp `DRAFT — internal checkpoint` because the authoritative output
-fingerprint pipeline, sheets, profiles, and complete output qualification are
-not integrated yet. An active filter instead stamps `DRAFT — VIEW FILTER ACTIVE`
-and explains that view filters do not change totals. Draft output does not
-mutate the document.
+They stamp `DRAFT — internal checkpoint` while sheets, profiles, and complete
+output qualification remain open. PDF, SVG, and native 3D image exports write
+an adjacent output-fingerprint manifest covering the document head, page/filter
+view descriptor, linked processing roles, and running Windows executable. An
+active filter instead stamps `DRAFT — VIEW FILTER ACTIVE` and explains that
+view filters do not change totals. Draft output does not mutate the document.
 
 The executable supports:
 
