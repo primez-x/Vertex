@@ -1,12 +1,14 @@
 #pragma once
 
 #include "sketch/document.hpp"
+#include "sketch/recovery_ledger.hpp"
 
 #include <filesystem>
 #include <functional>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace sketch {
@@ -45,6 +47,30 @@ struct LoadResult {
     std::string file_sha256;
 };
 
+class ProjectArchiveSnapshot final {
+public:
+    ProjectArchiveSnapshot(DocumentSnapshot document, RecoveryLedger recovery, ArchiveRole role)
+        : document_(std::move(document)), recovery_(std::move(recovery)), role_(role) {}
+    [[nodiscard]] const DocumentSnapshot& document() const noexcept { return document_; }
+    [[nodiscard]] const RecoveryLedger& recovery() const noexcept { return recovery_; }
+    [[nodiscard]] ArchiveRole role() const noexcept { return role_; }
+private:
+    DocumentSnapshot document_;
+    RecoveryLedger recovery_;
+    ArchiveRole role_;
+};
+struct ArchiveLoadResult {
+    // Opaque results deliberately have no forkable document snapshot. Their
+    // ledger and exact source fingerprint remain available for opaque handling.
+    std::optional<ProjectArchiveSnapshot> archive;
+    RecoveryLedgerDecodeResult recovery;
+    std::string file_sha256;
+    // No editable Document is returned, especially for an opaque ledger.
+    [[nodiscard]] bool supported() const noexcept { return archive.has_value() && recovery.supported(); }
+    [[nodiscard]] bool opaque() const noexcept { return recovery.opaque(); }
+    [[nodiscard]] bool editable() const noexcept { return supported() && archive->document().is_editable(); }
+};
+
 enum class StorageErrorCode {
     io_error,
     sqlite_error,
@@ -76,6 +102,7 @@ public:
     // anywhere in retained history require v2. Qualified persisted
     // boundary_authoring envelopes require v3.
     static constexpr std::uint32_t format_version = 3;
+    static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;
     static constexpr std::uint64_t maximum_revision_count = 10'000;
@@ -89,6 +116,10 @@ public:
                                           const DocumentSnapshot& snapshot,
                                           const SaveOptions& options = {});
     [[nodiscard]] static LoadResult load(const std::filesystem::path& source);
+    // Recovery-bearing v4 only. A document-only path never drops a ledger.
+    [[nodiscard]] static SaveReceipt save_archive(const std::filesystem::path& destination,
+        const ProjectArchiveSnapshot&, const SaveOptions& options = {});
+    [[nodiscard]] static ArchiveLoadResult load_archive(const std::filesystem::path& source, ArchiveRole role);
     [[nodiscard]] static std::string file_sha256(const std::filesystem::path& source);
 };
 

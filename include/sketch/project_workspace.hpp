@@ -13,6 +13,9 @@
 namespace sketch {
 namespace detail { struct WorkspaceDocumentState; }
 
+class ProjectArchiveSnapshot;
+struct DecodedRecoveryLedger;
+
 class ProjectWorkspace;
 
 enum class WorkspaceLifecycleKind { document_edit, boundary_activate, boundary_discard, boundary_finish, undo, redo, clear_redo };
@@ -65,6 +68,7 @@ public:
     [[nodiscard]] const WorkspaceNavigationState& navigation() const noexcept { return navigation_; }
     [[nodiscard]] const std::vector<WorkspaceLifecycleEvent>& lifecycle_history() const noexcept { return lifecycle_history_; }
     [[nodiscard]] const WorkspaceRetiredBoundaries& retired_boundaries() const noexcept { return retired_; }
+    [[nodiscard]] const nlohmann::json& history_extensions() const noexcept { return history_extensions_; }
 
 private:
     friend class ProjectWorkspace;
@@ -72,7 +76,7 @@ private:
         const std::optional<BoundaryActiveRecovery>&, const std::string&,
         std::uint64_t epoch, std::uint64_t edited_generation, std::uint64_t checkpoint_generation,
         const BoundaryAuthoringResourcePolicy&, const WorkspaceNavigationState&,
-        const std::vector<WorkspaceLifecycleEvent>&, const WorkspaceRetiredBoundaries&);
+        const std::vector<WorkspaceLifecycleEvent>&, const WorkspaceRetiredBoundaries&, const nlohmann::json&);
 
     DocumentSnapshot document_;
     WorkspaceDocumentHistory history_;
@@ -85,6 +89,7 @@ private:
     WorkspaceNavigationState navigation_;
     std::vector<WorkspaceLifecycleEvent> lifecycle_history_;
     WorkspaceRetiredBoundaries retired_;
+    nlohmann::json history_extensions_;
 };
 
 // A sealed, instance-bound candidate. Returned snapshots are detached values.
@@ -109,7 +114,7 @@ private:
 };
 
 // Document, active-checkpoint and lifecycle navigation authority.
-// Persisted-ledger validation and storage coordination remain pending.
+// Persisted restoration grants no filesystem ownership or save acknowledgement.
 // Confined to its owning application thread: member calls must not overlap.
 // Storage workers receive detached snapshots, never the workspace itself.
 class ProjectWorkspace final {
@@ -121,6 +126,12 @@ public:
     ProjectWorkspace(ProjectWorkspace&&) = delete;
     ProjectWorkspace& operator=(ProjectWorkspace&&) = delete;
     ~ProjectWorkspace();
+
+    // Revalidates the archive and supplied decoded aggregate before restoration.
+    // Archives do not persist instance identity or resource policy: restoration
+    // creates a fresh workspace identity and uses the default resource policy.
+    [[nodiscard]] static std::unique_ptr<ProjectWorkspace> restore_archive(
+        const ProjectArchiveSnapshot&, const DecodedRecoveryLedger&);
 
     [[nodiscard]] const std::string& identity() const noexcept;
     [[nodiscard]] std::uint64_t epoch() const noexcept;
@@ -155,6 +166,12 @@ public:
     Revision commit(PreparedWorkspaceEdit& edit);
 
 private:
+    [[nodiscard]] static std::unique_ptr<ProjectWorkspace> restore_components(
+        const DocumentSnapshot&, const WorkspaceDocumentHistory&,
+        const std::optional<BoundaryActiveRecovery>&, const WorkspaceNavigationState&,
+        const std::vector<WorkspaceLifecycleEvent>&, const WorkspaceRetiredBoundaries&,
+        const nlohmann::json&, std::uint64_t epoch, std::uint64_t edited_generation,
+        std::uint64_t checkpoint_generation);
     [[nodiscard]] std::unique_ptr<PreparedWorkspaceEdit::State> prepare_state() const;
     [[nodiscard]] PreparedWorkspaceEdit prepare_document_edit(const Command&) const;
     [[nodiscard]] PreparedWorkspaceEdit prepare_navigation(bool redo) const;

@@ -31,7 +31,13 @@ cross-record epoch/content/checkpoint agreement. Unknown kinds or versions and
 role mismatches preserve the complete opaque ledger. Combined borrowed document,
 wrapper and payload budgets precede copies and replay. See
 `workspace-history-format.md` and `recovery-ledger.md` for the value contracts.
-SQLite v4 persistence and archive loading remain pending.
+Internal SQLite v4 archive save/load now preserves the complete ledger and
+optional saved marker. It shares the locked atomic-publication/backup path,
+validates an aggregate digest, rejects duplicate recovery JSON keys and bounds
+wire data before DOM construction and hashing. Opaque results expose no reusable
+document snapshot. Desktop open/save now uses guarded v4 restoration and save
+acknowledgement; workspace-command migration, autosave and restart restoration
+remain open.
 
 Workspace navigation now orders document commands, session activation and
 discard and finish in one in-memory history. Undo/redo restores exact archived drafts,
@@ -48,7 +54,8 @@ be submitted as new activations to bypass restoration. Finish publishes one
 Document revision; undo retains non-finalizable retired input, and redo restores
 the original geometry and dimension IDs. Multiple retired inputs survive branches
 and activation navigation. Persisted event replay validation and aggregate resource
-admission are implemented as core APIs; SQLite archive integration remains pending.
+admission are implemented as core APIs; the recovery-aware SQLite v4 archive
+routes now persist and reopen the ledger.
 The final extension regression also passes in both builds: integer and floating
 extension representations are compared canonically, so archival sharing cannot
 substitute `1` for `1.0`. The five affected tests were rerun after this fix.
@@ -58,18 +65,22 @@ lifecycle histories, navigation, identity, epoch, content generations and the
 actual resource policy. Current document/draft values are detached; archival
 inputs are shared immutable values. Captures survive edits and owner destruction.
 Capture grants no save acknowledgement or filesystem ownership authority.
-Persisted counters, desktop routing, background I/O and save watermarks remain
-to be connected.
+Persisted counters are restored by the core v4 archive route. Desktop
+workspace-command routing, background I/O and save watermarks remain to be
+connected.
 
-The v24m full integrated checkpoint passes 70/70 tests in Debug (78.13 seconds)
-and Release (15.81 seconds). All 220
-recorded source inputs remained unchanged across those builds/tests, and 136
+The v24r full integrated checkpoint passes 74/74 tests in Debug (94.81 seconds)
+and Release (20.37 seconds). All 227
+recorded source inputs remained unchanged across those builds/tests, and 144
 executable hashes are recorded. Recovery checks cover
 all 18 action kinds, both modes, phases, construction, receipt encoding,
 commits, exact checkpoint/history behavior, source bindings, active/recovery-copy
 records, historical baseline fences, sealed workspace document publication and
 active-checkpoint publication, global activation/discard navigation and
-pointer/semantic generation separation.
+pointer/semantic generation separation. The checkpoint also covers desktop
+v4 open/save, ledger preservation, failed-open isolation and fail-closed direct
+edits to restored recovery documents.
+The source and executable manifest is `artifacts/reviews/integrated-v24r-provenance.json`.
 The earlier v24d checkpoint also passed eighteen offscreen boundary
 canvas/input/workflow checks at DPR 1, 1.5 and 2 across both builds.
 These are local incremental builds and regression checks, not reproducible-build
@@ -77,9 +88,12 @@ or production performance certification.
 
 The workspace publication API passed independent source review. It has private
 candidate documents, instance/epoch/full-source checks, detached previews and
-no mutable Document escape. It is not yet wired into the desktop or a persisted
-recovery archive. The record codecs and baseline validator are prerequisites; aggregate
-v4 persistence, autosave and restart recovery remain open.
+no mutable Document escape. Core archive restoration now validates and detaches
+the decoded aggregate before installing it in a fresh workspace. The guarded
+desktop open path now uses this API. Internal aggregate v4 persistence and the
+save acknowledgement boundary are implemented and used by the guarded desktop
+save path; full workspace-command migration, live queueing, autosave and
+restart recovery remain open.
 Explicit Revise Input is implemented in memory: canonical replay regenerates
 IDs, preserves local history/counter floors and opaque extensions, and records
 the original retired namespace and finish event on a fresh activation bound to

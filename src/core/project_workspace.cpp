@@ -16,6 +16,7 @@ struct WorkspaceDocumentState {
     WorkspaceNavigationState navigation;
     std::vector<WorkspaceLifecycleEvent> lifecycle;
     WorkspaceRetiredBoundaries retired;
+    nlohmann::json history_extensions = nlohmann::json::object();
 };
 }
 
@@ -104,10 +105,12 @@ ProjectWorkspaceSnapshot::ProjectWorkspaceSnapshot(
     const std::optional<BoundaryActiveRecovery>& active, const std::string& identity,
     std::uint64_t epoch, std::uint64_t edited_generation, std::uint64_t checkpoint_generation,
     const BoundaryAuthoringResourcePolicy& policy, const WorkspaceNavigationState& navigation,
-    const std::vector<WorkspaceLifecycleEvent>& lifecycle, const WorkspaceRetiredBoundaries& retired)
+    const std::vector<WorkspaceLifecycleEvent>& lifecycle, const WorkspaceRetiredBoundaries& retired,
+    const nlohmann::json& history_extensions)
     : document_(document), history_(history), active_(active), identity_(identity),
       epoch_(epoch), edited_generation_(edited_generation), checkpoint_generation_(checkpoint_generation),
-      resource_policy_(policy), navigation_(navigation), lifecycle_history_(lifecycle), retired_(retired) {}
+      resource_policy_(policy), navigation_(navigation), lifecycle_history_(lifecycle), retired_(retired),
+      history_extensions_(history_extensions) {}
 
 PreparedWorkspaceEdit::PreparedWorkspaceEdit(std::unique_ptr<State> state) noexcept
     : state_(std::move(state)) {}
@@ -133,6 +136,27 @@ ProjectWorkspace::ProjectWorkspace(const DocumentSnapshot& source, BoundaryAutho
 
 ProjectWorkspace::~ProjectWorkspace() = default;
 
+std::unique_ptr<ProjectWorkspace> ProjectWorkspace::restore_components(
+    const DocumentSnapshot& document, const WorkspaceDocumentHistory& history,
+    const std::optional<BoundaryActiveRecovery>& active, const WorkspaceNavigationState& navigation,
+    const std::vector<WorkspaceLifecycleEvent>& lifecycle, const WorkspaceRetiredBoundaries& retired,
+    const nlohmann::json& history_extensions, std::uint64_t epoch,
+    std::uint64_t edited_generation, std::uint64_t checkpoint_generation) {
+    // All validation precedes state installation. Document::fork recomputes
+    // editability from retained content and preserves existing saved markers.
+    auto restored = std::make_unique<ProjectWorkspace>(document);
+    restored->state_->history = history;
+    restored->state_->active = active;
+    restored->state_->navigation = navigation;
+    restored->state_->lifecycle = lifecycle;
+    restored->state_->retired = retired;
+    restored->state_->history_extensions = history_extensions;
+    restored->epoch_ = epoch;
+    restored->edited_generation_ = edited_generation;
+    restored->checkpoint_generation_ = checkpoint_generation;
+    return restored;
+}
+
 const std::string& ProjectWorkspace::identity() const noexcept { return identity_; }
 std::uint64_t ProjectWorkspace::epoch() const noexcept { return epoch_; }
 std::uint64_t ProjectWorkspace::edited_generation() const noexcept { return edited_generation_; }
@@ -141,7 +165,7 @@ DocumentSnapshot ProjectWorkspace::snapshot() const { return state_->document->s
 ProjectWorkspaceSnapshot ProjectWorkspace::capture() const {
     return ProjectWorkspaceSnapshot(state_->document->snapshot(), state_->history, state_->active,
         identity_, epoch_, edited_generation_, checkpoint_generation_, resource_policy_,
-        state_->navigation, state_->lifecycle, state_->retired);
+        state_->navigation, state_->lifecycle, state_->retired, state_->history_extensions);
 }
 WorkspaceDocumentHistory ProjectWorkspace::document_history() const { return state_->history; }
 std::optional<BoundaryActiveRecovery> ProjectWorkspace::active_boundary() const { return state_->active; }
@@ -180,6 +204,7 @@ std::unique_ptr<PreparedWorkspaceEdit::State> ProjectWorkspace::prepare_state() 
     state->candidate->navigation = state_->navigation;
     state->candidate->lifecycle = state_->lifecycle;
     state->candidate->retired = state_->retired;
+    state->candidate->history_extensions = state_->history_extensions;
     return state;
 }
 

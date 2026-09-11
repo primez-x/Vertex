@@ -3,9 +3,11 @@
 This document defines the implementation and reference contract for durable
 unfinished boundary recovery in Property Studio.
 
-The contract below is planned behavior. It does not claim that the planned
-APIs, recovery ledger, storage format v4, or desktop recovery path are
-implemented, and it does not certify production or Apex parity.
+The contract below includes both implemented core APIs and planned integration.
+The recovery ledger and internal v4 archive save/load routes are implemented;
+desktop open/save now uses guarded recovery-aware paths, while autosave,
+restart recovery, live workspace editing and ownership integration remain open.
+This does not certify production or Apex parity.
 
 ## Current boundary
 
@@ -13,8 +15,11 @@ The current application already has shared Draw First and Define First
 authoring, construction receipts, sealed commits, and storage format v3. Its
 working document is still an in-memory state rather than a durable live
 journal. Unfinished sessions are currently kept in memory and reported as
-unsaved. The current v3 format and its existing five-table archive remain
-unchanged until the recovery implementation is delivered.
+unsaved. The existing v1–3 document-only routes remain unchanged. Separate
+recovery-aware v4 routes are documented in `project-archive-v4.md`; the desktop
+now opens supported ordinary v4 archives and preserves their ledger on save.
+Direct edits to a restored recovery document fail closed until all desktop
+mutations use workspace commands.
 
 The recovery work is staged as three dependency packages:
 
@@ -45,10 +50,12 @@ The recovery work is staged as three dependency packages:
    `Document::fork(snapshot)` is also implemented through the existing full
    restore validator; focused tests preserve saved markers, both history stacks,
    source isolation and read-only protection while rejecting malformed history.
-2. **A2, required and not integrated:** the aggregate archive, storage,
-   history, workspace coordinator, roles, copying, and Windows ownership
-   services. The dedicated-thread ownership broker passes its configured
-   Debug/Release tests, but independent review found required shutdown,
+2. **A2, in integration:** the aggregate archive, storage, history and
+   workspace coordinator core. Internal v4 archive save/load and ledger
+   validation are implemented and pass focused Debug/Release checks. Windows
+   ownership, role promotion and opaque-copy services remain integration work.
+   The dedicated-thread ownership broker passes its configured Debug/Release
+   tests, but independent review found required shutdown,
    mutex release/close retry, and abandonment-observation repairs. Real
    Windows subprocess regressions pass in Debug/Release against the frozen
    v1 source, covering real contention, namespace independence, partial
@@ -60,8 +67,10 @@ The recovery work is staged as three dependency packages:
    Both are repaired with focused regressions; the shutdown regression failed
    before the fix and passes afterward. Path/FILE_ID resolution and publication
    integration remain required.
-3. **B, required and not implemented:** desktop mutation routing, save/open,
-   autosave, restart recovery, Save As, shutdown, and recovery UI.
+3. **B, in integration:** guarded desktop save/open and Save As paths now use
+   the v4 archive and acknowledgement boundaries. Full workspace-command
+   mutation routing, autosave, restart recovery, shutdown and recovery UI
+   remain required.
 
 These are implementation checkpoints inside the existing full production
 scope. They do not reduce that scope or turn the current v3 tests into durable
@@ -102,7 +111,7 @@ Focused Debug/Release tests cover publication, rejected tickets, preview
 isolation, exact Document navigation, read-only enforcement and invalid-history
 construction (`artifacts/reviews/workspace-publication-*-v1-tests.log`). This
 API now also has the in-memory activation/discard navigation described below;
-persisted-ledger validation and desktop migration remain pending. Publication's source-reviewed swap
+persisted-ledger validation is now implemented; desktop migration remains pending. Publication's source-reviewed swap
 boundary is not a claim of universal allocation-failure safety throughout
 Document construction and destruction.
 
@@ -280,7 +289,8 @@ repairing context. Focused Debug/Release tests cover save-marker invariance,
 foreign identity, changed content under the same revision, undo lineage,
 missing/mismatched contexts and read-only content. This value is provenance,
 not authorization to commit; the workspace must enforce it when finalizing.
-Archive encoding, explicit rebind and desktop enforcement remain pending.
+Archive encoding and aggregate ledger validation are implemented. Explicit
+rebind and desktop enforcement remain pending.
 
 ## Recovery archive and storage format v4
 
@@ -374,21 +384,21 @@ source and extension round trips, strict fields and discriminators, numeric
 limits, opaque future schemas, and whole-record resource rejection. A separate
 integration test captures a real document binding, round-trips it with a draft,
 and checks save-stable versus stale-source behavior. Evidence is retained in
-`artifacts/reviews/active-recovery-*-v*-tests.log`. This is a record codec, not
-evidence of a saved or restart-recoverable aggregate project.
+`artifacts/reviews/active-recovery-*-v*-tests.log`. The codec is now exercised by
+the recovery-aware v4 aggregate archive, while desktop restart recovery remains
+an integration gate.
 
 This record codec does not establish archive validity by itself: record
 uniqueness, workspace-history relationships, archive role and the aggregate
 digest require enclosing validation. The internal `recovery_ledger.hpp`
 validator now implements uniqueness, relationships, role handling, document
-anchors and shared-counter agreement; aggregate disk hashing is still pending.
-See `recovery-ledger.md` for its contract and remaining storage work. Source freshness is
-checked separately against the target document; stale records remain readable.
-The enclosing workspace must reserve record and ledger overhead when admitting
-live edits. A checkpoint that fits its standalone budget does not by itself
-prove that the combined archive fits its budget. Ledger decoding now performs
-combined admission, but live-edit admission and storage publication still need
-to use that boundary; this integration gate remains open.
+anchors, shared-counter agreement and aggregate resource admission. The
+recovery-aware v4 archive persists that validated ledger with a canonical
+aggregate digest through the locked atomic publication path. See
+`recovery-ledger.md` and `project-archive-v4.md` for the wire contracts. Source
+freshness is checked separately against the target document; stale records
+remain readable. Live-workspace admission, long-lived ownership and desktop
+routing still need to use these core boundaries.
 
 Known record envelopes validate positive integer schema and replay versions,
 required fields, field types, references, and resource limits. Missing,
@@ -410,9 +420,9 @@ The current document-only writer now checks the SQLite user-version marker
 through the hash-verified destination handle before making a backup or
 publishing. Versions 4 and higher are refused even with a correct expected
 hash. A regression demonstrates the previous overwrite and checks unchanged
-bytes and absence of staging/backup remnants after rejection. This is the
-protective boundary only; aggregate v4 read/write and lifecycle validation
-remain to be implemented.
+bytes and absence of staging/backup remnants after rejection. The separate
+aggregate v4 routes now perform complete ledger validation and atomic
+publication, while this document-only protection remains in force.
 
 ## One history authority and lifecycle operations
 
@@ -477,15 +487,16 @@ sharing and no-op classification. Regressions reject conflating integer `1`
 with floating `1.0`, both in the active envelope and nested checkpoint
 extensions, and verify exact restoration after discard.
 
-Implementation detail for the pending lifecycle ledger: baseline command
+Implementation detail for the lifecycle ledger: baseline command
 references must distinguish an original command revision from a physical
 Document snapshot target. Undo/redo append revisions, so `source_revision` may
 name a navigation snapshot rather than the original command. The implemented
 `derive_workspace_baseline_navigation` replays the validated retained prefix
 and pairs stable command identities with both physical baseline stacks. Tests
 include imported redo, repeated navigation, later branches, named revisions and
-ordinary edits whose messages are "undo" or "redo". This helper does not yet
-implement global lifecycle navigation.
+ordinary edits whose messages are "undo" or "redo". The persisted
+workspace-history codec and core archive-restoration API now carry this
+validated lifecycle state; desktop workspace-command routing remains pending.
 
 The runtime lifecycle history uses typed baseline-command references and post-fence
 event IDs. First session activation is an undoable lifecycle operation; otherwise
@@ -794,15 +805,15 @@ depends on it.
 
 | Area | Required evidence | Current status at this checkpoint |
 | --- | --- | --- |
-| Session state and replay | Exact encode/decode/re-encode; both modes and every phase; all receipt constructors and point construction; semantic no-op, open-chain, pending-dimension, classification-only, fully-undone, reset, cancel, pointer-only, redo-tail, branch, and abandoned-counter cases. Faults leave state unchanged. | A1 is underway. Durable checkpoint/replay is not delivered; unfinished work remains memory-only. |
+| Session state and replay | Exact encode/decode/re-encode; both modes and every phase; all receipt constructors and point construction; semantic no-op, open-chain, pending-dimension, classification-only, fully-undone, reset, cancel, pointer-only, redo-tail, branch, and abandoned-counter cases. Faults leave state unchanged. | Core checkpoint/replay and aggregate ledger codecs pass focused Debug/Release tests; desktop durable recovery and full parity certification remain open. |
 | Counter and identity safety | Four next-ID values reject zero, overflow, decrease, collision, namespace mismatch, and inconsistent allocation; valid forward gaps survive; high-water values dominate the entire retained timeline. | Required; not a production-certified result. |
 | Source binding | Save-marker invariance; exact document ID/revision/digest/context; forged same-ID history rejection; undo/redo staleness; explicit fresh-ID rebind and provenance. | The source-digest helper and focused Debug/Release save/reopen checks pass; A1 remains underway for session codec and recovery integration. |
-| V4 archive and compatibility | Exact STRICT table and metadata markers; nonempty-ledger rule; canonical digest; duplicate/missing/empty/malformed/oversize records; unknown kind/version preservation; document-only v4 refusal; current-reader round trip; actual retained-v3-reader rejection; v1-v3 fixtures unchanged. | A2 is not implemented; storage remains v3. |
-| Workspace history | Baseline with both Document undo and redo stacks; fence crossings; event IDs/order/links; finish and discard inline events; mixed edit/discard/undo/redo; nonempty redo on open; branch retention; no orphan payloads. | A2 is not implemented. |
-| Mutation and commit authority | All mutation enters through workspace commands; const/snapshot access only; stale identity/epoch/full-digest candidate rejection; one generation per successful operation; opaque/read-only archives reject every edit path. | A2 and B are not implemented. |
-| Anchors and asynchronous saves | Nullable explicit-save anchor; named-source preservation; untitled never-saved recovery; separate epoch/edit/checkpoint generations; stale completion remains a valid old file but cannot acknowledge current state; queued barrier, cleanup failure, shutdown, and retry cases. | A2/B are not implemented. |
-| Ownership and roles | Case/path/hardlink/DOS/extended aliases; volume plus `FILE_ID`; replacement identity; missing Save As; restart/crash lock behavior; recovery aliases; ordinary versus recovery role; promotion and exact-byte opaque copies. | Existing ProjectStore has scoped path/CAS publication; long-lived workspace ownership and role handling are required. |
-| Desktop recovery | Both tabs share one session; source/context replacement invalidates candidates; autosave/reopen/finish/discard; recovery UI; pointer-only flush; process interruption; no transient output leakage. | B is not implemented; current desktop reports unfinished drafts as unsaved in memory. |
+| V4 archive and compatibility | Exact STRICT table and metadata markers; nonempty-ledger rule; canonical digest; duplicate/missing/empty/malformed/oversize records; unknown kind/version preservation; document-only v4 refusal; current-reader round trip; actual retained-v3-reader rejection; v1-v3 fixtures unchanged. | Internal v4 save/load and regression tests implemented; frozen pre-v4 reader rejects both roles. Exact-byte opaque copying and ownership/desktop integration remain open, so A2 is not complete. |
+| Workspace history | Baseline with both Document undo and redo stacks; fence crossings; event IDs/order/links; finish and discard inline events; mixed edit/discard/undo/redo; nonempty redo on open; branch retention; no orphan payloads. | Core history codec, aggregate validation and `ProjectWorkspace::restore_archive` pass focused Debug/Release tests; desktop routing remains open. |
+| Mutation and commit authority | All mutation enters through workspace commands; const/snapshot access only; stale identity/epoch/full-digest candidate rejection; one generation per successful operation; opaque/read-only archives reject every edit path. | Core workspace CAS and read-only/opaque boundaries are implemented; desktop migration is open. |
+| Anchors and asynchronous saves | Nullable explicit-save anchor; named-source preservation; untitled never-saved recovery; separate epoch/edit/checkpoint generations; stale completion remains a valid old file but cannot acknowledge current state; queued barrier, cleanup failure, shutdown, and retry cases. | Core save-acknowledgement ticket consumption and stale-result handling pass focused Debug/Release tests; asynchronous queue, autosave and desktop integration remain open. |
+| Ownership and roles | Case/path/hardlink/DOS/extended aliases; volume plus `FILE_ID`; replacement identity; missing Save As; restart/crash lock behavior; recovery aliases; ordinary versus recovery role; promotion and exact-byte opaque copies. | v4 role validation, CAS publication and archive identity checks are implemented; long-lived Windows ownership, promotion and exact-byte opaque copies remain open. |
+| Desktop recovery | Both tabs share one session; source/context replacement invalidates candidates; autosave/reopen/finish/discard; recovery UI; pointer-only flush; process interruption; no transient output leakage. | Guarded v4 open/save and failed-open preservation pass focused Debug/Release tests; workspace-command migration, recovery UI, autosave and restart recovery remain open. |
 | Real qualification gates | Physical power interruption, filesystem/filter-driver and disk-full behavior, multiprocess alias qualification, large-history replay/save/input latency, backup growth, clean-machine packaging, and full requirement audit. | Open production gates; model agreement and focused tests are insufficient. |
 
 ## Remaining production gates
@@ -811,7 +822,7 @@ Durable recovery is only one part of the full production goal. Exact Apex
 keyboard and dimension-placement acceptance fixtures, receipt-preserving move,
 dimension-edit, reversal, split, and merge derivations, source-edge
 provenance, and complete desktop workflow parity remain required. The current
-internal v23 construction and storage evidence does not establish those
+v24q internal construction and storage evidence does not establish those
 requirements.
 
 The recovery implementation also needs measured large-history copy/replay and

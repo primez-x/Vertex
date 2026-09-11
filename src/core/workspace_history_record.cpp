@@ -249,7 +249,7 @@ void preflight_wire_history(const DocumentSnapshot& document, const Json& envelo
 
 WorkspaceHistoryRecord capture_workspace_history_record(const ProjectWorkspaceSnapshot& snapshot) {
     return {snapshot.document_history(), snapshot.lifecycle_history(), snapshot.navigation(), snapshot.retired_boundaries(),
-        snapshot.epoch(), snapshot.edited_generation(), snapshot.checkpoint_generation(), Json::object()};
+        snapshot.epoch(), snapshot.edited_generation(), snapshot.checkpoint_generation(), snapshot.history_extensions()};
 }
 
 void validate_workspace_history_record(const DocumentSnapshot& document, const WorkspaceHistoryRecord& record,

@@ -25,6 +25,11 @@ struct RecoveryLedgerDecodeResult {
 // Nonempty recovery ledgers only. Unknown kinds/versions and role mismatches
 // retain the complete ledger without granting editable state. This validates
 // borrowed values; disk schema, hashing and publication belong to ProjectStore.
+// Generic admission only: no copies, schema interpretation or canonical replay.
+[[nodiscard]] WorkspaceRecoveryUsage preflight_recovery_ledger(
+    const DocumentSnapshot&, const RecoveryLedger&,
+    const BoundaryAuthoringResourcePolicy& = boundary_authoring_default_resource_policy,
+    const WorkspaceRecoveryLimits& = {});
 [[nodiscard]] RecoveryLedgerDecodeResult decode_recovery_ledger(
     const DocumentSnapshot&, const RecoveryLedger&, ArchiveRole,
     const BoundaryAuthoringResourcePolicy& = boundary_authoring_default_resource_policy,

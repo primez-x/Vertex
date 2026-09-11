@@ -3,8 +3,9 @@
 `recovery_ledger.hpp` defines the aggregate validation boundary for the three
 recovery record kinds. A ledger is a nonempty sequence of records containing
 `record_id`, `record_kind` and a JSON envelope. IDs are unique; each known kind
-occurs at most once. This is an internal value API, not a SQLite v4 load or save
-implementation.
+occurs at most once. This internal value API is used by the separate SQLite v4
+archive routes documented in `project-archive-v4.md`; core workspace restoration
+revalidates and detaches the decoded aggregate before installation.
 
 An active boundary requires workspace history. A recovery-copy record also
 requires history, and its workspace epoch, edited generation and checkpoint
@@ -27,7 +28,8 @@ charged as well as payloads. For recognized records, raw action counts, closure
 work and lifecycle-event counts are checked before invoking individual codecs.
 The limits are conservative admission estimates, not memory or timing promises.
 
-SQLite schema checks, sorted-row logical hashing, locked atomic publication,
-exact-byte copying of unfamiliar archives, and desktop save/reopen integration
-remain separate work. The current document-only store still supports formats
-1–3 and must continue refusing recovery-bearing destinations.
+SQLite schema checks, sorted-row logical hashing and locked atomic publication
+are implemented in the archive store. Exact-byte copying of unfamiliar archives,
+full workspace-command desktop editing, autosave and restart recovery remain
+separate work. The document-only store still supports formats 1–3 and refuses
+recovery-bearing destinations.

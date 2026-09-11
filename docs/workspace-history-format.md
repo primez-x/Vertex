@@ -1,8 +1,10 @@
 # Workspace history record, version 1
 
-This describes the internal `workspace_history` record codec. It is not yet a
-supported project archive: SQLite v4 storage, reopening, save acknowledgement
-and desktop recovery remain separate integration work.
+This describes the internal `workspace_history` record codec, now used by the
+recovery-aware SQLite v4 save/load routes. Core workspace restoration consumes
+this record after aggregate revalidation, and the guarded desktop save path uses
+the acknowledgement boundary. Live asynchronous saving, autosave and restart
+recovery remain separate integration work.
 
 The JSON envelope has exactly these fields: `version`, `replay_version`,
 `document_history`, `events`, `navigation`, `retired`, `workspace_epoch`,

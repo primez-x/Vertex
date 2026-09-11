@@ -203,7 +203,7 @@ All three versions use the following application tables:
 | `named_revisions` | Stable name-to-revision mappings, including retained branches |
 
 All application tables are SQLite `STRICT` tables with primary and foreign keys. A standalone
-file must have `saved_revision == head_revision`, use SQLite `DELETE` journal mode, and have no
+v1–3 file must have `saved_revision == head_revision`, use SQLite `DELETE` journal mode, and have no
 `-journal`, `-wal`, or `-shm` sidecar. Load verifies the exact metadata-key set, `user_version`,
 table columns, primary keys, foreign keys, and `STRICT` flags. It rejects missing or additional
 schema objects, invalid column types, non-contiguous or impossible history transitions, a
@@ -225,6 +225,11 @@ SQLite text characters. IDs allow ASCII letters, digits, dash, underscore, dot, 
 paths must name ordinary files under an existing, non-reparse-point parent directory. Windows
 device names and alternate data streams are rejected; ambiguous trailing-dot or trailing-space
 names are rejected when creating a destination.
+
+The separate recovery-aware v4 format adds a recovery-record table and preserves
+the optional captured saved revision. Its complete schema, digest and opaque
+load contract are documented in [project-archive-v4.md](project-archive-v4.md).
+Document-only APIs refuse v4 rather than discard its recovery ledger.
 
 ## Save and replacement protocol
 

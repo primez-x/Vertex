@@ -106,12 +106,10 @@ void validation_work(const WorkspaceRecoveryUsage& usage, const WorkspaceRecover
 }
 } // namespace
 
-RecoveryLedgerDecodeResult decode_recovery_ledger(const DocumentSnapshot& document,
-    const RecoveryLedger& ledger, ArchiveRole role, const BoundaryAuthoringResourcePolicy& policy,
+WorkspaceRecoveryUsage preflight_recovery_ledger(const DocumentSnapshot& document,
+    const RecoveryLedger& ledger, const BoundaryAuthoringResourcePolicy& policy,
     const WorkspaceRecoveryLimits& limits) {
-    try {
         if (ledger.empty()) invalid("ledger must not be empty");
-        if (role != ArchiveRole::ordinary && role != ArchiveRole::recovery_copy) invalid("unknown archive role");
         auto usage = preflight_workspace_recovery(document, {}, {}, {}, {}, {}, policy, limits);
         auto wire_policy = policy;
         wire_policy.max_encoded_bytes = limits.max_encoded_bytes;
@@ -136,6 +134,15 @@ RecoveryLedgerDecodeResult decode_recovery_ledger(const DocumentSnapshot& docume
             add(usage.string_bytes, wire.string_bytes, limits.max_string_bytes);
         }
         validation_work(usage, limits);
+        return usage;
+}
+
+RecoveryLedgerDecodeResult decode_recovery_ledger(const DocumentSnapshot& document,
+    const RecoveryLedger& ledger, ArchiveRole role, const BoundaryAuthoringResourcePolicy& policy,
+    const WorkspaceRecoveryLimits& limits) {
+    try {
+        if (role != ArchiveRole::ordinary && role != ArchiveRole::recovery_copy) invalid("unknown archive role");
+        auto usage = preflight_recovery_ledger(document, ledger, policy, limits);
         std::set<std::string_view> ids;
         const Json *active = nullptr, *history = nullptr, *copy = nullptr;
         bool unsupported = false;

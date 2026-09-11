@@ -17,8 +17,9 @@ enum class Workspace {
     architectural,
 };
 
-// Reusable native workspace shell. The application owns one Document and both
-// workspace tabs render and edit that same semantic model.
+// Reusable native workspace shell. Both tabs render and edit the same Document.
+// Recovery archives retain a separate workspace authority for lossless save;
+// direct Document edits to those archives cannot yet be saved through this shell.
 class MainWindow final : public QMainWindow {
 public:
     explicit MainWindow(std::shared_ptr<Document> document = {}, QWidget* parent = nullptr);

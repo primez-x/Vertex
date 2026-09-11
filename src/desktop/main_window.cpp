@@ -13,6 +13,8 @@
 #include "sketch/document_digest.hpp"
 #include "sketch/calculations.hpp"
 #include "sketch/project_store.hpp"
+#include "sketch/project_workspace.hpp"
+#include "sketch/workspace_save_coordinator.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/project_visibility.hpp"
 #include "sketch/quantity.hpp"
@@ -895,6 +897,7 @@ public:
             m_document = std::make_shared<Document>(Document::create());
         }
         ensure_project_scaffold(*m_document);
+        m_project_workspace = std::make_unique<ProjectWorkspace>(m_document->snapshot());
         initializeDrawingContext();
         buildUi();
         refresh();
@@ -1670,7 +1673,10 @@ public:
         try {
             auto candidate = std::make_shared<Document>(Document::create());
             ensure_project_scaffold(*candidate);
+            auto candidate_workspace = std::make_unique<ProjectWorkspace>(candidate->snapshot());
             m_document = std::move(candidate);
+            m_project_workspace = std::move(candidate_workspace);
+            m_recovery_ledger.clear();
             m_view_filter = {};
             initializeDrawingContext();
             m_file_path.clear();
@@ -1698,15 +1704,34 @@ public:
             return false;
         }
         try {
-            auto loaded = ProjectStore::load(filesystem_path(path));
-            auto candidate =
-                std::make_shared<Document>(std::move(loaded.document));
             const auto candidate_path = filesystem_path(path);
+            std::shared_ptr<Document> candidate;
+            std::unique_ptr<ProjectWorkspace> candidate_workspace;
+            RecoveryLedger candidate_ledger;
+            std::string candidate_sha256;
+            try {
+                auto loaded = ProjectStore::load(candidate_path);
+                candidate = std::make_shared<Document>(std::move(loaded.document));
+                candidate_workspace = std::make_unique<ProjectWorkspace>(candidate->snapshot());
+                candidate_sha256 = std::move(loaded.file_sha256);
+            } catch (const StorageError& error) {
+                if (error.code() != StorageErrorCode::unsupported_format) throw;
+                auto loaded = ProjectStore::load_archive(candidate_path, ArchiveRole::ordinary);
+                if (!loaded.supported())
+                    throw std::runtime_error("This recovery archive is unsupported and cannot be opened for editing.");
+                candidate_workspace = ProjectWorkspace::restore_archive(
+                    *loaded.archive, *loaded.recovery.decoded);
+                candidate = std::make_shared<Document>(Document::fork(candidate_workspace->snapshot()));
+                candidate_ledger = loaded.archive->recovery();
+                candidate_sha256 = std::move(loaded.file_sha256);
+            }
             m_document = std::move(candidate);
+            m_project_workspace = std::move(candidate_workspace);
+            m_recovery_ledger = std::move(candidate_ledger);
             m_view_filter = {};
             m_file_path = candidate_path;
             initializeDrawingContext();
-            m_file_sha256 = loaded.file_sha256;
+            m_file_sha256 = std::move(candidate_sha256);
             m_selected_id.clear();
             clearPreview();
             m_tool = CanvasTool::select;
@@ -2209,6 +2234,22 @@ private:
         }
         try {
             const auto snapshot = m_document->snapshot();
+            const auto source_digest = document_authoring_source_digest_v1(snapshot);
+            if (source_digest != document_authoring_source_digest_v1(m_project_workspace->snapshot())) {
+                // The public mutable Document API remains supported for legacy projects.
+                // Until desktop edits use workspace commands, never silently discard a
+                // restored recovery ledger to accommodate an out-of-band document edit.
+                if (!m_recovery_ledger.empty())
+                    throw std::runtime_error("The recovered document changed outside its workspace. Saving is blocked to preserve recovery history.");
+                m_project_workspace = std::make_unique<ProjectWorkspace>(snapshot);
+            }
+            const auto workspace_snapshot = m_project_workspace->capture();
+            const auto source_document = m_document;
+            const auto path_utf8 = path.generic_u8string();
+            const SavePublicationBinding binding{
+                m_save_owner_token, ArchiveRole::ordinary, make_stable_id(),
+                std::string(reinterpret_cast<const char*>(path_utf8.data()), path_utf8.size())};
+            auto ticket = WorkspaceSaveCoordinator::capture(workspace_snapshot, binding, source_digest);
             SaveOptions options;
             if (current_destination && !m_file_sha256.empty()) {
                 options.expected_destination_sha256 = m_file_sha256;
@@ -2218,7 +2259,29 @@ private:
             } else if (!current_destination && path == m_file_path && !m_file_sha256.empty()) {
                 options.expected_destination_sha256 = m_file_sha256;
             }
-            const auto receipt = ProjectStore::save(path, snapshot, options);
+            // Recovery archives preserve an optional saved marker. Prepare a
+            // detached snapshot with the current revision marked saved so a
+            // successful save remains clean after a close/reopen cycle. The
+            // live marker is changed only after acknowledgement succeeds.
+            std::optional<Document> persisted_document;
+            DocumentSnapshot persisted_snapshot = snapshot;
+            if (!m_recovery_ledger.empty()) {
+                persisted_document.emplace(Document::fork(snapshot));
+                persisted_document->mark_saved(snapshot.revision());
+                persisted_snapshot = persisted_document->snapshot();
+            }
+            const auto receipt = m_recovery_ledger.empty()
+                ? ProjectStore::save(path, persisted_snapshot, options)
+                : ProjectStore::save_archive(path,
+                    ProjectArchiveSnapshot(persisted_snapshot, m_recovery_ledger, ArchiveRole::ordinary), options);
+            const auto acknowledgement = WorkspaceSaveCoordinator::accept(ticket, receipt,
+                m_project_workspace->capture(), binding,
+                document_authoring_source_digest_v1(m_document->snapshot()));
+            if (!acknowledgement.acknowledged() || source_document != m_document ||
+                document_snapshot_digest(snapshot) != document_snapshot_digest(m_document->snapshot())) {
+                setError(QStringLiteral("The file was saved, but the current workspace changed and was not marked saved."));
+                return false;
+            }
             const bool refresh_draft_source = m_boundary_source && m_boundary_document == m_document &&
                 document_snapshot_digest(*m_boundary_source) == document_snapshot_digest(snapshot);
             m_document->mark_saved(receipt.revision);
@@ -4008,6 +4071,9 @@ private:
 
     MainWindow* owner{};
     std::shared_ptr<Document> m_document;
+    std::unique_ptr<ProjectWorkspace> m_project_workspace;
+    RecoveryLedger m_recovery_ledger;
+    const std::string m_save_owner_token{make_stable_id()};
     std::filesystem::path m_file_path;
     std::string m_file_sha256;
     Workspace m_workspace{Workspace::measurement};
