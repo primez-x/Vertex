@@ -32,6 +32,7 @@
 
 #include <QAction>
 #include <QActionGroup>
+#include <QAbstractItemView>
 #include <QComboBox>
 #include <QCloseEvent>
 #include <QCheckBox>
@@ -43,6 +44,7 @@
 #include <QFormLayout>
 #include <QGuiApplication>
 #include <QGroupBox>
+#include <QHeaderView>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QMouseEvent>
@@ -69,6 +71,8 @@
 #include <QStandardPaths>
 #include <QSplitter>
 #include <QTabWidget>
+#include <QTableWidget>
+#include <QTableWidgetItem>
 #include <QToolBar>
 #include <QToolButton>
 #include <QTimer>
@@ -97,6 +101,7 @@
 #include <string_view>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
 #include <utility>
 
 #include <nlohmann/json.hpp>
@@ -739,6 +744,36 @@ QString format_length(double metres, bool metric) {
     return QStringLiteral("%1%2\"").arg(sign).arg(inches, 0, 'f', 1);
 }
 
+QString schedule_value_text(const ScheduleValue& value) {
+    return std::visit([](const auto& item) -> QString {
+        using Value = std::decay_t<decltype(item)>;
+        if constexpr (std::is_same_v<Value, std::string>) {
+            return QString::fromStdString(item);
+        } else if constexpr (std::is_same_v<Value, bool>) {
+            return item ? QStringLiteral("Yes") : QStringLiteral("No");
+        } else if constexpr (std::is_same_v<Value, std::int64_t>) {
+            return QString::number(item);
+        } else if constexpr (std::is_same_v<Value, double>) {
+            return QString::number(item, 'f', 3);
+        } else {
+            const auto unit = item.unit == ScheduleUnit::metre
+                ? QStringLiteral("m") : item.unit == ScheduleUnit::square_metre
+                ? QStringLiteral("m²") : QStringLiteral("m³");
+            return QStringLiteral("%1 %2").arg(item.value, 0, 'f', 3).arg(unit);
+        }
+    }, value);
+}
+
+QString schedule_kind_text(ScheduleRowKind kind) {
+    switch (kind) {
+    case ScheduleRowKind::door: return QStringLiteral("Door");
+    case ScheduleRowKind::window: return QStringLiteral("Window");
+    case ScheduleRowKind::room: return QStringLiteral("Room");
+    case ScheduleRowKind::material: return QStringLiteral("Material");
+    }
+    return QStringLiteral("Unknown");
+}
+
 QString workspace_name(Workspace workspace) {
     return workspace == Workspace::measurement ? QStringLiteral("Measurement")
                                                 : QStringLiteral("Architectural");
@@ -1022,6 +1057,9 @@ public:
 
     [[nodiscard]] Document& document() noexcept { return *m_document; }
     [[nodiscard]] const Document& document() const noexcept { return *m_document; }
+    [[nodiscard]] DocumentScheduleProjection scheduleSnapshot() const {
+        return build_document_schedules(m_document->snapshot());
+    }
 
     [[nodiscard]] Workspace workspace() const noexcept { return m_workspace; }
 
@@ -2195,6 +2233,78 @@ public:
         return true;
     }
 
+    void showSchedules() {
+        const auto projection = scheduleSnapshot();
+        QDialog dialog(owner);
+        dialog.setWindowTitle(QStringLiteral("Schedules"));
+        dialog.setModal(true);
+        dialog.resize(780, 480);
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* heading = new QLabel(
+            QStringLiteral("Document revision %1  •  read-only calculated cells expose their sources")
+                .arg(projection.snapshot.revision), &dialog);
+        heading->setWordWrap(true);
+        layout->addWidget(heading);
+        auto* table = new QTableWidget(&dialog);
+        table->setObjectName(QStringLiteral("scheduleTable"));
+        table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        table->setSelectionBehavior(QAbstractItemView::SelectRows);
+        table->setAlternatingRowColors(true);
+        std::set<std::string> column_names{"kind", "mark"};
+        for (const auto& row : projection.snapshot.rows)
+            for (const auto& [name, unused] : row.cells) {
+                (void)unused;
+                column_names.insert(name);
+            }
+        std::vector<std::string> columns(column_names.begin(), column_names.end());
+        table->setColumnCount(static_cast<int>(columns.size()));
+        QStringList headers;
+        for (const auto& column : columns) headers.push_back(QString::fromStdString(column));
+        table->setHorizontalHeaderLabels(headers);
+        table->setRowCount(static_cast<int>(projection.snapshot.rows.size()));
+        for (int row_index = 0; row_index < table->rowCount(); ++row_index) {
+            const auto& row = projection.snapshot.rows[static_cast<std::size_t>(row_index)];
+            for (int column_index = 0; column_index < table->columnCount(); ++column_index) {
+                const auto& column = columns[static_cast<std::size_t>(column_index)];
+                QString text;
+                QString tooltip;
+                if (column == "kind") {
+                    text = schedule_kind_text(row.kind);
+                } else if (column == "mark") {
+                    text = QString::fromStdString(row.mark);
+                } else if (const auto cell = row.cells.find(column); cell != row.cells.end()) {
+                    text = schedule_value_text(cell->second.value);
+                    if (!cell->second.editable) {
+                        tooltip = QStringLiteral("Calculated: %1")
+                                      .arg(QString::fromStdString(cell->second.explanation));
+                        for (const auto& source : cell->second.sources) {
+                            tooltip += QStringLiteral("\n%1.%2")
+                                           .arg(QString::fromStdString(source.object_id),
+                                                QString::fromStdString(source.property));
+                        }
+                    }
+                }
+                auto* item = new QTableWidgetItem(text);
+                if (!tooltip.isEmpty()) item->setToolTip(tooltip);
+                table->setItem(row_index, column_index, item);
+            }
+        }
+        table->resizeColumnsToContents();
+        table->horizontalHeader()->setStretchLastSection(true);
+        layout->addWidget(table, 1);
+        if (!projection.diagnostics.empty()) {
+            auto* diagnostics = new QLabel(&dialog);
+            diagnostics->setWordWrap(true);
+            QString text = QStringLiteral("Diagnostics:");
+            for (const auto& message : projection.diagnostics)
+                text += QStringLiteral("\n• %1").arg(QString::fromStdString(message));
+            diagnostics->setText(text);
+            diagnostics->setStyleSheet(QStringLiteral("color:#8b1a1a;"));
+            layout->addWidget(diagnostics);
+        }
+        dialog.exec();
+    }
+
     void showCommandPalette() {
         QDialog dialog(owner);
         dialog.setWindowTitle(QStringLiteral("Command search"));
@@ -2225,6 +2335,7 @@ public:
              [this] { showOrganizationDialog("rename"); }},
             {QStringLiteral("Measurement workspace"), [this] { setWorkspace(Workspace::measurement); }},
             {QStringLiteral("Architectural workspace"), [this] { setWorkspace(Workspace::architectural); }},
+            {QStringLiteral("Open schedules"), [this] { showSchedules(); }},
             {QStringLiteral("Select tool"), [this] { setTool(CanvasTool::select); }},
             {QStringLiteral("Draw measurement boundary"), [this] { setTool(CanvasTool::boundary); }},
             {QStringLiteral("Define area before drawing"),
@@ -2948,6 +3059,7 @@ private:
         m_architectural_action = toolbar->addAction(QStringLiteral("Architectural"));
         toolbar->addSeparator();
         m_palette_action = toolbar->addAction(QStringLiteral("Commands"));
+        m_schedule_action = toolbar->addAction(QStringLiteral("Schedules"));
         m_about_action = toolbar->addAction(QStringLiteral("About"));
         toolbar->addSeparator();
         auto* theme_menu = new QMenu(owner);
@@ -3017,6 +3129,8 @@ private:
                          [this] { setWorkspace(Workspace::architectural); });
         QObject::connect(m_palette_action, &QAction::triggered, owner,
                          [this] { showCommandPalette(); });
+        QObject::connect(m_schedule_action, &QAction::triggered, owner,
+                         [this] { showSchedules(); });
         QObject::connect(m_about_action, &QAction::triggered, owner, [this] { showAbout(); });
         QObject::connect(m_unitsCombo, &QComboBox::currentIndexChanged, owner,
                          [this](int index) { setMetricUnits(index == 1); });
@@ -4948,6 +5062,7 @@ private:
     QAction* m_measurement_action{};
     QAction* m_architectural_action{};
     QAction* m_palette_action{};
+    QAction* m_schedule_action{};
     QAction* m_about_action{};
 };
 
@@ -4962,6 +5077,10 @@ Document& MainWindow::document() noexcept {
 
 const Document& MainWindow::document() const noexcept {
     return m_impl->document();
+}
+
+DocumentScheduleProjection MainWindow::scheduleSnapshot() const {
+    return m_impl->scheduleSnapshot();
 }
 
 Workspace MainWindow::workspace() const noexcept {

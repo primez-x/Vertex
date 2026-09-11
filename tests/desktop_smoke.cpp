@@ -444,6 +444,15 @@ int main(int argc, char** argv) {
             "slab must persist its boundary and holes arrays");
     require(slab->second.properties.at("thickness_m").get<double>() > 0.19,
             "slab thickness must be stored in canonical metres");
+    const auto schedules = window.scheduleSnapshot();
+    const auto opening_row = std::find_if(schedules.snapshot.rows.begin(),
+                                          schedules.snapshot.rows.end(),
+        [&](const auto& row) { return row.object_id == opening_id.toStdString(); });
+    require(opening_row != schedules.snapshot.rows.end() &&
+                opening_row->cells.contains("area") &&
+                !opening_row->cells.at("area").editable &&
+                schedules.snapshot.revision == window.document().revision(),
+            "shared document schedules must include hosted openings with a read-only calculated area");
 
     window.setMetricUnits(true);
     require(window.metricUnits(), "metric display toggle should be observable");

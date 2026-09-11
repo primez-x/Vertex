@@ -1771,12 +1771,17 @@
       "package": 5,
       "blocker": null,
       "implementation_sources": [
+        "include/sketch/document_schedule_adapter.hpp",
+        "src/core/document_schedule_adapter.cpp",
+        "tests/document_schedule_adapter_tests.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/desktop_smoke.cpp",
         "include/sketch/schedule_model.hpp",
         "src/core/schedule_model.cpp",
         "tests/schedule_model_tests.cpp",
         "docs/schedules.md"
       ],
-      "implementation_note": "Standalone typed door/window, room, and material schedule records with stable marks and source-backed calculated cells are implemented; document-derived generation, persistence, and UI remain open."
+      "implementation_note": "Standalone typed records and a revision-bound Document-derived adapter now generate door/window, room, and material rows with stable marks, source-backed calculated cells and explicit diagnostics; persistence, editable UI and complete sheet/output integration remain open."
     },
     {
       "id": "ARCH-SCH-002",
@@ -1789,12 +1794,17 @@
       "package": 5,
       "blocker": null,
       "implementation_sources": [
+        "include/sketch/document_schedule_adapter.hpp",
+        "src/core/document_schedule_adapter.cpp",
+        "tests/document_schedule_adapter_tests.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/desktop_smoke.cpp",
         "include/sketch/schedule_model.hpp",
         "src/core/schedule_model.cpp",
         "tests/schedule_model_tests.cpp",
         "docs/schedules.md"
       ],
-      "implementation_note": "Deterministic edit descriptions and fail-closed calculated-cell source references are implemented; dispatch through Document commands/history and editable schedule UI remain open."
+      "implementation_note": "Deterministic edit descriptions and fail-closed calculated-cell source references are implemented, and desktop exposes the revision-bound schedule projection; dispatch through Document commands/history and editable schedule UI remain open."
     },
     {
       "id": "ARCH-SHEET-001",

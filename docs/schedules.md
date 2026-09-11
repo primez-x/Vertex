@@ -15,15 +15,28 @@ cycles. Examples include gross area, deductions and net area; semantic adapters
 are responsible for computing correct values and regenerating the snapshot
 after accepted model changes. The projection does not infer geometry or units.
 
+`document_schedule_adapter.hpp` now provides a read-only projection from the
+shared `DocumentSnapshot`. Hosted door/window entities become rows with stable
+marks, dimensions, host identity, and a calculated area whose source refs are
+the width and height cells. Room entities can supply an explicit area or a
+validated closed boundary, and material rows can be supplied through the
+`material_name`/`volume_m3` semantic fields. The projection is stamped with the
+source document revision and reports malformed or incomplete rows as sorted
+diagnostics; invalid rows never become partial schedule output. The desktop
+`MainWindow::scheduleSnapshot()` API exposes this same projection without a
+second document model.
+
 `make_schedule_edit` returns a deterministic command description containing the
 source target, expected document revision, prior value and replacement. It
 rejects edits to calculated cells with an explanation naming the sources, type
 or dimensional-unit changes, nonfinite values and invalid marks. Command
 creation does not mutate the snapshot or semantic model.
 
-The document integration must validate the revision and prior value, enforce
-semantic constraints such as positive widths, translate the description into a
-normal document command, and regenerate calculated values after acceptance.
-This module does not yet create document history, persist schedules, group
-material quantities, calculate geometry, or provide UI. Its tests establish the
-projection/edit contract, not the complete production acceptance criteria.
+The schedule adapter is intentionally read-only at this checkpoint. Document
+integration must still validate the revision and prior value, enforce semantic
+constraints such as positive widths, translate the description into a normal
+document command, regenerate calculated values after acceptance, and provide a
+visible editable schedule grid. Schedule persistence, grouped material
+quantities, and complete sheet/print layout remain open production work. Tests
+establish both the Document-derived projection and the projection/edit
+contract, not the complete production acceptance criteria.

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/document.hpp"
+#include "sketch/document_schedule_adapter.hpp"
 #include "sketch/geometry.hpp"
 #include "sketch/boundary_authoring_session.hpp"
 
@@ -30,6 +31,9 @@ public:
 
     [[nodiscard]] Document& document() noexcept;
     [[nodiscard]] const Document& document() const noexcept;
+    // Read-only schedule projection bound to the current shared document
+    // revision. Malformed rows are returned as explicit diagnostics.
+    [[nodiscard]] DocumentScheduleProjection scheduleSnapshot() const;
 
     [[nodiscard]] Workspace workspace() const noexcept;
     void setWorkspace(Workspace workspace);
