@@ -23,7 +23,10 @@ qualification remain open. The desktop Architectural tab now has a transient
 Plan/Elevation/Section selector. Non-plan views show derived wall, slab, and
 building-object edges on the canvas and route selected-workspace draft output
 through that canvas; the section plane is the frame origin plane. Persisted
-presentation cut/far-depth settings remain the next integration boundary.
+coordinated-view frames and section cut depth now drive the selector when a
+matching typed sheet/view entity is present; the built-in 1.2 m frame remains a
+safe fallback. Far-depth filtering, material hatching, annotation overlays,
+sheet layout editing, and final production qualification remain open.
 
 Focused coverage includes a rotated-frame elevation, a horizontal circular
 section that retains four analytic quarter arcs, a vertical rectangular

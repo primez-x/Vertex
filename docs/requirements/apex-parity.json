@@ -1731,7 +1731,7 @@
         "tests/sheet_view_entity_codec_tests.cpp",
         "docs/sheets-views.md"
       ],
-      "implementation_note": "Immutable coordinated plan/elevation/section view references and frame validation persist through a typed Document entity, and supported semantic building objects now have analytical hidden-line plan/elevation and true solid-plane section projection tests; shared object editing, cut-depth presentation, renderer, sheet layout and UI synchronization remain open."
+      "implementation_note": "Immutable coordinated plan/elevation/section view references and frame validation persist through a typed Document entity, and supported semantic building objects now have analytical hidden-line plan/elevation and true solid-plane section projection tests. The Architectural selector consumes persisted frames when present and shared object editing, renderer synchronization, and sheet layout remain open."
     },
     {
       "id": "ARCH-VIEW-002",
@@ -1758,7 +1758,7 @@
         "tests/sheet_view_entity_codec_tests.cpp",
         "docs/sheets-views.md"
       ],
-      "implementation_note": "Section presentation settings are validated and persist through the typed Document entity; analytical solid-plane section edges are now implemented for supported objects, while cut-depth filtering, line/hatch/annotation overlays, UI editing and print fixtures remain open."
+      "implementation_note": "Section presentation settings are validated and persist through the typed Document entity; analytical solid-plane section edges and persisted section cut-depth consumption are implemented for supported objects, while far-depth filtering, line/hatch/annotation overlays, UI editing and print fixtures remain open."
     },
     {
       "id": "ARCH-SCH-001",

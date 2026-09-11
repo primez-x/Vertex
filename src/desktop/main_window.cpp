@@ -838,11 +838,46 @@ BuildingViewFrame architectural_view_frame(BuildingViewKind kind) {
         return {{0.0, 0.0, 0.0}, {0.0, -1.0, 0.0}, {0.0, 0.0, 1.0}};
     case BuildingViewKind::section:
         // The first production view is a conventional horizontal cut at
-        // 1.2 m. Persisted coordinated-view cut settings will replace this
-        // selector default when sheet editing is integrated.
+        // 1.2 m. A persisted coordinated section overrides this fallback.
         return {{0.0, 0.0, 1.2}, {0.0, 0.0, -1.0}, {0.0, 1.0, 0.0}};
     }
     throw std::invalid_argument("unknown architectural view kind");
+}
+
+BuildingViewFrame architectural_view_frame(const DocumentSnapshot& snapshot,
+                                           BuildingViewKind kind) {
+    const auto fallback = architectural_view_frame(kind);
+    for (const auto& [id, entity] : snapshot.entities()) {
+        (void)id;
+        if (entity.type != kSheetViewEntityType) continue;
+        try {
+            const auto model = decode_sheet_view_entity(entity);
+            const auto found = std::find_if(model.views().begin(), model.views().end(),
+                [&](const auto& view) {
+                    const auto expected = kind == BuildingViewKind::plan
+                        ? CoordinatedViewKind::plan
+                        : kind == BuildingViewKind::elevation
+                        ? CoordinatedViewKind::elevation : CoordinatedViewKind::section;
+                    return view.kind == expected;
+                });
+            if (found == model.views().end()) continue;
+            BuildingViewFrame result{
+                {found->origin_m[0], found->origin_m[1], found->origin_m[2]},
+                {found->direction[0], found->direction[1], found->direction[2]},
+                {found->up[0], found->up[1], found->up[2]}};
+            if (kind == BuildingViewKind::section) {
+                result.origin.x += result.direction.x * found->presentation.cut_depth_m;
+                result.origin.y += result.direction.y * found->presentation.cut_depth_m;
+                result.origin.z += result.direction.z * found->presentation.cut_depth_m;
+            }
+            return result;
+        } catch (const std::exception&) {
+            // The typed Document boundary reports malformed sheet/view data;
+            // a transient canvas still falls back to the safe default frame.
+            return fallback;
+        }
+    }
+    return fallback;
 }
 
 const char* architectural_view_name(BuildingViewKind kind) {
@@ -3996,7 +4031,7 @@ private:
         std::vector<CanvasEntity> architectural_geometry = all_geometry;
         if (m_architectural_view_kind != BuildingViewKind::plan) {
             architectural_geometry.clear();
-            const auto frame = architectural_view_frame(m_architectural_view_kind);
+            const auto frame = architectural_view_frame(snapshot, m_architectural_view_kind);
             for (const auto& [id, entity] : snapshot.entities()) {
                 try {
                     if (can_recognize_building_entity_type(entity.type)) {
