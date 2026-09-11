@@ -13,7 +13,7 @@ The root CMake integration includes these desktop sources and dependencies:
 | File | Role |
 | --- | --- |
 | `include/sketch/desktop/main_window.hpp` | Reusable `sketch::desktop::MainWindow` API and `Workspace` enum |
-| `src/desktop/main_window.cpp` | Qt Widgets shell, commands, persistence, inspector, and output actions |
+| `src/desktop/main_window.cpp` | Qt Widgets shell, commands, persistence, inspector, recovery selection, and output actions |
 | `src/core/project_organization.cpp` | Pure hierarchy, inherited host context and unresolved relationship diagnostics |
 | `src/desktop/building_object_dialog.cpp` | Six-form geometry editing and exact quantity entry records |
 | `src/desktop/plan_canvas.hpp` | Native analytic plan canvas types and interaction seam |

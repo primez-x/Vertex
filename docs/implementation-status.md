@@ -12,9 +12,9 @@ redo, and save acknowledgement. Typed relationship validation and portable
 package staging are present as bounded, separately testable slices.
 
 These additions are still development checkpoints. Apex native import/export,
-device and appraisal adapters, recovery discovery/retention UI, installer and
-source-kit qualification, and production acceptance evidence remain open in the
-requirements ledger.
+device and appraisal adapters, recovery retention cleanup and broader restore
+qualification, installer and source-kit qualification, and production
+acceptance evidence remain open in the requirements ledger.
 
 The current checkpoint also includes read-only recovery-copy discovery with
 source-path and hash matching, a fail-closed offline-independence policy wired
@@ -24,6 +24,13 @@ records, and a standalone vertical level/floor-to-floor graph. These slices
 have focused test coverage and remain core foundations; decoder, project/UI
 persistence, native Apex compatibility, clean-machine packaging, and
 end-to-end production evidence are still open.
+
+The next foundation slice adds immutable room-versus-measurement relationship
+validation, existing/demolished/proposed phase state with mutually exclusive
+remodel alternatives, deterministic geometry-operation helpers, and a
+performance-report harness that computes declared percentile thresholds without
+claiming hardware qualification. Their downstream Document, view, schedule,
+sheet, and acceptance integrations remain open.
 
 Recovery validation now checks lifecycle ordering against the complete Document
 history projection and replays the global navigation stacks/operation registry.

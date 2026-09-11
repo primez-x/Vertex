@@ -35,5 +35,7 @@ cap is not an aggregate byte or execution-time budget.
 `recovery_discovery_tests` checks valid provenance, mismatch states, role-opaque and
 corrupt archives, duplicate IDs, traversal rejection, filtering, missing paths,
 and unchanged source/recovery hashes. A symlink exclusion check is exercised when
-the environment permits creating symlinks. It does not simulate concurrent path
-replacement or establish interactive recovery UI behavior.
+the environment permits creating symlinks. The native desktop's **Recover…**
+action uses this read-only list to let the user choose a loadable copy before
+the normal guarded open path; it does not simulate concurrent path replacement,
+retention cleanup, or final restore authorization.

@@ -115,6 +115,7 @@
       "implementation_sources": [
         "include/sketch/offline_policy.hpp",
         "src/core/offline_policy.cpp",
+        "src/desktop/main_window.cpp",
         "tests/offline_policy_tests.cpp",
         "docs/offline-policy.md"
       ],
@@ -1498,10 +1499,17 @@
       "requirement": "Model rooms and architectural boundaries separately from appraisal measurement boundaries, with explicit relationships where desired.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "A room can relate to, follow, or remain independent from a measurement boundary without silently conflating classifications or geometry.",
       "package": 4,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/room_relationships.hpp",
+        "src/core/room_relationships.cpp",
+        "tests/room_relationships_tests.cpp",
+        "docs/room-relationships.md"
+      ],
+      "implementation_note": "Room, appraisal-boundary, and architectural-wall references have separate kinds with independent/follows/derived-from relations and graph validation; geometry binding, Document persistence, and UI remain open."
     },
     {
       "id": "ARCH-MOD-010",
@@ -1509,10 +1517,17 @@
       "requirement": "Support existing, demolished, and proposed phases across the model, views, calculations, schedules, and sheets.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Phase fixtures show the selected state consistently in every required view and can be changed through undoable commands.",
       "package": 4,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/model_phases.hpp",
+        "src/core/model_phases.cpp",
+        "tests/model_phases_tests.cpp",
+        "docs/phases-alternatives.md"
+      ],
+      "implementation_note": "Immutable existing/demolished/proposed phase state and validation are implemented; view, calculation, schedule, sheet, Document command, and persistence integration remain open."
     },
     {
       "id": "ARCH-MOD-011",
@@ -1520,10 +1535,17 @@
       "requirement": "Support mutually exclusive remodeling alternatives over a shared existing model with clear comparison state.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Alternative fixtures switch, compare, save, and print without contaminating one another or changing the shared existing state.",
       "package": 4,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/model_phases.hpp",
+        "src/core/model_phases.cpp",
+        "tests/model_phases_tests.cpp",
+        "docs/phases-alternatives.md"
+      ],
+      "implementation_note": "Mutually exclusive remodeling alternatives over a shared baseline and deterministic comparison state are implemented; coordinated model/views, save/print, and undo integration remain open."
     },
     {
       "id": "ARCH-3D-001",
@@ -1799,7 +1821,7 @@
         "docs/workspace-autosave-scheduler.md",
         "docs/workspace-save-queue.md"
       ],
-      "implementation_note": "Owner-thread scheduling, queued immutable captures, guarded recovery archives, timed coverage for recovered, legacy, and untitled projects, and read-only recovery-candidate discovery are implemented; crash/power interruption fixtures, restart/opening UI, and retention cleanup remain open."
+      "implementation_note": "Owner-thread scheduling, queued immutable captures, guarded recovery archives, timed coverage for recovered, legacy, and untitled projects, read-only recovery-candidate discovery, and a native Recover action are implemented; crash/power interruption fixtures, retention cleanup, and final restore qualification remain open."
     },
     {
       "id": "REC-002",
@@ -2011,10 +2033,16 @@
       "requirement": "Target 95th-percentile navigation frame time at or below 16.7 ms on agreed reference hardware for representative workloads.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Recorded 50,000-entity, 10,000-object/one-million-triangle, and 20-sheet/250 MB workloads meet the measured target or produce an explicit unresolved gate failure.",
       "package": 8,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "scripts/performance_benchmark.py",
+        "tests/test_performance_benchmark.py",
+        "docs/performance-benchmark.md"
+      ],
+      "implementation_note": "Deterministic p95 navigation reporting and threshold checks are implemented; representative workloads, reference hardware runs, and final performance evidence remain open."
     },
     {
       "id": "OPS-PERF-002",
@@ -2022,10 +2050,16 @@
       "requirement": "Target input feedback at or below 50 ms and ordinary edits at or below 250 ms, with expensive regeneration in cancellable background work.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Instrumented drawing and editing fixtures report latency percentiles and cancel a long regeneration without losing the valid revision.",
       "package": 8,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "scripts/performance_benchmark.py",
+        "tests/test_performance_benchmark.py",
+        "docs/performance-benchmark.md"
+      ],
+      "implementation_note": "Input/edit percentile calculations and explicit threshold failures are implemented; cancellable regeneration instrumentation and hardware measurements remain open."
     },
     {
       "id": "OPS-PERF-003",
@@ -2033,10 +2067,16 @@
       "requirement": "Target representative project open/save at or below five seconds while preserving snapshot and asset integrity.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Instrumented representative projects report open/save time, revision identity, and manifest validation result.",
       "package": 8,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "scripts/performance_benchmark.py",
+        "tests/test_performance_benchmark.py",
+        "docs/performance-benchmark.md"
+      ],
+      "implementation_note": "Open/save percentile reporting validates explicit workload and sample metadata; representative project integrity and clean-machine performance evidence remain open."
     },
     {
       "id": "OPS-QA-001",
