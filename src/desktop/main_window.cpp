@@ -1632,7 +1632,7 @@ public:
         owner->setPalette(palette);
         QString stylesheet = QStringLiteral(R"(
             QMainWindow { background: $background; }
-            QWidget { font-family: "Inter", "Segoe UI"; font-size: 13px; }
+            QWidget { font-size: 13px; }
             QDialog { background: $background; }
             QToolBar#primaryToolbar { background: $surface; border: 0; border-bottom: 1px solid $border;
                        padding: 9px 16px; spacing: 5px; min-height: 48px; }

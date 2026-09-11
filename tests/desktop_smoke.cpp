@@ -15,6 +15,8 @@
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
+#include <QFont>
+#include <QFontDatabase>
 #include <QImage>
 #include <QKeyEvent>
 #include <QKeySequenceEdit>
@@ -396,6 +398,11 @@ void test_six_form_authoring_and_quantity_history() {
 int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QApplication application(argc, argv);
+    const auto font_id = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"));
+    require(font_id >= 0, "desktop smoke must load the bundled Inter font");
+    const auto families = QFontDatabase::applicationFontFamilies(font_id);
+    require(!families.isEmpty(), "bundled Inter font must expose a family");
+    application.setFont(QFont(families.front(), 10));
     QString field_ui_capture_directory;
     for (int index = 1; index + 1 < argc; ++index) {
         if (std::string_view(argv[index]) == "--capture-field-ui") {

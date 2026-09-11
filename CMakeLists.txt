@@ -355,6 +355,8 @@ if(SKETCH_BUILD_DESKTOP)
     target_link_libraries(native_view_tests PRIVATE sketch_visualization sketch_constraint_authoring)
     add_executable(desktop_smoke tests/desktop_smoke.cpp)
     target_link_libraries(desktop_smoke PRIVATE sketch_desktop)
+    qt_add_resources(desktop_smoke desktop_smoke_test_fonts PREFIX "/fonts" BASE assets/fonts
+      FILES assets/fonts/Inter.ttf)
     add_executable(desktop_workspace_recovery_tests tests/desktop_workspace_recovery_tests.cpp)
     target_link_libraries(desktop_workspace_recovery_tests PRIVATE sketch_desktop)
     add_executable(building_object_dialog_tests tests/building_object_dialog_tests.cpp)
