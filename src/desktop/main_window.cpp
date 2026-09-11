@@ -1421,6 +1421,87 @@ public:
         }
     }
 
+    [[nodiscard]] bool editArchitecturalViewPresentation(
+        const QString& view_id, const QString& cut_depth_m, const QString& far_depth_m,
+        const QString& cut_line_mm, const QString& projection_line_mm, bool hatch_enabled,
+        const QString& hatch_pattern, const QString& detail) {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        try {
+            const auto parse_finite = [](const QString& text, const char* label) {
+                bool ok = false;
+                const auto value = text.trimmed().toDouble(&ok);
+                if (!ok || !std::isfinite(value))
+                    throw std::invalid_argument(std::string(label) + " must be a finite number");
+                return value;
+            };
+            const auto cut = parse_finite(cut_depth_m, "Cut depth");
+            const auto far = parse_finite(far_depth_m, "Far depth");
+            const auto cut_line = parse_finite(cut_line_mm, "Cut line width");
+            const auto projection_line = parse_finite(projection_line_mm, "Projection line width");
+            ViewDetail detail_value{};
+            const auto detail_name = detail.trimmed().toLower();
+            if (detail_name == QStringLiteral("coarse")) detail_value = ViewDetail::coarse;
+            else if (detail_name == QStringLiteral("medium")) detail_value = ViewDetail::medium;
+            else if (detail_name == QStringLiteral("fine")) detail_value = ViewDetail::fine;
+            else throw std::invalid_argument("View detail must be coarse, medium, or fine");
+            const auto pattern = hatch_pattern.trimmed().toStdString();
+            if (pattern.empty()) throw std::invalid_argument("Hatch pattern cannot be empty");
+            const auto source = authoringSnapshot();
+            const Entity* view_entity = nullptr;
+            std::optional<SheetViewModel> model;
+            const auto wanted_view = view_id.trimmed().toStdString();
+            for (const auto& [id, candidate] : source.entities()) {
+                (void)id;
+                if (candidate.type != kSheetViewEntityType) continue;
+                try {
+                    auto decoded = decode_sheet_view_entity(candidate);
+                    const auto found = std::find_if(decoded.views().begin(), decoded.views().end(),
+                        [&](const auto& view) { return view.id == wanted_view; });
+                    if (found != decoded.views().end()) {
+                        model = std::move(decoded);
+                        view_entity = &candidate;
+                        break;
+                    }
+                } catch (const std::exception&) {
+                    if (wanted_view.empty()) throw;
+                }
+            }
+            if (view_entity == nullptr || !model)
+                throw std::invalid_argument("Architectural view was not found");
+            const auto found = std::find_if(model->views().begin(), model->views().end(),
+                [&](const auto& view) { return view.id == wanted_view; });
+            if (found == model->views().end())
+                throw std::invalid_argument("Architectural view identity was not found");
+            auto replacement = *found;
+            replacement.presentation.cut_depth_m = cut;
+            replacement.presentation.far_depth_m = far;
+            replacement.presentation.cut_line_mm = cut_line;
+            replacement.presentation.projection_line_mm = projection_line;
+            replacement.presentation.hatch_enabled = hatch_enabled;
+            replacement.presentation.hatch_pattern = pattern;
+            replacement.presentation.detail = detail_value;
+            const auto updated_model = model->with_view(std::move(replacement));
+            auto updated_entity = *view_entity;
+            updated_entity.properties = make_sheet_view_entity(
+                updated_entity.id, updated_model).properties;
+            const ApplyEntityChanges command{
+                source.revision(), {EntityChange::upsert(std::move(updated_entity))}, {},
+                "Edit architectural view presentation"};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Architectural view edit: %1")
+                         .arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     [[nodiscard]] Workspace workspace() const noexcept { return m_workspace; }
 
     void setWorkspace(Workspace workspace) {
@@ -3012,6 +3093,68 @@ public:
         }
     }
 
+    void showArchitecturalViewSettings() {
+        const auto context = captureModalContext();
+        const auto source = authoringSnapshot();
+        const auto sheet_entity = std::find_if(source.entities().begin(), source.entities().end(),
+            [](const auto& entry) { return entry.second.type == kSheetViewEntityType; });
+        if (sheet_entity == source.entities().end()) {
+            setError(QStringLiteral("No typed architectural view is available."));
+            return;
+        }
+        try {
+            const auto model = decode_sheet_view_entity(sheet_entity->second);
+            const auto expected_kind = m_architectural_view_kind == BuildingViewKind::plan
+                ? CoordinatedViewKind::plan
+                : m_architectural_view_kind == BuildingViewKind::elevation
+                ? CoordinatedViewKind::elevation : CoordinatedViewKind::section;
+            const auto found = std::find_if(model.views().begin(), model.views().end(),
+                [&](const auto& view) { return view.kind == expected_kind; });
+            if (found == model.views().end())
+                throw std::invalid_argument("the selected architectural view is not defined");
+            const auto number = [](double value) { return QString::number(value, 'g', 12); };
+            QDialog dialog(owner);
+            dialog.setWindowTitle(QStringLiteral("Architectural view settings"));
+            dialog.setModal(true);
+            auto* form = new QFormLayout(&dialog);
+            auto* cut = new QLineEdit(number(found->presentation.cut_depth_m), &dialog);
+            auto* far = new QLineEdit(number(found->presentation.far_depth_m), &dialog);
+            auto* cut_line = new QLineEdit(number(found->presentation.cut_line_mm), &dialog);
+            auto* projection_line = new QLineEdit(number(found->presentation.projection_line_mm), &dialog);
+            auto* pattern = new QLineEdit(QString::fromStdString(found->presentation.hatch_pattern), &dialog);
+            auto* hatch = new QCheckBox(QStringLiteral("Enable material hatching"), &dialog);
+            auto* detail = new QComboBox(&dialog);
+            detail->addItems({QStringLiteral("Coarse"), QStringLiteral("Medium"), QStringLiteral("Fine")});
+            detail->setCurrentIndex(static_cast<int>(found->presentation.detail));
+            cut->setObjectName(QStringLiteral("viewCutDepth"));
+            far->setObjectName(QStringLiteral("viewFarDepth"));
+            cut_line->setObjectName(QStringLiteral("viewCutLine"));
+            projection_line->setObjectName(QStringLiteral("viewProjectionLine"));
+            pattern->setObjectName(QStringLiteral("viewHatchPattern"));
+            hatch->setObjectName(QStringLiteral("viewHatchEnabled"));
+            detail->setObjectName(QStringLiteral("viewDetail"));
+            hatch->setChecked(found->presentation.hatch_enabled);
+            form->addRow(QStringLiteral("Cut depth (m)"), cut);
+            form->addRow(QStringLiteral("Far depth (m)"), far);
+            form->addRow(QStringLiteral("Cut line width (mm)"), cut_line);
+            form->addRow(QStringLiteral("Projection line width (mm)"), projection_line);
+            form->addRow(QStringLiteral("Hatch pattern"), pattern);
+            form->addRow(hatch);
+            form->addRow(QStringLiteral("Detail"), detail);
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+            form->addRow(buttons);
+            QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+            QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+            if (dialog.exec() != QDialog::Accepted || !modalContextUnchanged(context)) return;
+            (void)editArchitecturalViewPresentation(
+                QString::fromStdString(found->id), cut->text(), far->text(), cut_line->text(),
+                projection_line->text(), hatch->isChecked(), pattern->text(), detail->currentText());
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Architectural view settings: %1")
+                         .arg(QString::fromUtf8(error.what())));
+        }
+    }
+
     void showCommandPalette() {
         QDialog dialog(owner);
         dialog.setWindowTitle(QStringLiteral("Command search"));
@@ -3047,6 +3190,8 @@ public:
             {QStringLiteral("Edit sheet viewport settings"), [this] { showViewportSettings(); }},
             {QStringLiteral("Edit schedule placement settings"),
              [this] { showSchedulePlacementSettings(); }},
+            {QStringLiteral("Edit architectural view settings"),
+             [this] { showArchitecturalViewSettings(); }},
             {QStringLiteral("Select tool"), [this] { setTool(CanvasTool::select); }},
             {QStringLiteral("Draw measurement boundary"), [this] { setTool(CanvasTool::boundary); }},
             {QStringLiteral("Define area before drawing"),
@@ -3774,6 +3919,7 @@ private:
         m_sheet_action = toolbar->addAction(QStringLiteral("Sheet settings"));
         m_viewport_action = toolbar->addAction(QStringLiteral("Viewport settings"));
         m_schedule_placement_action = toolbar->addAction(QStringLiteral("Schedule placement"));
+        m_view_action = toolbar->addAction(QStringLiteral("View settings"));
         m_about_action = toolbar->addAction(QStringLiteral("About"));
         toolbar->addSeparator();
         auto* theme_menu = new QMenu(owner);
@@ -3851,6 +3997,8 @@ private:
                          [this] { showViewportSettings(); });
         QObject::connect(m_schedule_placement_action, &QAction::triggered, owner,
                          [this] { showSchedulePlacementSettings(); });
+        QObject::connect(m_view_action, &QAction::triggered, owner,
+                         [this] { showArchitecturalViewSettings(); });
         QObject::connect(m_about_action, &QAction::triggered, owner, [this] { showAbout(); });
         QObject::connect(m_unitsCombo, &QComboBox::currentIndexChanged, owner,
                          [this](int index) { setMetricUnits(index == 1); });
@@ -5786,6 +5934,7 @@ private:
     QAction* m_sheet_action{};
     QAction* m_viewport_action{};
     QAction* m_schedule_placement_action{};
+    QAction* m_view_action{};
     QAction* m_about_action{};
 };
 
@@ -5830,6 +5979,15 @@ bool MainWindow::editSheetSchedulePlacement(const QString& sheet_id, const QStri
                                             const QString& width_mm, const QString& height_mm) {
     return m_impl->editSheetSchedulePlacement(sheet_id, placement_id, x_mm, y_mm, width_mm,
                                               height_mm);
+}
+
+bool MainWindow::editArchitecturalViewPresentation(
+    const QString& view_id, const QString& cut_depth_m, const QString& far_depth_m,
+    const QString& cut_line_mm, const QString& projection_line_mm, bool hatch_enabled,
+    const QString& hatch_pattern, const QString& detail) {
+    return m_impl->editArchitecturalViewPresentation(
+        view_id, cut_depth_m, far_depth_m, cut_line_mm, projection_line_mm, hatch_enabled,
+        hatch_pattern, detail);
 }
 
 Workspace MainWindow::workspace() const noexcept {

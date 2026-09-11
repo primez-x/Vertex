@@ -24,7 +24,10 @@ its finite origin in metres, orthonormal direction/up frame, cut and far depths,
 paper line widths, hatch enable/pattern/scale and detail level. Cut depth is a
 nonnegative distance along the direction from the origin, limited by far depth;
 these are projection instructions, not computed model intersections. All kinds
-use the same frame contract; adapters choose the appropriate orientation.
+use the same frame contract; adapters choose the appropriate orientation. The
+desktop Architectural view settings command edits these presentation fields
+through typed Document history; output overlays and full annotation/hatch
+rendering remain qualification work.
 
 Sheets have explicit positive page dimensions in millimetres, unique sheet
 numbers, title-block metadata, revisions, callouts and schedule placements.

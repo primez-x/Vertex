@@ -67,6 +67,17 @@ public:
                                                   const QString& y_mm,
                                                   const QString& width_mm,
                                                   const QString& height_mm);
+    // Updates persisted architectural view presentation settings through
+    // typed validation and normal Document history.
+    [[nodiscard]] bool editArchitecturalViewPresentation(
+        const QString& view_id,
+        const QString& cut_depth_m,
+        const QString& far_depth_m,
+        const QString& cut_line_mm,
+        const QString& projection_line_mm,
+        bool hatch_enabled,
+        const QString& hatch_pattern,
+        const QString& detail);
 
     [[nodiscard]] Workspace workspace() const noexcept;
     void setWorkspace(Workspace workspace);

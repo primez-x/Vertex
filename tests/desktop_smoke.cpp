@@ -257,6 +257,19 @@ int main(int argc, char** argv) {
             "a new document must include a validated coordinated sheet/view model");
     require(window.document().snapshot().entities().contains("floor-1"),
             "a new document must create the floor scaffold before objects");
+    require(window.editArchitecturalViewPresentation(
+                QStringLiteral("view-plan"), QStringLiteral("1.5"), QStringLiteral("80"),
+                QStringLiteral("0.7"), QStringLiteral("0.25"), true,
+                QStringLiteral("concrete"), QStringLiteral("fine")),
+            "architectural view presentation must commit through typed Document history");
+    const auto edited_view_entity = window.document().snapshot().entities().at("sheet-view-1");
+    require(edited_view_entity.properties.at("model").at("views").at(0)
+                    .at("presentation").at("cut_depth_m") == 1.5 &&
+                edited_view_entity.properties.at("model").at("views").at(0)
+                    .at("presentation").at("detail") == "fine",
+            "architectural view presentation edit must persist typed settings");
+    require(window.undoCommand() && window.redoCommand(),
+            "architectural view presentation edit must participate in normal document history");
 
     const auto boundary_id = window.createBoundary(
         sketch::Boundary{{{{0.0, 0.0}, {3.0, 0.0}, 0.0},
