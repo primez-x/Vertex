@@ -195,6 +195,10 @@ public:
                                               bool flip_horizontal,
                                               bool flip_vertical,
                                               bool visible);
+    // Starts the normal receipt-bearing boundary authoring workflow with the
+    // selected reference retained as the tracing context. Geometry remains
+    // authored model data; the reference image is never a measurement source.
+    [[nodiscard]] bool beginReferenceTrace();
     [[nodiscard]] bool undoCommand();
     [[nodiscard]] bool redoCommand();
 

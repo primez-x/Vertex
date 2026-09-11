@@ -34,6 +34,7 @@
 
 #include <QAction>
 #include <QActionGroup>
+#include <QApplication>
 #include <QAbstractItemView>
 #include <QComboBox>
 #include <QCloseEvent>
@@ -70,6 +71,7 @@
 #include <QSizePolicy>
 #include <QSvgGenerator>
 #include <QStyle>
+#include <QStyleFactory>
 #include <QStyleOptionViewItem>
 #include <QStatusBar>
 #include <QStandardPaths>
@@ -1566,30 +1568,94 @@ public:
     }
 
     void applyTheme(WorkspaceTheme theme) {
+        const bool dark = theme == WorkspaceTheme::dark;
+        const bool contrast = theme == WorkspaceTheme::high_contrast;
+        const QString background = contrast ? "#000000" : dark ? "#171d27" : "#edf1f6";
+        const QString surface = contrast ? "#000000" : dark ? "#202938" : "#ffffff";
+        const QString foreground = contrast ? "#ffffff" : dark ? "#e7edf7" : "#263449";
+        const QString muted = contrast ? "#ffffff" : dark ? "#a6b4c9" : "#607087";
+        const QString border = contrast ? "#ffffff" : dark ? "#3b485e" : "#d5dee9";
+        const QString accent = contrast ? "#ffff00" : dark ? "#78b4ff" : "#2463bf";
+        const QString selection = contrast ? "#ffff00" : dark ? "#29446a" : "#e5efff";
+        const QString selectedText = contrast ? "#000000" : foreground;
         QPalette palette = owner->style()->standardPalette();
-        if (theme == WorkspaceTheme::dark) {
-            palette.setColor(QPalette::Window, QColor(QStringLiteral("#20252b")));
-            palette.setColor(QPalette::WindowText, QColor(QStringLiteral("#f1f5f9")));
-            palette.setColor(QPalette::Base, QColor(QStringLiteral("#15191e")));
-            palette.setColor(QPalette::AlternateBase, QColor(QStringLiteral("#252c34")));
-            palette.setColor(QPalette::Text, QColor(QStringLiteral("#f1f5f9")));
-            palette.setColor(QPalette::Button, QColor(QStringLiteral("#2b333d")));
-            palette.setColor(QPalette::ButtonText, QColor(QStringLiteral("#f1f5f9")));
-            palette.setColor(QPalette::Highlight, QColor(QStringLiteral("#2f80ed")));
-            palette.setColor(QPalette::HighlightedText, QColor(QStringLiteral("#ffffff")));
-        } else if (theme == WorkspaceTheme::high_contrast) {
-            palette.setColor(QPalette::Window, Qt::black);
-            palette.setColor(QPalette::WindowText, Qt::white);
-            palette.setColor(QPalette::Base, Qt::black);
-            palette.setColor(QPalette::AlternateBase, QColor(QStringLiteral("#202020")));
-            palette.setColor(QPalette::Text, Qt::white);
-            palette.setColor(QPalette::Button, Qt::black);
-            palette.setColor(QPalette::ButtonText, Qt::white);
-            palette.setColor(QPalette::Highlight, Qt::yellow);
-            palette.setColor(QPalette::HighlightedText, Qt::black);
-            palette.setColor(QPalette::Link, Qt::yellow);
-        }
+        palette.setColor(QPalette::Window, QColor(background));
+        palette.setColor(QPalette::WindowText, QColor(foreground));
+        palette.setColor(QPalette::Base, QColor(surface));
+        palette.setColor(QPalette::AlternateBase, QColor(background));
+        palette.setColor(QPalette::Text, QColor(foreground));
+        palette.setColor(QPalette::Button, QColor(surface));
+        palette.setColor(QPalette::ButtonText, QColor(foreground));
+        palette.setColor(QPalette::Highlight, QColor(selection));
+        palette.setColor(QPalette::HighlightedText, QColor(selectedText));
+        palette.setColor(QPalette::Link, QColor(accent));
+        palette.setColor(QPalette::Disabled, QPalette::Text, QColor(muted));
+        palette.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(muted));
         owner->setPalette(palette);
+        QString stylesheet = QStringLiteral(R"(
+            QMainWindow { background: $background; }
+            QWidget { font-family: "Segoe UI"; font-size: 12px; }
+            QToolBar { background: $surface; border: 0; border-bottom: 1px solid $border;
+                       padding: 7px; spacing: 3px; }
+            QToolBar::separator { background: $border; width: 1px; margin: 6px 5px; }
+            QPushButton, QToolButton { color: $foreground; background: $surface;
+                border: 1px solid $border; border-radius: 5px; padding: 6px 9px; }
+            QToolBar QToolButton { border-color: transparent; padding: 6px 7px; }
+            QWidget#toolPanel QToolButton { padding: 6px 3px; }
+            QPushButton:hover, QToolButton:hover { background: $selection; border-color: $accent; }
+            QPushButton:pressed, QToolButton:pressed, QToolButton:checked {
+                background: $selection; color: $selectedText; border-color: $accent; }
+            QPushButton:focus, QToolButton:focus, QComboBox:focus, QLineEdit:focus,
+            QAbstractSpinBox:focus { border: 2px solid $accent; }
+            QPushButton:disabled, QToolButton:disabled { color: $muted; background: $background; }
+            QComboBox, QLineEdit, QAbstractSpinBox { color: $foreground; background: $surface;
+                border: 1px solid $border; border-radius: 5px; padding: 5px 7px; min-height: 18px; }
+            QComboBox { padding-right: 22px; }
+            QComboBox::drop-down { border: 0; width: 20px; }
+            QComboBox QAbstractItemView, QMenu { background: $surface; color: $foreground;
+                border: 1px solid $border; selection-background-color: $selection;
+                selection-color: $selectedText; padding: 4px; }
+            QMenu::item { padding: 6px 18px; }
+            QMenu::item:selected { background: $selection; color: $selectedText; }
+            QWidget#navigatorPanel, QWidget#toolPanel, QWidget#inspectorBody { background: $surface; }
+            QLabel#modelViewUnavailable { background: $surface; color: $muted;
+                border: 1px solid $border; border-radius: 8px; margin: 12px; padding: 24px; }
+            QLabel#drawingContext, QLabel#elevationScope { color: $muted; font-size: 11px; }
+            QLabel#checkpointBanner { background: $background; color: $muted;
+                padding: 7px 14px; font-weight: 600; }
+            QTreeWidget, QListWidget, QTableWidget { background: $surface; color: $foreground;
+                border: 0; alternate-background-color: $background; outline: 0;
+                selection-background-color: $selection; selection-color: $selectedText; }
+            QTreeWidget::item { min-height: 25px; border-radius: 4px; }
+            QTreeWidget::item:hover { background: $background; }
+            QTreeWidget::item:selected { background: $selection; color: $selectedText; }
+            QTreeWidget::item:focus { border: 1px solid $accent; }
+            QHeaderView::section { background: $background; color: $muted;
+                border: 0; border-bottom: 1px solid $border; padding: 6px; }
+            QTabWidget::pane { border: 1px solid $border; background: $surface; }
+            QTabBar::tab { background: $background; color: $muted; padding: 10px 18px;
+                border: 0; border-bottom: 3px solid transparent; }
+            QTabBar::tab:selected { background: $surface; color: $accent; border-bottom-color: $accent; }
+            QTabBar::tab:hover { color: $foreground; background: $selection; }
+            QGroupBox { color: $foreground; background: $surface; border: 1px solid $border;
+                border-radius: 6px; margin-top: 14px; padding: 14px 8px 8px; font-weight: 600; }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }
+            QScrollArea { border: 0; background: $surface; }
+            QSplitter::handle { background: $background; }
+            QSplitter::handle:hover { background: $accent; }
+            QStatusBar { background: $surface; color: $muted; border-top: 1px solid $border; padding: 4px 8px; }
+            QStatusBar::item { border: 0; }
+            QScrollBar:vertical { background: $background; width: 10px; margin: 0; }
+            QScrollBar::handle:vertical { background: $border; border-radius: 4px; min-height: 24px; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+            QToolTip { background: $surface; color: $foreground; border: 1px solid $border; padding: 6px; }
+        )");
+        stylesheet.replace("$background", background).replace("$surface", surface)
+            .replace("$foreground", foreground).replace("$muted", muted)
+            .replace("$border", border).replace("$accent", accent)
+            .replace("$selection", selection).replace("$selectedText", selectedText);
+        owner->setStyleSheet(stylesheet);
         owner->setProperty("workspaceTheme", QString::fromStdString(workspace_theme_name(theme)));
         m_theme = theme;
     }
@@ -2177,6 +2243,25 @@ public:
             return true;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Reference transform: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    bool beginReferenceTrace() {
+        try {
+            const auto selected = m_selected_id.trimmed().toStdString();
+            const auto snapshot = m_document->snapshot();
+            const auto found = snapshot.entities().find(selected);
+            if (found == snapshot.entities().end() ||
+                found->second.type != "reference_asset") {
+                throw std::invalid_argument("Select a reference image before tracing it.");
+            }
+            if (!beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, {})) return false;
+            owner->statusBar()->showMessage(
+                QStringLiteral("Trace reference • click boundary points, use D for precise input, Enter to close"));
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Trace reference: %1").arg(QString::fromUtf8(error.what())));
             return false;
         }
     }
@@ -3929,6 +4014,7 @@ public:
             {QStringLiteral("Import reference image"), [this] { showReferenceImport(); }},
             {QStringLiteral("Calibrate selected reference image"),
              [this] { showReferenceCalibration(); }},
+            {QStringLiteral("Trace selected reference"), [this] { beginReferenceTrace(); }},
             {QStringLiteral("Open schedules"), [this] { showSchedules(); }},
             {QStringLiteral("Edit drawing sheet settings"), [this] { showSheetSettings(); }},
             {QStringLiteral("Edit sheet viewport settings"), [this] { showViewportSettings(); }},
@@ -4639,6 +4725,7 @@ private:
     }
 
     void buildUi() {
+        QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
         owner->setObjectName(QStringLiteral("propertyStudioMainWindow"));
         owner->resize(1480, 900);
         owner->setMinimumSize(1080, 700);
@@ -4778,9 +4865,6 @@ private:
             QStringLiteral("Offline native workflow  •  Measurement + Architectural"),
             central);
         banner->setObjectName(QStringLiteral("checkpointBanner"));
-        banner->setStyleSheet(QStringLiteral(
-            "QLabel#checkpointBanner { background:#243142; color:#d8e7f7; padding:5px 10px; "
-            "font-weight:600; letter-spacing:0.4px; }"));
         root_layout->addWidget(banner);
         m_plan_error_banner = new QLabel(central);
         m_plan_error_banner->setObjectName(QStringLiteral("planGeometryError"));
@@ -4794,10 +4878,12 @@ private:
         root_layout->addWidget(splitter, 1);
 
         auto* navigator_panel = new QWidget(splitter);
+        navigator_panel->setObjectName(QStringLiteral("navigatorPanel"));
         navigator_panel->setMinimumWidth(190);
         navigator_panel->setMaximumWidth(260);
         auto* navigator_layout = new QVBoxLayout(navigator_panel);
-        navigator_layout->setContentsMargins(0, 0, 0, 0);
+        navigator_layout->setContentsMargins(10, 12, 10, 10);
+        navigator_layout->setSpacing(8);
         navigator_layout->addWidget(new QLabel(QStringLiteral("Drawing layer"), navigator_panel));
         m_drawing_layer_combo = new QComboBox(navigator_panel);
         m_drawing_layer_combo->setObjectName(QStringLiteral("drawingLayer"));
@@ -4812,10 +4898,9 @@ private:
         m_drawing_context_label->setObjectName(QStringLiteral("drawingContext"));
         m_drawing_context_label->setWordWrap(true);
         m_drawing_context_label->setTextFormat(Qt::PlainText);
-        m_drawing_context_label->setStyleSheet(QStringLiteral("color:#555; font-size:11px;"));
         navigator_layout->addWidget(m_drawing_context_label);
         auto* scope_label = new QLabel(QStringLiteral("Geometry uses world elevations"), navigator_panel);
-        scope_label->setStyleSheet(QStringLiteral("color:#666; font-size:11px;"));
+        scope_label->setObjectName(QStringLiteral("elevationScope"));
         scope_label->setWordWrap(true);
         navigator_layout->addWidget(scope_label);
         auto* visibility_header = new QHBoxLayout();
@@ -4894,6 +4979,7 @@ private:
                          });
 
         auto* tool_panel = new QWidget(splitter);
+        tool_panel->setObjectName(QStringLiteral("toolPanel"));
         tool_panel->setFixedWidth(82);
         auto* tool_layout = new QVBoxLayout(tool_panel);
         tool_layout->setContentsMargins(4, 8, 4, 8);
@@ -4987,9 +5073,9 @@ private:
             auto* unavailable = new QLabel(
                 QStringLiteral("Native OCCT 3D is disabled on the offscreen smoke platform."),
                 architectural_splitter);
+            unavailable->setObjectName(QStringLiteral("modelViewUnavailable"));
             unavailable->setAlignment(Qt::AlignCenter);
             unavailable->setWordWrap(true);
-            unavailable->setStyleSheet(QStringLiteral("color:#9aa8ba; padding:24px;"));
             architectural_splitter->addWidget(unavailable);
         }
         architectural_layout->addWidget(architectural_splitter);
@@ -5010,10 +5096,12 @@ private:
         m_inspector->setMinimumWidth(290);
         m_inspector->setMaximumWidth(330);
         auto* inspector_body = new QWidget(m_inspector);
+        inspector_body->setObjectName(QStringLiteral("inspectorBody"));
         inspector_body->setMinimumWidth(0);
         inspector_body->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
         auto* inspector_layout = new QVBoxLayout(inspector_body);
         inspector_layout->setContentsMargins(10, 10, 10, 10);
+        inspector_layout->setSpacing(10);
         auto* heading = new QLabel(QStringLiteral("Inspector"), inspector_body);
         heading->setStyleSheet(QStringLiteral("font-size:16px; font-weight:600;"));
         inspector_layout->addWidget(heading);
@@ -7293,6 +7381,10 @@ bool MainWindow::editReferenceTransform(const QString& reference_id, const QStri
     return m_impl->editReferenceTransform(reference_id, x_metres, y_metres,
                                           metres_per_source_unit, scale, rotation_degrees,
                                           intensity, flip_horizontal, flip_vertical, visible);
+}
+
+bool MainWindow::beginReferenceTrace() {
+    return m_impl->beginReferenceTrace();
 }
 
 bool MainWindow::undoCommand() {

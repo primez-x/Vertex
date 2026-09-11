@@ -25,10 +25,11 @@ images can now be imported into the project Asset store, displayed as a shared
 canvas underlay, calibrated in metres per source pixel, and transformed through
 typed undoable edits. PDF page import now retains the original PDF beside
 a validated local PNG preview, so PDF tracing can start from an offline project
-asset. Multiple retained underlays, PDF page selection, and known-distance
-calibration UI are integrated through the typed Document history. Interactive tracing,
-native Apex compatibility, clean-machine packaging, and end-to-end production
-evidence are still open.
+asset. Multiple retained underlays, PDF page selection, known-distance
+calibration UI, and the explicit **Trace selected reference** boundary workflow
+are integrated through the typed Document history. Automated edge extraction,
+editable PDF geometry, native Apex compatibility, clean-machine packaging, and
+end-to-end production evidence are still open.
 
 The next foundation slice adds immutable room-versus-measurement relationship
 validation, existing/demolished/proposed phase state with mutually exclusive

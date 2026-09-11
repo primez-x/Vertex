@@ -142,7 +142,12 @@ underlays render in stable entity-ID order beneath authored geometry, including
 sheet output; the last underlay in that order is picked first where they overlap.
 The PDF import dialog asks for a page when the source contains multiple pages;
 programmatic imports retain the first-page default. PDF content remains a raster
-reference, with no editable extraction. Interactive tracing remains pending.
+reference, with no editable extraction. **Trace selected reference** starts the
+same receipt-bearing boundary authoring session used by measured drawing, so
+the operator can click or precisely enter a boundary over the calibrated image;
+the committed boundary remains model geometry and can be classified and
+calculated independently of the pixels. Automated edge extraction and editable
+PDF geometry remain future work.
 
 ## Interaction and persistence
 

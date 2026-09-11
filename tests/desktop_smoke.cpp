@@ -12,6 +12,7 @@
 #include <QComboBox>
 #include <QFile>
 #include <QImage>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPainter>
@@ -405,6 +406,13 @@ int main(int argc, char** argv) {
             "reference transform should persist calibration, placement, and presentation");
     require(window.undoCommand() && window.redoCommand(),
             "reference transform should participate in undo and redo");
+    require(window.selectEntity(reference_id) && window.beginReferenceTrace() &&
+                reference_canvas->boundaryDraftPreview().has_value(),
+            "a selected reference should start the normal interactive tracing workflow");
+    QKeyEvent cancel_trace(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(reference_canvas, &cancel_trace);
+    require(!reference_canvas->boundaryDraftPreview().has_value(),
+            "cancelling a reference trace should leave no unfinished boundary draft");
 
     // Exercise two independent retained underlays without other scene content.
     sketch::desktop::MainWindow multi_reference_window;
