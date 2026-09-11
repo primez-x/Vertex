@@ -3,8 +3,9 @@
 This describes the internal `workspace_history` record codec, now used by the
 recovery-aware SQLite v4 save/load routes. Core workspace restoration consumes
 this record after aggregate revalidation, and the guarded desktop save path uses
-the acknowledgement boundary. Live asynchronous saving, autosave and restart
-recovery remain separate integration work.
+the acknowledgement boundary. Live desktop asynchronous saving, autosave and
+restart recovery remain separate integration work; reusable queue and scheduler
+contracts are documented independently.
 
 The JSON envelope has exactly these fields: `version`, `replay_version`,
 `document_history`, `events`, `navigation`, `retired`, `workspace_epoch`,

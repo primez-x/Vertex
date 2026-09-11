@@ -36,7 +36,12 @@ optional saved marker. It shares the locked atomic-publication/backup path,
 validates an aggregate digest, rejects duplicate recovery JSON keys and bounds
 wire data before DOM construction and hashing. Opaque results expose no reusable
 document snapshot. Desktop open/save now uses guarded v4 restoration and save
-acknowledgement; workspace-command migration, autosave and restart restoration
+acknowledgement; a serialized immutable-snapshot save queue now provides FIFO
+background publication, ordered barriers, exception capture, and explicit
+draining/cancellation semantics. An owner-thread autosave scheduler now enforces
+two-second quiet debounce and a 30-second maximum interval while preserving
+stale/failure retry semantics. Desktop queue/scheduler wiring, restart
+restoration
 remain open.
 
 Workspace navigation now orders document commands, session activation and
@@ -79,7 +84,10 @@ records, historical baseline fences, sealed workspace document publication and
 active-checkpoint publication, global activation/discard navigation and
 pointer/semantic generation separation. The checkpoint also covers desktop
 v4 open/save, ledger preservation, failed-open isolation and fail-closed direct
-edits to restored recovery documents.
+edits to restored recovery documents. Entity authoring, organization/building
+object commands, undo/redo, and lifecycle-only navigation now route through the
+workspace for recovered archives; constraint-preview and boundary-finish paths
+still need migration.
 The source and executable manifest is `artifacts/reviews/integrated-v24r-provenance.json`.
 The earlier v24d checkpoint also passed eighteen offscreen boundary
 canvas/input/workflow checks at DPR 1, 1.5 and 2 across both builds.
@@ -92,8 +100,8 @@ no mutable Document escape. Core archive restoration now validates and detaches
 the decoded aggregate before installing it in a fresh workspace. The guarded
 desktop open path now uses this API. Internal aggregate v4 persistence and the
 save acknowledgement boundary are implemented and used by the guarded desktop
-save path; full workspace-command migration, live queueing, autosave and
-restart recovery remain open.
+save path; remaining workspace-command migration, desktop queue wiring,
+autosave, and restart recovery remain open.
 Explicit Revise Input is implemented in memory: canonical replay regenerates
 IDs, preserves local history/counter floors and opaque extensions, and records
 the original retired namespace and finish event on a fresh activation bound to

@@ -259,7 +259,10 @@
       "package": 3,
       "blocker": null,
       "implementation_sources": [
-        "src/core/document.cpp"
+        "src/core/document.cpp",
+        "include/sketch/workspace_save_queue.hpp",
+        "src/core/workspace_save_queue.cpp",
+        "src/desktop/main_window.cpp"
       ],
       "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
     },
@@ -329,10 +332,17 @@
       "requirement": "Apex exchange, CAD exchange, devices, georeferencing, and appraisal integrations attach through replaceable versioned adapters.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "A disabled or failed adapter does not prevent project open, deterministic editing, calculation, save, print, or export; manifests report protocol and capability versions.",
       "package": 3,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/integration_adapter.hpp",
+        "src/core/integration_adapter.cpp",
+        "tests/integration_adapter_tests.cpp",
+        "docs/integration-adapters.md"
+      ],
+      "implementation_note": "Versioned descriptor and fail-closed registry are implemented and tested; concrete Apex/CAD/device/georeferencing/appraisal adapters and compatibility certification remain open."
     },
     {
       "id": "COMP-LIC-001",
@@ -353,7 +363,10 @@
       "package": 2,
       "blocker": "Exact revisions, transitive packages, and final build configuration must be selected and license-reviewed before distribution.",
       "implementation_sources": [
-        "third_party/dependencies.json"
+        "third_party/dependencies.json",
+        "third_party/distribution-components.json",
+        "scripts/distribution_inventory.py",
+        "docs/dependencies/distribution-inventory.md"
       ],
       "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
     },
@@ -1589,16 +1602,27 @@
       "package": 7,
       "blocker": null
     },
-    {
+  {
       "id": "REC-001",
       "area": "recovery",
       "requirement": "Provide local autosave, recoverable history, and crash/power-loss recovery with explicit edited, autosaved, and saved states.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Crash and power-interruption fixtures recover the last valid revision, identify the session and checksum, and never silently overwrite the saved source.",
       "package": 3,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/workspace_autosave_scheduler.hpp",
+        "src/core/workspace_autosave_scheduler.cpp",
+        "include/sketch/workspace_save_queue.hpp",
+        "src/core/workspace_save_queue.cpp",
+        "tests/workspace_autosave_scheduler_tests.cpp",
+        "tests/workspace_save_queue_tests.cpp",
+        "docs/workspace-autosave-scheduler.md",
+        "docs/workspace-save-queue.md"
+      ],
+      "implementation_note": "Scheduling policy and serialized queue are implemented and tested; desktop persistence, crash/power interruption, and restart recovery remain open."
     },
     {
       "id": "REC-002",

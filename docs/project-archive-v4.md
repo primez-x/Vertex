@@ -9,7 +9,9 @@ Unfamiliar records or a role mismatch yield an opaque result containing the
 original ledger and source hash, without a reusable document snapshot. The
 complete original archive remains on disk for future exact-byte handling. This is an
 internal persistence API; core workspace restoration now consumes the validated
-decoded aggregate, while desktop recovery and autosave are not yet integrated.
+decoded aggregate. Desktop has guarded v4 open/save and workspace-command
+coverage; the reusable save queue and autosave scheduler are implemented, while
+desktop scheduling, restart selection, and recovery UI remain open.
 
 Version 4 keeps the five existing document tables and adds one STRICT table:
 

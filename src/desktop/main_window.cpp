@@ -1074,7 +1074,7 @@ public:
                 layer_id = layer.id;
                 changes.push_back(EntityChange::upsert(std::move(layer)));
             } else if (type == "layer") layer_id = id;
-            m_document->apply(ApplyEntityChanges{
+            applyDocumentCommand(ApplyEntityChanges{
                 .expected_revision = revision,
                 .entity_changes = std::move(changes),
                 .message = "create " + type,
@@ -1243,7 +1243,7 @@ public:
                 if (!assignDrawingContext(candidate.properties)) return {};
             }
             const auto id = id_from(candidate.id);
-            m_document->apply(ApplyEntityChanges{
+            applyDocumentCommand(ApplyEntityChanges{
                 .expected_revision = expected_revision,
                 .entity_changes = {EntityChange::upsert(std::move(candidate))},
                 .message = replace_selected ? "edit building object" : "create building object",
@@ -1630,11 +1630,16 @@ public:
             if (changed) { clearError(); boundaryDraftChanged(); }
             return changed;
         }
-        if (!m_document->can_undo()) {
+        if (!(m_recovery_ledger.empty() ? m_document->can_undo() : m_project_workspace->can_undo())) {
             return false;
         }
         try {
-            m_document->undo(m_document->revision());
+            if (m_recovery_ledger.empty()) m_document->undo(m_document->revision());
+            else {
+                requireWorkspaceDocument();
+                auto edit = m_project_workspace->prepare_undo();
+                commitWorkspaceEdit(edit);
+            }
             m_selected_id.clear();
             clearError();
             refresh();
@@ -1651,11 +1656,16 @@ public:
             if (changed) { clearError(); boundaryDraftChanged(); }
             return changed;
         }
-        if (!m_document->can_redo()) {
+        if (!(m_recovery_ledger.empty() ? m_document->can_redo() : m_project_workspace->can_redo())) {
             return false;
         }
         try {
-            m_document->redo(m_document->revision());
+            if (m_recovery_ledger.empty()) m_document->redo(m_document->revision());
+            else {
+                requireWorkspaceDocument();
+                auto edit = m_project_workspace->prepare_redo();
+                commitWorkspaceEdit(edit);
+            }
             clearError();
             refresh();
             return true;
@@ -1728,6 +1738,7 @@ public:
             m_document = std::move(candidate);
             m_project_workspace = std::move(candidate_workspace);
             m_recovery_ledger = std::move(candidate_ledger);
+            m_saved_workspace_epoch = m_project_workspace->epoch();
             m_view_filter = {};
             m_file_path = candidate_path;
             initializeDrawingContext();
@@ -2205,6 +2216,66 @@ private:
         }
     }
 
+    void requireWorkspaceDocument() const {
+        if (document_authoring_source_digest_v1(m_document->snapshot()) !=
+            document_authoring_source_digest_v1(m_project_workspace->snapshot()))
+            throw std::runtime_error("The recovered document changed outside its workspace. The command is blocked to preserve recovery history.");
+    }
+
+    bool projectDirty() const {
+        return m_document->dirty() || (!m_recovery_ledger.empty() &&
+            m_project_workspace->epoch() != m_saved_workspace_epoch);
+    }
+
+    void commitWorkspaceEdit(PreparedWorkspaceEdit& edit) {
+        // Allocate the compatibility view before committing. Preserve its address
+        // for both canvases and callers holding the shared Document.
+        auto candidate = Document::fork(edit.preview());
+        if (const auto saved = m_document->snapshot().saved_revision_optional())
+            candidate.mark_saved(*saved);
+        (void)m_project_workspace->commit(edit);
+        *m_document = std::move(candidate);
+    }
+
+    void applyDocumentCommand(const Command& command) {
+        if (m_recovery_ledger.empty()) {
+            m_document->apply(command);
+            return;
+        }
+        requireWorkspaceDocument();
+        auto edit = m_project_workspace->prepare(command);
+        commitWorkspaceEdit(edit);
+    }
+
+    RecoveryLedger currentRecoveryLedger(const ProjectWorkspaceSnapshot& snapshot) const {
+        auto ledger = m_recovery_ledger;
+        if (ledger.empty()) return ledger;
+        const auto history = capture_workspace_history_record(snapshot);
+        bool has_history = false;
+        bool has_active = false;
+        for (auto it = ledger.begin(); it != ledger.end();) {
+            if (it->record_kind == "workspace_history") {
+                it->envelope = encode_workspace_history_record(snapshot.document(), history,
+                    snapshot.active_boundary());
+                has_history = true;
+            } else if (it->record_kind == "boundary_active") {
+                if (!snapshot.active_boundary()) {
+                    it = ledger.erase(it);
+                    continue;
+                }
+                it->envelope = encode_boundary_active_recovery(*snapshot.active_boundary());
+                has_active = true;
+            }
+            ++it;
+        }
+        if (!has_history) ledger.push_back({make_stable_id(), "workspace_history",
+            encode_workspace_history_record(snapshot.document(), history, snapshot.active_boundary())});
+        if (snapshot.active_boundary() && !has_active)
+            ledger.push_back({make_stable_id(), "boundary_active",
+                encode_boundary_active_recovery(*snapshot.active_boundary())});
+        return ledger;
+    }
+
     bool applyEntity(Entity entity, const char* message,
                      std::optional<Revision> expected_revision = std::nullopt) {
         if (!m_document->is_editable()) {
@@ -2213,7 +2284,7 @@ private:
             return false;
         }
         try {
-            m_document->apply(ApplyEntityChanges{
+            applyDocumentCommand(ApplyEntityChanges{
                 .expected_revision = expected_revision.value_or(m_document->revision()),
                 .entity_changes = {EntityChange::upsert(std::move(entity))},
                 .message = message,
@@ -2237,13 +2308,13 @@ private:
             const auto source_digest = document_authoring_source_digest_v1(snapshot);
             if (source_digest != document_authoring_source_digest_v1(m_project_workspace->snapshot())) {
                 // The public mutable Document API remains supported for legacy projects.
-                // Until desktop edits use workspace commands, never silently discard a
-                // restored recovery ledger to accommodate an out-of-band document edit.
+                // Never discard a restored ledger to accommodate an out-of-band edit.
                 if (!m_recovery_ledger.empty())
                     throw std::runtime_error("The recovered document changed outside its workspace. Saving is blocked to preserve recovery history.");
                 m_project_workspace = std::make_unique<ProjectWorkspace>(snapshot);
             }
             const auto workspace_snapshot = m_project_workspace->capture();
+            auto recovery_ledger = currentRecoveryLedger(workspace_snapshot);
             const auto source_document = m_document;
             const auto path_utf8 = path.generic_u8string();
             const SavePublicationBinding binding{
@@ -2273,7 +2344,7 @@ private:
             const auto receipt = m_recovery_ledger.empty()
                 ? ProjectStore::save(path, persisted_snapshot, options)
                 : ProjectStore::save_archive(path,
-                    ProjectArchiveSnapshot(persisted_snapshot, m_recovery_ledger, ArchiveRole::ordinary), options);
+                    ProjectArchiveSnapshot(persisted_snapshot, recovery_ledger, ArchiveRole::ordinary), options);
             const auto acknowledgement = WorkspaceSaveCoordinator::accept(ticket, receipt,
                 m_project_workspace->capture(), binding,
                 document_authoring_source_digest_v1(m_document->snapshot()));
@@ -2285,6 +2356,8 @@ private:
             const bool refresh_draft_source = m_boundary_source && m_boundary_document == m_document &&
                 document_snapshot_digest(*m_boundary_source) == document_snapshot_digest(snapshot);
             m_document->mark_saved(receipt.revision);
+            m_recovery_ledger = std::move(recovery_ledger);
+            m_saved_workspace_epoch = m_project_workspace->epoch();
             if (refresh_draft_source) m_boundary_source = m_document->snapshot();
             m_file_path = path;
             m_file_sha256 = receipt.file_sha256;
@@ -2303,7 +2376,7 @@ private:
 
     bool confirmDirtyTransition(const QString& title, const QString& message) {
         if (!confirmDiscardBoundaryDraft()) return false;
-        if (!m_document->dirty() || !m_document->is_editable()) {
+        if (!projectDirty() || !m_document->is_editable()) {
             return true;
         }
         const auto context = captureModalContext();
@@ -3540,9 +3613,11 @@ private:
     }
 
     void refreshActions() {
-        m_undo_action->setEnabled(m_boundary_session ? m_boundary_session->can_undo() : m_document->can_undo());
-        m_redo_action->setEnabled(m_boundary_session ? m_boundary_session->can_redo() : m_document->can_redo());
-        m_save_action->setEnabled(m_document->is_editable() && m_document->dirty());
+        m_undo_action->setEnabled(m_boundary_session ? m_boundary_session->can_undo() :
+            m_recovery_ledger.empty() ? m_document->can_undo() : m_project_workspace->can_undo());
+        m_redo_action->setEnabled(m_boundary_session ? m_boundary_session->can_redo() :
+            m_recovery_ledger.empty() ? m_document->can_redo() : m_project_workspace->can_redo());
+        m_save_action->setEnabled(m_document->is_editable() && projectDirty());
         m_save_as_action->setEnabled(m_document->is_editable());
         m_object_button->setEnabled(m_document->is_editable());
     }
@@ -3555,7 +3630,7 @@ private:
         } else {
             title += QStringLiteral("  •  Untitled");
         }
-        if (m_document->dirty() || hasBoundaryDraftChanges()) {
+        if (projectDirty() || hasBoundaryDraftChanges()) {
             title += QStringLiteral(" *");
         }
         owner->setWindowTitle(title);
@@ -4073,6 +4148,7 @@ private:
     std::shared_ptr<Document> m_document;
     std::unique_ptr<ProjectWorkspace> m_project_workspace;
     RecoveryLedger m_recovery_ledger;
+    std::uint64_t m_saved_workspace_epoch{};
     const std::string m_save_owner_token{make_stable_id()};
     std::filesystem::path m_file_path;
     std::string m_file_sha256;

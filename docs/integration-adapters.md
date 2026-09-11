@@ -1,0 +1,13 @@
+# Integration adapter contract
+
+`integration_adapter.hpp` defines metadata and deterministic capability resolution for Apex exchange, CAD exchange, devices, georeferencing, and appraisal. It does not load plugins, execute operations, parse Apex files, access devices, or certify format compatibility. No adapters are registered by default. Product code must treat a missing or rejected resolution as unavailable; it must never fall back to guessing a format or integration.
+
+Each descriptor owns a validated immutable copy of its definition: globally unique adapter ID, domain, API version, format ID and version, operations, provenance, and license. IDs use lowercase ASCII letters, digits, dots, underscores, and hyphens. Provenance and license must contain nonblank text without control characters. These fields document the supplier's claims; registration does not independently verify origin or legal rights. Callers remain responsible for assessing them before adding an adapter.
+
+The host currently accepts API **1.0** only. Format versions require a nonzero major version. Resolution requires the same format major and an offered minor at least as high as the requested minimum; adapters must advertise a version only when they support that compatibility promise. Requests also carry a minimum API version; unsupported API requirements are rejected. Duplicate IDs, empty or repeated operations, invalid enum values, and malformed metadata are rejected without changing the registry.
+
+Resolution matches domain, operation, format ID, and versions. An optional adapter ID narrows this match but never bypasses capability checks. Zero matches fail closed. Multiple matches raise an ambiguity error, even when one has a newer format minor. Select a specific adapter explicitly when multiple implementations are intentional.
+
+A registry belongs to the thread that constructs it and cannot be copied or moved. Register and resolve calls on another thread throw `std::logic_error` before touching mutable registry data. This is confinement, not a mutex-backed concurrent registry. Independently constructed registries have independent state. Returned `shared_ptr<const IntegrationAdapterDescriptor>` values can outlive the registry and be read across threads; the registry must still remain alive during calls, and destruction must not race with calls.
+
+Malformed descriptors and requests raise `std::invalid_argument`; missing and ambiguous matches raise `std::runtime_error`. The synthetic tests exercise metadata validation, defensive ownership, duplicate registration, version rejection, unknown integrations, ambiguity, explicit selection, and thread confinement. They do not establish compatibility with any third-party product or file format.

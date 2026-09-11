@@ -66,6 +66,37 @@ void run() {
         loaded.archive->recovery().front().envelope == ledger.front().envelope,
         "save preserves complete recovery ledger and extensions");
     require(loaded.recovery.decoded->active == active, "save retains active recovery input");
+    const auto wall = window.createStraightWall({0, 0}, {4, 0});
+    require(!wall.isEmpty(), "recovery workspace accepts desktop wall command");
+    require(window.undoCommand() && !window.document().snapshot().entities().contains(wall.toStdString()),
+        "recovery workspace undo removes desktop wall");
+    require(window.redoCommand() && window.document().snapshot().entities().contains(wall.toStdString()),
+        "recovery workspace redo restores desktop wall");
+    require(window.saveProject(), "edited recovery workspace saves its updated ledger");
+    const auto edited = ProjectStore::load_archive(destination, ArchiveRole::ordinary);
+    require(edited.supported() && edited.recovery.decoded->active == active &&
+        edited.recovery.decoded->history->extensions == history.extensions,
+        "edited archive preserves recovered input and history extensions");
+    require(reopened.openProject(qt_path(destination)), "edited recovery archive reopens");
+    require(reopened.undoCommand() && !reopened.document().snapshot().entities().contains(wall.toStdString()),
+        "reopened recovery archive retains command undo");
+    require(reopened.redoCommand() && reopened.saveProject(), "reopened recovery archive redoes and saves");
+    desktop::MainWindow lifecycle;
+    lifecycle.document().mark_saved(lifecycle.document().revision());
+    require(lifecycle.openProject(qt_path(source)), "open lifecycle fixture");
+    const auto lifecycle_path = directory / "lifecycle.bldproj";
+    require(lifecycle.saveProjectAs(qt_path(lifecycle_path)), "save lifecycle fixture");
+    require(lifecycle.undoCommand() && lifecycle.windowTitle().endsWith(" *"),
+        "lifecycle-only undo marks the project dirty");
+    require(lifecycle.saveProject(), "save lifecycle-only undo");
+    const auto retired = ProjectStore::load_archive(lifecycle_path, ArchiveRole::ordinary);
+    require(retired.supported() && !retired.recovery.decoded->active,
+        "lifecycle undo removes the active record without losing history");
+    require(lifecycle.openProject(qt_path(lifecycle_path)) && lifecycle.redoCommand() && lifecycle.saveProject(),
+        "lifecycle redo survives reopening");
+    const auto reactivated = ProjectStore::load_archive(lifecycle_path, ArchiveRole::ordinary);
+    require(reactivated.supported() && reactivated.recovery.decoded->active == active,
+        "lifecycle redo restores the retained input record");
     const auto clean_digest = document_snapshot_digest(window.document().snapshot());
     require(!window.openProject(qt_path(directory / "missing.bldproj")), "missing archive is rejected");
     require(document_snapshot_digest(window.document().snapshot()) == clean_digest,
@@ -76,6 +107,10 @@ void run() {
     entity.properties["name"] = "Direct edit";
     window.document().apply(ApplyEntityChanges{.expected_revision = window.document().revision(),
         .entity_changes = {EntityChange::upsert(std::move(entity))}, .message = "direct edit"});
+    const auto divergent_digest = document_snapshot_digest(window.document().snapshot());
+    require(window.createStraightWall({0, 1}, {4, 1}).isEmpty() && !window.undoCommand() &&
+        document_snapshot_digest(window.document().snapshot()) == divergent_digest,
+        "commands reject out-of-band divergence without discarding edits");
     require(!window.saveProject() && window.document().dirty(),
         "out-of-band recovery edits fail closed without acknowledging saved state");
     require(ProjectStore::file_sha256(destination) == file_hash,

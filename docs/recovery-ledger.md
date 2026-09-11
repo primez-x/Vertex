@@ -30,6 +30,7 @@ The limits are conservative admission estimates, not memory or timing promises.
 
 SQLite schema checks, sorted-row logical hashing and locked atomic publication
 are implemented in the archive store. Exact-byte copying of unfamiliar archives,
-full workspace-command desktop editing, autosave and restart recovery remain
-separate work. The document-only store still supports formats 1–3 and refuses
-recovery-bearing destinations.
+the remaining desktop mutation paths, desktop autosave scheduling, and restart
+recovery remain separate work. The reusable immutable save queue and
+owner-thread autosave policy are covered independently. The document-only store
+still supports formats 1–3 and refuses recovery-bearing destinations.

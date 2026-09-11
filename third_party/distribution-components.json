@@ -1,0 +1,412 @@
+{
+  "schema_version": 1,
+  "audit_status": "incomplete",
+  "runtime_evidence": {
+    "path": "artifacts/runtime/release-imports.json",
+    "required": true
+  },
+  "package_managers": [
+    {
+      "name": "vcpkg",
+      "manifest_path": "third_party/dependencies.json",
+      "repository": "https://github.com/microsoft/vcpkg.git",
+      "commit": "0397b75952a7c874b68a7d4f9baf8d3c5951b371"
+    }
+  ],
+  "components": [
+    {
+      "id": "property-studio",
+      "kind": "application",
+      "package": {
+        "name": "Property Studio",
+        "version": "workspace",
+        "license": "Proprietary"
+      },
+      "source": {
+        "kind": "workspace",
+        "paths": ["src", "include", "CMakeLists.txt"]
+      },
+      "notice_paths": ["LICENSE"],
+      "runtime_names": ["property-studio.exe"],
+      "destinations": {
+        "property-studio.exe": "bin/property-studio.exe"
+      }
+    },
+    {
+      "id": "property-cli",
+      "kind": "application",
+      "package": {
+        "name": "Property Studio CLI",
+        "version": "workspace",
+        "license": "Proprietary"
+      },
+      "source": {
+        "kind": "workspace",
+        "paths": ["src", "include", "CMakeLists.txt"]
+      },
+      "notice_paths": ["LICENSE"],
+      "runtime_names": ["property-cli.exe"],
+      "destinations": {
+        "property-cli.exe": "bin/property-cli.exe"
+      }
+    },
+    {
+      "id": "planegcs",
+      "kind": "runtime",
+      "package": {
+        "name": "PlaneGCS",
+        "version": "FreeCAD-1.1.3",
+        "license": "LGPL-2.1-or-later"
+      },
+      "source": {
+        "kind": "planegcs-provenance",
+        "provenance_path": "third_party/planegcs/SOURCE.md",
+        "paths": ["third_party/planegcs/upstream"]
+      },
+      "notice_paths": ["third_party/planegcs/upstream/LICENSE"],
+      "runtime_names": ["property_planegcs.dll"],
+      "destinations": {
+        "property_planegcs.dll": "bin/property_planegcs.dll"
+      }
+    },
+    {
+      "id": "qtbase",
+      "kind": "runtime",
+      "package": {
+        "name": "qtbase",
+        "version": "6.8.3",
+        "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+      },
+      "source": {
+        "kind": "qt-spdx",
+        "spdx_path": ".deps/qt/6.8.3/msvc2022_64/sbom/qtbase-6.8.3.spdx.json",
+        "prefix_path": ".deps/qt/6.8.3/msvc2022_64",
+        "package_id": "SPDXRef-Package-qtbase",
+        "module_version": "6.8.3"
+      },
+      "notice_paths": [
+        ".deps/qt/6.8.3/msvc2022_64/sbom/qtbase-6.8.3.spdx",
+        ".deps/qt/6.8.3/msvc2022_64/sbom/qtbase-6.8.3.source.spdx"
+      ],
+      "runtime_names": [
+        "Qt6Core.dll",
+        "Qt6Gui.dll",
+        "Qt6PrintSupport.dll",
+        "Qt6Widgets.dll",
+        "qwindows.dll",
+        "qmodernwindowsstyle.dll",
+        "qgif.dll",
+        "qico.dll",
+        "qjpeg.dll"
+      ],
+      "destinations": {
+        "Qt6Core.dll": "bin/Qt6Core.dll",
+        "Qt6Gui.dll": "bin/Qt6Gui.dll",
+        "Qt6PrintSupport.dll": "bin/Qt6PrintSupport.dll",
+        "Qt6Widgets.dll": "bin/Qt6Widgets.dll",
+        "qwindows.dll": "plugins/platforms/qwindows.dll",
+        "qmodernwindowsstyle.dll": "plugins/styles/qmodernwindowsstyle.dll",
+        "qgif.dll": "plugins/imageformats/qgif.dll",
+        "qico.dll": "plugins/imageformats/qico.dll",
+        "qjpeg.dll": "plugins/imageformats/qjpeg.dll"
+      }
+    },
+    {
+      "id": "opencascade",
+      "kind": "runtime",
+      "package": {
+        "name": "opencascade",
+        "version": "8.0.1",
+        "license": "LGPL-2.1-only"
+      },
+      "source": {
+        "kind": "vcpkg-spdx",
+        "spdx_path": ".deps/native/x64-windows/share/opencascade/vcpkg.spdx.json",
+        "prefix_path": ".deps/native/x64-windows",
+        "package_id": "SPDXRef-port"
+      },
+      "notice_paths": [".deps/native/x64-windows/share/opencascade/copyright"],
+      "runtime_names": [
+        "TKBO.dll",
+        "TKBRep.dll",
+        "TKernel.dll",
+        "TKG2d.dll",
+        "TKGeomBase.dll",
+        "TKHLR.dll",
+        "TKMath.dll",
+        "TKOpenGl.dll",
+        "TKPrim.dll",
+        "TKService.dll",
+        "TKTopAlgo.dll",
+        "TKV3d.dll",
+        "TKG3d.dll",
+        "TKGeomAlgo.dll",
+        "TKShHealing.dll",
+        "TKMesh.dll"
+      ],
+      "destinations": {
+        "TKBO.dll": "bin/TKBO.dll",
+        "TKBRep.dll": "bin/TKBRep.dll",
+        "TKernel.dll": "bin/TKernel.dll",
+        "TKG2d.dll": "bin/TKG2d.dll",
+        "TKGeomBase.dll": "bin/TKGeomBase.dll",
+        "TKHLR.dll": "bin/TKHLR.dll",
+        "TKMath.dll": "bin/TKMath.dll",
+        "TKOpenGl.dll": "bin/TKOpenGl.dll",
+        "TKPrim.dll": "bin/TKPrim.dll",
+        "TKService.dll": "bin/TKService.dll",
+        "TKTopAlgo.dll": "bin/TKTopAlgo.dll",
+        "TKV3d.dll": "bin/TKV3d.dll",
+        "TKG3d.dll": "bin/TKG3d.dll",
+        "TKGeomAlgo.dll": "bin/TKGeomAlgo.dll",
+        "TKShHealing.dll": "bin/TKShHealing.dll",
+        "TKMesh.dll": "bin/TKMesh.dll"
+      }
+    },
+    {
+      "id": "freetype",
+      "kind": "runtime",
+      "package": {
+        "name": "freetype",
+        "version": "2.14.3",
+        "license": "(FTL OR GPL-2.0-or-later)"
+      },
+      "source": {
+        "kind": "vcpkg-spdx",
+        "spdx_path": ".deps/native/x64-windows/share/freetype/vcpkg.spdx.json",
+        "prefix_path": ".deps/native/x64-windows",
+        "package_id": "SPDXRef-port"
+      },
+      "notice_paths": [".deps/native/x64-windows/share/freetype/copyright"],
+      "runtime_names": ["freetype.dll"],
+      "destinations": {
+        "freetype.dll": "bin/freetype.dll"
+      }
+    },
+    {
+      "id": "brotli",
+      "kind": "runtime",
+      "package": {
+        "name": "brotli",
+        "version": "1.2.0",
+        "license": "MIT"
+      },
+      "source": {
+        "kind": "vcpkg-spdx",
+        "spdx_path": ".deps/native/x64-windows/share/brotli/vcpkg.spdx.json",
+        "prefix_path": ".deps/native/x64-windows",
+        "package_id": "SPDXRef-port"
+      },
+      "notice_paths": [".deps/native/x64-windows/share/brotli/copyright"],
+      "runtime_names": ["brotlidec.dll", "brotlicommon.dll"],
+      "destinations": {
+        "brotlidec.dll": "bin/brotlidec.dll",
+        "brotlicommon.dll": "bin/brotlicommon.dll"
+      }
+    },
+    {
+      "id": "bzip2",
+      "kind": "runtime",
+      "package": {
+        "name": "bzip2",
+        "version": "1.0.8#6",
+        "license": "bzip2-1.0.6"
+      },
+      "source": {
+        "kind": "vcpkg-spdx",
+        "spdx_path": ".deps/native/x64-windows/share/bzip2/vcpkg.spdx.json",
+        "prefix_path": ".deps/native/x64-windows",
+        "package_id": "SPDXRef-port"
+      },
+      "notice_paths": [".deps/native/x64-windows/share/bzip2/copyright"],
+      "runtime_names": ["bz2.dll"],
+      "destinations": {
+        "bz2.dll": "bin/bz2.dll"
+      }
+    },
+    {
+      "id": "libpng",
+      "kind": "runtime",
+      "package": {
+        "name": "libpng",
+        "version": "1.6.58",
+        "license": "libpng-2.0"
+      },
+      "source": {
+        "kind": "vcpkg-spdx",
+        "spdx_path": ".deps/native/x64-windows/share/libpng/vcpkg.spdx.json",
+        "prefix_path": ".deps/native/x64-windows",
+        "package_id": "SPDXRef-port"
+      },
+      "notice_paths": [".deps/native/x64-windows/share/libpng/copyright"],
+      "runtime_names": ["libpng16.dll"],
+      "destinations": {
+        "libpng16.dll": "bin/libpng16.dll"
+      }
+    },
+    {
+      "id": "zlib",
+      "kind": "runtime",
+      "package": {
+        "name": "zlib",
+        "version": "1.3.2#2",
+        "license": "Zlib"
+      },
+      "source": {
+        "kind": "vcpkg-spdx",
+        "spdx_path": ".deps/native/x64-windows/share/zlib/vcpkg.spdx.json",
+        "prefix_path": ".deps/native/x64-windows",
+        "package_id": "SPDXRef-port"
+      },
+      "notice_paths": [".deps/native/x64-windows/share/zlib/copyright"],
+      "runtime_names": ["z.dll"],
+      "destinations": {
+        "z.dll": "bin/z.dll"
+      }
+    },
+    {
+      "id": "sqlite",
+      "kind": "static-source",
+      "package": {
+        "name": "SQLite",
+        "version": "3.53.4",
+        "license": "Public-Domain"
+      },
+      "source": {
+        "kind": "bootstrap-dependency",
+        "dependencies_path": "third_party/dependencies.json",
+        "dependency_name": "SQLite",
+        "paths": [
+          ".deps/src/sqlite/sqlite-amalgamation-3530400/sqlite3.c",
+          ".deps/src/sqlite/sqlite-amalgamation-3530400/sqlite3.h",
+          ".deps/src/sqlite/sqlite-amalgamation-3530400/sqlite3ext.h",
+          ".deps/src/sqlite/sqlite-amalgamation-3530400/shell.c"
+        ]
+      },
+      "source_files": [
+        {"path": ".deps/src/sqlite/sqlite-amalgamation-3530400/sqlite3.c", "sha256": "b1dd5d74ec7f29055a6684fa06fb3c2f6821c87dd38f9a458dfd2e8a1db28189"},
+        {"path": ".deps/src/sqlite/sqlite-amalgamation-3530400/sqlite3.h", "sha256": "919e7f2e8ed1d8f56ac17b412b8971c76aa5d1a879752cc6058f75e7d5910e1d"},
+        {"path": ".deps/src/sqlite/sqlite-amalgamation-3530400/sqlite3ext.h", "sha256": "ac9645e5c9ff0cf176efdd6e75cb5e98f46295d38e02db5c4d208826a39ab4be"},
+        {"path": ".deps/src/sqlite/sqlite-amalgamation-3530400/shell.c", "sha256": "8011ed018aa12969f93573b7bb1eae2d939d64d0f451b297ff847a0211c85179"}
+      ],
+      "artifacts": [
+        {"path": ".deps/downloads/sqlite-amalgamation-3530400.zip", "sha256": "1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d"}
+      ],
+      "notice_paths": ["third_party/README.md"]
+    },
+    {
+      "id": "nlohmann-json",
+      "kind": "static-source",
+      "package": {
+        "name": "nlohmann-json",
+        "version": "3.12.0",
+        "license": "MIT"
+      },
+      "source": {
+        "kind": "bootstrap-dependency",
+        "dependencies_path": "third_party/dependencies.json",
+        "dependency_name": "nlohmann-json",
+        "paths": [".deps/src/json/include/nlohmann/json.hpp"]
+      },
+      "source_files": [
+        {"path": ".deps/src/json/include/nlohmann/json.hpp", "sha256": "aaf127c04cb31c406e5b04a63f1ae89369fccde6d8fa7cdda1ed4f32dfc5de63"}
+      ],
+      "artifacts": [
+        {"path": ".deps/downloads/json-3.12.0.hpp", "sha256": "aaf127c04cb31c406e5b04a63f1ae89369fccde6d8fa7cdda1ed4f32dfc5de63"}
+      ],
+      "notice_paths": ["third_party/nlohmann-json-LICENSE.MIT"]
+    },
+    {
+      "id": "eigen3",
+      "kind": "static-source",
+      "package": {
+        "name": "eigen3",
+        "version": "5.0.1",
+        "license": "MPL-2.0"
+      },
+      "source": {
+        "kind": "vcpkg-spdx",
+        "spdx_path": ".deps/native/x64-windows/share/eigen3/vcpkg.spdx.json",
+        "prefix_path": ".deps/native/x64-windows",
+        "package_id": "SPDXRef-port",
+        "paths": [".deps/native/x64-windows/include/eigen3"]
+      },
+      "notice_paths": [".deps/native/x64-windows/share/eigen3/copyright"]
+    },
+    {
+      "id": "boost-graph",
+      "kind": "static-source",
+      "package": {
+        "name": "boost-graph",
+        "version": "1.92.0",
+        "license": "BSL-1.0"
+      },
+      "source": {
+        "kind": "vcpkg-spdx",
+        "spdx_path": ".deps/native/x64-windows/share/boost-graph/vcpkg.spdx.json",
+        "prefix_path": ".deps/native/x64-windows",
+        "package_id": "SPDXRef-port",
+        "paths": [".deps/native/x64-windows/include/boost"]
+      },
+      "notice_paths": [".deps/native/x64-windows/share/boost-graph/copyright"]
+    },
+    {
+      "id": "inter-font",
+      "kind": "asset",
+      "package": {
+        "name": "Inter",
+        "version": "4.1",
+        "license": "OFL-1.1"
+      },
+      "source": {
+        "kind": "bootstrap-dependency",
+        "dependencies_path": "third_party/dependencies.json",
+        "asset_name": "Inter",
+        "paths": ["assets/fonts/Inter.ttf"]
+      },
+      "source_files": [
+        {"path": "assets/fonts/Inter.ttf", "sha256": "29160a80ff49ddcab2c97711247e08b1fab27a484a329ce8b813d820dc559031"}
+      ],
+      "notice_paths": ["assets/fonts/OFL.txt"]
+    },
+    {
+      "id": "qtpdf-build",
+      "kind": "build-only",
+      "distribution_status": "excluded",
+      "package": {
+        "name": "qtpdf",
+        "version": "6.8.3",
+        "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+      },
+      "source": {
+        "kind": "qt-spdx",
+        "spdx_path": ".deps/qt/6.8.3/msvc2022_64/sbom/qtpdf-6.8.3.spdx.json",
+        "prefix_path": ".deps/qt/6.8.3/msvc2022_64",
+        "package_id": "SPDXRef-Package-qtpdf",
+        "module_version": "6.8.3"
+      },
+      "notice_paths": [
+        ".deps/qt/6.8.3/msvc2022_64/sbom/qtpdf-6.8.3.spdx",
+        ".deps/qt/6.8.3/msvc2022_64/sbom/qtpdf-6.8.3.source.spdx"
+      ]
+    },
+    {
+      "id": "qtsvg-build",
+      "kind": "build-only",
+      "distribution_status": "excluded",
+      "package": {
+        "name": "qtsvg",
+        "version": "6.8.3",
+        "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+      },
+      "source": {
+        "kind": "qt-spdx",
+        "spdx_path": ".deps/qt/6.8.3/msvc2022_64/sbom/qtsvg-6.8.3.spdx.json",
+        "prefix_path": ".deps/qt/6.8.3/msvc2022_64",
+        "package_id": "SPDXRef-Package-qtsvg",
+        "module_version": "6.8.3"
+      },
+      "notice_paths": [".deps/qt/6.8.3/msvc2022_64/sbom/qtsvg-6.8.3.spdx"]
+    }
+  ]
+}
