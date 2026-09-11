@@ -58,6 +58,15 @@ public:
                                          const QString& width_mm,
                                          const QString& height_mm,
                                          const QString& scale_denominator);
+    // Updates one persisted schedule placement's bounds through typed
+    // validation and normal Document history. Coordinates and dimensions are
+    // millimetres; its schedule registry identity is preserved.
+    [[nodiscard]] bool editSheetSchedulePlacement(const QString& sheet_id,
+                                                  const QString& placement_id,
+                                                  const QString& x_mm,
+                                                  const QString& y_mm,
+                                                  const QString& width_mm,
+                                                  const QString& height_mm);
 
     [[nodiscard]] Workspace workspace() const noexcept;
     void setWorkspace(Workspace workspace);

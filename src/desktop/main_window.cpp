@@ -1331,6 +1331,96 @@ public:
         }
     }
 
+    [[nodiscard]] bool editSheetSchedulePlacement(const QString& sheet_id,
+                                                   const QString& placement_id,
+                                                   const QString& x_mm, const QString& y_mm,
+                                                   const QString& width_mm,
+                                                   const QString& height_mm) {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        try {
+            const auto parse_finite = [](const QString& text, const char* label) {
+                bool ok = false;
+                const auto value = text.trimmed().toDouble(&ok);
+                if (!ok || !std::isfinite(value))
+                    throw std::invalid_argument(std::string(label) + " must be a finite number");
+                return value;
+            };
+            const auto x = parse_finite(x_mm, "Schedule X");
+            const auto y = parse_finite(y_mm, "Schedule Y");
+            const auto width = parse_finite(width_mm, "Schedule width");
+            const auto height = parse_finite(height_mm, "Schedule height");
+            const auto source = authoringSnapshot();
+            const Entity* sheet_entity = nullptr;
+            std::optional<SheetViewModel> model;
+            const auto wanted_sheet = sheet_id.trimmed().toStdString();
+            const auto wanted_placement = placement_id.trimmed().toStdString();
+            for (const auto& [id, candidate] : source.entities()) {
+                (void)id;
+                if (candidate.type != kSheetViewEntityType) continue;
+                try {
+                    auto decoded = decode_sheet_view_entity(candidate);
+                    const bool sheet_matches = wanted_sheet.empty() ||
+                        std::any_of(decoded.sheets().begin(), decoded.sheets().end(),
+                            [&](const auto& sheet) { return sheet.id == wanted_sheet; });
+                    if (!sheet_matches) continue;
+                    const auto selected_sheet = wanted_sheet.empty()
+                        ? decoded.sheets().front().id : wanted_sheet;
+                    const auto sheet = std::find_if(decoded.sheets().begin(), decoded.sheets().end(),
+                        [&](const auto& candidate_sheet) { return candidate_sheet.id == selected_sheet; });
+                    if (sheet == decoded.sheets().end()) continue;
+                    const bool placement_matches = wanted_placement.empty() ||
+                        std::any_of(sheet->schedules.begin(), sheet->schedules.end(),
+                            [&](const auto& placement) { return placement.id == wanted_placement; });
+                    if (placement_matches) {
+                        model = std::move(decoded);
+                        sheet_entity = &candidate;
+                        break;
+                    }
+                } catch (const std::exception&) {
+                    if (wanted_sheet.empty() || wanted_placement.empty()) throw;
+                }
+            }
+            if (sheet_entity == nullptr || !model || model->sheets().empty())
+                throw std::invalid_argument("Schedule placement was not found");
+            const auto selected_sheet_id = wanted_sheet.empty()
+                ? model->sheets().front().id : wanted_sheet;
+            const auto sheet = std::find_if(model->sheets().begin(), model->sheets().end(),
+                [&](const auto& candidate) { return candidate.id == selected_sheet_id; });
+            if (sheet == model->sheets().end())
+                throw std::invalid_argument("Drawing sheet identity was not found");
+            if (sheet->schedules.empty())
+                throw std::invalid_argument("Drawing sheet has no schedule placements");
+            const auto selected_placement_id = wanted_placement.empty()
+                ? sheet->schedules.front().id : wanted_placement;
+            const auto placement = std::find_if(sheet->schedules.begin(), sheet->schedules.end(),
+                [&](const auto& candidate) { return candidate.id == selected_placement_id; });
+            if (placement == sheet->schedules.end())
+                throw std::invalid_argument("Schedule placement identity was not found");
+            auto replacement = *placement;
+            replacement.bounds = {x, y, width, height};
+            const auto updated_model = model->with_schedule_placement(selected_sheet_id,
+                                                                       std::move(replacement));
+            auto updated_entity = *sheet_entity;
+            updated_entity.properties = make_sheet_view_entity(
+                updated_entity.id, updated_model).properties;
+            const ApplyEntityChanges command{
+                source.revision(), {EntityChange::upsert(std::move(updated_entity))}, {},
+                "Edit schedule placement"};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Schedule placement edit: %1")
+                         .arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     [[nodiscard]] Workspace workspace() const noexcept { return m_workspace; }
 
     void setWorkspace(Workspace workspace) {
@@ -2872,6 +2962,56 @@ public:
         }
     }
 
+    void showSchedulePlacementSettings() {
+        const auto context = captureModalContext();
+        const auto source = authoringSnapshot();
+        const auto sheet_entity = std::find_if(source.entities().begin(), source.entities().end(),
+            [](const auto& entry) { return entry.second.type == kSheetViewEntityType; });
+        if (sheet_entity == source.entities().end()) {
+            setError(QStringLiteral("No typed drawing sheet is available."));
+            return;
+        }
+        try {
+            const auto model = decode_sheet_view_entity(sheet_entity->second);
+            if (model.sheets().empty() || model.sheets().front().schedules.empty())
+                throw std::invalid_argument("no schedule placement is defined");
+            const auto& sheet = model.sheets().front();
+            const auto& placement = sheet.schedules.front();
+            const auto number = [](double value) { return QString::number(value, 'g', 12); };
+            QDialog dialog(owner);
+            dialog.setWindowTitle(QStringLiteral("Schedule placement settings"));
+            dialog.setModal(true);
+            auto* form = new QFormLayout(&dialog);
+            auto* schedule = new QLineEdit(QString::fromStdString(placement.schedule_id), &dialog);
+            auto* x = new QLineEdit(number(placement.bounds.x_mm), &dialog);
+            auto* y = new QLineEdit(number(placement.bounds.y_mm), &dialog);
+            auto* width = new QLineEdit(number(placement.bounds.width_mm), &dialog);
+            auto* height = new QLineEdit(number(placement.bounds.height_mm), &dialog);
+            schedule->setReadOnly(true);
+            schedule->setObjectName(QStringLiteral("schedulePlacementName"));
+            x->setObjectName(QStringLiteral("schedulePlacementX"));
+            y->setObjectName(QStringLiteral("schedulePlacementY"));
+            width->setObjectName(QStringLiteral("schedulePlacementWidth"));
+            height->setObjectName(QStringLiteral("schedulePlacementHeight"));
+            form->addRow(QStringLiteral("Schedule"), schedule);
+            form->addRow(QStringLiteral("X (mm)"), x);
+            form->addRow(QStringLiteral("Y (mm)"), y);
+            form->addRow(QStringLiteral("Width (mm)"), width);
+            form->addRow(QStringLiteral("Height (mm)"), height);
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+            form->addRow(buttons);
+            QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+            QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+            if (dialog.exec() != QDialog::Accepted || !modalContextUnchanged(context)) return;
+            (void)editSheetSchedulePlacement(QString::fromStdString(sheet.id),
+                                              QString::fromStdString(placement.id), x->text(), y->text(),
+                                              width->text(), height->text());
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Schedule placement settings: %1")
+                         .arg(QString::fromUtf8(error.what())));
+        }
+    }
+
     void showCommandPalette() {
         QDialog dialog(owner);
         dialog.setWindowTitle(QStringLiteral("Command search"));
@@ -2905,6 +3045,8 @@ public:
             {QStringLiteral("Open schedules"), [this] { showSchedules(); }},
             {QStringLiteral("Edit drawing sheet settings"), [this] { showSheetSettings(); }},
             {QStringLiteral("Edit sheet viewport settings"), [this] { showViewportSettings(); }},
+            {QStringLiteral("Edit schedule placement settings"),
+             [this] { showSchedulePlacementSettings(); }},
             {QStringLiteral("Select tool"), [this] { setTool(CanvasTool::select); }},
             {QStringLiteral("Draw measurement boundary"), [this] { setTool(CanvasTool::boundary); }},
             {QStringLiteral("Define area before drawing"),
@@ -3631,6 +3773,7 @@ private:
         m_schedule_action = toolbar->addAction(QStringLiteral("Schedules"));
         m_sheet_action = toolbar->addAction(QStringLiteral("Sheet settings"));
         m_viewport_action = toolbar->addAction(QStringLiteral("Viewport settings"));
+        m_schedule_placement_action = toolbar->addAction(QStringLiteral("Schedule placement"));
         m_about_action = toolbar->addAction(QStringLiteral("About"));
         toolbar->addSeparator();
         auto* theme_menu = new QMenu(owner);
@@ -3706,6 +3849,8 @@ private:
                          [this] { showSheetSettings(); });
         QObject::connect(m_viewport_action, &QAction::triggered, owner,
                          [this] { showViewportSettings(); });
+        QObject::connect(m_schedule_placement_action, &QAction::triggered, owner,
+                         [this] { showSchedulePlacementSettings(); });
         QObject::connect(m_about_action, &QAction::triggered, owner, [this] { showAbout(); });
         QObject::connect(m_unitsCombo, &QComboBox::currentIndexChanged, owner,
                          [this](int index) { setMetricUnits(index == 1); });
@@ -5640,6 +5785,7 @@ private:
     QAction* m_schedule_action{};
     QAction* m_sheet_action{};
     QAction* m_viewport_action{};
+    QAction* m_schedule_placement_action{};
     QAction* m_about_action{};
 };
 
@@ -5677,6 +5823,13 @@ bool MainWindow::editSheetViewport(const QString& sheet_id, const QString& viewp
                                    const QString& scale_denominator) {
     return m_impl->editSheetViewport(sheet_id, viewport_id, x_mm, y_mm, width_mm, height_mm,
                                      scale_denominator);
+}
+
+bool MainWindow::editSheetSchedulePlacement(const QString& sheet_id, const QString& placement_id,
+                                            const QString& x_mm, const QString& y_mm,
+                                            const QString& width_mm, const QString& height_mm) {
+    return m_impl->editSheetSchedulePlacement(sheet_id, placement_id, x_mm, y_mm, width_mm,
+                                              height_mm);
 }
 
 Workspace MainWindow::workspace() const noexcept {

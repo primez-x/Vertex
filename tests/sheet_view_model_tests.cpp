@@ -73,6 +73,16 @@ void coordination_and_isolation() {
     rejects([&] { (void)original.with_viewport("unknown", viewport); });
     viewport.id = "unknown";
     rejects([&] { (void)original.with_viewport("a", viewport); });
+    auto placement = original.sheets().front().schedules.front();
+    placement.bounds = {20, 160, 180, 100};
+    const auto changed_placement = original.with_schedule_placement("a", placement);
+    require(changed_placement.sheets().front().schedules.front() == placement,
+            "schedule placement bounds should update through the typed model");
+    require(changed_placement.sheets().front().viewports == original.sheets().front().viewports,
+            "schedule placement edits must preserve viewports");
+    rejects([&] { (void)original.with_schedule_placement("unknown", placement); });
+    placement.id = "unknown";
+    rejects([&] { (void)original.with_schedule_placement("a", placement); });
     sheet.id = "unknown";
     rejects([&] { (void)original.with_sheet(sheet); });
     plan.id = "unknown";

@@ -11,8 +11,9 @@ viewport bounds/scales, title block and active vector canvas through one
 renderer. Desktop sheet title-block/number and viewport bounds/scale editing
 now commit through the typed Document history; schedule placement rendering,
 including revision-bound door/window, room and material rows, now uses the
-same schedule projection as the Schedules dialog. Printer calibration,
-schedule placement editing, and production output qualification remain open. The shared
+same schedule projection as the Schedules dialog. Desktop schedule placement
+bounds can be edited through typed Document history; printer calibration and
+production output qualification remain open. The shared
 architectural projection engine now derives analytical plan, elevation, and
 section edges from supported building solids; see
 `docs/architectural-projections.md` for its explicit boundary and remaining

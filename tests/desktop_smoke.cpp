@@ -597,6 +597,19 @@ int main(int argc, char** argv) {
             "sheet viewport edit must persist bounds and independent scale");
     require(window.undoCommand() && window.redoCommand(),
             "sheet viewport edit must participate in normal document history");
+    require(window.editSheetSchedulePlacement(QStringLiteral("sheet-1"),
+                                              QStringLiteral("schedule-doors"),
+                                              QStringLiteral("235"), QStringLiteral("225"),
+                                              QStringLiteral("175"), QStringLiteral("55")),
+            "schedule placement must commit through the typed Document command path");
+    const auto edited_schedule_entity = window.document().snapshot().entities().at("sheet-view-1");
+    require(edited_schedule_entity.properties.at("model").at("sheets").at(0)
+                    .at("schedules").at(0).at("bounds").at("x_mm") == 235.0 &&
+                edited_schedule_entity.properties.at("model").at("sheets").at(0)
+                    .at("schedules").at(0).at("bounds").at("height_mm") == 55.0,
+            "schedule placement edit must persist its page bounds");
+    require(window.undoCommand() && window.redoCommand(),
+            "schedule placement edit must participate in normal document history");
     const auto revision_before_pdf = window.document().revision();
     require(window.exportDraftPdf(pdf_path_qstring), "draft PDF export should succeed locally");
     require(std::filesystem::file_size(pdf_path) > 0, "draft PDF should be nonempty");

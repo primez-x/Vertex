@@ -210,6 +210,19 @@ SheetViewModel SheetViewModel::with_viewport(const std::string& sheet_id,
     return create(views_, std::move(changed), schedule_ids_);
 }
 
+SheetViewModel SheetViewModel::with_schedule_placement(
+    const std::string& sheet_id, SheetSchedulePlacement replacement) const {
+    auto changed = sheets_;
+    const auto sheet = std::find_if(changed.begin(), changed.end(),
+        [&](const auto& candidate) { return candidate.id == sheet_id; });
+    require(sheet != changed.end(), "cannot edit schedule placement on unknown drawing sheet");
+    const auto placement = std::find_if(sheet->schedules.begin(), sheet->schedules.end(),
+        [&](const auto& candidate) { return candidate.id == replacement.id; });
+    require(placement != sheet->schedules.end(), "cannot replace unknown schedule placement");
+    *placement = std::move(replacement);
+    return create(views_, std::move(changed), schedule_ids_);
+}
+
 nlohmann::json SheetViewModel::to_json() const {
     return {{"schema", "sketch.sheet_view_model"}, {"version", 1}, {"views", views_},
         {"sheets", sheets_}, {"schedule_ids", schedule_ids_}};

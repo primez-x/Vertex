@@ -104,6 +104,10 @@ public:
     // revalidating all page and callout references.
     [[nodiscard]] SheetViewModel with_viewport(const std::string& sheet_id,
                                                SheetViewport replacement) const;
+    // Updates one schedule placement within a sheet while preserving its
+    // registry identity and revalidating the page bounds and schedule link.
+    [[nodiscard]] SheetViewModel with_schedule_placement(
+        const std::string& sheet_id, SheetSchedulePlacement replacement) const;
 private:
     SheetViewModel() = default;
     std::vector<CoordinatedView> views_;

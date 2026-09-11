@@ -403,8 +403,8 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   view inputs. Draft PDF/SVG/print consume the persisted sheet renderer, and
   sheet number/title-block plus viewport bounds/scale edits use Document
   history; persisted schedule placements now render revision-bound schedule
-  rows in draft output. Schedule placement editing, printer receipts, and
-  qualification remain open.
+  rows in draft output, and placement bounds can be edited through typed
+  Document history. Printer receipts and qualification remain open.
 - The architectural projection engine now derives analytical plan/elevation
   hidden-line output and true solid-plane section intersections for the
   supported semantic building objects. Frames are validated before OCCT
