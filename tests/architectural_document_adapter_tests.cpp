@@ -22,26 +22,29 @@ int main() {
         wall.id = "wall-a";
         Document document = Document::create({wall});
         const auto before = document.snapshot();
-        ArchitecturalOperation edit{ArchitecturalAction::property_edit, "wall-a", {}, {}, {{"height_m", "4.0"}}};
+        ArchitecturalOperation edit{ArchitecturalAction::property_edit, "wall-a", {}, {},
+                                    {{"height_m", "4.0"}, {"opaque_note", "4m"}}};
         ArchitecturalOperation transform{ArchitecturalAction::transform, "wall-a"};
         transform.transform = ArchitecturalTransform{1, 2, 0, 0.25, 1};
         const auto transaction = ArchitecturalTransaction::create(
             "tx-1", "model-r0", {"wall-a"}, {edit, transform}, "Update wall");
         const auto preview = preview_architectural_transaction(before, transaction);
-        require(preview.entities().at("wall-a").properties.at("height_m") == "4.0",
-                "preview property edit missing");
+        require(preview.entities().at("wall-a").properties.at("height_m") == 4.0,
+                "preview numeric property edit lost its type");
+        require(preview.entities().at("wall-a").properties.at("opaque_note") == "4m",
+                "preview opaque property edit lost its string value");
         require(preview.entities().at("wall-a").properties.contains("transform"),
                 "preview transform missing");
         require(document_snapshot_digest(document.snapshot()) == document_snapshot_digest(before),
                 "preview mutated source document");
         const auto revision = apply_architectural_transaction(document, transaction, document.revision());
-        require(revision == 1 && document.snapshot().entities().at("wall-a").properties.at("height_m") == "4.0",
+        require(revision == 1 && document.snapshot().entities().at("wall-a").properties.at("height_m") == 4.0,
                 "architectural transaction did not apply");
         const auto path = std::filesystem::temp_directory_path() / "property-studio-architectural-adapter.bldproj";
         std::filesystem::remove(path);
         (void)ProjectStore::save(path, document.snapshot());
         auto reopened = ProjectStore::load(path).document;
-        require(reopened.snapshot().entities().at("wall-a").properties.at("height_m") == "4.0" &&
+        require(reopened.snapshot().entities().at("wall-a").properties.at("height_m") == 4.0 &&
                     reopened.snapshot().entities().at("wall-a").properties.contains("transform"),
                 "architectural transaction did not survive save/reopen");
         std::filesystem::remove(path);

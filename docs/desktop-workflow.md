@@ -175,8 +175,10 @@ Architectural transaction previews now have a Document adapter that emits one
 typed, revision-fenced command for create, property edit, transform, duplicate,
 and delete operations. The adapter preserves unrelated measurement entities,
 supports one-step Document undo, and is covered by a save/reopen fixture. The
-full object-family schema and visible architectural inspector bindings remain
-under qualification.
+architectural inspector routes property edits through that adapter, including
+recovery-backed workspace edits, while preserving numeric and structured JSON
+values. The full object-family schema and visible architectural inspector
+bindings remain under qualification.
 
 ## Wall dimensions and constraints
 

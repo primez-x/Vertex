@@ -15,7 +15,22 @@ EntityState copy_entities(const DocumentSnapshot& source) {
 
 nlohmann::json properties_json(const std::map<std::string, std::string>& properties) {
     nlohmann::json result = nlohmann::json::object();
-    for (const auto& [key, value] : properties) result[key] = value;
+    for (const auto& [key, value] : properties) {
+        // ArchitecturalOperation is intentionally transport-friendly and keeps
+        // property payloads as strings. Decode JSON text when possible so the
+        // Document retains numeric, object, and array property types while
+        // opaque semantic strings such as 4m remain strings.
+        try {
+            const auto parsed = nlohmann::json::parse(value);
+            if (!parsed.is_discarded()) {
+                result[key] = parsed;
+                continue;
+            }
+        } catch (const nlohmann::json::exception&) {
+            // Fall through to an opaque string value.
+        }
+        result[key] = value;
+    }
     return result;
 }
 
@@ -49,7 +64,8 @@ EntityState apply_operations(const DocumentSnapshot& source,
         case ArchitecturalAction::property_edit: {
             auto found = entities.find(operation.object_id);
             if (found == entities.end()) throw std::invalid_argument("architectural edit target is missing");
-            for (const auto& [key, value] : operation.properties) found->second.properties[key] = value;
+            const auto decoded = properties_json(operation.properties);
+            for (const auto& [key, value] : decoded.items()) found->second.properties[key] = value;
             break;
         }
         case ArchitecturalAction::transform: {
@@ -100,9 +116,15 @@ ApplyEntityChanges make_command(const DocumentSnapshot& source, const Architectu
 
 }  // namespace
 
+ApplyEntityChanges architectural_transaction_command(const DocumentSnapshot& source,
+                                                     const ArchitecturalTransaction& transaction,
+                                                     Revision expected_revision) {
+    return make_command(source, transaction, expected_revision);
+}
+
 DocumentSnapshot preview_architectural_transaction(const DocumentSnapshot& source,
                                                    const ArchitecturalTransaction& transaction) {
-    const auto command = make_command(source, transaction, source.revision());
+    const auto command = architectural_transaction_command(source, transaction, source.revision());
     if (command.entity_changes.empty()) return source;
     return Document::preview_command(source, Command{command});
 }
@@ -111,7 +133,7 @@ Revision apply_architectural_transaction(Document& document,
                                          const ArchitecturalTransaction& transaction,
                                          Revision expected_revision) {
     const auto source = document.snapshot();
-    const auto command = make_command(source, transaction, expected_revision);
+    const auto command = architectural_transaction_command(source, transaction, expected_revision);
     if (command.entity_changes.empty()) return document.revision();
     return document.apply(Command{command});
 }

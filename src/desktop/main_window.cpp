@@ -11,6 +11,7 @@
 #include "sketch/boundary_commit.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/document_digest.hpp"
+#include "sketch/architectural_document_adapter.hpp"
 #include "sketch/calculations.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/project_workspace.hpp"
@@ -696,6 +697,11 @@ QString workspace_name(Workspace workspace) {
 
 bool is_closed_boundary_entity(std::string_view type) {
     return type == "boundary" || type == "measurement_boundary" || type == "room_boundary";
+}
+
+bool is_architectural_entity(std::string_view type) {
+    return type == "wall" || type == "opening" || type == "room" || type == "slab" ||
+           type == "roof" || type == "stair" || type == "column" || type == "beam";
 }
 
 QString tool_name(CanvasTool tool) {
@@ -2181,6 +2187,36 @@ private:
         if (!entity.has_value()) {
             setError(QStringLiteral("Select an entity before editing it."));
             return false;
+        }
+        if (is_architectural_entity(entity->type)) {
+            try {
+                const auto source = authoringSnapshot();
+                std::map<std::string, std::string> encoded;
+                for (const auto& [key, value] : properties.items()) {
+                    encoded.emplace(key, value.dump());
+                }
+                const auto transaction = ArchitecturalTransaction::create(
+                    new_id("architectural-tx"), std::to_string(source.revision()),
+                    {entity->id},
+                    {ArchitecturalOperation{ArchitecturalAction::property_edit,
+                        entity->id, {}, {}, std::move(encoded), std::nullopt}},
+                    message);
+                const auto preview = preview_architectural_transaction(source, transaction);
+                if (entity_map_digest(source.entities()) == entity_map_digest(preview.entities())) {
+                    clearError();
+                    return true;
+                }
+                const auto command = architectural_transaction_command(source, transaction,
+                                                                        source.revision());
+                applyDocumentCommand(Command{command});
+                clearError();
+                refresh();
+                return true;
+            } catch (const std::exception& error) {
+                setError(QStringLiteral("%1: %2").arg(QString::fromUtf8(message),
+                                                        QString::fromUtf8(error.what())));
+                return false;
+            }
         }
         auto updated = *entity;
         updated.properties = std::move(properties);

@@ -8,6 +8,11 @@ namespace sketch {
 // Converts a validated architectural transaction into the existing typed
 // Document command boundary. It preserves unrelated measurement entities and
 // emits at most one change per entity, so the operation is atomic and undoable.
+[[nodiscard]] ApplyEntityChanges architectural_transaction_command(
+    const DocumentSnapshot& source, const ArchitecturalTransaction& transaction,
+    Revision expected_revision);
+
+// Builds a detached preview using the same command that will be committed.
 [[nodiscard]] DocumentSnapshot preview_architectural_transaction(
     const DocumentSnapshot& source, const ArchitecturalTransaction& transaction);
 
