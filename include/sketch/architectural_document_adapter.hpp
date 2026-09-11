@@ -2,8 +2,18 @@
 
 #include "sketch/architectural_workflow_contract.hpp"
 #include "sketch/document.hpp"
+#include "sketch/assembly_model.hpp"
 
 namespace sketch {
+
+// Typed semantic edits retain the container's identity, extensions and unrelated
+// properties. Apply through Document for atomic admission and revision fencing.
+[[nodiscard]] ApplyEntityChanges assembly_type_update_command(
+    const DocumentSnapshot& source, const std::string& entity_id,
+    AssemblyType replacement, Revision expected_revision);
+[[nodiscard]] ApplyEntityChanges model_phase_selection_command(
+    const DocumentSnapshot& source, const std::string& entity_id,
+    std::optional<std::string> alternative, Revision expected_revision);
 
 // Converts a validated architectural transaction into the existing typed
 // Document command boundary. It preserves unrelated measurement entities and

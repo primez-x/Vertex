@@ -52,3 +52,24 @@ the files named by the allowlist, not proof that the list is complete. It does
 not claim a complete source kit, licensing review, SBOM, or reproducible
 Windows rebuild. Clean-machine offline build tests, dependency closure,
 license obligations, and rebuild evidence remain separate qualification work.
+
+To carry the checked files with the runtime and dependency evidence, compose
+an offline bundle after generating this manifest. The source-kit manifest is
+validated again, copied under `source-kit/`, and retained under `metadata/`:
+
+```powershell
+python scripts/stage_offline_bundle.py `
+  --source-root . `
+  --inventory artifacts/runtime/distribution-inventory.json `
+  --allowlist packaging/portable-allowlist.json `
+  --source-kit artifacts/source-kit-manifest.json `
+  --output-root artifacts/packages `
+  --destination property-studio-offline
+```
+
+This creates an installer bundle and a separate `runtime-manifest.json`. The
+PowerShell installer copies the runtime subset only; source-kit files remain
+available for a private handoff and are not silently presented as a successful
+clean-checkout rebuild. Bundle-level and installed-runtime verification use
+the self-contained `verify-offline-bundle.ps1` script and retain the same
+incomplete qualification status.

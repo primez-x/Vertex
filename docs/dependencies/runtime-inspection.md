@@ -68,3 +68,9 @@ The next packaging artifact must map each shipped binary hash and static/header
 input to its exact package, version, source/provenance and notice files. This
 inventory must remain distinct from proof that distribution obligations and
 offline installation have been satisfied.
+
+After the runtime evidence and ownership report are current, use the
+[Windows offline bundle](offline-installer.md) staging command to carry the
+hash-checked runtime set, source-kit files, and dependency/license metadata to
+another machine. The bundle verifier checks declared bytes; it does not turn
+static import evidence into clean-machine or network-denied runtime evidence.

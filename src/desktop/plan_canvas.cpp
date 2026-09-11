@@ -148,6 +148,13 @@ void PlanCanvas::setMetricUnits(bool metric) {
     update();
 }
 
+void PlanCanvas::setCanvasBackground(QColor background) {
+    if (!background.isValid()) return;
+    if (m_canvas_background == background) return;
+    m_canvas_background = std::move(background);
+    update();
+}
+
 void PlanCanvas::setSelectedId(const QString& entity_id) {
     m_selected_id = entity_id;
     for (auto& entity : m_entities) {
@@ -282,7 +289,7 @@ void PlanCanvas::zoomBy(double factor, QPointF anchor) {
 }
 
 void PlanCanvas::renderScene(QPainter& painter, const QRectF& viewport) const {
-    renderSceneWithTransform(painter, viewport, false, QColor(24, 29, 37),
+    renderSceneWithTransform(painter, viewport, false, m_canvas_background,
                              std::nullopt, std::nullopt);
 }
 
@@ -495,7 +502,9 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
         }
         if (!instruction.isEmpty()) {
             painter.save();
-            painter.setPen(QColor(190, 201, 219));
+            painter.setPen(background.lightnessF() > 0.5
+                               ? QColor(86, 102, 124)
+                               : QColor(190, 201, 219));
             painter.drawText(viewport.adjusted(12.0, 10.0, -12.0, -10.0),
                              Qt::AlignTop | Qt::AlignLeft, instruction);
             painter.restore();
@@ -517,9 +526,13 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
             bounds.moveCenter(center);
             bounds.adjust(-5.0, -3.0, 5.0, 3.0);
             painter.setPen(Qt::NoPen);
-            painter.setBrush(QColor(20, 25, 34, 225));
+            painter.setBrush(background.lightnessF() > 0.5
+                                 ? QColor(255, 255, 255, 238)
+                                 : QColor(20, 25, 34, 225));
             painter.drawRoundedRect(bounds, 3.0, 3.0);
-            painter.setPen(QColor(255, 239, 172));
+            painter.setPen(background.lightnessF() > 0.5
+                               ? QColor(50, 65, 84)
+                               : QColor(255, 239, 172));
             painter.setBrush(Qt::NoBrush);
             painter.drawText(bounds, Qt::AlignCenter, label.text);
         }
@@ -773,8 +786,9 @@ void PlanCanvas::drawGrid(QPainter& painter, const QRectF& viewport, double scal
     while (step < desired_world_spacing) {
         step *= 2.0;
     }
-    QPen minor(QColor(45, 53, 65), 0.0);
-    QPen major(QColor(57, 67, 81), 0.0);
+    const bool light_surface = m_canvas_background.lightnessF() > 0.5;
+    QPen minor(light_surface ? QColor(229, 235, 243) : QColor(45, 53, 65), 0.0);
+    QPen major(light_surface ? QColor(207, 218, 232) : QColor(57, 67, 81), 0.0);
     const auto first_x = std::floor(min_x / step) * step;
     const auto first_y = std::floor(min_y / step) * step;
     for (auto x = first_x; x <= max_x + step; x += step) {
@@ -885,11 +899,19 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
             painter.rotate(-label.rotation_radians * 180.0 / 3.14159265358979323846);
         }
         painter.setPen(Qt::NoPen);
-        painter.setBrush(output ? background : QColor(20, 25, 34, 225));
+        const auto label_background = output
+            ? background
+            : background.lightnessF() > 0.5
+                ? QColor(255, 255, 255, 238)
+                : QColor(20, 25, 34, 225);
+        painter.setBrush(label_background);
         painter.drawRoundedRect(bounds, 3.0, 3.0);
         painter.setPen(output ? (background.lightnessF() > 0.5 ? QColor(25, 25, 25)
                                                                 : QColor(255, 239, 172))
-                              : label.selected ? QColor(112, 222, 255) : QColor(255, 239, 172));
+                              : label.selected ? QColor(37, 99, 235)
+                                                : background.lightnessF() > 0.5
+                                                    ? QColor(50, 65, 84)
+                                                    : QColor(255, 239, 172));
         painter.setBrush(Qt::NoBrush);
         painter.drawText(bounds, Qt::AlignCenter, label.text);
         painter.restore();

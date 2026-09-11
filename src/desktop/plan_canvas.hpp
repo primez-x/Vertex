@@ -87,6 +87,9 @@ public:
     void setGridEnabled(bool enabled);
     void setSnapEnabled(bool enabled);
     void setMetricUnits(bool metric);
+    // Updates the interactive canvas surface without changing the model or
+    // any explicit output background passed to renderScene(...).
+    void setCanvasBackground(QColor background);
     void setSelectedId(const QString& entity_id);
     void setLabels(std::vector<CanvasLabel> labels);
     [[nodiscard]] const std::vector<CanvasLabel>& labels() const noexcept { return m_labels; }
@@ -162,6 +165,7 @@ private:
     bool m_grid_enabled{true};
     bool m_snap_enabled{true};
     bool m_metric_units{false};
+    QColor m_canvas_background{248, 250, 252};
     QString m_selected_id;
     double m_scale{80.0};
     Vec2 m_view_center{0.0, 0.0};

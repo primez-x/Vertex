@@ -9,10 +9,15 @@
 #include "../src/desktop/draft_image_stamp.hpp"
 
 #include <QApplication>
+#include <QAction>
 #include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QDir>
 #include <QFile>
 #include <QImage>
 #include <QKeyEvent>
+#include <QKeySequenceEdit>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPainter>
@@ -21,6 +26,9 @@
 #include <QPushButton>
 #include <QToolButton>
 #include <QTemporaryDir>
+#include <QStandardPaths>
+#include <QTimer>
+#include <QUuid>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
 
@@ -58,6 +66,144 @@ QTreeWidgetItem* navigator_item(sketch::desktop::MainWindow& window, const QStri
         }
     }
     return result;
+}
+
+void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
+    const auto original_name = QCoreApplication::applicationName();
+    const auto original_test_mode = QStandardPaths::isTestModeEnabled();
+    QStandardPaths::setTestModeEnabled(true);
+    QCoreApplication::setApplicationName(QStringLiteral("PropertyStudio-shortcut-test-") +
+        QUuid::createUuid().toString(QUuid::WithoutBraces));
+    const auto settings_directory = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+    const auto settings_path = settings_directory + QStringLiteral("/keyboard-shortcuts.json");
+    {
+        sketch::desktop::MainWindow window;
+        require(window.findChild<QWidget*>(QStringLiteral("primaryToolbar")) != nullptr &&
+                    window.findChild<QWidget*>(QStringLiteral("workspaceHeader")) != nullptr &&
+                    window.findChild<QLabel*>(QStringLiteral("appTitle")) != nullptr &&
+                    window.findChild<QWidget*>(QStringLiteral("workspaceTabs")) != nullptr,
+                "modern workspace shell must expose its branded header, grouped toolbar, and tabs");
+        auto* settings = window.findChild<QAction*>(QStringLiteral("keyboardShortcutSettings"));
+        require(settings, "shortcut editor must be discoverable");
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = window.findChild<QDialog*>(QStringLiteral("keyboardShortcutDialog"));
+            require(dialog, "shortcut editor must open");
+            auto* preset = dialog->findChild<QComboBox*>(QStringLiteral("keyboardShortcutPreset"));
+            auto* save = dialog->findChild<QKeySequenceEdit*>(QStringLiteral("shortcut-save"));
+            auto* open = dialog->findChild<QKeySequenceEdit*>(QStringLiteral("shortcut-open"));
+            auto* buttons = dialog->findChild<QDialogButtonBox*>(QStringLiteral("keyboardShortcutButtons"));
+            auto* status = dialog->findChild<QLabel*>(QStringLiteral("keyboardShortcutStatus"));
+            require(preset && save && open && buttons && status, "shortcut controls must exist");
+            preset->setCurrentIndex(2);
+            if (!capture_directory.isEmpty())
+                require(dialog->grab().save(capture_directory + QStringLiteral("/shortcuts.png")), "shortcut capture");
+            require(save->keySequence() == QKeySequence("F2") && open->keySequence() == QKeySequence("F3"),
+                    "Apex preset must map the documented save and open keys");
+            open->setKeySequence(save->keySequence());
+            buttons->button(QDialogButtonBox::Save)->click();
+            require(dialog->isVisible() && status->text().contains("more than once") && !QFile::exists(settings_path),
+                    "duplicate bindings must fail without persisting or dismissing the editor");
+            open->setKeySequence(QKeySequence("Ctrl+Z"));
+            buttons->button(QDialogButtonBox::Save)->click();
+            require(dialog->isVisible() && status->text().contains("reserved"),
+                    "canvas undo must remain reserved");
+            open->setKeySequence(QKeySequence("F3"));
+            buttons->button(QDialogButtonBox::Save)->click();
+        });
+        settings->trigger();
+        require(QFile::exists(settings_path), "custom shortcuts must be saved locally");
+        auto* define = window.findChild<QAction*>(QStringLiteral("defineAreaShortcut"));
+        require(define && define->shortcut() == QKeySequence("F4"), "Apex Define Area binding must activate");
+        sketch::desktop::MainWindow reopened;
+        require(reopened.findChild<QAction*>(QStringLiteral("defineAreaShortcut"))->shortcut() == QKeySequence("F4"),
+                "shortcuts must survive a new workspace window");
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = window.findChild<QDialog*>(QStringLiteral("keyboardShortcutDialog"));
+            dialog->findChild<QComboBox*>(QStringLiteral("keyboardShortcutPreset"))->setCurrentIndex(1);
+            dialog->reject();
+        });
+        settings->trigger();
+        require(define->shortcut() == QKeySequence("F4"), "cancel must preserve active bindings");
+
+        const auto wall = window.createStraightWall({0, 0}, {4, 0});
+        require(!wall.isEmpty() && window.selectEntity(wall), "keypad fixture wall must be selectable");
+        auto* keypad = window.findChild<QPushButton*>(QStringLiteral("measurementKeypad"));
+        require(keypad, "inspector keypad must be discoverable");
+        const auto revision = window.document().revision();
+        const auto original_height = window.document().snapshot().entities().at(wall.toStdString()).properties.at("height_m");
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = window.findChild<QDialog*>(QStringLiteral("measurementKeypadDialog"));
+            require(dialog, "keypad must open");
+            auto* target = dialog->findChild<QComboBox*>(QStringLiteral("measurementKeypadTarget"));
+            auto* input = dialog->findChild<QLineEdit*>(QStringLiteral("measurementKeypadValue"));
+            auto* buttons = dialog->findChild<QDialogButtonBox*>(QStringLiteral("measurementKeypadButtons"));
+            require(target && input && buttons, "keypad controls must exist");
+            target->setCurrentIndex(target->findData(1));
+            require(target->currentData().toInt() == 1, "wall height must be editable through keypad");
+            if (!capture_directory.isEmpty())
+                require(dialog->grab().save(capture_directory + QStringLiteral("/measurement-keypad.png")), "keypad capture");
+            input->setText(QStringLiteral("1/0 ft"));
+            buttons->button(QDialogButtonBox::Apply)->click();
+            require(dialog->isVisible() && window.document().revision() == revision &&
+                    !dialog->findChild<QLabel*>(QStringLiteral("measurementKeypadStatus"))->text().isEmpty(),
+                    "invalid keypad measurement must preserve document and show a useful error");
+            input->clear();
+            dialog->findChild<QPushButton*>(QStringLiteral("measurementKeypadToken10"))->click();
+            dialog->findChild<QPushButton*>(QStringLiteral("measurementKeypadToken15"))->click();
+            require(input->text() == QStringLiteral("3m"), "on-screen keys must compose an explicit-unit quantity");
+            buttons->button(QDialogButtonBox::Apply)->click();
+        });
+        keypad->click();
+        require(window.document().snapshot().entities().at(wall.toStdString()).properties.at("height_m") == 3.0,
+                "keypad must commit the exact selected dimension through the document command");
+        require(window.undoCommand() &&
+                window.document().snapshot().entities().at(wall.toStdString()).properties.at("height_m") == original_height,
+                "keypad edit must participate in undo");
+        require(window.selectEntity(wall), "reselect wall after undo clears the selection");
+        const auto cancel_revision = window.document().revision();
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = window.findChild<QDialog*>(QStringLiteral("measurementKeypadDialog"));
+            dialog->findChild<QLineEdit*>(QStringLiteral("measurementKeypadValue"))->setText(QStringLiteral("20m"));
+            dialog->reject();
+        });
+        keypad->click();
+        require(window.document().revision() == cancel_revision, "canceling keypad must not modify geometry");
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = window.findChild<QDialog*>(QStringLiteral("measurementKeypadDialog"));
+            require(!window.createStraightWall({0, 1}, {4, 1}).isEmpty(), "stale keypad fixture must change the document");
+            const auto changed_revision = window.document().revision();
+            dialog->findChild<QDialogButtonBox*>(QStringLiteral("measurementKeypadButtons"))->button(QDialogButtonBox::Apply)->click();
+            require(dialog->isVisible() && window.document().revision() == changed_revision &&
+                    dialog->findChild<QLabel*>(QStringLiteral("measurementKeypadStatus"))->text().contains("changed"),
+                    "stale keypad must not apply an expression to a changed document or selection");
+            dialog->reject();
+        });
+        keypad->click();
+
+        require(QFile::remove(settings_path) && QDir().mkdir(settings_path), "create blocked settings path fixture");
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = window.findChild<QDialog*>(QStringLiteral("keyboardShortcutDialog"));
+            dialog->findChild<QComboBox*>(QStringLiteral("keyboardShortcutPreset"))->setCurrentIndex(1);
+            dialog->findChild<QDialogButtonBox*>(QStringLiteral("keyboardShortcutButtons"))->button(QDialogButtonBox::Save)->click();
+            require(dialog->isVisible() && define->shortcut() == QKeySequence("F4") &&
+                    dialog->findChild<QLabel*>(QStringLiteral("keyboardShortcutStatus"))->text().contains("Could not save"),
+                    "persistence failure must preserve active shortcuts and keep editor open");
+            dialog->reject();
+        });
+        settings->trigger();
+        require(QDir().rmdir(settings_path), "remove blocked settings path fixture");
+        QFile corrupt(settings_path);
+        require(corrupt.open(QIODevice::WriteOnly | QIODevice::Truncate), "test settings must be writable");
+        corrupt.write("{bad json");
+        corrupt.close();
+        sketch::desktop::MainWindow fallback;
+        require(fallback.findChild<QAction*>(QStringLiteral("defineAreaShortcut"))->shortcut() == QKeySequence("Ctrl+Shift+D"),
+                "corrupt settings must fail closed to the complete default preset");
+    }
+    require(QFile::remove(settings_path), "test shortcut settings must be removed");
+    QDir().rmdir(settings_directory);
+    QCoreApplication::setApplicationName(original_name);
+    QStandardPaths::setTestModeEnabled(original_test_mode);
 }
 
 void test_organization_context() {
@@ -250,6 +396,14 @@ void test_six_form_authoring_and_quantity_history() {
 int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QApplication application(argc, argv);
+    QString field_ui_capture_directory;
+    for (int index = 1; index + 1 < argc; ++index) {
+        if (std::string_view(argv[index]) == "--capture-field-ui") {
+            field_ui_capture_directory = QString::fromLocal8Bit(argv[index + 1]);
+            require(QDir().mkpath(field_ui_capture_directory), "field UI capture directory");
+        }
+    }
+    test_shortcuts_and_measurement_keypad(field_ui_capture_directory);
     {
         QTemporaryDir stamp_directory;
         require(stamp_directory.isValid(), "stamp test directory should be available");

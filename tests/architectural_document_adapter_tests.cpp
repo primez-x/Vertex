@@ -1,6 +1,8 @@
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/project_store.hpp"
+#include "sketch/assembly_model.hpp"
+#include "sketch/model_phases.hpp"
 
 #include <filesystem>
 #include <iostream>
@@ -59,6 +61,46 @@ int main() {
             {{ArchitecturalAction::select, "wall-a"}}, "Select");
         require(preview_architectural_transaction(document.snapshot(), select).revision() == document.revision(),
                 "select-only preview should not create a revision");
+        rejects([&] { (void)apply_architectural_transaction(document, select, 99); });
+
+        auto label = Entity::create("label");
+        label.id = "label-a";
+        auto invalid_phases = Entity::create("model_phases", {{"model",
+            ModelPhases::create({label.id}, {label.id}, {}).to_json()}});
+        rejects([&] { (void)Document::create({label, invalid_phases}); });
+
+        AssemblyType type{"type-a", "Wall", {{"finish", "paint"}}, {}, {}};
+        const auto assemblies = AssemblyModel::create({}, {type},
+            {{"instance-a", "type-a", {}, {}, {}}});
+        auto assembly_entity = Entity::create("assembly_model", {{"model", assemblies.to_json()}, {"note", "keep"}});
+        assembly_entity.id = "assemblies";
+        const auto phases = ModelPhases::create({wall.id}, {wall.id}, {{"option-a", "Remove wall", {wall.id}, {}}});
+        auto phase_entity = Entity::create("model_phases", {{"model", phases.to_json()}});
+        phase_entity.id = "phases";
+        auto semantic = Document::create({wall, assembly_entity, phase_entity});
+        type.properties["finish"] = "tile";
+        semantic.apply(assembly_type_update_command(semantic.snapshot(), "assemblies", type, semantic.revision()));
+        semantic.apply(model_phase_selection_command(semantic.snapshot(), "phases", "option-a", semantic.revision()));
+        require(semantic.snapshot().entities().at("assemblies").properties.at("note") == "keep", "typed edit lost unrelated properties");
+        const auto digest = document_snapshot_digest(semantic.snapshot());
+        rejects([&] { semantic.apply(model_phase_selection_command(semantic.snapshot(), "phases", "missing", semantic.revision())); });
+        rejects([&] { semantic.apply(assembly_type_update_command(semantic.snapshot(), "phases", type, semantic.revision())); });
+        rejects([&] { semantic.apply(ApplyEntityChanges{semantic.revision(), {EntityChange::erase(wall.id)}, {}, "Remove referenced wall"}); });
+        auto future = phase_entity;
+        future.properties["model"]["version"] = 2;
+        rejects([&] { semantic.apply(ApplyEntityChanges{semantic.revision(), {EntityChange::upsert(future)}, {}, "Unknown version"}); });
+        require(document_snapshot_digest(semantic.snapshot()) == digest, "rejected semantic edits changed history");
+        (void)ProjectStore::save(path, semantic.snapshot());
+        auto semantic_reopened = ProjectStore::load(path).document;
+        require(ModelPhases::from_json(semantic_reopened.snapshot().entities().at("phases").properties.at("model")).active_alternative() == "option-a", "phase selection did not reopen");
+        semantic_reopened.undo(semantic_reopened.revision());
+        require(!ModelPhases::from_json(semantic_reopened.snapshot().entities().at("phases").properties.at("model")).active_alternative(), "phase selection did not undo after reopening");
+        semantic_reopened.undo(semantic_reopened.revision());
+        require(AssemblyModel::from_json(semantic_reopened.snapshot().entities().at("assemblies").properties.at("model")).resolve("instance-a").properties.at("finish") == "paint", "assembly edit did not undo");
+        semantic_reopened.redo(semantic_reopened.revision());
+        semantic_reopened.redo(semantic_reopened.revision());
+        require(semantic_reopened.snapshot().entities() == semantic.snapshot().entities(), "semantic redo did not restore edited models");
+        std::filesystem::remove(path);
         std::cout << "architectural document adapter tests passed\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

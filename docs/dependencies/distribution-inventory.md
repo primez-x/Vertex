@@ -34,3 +34,12 @@ license clearance, or commercial redistributability. The Qt SDK SBOM includes
 broader installed modules than the current runtime allowlist, so `qtpdf` and
 `qtsvg` remain recorded as excluded build-only components until their use and
 distribution obligations are separately qualified.
+
+`stage_offline_bundle.py` consumes this report as an immutable input. It
+retains the full inventory under `metadata/distribution-inventory.json`,
+derives a sorted `license_inventory` and `dependency_closure` summary in the
+bundle manifest, and checks every staged runtime byte against this report.
+This makes ownership and integrity review portable with the bundle while
+keeping it distinct from clean-machine installation and offline application
+qualification. The bundle command is documented in
+[Windows offline bundle](offline-installer.md).

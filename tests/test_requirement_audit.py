@@ -1,7 +1,9 @@
 import copy
 import hashlib
 import importlib.util
+import json
 import pathlib
+import sys
 import tempfile
 import unittest
 
@@ -83,6 +85,59 @@ class ProductionGateTests(unittest.TestCase):
             previous = audit.source_fingerprint(root)
             attributes.write_text("* text=auto eol=crlf")
             self.assertNotEqual(previous, audit.source_fingerprint(root))
+
+
+class RequirementAuditCliTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = pathlib.Path(self.temporary.name)
+        self.docs = self.root / "docs" / "requirements"
+        self.docs.mkdir(parents=True)
+        self.ledger_path = self.docs / "apex-parity.json"
+        self.gates_path = self.docs / "production-gates.json"
+        self.evidence_path = self.docs / "acceptance-evidence.json"
+
+    def write_contract(self, *, implementation_status="not_started", evidence_status="documented"):
+        requirements = [{"id": "REQ-1", "area": "core", "requirement": "Save exactly",
+            "evidence_status": evidence_status, "implementation_status": implementation_status, "acceptance": "Reopen same revision",
+            "package": 3, "blocker": None, "source_urls": []}]
+        gates = {"schema_version": "1.0", "release_rule": {"required_gates": ["G1"]},
+                 "gates": {"G1": {"required": True, "requirement_ids": ["REQ-1"]}},
+                 "requirement_to_gate": {"REQ-1": "G1"}}
+        self.ledger_path.write_text(json.dumps({"requirements": requirements}), encoding="utf-8")
+        self.gates_path.write_text(json.dumps(gates), encoding="utf-8")
+        return requirements[0]
+
+    def run_audit(self, *args):
+        original_root = audit.ROOT
+        original_argv = sys.argv
+        try:
+            audit.ROOT = self.root
+            sys.argv = ["requirement_audit.py", *args]
+            return audit.main()
+        finally:
+            audit.ROOT = original_root
+            sys.argv = original_argv
+
+    def test_release_mode_only_gate_fails_when_gaps_exist(self):
+        self.write_contract(implementation_status="not_started")
+        self.assertEqual(self.run_audit(), 0)
+        self.assertEqual(self.run_audit("--release"), 2)
+
+    def test_release_mode_reports_pass_when_evidence_is_current(self):
+        requirements = self.write_contract(implementation_status="verified")
+        self.assertEqual(requirements["implementation_status"], "verified")
+        artifact = self.root / "acceptance" / "proof.txt"
+        artifact.parent.mkdir()
+        artifact.write_text("proof artifact", encoding="utf-8")
+        evidence = {"REQ-1": {"result": "pass",
+            "source_tree_sha256": audit.source_fingerprint(self.root),
+            "artifacts": [{"path": "acceptance/proof.txt",
+                          "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest()}]}}
+        self.evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+        self.assertEqual(self.run_audit(), 0)
+        self.assertEqual(self.run_audit("--release"), 0)
 
 
 if __name__ == "__main__":

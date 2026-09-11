@@ -15,6 +15,7 @@
 #include "sketch/document_digest.hpp"
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/output_fingerprint.hpp"
+#include "sketch/sheet_output_scene.hpp"
 #include "sketch/calculations.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/project_workspace.hpp"
@@ -41,18 +42,22 @@
 #include <QCheckBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDir>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QGuiApplication>
 #include <QGroupBox>
+#include <QGridLayout>
 #include <QHeaderView>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QInputDialog>
 #include <QMouseEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QKeySequenceEdit>
 #include <QListWidget>
 #include <QMessageBox>
 #include <QMenu>
@@ -70,6 +75,8 @@
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QSvgGenerator>
+#include <QSvgRenderer>
+#include <QPixmap>
 #include <QStyle>
 #include <QStyleFactory>
 #include <QStyleOptionViewItem>
@@ -118,6 +125,22 @@ namespace sketch::desktop {
 namespace {
 
 using json = nlohmann::json;
+
+// Qt's stock Fusion icons are intentionally conservative and read as legacy
+// desktop chrome at the scale used by this workspace. These small inline SVG
+// glyphs keep the toolbar crisp, theme-independent, and redistributable.
+QIcon modern_toolbar_icon(const char* paths) {
+    const QByteArray svg = QByteArrayLiteral(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'>"
+        "<g fill='none' stroke='#52657d' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'>") +
+        QByteArray(paths) + QByteArrayLiteral("</g></svg>");
+    QSvgRenderer renderer(svg);
+    QPixmap pixmap(24, 24);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    renderer.render(&painter);
+    return QIcon(pixmap);
+}
 
 QString id_from(std::string value) {
     return QString::fromStdString(std::move(value));
@@ -989,12 +1012,27 @@ protected:
                 const auto indicator = style()->subElementRect(
                     QStyle::SE_ItemViewItemCheckIndicator, &option, this);
                 m_checkbox_interaction = indicator.contains(event->position().toPoint());
+                if (m_checkbox_interaction) {
+                    // Handle the small checkbox hit target explicitly. Fusion
+                    // styles can otherwise let a press/release pair fall
+                    // through to row selection when a rounded item stylesheet
+                    // changes the delegate's geometry.
+                    item->setCheckState(0, item->checkState(0) == Qt::Checked
+                                               ? Qt::Unchecked : Qt::Checked);
+                    event->accept();
+                    return;
+                }
             }
         }
         QTreeWidget::mousePressEvent(event);
     }
 
     void mouseReleaseEvent(QMouseEvent* event) override {
+        if (m_checkbox_interaction) {
+            if (event != nullptr) event->accept();
+            m_checkbox_interaction = false;
+            return;
+        }
         QTreeWidget::mouseReleaseEvent(event);
         m_checkbox_interaction = false;
     }
@@ -1570,13 +1608,13 @@ public:
     void applyTheme(WorkspaceTheme theme) {
         const bool dark = theme == WorkspaceTheme::dark;
         const bool contrast = theme == WorkspaceTheme::high_contrast;
-        const QString background = contrast ? "#000000" : dark ? "#171d27" : "#edf1f6";
-        const QString surface = contrast ? "#000000" : dark ? "#202938" : "#ffffff";
-        const QString foreground = contrast ? "#ffffff" : dark ? "#e7edf7" : "#263449";
-        const QString muted = contrast ? "#ffffff" : dark ? "#a6b4c9" : "#607087";
-        const QString border = contrast ? "#ffffff" : dark ? "#3b485e" : "#d5dee9";
-        const QString accent = contrast ? "#ffff00" : dark ? "#78b4ff" : "#2463bf";
-        const QString selection = contrast ? "#ffff00" : dark ? "#29446a" : "#e5efff";
+        const QString background = contrast ? "#000000" : dark ? "#111827" : "#f3f6fa";
+        const QString surface = contrast ? "#000000" : dark ? "#1b2638" : "#ffffff";
+        const QString foreground = contrast ? "#ffffff" : dark ? "#edf2fb" : "#182536";
+        const QString muted = contrast ? "#ffffff" : dark ? "#a8b7cc" : "#63748a";
+        const QString border = contrast ? "#ffffff" : dark ? "#33435a" : "#d9e2ed";
+        const QString accent = contrast ? "#ffff00" : dark ? "#7db3ff" : "#2563eb";
+        const QString selection = contrast ? "#ffff00" : dark ? "#243e67" : "#e7efff";
         const QString selectedText = contrast ? "#000000" : foreground;
         QPalette palette = owner->style()->standardPalette();
         palette.setColor(QPalette::Window, QColor(background));
@@ -1594,14 +1632,17 @@ public:
         owner->setPalette(palette);
         QString stylesheet = QStringLiteral(R"(
             QMainWindow { background: $background; }
-            QWidget { font-family: "Segoe UI"; font-size: 12px; }
-            QToolBar { background: $surface; border: 0; border-bottom: 1px solid $border;
-                       padding: 7px; spacing: 3px; }
-            QToolBar::separator { background: $border; width: 1px; margin: 6px 5px; }
+            QWidget { font-family: "Segoe UI"; font-size: 13px; }
+            QDialog { background: $background; }
+            QToolBar#primaryToolbar { background: $surface; border: 0; border-bottom: 1px solid $border;
+                       padding: 9px 16px; spacing: 5px; min-height: 48px; }
+            QToolBar::separator { background: $border; width: 1px; margin: 7px 8px; }
             QPushButton, QToolButton { color: $foreground; background: $surface;
-                border: 1px solid $border; border-radius: 5px; padding: 6px 9px; }
-            QToolBar QToolButton { border-color: transparent; padding: 6px 7px; }
-            QWidget#toolPanel QToolButton { padding: 6px 3px; }
+                border: 1px solid $border; border-radius: 8px; padding: 8px 11px; }
+            QToolBar QToolButton { border-color: transparent; padding: 8px 10px; min-height: 30px; }
+            QToolBar QToolButton:hover { background: $selection; border-color: $selection; }
+            QToolBar QToolButton:checked { background: $selection; color: $accent; border-color: $accent; }
+            QWidget#toolPanel QToolButton { padding: 10px 5px; min-height: 34px; }
             QPushButton:hover, QToolButton:hover { background: $selection; border-color: $accent; }
             QPushButton:pressed, QToolButton:pressed, QToolButton:checked {
                 background: $selection; color: $selectedText; border-color: $accent; }
@@ -1609,47 +1650,61 @@ public:
             QAbstractSpinBox:focus { border: 2px solid $accent; }
             QPushButton:disabled, QToolButton:disabled { color: $muted; background: $background; }
             QComboBox, QLineEdit, QAbstractSpinBox { color: $foreground; background: $surface;
-                border: 1px solid $border; border-radius: 5px; padding: 5px 7px; min-height: 18px; }
-            QComboBox { padding-right: 22px; }
-            QComboBox::drop-down { border: 0; width: 20px; }
+                border: 1px solid $border; border-radius: 8px; padding: 7px 10px; min-height: 22px; }
+            QComboBox { padding-right: 24px; }
+            QComboBox::drop-down { border: 0; width: 24px; }
             QComboBox QAbstractItemView, QMenu { background: $surface; color: $foreground;
                 border: 1px solid $border; selection-background-color: $selection;
                 selection-color: $selectedText; padding: 4px; }
-            QMenu::item { padding: 6px 18px; }
+            QMenu::item { padding: 8px 20px; }
             QMenu::item:selected { background: $selection; color: $selectedText; }
+            QWidget#workspaceHeader { background: $surface; border-bottom: 1px solid $border; }
+            QLabel#appMark { background: $accent; color: #ffffff; border-radius: 9px;
+                padding: 7px 9px; font-size: 13px; font-weight: 700; }
+            QLabel#appTitle { color: $foreground; font-size: 18px; font-weight: 700; }
+            QLabel#appSubtitle { color: $muted; font-size: 11px; }
+            QLabel#projectHeader { color: $foreground; font-size: 13px; font-weight: 600; }
+            QLabel#panelHeading { color: $muted; font-size: 10px; font-weight: 700;
+                letter-spacing: 1px; }
+            QLabel#inspectorHeading { color: $foreground; font-size: 18px; font-weight: 700; }
+            QLabel#offlineBadge { color: $accent; background: $selection; border: 1px solid $accent;
+                border-radius: 10px; padding: 5px 9px; font-size: 11px; font-weight: 700; }
+            QLabel#checkpointBanner { background: $background; color: $muted; border: 1px solid $border;
+                border-radius: 8px; margin: 9px 16px 1px; padding: 8px 12px; font-size: 12px; }
             QWidget#navigatorPanel, QWidget#toolPanel, QWidget#inspectorBody { background: $surface; }
+            QWidget#navigatorPanel, QWidget#toolPanel { border: 1px solid $border; border-radius: 10px; }
             QLabel#modelViewUnavailable { background: $surface; color: $muted;
-                border: 1px solid $border; border-radius: 8px; margin: 12px; padding: 24px; }
+                border: 1px solid $border; border-radius: 10px; margin: 12px; padding: 24px; }
             QLabel#drawingContext, QLabel#elevationScope { color: $muted; font-size: 11px; }
-            QLabel#checkpointBanner { background: $background; color: $muted;
-                padding: 7px 14px; font-weight: 600; }
             QTreeWidget, QListWidget, QTableWidget { background: $surface; color: $foreground;
-                border: 0; alternate-background-color: $background; outline: 0;
+                border: 0; alternate-background-color: transparent; outline: 0;
                 selection-background-color: $selection; selection-color: $selectedText; }
-            QTreeWidget::item { min-height: 25px; border-radius: 4px; }
+            QTreeWidget::item { min-height: 29px; border-radius: 6px; padding: 3px 6px; }
             QTreeWidget::item:hover { background: $background; }
             QTreeWidget::item:selected { background: $selection; color: $selectedText; }
             QTreeWidget::item:focus { border: 1px solid $accent; }
             QHeaderView::section { background: $background; color: $muted;
                 border: 0; border-bottom: 1px solid $border; padding: 6px; }
-            QTabWidget::pane { border: 1px solid $border; background: $surface; }
-            QTabBar::tab { background: $background; color: $muted; padding: 10px 18px;
-                border: 0; border-bottom: 3px solid transparent; }
-            QTabBar::tab:selected { background: $surface; color: $accent; border-bottom-color: $accent; }
-            QTabBar::tab:hover { color: $foreground; background: $selection; }
+            QTabWidget#workspaceTabs::pane { border: 1px solid $border; border-radius: 10px; background: $surface; }
+            QTabBar::tab { background: transparent; color: $muted; padding: 10px 18px;
+                margin: 3px 2px; border: 1px solid transparent; border-radius: 8px; }
+            QTabBar::tab:selected { background: $selection; color: $accent; border-color: $accent; }
+            QTabBar::tab:hover { color: $foreground; background: $background; }
+            QWidget#measurementPlanCanvas, QWidget#architecturalPlanCanvas {
+                border: 1px solid $border; border-radius: 8px; }
             QGroupBox { color: $foreground; background: $surface; border: 1px solid $border;
-                border-radius: 6px; margin-top: 14px; padding: 14px 8px 8px; font-weight: 600; }
+                border-radius: 10px; margin-top: 18px; padding: 16px 10px 10px; font-weight: 600; }
             QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }
             QScrollArea { border: 0; background: $surface; }
             QSplitter::handle { background: $background; }
             QSplitter::handle:hover { background: $accent; }
-            QStatusBar { background: $surface; color: $muted; border-top: 1px solid $border; padding: 4px 8px; }
+            QStatusBar { background: $surface; color: $muted; border-top: 1px solid $border; padding: 6px 14px; }
             QStatusBar::item { border: 0; }
-            QScrollBar:vertical { background: $background; width: 10px; margin: 0; }
-            QScrollBar::handle:vertical { background: $border; border-radius: 4px; min-height: 24px; }
+            QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
+            QScrollBar::handle:vertical { background: $border; border-radius: 5px; min-height: 28px; }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
             QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
-            QToolTip { background: $surface; color: $foreground; border: 1px solid $border; padding: 6px; }
+            QToolTip { background: $surface; color: $foreground; border: 1px solid $border; padding: 7px; }
         )");
         stylesheet.replace("$background", background).replace("$surface", surface)
             .replace("$foreground", foreground).replace("$muted", muted)
@@ -1658,6 +1713,16 @@ public:
         owner->setStyleSheet(stylesheet);
         owner->setProperty("workspaceTheme", QString::fromStdString(workspace_theme_name(theme)));
         m_theme = theme;
+        if (m_measurementCanvas) m_measurementCanvas->setCanvasBackground(QColor(dark ? "#141b27" : "#f8fafc"));
+        if (m_architecturalCanvas) m_architecturalCanvas->setCanvasBackground(QColor(dark ? "#141b27" : "#f8fafc"));
+    }
+
+    void styleDialog(QDialog& dialog) const {
+        // Top-level Qt dialogs do not always inherit a parent window's style
+        // sheet. Copy the already-resolved palette and stylesheet so modal
+        // editors use the same modern surfaces, focus rings, and spacing.
+        dialog.setPalette(owner->palette());
+        dialog.setStyleSheet(owner->styleSheet());
     }
 
     void initializeDrawingContext() {
@@ -2963,6 +3028,16 @@ public:
     bool renderSheetOutput(QPainter& painter, const QRectF& target, QColor background) {
         if (target.width() <= 0.0 || target.height() <= 0.0) return false;
         const auto snapshot = m_document->snapshot();
+        // Resolve and fingerprint the persisted sheet graph before drawing so
+        // preview, PDF, SVG, and print all share one validated output scene.
+        // This also blocks authoritative-looking output when a required sheet
+        // or dependency is malformed.
+        try {
+            (void)outputFingerprintForSnapshot(snapshot);
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Sheet output blocked: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
         const Entity* sheet_entity = nullptr;
         for (const auto& [id, entity] : snapshot.entities()) {
             (void)id;
@@ -3192,29 +3267,31 @@ public:
     }
 
     [[nodiscard]] OutputFingerprintInputs outputFingerprintInputs(
-        const DocumentSnapshot& snapshot) const {
+        const DocumentSnapshot& snapshot, bool include_legacy_view_descriptor = true) const {
         const auto build_digest = currentExecutableDigest();
         OutputFingerprintInputs inputs;
         inputs.profiles = fingerprint_not_applicable(
             "Calculation profiles are stored in the document head.");
         inputs.fonts = fingerprint_not_applicable(
             "Draft output uses the selected local Qt font without embedding font bytes.");
-        json view_descriptor{{"page_size", m_pageSizeCombo ? m_pageSizeCombo->currentText().toStdString()
-                                                               : std::string("A4")},
-                             {"architectural_view", architectural_view_name(m_architectural_view_kind)},
-                             {"hidden_floor_ids", std::vector<std::string>(
-                                  m_view_filter.hidden_floor_ids.begin(), m_view_filter.hidden_floor_ids.end())},
-                             {"hidden_layer_ids", std::vector<std::string>(
-                                  m_view_filter.hidden_layer_ids.begin(), m_view_filter.hidden_layer_ids.end())}};
-        for (const auto& [id, entity] : snapshot.entities()) {
-            if (entity.type != kSheetViewEntityType) continue;
-            view_descriptor["sheet_view_model"] =
-                json{{"entity_id", id}, {"content_sha256", digest_text(entity.properties.dump())}};
-            break;
+        if (include_legacy_view_descriptor) {
+            json view_descriptor{{"page_size", m_pageSizeCombo ? m_pageSizeCombo->currentText().toStdString()
+                                                                   : std::string("A4")},
+                                 {"architectural_view", architectural_view_name(m_architectural_view_kind)},
+                                 {"hidden_floor_ids", std::vector<std::string>(
+                                      m_view_filter.hidden_floor_ids.begin(), m_view_filter.hidden_floor_ids.end())},
+                                 {"hidden_layer_ids", std::vector<std::string>(
+                                      m_view_filter.hidden_layer_ids.begin(), m_view_filter.hidden_layer_ids.end())}};
+            for (const auto& [id, entity] : snapshot.entities()) {
+                if (entity.type != kSheetViewEntityType) continue;
+                view_descriptor["sheet_view_model"] =
+                    json{{"entity_id", id}, {"content_sha256", digest_text(entity.properties.dump())}};
+                break;
+            }
+            inputs.views = fingerprint_resources({fingerprint_resource(
+                "plan-canvas-view", view_descriptor.dump(),
+                json{{"renderer", "PlanCanvas"}, {"descriptor_version", 1}})});
         }
-        inputs.views = fingerprint_resources({fingerprint_resource(
-            "plan-canvas-view", view_descriptor.dump(),
-            json{{"renderer", "PlanCanvas"}, {"descriptor_version", 1}})});
         inputs.crs = fingerprint_not_applicable(
             "Output is expressed in local project coordinates; no georeference is active.");
         inputs.processing_components.state = FingerprintGroupState::resources;
@@ -3232,9 +3309,45 @@ public:
         return inputs;
     }
 
+    [[nodiscard]] OutputFingerprint outputFingerprintForSnapshot(
+        const DocumentSnapshot& snapshot) const {
+        const auto sheet = std::find_if(snapshot.entities().begin(), snapshot.entities().end(),
+            [](const auto& entry) { return entry.second.type == kSheetViewEntityType; });
+        if (sheet == snapshot.entities().end()) {
+            return make_output_fingerprint(snapshot, outputFingerprintInputs(snapshot));
+        }
+
+        const auto model = decode_sheet_view_entity(sheet->second);
+        if (model.sheets().empty()) {
+            throw std::invalid_argument("the persisted sheet graph contains no drawing sheets");
+        }
+        const auto inputs = outputFingerprintInputs(snapshot, false);
+        const auto scene = make_sheet_output_scene(snapshot, sheet->first,
+                                                   model.sheets().front().id, inputs);
+        const auto current = check_sheet_output_scene_current(scene, snapshot, inputs);
+        if (!current.valid) {
+            throw std::invalid_argument("sheet output scene is invalid: " + current.error);
+        }
+        if (!current.current) {
+            std::string groups;
+            for (std::size_t index = 0; index < current.changed_groups.size(); ++index) {
+                if (index > 0) groups += ", ";
+                groups += current.changed_groups[index];
+            }
+            throw std::invalid_argument("sheet output scene is stale" +
+                                        (groups.empty() ? std::string() : " (" + groups + ")"));
+        }
+        std::string error;
+        const auto fingerprint = deserialize_output_fingerprint(scene.at("fingerprint"), &error);
+        if (!fingerprint) {
+            throw std::invalid_argument("sheet output scene fingerprint is invalid: " + error);
+        }
+        return *fingerprint;
+    }
+
     bool writeOutputFingerprint(const QString& output_path, const DocumentSnapshot& snapshot,
                                 QString output_kind) {
-        const auto fingerprint = make_output_fingerprint(snapshot, outputFingerprintInputs(snapshot));
+        const auto fingerprint = outputFingerprintForSnapshot(snapshot);
         const auto payload = json{{"schema", "property-studio.output-fingerprint.v1"},
                                   {"output_kind", output_kind.toStdString()},
                                   {"output_file", QFileInfo(output_path).fileName().toStdString()},
@@ -3489,6 +3602,7 @@ public:
     void showSchedules() {
         const auto projection = scheduleSnapshot();
         QDialog dialog(owner);
+        styleDialog(dialog);
         dialog.setWindowTitle(QStringLiteral("Schedules"));
         dialog.setModal(true);
         dialog.resize(780, 480);
@@ -3618,6 +3732,7 @@ public:
             if (model.sheets().empty()) throw std::invalid_argument("no drawing sheets are defined");
             const auto& sheet = model.sheets().front();
             QDialog dialog(owner);
+            styleDialog(dialog);
             dialog.setWindowTitle(QStringLiteral("Sheet settings"));
             dialog.setModal(true);
             auto* form = new QFormLayout(&dialog);
@@ -3667,6 +3782,7 @@ public:
                 return QString::number(value, 'g', 12);
             };
             QDialog dialog(owner);
+            styleDialog(dialog);
             dialog.setWindowTitle(QStringLiteral("Viewport settings"));
             dialog.setModal(true);
             auto* form = new QFormLayout(&dialog);
@@ -3715,6 +3831,7 @@ public:
             const auto& placement = sheet.schedules.front();
             const auto number = [](double value) { return QString::number(value, 'g', 12); };
             QDialog dialog(owner);
+            styleDialog(dialog);
             dialog.setWindowTitle(QStringLiteral("Schedule placement settings"));
             dialog.setModal(true);
             auto* form = new QFormLayout(&dialog);
@@ -3769,6 +3886,7 @@ public:
                 throw std::invalid_argument("the selected architectural view is not defined");
             const auto number = [](double value) { return QString::number(value, 'g', 12); };
             QDialog dialog(owner);
+            styleDialog(dialog);
             dialog.setWindowTitle(QStringLiteral("Architectural view settings"));
             dialog.setModal(true);
             auto* form = new QFormLayout(&dialog);
@@ -3816,6 +3934,7 @@ public:
 
     void showAnnotationEditor() {
         QDialog dialog(owner);
+        styleDialog(dialog);
         dialog.setWindowTitle(QStringLiteral("Add annotations"));
         dialog.setModal(true);
         dialog.resize(520, 300);
@@ -3943,6 +4062,7 @@ public:
             return;
         }
         QDialog dialog(owner);
+        styleDialog(dialog);
         dialog.setWindowTitle(QStringLiteral("Calibrate reference image"));
         auto* form = new QFormLayout(&dialog);
         auto* first_x = new QLineEdit(QStringLiteral("0"), &dialog);
@@ -3980,8 +4100,261 @@ public:
         dialog.exec();
     }
 
+    struct ShortcutBinding {
+        QString id;
+        QAction* action{};
+        QKeySequence standard;
+        QKeySequence apex;
+    };
+
+    QString shortcutSettingsPath() const {
+        return QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) +
+               QStringLiteral("/keyboard-shortcuts.json");
+    }
+
+    QString validateShortcuts(const std::vector<QKeySequence>& keys) const {
+        // Canvas editing and text controls retain their ordinary editing keys.
+        const std::vector<QKeySequence> reserved{
+            QKeySequence::Undo, QKeySequence::Redo, QKeySequence::Copy,
+            QKeySequence::Cut, QKeySequence::Paste, QKeySequence::SelectAll,
+            QKeySequence(QStringLiteral("Ctrl+Shift+Z"))};
+        for (std::size_t index = 0; index < keys.size(); ++index) {
+            const auto& sequence = keys[index];
+            if (sequence.isEmpty()) continue;
+            if (sequence.count() != 1) return QStringLiteral("Use one key combination per command.");
+            const auto key = sequence[0].key();
+            const auto modifiers = sequence[0].keyboardModifiers();
+            if (key == Qt::Key_unknown || key == Qt::Key_Control || key == Qt::Key_Shift ||
+                key == Qt::Key_Alt || key == Qt::Key_Meta || key == Qt::Key_Tab || key == Qt::Key_Backtab ||
+                key == Qt::Key_Return || key == Qt::Key_Enter || key == Qt::Key_Escape ||
+                key == Qt::Key_Backspace || key == Qt::Key_Delete || key == Qt::Key_Insert ||
+                (key >= Qt::Key_Home && key <= Qt::Key_PageDown) ||
+                (!(modifiers & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier)) &&
+                 !(key >= Qt::Key_F1 && key <= Qt::Key_F35)) ||
+                std::find(reserved.begin(), reserved.end(), sequence) != reserved.end()) {
+                return QStringLiteral("%1 is reserved for text entry or canvas editing.")
+                    .arg(sequence.toString(QKeySequence::NativeText));
+            }
+            for (std::size_t other = 0; other < index; ++other) {
+                if (keys[other] == sequence) {
+                    return QStringLiteral("%1 is assigned more than once.")
+                        .arg(sequence.toString(QKeySequence::NativeText));
+                }
+            }
+        }
+        return {};
+    }
+
+    void initializeShortcuts() {
+        const auto add = [this](QString id, QAction* action, const char* standard, const char* apex) {
+            m_shortcuts.push_back({std::move(id), action, QKeySequence(QString::fromLatin1(standard)),
+                                  QKeySequence(QString::fromLatin1(apex))});
+        };
+        add(QStringLiteral("new"), m_new_action, "Ctrl+N", "Ctrl+N");
+        add(QStringLiteral("open"), m_open_action, "Ctrl+O", "F3");
+        add(QStringLiteral("save"), m_save_action, "Ctrl+S", "F2");
+        add(QStringLiteral("save-as"), m_save_as_action, "Ctrl+Shift+S", "Ctrl+Shift+S");
+        add(QStringLiteral("commands"), m_palette_action, "Ctrl+K", "Ctrl+K");
+        add(QStringLiteral("measurement"), m_measurement_action, "Ctrl+1", "Ctrl+1");
+        add(QStringLiteral("architectural"), m_architectural_action, "Ctrl+2", "Ctrl+2");
+        add(QStringLiteral("annotations"), m_annotation_action, "Ctrl+Shift+A", "Ctrl+Shift+A");
+        auto* define = new QAction(QStringLiteral("Define area before drawing"), owner);
+        define->setObjectName(QStringLiteral("defineAreaShortcut"));
+        owner->addAction(define);
+        QObject::connect(define, &QAction::triggered, owner, [this] {
+            (void)beginBoundaryDrawing(BoundaryAuthoringMode::define_first, {});
+        });
+        add(QStringLiteral("define-area"), define, "Ctrl+Shift+D", "F4");
+        for (const auto& binding : m_shortcuts) binding.action->setShortcut(binding.standard);
+
+        QFile file(shortcutSettingsPath());
+        if (!file.exists()) return;
+        try {
+            if (!file.open(QIODevice::ReadOnly) || file.size() > 64 * 1024)
+                throw std::runtime_error("Shortcut settings cannot be read.");
+            const auto settings_document = json::parse(file.readAll().toStdString());
+            if (!settings_document.is_object() || settings_document.size() != 2 ||
+                !settings_document.at("version").is_number_integer() || settings_document.at("version") != 1 ||
+                !settings_document.at("bindings").is_object() || settings_document.at("bindings").size() != m_shortcuts.size())
+                throw std::runtime_error("Unsupported shortcut settings.");
+            std::vector<QKeySequence> keys;
+            for (const auto& binding : m_shortcuts) {
+                const auto text = QString::fromStdString(
+                    settings_document.at("bindings").at(binding.id.toStdString()).get<std::string>());
+                const auto sequence = QKeySequence::fromString(text, QKeySequence::PortableText);
+                if (sequence.toString(QKeySequence::PortableText) != text)
+                    throw std::runtime_error("Invalid shortcut text.");
+                keys.push_back(sequence);
+            }
+            if (!validateShortcuts(keys).isEmpty()) throw std::runtime_error("Conflicting or reserved shortcuts.");
+            for (std::size_t index = 0; index < keys.size(); ++index)
+                m_shortcuts[index].action->setShortcut(keys[index]);
+        } catch (const std::exception&) {
+            m_shortcut_load_error = QStringLiteral("Saved shortcuts could not be loaded. Default bindings are active.");
+        }
+    }
+
+    void showShortcutSettings() {
+        QDialog dialog(owner);
+        styleDialog(dialog);
+        dialog.setObjectName(QStringLiteral("keyboardShortcutDialog"));
+        dialog.setWindowTitle(QStringLiteral("Keyboard shortcuts"));
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* presets = new QComboBox(&dialog);
+        presets->setObjectName(QStringLiteral("keyboardShortcutPreset"));
+        presets->addItems({QStringLiteral("Current bindings"), QStringLiteral("Property Studio defaults"),
+                           QStringLiteral("Apex v7 compatible subset")});
+        layout->addWidget(presets);
+        auto* help = new QLabel(QStringLiteral(
+            "Apex subset: F2 Save, F3 Open, F4 Define area. Other commands retain Studio defaults. "
+            "Text editing and canvas keys remain reserved. Clear a binding to disable it."), &dialog);
+        help->setWordWrap(true);
+        layout->addWidget(help);
+        auto* form = new QFormLayout;
+        std::vector<QKeySequenceEdit*> editors;
+        for (const auto& binding : m_shortcuts) {
+            auto* edit = new QKeySequenceEdit(binding.action->shortcut(), &dialog);
+            edit->setMaximumSequenceLength(1);
+            edit->setClearButtonEnabled(true);
+            edit->setObjectName(QStringLiteral("shortcut-") + binding.id);
+            edit->setAccessibleName(binding.action->text());
+            form->addRow(binding.action->text(), edit);
+            editors.push_back(edit);
+        }
+        layout->addLayout(form);
+        auto* status = new QLabel(m_shortcut_load_error, &dialog);
+        status->setObjectName(QStringLiteral("keyboardShortcutStatus"));
+        status->setWordWrap(true);
+        layout->addWidget(status);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
+        buttons->setObjectName(QStringLiteral("keyboardShortcutButtons"));
+        layout->addWidget(buttons);
+        QObject::connect(presets, &QComboBox::currentIndexChanged, &dialog, [&](int preset) {
+            for (std::size_t index = 0; index < editors.size(); ++index) {
+                const auto& binding = m_shortcuts[index];
+                editors[index]->setKeySequence(preset == 1 ? binding.standard :
+                                               preset == 2 ? binding.apex : binding.action->shortcut());
+            }
+        });
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+            std::vector<QKeySequence> keys;
+            for (auto* editor : editors) keys.push_back(editor->keySequence());
+            const auto error = validateShortcuts(keys);
+            if (!error.isEmpty()) { status->setText(error); return; }
+            json settings_document{{"version", 1}, {"bindings", json::object()}};
+            for (std::size_t index = 0; index < keys.size(); ++index)
+                settings_document["bindings"][m_shortcuts[index].id.toStdString()] =
+                    keys[index].toString(QKeySequence::PortableText).toStdString();
+            const auto bytes = QByteArray::fromStdString(settings_document.dump(2));
+            QSaveFile file(shortcutSettingsPath());
+            if (!QDir().mkpath(QFileInfo(file.fileName()).absolutePath()) ||
+                !file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
+                status->setText(QStringLiteral("Could not save shortcuts. Existing bindings remain active."));
+                return;
+            }
+            for (std::size_t index = 0; index < keys.size(); ++index)
+                m_shortcuts[index].action->setShortcut(keys[index]);
+            m_shortcut_load_error.clear();
+            dialog.accept();
+        });
+        dialog.exec();
+    }
+
+    void showMeasurementKeypad() {
+        QDialog dialog(owner);
+        styleDialog(dialog);
+        dialog.setObjectName(QStringLiteral("measurementKeypadDialog"));
+        dialog.setWindowTitle(QStringLiteral("Measurement keypad"));
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* target = new QComboBox(&dialog);
+        target->setObjectName(QStringLiteral("measurementKeypadTarget"));
+        target->setAccessibleName(QStringLiteral("Dimension to edit"));
+        const std::array<QLineEdit*, 3> fields{m_length_edit, m_height_edit, m_thickness_edit};
+        const std::array<QString, 3> names{QStringLiteral("Length"), QStringLiteral("Height"), QStringLiteral("Thickness")};
+        for (std::size_t index = 0; index < fields.size(); ++index) {
+            if (fields[index]->isEnabled() && !fields[index]->isReadOnly() && !fields[index]->isHidden())
+                target->addItem(names[index], static_cast<int>(index));
+        }
+        layout->addWidget(target);
+        auto* input = new QLineEdit(&dialog);
+        input->setObjectName(QStringLiteral("measurementKeypadValue"));
+        input->setAccessibleName(QStringLiteral("Measurement expression"));
+        layout->addWidget(input);
+        auto* hint = new QLabel(m_metric_units ? QStringLiteral("Default unit: metres. Fractions and explicit units are accepted.") :
+                                              QStringLiteral("Default unit: feet. Fractions and explicit units are accepted."), &dialog);
+        hint->setWordWrap(true);
+        layout->addWidget(hint);
+        auto* grid = new QGridLayout;
+        const QStringList tokens{QStringLiteral("7"), QStringLiteral("8"), QStringLiteral("9"), QStringLiteral("/"),
+                                 QStringLiteral("4"), QStringLiteral("5"), QStringLiteral("6"), QStringLiteral("."),
+                                 QStringLiteral("1"), QStringLiteral("2"), QStringLiteral("3"), QStringLiteral(" "),
+                                 QStringLiteral("0"), QStringLiteral("ft"), QStringLiteral("in"), QStringLiteral("m"),
+                                 QStringLiteral("mm"), QStringLiteral("cm")};
+        for (int index = 0; index < tokens.size(); ++index) {
+            const auto token = tokens[index];
+            auto* button = new QPushButton(token == QStringLiteral(" ") ? QStringLiteral("Space") : token, &dialog);
+            button->setObjectName(QStringLiteral("measurementKeypadToken%1").arg(index));
+            button->setMinimumSize(48, 40);
+            button->setAutoDefault(false);
+            grid->addWidget(button, index / 4, index % 4);
+            QObject::connect(button, &QPushButton::clicked, &dialog, [input, token] {
+                input->insert(token); input->setFocus();
+            });
+        }
+        auto* erase = new QPushButton(QStringLiteral("Backspace"), &dialog);
+        erase->setAutoDefault(false);
+        grid->addWidget(erase, 4, 2, 1, 2);
+        QObject::connect(erase, &QPushButton::clicked, input, [input] { input->backspace(); input->setFocus(); });
+        layout->addLayout(grid);
+        auto* status = new QLabel(&dialog);
+        status->setObjectName(QStringLiteral("measurementKeypadStatus"));
+        status->setWordWrap(true);
+        layout->addWidget(status);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel, &dialog);
+        buttons->setObjectName(QStringLiteral("measurementKeypadButtons"));
+        layout->addWidget(buttons);
+        const auto selected_id = m_selected_id;
+        const auto revision = m_document->revision();
+        const auto document_id = m_document->snapshot().document_id();
+        const auto load = [&] {
+            if (target->count()) input->setText(fields[static_cast<std::size_t>(target->currentData().toInt())]->text());
+            input->selectAll();
+            input->setFocus();
+        };
+        QObject::connect(target, &QComboBox::currentIndexChanged, &dialog, load);
+        load();
+        buttons->button(QDialogButtonBox::Apply)->setEnabled(target->count() > 0);
+        if (!target->count()) status->setText(QStringLiteral("Select an editable dimensioned object first."));
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        bool wall_length = false;
+        QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, [&] {
+            if (m_selected_id != selected_id || m_document->revision() != revision ||
+                m_document->snapshot().document_id() != document_id) {
+                status->setText(QStringLiteral("The selection or document changed. Reopen the keypad.")); return;
+            }
+            const auto index = target->currentData().toInt();
+            if (!fields[static_cast<std::size_t>(index)]->isEnabled()) return;
+            const auto entity = selectedEntity();
+            wall_length = index == 0 && entity && entity->type == "wall";
+            if (wall_length) {
+                try {
+                    if (!(parse_quantity(input->text().toStdString(), m_metric_units ? Unit::metre : Unit::foot).metres > 0.0))
+                        throw std::invalid_argument("Length must be positive.");
+                } catch (const std::exception& error) { status->setText(QString::fromUtf8(error.what())); return; }
+                dialog.accept(); // Continue through the existing constraint preview.
+            } else {
+                const bool ok = index == 0 ? editSelectedLength(input->text()) :
+                                index == 1 ? editSelectedHeight(input->text()) : editSelectedThickness(input->text());
+                if (ok) dialog.accept(); else status->setText(lastError());
+            }
+        });
+        if (dialog.exec() == QDialog::Accepted && wall_length) showConstraintEditor(input->text());
+    }
+
     void showCommandPalette() {
         QDialog dialog(owner);
+        styleDialog(dialog);
         dialog.setWindowTitle(QStringLiteral("Command search"));
         dialog.setModal(true);
         dialog.resize(560, 420);
@@ -3997,6 +4370,8 @@ public:
             std::function<void()> execute;
         };
         std::vector<Command> commands{
+            {QStringLiteral("Customize keyboard shortcuts"), [this] { showShortcutSettings(); }},
+            {QStringLiteral("Measurement keypad"), [this] { showMeasurementKeypad(); }},
             {QStringLiteral("New project"), [this] { createNewProject(); }},
             {QStringLiteral("Open project"), [this] { openFromDialog(); }},
             {QStringLiteral("Save project"), [this] { saveProject(); }},
@@ -4731,29 +5106,62 @@ private:
         owner->setMinimumSize(1080, 700);
 
         auto* toolbar = owner->addToolBar(QStringLiteral("Workspace"));
+        toolbar->setObjectName(QStringLiteral("primaryToolbar"));
         toolbar->setMovable(false);
-        toolbar->setToolButtonStyle(Qt::ToolButtonTextOnly);
-        m_new_action = toolbar->addAction(QStringLiteral("New"));
-        m_open_action = toolbar->addAction(QStringLiteral("Open"));
-        m_recover_action = toolbar->addAction(QStringLiteral("Recover…"));
-        m_save_action = toolbar->addAction(QStringLiteral("Save"));
-        m_save_as_action = toolbar->addAction(QStringLiteral("Save as…"));
+        toolbar->setFloatable(false);
+        toolbar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        toolbar->setIconSize(QSize(18, 18));
+        const auto add_toolbar_action = [this, toolbar](const QString& label, const char* icon_paths) {
+            auto* action = toolbar->addAction(modern_toolbar_icon(icon_paths), label);
+            action->setToolTip(label);
+            return action;
+        };
+        m_new_action = add_toolbar_action(QStringLiteral("New"), "<path d='M6 3h9l3 3v15H6z'/><path d='M15 3v5h5'/><path d='M9 13h6M12 10v6'/>");
+        m_open_action = add_toolbar_action(QStringLiteral("Open"), "<path d='M3 7h7l2 2h9v11H3z'/><path d='M3 7V5h7l2 2'/>");
+        m_recover_action = add_toolbar_action(QStringLiteral("Recover"), "<path d='M5 8a8 8 0 1 1 0 8'/><path d='M5 4v4h4'/>");
+        m_save_action = add_toolbar_action(QStringLiteral("Save"), "<path d='M5 3h12l3 3v15H5z'/><path d='M8 3v6h9V3M8 21v-7h9v7'/>");
+        m_save_as_action = add_toolbar_action(QStringLiteral("Save as"), "<path d='M5 3h12l3 3v15H5z'/><path d='M8 3v6h9V3M8 21v-7h9v7'/><path d='M15 12h5M17.5 9.5v5'/>");
         toolbar->addSeparator();
-        m_undo_action = toolbar->addAction(QStringLiteral("Undo"));
-        m_redo_action = toolbar->addAction(QStringLiteral("Redo"));
+        m_undo_action = add_toolbar_action(QStringLiteral("Undo"), "<path d='M9 7 4 12l5 5'/><path d='M4 12h9a7 7 0 0 1 7 7'/>");
+        m_redo_action = add_toolbar_action(QStringLiteral("Redo"), "<path d='m15 7 5 5-5 5'/><path d='M20 12h-9a7 7 0 0 0-7 7'/>");
         toolbar->addSeparator();
         m_measurement_action = toolbar->addAction(QStringLiteral("Measurement"));
         m_architectural_action = toolbar->addAction(QStringLiteral("Architectural"));
         toolbar->addSeparator();
-        m_palette_action = toolbar->addAction(QStringLiteral("Commands"));
-        m_annotation_action = toolbar->addAction(QStringLiteral("Annotations"));
-        m_reference_action = toolbar->addAction(QStringLiteral("Reference"));
-        m_schedule_action = toolbar->addAction(QStringLiteral("Schedules"));
-        m_sheet_action = toolbar->addAction(QStringLiteral("Sheet settings"));
-        m_viewport_action = toolbar->addAction(QStringLiteral("Viewport settings"));
-        m_schedule_placement_action = toolbar->addAction(QStringLiteral("Schedule placement"));
-        m_view_action = toolbar->addAction(QStringLiteral("View settings"));
-        m_about_action = toolbar->addAction(QStringLiteral("About"));
+        m_palette_action = add_toolbar_action(QStringLiteral("Commands"), "<path d='M5 5h5v5H5zM14 5h5v5h-5zM5 14h5v5H5zM14 14h5v5h-5z'/>");
+        auto* shortcut_settings = add_toolbar_action(QStringLiteral("Shortcuts"), "<rect x='3' y='6' width='18' height='12' rx='2'/><path d='M7 10h2M11 10h2M15 10h2M7 14h10'/>");
+        shortcut_settings->setObjectName(QStringLiteral("keyboardShortcutSettings"));
+
+        // Keep the canvas-facing toolbar focused. Secondary authoring and
+        // presentation commands remain one click away in an overflow menu,
+        // while their QAction identities and shortcuts stay stable.
+        auto* more_menu = new QMenu(owner);
+        m_annotation_action = new QAction(QStringLiteral("Annotations"), owner);
+        m_reference_action = new QAction(QStringLiteral("Reference image"), owner);
+        m_schedule_action = new QAction(QStringLiteral("Schedules"), owner);
+        m_sheet_action = new QAction(QStringLiteral("Sheet settings"), owner);
+        m_viewport_action = new QAction(QStringLiteral("Viewport settings"), owner);
+        m_schedule_placement_action = new QAction(QStringLiteral("Schedule placement"), owner);
+        m_view_action = new QAction(QStringLiteral("Architectural view settings"), owner);
+        m_about_action = new QAction(QStringLiteral("About Property Studio"), owner);
+        const std::array<QAction*, 8> secondary_actions{
+            m_annotation_action, m_reference_action, m_schedule_action, m_sheet_action,
+            m_viewport_action, m_schedule_placement_action, m_view_action, m_about_action};
+        for (auto* action : secondary_actions) {
+            owner->addAction(action);
+            more_menu->addAction(action);
+        }
+        more_menu->addSeparator();
+        auto* more_action = more_menu->addAction(QStringLiteral("Keyboard shortcuts…"));
+        QObject::connect(more_action, &QAction::triggered, owner, [this] { showShortcutSettings(); });
+        auto* more_button = new QToolButton(toolbar);
+        more_button->setObjectName(QStringLiteral("moreTools"));
+        more_button->setText(QStringLiteral("More"));
+        more_button->setToolTip(QStringLiteral("Annotations, references, sheets, and view settings"));
+        more_button->setMenu(more_menu);
+        more_button->setPopupMode(QToolButton::InstantPopup);
+        toolbar->addWidget(more_button);
+        QObject::connect(shortcut_settings, &QAction::triggered, owner, [this] { showShortcutSettings(); });
         toolbar->addSeparator();
         auto* theme_menu = new QMenu(owner);
         const auto add_theme_action = [this, theme_menu](QString label, WorkspaceTheme theme) {
@@ -4764,40 +5172,40 @@ private:
         add_theme_action(QStringLiteral("Dark"), WorkspaceTheme::dark);
         add_theme_action(QStringLiteral("High contrast"), WorkspaceTheme::high_contrast);
         auto* theme_button = new QToolButton(toolbar);
+        theme_button->setObjectName(QStringLiteral("themeMenu"));
         theme_button->setText(QStringLiteral("Theme"));
         theme_button->setToolTip(QStringLiteral("Select light, dark, or high-contrast workspace theme"));
         theme_button->setMenu(theme_menu);
         theme_button->setPopupMode(QToolButton::InstantPopup);
         toolbar->addWidget(theme_button);
-         toolbar->addWidget(new QLabel(QStringLiteral("Units"), toolbar));
-         m_unitsCombo = new QComboBox(toolbar);
-         m_unitsCombo->addItems({QStringLiteral("Imperial (ft/in)"), QStringLiteral("Metric (m/mm)")});
-         toolbar->addWidget(m_unitsCombo);
-         toolbar->addWidget(new QLabel(QStringLiteral("Sheet"), toolbar));
-         m_pageSizeCombo = new QComboBox(toolbar);
-         m_pageSizeCombo->setObjectName(QStringLiteral("outputPageSize"));
-         const std::vector<std::pair<QString, QPageSize::PageSizeId>> page_sizes{
-             {QStringLiteral("Letter"), QPageSize::Letter},
-             {QStringLiteral("Legal"), QPageSize::Legal},
-             {QStringLiteral("Tabloid"), QPageSize::Tabloid},
-             {QStringLiteral("A4"), QPageSize::A4},
-             {QStringLiteral("A3"), QPageSize::A3},
-         };
-         for (const auto& [label, page_size] : page_sizes) {
-             m_pageSizeCombo->addItem(label, static_cast<int>(page_size));
-         }
-         m_pageSizeCombo->setCurrentIndex(m_pageSizeCombo->findData(static_cast<int>(QPageSize::A4)));
-         m_pageSizeCombo->setToolTip(QStringLiteral("Select the draft PDF and print sheet size"));
-         toolbar->addWidget(m_pageSizeCombo);
-         toolbar->addWidget(new QLabel(QStringLiteral("Architectural view"), toolbar));
-         m_architecturalViewCombo = new QComboBox(toolbar);
-         m_architecturalViewCombo->setObjectName(QStringLiteral("architecturalView"));
-         m_architecturalViewCombo->addItem(QStringLiteral("Plan"), static_cast<int>(BuildingViewKind::plan));
-         m_architecturalViewCombo->addItem(QStringLiteral("Elevation"), static_cast<int>(BuildingViewKind::elevation));
-         m_architecturalViewCombo->addItem(QStringLiteral("Section @ 1.2 m"), static_cast<int>(BuildingViewKind::section));
-         m_architecturalViewCombo->setToolTip(QStringLiteral(
-             "Select the derived architectural plan, elevation, or horizontal section view"));
-         toolbar->addWidget(m_architecturalViewCombo);
+        m_unitsCombo = new QComboBox(toolbar);
+        m_unitsCombo->setObjectName(QStringLiteral("unitSystem"));
+        m_unitsCombo->addItems({QStringLiteral("Imperial"), QStringLiteral("Metric")});
+        m_unitsCombo->setToolTip(QStringLiteral("Units for dimensions and calculations"));
+        toolbar->addWidget(m_unitsCombo);
+        m_pageSizeCombo = new QComboBox(toolbar);
+        m_pageSizeCombo->setObjectName(QStringLiteral("outputPageSize"));
+        const std::vector<std::pair<QString, QPageSize::PageSizeId>> page_sizes{
+            {QStringLiteral("Letter"), QPageSize::Letter},
+            {QStringLiteral("Legal"), QPageSize::Legal},
+            {QStringLiteral("Tabloid"), QPageSize::Tabloid},
+            {QStringLiteral("A4"), QPageSize::A4},
+            {QStringLiteral("A3"), QPageSize::A3},
+        };
+        for (const auto& [label, page_size] : page_sizes) {
+            m_pageSizeCombo->addItem(label, static_cast<int>(page_size));
+        }
+        m_pageSizeCombo->setCurrentIndex(m_pageSizeCombo->findData(static_cast<int>(QPageSize::A4)));
+        m_pageSizeCombo->setToolTip(QStringLiteral("Paper size for PDF, print preview, and sheets"));
+        toolbar->addWidget(m_pageSizeCombo);
+        m_architecturalViewCombo = new QComboBox(toolbar);
+        m_architecturalViewCombo->setObjectName(QStringLiteral("architecturalView"));
+        m_architecturalViewCombo->addItem(QStringLiteral("Plan"), static_cast<int>(BuildingViewKind::plan));
+        m_architecturalViewCombo->addItem(QStringLiteral("Elevation"), static_cast<int>(BuildingViewKind::elevation));
+        m_architecturalViewCombo->addItem(QStringLiteral("Section · 1.2 m"), static_cast<int>(BuildingViewKind::section));
+        m_architecturalViewCombo->setToolTip(QStringLiteral(
+            "Select the derived architectural plan, elevation, or horizontal section view"));
+        toolbar->addWidget(m_architecturalViewCombo);
 
         auto* workspace_group = new QActionGroup(owner);
         workspace_group->setExclusive(true);
@@ -4852,17 +5260,48 @@ private:
                                  break;
                              }
                          });
-        m_new_action->setShortcut(QKeySequence::New);
-        m_open_action->setShortcut(QKeySequence::Open);
-        m_save_action->setShortcut(QKeySequence::Save);
-        m_palette_action->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_K));
+        initializeShortcuts();
         applyTheme(WorkspaceTheme::light);
 
         auto* central = new QWidget(owner);
+        central->setObjectName(QStringLiteral("workspaceRoot"));
         auto* root_layout = new QVBoxLayout(central);
         root_layout->setContentsMargins(0, 0, 0, 0);
+        root_layout->setSpacing(0);
+
+        auto* header = new QWidget(central);
+        header->setObjectName(QStringLiteral("workspaceHeader"));
+        auto* header_layout = new QHBoxLayout(header);
+        header_layout->setContentsMargins(20, 14, 20, 12);
+        header_layout->setSpacing(10);
+        auto* app_mark = new QLabel(QStringLiteral("PS"), header);
+        app_mark->setObjectName(QStringLiteral("appMark"));
+        app_mark->setAlignment(Qt::AlignCenter);
+        app_mark->setFixedSize(38, 34);
+        header_layout->addWidget(app_mark);
+        auto* title_column = new QVBoxLayout;
+        title_column->setContentsMargins(0, 0, 0, 0);
+        title_column->setSpacing(1);
+        auto* app_title = new QLabel(QStringLiteral("Property Studio"), header);
+        app_title->setObjectName(QStringLiteral("appTitle"));
+        title_column->addWidget(app_title);
+        auto* app_subtitle = new QLabel(QStringLiteral("Offline-first plan + building workspace"), header);
+        app_subtitle->setObjectName(QStringLiteral("appSubtitle"));
+        title_column->addWidget(app_subtitle);
+        header_layout->addLayout(title_column);
+        header_layout->addSpacing(18);
+        m_project_header_label = new QLabel(QStringLiteral("Untitled project"), header);
+        m_project_header_label->setObjectName(QStringLiteral("projectHeader"));
+        header_layout->addWidget(m_project_header_label);
+        header_layout->addStretch();
+        m_header_status_label = new QLabel(QStringLiteral("LOCAL · READY"), header);
+        m_header_status_label->setObjectName(QStringLiteral("offlineBadge"));
+        m_header_status_label->setAlignment(Qt::AlignCenter);
+        header_layout->addWidget(m_header_status_label);
+        root_layout->addWidget(header);
+
         auto* banner = new QLabel(
-            QStringLiteral("Offline native workflow  •  Measurement + Architectural"),
+            QStringLiteral("Offline ready  ·  your project, calculations, and exports stay on this PC"),
             central);
         banner->setObjectName(QStringLiteral("checkpointBanner"));
         root_layout->addWidget(banner);
@@ -4874,17 +5313,21 @@ private:
         root_layout->addWidget(m_plan_error_banner);
 
         auto* splitter = new QSplitter(Qt::Horizontal, central);
+        splitter->setObjectName(QStringLiteral("workspaceSplitter"));
+        splitter->setContentsMargins(16, 10, 16, 14);
         splitter->setChildrenCollapsible(true);
         root_layout->addWidget(splitter, 1);
 
         auto* navigator_panel = new QWidget(splitter);
         navigator_panel->setObjectName(QStringLiteral("navigatorPanel"));
-        navigator_panel->setMinimumWidth(190);
-        navigator_panel->setMaximumWidth(260);
+        navigator_panel->setMinimumWidth(220);
+        navigator_panel->setMaximumWidth(300);
         auto* navigator_layout = new QVBoxLayout(navigator_panel);
-        navigator_layout->setContentsMargins(10, 12, 10, 10);
-        navigator_layout->setSpacing(8);
-        navigator_layout->addWidget(new QLabel(QStringLiteral("Drawing layer"), navigator_panel));
+        navigator_layout->setContentsMargins(14, 15, 14, 14);
+        navigator_layout->setSpacing(10);
+        auto* drawing_layer_heading = new QLabel(QStringLiteral("DRAWING LAYER"), navigator_panel);
+        drawing_layer_heading->setObjectName(QStringLiteral("panelHeading"));
+        navigator_layout->addWidget(drawing_layer_heading);
         m_drawing_layer_combo = new QComboBox(navigator_panel);
         m_drawing_layer_combo->setObjectName(QStringLiteral("drawingLayer"));
         m_drawing_layer_combo->setMinimumWidth(0);
@@ -4904,7 +5347,8 @@ private:
         scope_label->setWordWrap(true);
         navigator_layout->addWidget(scope_label);
         auto* visibility_header = new QHBoxLayout();
-        auto* visibility_heading = new QLabel(QStringLiteral("Visibility"), navigator_panel);
+        auto* visibility_heading = new QLabel(QStringLiteral("VISIBILITY"), navigator_panel);
+        visibility_heading->setObjectName(QStringLiteral("panelHeading"));
         visibility_heading->setStyleSheet(QStringLiteral("font-weight:600;"));
         visibility_header->addWidget(visibility_heading);
         visibility_header->addStretch();
@@ -4918,7 +5362,6 @@ private:
         m_visibility_label = new QLabel(navigator_panel);
         m_visibility_label->setObjectName(QStringLiteral("visibilitySummary"));
         m_visibility_label->setWordWrap(true);
-        m_visibility_label->setStyleSheet(QStringLiteral("color:#666; font-size:11px;"));
         navigator_layout->addWidget(m_visibility_label);
         QObject::connect(m_show_all_button, &QPushButton::clicked, owner,
                          [this] { showAllContainers(); });
@@ -4931,8 +5374,8 @@ private:
         m_navigator->setHeaderHidden(true);
         m_navigator->setIndentation(14);
         m_navigator->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        m_navigator->setMinimumWidth(190);
-        m_navigator->setMaximumWidth(230);
+        m_navigator->setMinimumWidth(0);
+        m_navigator->setMaximumWidth(280);
         QObject::connect(m_navigator, &QTreeWidget::currentItemChanged, owner,
             [this](QTreeWidgetItem* item, QTreeWidgetItem*) {
                 if (m_refreshing || !item) return;
@@ -4980,10 +5423,10 @@ private:
 
         auto* tool_panel = new QWidget(splitter);
         tool_panel->setObjectName(QStringLiteral("toolPanel"));
-        tool_panel->setFixedWidth(82);
+        tool_panel->setFixedWidth(96);
         auto* tool_layout = new QVBoxLayout(tool_panel);
-        tool_layout->setContentsMargins(4, 8, 4, 8);
-        tool_layout->setSpacing(4);
+        tool_layout->setContentsMargins(7, 14, 7, 14);
+        tool_layout->setSpacing(7);
         m_select_button = addToolButton(tool_layout, QStringLiteral("Select"), CanvasTool::select, true);
         m_boundary_button = addToolButton(tool_layout, QStringLiteral("Boundary"), CanvasTool::boundary);
         m_boundary_button->setText(QStringLiteral("Draw first"));
@@ -5044,6 +5487,7 @@ private:
         QObject::connect(m_fit_button, &QToolButton::clicked, owner, [this] { fitView(); });
 
         m_workspaceTabs = new QTabWidget(splitter);
+        m_workspaceTabs->setObjectName(QStringLiteral("workspaceTabs"));
         m_workspaceTabs->setDocumentMode(true);
         m_workspaceTabs->setTabsClosable(false);
         m_measurementCanvas = new PlanCanvas(m_workspaceTabs);
@@ -5093,16 +5537,17 @@ private:
         m_inspector = new QScrollArea(splitter);
         m_inspector->setWidgetResizable(true);
         m_inspector->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        m_inspector->setMinimumWidth(290);
-        m_inspector->setMaximumWidth(330);
+        m_inspector->setMinimumWidth(320);
+        m_inspector->setMaximumWidth(390);
         auto* inspector_body = new QWidget(m_inspector);
         inspector_body->setObjectName(QStringLiteral("inspectorBody"));
         inspector_body->setMinimumWidth(0);
         inspector_body->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
         auto* inspector_layout = new QVBoxLayout(inspector_body);
-        inspector_layout->setContentsMargins(10, 10, 10, 10);
-        inspector_layout->setSpacing(10);
+        inspector_layout->setContentsMargins(16, 15, 16, 16);
+        inspector_layout->setSpacing(12);
         auto* heading = new QLabel(QStringLiteral("Inspector"), inspector_body);
+        heading->setObjectName(QStringLiteral("inspectorHeading"));
         heading->setStyleSheet(QStringLiteral("font-size:16px; font-weight:600;"));
         inspector_layout->addWidget(heading);
         m_inspector_context = new QLabel(inspector_body);
@@ -5230,6 +5675,12 @@ private:
         m_thickness_edit->setMinimumWidth(0);
         form->addRow(QStringLiteral("Thickness"), m_thickness_edit);
         inspector_layout->addLayout(form);
+
+        auto* keypad = new QPushButton(QStringLiteral("Measurement keypad…"), inspector_body);
+        keypad->setObjectName(QStringLiteral("measurementKeypad"));
+        keypad->setAccessibleName(QStringLiteral("Open measurement keypad"));
+        inspector_layout->addWidget(keypad);
+        QObject::connect(keypad, &QPushButton::clicked, owner, [this] { showMeasurementKeypad(); });
 
         auto* calculation_group = new QGroupBox(QStringLiteral("Area calculation"), inspector_body);
         m_calculation_group = calculation_group;
@@ -6484,6 +6935,18 @@ private:
             title += QStringLiteral(" *");
         }
         owner->setWindowTitle(title);
+        if (m_project_header_label) {
+            const auto project_name = m_file_path.empty()
+                ? QStringLiteral("Untitled project")
+                : QString::fromStdWString(m_file_path.filename().wstring());
+            m_project_header_label->setText(project_name +
+                (projectDirty() || hasBoundaryDraftChanges() ? QStringLiteral("  ·  Unsaved changes") : QString{}));
+        }
+        if (m_header_status_label) {
+            m_header_status_label->setText(projectDirty() || hasBoundaryDraftChanges()
+                                                ? QStringLiteral("LOCAL · UNSAVED")
+                                                : QStringLiteral("LOCAL · READY"));
+        }
         if (m_measurement_action) {
             QSignalBlocker first(m_measurement_action);
             QSignalBlocker second(m_architectural_action);
@@ -7075,6 +7538,8 @@ private:
     QComboBox* m_drawing_layer_combo{};
     QComboBox* m_pageSizeCombo{};
     QComboBox* m_architecturalViewCombo{};
+    QLabel* m_project_header_label{};
+    QLabel* m_header_status_label{};
     QLabel* m_drawing_context_label{};
     QLabel* m_visibility_label{};
     QPushButton* m_show_all_button{};
@@ -7165,6 +7630,8 @@ private:
     QAction* m_measurement_action{};
     QAction* m_architectural_action{};
     QAction* m_palette_action{};
+    std::vector<ShortcutBinding> m_shortcuts;
+    QString m_shortcut_load_error;
     QAction* m_annotation_action{};
     QAction* m_reference_action{};
     QAction* m_schedule_action{};

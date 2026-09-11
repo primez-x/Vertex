@@ -58,3 +58,10 @@ qualification flags remain false. A successful staging run is an integrity
 and file-selection record; it does not qualify an installer, clean-machine
 installation, complete dynamic-load coverage, licensing, or offline
 operation.
+
+For the Windows handoff, use the higher-level
+[`stage_offline_bundle.py`](offline-installer.md) command. It consumes this
+portable file set, adds the checked source-kit payload and dependency/license
+metadata, emits a runtime manifest, and includes a self-contained PowerShell
+verifier and copy installer. The generated bundle remains an integrity record
+with all qualification flags false.

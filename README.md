@@ -53,7 +53,12 @@ The latter saves visual captures for inspection in `artifacts/desktop-smoke`.
 See [runtime inspection](docs/dependencies/runtime-inspection.md) for the
 current binary/plugin inventory and its packaging limitations.
 
+The reviewed runtime inventory, source-kit manifest, and portable allowlist
+can be composed into a deterministic Windows offline bundle with
+`scripts/stage_offline_bundle.py`; see [offline bundle instructions](docs/dependencies/offline-installer.md).
+
 The [project format](docs/project-format.md), [calculation contract](docs/calculations.md),
+[workspace UI](docs/workspace-ui.md),
 [accepted production plan](docs/production-plan.md), and
 [implementation status](docs/implementation-status.md) distinguish implemented
 behavior from the remaining production acceptance requirements.

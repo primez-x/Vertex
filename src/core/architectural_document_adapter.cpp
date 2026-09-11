@@ -1,4 +1,5 @@
 #include "sketch/architectural_document_adapter.hpp"
+#include "sketch/model_phases.hpp"
 
 #include <algorithm>
 #include <set>
@@ -8,6 +9,18 @@ namespace sketch {
 namespace {
 
 using EntityState = std::map<std::string, Entity, std::less<>>;
+
+Entity semantic_entity(const DocumentSnapshot& source, const std::string& id,
+                       std::string_view expected_type, Revision expected_revision) {
+    if (source.revision() != expected_revision)
+        throw DocumentError(DocumentErrorCode::stale_revision, "semantic edit source revision is stale");
+    const auto found = source.entities().find(id);
+    if (found == source.entities().end())
+        throw DocumentError(DocumentErrorCode::dangling_reference, "semantic edit target is missing");
+    if (found->second.type != expected_type)
+        throw DocumentError(DocumentErrorCode::invalid_entity, "semantic edit target has the wrong role");
+    return found->second;
+}
 
 EntityState copy_entities(const DocumentSnapshot& source) {
     return source.entities();
@@ -116,6 +129,22 @@ ApplyEntityChanges make_command(const DocumentSnapshot& source, const Architectu
 
 }  // namespace
 
+ApplyEntityChanges assembly_type_update_command(const DocumentSnapshot& source,
+    const std::string& entity_id, AssemblyType replacement, Revision expected_revision) {
+    auto entity = semantic_entity(source, entity_id, "assembly_model", expected_revision);
+    entity.properties["model"] = AssemblyModel::from_json(entity.properties.at("model"))
+        .with_type(std::move(replacement)).to_json();
+    return {expected_revision, {EntityChange::upsert(std::move(entity))}, {}, "Update assembly type"};
+}
+
+ApplyEntityChanges model_phase_selection_command(const DocumentSnapshot& source,
+    const std::string& entity_id, std::optional<std::string> alternative, Revision expected_revision) {
+    auto entity = semantic_entity(source, entity_id, "model_phases", expected_revision);
+    entity.properties["model"] = ModelPhases::from_json(entity.properties.at("model"))
+        .with_active(std::move(alternative)).to_json();
+    return {expected_revision, {EntityChange::upsert(std::move(entity))}, {}, "Select remodeling alternative"};
+}
+
 ApplyEntityChanges architectural_transaction_command(const DocumentSnapshot& source,
                                                      const ArchitecturalTransaction& transaction,
                                                      Revision expected_revision) {
@@ -133,6 +162,8 @@ Revision apply_architectural_transaction(Document& document,
                                          const ArchitecturalTransaction& transaction,
                                          Revision expected_revision) {
     const auto source = document.snapshot();
+    if (source.revision() != expected_revision)
+        throw DocumentError(DocumentErrorCode::stale_revision, "architectural transaction revision is stale");
     const auto command = architectural_transaction_command(source, transaction, expected_revision);
     if (command.entity_changes.empty()) return document.revision();
     return document.apply(Command{command});
