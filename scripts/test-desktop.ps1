@@ -1,4 +1,5 @@
-param([ValidateSet('Debug', 'Release')][string]$Configuration = 'Debug')
+param([ValidateSet('Debug', 'Release')][string]$Configuration = 'Debug',
+      [switch]$IncludeReference)
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $configName = $Configuration.ToLowerInvariant()
@@ -14,6 +15,7 @@ foreach ($workspace in @('measurement', 'architectural')) {
                         @{ Size = '1920x1080'; Scale = '1' },
                         @{ Size = '1366x768'; Scale = '1.5' })) {
         $stem = "$workspace-$($case.Size)-$($case.Scale)"
+        if ($IncludeReference) { $stem += '-reference' }
         $imagePath = Join-Path $outputDirectory "$stem.png"
         $modelPath = Join-Path $outputDirectory "$stem-model.png"
         $startInfo = [System.Diagnostics.ProcessStartInfo]::new($executable)
@@ -28,9 +30,11 @@ foreach ($workspace in @('measurement', 'architectural')) {
         $startInfo.Environment['QT_ENABLE_HIGHDPI_SCALING'] = '0'
         $startInfo.Environment['QT_SCREEN_SCALE_FACTORS'] = '1'
         $startInfo.Environment['QT_SCALE_FACTOR'] = $case.Scale
-        foreach ($argument in @('--smoke', '--smoke-workspace', $workspace,
-                                '--smoke-size', $case.Size, '--smoke-output', $imagePath,
-                                '--smoke-3d-output', $modelPath)) {
+        $arguments = @('--smoke', '--smoke-workspace', $workspace,
+                       '--smoke-size', $case.Size, '--smoke-output', $imagePath,
+                       '--smoke-3d-output', $modelPath)
+        if ($IncludeReference) { $arguments += '--smoke-reference' }
+        foreach ($argument in $arguments) {
             $startInfo.ArgumentList.Add($argument)
         }
         $testProcess = [System.Diagnostics.Process]::new()

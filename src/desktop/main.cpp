@@ -4,8 +4,11 @@
 #include <QApplication>
 #include <QDebug>
 #include <QDir>
+#include <QFile>
 #include <QFont>
 #include <QFontDatabase>
+#include <QImage>
+#include <QPainter>
 #include <QRegularExpression>
 #include <QSize>
 #include <QTimer>
@@ -133,6 +136,30 @@ bool seed_smoke_document(sketch::desktop::MainWindow& window, bool architectural
            window.selectEntity(boundary_id);
 }
 
+bool seed_smoke_reference(sketch::desktop::MainWindow& window) {
+    const auto path = QDir::temp().filePath(
+        QStringLiteral("property-studio-reference-smoke-%1.png")
+            .arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+    QImage image(600, 400, QImage::Format_ARGB32);
+    image.fill(QColor(217, 232, 242));
+    {
+        QPainter painter(&image);
+        painter.setPen(QPen(QColor(120, 150, 170), 3));
+        for (int x = 0; x <= image.width(); x += 50) painter.drawLine(x, 0, x, image.height());
+        for (int y = 0; y <= image.height(); y += 50) painter.drawLine(0, y, image.width(), y);
+        painter.setPen(QPen(QColor(72, 104, 125), 8));
+        painter.drawRect(24, 24, image.width() - 48, image.height() - 48);
+    }
+    if (!image.save(path, "PNG")) return false;
+    const auto id = window.importReferenceImage(path);
+    QFile::remove(path);
+    if (id.isEmpty()) return false;
+    return window.editReferenceTransform(id, QStringLiteral("6"), QStringLiteral("4"),
+                                         QStringLiteral("0.02"), QStringLiteral("1"),
+                                         QStringLiteral("0"), QStringLiteral("0.18"),
+                                         false, false, true);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -167,6 +194,11 @@ int main(int argc, char** argv) {
         window.setAttribute(Qt::WA_ShowWithoutActivating, true);
         window.resize(smoke_size(application.arguments()));
         if (!seed_smoke_document(window, architectural)) {
+            return 2;
+        }
+        if (application.arguments().contains(QStringLiteral("--smoke-reference")) &&
+            !seed_smoke_reference(window)) {
+            qCritical() << "Property Studio: reference underlay smoke fixture failed";
             return 2;
         }
         window.fitView();
