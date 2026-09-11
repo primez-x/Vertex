@@ -176,6 +176,15 @@ public:
     // creates a reference_asset entity with an explicit, editable calibration
     // scale. PDF source bytes remain alongside a deterministic local preview.
     [[nodiscard]] QString importReferenceImage(const QString& path);
+    // Calibrates a reference from two source-pixel points and a known local
+    // distance expression (for example, "12 ft" or "3.5 m"). The source
+    // points and original expression remain inspectable project metadata.
+    [[nodiscard]] bool calibrateReference(const QString& reference_id,
+                                          const QString& first_x,
+                                          const QString& first_y,
+                                          const QString& second_x,
+                                          const QString& second_y,
+                                          const QString& known_distance);
     [[nodiscard]] bool editReferenceTransform(const QString& reference_id,
                                               const QString& x_metres,
                                               const QString& y_metres,
@@ -204,6 +213,7 @@ public:
     void showCommandPalette();
     void showAnnotationEditor();
     void showReferenceImport();
+    void showReferenceCalibration();
     void showConstraintEditor();
     void fitView();
 

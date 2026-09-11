@@ -26,6 +26,8 @@ canvas underlay, calibrated in metres per source pixel, and transformed through
 typed undoable edits. PDF first-page import now retains the original PDF beside
 a validated local PNG preview, so PDF tracing can start from an offline project
 asset. Multi-underlay management, PDF page selection, interactive tracing,
+and known-distance calibration UI are now integrated through the typed Document
+history. Multi-underlay management, PDF page selection, interactive tracing,
 native Apex compatibility, clean-machine packaging, and end-to-end production
 evidence are still open.
 

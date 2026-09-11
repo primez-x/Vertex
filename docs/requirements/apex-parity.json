@@ -1182,7 +1182,7 @@
         "tests/reference_asset_tests.cpp",
         "docs/reference-assets.md"
       ],
-      "implementation_note": "Calibration stores known source distance, unit, scale, and provenance with deterministic validation; the desktop exposes and persists metres-per-source-pixel calibration through the reference inspector, and PDF first-page previews use the same transform. Known-distance calibration dialogs and calibrated tracing fixtures remain open."
+      "implementation_note": "Calibration stores known source distance, unit, scale, and provenance with deterministic validation; the desktop exposes and persists metres-per-source-pixel calibration through the reference inspector and a typed known-distance dialog, and PDF first-page previews use the same transform. Calibrated tracing fixtures and interactive trace editing remain open."
     },
     {
       "id": "APX-TRACE-003",

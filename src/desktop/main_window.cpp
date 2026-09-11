@@ -2076,6 +2076,54 @@ public:
         }
     }
 
+    bool calibrateReference(const QString& reference_id, const QString& first_x,
+                            const QString& first_y, const QString& second_x,
+                            const QString& second_y, const QString& known_distance) {
+        try {
+            if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
+            const auto parse_finite = [](const QString& text, const char* message) {
+                bool ok = false;
+                const auto value = text.trimmed().toDouble(&ok);
+                if (!ok || !std::isfinite(value)) throw std::invalid_argument(message);
+                return value;
+            };
+            const Vec2 first{parse_finite(first_x, "First calibration X must be finite pixels."),
+                             parse_finite(first_y, "First calibration Y must be finite pixels.")};
+            const Vec2 second{parse_finite(second_x, "Second calibration X must be finite pixels."),
+                              parse_finite(second_y, "Second calibration Y must be finite pixels.")};
+            const auto known = parse_quantity(known_distance.trimmed().toStdString(), Unit::metre);
+            const auto source_distance = std::hypot(second.x - first.x, second.y - first.y);
+            if (!(source_distance > 0.0) || !std::isfinite(source_distance) ||
+                !(known.metres > 0.0) || !std::isfinite(known.metres)) {
+                throw std::invalid_argument("Calibration distances must be finite and positive.");
+            }
+            const auto source = authoringSnapshot();
+            const auto found = source.entities().find(reference_id.trimmed().toStdString());
+            if (found == source.entities().end() || found->second.type != "reference_asset") {
+                throw std::invalid_argument("Reference image was not found.");
+            }
+            auto updated = found->second;
+            updated.properties["calibration_first_source"] = json::array({first.x, first.y});
+            updated.properties["calibration_second_source"] = json::array({second.x, second.y});
+            updated.properties["calibration_known_distance"] = known.original_expression;
+            updated.properties["calibration_input_unit"] = static_cast<int>(known.entered_unit);
+            updated.properties["metres_per_source_unit"] = known.metres / source_distance;
+            const auto command = ApplyEntityChanges{
+                source.revision(), {EntityChange::upsert(std::move(updated))}, {},
+                "Calibrate reference image"};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            m_selected_id = reference_id.trimmed();
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Reference calibration: %1")
+                         .arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     bool editReferenceTransform(const QString& reference_id, const QString& x_metres,
                                 const QString& y_metres, const QString& metres_per_source_unit,
                                 const QString& scale, const QString& rotation_degrees,
@@ -3762,6 +3810,51 @@ public:
         }
     }
 
+    void showReferenceCalibration() {
+        const auto snapshot = m_document->snapshot();
+        const auto found = snapshot.entities().find(m_selected_id.toStdString());
+        if (found == snapshot.entities().end() || found->second.type != "reference_asset") {
+            setError(QStringLiteral("Select a reference image before calibrating it."));
+            return;
+        }
+        QDialog dialog(owner);
+        dialog.setWindowTitle(QStringLiteral("Calibrate reference image"));
+        auto* form = new QFormLayout(&dialog);
+        auto* first_x = new QLineEdit(QStringLiteral("0"), &dialog);
+        auto* first_y = new QLineEdit(QStringLiteral("0"), &dialog);
+        auto* second_x = new QLineEdit(QStringLiteral("100"), &dialog);
+        auto* second_y = new QLineEdit(QStringLiteral("0"), &dialog);
+        auto* known_distance = new QLineEdit(QStringLiteral("1 m"), &dialog);
+        first_x->setObjectName(QStringLiteral("referenceCalibrationFirstX"));
+        first_y->setObjectName(QStringLiteral("referenceCalibrationFirstY"));
+        second_x->setObjectName(QStringLiteral("referenceCalibrationSecondX"));
+        second_y->setObjectName(QStringLiteral("referenceCalibrationSecondY"));
+        known_distance->setObjectName(QStringLiteral("referenceCalibrationDistance"));
+        form->addRow(QStringLiteral("First X (px)"), first_x);
+        form->addRow(QStringLiteral("First Y (px)"), first_y);
+        form->addRow(QStringLiteral("Second X (px)"), second_x);
+        form->addRow(QStringLiteral("Second Y (px)"), second_y);
+        form->addRow(QStringLiteral("Known distance"), known_distance);
+        auto* status = new QLabel(&dialog);
+        status->setWordWrap(true);
+        form->addRow(status);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+        form->addRow(buttons);
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [this, &dialog, status,
+                                                                           first_x, first_y,
+                                                                           second_x, second_y,
+                                                                           known_distance] {
+            if (calibrateReference(m_selected_id, first_x->text(), first_y->text(),
+                                   second_x->text(), second_y->text(), known_distance->text())) {
+                dialog.accept();
+            } else {
+                status->setText(lastError());
+            }
+        });
+        dialog.exec();
+    }
+
     void showCommandPalette() {
         QDialog dialog(owner);
         dialog.setWindowTitle(QStringLiteral("Command search"));
@@ -3794,6 +3887,8 @@ public:
             {QStringLiteral("Architectural workspace"), [this] { setWorkspace(Workspace::architectural); }},
             {QStringLiteral("Add labels and symbols"), [this] { showAnnotationEditor(); }},
             {QStringLiteral("Import reference image"), [this] { showReferenceImport(); }},
+            {QStringLiteral("Calibrate selected reference image"),
+             [this] { showReferenceCalibration(); }},
             {QStringLiteral("Open schedules"), [this] { showSchedules(); }},
             {QStringLiteral("Edit drawing sheet settings"), [this] { showSheetSettings(); }},
             {QStringLiteral("Edit sheet viewport settings"), [this] { showViewportSettings(); }},
@@ -4962,6 +5057,9 @@ private:
         m_apply_reference_button = new QPushButton(QStringLiteral("Apply reference"), m_reference_group);
         m_apply_reference_button->setObjectName(QStringLiteral("applyReference"));
         reference_layout->addRow(m_apply_reference_button);
+        m_calibrate_reference_button = new QPushButton(QStringLiteral("Calibrate known distance…"), m_reference_group);
+        m_calibrate_reference_button->setObjectName(QStringLiteral("calibrateReference"));
+        reference_layout->addRow(m_calibrate_reference_button);
         m_reference_group->setVisible(false);
         inspector_layout->addWidget(m_reference_group);
         QObject::connect(m_apply_reference_button, &QPushButton::clicked, owner, [this] {
@@ -4973,6 +5071,8 @@ private:
                 m_reference_flip_vertical_check->isChecked(),
                 m_reference_visible_check->isChecked());
         });
+        QObject::connect(m_calibrate_reference_button, &QPushButton::clicked, owner,
+                         [this] { showReferenceCalibration(); });
         m_constraint_button = new QPushButton(QStringLiteral("Dimensions and constraints…"), inspector_body);
         m_constraint_button->setObjectName(QStringLiteral("editWallConstraints"));
         inspector_layout->addWidget(m_constraint_button);
@@ -6925,6 +7025,7 @@ private:
     QCheckBox* m_reference_flip_vertical_check{};
     QCheckBox* m_reference_visible_check{};
     QPushButton* m_apply_reference_button{};
+    QPushButton* m_calibrate_reference_button{};
     QPushButton* m_constraint_button{};
     QToolButton* m_grid_button{};
     QToolButton* m_snap_button{};
@@ -7137,6 +7238,13 @@ bool MainWindow::deleteAnnotation(const QString& annotation_id) {
 
 QString MainWindow::importReferenceImage(const QString& path) {
     return m_impl->importReferenceImage(path);
+}
+
+bool MainWindow::calibrateReference(const QString& reference_id, const QString& first_x,
+                                    const QString& first_y, const QString& second_x,
+                                    const QString& second_y, const QString& known_distance) {
+    return m_impl->calibrateReference(reference_id, first_x, first_y, second_x, second_y,
+                                      known_distance);
 }
 
 bool MainWindow::editReferenceTransform(const QString& reference_id, const QString& x_metres,

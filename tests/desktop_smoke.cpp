@@ -344,6 +344,19 @@ int main(int argc, char** argv) {
     require(reference_canvas != nullptr && reference_canvas->reference().has_value() &&
                 !reference_canvas->reference()->image.isNull(),
             "reference import should feed the shared canvas underlay");
+    require(window.calibrateReference(reference_id, QStringLiteral("0"), QStringLiteral("0"),
+                                      QStringLiteral("40"), QStringLiteral("0"),
+                                      QStringLiteral("2 ft")),
+            "reference known-distance calibration should use typed document history");
+    const auto calibrated_reference = window.document().snapshot().entities().at(reference_id.toStdString());
+    require(calibrated_reference.properties.at("calibration_first_source") ==
+                nlohmann::json::array({0.0, 0.0}) &&
+                calibrated_reference.properties.at("calibration_second_source") ==
+                nlohmann::json::array({40.0, 0.0}) &&
+                calibrated_reference.properties.at("calibration_known_distance") == "2 ft" &&
+                std::abs(calibrated_reference.properties.at("metres_per_source_unit").get<double>() -
+                         0.6096 / 40.0) < 1e-12,
+            "reference calibration should retain source points, expression, and exact scale");
     require(window.editReferenceTransform(reference_id, QStringLiteral("1.25"), QStringLiteral("-0.5"),
                                           QStringLiteral("0.02"), QStringLiteral("1.5"),
                                           QStringLiteral("15"), QStringLiteral("0.4"), true,
