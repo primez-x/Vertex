@@ -1,0 +1,54 @@
+# Source/build handoff manifest
+
+`scripts/source_kit_manifest.py` creates a small, reviewable handoff record for
+the Windows offline build. It reads an explicit allowlist below an explicit
+source root, verifies each selected file, and writes one deterministic JSON
+manifest. The command does not search the checkout, a build directory, the
+process `PATH`, or an installed SDK for additional inputs.
+
+Create an allowlist such as:
+
+```json
+{
+  "schema_version": 1,
+  "entries": [
+    {"category": "source", "path": "include/sketch/document.hpp"},
+    {"category": "build", "path": "build/windows-release/property-studio.exe"},
+    {"category": "docs", "path": "docs/production-plan.md"},
+    {"category": "licenses", "path": "LICENSE"},
+    {"category": "fixtures", "path": "tests/fixtures/example.json"}
+  ]
+}
+```
+
+Each entry needs one category and one repository-relative `path`. The allowed
+categories are `source`, `build`, `docs`, `licenses`, and `fixtures`. An entry
+may include an optional `sha256` value (64 hexadecimal digits) and optional
+`size` value. Supplied values are checked against the bytes under the source
+root; a stale value fails the command. Paths are normalized to POSIX separators
+in the output, and duplicate paths are rejected case-insensitively for Windows
+compatibility.
+
+Generate the manifest with all three operational paths explicit:
+
+```powershell
+python scripts/source_kit_manifest.py `
+  --source-root . `
+  --allowlist packaging/source-kit-allowlist.json `
+  --output artifacts/source-kit-manifest.json
+```
+
+The generator rejects absolute or traversal paths in the allowlist, symlinks
+and junctions in the selected path, missing or non-file inputs, unknown
+categories, duplicate entries, invalid hashes, and stale optional hashes or
+sizes. It validates every input before creating or replacing the output
+manifest. The manifest contains only relative `files` entries with their
+category, SHA-256, and byte `size`; no developer-machine root is serialized.
+Files are sorted by canonical path and JSON keys use stable sorted formatting,
+so changing allowlist order does not change the output bytes.
+
+The output always carries `audit_status: "incomplete"`. It is an inventory of
+the files named by the allowlist, not proof that the list is complete. It does
+not claim a complete source kit, licensing review, SBOM, or reproducible
+Windows rebuild. Clean-machine offline build tests, dependency closure,
+license obligations, and rebuild evidence remain separate qualification work.

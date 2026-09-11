@@ -15,6 +15,8 @@
 #include "sketch/project_store.hpp"
 #include "sketch/project_workspace.hpp"
 #include "sketch/recovery_copy_record.hpp"
+#include "sketch/recovery_discovery.hpp"
+#include "sketch/offline_policy.hpp"
 #include "sketch/workspace_save_coordinator.hpp"
 #include "sketch/workspace_save_queue.hpp"
 #include "sketch/workspace_autosave_scheduler.hpp"
@@ -898,6 +900,18 @@ class MainWindow::Impl {
 public:
     Impl(MainWindow* window, std::shared_ptr<Document> document)
         : owner(window), m_document(std::move(document)) {
+        // The product contract is local-first.  Declare the four required
+        // capabilities explicitly at the native application boundary and
+        // fail closed if a future integration weakens that declaration.
+        RuntimeCapabilities runtime;
+        runtime.account = RuntimeRequirement::not_required;
+        runtime.activation = RuntimeRequirement::not_required;
+        runtime.subscription = RuntimeRequirement::not_required;
+        runtime.network = RuntimeRequirement::not_required;
+        const auto offline_report = evaluate_offline_policy(runtime);
+        if (!offline_report.startup_allowed) {
+            throw std::runtime_error("Offline independence policy rejected application startup.");
+        }
         if (!m_document) {
             m_document = std::make_shared<Document>(Document::create());
         }
@@ -2625,6 +2639,7 @@ private:
         toolbar->setToolButtonStyle(Qt::ToolButtonTextOnly);
         m_new_action = toolbar->addAction(QStringLiteral("New"));
         m_open_action = toolbar->addAction(QStringLiteral("Open"));
+        m_recover_action = toolbar->addAction(QStringLiteral("Recover…"));
         m_save_action = toolbar->addAction(QStringLiteral("Save"));
         m_save_as_action = toolbar->addAction(QStringLiteral("Save as…"));
         toolbar->addSeparator();
@@ -2652,6 +2667,8 @@ private:
 
         QObject::connect(m_new_action, &QAction::triggered, owner, [this] { createNewProject(); });
         QObject::connect(m_open_action, &QAction::triggered, owner, [this] { openFromDialog(); });
+        QObject::connect(m_recover_action, &QAction::triggered, owner,
+                         [this] { recoverFromDialog(); });
         QObject::connect(m_save_action, &QAction::triggered, owner, [this] { saveProject(); });
         QObject::connect(m_save_as_action, &QAction::triggered, owner,
                          [this] { saveAsFromDialog(); });
@@ -4197,6 +4214,41 @@ private:
         }
     }
 
+    void recoverFromDialog() {
+        const auto directory = filesystem_path(
+            QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)) / "recovery";
+        const auto discovered = discover_recovery_copies(std::nullopt, directory);
+        if (!discovered.directory_diagnostic.empty()) {
+            setError(QStringLiteral("Recovery discovery failed: %1")
+                         .arg(QString::fromUtf8(discovered.directory_diagnostic.c_str())));
+            return;
+        }
+        QStringList choices;
+        std::vector<QString> paths;
+        for (const auto& candidate : discovered.candidates) {
+            if (!candidate.loadable || candidate.duplicate_archive_id) continue;
+            auto label = QString::fromStdWString(candidate.path.wstring());
+            if (candidate.metadata) {
+                label += QStringLiteral("  [session %1]")
+                             .arg(QString::fromStdString(candidate.metadata->archive_id));
+            }
+            choices.push_back(label);
+            paths.push_back(QString::fromStdWString(candidate.path.wstring()));
+        }
+        if (choices.isEmpty()) {
+            QMessageBox::information(owner, QStringLiteral("Recover project"),
+                                     QStringLiteral("No valid local recovery copies were found."));
+            return;
+        }
+        bool accepted = false;
+        const auto selected = QInputDialog::getItem(
+            owner, QStringLiteral("Recover project"),
+            QStringLiteral("Choose a local recovery copy:"), choices, 0, false, &accepted);
+        if (!accepted || selected.isEmpty()) return;
+        const auto index = choices.indexOf(selected);
+        if (index >= 0 && index < static_cast<int>(paths.size())) openProject(paths[index]);
+    }
+
     struct ModalContext {
         std::shared_ptr<Document> document;
         Revision revision;
@@ -4459,6 +4511,7 @@ private:
     QToolButton* m_fit_button{};
     QAction* m_new_action{};
     QAction* m_open_action{};
+    QAction* m_recover_action{};
     QAction* m_save_action{};
     QAction* m_save_as_action{};
     QAction* m_undo_action{};

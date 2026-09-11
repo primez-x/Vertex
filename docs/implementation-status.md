@@ -16,6 +16,15 @@ device and appraisal adapters, recovery discovery/retention UI, installer and
 source-kit qualification, and production acceptance evidence remain open in the
 requirements ledger.
 
+The current checkpoint also includes read-only recovery-copy discovery with
+source-path and hash matching, a fail-closed offline-independence policy wired
+at native startup, deterministic source-kit and portable-package manifests,
+immutable reference-asset calibration and transform records, typed schedule
+records, and a standalone vertical level/floor-to-floor graph. These slices
+have focused test coverage and remain core foundations; decoder, project/UI
+persistence, native Apex compatibility, clean-machine packaging, and
+end-to-end production evidence are still open.
+
 Recovery validation now checks lifecycle ordering against the complete Document
 history projection and replays the global navigation stacks/operation registry.
 It rejects malformed IDs, sequences, targets, payload presence and revision
