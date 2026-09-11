@@ -82,6 +82,7 @@
 #include <QUuid>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cctype>
 #include <cmath>
@@ -903,6 +904,15 @@ const char* architectural_view_name(BuildingViewKind kind) {
     case BuildingViewKind::plan: return "plan";
     case BuildingViewKind::elevation: return "elevation";
     case BuildingViewKind::section: return "section";
+    }
+    throw std::invalid_argument("unknown architectural view kind");
+}
+
+std::size_t architectural_view_index(BuildingViewKind kind) {
+    switch (kind) {
+    case BuildingViewKind::plan: return 0;
+    case BuildingViewKind::elevation: return 1;
+    case BuildingViewKind::section: return 2;
     }
     throw std::invalid_argument("unknown architectural view kind");
 }
@@ -2456,7 +2466,6 @@ public:
             painter.setPen(QPen(QColor(45, 52, 60), std::max(1.0, paper_scale)));
             painter.drawRect(page);
 
-            const auto center = outputCanvas()->contentCenter();
             const auto find_view = [&](const std::string& id) -> const CoordinatedView* {
                 const auto found = std::find_if(model.views().begin(), model.views().end(),
                     [&](const auto& view) { return view.id == id; });
@@ -2465,6 +2474,14 @@ public:
             for (const auto& viewport : sheet.viewports) {
                 const auto* view = find_view(viewport.view_id);
                 if (view == nullptr) continue;
+                const auto view_kind = [&] {
+                    switch (view->kind) {
+                    case CoordinatedViewKind::plan: return BuildingViewKind::plan;
+                    case CoordinatedViewKind::elevation: return BuildingViewKind::elevation;
+                    case CoordinatedViewKind::section: return BuildingViewKind::section;
+                    }
+                    throw std::invalid_argument("unknown coordinated view kind");
+                }();
                 const QRectF viewport_rect(
                     page.left() + viewport.bounds.x_mm * paper_scale,
                     page.top() + viewport.bounds.y_mm * paper_scale,
@@ -2473,7 +2490,24 @@ public:
                 painter.save();
                 painter.setClipRect(viewport_rect);
                 const auto model_scale = paper_scale * 1000.0 / viewport.scale_denominator;
-                outputCanvas()->renderSceneAt(painter, viewport_rect, model_scale, center, Qt::white);
+                std::unique_ptr<PlanCanvas> temporary_canvas;
+                PlanCanvas* viewport_canvas = nullptr;
+                if (view_kind == BuildingViewKind::plan) {
+                    viewport_canvas = m_measurementCanvas;
+                } else if (view_kind == m_architectural_view_kind) {
+                    viewport_canvas = m_architecturalCanvas;
+                } else {
+                    temporary_canvas = std::make_unique<PlanCanvas>();
+                    temporary_canvas->setGridEnabled(false);
+                    temporary_canvas->setSnapEnabled(false);
+                    temporary_canvas->setEntities(
+                        m_architectural_view_entities[architectural_view_index(view_kind)]);
+                    temporary_canvas->setLabels(m_measurementCanvas->labels());
+                    viewport_canvas = temporary_canvas.get();
+                }
+                const auto viewport_center = viewport_canvas->contentCenter();
+                viewport_canvas->renderSceneAt(painter, viewport_rect, model_scale,
+                                               viewport_center, Qt::white);
                 painter.restore();
                 painter.setPen(QPen(QColor(115, 125, 138), std::max(1.0, paper_scale * 0.6)));
                 painter.drawRect(viewport_rect);
@@ -4710,28 +4744,29 @@ private:
                                                 read_number(entity.properties, "thickness_m", 0.08),
                                                 id_from(id) == m_selected_id});
         }
-        // Measurement always retains its plan geometry. The architectural
-        // canvas can independently request an analytical elevation or section
-        // over the same semantic entities; the second pass keeps the shared
-        // Document authoritative and avoids turning plan pixels into model
-        // data.
-        std::vector<CanvasEntity> architectural_geometry = all_geometry;
-        if (m_architectural_view_kind != BuildingViewKind::plan) {
-            architectural_geometry.clear();
-            const auto frame = architectural_view_frame(snapshot, m_architectural_view_kind);
+        // Measurement always retains its plan geometry. Build all three
+        // architectural presentations from the same snapshot so persisted
+        // sheet viewports can render independently of the active workspace.
+        std::array<std::vector<CanvasEntity>, 3> view_geometry;
+        view_geometry[architectural_view_index(BuildingViewKind::plan)] = all_geometry;
+        const auto build_architectural_geometry = [&](BuildingViewKind kind) {
+            if (kind == BuildingViewKind::plan) return all_geometry;
+            std::vector<CanvasEntity> result;
+            result.reserve(snapshot.entities().size());
+            const auto frame = architectural_view_frame(snapshot, kind);
             for (const auto& [id, entity] : snapshot.entities()) {
                 try {
                     if (can_recognize_building_entity_type(entity.type)) {
-                        const auto key = "view:" + std::to_string(static_cast<int>(m_architectural_view_kind)) +
+                        const auto key = "view:" + std::to_string(static_cast<int>(kind)) +
                                          '\n' + entity.type + '\n' + entity.properties.dump();
                         auto cached = m_plan_projection_cache.find(id);
                         if (cached == m_plan_projection_cache.end() || cached->second.first != key) {
                             auto projection = project_building_view(
-                                decode_building_entity(entity), m_architectural_view_kind, frame);
+                                decode_building_entity(entity), kind, frame);
                             cached = m_plan_projection_cache.insert_or_assign(
                                 id, std::make_pair(key, std::move(projection))).first;
                         }
-                        architectural_geometry.push_back(CanvasEntity{
+                        result.push_back(CanvasEntity{
                             id_from(id), QString::fromStdString(entity.type),
                             cached->second.second, 0.0, id_from(id) == m_selected_id});
                         continue;
@@ -4748,8 +4783,8 @@ private:
                                         openings_by_wall[id]};
                         validate_wall_semantics(wall);
                         const auto projection = project_shape_view(
-                            make_wall(wall), m_architectural_view_kind, frame);
-                        architectural_geometry.push_back(CanvasEntity{
+                            make_wall(wall), kind, frame);
+                        result.push_back(CanvasEntity{
                             id_from(id), QStringLiteral("wall"), projection, *thickness,
                             id_from(id) == m_selected_id});
                         continue;
@@ -4764,39 +4799,49 @@ private:
                         }
                         const auto projection = project_shape_view(
                             make_slab(Slab{id, *boundary, *holes, *thickness, *elevation}),
-                            m_architectural_view_kind, frame);
-                        architectural_geometry.push_back(CanvasEntity{
+                            kind, frame);
+                        result.push_back(CanvasEntity{
                             id_from(id), QStringLiteral("slab"), projection, *thickness,
                             id_from(id) == m_selected_id});
                     }
                 } catch (const std::exception& error) {
-                    append_geometry_error(QStringLiteral("%1 view %2: %3")
-                        .arg(m_architectural_view_kind == BuildingViewKind::elevation
-                                 ? QStringLiteral("Elevation") : QStringLiteral("Section"),
-                             id_from(id), QString::fromUtf8(error.what())));
+                    if (kind == m_architectural_view_kind) {
+                        append_geometry_error(QStringLiteral("%1 view %2: %3")
+                            .arg(kind == BuildingViewKind::elevation
+                                     ? QStringLiteral("Elevation") : QStringLiteral("Section"),
+                                 id_from(id), QString::fromUtf8(error.what())));
+                    }
                 }
             }
+            return result;
+        };
+        for (const auto kind : {BuildingViewKind::elevation, BuildingViewKind::section}) {
+            view_geometry[architectural_view_index(kind)] = build_architectural_geometry(kind);
         }
         // Every supported entity above has been parsed and validated before
         // the view mask is applied. Hidden invalid geometry therefore keeps
         // the output error visible and cannot become a way around validation.
         const auto visible_ids = visible_project_entities(snapshot, m_view_filter);
         std::vector<CanvasEntity> geometry;
-        std::vector<CanvasEntity> visible_architectural_geometry;
+        std::array<std::vector<CanvasEntity>, 3> visible_view_geometry;
         geometry.reserve(all_geometry.size());
-        visible_architectural_geometry.reserve(architectural_geometry.size());
         for (auto& entity : all_geometry) {
             if (visible_ids.contains(entity.id.toStdString())) {
                 geometry.push_back(std::move(entity));
             }
         }
-        for (auto& entity : architectural_geometry) {
-            if (visible_ids.contains(entity.id.toStdString())) {
-                visible_architectural_geometry.push_back(std::move(entity));
+        for (std::size_t index = 0; index < view_geometry.size(); ++index) {
+            visible_view_geometry[index].reserve(view_geometry[index].size());
+            for (auto& entity : view_geometry[index]) {
+                if (visible_ids.contains(entity.id.toStdString())) {
+                    visible_view_geometry[index].push_back(std::move(entity));
+                }
             }
         }
         m_measurementCanvas->setEntities(geometry);
-        m_architecturalCanvas->setEntities(std::move(visible_architectural_geometry));
+        m_architectural_view_entities = std::move(visible_view_geometry);
+        m_architecturalCanvas->setEntities(
+            m_architectural_view_entities[architectural_view_index(m_architectural_view_kind)]);
         std::vector<CanvasLabel> labels;
         for (auto& label : all_labels) {
             if (visible_ids.contains(label.id.toStdString())) labels.push_back(std::move(label));
@@ -5933,6 +5978,7 @@ private:
     std::map<std::string, std::pair<std::string, Boundary>> m_plan_projection_cache;
     std::map<std::string, std::pair<std::string, QString>, std::less<>>
         m_plan_slab_validation_cache;
+    std::array<std::vector<CanvasEntity>, 3> m_architectural_view_entities;
     Vec2 m_last_cursor{};
     std::optional<BoundaryAuthoringSession> m_boundary_session;
     std::optional<DocumentSnapshot> m_boundary_source;

@@ -6,15 +6,15 @@ ARCH-VIEW-001/002, ARCH-SHEET-001 and IO-OUTPUT-002. The
 versioned project format and reuses the same validation at create/load/command
 boundaries. New desktop projects start with validated plan, elevation and
 section views, a sheet, title block, and independently scaled viewport in that
-entity. Draft
-PDF, SVG, and print output now consumes the persisted sheet dimensions,
-viewport bounds/scales, title block and active vector canvas through one
-renderer. Desktop sheet title-block/number and viewport bounds/scale editing
-now commit through the typed Document history; schedule placement rendering,
-including revision-bound door/window, room and material rows, now uses the
-same schedule projection as the Schedules dialog. Desktop schedule placement
-bounds can be edited through typed Document history; printer calibration and
-production output qualification remain open. The shared
+entity. Draft PDF, SVG, and print output now consumes the persisted sheet
+dimensions, viewport bounds/scales, title block and view-specific vector
+geometry derived from the same immutable document snapshot, regardless of the
+active workspace tab. Desktop sheet title-block/number and viewport
+bounds/scale editing now commit through the typed Document history; schedule
+placement rendering, including revision-bound door/window, room and material
+rows, now uses the same schedule projection as the Schedules dialog. Desktop
+schedule placement bounds can be edited through typed Document history; printer
+calibration and production output qualification remain open. The shared
 architectural projection engine now derives analytical plan, elevation, and
 section edges from supported building solids; see
 `docs/architectural-projections.md` for its explicit boundary and remaining

@@ -401,7 +401,9 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
 - New desktop projects now seed a validated `sheet_view_model` entity with a
   coordinated plan/elevation/section views, an A-101 sheet, title block, and independent viewport scale;
   the entity survives normal save/reopen and participates in output-fingerprint
-  view inputs. Draft PDF/SVG/print consume the persisted sheet renderer, and
+  view inputs. Draft PDF/SVG/print consume the persisted sheet renderer and
+  select view-specific derived geometry for each persisted viewport, even when
+  the active workspace tab differs, and
   sheet number/title-block plus viewport bounds/scale edits use Document
   history; persisted schedule placements now render revision-bound schedule
   rows in draft output, and placement bounds can be edited through typed
@@ -415,8 +417,8 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   the Architectural tab now switches between transient plan/elevation/section
   canvas views and routes its selected view through draft output; persisted
   cut-depth presentation now persists and is editable from the desktop view
-  settings command; annotations/hatching, sheet layout, and production print
-  integration remain open.
+  settings command; annotations/hatching, complete sheet layout, and production
+  print integration remain open.
 - Release import inspection resolves 34 selected application/component
   binaries on this machine. The Qt dry-run exposed default plugin expansion;
   an explicit current-component allowlist is recorded. Clean-machine packaging,
