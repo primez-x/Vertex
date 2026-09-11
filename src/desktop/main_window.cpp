@@ -14,7 +14,10 @@
 #include "sketch/calculations.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/project_workspace.hpp"
+#include "sketch/recovery_copy_record.hpp"
 #include "sketch/workspace_save_coordinator.hpp"
+#include "sketch/workspace_save_queue.hpp"
+#include "sketch/workspace_autosave_scheduler.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/project_visibility.hpp"
 #include "sketch/quantity.hpp"
@@ -51,6 +54,7 @@
 #include <QStyle>
 #include <QStyleOptionViewItem>
 #include <QStatusBar>
+#include <QStandardPaths>
 #include <QSplitter>
 #include <QTabWidget>
 #include <QToolBar>
@@ -79,6 +83,7 @@
 #include <string>
 #include <string_view>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 
 #include <nlohmann/json.hpp>
@@ -901,7 +906,21 @@ public:
         initializeDrawingContext();
         buildUi();
         refresh();
+        m_save_timer = new QTimer(owner);
+        m_save_timer->setObjectName(QStringLiteral("workspaceSavePoll"));
+        m_save_timer->setInterval(100);
+        QObject::connect(m_save_timer, &QTimer::timeout, owner, [this] { pollAutosave(); });
+        m_save_timer->start();
     }
+
+    ~Impl() {
+        m_save_timer->stop();
+        // Jobs own detached values only. Join before destroying any owner state.
+        m_save_queue.shutdown(true);
+        drainSaveCompletions();
+    }
+
+    QString recoveryCopyPath() const { return QString::fromStdWString(m_autosave_path.wstring()); }
 
     [[nodiscard]] Document& document() noexcept { return *m_document; }
     [[nodiscard]] const Document& document() const noexcept { return *m_document; }
@@ -1527,13 +1546,13 @@ public:
             }
             // Programmatic edits use the same validated intent as the dialog.
             // The interactive inspector opens a preview before committing.
-            ConstraintDialog dialog(m_document->snapshot(), m_selected_id, m_metric_units, owner);
+            ConstraintDialog dialog(authoringSnapshot(), m_selected_id, m_metric_units, owner);
             dialog.setLengthExpression(expression);
             if (!dialog.previewEdit() || !dialog.submit()) {
                 setError(dialog.lastError());
                 return false;
             }
-            apply_constraint_authoring(*m_document, *dialog.acceptedPreview());
+            applyConstraintPreview(*dialog.acceptedPreview());
             clearError();
             refresh();
             return true;
@@ -1687,6 +1706,8 @@ public:
             m_document = std::move(candidate);
             m_project_workspace = std::move(candidate_workspace);
             m_recovery_ledger.clear();
+            m_saved_edited_generation = 0;
+            resetAutosaveSession();
             m_view_filter = {};
             initializeDrawingContext();
             m_file_path.clear();
@@ -1739,6 +1760,8 @@ public:
             m_project_workspace = std::move(candidate_workspace);
             m_recovery_ledger = std::move(candidate_ledger);
             m_saved_workspace_epoch = m_project_workspace->epoch();
+            m_saved_edited_generation = m_document->dirty() ? 0 : m_project_workspace->edited_generation();
+            resetAutosaveSession();
             m_view_filter = {};
             m_file_path = candidate_path;
             initializeDrawingContext();
@@ -2247,6 +2270,24 @@ private:
         commitWorkspaceEdit(edit);
     }
 
+    DocumentSnapshot authoringSnapshot() const {
+        if (m_recovery_ledger.empty()) return m_document->snapshot();
+        requireWorkspaceDocument();
+        // The workspace's saved marker can differ after explicit Save. Build
+        // sealed previews from the exact snapshot their workspace adapter uses.
+        return m_project_workspace->snapshot();
+    }
+
+    void applyConstraintPreview(const ConstraintAuthoringPreview& preview) {
+        if (m_recovery_ledger.empty()) {
+            apply_constraint_authoring(*m_document, preview);
+            return;
+        }
+        requireWorkspaceDocument();
+        auto edit = m_project_workspace->prepare_constraint_authoring(preview);
+        commitWorkspaceEdit(edit);
+    }
+
     RecoveryLedger currentRecoveryLedger(const ProjectWorkspaceSnapshot& snapshot) const {
         auto ledger = m_recovery_ledger;
         if (ledger.empty()) return ledger;
@@ -2298,6 +2339,157 @@ private:
         }
     }
 
+    void drainSaveCompletions() {
+        for (auto& completion : m_save_queue.take_completed()) {
+            if (completion.kind == WorkspaceSaveQueue::CompletionKind::barrier) {
+                m_completed_barrier = completion.sequence;
+            } else if (m_autosave_pending && completion.sequence == m_autosave_pending->sequence) {
+                auto pending = std::move(*m_autosave_pending);
+                m_autosave_pending.reset();
+                bool accepted = false;
+                if (completion.succeeded()) {
+                    const auto result = WorkspaceSaveCoordinator::accept(*completion.ticket,
+                        *completion.receipt, m_project_workspace->capture(), pending.binding,
+                        document_authoring_source_digest_v1(m_document->snapshot()));
+                    // A stale publication still owns these bytes. Retain its hash
+                    // for the next guarded write, without acknowledging newer state.
+                    if (result.publication_valid) m_autosave_sha256 = completion.receipt->file_sha256;
+                    accepted = result.acknowledged();
+                }
+                m_autosave_scheduler.complete(pending.capture, accepted,
+                    WorkspaceAutosaveScheduler::Clock::now());
+                if (accepted) m_autosaved_checkpoint = pending.capture.checkpoint_generation;
+                if (!completion.succeeded()) {
+                    m_autosave_retry_after = WorkspaceAutosaveScheduler::Clock::now() + std::chrono::seconds(2);
+                    // Avoid modal UI from a timer (including during shutdown).
+                    m_last_error = QStringLiteral("Recovery copy failed; current changes remain unsaved.");
+                    owner->statusBar()->showMessage(m_last_error, 6000);
+                }
+            } else {
+                m_completed_saves.emplace(completion.sequence, std::move(completion));
+            }
+        }
+    }
+
+    void resetAutosaveSession() {
+        // Called only after a project transition has drained the queue. The
+        // document ID can remain stable across reopen, so session state must
+        // be reset explicitly rather than inferred from identity alone.
+        m_autosave_scheduler = WorkspaceAutosaveScheduler{};
+        m_autosave_document_id.clear();
+        m_autosave_archive_id.clear();
+        m_autosave_path.clear();
+        m_autosave_sha256.clear();
+        m_autosaved_checkpoint = 0;
+        m_autosave_retry_after = {};
+    }
+
+    void waitForSaveBarrier() {
+        const auto barrier = m_save_queue.enqueue_barrier();
+        while (m_completed_barrier < barrier) {
+            drainSaveCompletions();
+            if (m_completed_barrier < barrier) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+
+    void pollAutosave() {
+        drainSaveCompletions();
+        if (!m_document->is_editable()) return;
+        try {
+            const bool recovery_project = !m_recovery_ledger.empty();
+            if (recovery_project) {
+                requireWorkspaceDocument();
+            } else if (document_authoring_source_digest_v1(m_document->snapshot()) !=
+                       document_authoring_source_digest_v1(m_project_workspace->snapshot())) {
+                // Legacy v1-v3 documents still expose the historical mutable
+                // Document API. Rebase the detached workspace before taking a
+                // recovery capture so the queue never sees stale geometry.
+                m_project_workspace = std::make_unique<ProjectWorkspace>(m_document->snapshot());
+            }
+            const auto now = WorkspaceAutosaveScheduler::Clock::now();
+            const auto document_id = m_document->snapshot().document_id();
+            if (m_autosave_document_id != document_id) {
+                // Project transitions drain first, so the scheduler has no old job.
+                m_autosave_scheduler = WorkspaceAutosaveScheduler{};
+                m_autosave_document_id = document_id;
+                // Legacy projects use the document revision as their
+                // monotonic recovery generation. A clean open starts at its
+                // saved marker; an edit that happened before the first timer
+                // tick therefore remains visible to the scheduler.
+                m_autosaved_checkpoint = recovery_project ? 0
+                    : m_document->snapshot().saved_revision_optional().value_or(0);
+                m_autosave_sha256.clear();
+                m_autosave_retry_after = {};
+                m_autosave_archive_id = make_stable_id();
+                auto directory = m_file_path.empty()
+                    ? filesystem_path(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)) / "recovery"
+                    : m_file_path.parent_path();
+                if (directory.empty()) directory = std::filesystem::current_path();
+                m_autosave_path = directory / ("recovery-" + m_autosave_archive_id + ".bldproj");
+            }
+            const auto edited_generation = recovery_project
+                ? m_project_workspace->edited_generation() : m_document->revision();
+            const auto checkpoint_generation = recovery_project
+                ? m_project_workspace->checkpoint_generation() : m_document->revision();
+            m_autosave_scheduler.observe(now, edited_generation, checkpoint_generation,
+                m_autosaved_checkpoint);
+            if (now < m_autosave_retry_after) return;
+            const auto capture = m_autosave_scheduler.capture(now);
+            if (!capture) return;
+            try {
+                const auto snapshot = m_project_workspace->capture();
+                const auto path = m_autosave_path;
+                const auto utf8 = path.generic_u8string();
+                SavePublicationBinding binding{m_save_owner_token, ArchiveRole::recovery_copy,
+                    m_autosave_archive_id, std::string(reinterpret_cast<const char*>(utf8.data()), utf8.size())};
+                auto ticket = WorkspaceSaveCoordinator::capture(snapshot, binding,
+                    document_authoring_source_digest_v1(m_document->snapshot()));
+                auto ledger = currentRecoveryLedger(snapshot);
+                if (ledger.empty()) {
+                    // A legacy or untitled project has no persisted recovery
+                    // ledger yet, but a recovery-copy role still requires the
+                    // same history anchor as a restored v4 project.
+                    const auto history = capture_workspace_history_record(snapshot);
+                    ledger.push_back({make_stable_id(), "workspace_history",
+                        encode_workspace_history_record(snapshot.document(), history,
+                            snapshot.active_boundary())});
+                }
+                RecoveryCopyRecord copy;
+                copy.archive_id = m_autosave_archive_id;
+                copy.owner_token = m_save_owner_token;
+                copy.document_id = snapshot.document().document_id();
+                if (!m_file_path.empty()) {
+                    const auto source_utf8 = m_file_path.generic_u8string();
+                    copy.source_path = std::string(reinterpret_cast<const char*>(source_utf8.data()), source_utf8.size());
+                }
+                if (!m_file_sha256.empty()) copy.source_sha256 = m_file_sha256;
+                copy.explicitly_saved_document_revision = m_document->snapshot().saved_revision_optional();
+                copy.explicit_save_generation = m_saved_edited_generation;
+                copy.saved_edited_generation = m_saved_edited_generation;
+                copy.workspace_epoch = snapshot.epoch();
+                copy.edited_generation = snapshot.edited_generation();
+                copy.checkpoint_generation = snapshot.checkpoint_generation();
+                copy.autosaved_checkpoint_generation = snapshot.checkpoint_generation();
+                ledger.push_back({m_autosave_archive_id, "recovery_copy", encode_recovery_copy_record(copy)});
+                auto archive = ProjectArchiveSnapshot(snapshot.document(), std::move(ledger), ArchiveRole::recovery_copy);
+                SaveOptions options;
+                if (!m_autosave_sha256.empty()) options.expected_destination_sha256 = m_autosave_sha256;
+                const auto sequence = m_save_queue.enqueue(std::move(ticket),
+                    [path, archive = std::move(archive), options] {
+                        std::filesystem::create_directories(path.parent_path());
+                        return ProjectStore::save_archive(path, archive, options);
+                    });
+                m_autosave_pending = PendingAutosave{sequence, *capture, std::move(binding)};
+            } catch (...) {
+                m_autosave_scheduler.complete(*capture, false, now);
+                throw;
+            }
+        } catch (const std::exception& error) {
+            m_autosave_retry_after = WorkspaceAutosaveScheduler::Clock::now() + std::chrono::seconds(2);
+            m_last_error = QStringLiteral("Recovery copy paused: %1").arg(QString::fromUtf8(error.what()));
+        }
+    }
+
     bool saveTo(const std::filesystem::path& path, bool current_destination) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only and cannot be saved."));
@@ -2341,11 +2533,21 @@ private:
                 persisted_document->mark_saved(snapshot.revision());
                 persisted_snapshot = persisted_document->snapshot();
             }
-            const auto receipt = m_recovery_ledger.empty()
-                ? ProjectStore::save(path, persisted_snapshot, options)
-                : ProjectStore::save_archive(path,
-                    ProjectArchiveSnapshot(persisted_snapshot, recovery_ledger, ArchiveRole::ordinary), options);
-            const auto acknowledgement = WorkspaceSaveCoordinator::accept(ticket, receipt,
+            const bool legacy = m_recovery_ledger.empty();
+            const auto sequence = m_save_queue.enqueue(std::move(ticket),
+                [path, persisted_snapshot, recovery_ledger, options, legacy] {
+                    return legacy ? ProjectStore::save(path, persisted_snapshot, options)
+                        : ProjectStore::save_archive(path,
+                            ProjectArchiveSnapshot(persisted_snapshot, recovery_ledger, ArchiveRole::ordinary), options);
+                });
+            // Synchronous API compatibility: storage runs on the worker, while
+            // this explicit barrier deliberately does not pump reentrant UI events.
+            waitForSaveBarrier();
+            auto completion = std::move(m_completed_saves.at(sequence));
+            m_completed_saves.erase(sequence);
+            if (completion.error) std::rethrow_exception(completion.error);
+            const auto& receipt = *completion.receipt;
+            const auto acknowledgement = WorkspaceSaveCoordinator::accept(*completion.ticket, receipt,
                 m_project_workspace->capture(), binding,
                 document_authoring_source_digest_v1(m_document->snapshot()));
             if (!acknowledgement.acknowledged() || source_document != m_document ||
@@ -2358,6 +2560,12 @@ private:
             m_document->mark_saved(receipt.revision);
             m_recovery_ledger = std::move(recovery_ledger);
             m_saved_workspace_epoch = m_project_workspace->epoch();
+            m_saved_edited_generation = m_project_workspace->edited_generation();
+            // An explicit publication is also a durable recovery checkpoint.
+            // Advance the local autosave watermark only after the queue has
+            // acknowledged this exact destination and workspace state.
+            m_autosaved_checkpoint = m_recovery_ledger.empty()
+                ? m_document->revision() : m_project_workspace->checkpoint_generation();
             if (refresh_draft_source) m_boundary_source = m_document->snapshot();
             m_file_path = path;
             m_file_sha256 = receipt.file_sha256;
@@ -2375,6 +2583,7 @@ private:
     }
 
     bool confirmDirtyTransition(const QString& title, const QString& message) {
+        waitForSaveBarrier();
         if (!confirmDiscardBoundaryDraft()) return false;
         if (!projectDirty() || !m_document->is_editable()) {
             return true;
@@ -2399,7 +2608,11 @@ private:
         }
         if (!unchanged()) return false;
         if (answer == QMessageBox::Save && !saveProject()) return false;
-        return unchanged();
+        if (!unchanged()) return false;
+        // The modal prompt runs an event loop and can submit another autosave.
+        // Finish that publication before a successful close/project transition.
+        waitForSaveBarrier();
+        return true;
     }
 
     void buildUi() {
@@ -3867,10 +4080,18 @@ private:
             }
             BoundaryCommitIntent intent{m_boundary_session->options(), m_boundary_session->accepted_chains(),
                 *m_boundary_context, "Draw and define measured area"};
-            const auto preview = preview_boundary_commit(*m_boundary_source, intent);
+            if (document_snapshot_digest(*m_boundary_source) != document_snapshot_digest(m_document->snapshot()))
+                throw std::invalid_argument("the document changed after boundary drawing started");
+            const auto preview = preview_boundary_commit(authoringSnapshot(), intent);
             if (!preview.accepted()) throw std::invalid_argument(preview.diagnostics().empty()
                 ? "boundary commit was rejected" : preview.diagnostics().front());
-            (void)apply_boundary_commit(*m_document, preview);
+            if (m_recovery_ledger.empty()) {
+                (void)apply_boundary_commit(*m_document, preview);
+            } else {
+                requireWorkspaceDocument();
+                auto edit = m_project_workspace->prepare_boundary_commit(preview);
+                commitWorkspaceEdit(edit);
+            }
             m_selected_id = QString::fromStdString(preview.created_boundary_ids().front());
             clearPreview();
             m_tool = CanvasTool::select;
@@ -4007,13 +4228,13 @@ public:
         }
         const auto context = captureModalContext();
         try {
-            ConstraintDialog dialog(m_document->snapshot(), m_selected_id, m_metric_units, owner);
+            ConstraintDialog dialog(authoringSnapshot(), m_selected_id, m_metric_units, owner);
             if (!initial_length.isEmpty()) dialog.setLengthExpression(initial_length);
             if (dialog.exec() != QDialog::Accepted) { refreshInspector(); return; }
             if (!modalContextUnchanged(context)) return;
             const auto preview = dialog.acceptedPreview();
             if (!preview) return;
-            apply_constraint_authoring(*m_document, *preview);
+            applyConstraintPreview(*preview);
             clearError();
             refresh();
         } catch (const std::exception& error) {
@@ -4149,7 +4370,25 @@ private:
     std::unique_ptr<ProjectWorkspace> m_project_workspace;
     RecoveryLedger m_recovery_ledger;
     std::uint64_t m_saved_workspace_epoch{};
+    std::uint64_t m_saved_edited_generation{};
     const std::string m_save_owner_token{make_stable_id()};
+    WorkspaceSaveQueue m_save_queue;
+    WorkspaceAutosaveScheduler m_autosave_scheduler;
+    struct PendingAutosave {
+        std::uint64_t sequence;
+        WorkspaceAutosaveScheduler::Capture capture;
+        SavePublicationBinding binding;
+    };
+    std::optional<PendingAutosave> m_autosave_pending;
+    std::map<std::uint64_t, WorkspaceSaveQueue::Completion> m_completed_saves;
+    std::uint64_t m_completed_barrier{};
+    std::uint64_t m_autosaved_checkpoint{};
+    std::string m_autosave_document_id;
+    std::string m_autosave_archive_id;
+    std::filesystem::path m_autosave_path;
+    std::string m_autosave_sha256;
+    WorkspaceAutosaveScheduler::TimePoint m_autosave_retry_after{};
+    QTimer* m_save_timer{};
     std::filesystem::path m_file_path;
     std::string m_file_sha256;
     Workspace m_workspace{Workspace::measurement};
@@ -4374,6 +4613,10 @@ bool MainWindow::openProject(const QString& path) {
 
 bool MainWindow::saveProject() {
     return m_impl->saveProject();
+}
+
+QString MainWindow::recoveryCopyPath() const {
+    return m_impl->recoveryCopyPath();
 }
 
 bool MainWindow::saveProjectAs(const QString& path) {

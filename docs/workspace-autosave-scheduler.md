@@ -15,6 +15,11 @@ and retryable. Generation regressions, mismatched completions, and invalid
 intervals fail closed.
 
 The scheduler deliberately does not start threads, serialize archives, mutate
-saved markers, or choose a recovery path. The desktop owner will combine it
-with `ProjectWorkspace`, `WorkspaceSaveQueue`, and `WorkspaceSaveCoordinator`
-when autosave/restart UI is integrated.
+saved markers, or choose a recovery path. The Windows desktop owner combines
+it with `ProjectWorkspace`, `WorkspaceSaveQueue`, and
+`WorkspaceSaveCoordinator`: all editable projects receive a sibling recovery
+archive after the quiet interval, with v4 recovery metadata and a guarded
+destination hash. Legacy documents are rebased into a detached workspace for
+capture; an explicit save advances the recovery watermark only after the
+publication barrier acknowledges the saved state. Recovery discovery/opening,
+retention cleanup, and unfinished live boundary input remain separate work.

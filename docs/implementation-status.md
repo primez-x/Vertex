@@ -1,5 +1,21 @@
 # Implementation status
 
+## Current checkpoint (September 2026)
+
+The Windows desktop now uses the immutable save queue and owner-thread
+autosave scheduler for explicit saves, close/project transitions, and recovery
+copies. Recovery archives carry stable v4 metadata and guarded destination
+hashes; legacy and untitled edits are rebased into detached workspace captures
+so they receive the same local recovery behavior. Recovered constraint previews
+and boundary commits use sealed `ProjectWorkspace` adapters, preserving undo,
+redo, and save acknowledgement. Typed relationship validation and portable
+package staging are present as bounded, separately testable slices.
+
+These additions are still development checkpoints. Apex native import/export,
+device and appraisal adapters, recovery discovery/retention UI, installer and
+source-kit qualification, and production acceptance evidence remain open in the
+requirements ledger.
+
 Recovery validation now checks lifecycle ordering against the complete Document
 history projection and replays the global navigation stacks/operation registry.
 It rejects malformed IDs, sequences, targets, payload presence and revision
@@ -40,9 +56,8 @@ acknowledgement; a serialized immutable-snapshot save queue now provides FIFO
 background publication, ordered barriers, exception capture, and explicit
 draining/cancellation semantics. An owner-thread autosave scheduler now enforces
 two-second quiet debounce and a 30-second maximum interval while preserving
-stale/failure retry semantics. Desktop queue/scheduler wiring, restart
-restoration
-remain open.
+stale/failure retry semantics. Desktop queue/scheduler wiring is now integrated
+for explicit saves and timed recovery copies; restart restoration remains open.
 
 Workspace navigation now orders document commands, session activation and
 discard and finish in one in-memory history. Undo/redo restores exact archived drafts,
@@ -71,8 +86,8 @@ actual resource policy. Current document/draft values are detached; archival
 inputs are shared immutable values. Captures survive edits and owner destruction.
 Capture grants no save acknowledgement or filesystem ownership authority.
 Persisted counters are restored by the core v4 archive route. Desktop
-workspace-command routing, background I/O and save watermarks remain to be
-connected.
+workspace-command routing, background I/O, and save watermarks are integrated;
+recovery discovery and restart selection remain open.
 
 The v24r full integrated checkpoint passes 74/74 tests in Debug (94.81 seconds)
 and Release (20.37 seconds). All 227
@@ -85,9 +100,8 @@ active-checkpoint publication, global activation/discard navigation and
 pointer/semantic generation separation. The checkpoint also covers desktop
 v4 open/save, ledger preservation, failed-open isolation and fail-closed direct
 edits to restored recovery documents. Entity authoring, organization/building
-object commands, undo/redo, and lifecycle-only navigation now route through the
-workspace for recovered archives; constraint-preview and boundary-finish paths
-still need migration.
+object commands, undo/redo, lifecycle-only navigation, recovered constraint
+previews, and recovered boundary commits now route through the workspace.
 The source and executable manifest is `artifacts/reviews/integrated-v24r-provenance.json`.
 The earlier v24d checkpoint also passed eighteen offscreen boundary
 canvas/input/workflow checks at DPR 1, 1.5 and 2 across both builds.
@@ -100,8 +114,8 @@ no mutable Document escape. Core archive restoration now validates and detaches
 the decoded aggregate before installing it in a fresh workspace. The guarded
 desktop open path now uses this API. Internal aggregate v4 persistence and the
 save acknowledgement boundary are implemented and used by the guarded desktop
-save path; remaining workspace-command migration, desktop queue wiring,
-autosave, and restart recovery remain open.
+save path; remaining restart recovery, retention cleanup, and production
+qualification remain open.
 Explicit Revise Input is implemented in memory: canonical replay regenerates
 IDs, preserves local history/counter floors and opaque extensions, and records
 the original retired namespace and finish event on a fresh activation bound to
@@ -156,9 +170,8 @@ preallocated rollback bookkeeping, retryable cleanup and unexpected owner exit.
 Independent review found a queued-acquisition shutdown race and loss of
 abandonment observations during registry allocation failure. Both now have
 focused passing regressions; the shutdown test failed against the previous
-implementation. Actual filesystem identity resolution,
-aggregate archive persistence, workspace publication and desktop autosave are
-still required; see [durable recovery](boundary-recovery.md).
+implementation. Restart recovery, recovery discovery, and production
+qualification remain required; see [durable recovery](boundary-recovery.md).
 
 The earlier v23f desktop checkpoint adds
 native Draw First and Define First sessions,

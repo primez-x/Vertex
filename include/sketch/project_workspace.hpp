@@ -14,6 +14,8 @@ namespace sketch {
 namespace detail { struct WorkspaceDocumentState; }
 
 class ProjectArchiveSnapshot;
+class ConstraintAuthoringPreview;
+class BoundaryCommitPreview;
 struct DecodedRecoveryLedger;
 
 class ProjectWorkspace;
@@ -161,6 +163,12 @@ public:
     [[nodiscard]] bool can_undo() const noexcept;
     [[nodiscard]] bool can_redo() const noexcept;
     [[nodiscard]] PreparedWorkspaceEdit prepare(const Command& command) const;
+    // Revalidate sealed previews on an isolated fork, then stage one ordinary
+    // document edit. Boundary commit does not finish an active session.
+    [[nodiscard]] PreparedWorkspaceEdit prepare_constraint_authoring(
+        const ConstraintAuthoringPreview& preview) const;
+    [[nodiscard]] PreparedWorkspaceEdit prepare_boundary_commit(
+        const BoundaryCommitPreview& preview) const;
     [[nodiscard]] PreparedWorkspaceEdit prepare_undo() const;
     [[nodiscard]] PreparedWorkspaceEdit prepare_redo() const;
     Revision commit(PreparedWorkspaceEdit& edit);

@@ -212,10 +212,17 @@
       "requirement": "Typed links distinguish architectural walls, room boundaries, and appraisal measurement boundaries, with explicit ownership and no unconstrained bidirectional cycles.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Independent, wall-derived, and measurement-driven relationships can be created, frozen, disconnected, undone, and rejected when cyclic or ambiguous.",
       "package": 3,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/typed_relationships.hpp",
+        "src/core/typed_relationships.cpp",
+        "tests/typed_relationships_tests.cpp",
+        "docs/typed-relationships.md"
+      ],
+      "implementation_note": "Immutable typed relationship validation and deterministic serialization are implemented; Document persistence, geometry propagation, and integrated undo wiring remain open."
     },
     {
       "id": "CORE-DOC-003",
@@ -262,7 +269,9 @@
         "src/core/document.cpp",
         "include/sketch/workspace_save_queue.hpp",
         "src/core/workspace_save_queue.cpp",
-        "src/desktop/main_window.cpp"
+        "src/desktop/main_window.cpp",
+        "src/core/project_workspace_preview_adapters.cpp",
+        "tests/project_workspace_preview_adapters_tests.cpp"
       ],
       "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
     },
@@ -1463,10 +1472,16 @@
       "requirement": "Plans, elevations, sections, 3D, calculations, schedules, and sheets use explicit stable references to the same semantic objects.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Deleting or changing a referenced feature produces a visible issue or controlled update rather than silently retargeting an annotation or schedule row.",
       "package": 5,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/typed_relationships.hpp",
+        "src/core/typed_relationships.cpp",
+        "docs/typed-relationships.md"
+      ],
+      "implementation_note": "Typed stable references and cycle/ambiguity validation are present as a bounded core slice; cross-view semantic object persistence and controlled retargeting remain open."
     },
     {
       "id": "ARCH-OUTPUT-001",
@@ -1617,12 +1632,14 @@
         "src/core/workspace_autosave_scheduler.cpp",
         "include/sketch/workspace_save_queue.hpp",
         "src/core/workspace_save_queue.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/desktop_workspace_recovery_tests.cpp",
         "tests/workspace_autosave_scheduler_tests.cpp",
         "tests/workspace_save_queue_tests.cpp",
         "docs/workspace-autosave-scheduler.md",
         "docs/workspace-save-queue.md"
       ],
-      "implementation_note": "Scheduling policy and serialized queue are implemented and tested; desktop persistence, crash/power interruption, and restart recovery remain open."
+      "implementation_note": "Owner-thread scheduling, queued immutable captures, guarded recovery archives, and timed coverage for recovered, legacy, and untitled projects are implemented; crash/power interruption fixtures, recovery discovery/opening UI, and retention cleanup remain open."
     },
     {
       "id": "REC-002",
@@ -1910,10 +1927,16 @@
       "requirement": "Deliver signed or otherwise integrity-verifiable offline installer and portable Windows packages with no hidden network prerequisite.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Clean-machine installation, launch, repair/recovery, uninstall behavior, and package hashes are recorded with networking disabled.",
       "package": 8,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "scripts/stage_portable_package.py",
+        "tests/test_stage_portable_package.py",
+        "docs/dependencies/portable-package.md"
+      ],
+      "implementation_note": "Portable staging now verifies explicit inventory hashes, allowlists, path safety, and emits an integrity manifest; installer creation, signing, clean-machine/offline qualification, and package certification remain open."
     },
     {
       "id": "OPS-PACK-002",

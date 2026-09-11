@@ -111,6 +111,9 @@ public:
     [[nodiscard]] bool openProject(const QString& path);
     [[nodiscard]] bool saveProject();
     [[nodiscard]] bool saveProjectAs(const QString& path);
+    // Session-specific recovery copy, separate from the ordinary destination.
+    // Empty until scheduling begins for a workspace-backed recovery project.
+    [[nodiscard]] QString recoveryCopyPath() const;
     [[nodiscard]] bool exportDraftPdf(const QString& path);
     [[nodiscard]] bool exportNativeViewImage(const QString& path);
     [[nodiscard]] bool showPrintPreview();
