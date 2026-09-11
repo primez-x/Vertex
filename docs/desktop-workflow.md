@@ -151,7 +151,9 @@ unrelated edits, opaque future records, undo/redo and save/reopen for every form
 Other commands still need their complete measurement-provenance integration.
 Grid, snap, pan, zoom, fit, near-cursor coordinates, keyboard shortcuts, and a
 Ctrl+K command search palette are active. Unsupported features are not shown
-as enabled controls.
+as enabled controls. The Theme toolbar menu and command palette select light,
+dark, or high-contrast palettes; these presentation controls do not alter
+document geometry or measurement units.
 
 Open loads into a temporary `LoadResult` and swaps the document only after a
 successful load, so corrupt, unsupported, or unreadable files leave the
@@ -161,6 +163,13 @@ save failure leaves the document and original file in place. Unknown required
 data remains read-only and is surfaced in the inspector; edit and save actions
 are disabled. Closing a dirty editable document prompts to save, discard, or
 cancel.
+
+Architectural transaction previews now have a Document adapter that emits one
+typed, revision-fenced command for create, property edit, transform, duplicate,
+and delete operations. The adapter preserves unrelated measurement entities,
+supports one-step Document undo, and is covered by a save/reopen fixture. The
+full object-family schema and visible architectural inspector bindings remain
+under qualification.
 
 ## Wall dimensions and constraints
 

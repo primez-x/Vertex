@@ -1720,9 +1720,12 @@
         "include/sketch/sheet_view_model.hpp",
         "src/core/sheet_view_model.cpp",
         "tests/sheet_view_model_tests.cpp",
+        "include/sketch/sheet_view_entity_codec.hpp",
+        "src/core/sheet_view_entity_codec.cpp",
+        "tests/sheet_view_entity_codec_tests.cpp",
         "docs/sheets-views.md"
       ],
-      "implementation_note": "Immutable coordinated plan/elevation/section view references and frame validation are implemented; shared Document object editing, renderer, and UI synchronization remain open."
+      "implementation_note": "Immutable coordinated plan/elevation/section view references and frame validation are implemented and persist through a typed Document entity; shared object editing, renderer, and UI synchronization remain open."
     },
     {
       "id": "ARCH-VIEW-002",
@@ -1738,9 +1741,12 @@
         "include/sketch/sheet_view_model.hpp",
         "src/core/sheet_view_model.cpp",
         "tests/sheet_view_model_tests.cpp",
+        "include/sketch/sheet_view_entity_codec.hpp",
+        "src/core/sheet_view_entity_codec.cpp",
+        "tests/sheet_view_entity_codec_tests.cpp",
         "docs/sheets-views.md"
       ],
-      "implementation_note": "Section cut depth, line treatment, hatching, annotations, and detail-overlay settings are validated and serializable; rendering, persistence, and print fixtures remain open."
+      "implementation_note": "Section cut depth, line treatment, hatching, annotations, and detail-overlay settings are validated and persist through the typed Document entity; rendering, UI editing, and print fixtures remain open."
     },
     {
       "id": "ARCH-SCH-001",
@@ -1792,9 +1798,12 @@
         "include/sketch/sheet_view_model.hpp",
         "src/core/sheet_view_model.cpp",
         "tests/sheet_view_model_tests.cpp",
+        "include/sketch/sheet_view_entity_codec.hpp",
+        "src/core/sheet_view_entity_codec.cpp",
+        "tests/sheet_view_entity_codec_tests.cpp",
         "docs/sheets-views.md"
       ],
-      "implementation_note": "Coordinated sheets with title blocks, revisions, callouts, schedule references, page sizes, and independent viewport scales are implemented as immutable semantic records; Document/UI/print integration remains open."
+      "implementation_note": "Coordinated sheets with title blocks, revisions, callouts, schedule references, page sizes, and independent viewport scales are implemented as immutable semantic records and persist through the typed Document entity; UI editing, layout, and print integration remain open."
     },
     {
       "id": "ARCH-EDIT-001",
@@ -1809,10 +1818,13 @@
       "implementation_sources": [
         "include/sketch/architectural_workflow_contract.hpp",
         "src/core/architectural_workflow_contract.cpp",
+        "include/sketch/architectural_document_adapter.hpp",
+        "src/core/architectural_document_adapter.cpp",
         "tests/architectural_workflow_contract_tests.cpp",
+        "tests/architectural_document_adapter_tests.cpp",
         "docs/architectural-workflow-contract.md"
       ],
-      "implementation_note": "Architectural create/select/property-edit/transform/duplicate/delete intents and single-transaction output requirements are validated as immutable descriptors; live Document mutation, UI binding, type schemas, and user-observed undo/save/reopen remain open."
+      "implementation_note": "Architectural create/select/property-edit/transform/duplicate/delete intents are translated into one revision-fenced atomic Document command with preview, undo, and save/reopen coverage; visible UI binding, type schemas, geometric transforms, and user-observed output remain open."
     },
     {
       "id": "ARCH-REL-001",

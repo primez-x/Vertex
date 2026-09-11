@@ -1,8 +1,10 @@
 # Coordinated view and sheet semantic model
 
 `SheetViewModel` provides a validated immutable semantic foundation for
-ARCH-VIEW-001/002, ARCH-SHEET-001 and IO-OUTPUT-002. These requirements are not
-complete product workflows: rendering, Document persistence/undo integration,
+ARCH-VIEW-001/002, ARCH-SHEET-001 and IO-OUTPUT-002. The
+`sheet_view_model` Document entity codec now persists this graph through the
+versioned project format and reuses the same validation at create/load/command
+boundaries. These requirements are not complete product workflows: rendering,
 desktop editing and print/PDF output remain unimplemented here.
 
 Views identify plan, elevation and section definitions by stable ID. A view owns
@@ -38,3 +40,6 @@ independent of insertion order. JSON output and caller inputs are detached from
 the stored snapshot. Import validates the complete graph before returning a
 snapshot. Tests cover coordinated edits, scale independence, input isolation,
 deterministic round trips and malformed geometry, identities and references.
+The entity codec tests cover typed Document admission and ProjectStore
+save/reopen, including schema, version, unknown-field and dangling-view
+rejection.

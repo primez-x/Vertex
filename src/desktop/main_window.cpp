@@ -17,6 +17,7 @@
 #include "sketch/recovery_copy_record.hpp"
 #include "sketch/recovery_discovery.hpp"
 #include "sketch/offline_policy.hpp"
+#include "sketch/workspace_accessibility.hpp"
 #include "sketch/workspace_save_coordinator.hpp"
 #include "sketch/workspace_save_queue.hpp"
 #include "sketch/workspace_autosave_scheduler.hpp"
@@ -44,7 +45,9 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QMenu>
 #include <QPageSize>
+#include <QPalette>
 #include <QPainter>
 #include <QPdfWriter>
 #include <QPrintPreviewDialog>
@@ -964,6 +967,35 @@ public:
         refreshInspector();
         refreshCursorLabel(m_last_cursor);
         refreshBoundaryPreview();
+    }
+
+    void applyTheme(WorkspaceTheme theme) {
+        QPalette palette = owner->style()->standardPalette();
+        if (theme == WorkspaceTheme::dark) {
+            palette.setColor(QPalette::Window, QColor(QStringLiteral("#20252b")));
+            palette.setColor(QPalette::WindowText, QColor(QStringLiteral("#f1f5f9")));
+            palette.setColor(QPalette::Base, QColor(QStringLiteral("#15191e")));
+            palette.setColor(QPalette::AlternateBase, QColor(QStringLiteral("#252c34")));
+            palette.setColor(QPalette::Text, QColor(QStringLiteral("#f1f5f9")));
+            palette.setColor(QPalette::Button, QColor(QStringLiteral("#2b333d")));
+            palette.setColor(QPalette::ButtonText, QColor(QStringLiteral("#f1f5f9")));
+            palette.setColor(QPalette::Highlight, QColor(QStringLiteral("#2f80ed")));
+            palette.setColor(QPalette::HighlightedText, QColor(QStringLiteral("#ffffff")));
+        } else if (theme == WorkspaceTheme::high_contrast) {
+            palette.setColor(QPalette::Window, Qt::black);
+            palette.setColor(QPalette::WindowText, Qt::white);
+            palette.setColor(QPalette::Base, Qt::black);
+            palette.setColor(QPalette::AlternateBase, QColor(QStringLiteral("#202020")));
+            palette.setColor(QPalette::Text, Qt::white);
+            palette.setColor(QPalette::Button, Qt::black);
+            palette.setColor(QPalette::ButtonText, Qt::white);
+            palette.setColor(QPalette::Highlight, Qt::yellow);
+            palette.setColor(QPalette::HighlightedText, Qt::black);
+            palette.setColor(QPalette::Link, Qt::yellow);
+        }
+        owner->setPalette(palette);
+        owner->setProperty("workspaceTheme", QString::fromStdString(workspace_theme_name(theme)));
+        m_theme = theme;
     }
 
     void initializeDrawingContext() {
@@ -1984,6 +2016,9 @@ public:
             {QStringLiteral("Toggle grid"), [this] { toggleGrid(); }},
             {QStringLiteral("Toggle snap"), [this] { toggleSnap(); }},
             {QStringLiteral("Fit view"), [this] { fitView(); }},
+            {QStringLiteral("Light theme"), [this] { applyTheme(WorkspaceTheme::light); }},
+            {QStringLiteral("Dark theme"), [this] { applyTheme(WorkspaceTheme::dark); }},
+            {QStringLiteral("High contrast theme"), [this] { applyTheme(WorkspaceTheme::high_contrast); }},
             {QStringLiteral("Export draft PDF"), [this] { exportFromDialog(); }},
             {QStringLiteral("Print preview (draft)"), [this] { showPrintPreview(); }},
             {QStringLiteral("About internal checkpoint"), [this] { showAbout(); }},
@@ -2652,6 +2687,20 @@ private:
         m_palette_action = toolbar->addAction(QStringLiteral("Commands"));
         m_about_action = toolbar->addAction(QStringLiteral("About"));
         toolbar->addSeparator();
+        auto* theme_menu = new QMenu(owner);
+        const auto add_theme_action = [this, theme_menu](QString label, WorkspaceTheme theme) {
+            auto* action = theme_menu->addAction(std::move(label));
+            QObject::connect(action, &QAction::triggered, owner, [this, theme] { applyTheme(theme); });
+        };
+        add_theme_action(QStringLiteral("Light"), WorkspaceTheme::light);
+        add_theme_action(QStringLiteral("Dark"), WorkspaceTheme::dark);
+        add_theme_action(QStringLiteral("High contrast"), WorkspaceTheme::high_contrast);
+        auto* theme_button = new QToolButton(toolbar);
+        theme_button->setText(QStringLiteral("Theme"));
+        theme_button->setToolTip(QStringLiteral("Select light, dark, or high-contrast workspace theme"));
+        theme_button->setMenu(theme_menu);
+        theme_button->setPopupMode(QToolButton::InstantPopup);
+        toolbar->addWidget(theme_button);
         toolbar->addWidget(new QLabel(QStringLiteral("Units"), toolbar));
         m_unitsCombo = new QComboBox(toolbar);
         m_unitsCombo->addItems({QStringLiteral("Imperial (ft/in)"), QStringLiteral("Metric (m/mm)")});
@@ -2687,6 +2736,7 @@ private:
         m_open_action->setShortcut(QKeySequence::Open);
         m_save_action->setShortcut(QKeySequence::Save);
         m_palette_action->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_K));
+        applyTheme(WorkspaceTheme::light);
 
         auto* central = new QWidget(owner);
         auto* root_layout = new QVBoxLayout(central);
@@ -4444,6 +4494,7 @@ private:
     std::filesystem::path m_file_path;
     std::string m_file_sha256;
     Workspace m_workspace{Workspace::measurement};
+    WorkspaceTheme m_theme{WorkspaceTheme::light};
     CanvasTool m_tool{CanvasTool::select};
     bool m_metric_units{false};
     bool m_grid_enabled{true};

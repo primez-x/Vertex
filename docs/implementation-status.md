@@ -40,6 +40,13 @@ limits, and offline PROJ declarations. These APIs are tested in isolation;
 polished assets, rendering, OS sandbox launch, and production integration
 evidence remain open.
 
+The coordinated sheet/view graph now has a versioned `sheet_view_model` entity
+codec at the Document boundary. Document creation, command admission and
+ProjectStore load reuse SheetViewModel validation, and a save/reopen regression
+proves the typed graph survives the portable project format. This closes a
+semantic persistence foundation; desktop sheet editing, projection, layout,
+printing and output certification remain open.
+
 Recovery validation now checks lifecycle ordering against the complete Document
 history projection and replays the global navigation stacks/operation registry.
 It rejects malformed IDs, sequences, targets, payload presence and revision

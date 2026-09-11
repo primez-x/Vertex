@@ -27,6 +27,11 @@ public:
     [[nodiscard]] static ArchitecturalTransaction create(std::string id, std::string base_revision,
         std::vector<std::string> existing_ids, std::vector<ArchitecturalOperation> operations,
         std::string undo_label);
+    [[nodiscard]] const std::string& id() const noexcept { return id_; }
+    [[nodiscard]] const std::string& base_revision() const noexcept { return base_revision_; }
+    [[nodiscard]] const std::string& undo_label() const noexcept { return undo_label_; }
+    [[nodiscard]] const std::vector<std::string>& existing_ids() const noexcept { return existing_ids_; }
+    [[nodiscard]] const std::vector<ArchitecturalOperation>& operations() const noexcept { return operations_; }
     [[nodiscard]] const std::vector<std::string>& resulting_ids() const noexcept { return resulting_ids_; }
     [[nodiscard]] nlohmann::json to_json() const;
 private:

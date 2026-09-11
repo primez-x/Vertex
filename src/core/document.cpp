@@ -1,4 +1,5 @@
 #include "sketch/document.hpp"
+#include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/constraint_integrity.hpp"
 #include "sketch/boundary_integrity.hpp"
 
@@ -160,6 +161,14 @@ void validate_entity(const Entity& entity) {
         if (entity.extensions.contains(key)) {
             document_error(DocumentErrorCode::invalid_entity,
                            std::string("entity extension uses reserved field: ") + key);
+        }
+    }
+    if (entity.type == kSheetViewEntityType) {
+        try {
+            validate_sheet_view_entity(entity);
+        } catch (const std::exception& error) {
+            document_error(DocumentErrorCode::invalid_entity,
+                           std::string("invalid sheet/view entity: ") + error.what());
         }
     }
 }
@@ -523,11 +532,12 @@ std::string sha256_hex(std::span<const std::byte> bytes) {
 }
 
 bool is_known_entity_type(std::string_view type) noexcept {
-    static constexpr std::array<std::string_view, 20> known{
+    static constexpr std::array<std::string_view, 21> known{
         "property",             "building", "floor",  "layer", "boundary",
         "measurement_boundary", "room_boundary", "wall", "opening", "room",
         "slab",                 "roof",     "stair",  "column", "beam",
-        "label",                "sheet",    "view",   "constraint", "dimension"};
+        "label",                "sheet",    "view",   "constraint", "dimension",
+        "sheet_view_model"};
     return std::find(known.begin(), known.end(), type) != known.end();
 }
 
