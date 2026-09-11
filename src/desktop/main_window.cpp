@@ -5,6 +5,7 @@
 #include "sketch/architecture.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/building_plan_projection.hpp"
+#include "sketch/building_view_projection.hpp"
 #include "sketch/desktop/building_object_dialog.hpp"
 #include "sketch/desktop/constraint_dialog.hpp"
 #include "sketch/desktop/boundary_input_dialog.hpp"
@@ -750,6 +751,30 @@ bool is_closed_boundary_entity(std::string_view type) {
 bool is_architectural_entity(std::string_view type) {
     return type == "wall" || type == "opening" || type == "room" || type == "slab" ||
            type == "roof" || type == "stair" || type == "column" || type == "beam";
+}
+
+BuildingViewFrame architectural_view_frame(BuildingViewKind kind) {
+    switch (kind) {
+    case BuildingViewKind::plan:
+        return {{0.0, 0.0, 0.0}, {0.0, 0.0, -1.0}, {0.0, 1.0, 0.0}};
+    case BuildingViewKind::elevation:
+        return {{0.0, 0.0, 0.0}, {0.0, -1.0, 0.0}, {0.0, 0.0, 1.0}};
+    case BuildingViewKind::section:
+        // The first production view is a conventional horizontal cut at
+        // 1.2 m. Persisted coordinated-view cut settings will replace this
+        // selector default when sheet editing is integrated.
+        return {{0.0, 0.0, 1.2}, {0.0, 0.0, -1.0}, {0.0, 1.0, 0.0}};
+    }
+    throw std::invalid_argument("unknown architectural view kind");
+}
+
+const char* architectural_view_name(BuildingViewKind kind) {
+    switch (kind) {
+    case BuildingViewKind::plan: return "plan";
+    case BuildingViewKind::elevation: return "elevation";
+    case BuildingViewKind::section: return "section";
+    }
+    throw std::invalid_argument("unknown architectural view kind");
 }
 
 QString tool_name(CanvasTool tool) {
@@ -1897,6 +1922,11 @@ public:
         return static_cast<QPageSize::PageSizeId>(m_pageSizeCombo->currentData().toInt());
     }
 
+    [[nodiscard]] PlanCanvas* outputCanvas() const noexcept {
+        return m_workspace == Workspace::architectural ? m_architecturalCanvas
+                                                        : m_measurementCanvas;
+    }
+
     bool saveProject() {
         if (m_file_path.empty()) {
             const auto selected = QFileDialog::getSaveFileName(
@@ -1948,6 +1978,7 @@ public:
             "Draft output uses the selected local Qt font without embedding font bytes.");
         json view_descriptor{{"page_size", m_pageSizeCombo ? m_pageSizeCombo->currentText().toStdString()
                                                                : std::string("A4")},
+                             {"architectural_view", architectural_view_name(m_architectural_view_kind)},
                              {"hidden_floor_ids", std::vector<std::string>(
                                   m_view_filter.hidden_floor_ids.begin(), m_view_filter.hidden_floor_ids.end())},
                              {"hidden_layer_ids", std::vector<std::string>(
@@ -2016,7 +2047,7 @@ public:
                 setError(QStringLiteral("PDF export could not open the destination."));
                 return false;
             }
-            m_measurementCanvas->renderScene(
+            outputCanvas()->renderScene(
                 painter, QRectF(0.0, 0.0, writer.width(), writer.height()), true, Qt::white);
             painter.resetTransform();
             painter.setPen(QColor(150, 50, 50));
@@ -2064,7 +2095,7 @@ public:
                 setError(QStringLiteral("SVG export could not open the destination."));
                 return false;
             }
-            m_measurementCanvas->renderScene(
+            outputCanvas()->renderScene(
                 painter, QRectF(0.0, 0.0, width, height), true, Qt::white);
             painter.resetTransform();
             painter.setPen(QColor(150, 50, 50));
@@ -2152,7 +2183,7 @@ public:
                              printer->setPageSize(QPageSize(selectedPageSize()));
                              QPainter painter(printer);
                              const auto page = printer->pageRect(QPrinter::DevicePixel);
-                             m_measurementCanvas->renderScene(painter, QRectF(page), true, Qt::white);
+                             outputCanvas()->renderScene(painter, QRectF(page), true, Qt::white);
                              painter.resetTransform();
                              painter.setPen(QColor(150, 50, 50));
                              painter.drawText(QRectF(page.left() + 24.0, page.top() + 24.0,
@@ -2953,6 +2984,15 @@ private:
          m_pageSizeCombo->setCurrentIndex(m_pageSizeCombo->findData(static_cast<int>(QPageSize::A4)));
          m_pageSizeCombo->setToolTip(QStringLiteral("Select the draft PDF and print sheet size"));
          toolbar->addWidget(m_pageSizeCombo);
+         toolbar->addWidget(new QLabel(QStringLiteral("Architectural view"), toolbar));
+         m_architecturalViewCombo = new QComboBox(toolbar);
+         m_architecturalViewCombo->setObjectName(QStringLiteral("architecturalView"));
+         m_architecturalViewCombo->addItem(QStringLiteral("Plan"), static_cast<int>(BuildingViewKind::plan));
+         m_architecturalViewCombo->addItem(QStringLiteral("Elevation"), static_cast<int>(BuildingViewKind::elevation));
+         m_architecturalViewCombo->addItem(QStringLiteral("Section @ 1.2 m"), static_cast<int>(BuildingViewKind::section));
+         m_architecturalViewCombo->setToolTip(QStringLiteral(
+             "Select the derived architectural plan, elevation, or horizontal section view"));
+         toolbar->addWidget(m_architecturalViewCombo);
 
         auto* workspace_group = new QActionGroup(owner);
         workspace_group->setExclusive(true);
@@ -2980,6 +3020,19 @@ private:
         QObject::connect(m_about_action, &QAction::triggered, owner, [this] { showAbout(); });
         QObject::connect(m_unitsCombo, &QComboBox::currentIndexChanged, owner,
                          [this](int index) { setMetricUnits(index == 1); });
+        QObject::connect(m_architecturalViewCombo, &QComboBox::currentIndexChanged, owner,
+                         [this](int index) {
+                             const auto value = m_architecturalViewCombo->itemData(index).toInt();
+                             switch (static_cast<BuildingViewKind>(value)) {
+                             case BuildingViewKind::plan:
+                             case BuildingViewKind::elevation:
+                             case BuildingViewKind::section:
+                                 m_architectural_view_kind = static_cast<BuildingViewKind>(value);
+                                 refreshCanvases();
+                                 if (m_workspace == Workspace::architectural) m_architecturalCanvas->fitView();
+                                 break;
+                             }
+                         });
         m_new_action->setShortcut(QKeySequence::New);
         m_open_action->setShortcut(QKeySequence::Open);
         m_save_action->setShortcut(QKeySequence::Save);
@@ -3613,19 +3666,93 @@ private:
                                                 read_number(entity.properties, "thickness_m", 0.08),
                                                 id_from(id) == m_selected_id});
         }
+        // Measurement always retains its plan geometry. The architectural
+        // canvas can independently request an analytical elevation or section
+        // over the same semantic entities; the second pass keeps the shared
+        // Document authoritative and avoids turning plan pixels into model
+        // data.
+        std::vector<CanvasEntity> architectural_geometry = all_geometry;
+        if (m_architectural_view_kind != BuildingViewKind::plan) {
+            architectural_geometry.clear();
+            const auto frame = architectural_view_frame(m_architectural_view_kind);
+            for (const auto& [id, entity] : snapshot.entities()) {
+                try {
+                    if (can_recognize_building_entity_type(entity.type)) {
+                        const auto key = "view:" + std::to_string(static_cast<int>(m_architectural_view_kind)) +
+                                         '\n' + entity.type + '\n' + entity.properties.dump();
+                        auto cached = m_plan_projection_cache.find(id);
+                        if (cached == m_plan_projection_cache.end() || cached->second.first != key) {
+                            auto projection = project_building_view(
+                                decode_building_entity(entity), m_architectural_view_kind, frame);
+                            cached = m_plan_projection_cache.insert_or_assign(
+                                id, std::make_pair(key, std::move(projection))).first;
+                        }
+                        architectural_geometry.push_back(CanvasEntity{
+                            id_from(id), QString::fromStdString(entity.type),
+                            cached->second.second, 0.0, id_from(id) == m_selected_id});
+                        continue;
+                    }
+                    if (entity.type == "wall") {
+                        const auto baseline = read_required_segment(entity.properties, "baseline");
+                        const auto thickness = read_finite_number(entity.properties, "thickness_m");
+                        const auto height = read_finite_number(entity.properties, "height_m");
+                        const auto elevation = read_finite_number(entity.properties, "elevation_m");
+                        if (!baseline || !thickness || !height || !elevation) {
+                            throw std::invalid_argument("wall projection requires baseline, thickness, height, and elevation");
+                        }
+                        const Wall wall{id, *baseline, *thickness, *height, *elevation,
+                                        openings_by_wall[id]};
+                        validate_wall_semantics(wall);
+                        const auto projection = project_shape_view(
+                            make_wall(wall), m_architectural_view_kind, frame);
+                        architectural_geometry.push_back(CanvasEntity{
+                            id_from(id), QStringLiteral("wall"), projection, *thickness,
+                            id_from(id) == m_selected_id});
+                        continue;
+                    }
+                    if (entity.type == "slab") {
+                        const auto boundary = read_required_boundary(entity.properties, "boundary");
+                        const auto holes = read_required_holes(entity.properties);
+                        const auto thickness = read_finite_number(entity.properties, "thickness_m");
+                        const auto elevation = read_finite_number(entity.properties, "elevation_m");
+                        if (!boundary || !holes || !thickness || !elevation) {
+                            throw std::invalid_argument("slab projection requires boundary, holes, thickness, and elevation");
+                        }
+                        const auto projection = project_shape_view(
+                            make_slab(Slab{id, *boundary, *holes, *thickness, *elevation}),
+                            m_architectural_view_kind, frame);
+                        architectural_geometry.push_back(CanvasEntity{
+                            id_from(id), QStringLiteral("slab"), projection, *thickness,
+                            id_from(id) == m_selected_id});
+                    }
+                } catch (const std::exception& error) {
+                    append_geometry_error(QStringLiteral("%1 view %2: %3")
+                        .arg(m_architectural_view_kind == BuildingViewKind::elevation
+                                 ? QStringLiteral("Elevation") : QStringLiteral("Section"),
+                             id_from(id), QString::fromUtf8(error.what())));
+                }
+            }
+        }
         // Every supported entity above has been parsed and validated before
         // the view mask is applied. Hidden invalid geometry therefore keeps
         // the output error visible and cannot become a way around validation.
         const auto visible_ids = visible_project_entities(snapshot, m_view_filter);
         std::vector<CanvasEntity> geometry;
+        std::vector<CanvasEntity> visible_architectural_geometry;
         geometry.reserve(all_geometry.size());
+        visible_architectural_geometry.reserve(architectural_geometry.size());
         for (auto& entity : all_geometry) {
             if (visible_ids.contains(entity.id.toStdString())) {
                 geometry.push_back(std::move(entity));
             }
         }
+        for (auto& entity : architectural_geometry) {
+            if (visible_ids.contains(entity.id.toStdString())) {
+                visible_architectural_geometry.push_back(std::move(entity));
+            }
+        }
         m_measurementCanvas->setEntities(geometry);
-        m_architecturalCanvas->setEntities(geometry);
+        m_architecturalCanvas->setEntities(std::move(visible_architectural_geometry));
         std::vector<CanvasLabel> labels;
         for (auto& label : all_labels) {
             if (visible_ids.contains(label.id.toStdString())) labels.push_back(std::move(label));
@@ -4752,6 +4879,7 @@ private:
     QString m_active_layer_id;
     QComboBox* m_drawing_layer_combo{};
     QComboBox* m_pageSizeCombo{};
+    QComboBox* m_architecturalViewCombo{};
     QLabel* m_drawing_context_label{};
     QLabel* m_visibility_label{};
     QPushButton* m_show_all_button{};
@@ -4769,6 +4897,7 @@ private:
     QString m_last_boundary_classification{QStringLiteral("measurement")};
     QToolButton* m_define_boundary_button{};
     std::optional<Vec2> m_pending_wall_start;
+    BuildingViewKind m_architectural_view_kind{BuildingViewKind::plan};
 
     VisibilityTreeWidget* m_navigator{};
     QTabWidget* m_workspaceTabs{};

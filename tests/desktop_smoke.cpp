@@ -497,6 +497,33 @@ int main(int argc, char** argv) {
     require(std::abs(min_x - 0.85) < 1e-7 && std::abs(max_x - 1.15) < 1e-7 &&
                 std::abs(min_y - 1.8) < 1e-7 && std::abs(max_y - 2.2) < 1e-7,
             "column plan must use its real dimensions and world placement");
+    auto* architectural_widget = window.findChild<QWidget*>(QStringLiteral("architecturalPlanCanvas"));
+    auto* architectural = dynamic_cast<sketch::desktop::PlanCanvas*>(architectural_widget);
+    auto* architectural_view = window.findChild<QComboBox*>(QStringLiteral("architecturalView"));
+    require(architectural && architectural_view && architectural_view->count() == 3,
+            "architectural view selector and canvas should be available");
+    architectural_view->setCurrentText(QStringLiteral("Elevation"));
+    const auto elevation_column = std::find_if(architectural->entities().begin(),
+                                               architectural->entities().end(),
+        [&](const auto& entity) { return entity.id == column_id; });
+    require(elevation_column != architectural->entities().end() &&
+                elevation_column->segments.size() == 4,
+            "architectural elevation should project the same column as four edges");
+    double elevation_min_y = 1e9, elevation_max_y = -1e9;
+    for (const auto& segment : elevation_column->segments) {
+        elevation_min_y = std::min({elevation_min_y, segment.start.y, segment.end.y});
+        elevation_max_y = std::max({elevation_max_y, segment.start.y, segment.end.y});
+    }
+    require(std::abs(elevation_min_y) < 1e-7 && std::abs(elevation_max_y - 3.0) < 1e-7,
+            "architectural elevation must preserve the column height");
+    architectural_view->setCurrentText(QStringLiteral("Section @ 1.2 m"));
+    const auto section_column = std::find_if(architectural->entities().begin(),
+                                             architectural->entities().end(),
+        [&](const auto& entity) { return entity.id == column_id; });
+    require(section_column != architectural->entities().end() &&
+                section_column->segments.size() == 4,
+            "architectural section should intersect the same column with four edges");
+    architectural_view->setCurrentText(QStringLiteral("Plan"));
     auto edited_column = column;
     edited_column.properties["height_m"] = 3.5;
     edited_column.extensions = nlohmann::json::object();

@@ -402,6 +402,15 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   the entity survives normal save/reopen and participates in output-fingerprint
   view inputs. Interactive sheet editing, coordinated layout rendering, and
   print integration remain open.
+- The architectural projection engine now derives analytical plan/elevation
+  hidden-line output and true solid-plane section intersections for the
+  supported semantic building objects. Frames are validated before OCCT
+  projection, circles remain analytic arcs, and unsupported intersection
+  curves or missed section planes fail closed. Focused Debug coverage passes;
+  the Architectural tab now switches between transient plan/elevation/section
+  canvas views and routes its selected view through draft output; persisted
+  cut-depth presentation, annotations/hatching, sheet layout, and production
+  print integration remain open.
 - Release import inspection resolves 34 selected application/component
   binaries on this machine. The Qt dry-run exposed default plugin expansion;
   an explicit current-component allowlist is recorded. Clean-machine packaging,

@@ -1717,6 +1717,12 @@
       "package": 5,
       "blocker": null,
       "implementation_sources": [
+        "include/sketch/building_view_projection.hpp",
+        "src/architecture/building_view_projection.cpp",
+        "tests/building_view_projection_tests.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/desktop_smoke.cpp",
+        "docs/architectural-projections.md",
         "include/sketch/sheet_view_model.hpp",
         "src/core/sheet_view_model.cpp",
         "tests/sheet_view_model_tests.cpp",
@@ -1725,7 +1731,7 @@
         "tests/sheet_view_entity_codec_tests.cpp",
         "docs/sheets-views.md"
       ],
-      "implementation_note": "Immutable coordinated plan/elevation/section view references and frame validation are implemented and persist through a typed Document entity; shared object editing, renderer, and UI synchronization remain open."
+      "implementation_note": "Immutable coordinated plan/elevation/section view references and frame validation persist through a typed Document entity, and supported semantic building objects now have analytical hidden-line plan/elevation and true solid-plane section projection tests; shared object editing, cut-depth presentation, renderer, sheet layout and UI synchronization remain open."
     },
     {
       "id": "ARCH-VIEW-002",
@@ -1738,6 +1744,12 @@
       "package": 5,
       "blocker": null,
       "implementation_sources": [
+        "include/sketch/building_view_projection.hpp",
+        "src/architecture/building_view_projection.cpp",
+        "tests/building_view_projection_tests.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/desktop_smoke.cpp",
+        "docs/architectural-projections.md",
         "include/sketch/sheet_view_model.hpp",
         "src/core/sheet_view_model.cpp",
         "tests/sheet_view_model_tests.cpp",
@@ -1746,7 +1758,7 @@
         "tests/sheet_view_entity_codec_tests.cpp",
         "docs/sheets-views.md"
       ],
-      "implementation_note": "Section cut depth, line treatment, hatching, annotations, and detail-overlay settings are validated and persist through the typed Document entity; rendering, UI editing, and print fixtures remain open."
+      "implementation_note": "Section presentation settings are validated and persist through the typed Document entity; analytical solid-plane section edges are now implemented for supported objects, while cut-depth filtering, line/hatch/annotation overlays, UI editing and print fixtures remain open."
     },
     {
       "id": "ARCH-SCH-001",

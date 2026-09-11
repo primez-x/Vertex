@@ -6,8 +6,12 @@ ARCH-VIEW-001/002, ARCH-SHEET-001 and IO-OUTPUT-002. The
 versioned project format and reuses the same validation at create/load/command
 boundaries. New desktop projects start with a validated default plan view,
 sheet, title block, and independently scaled viewport in that entity. These
-requirements are not complete product workflows: rendering, desktop editing
-and print/PDF layout integration remain unimplemented here.
+requirements are not complete product workflows: desktop editing and
+print/PDF layout integration remain unimplemented here. The shared
+architectural projection engine now derives analytical plan, elevation, and
+section edges from supported building solids; see
+`docs/architectural-projections.md` for its explicit boundary and remaining
+integration work.
 
 Views identify plan, elevation and section definitions by stable ID. A view owns
 its finite origin in metres, orthonormal direction/up frame, cut and far depths,
