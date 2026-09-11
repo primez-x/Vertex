@@ -406,6 +406,74 @@ int main(int argc, char** argv) {
     require(window.undoCommand() && window.redoCommand(),
             "reference transform should participate in undo and redo");
 
+    // Exercise two independent retained underlays without other scene content.
+    sketch::desktop::MainWindow multi_reference_window;
+    const auto second_reference_path = reference_directory.filePath("second.png");
+    reference_image.fill(Qt::red);
+    require(reference_image.save(reference_path), "red reference fixture should save");
+    reference_image.fill(Qt::blue);
+    require(reference_image.save(second_reference_path), "blue reference fixture should save");
+    const auto first_underlay = multi_reference_window.importReferenceImage(reference_path);
+    const auto second_underlay = multi_reference_window.importReferenceImage(second_reference_path);
+    require(!first_underlay.isEmpty() && !second_underlay.isEmpty(), "two raster imports should succeed");
+    const auto place_underlay = [&](const QString& id, const QString& x, bool visible) {
+        return multi_reference_window.editReferenceTransform(id, x, QStringLiteral("0"),
+            QStringLiteral("0.01"), QStringLiteral("1"), QStringLiteral("0"),
+            QStringLiteral("1"), false, false, visible);
+    };
+    require(place_underlay(first_underlay, QStringLiteral("-1"), true) &&
+                place_underlay(second_underlay, QStringLiteral("1"), true),
+            "each underlay should support independent transforms");
+    const auto verify_underlays = [&] {
+        auto* canvas = dynamic_cast<sketch::desktop::PlanCanvas*>(
+            multi_reference_window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+        require(canvas && canvas->references().size() == 2, "both underlays should reach the canvas");
+        canvas->setGridEnabled(false);
+        QImage rendered(400, 200, QImage::Format_ARGB32);
+        QPainter painter(&rendered);
+        canvas->renderSceneAt(painter, QRectF(0, 0, 400, 200), 100.0, {0.0, 0.0}, Qt::white);
+        painter.end();
+        require(rendered.pixelColor(100, 100) == QColor(Qt::red) &&
+                    rendered.pixelColor(300, 100) == QColor(Qt::blue),
+                "both separately positioned raster underlays must actually render");
+    };
+    verify_underlays();
+    require(multi_reference_window.selectEntity(first_underlay) &&
+                multi_reference_window.selectEntity(second_underlay),
+            "both references should be independently selectable for inspection");
+    const auto multi_project_path = reference_directory.filePath("multi-reference.sketch");
+    require(multi_reference_window.saveProjectAs(multi_project_path) &&
+                multi_reference_window.openProject(multi_project_path),
+            "two embedded references should save and reopen");
+    verify_underlays();
+    const auto revision_before_bad_import = multi_reference_window.document().revision();
+    require(multi_reference_window.importReferenceImage(reference_directory.filePath("missing.png")).isEmpty(),
+            "missing reference files must fail closed");
+    QFile malformed_reference(reference_directory.filePath("malformed.png"));
+    require(malformed_reference.open(QIODevice::WriteOnly), "malformed fixture should open");
+    malformed_reference.write("not a raster");
+    malformed_reference.close();
+    require(multi_reference_window.importReferenceImage(malformed_reference.fileName()).isEmpty() &&
+                multi_reference_window.document().revision() == revision_before_bad_import,
+            "malformed imports must leave existing references and document history unchanged");
+    verify_underlays();
+
+    auto missing_asset_reference = multi_reference_window.document().snapshot().entities().at(
+        first_underlay.toStdString());
+    missing_asset_reference.properties["render_asset_id"] = "missing-render-asset";
+    bool missing_asset_rejected = false;
+    try {
+        multi_reference_window.document().apply(sketch::ApplyEntityChanges{
+            .expected_revision = multi_reference_window.document().revision(),
+            .entity_changes = {sketch::EntityChange::upsert(missing_asset_reference)},
+            .message = "reject missing underlay asset",
+        });
+    } catch (const std::exception&) { missing_asset_rejected = true; }
+    require(missing_asset_rejected &&
+                multi_reference_window.document().revision() == revision_before_bad_import,
+            "missing embedded render assets must be rejected atomically");
+    verify_underlays();
+
     QTemporaryDir pdf_directory;
     require(pdf_directory.isValid(), "PDF reference fixture needs a temporary directory");
     const auto reference_pdf_path = pdf_directory.filePath("trace.pdf");

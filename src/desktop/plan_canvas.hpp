@@ -91,8 +91,10 @@ public:
     void setLabels(std::vector<CanvasLabel> labels);
     [[nodiscard]] const std::vector<CanvasLabel>& labels() const noexcept { return m_labels; }
     void setReference(std::optional<CanvasReference> reference);
-    [[nodiscard]] const std::optional<CanvasReference>& reference() const noexcept {
-        return m_reference;
+    void setReferences(std::vector<CanvasReference> references);
+    [[nodiscard]] const std::vector<CanvasReference>& references() const noexcept { return m_references; }
+    [[nodiscard]] std::optional<CanvasReference> reference() const {
+        return m_references.empty() ? std::nullopt : std::optional{m_references.front()};
     }
     void setBoundaryPreview(std::vector<Vec2> points);
     void setWallPreview(std::optional<std::pair<Vec2, Vec2>> wall);
@@ -152,7 +154,7 @@ private:
 
     std::vector<CanvasEntity> m_entities;
     std::vector<CanvasLabel> m_labels;
-    std::optional<CanvasReference> m_reference;
+    std::vector<CanvasReference> m_references;
     std::vector<Vec2> m_boundary_preview;
     std::optional<std::pair<Vec2, Vec2>> m_wall_preview;
     std::optional<BoundaryDraftPreview> m_boundary_draft_preview;

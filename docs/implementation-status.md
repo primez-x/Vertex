@@ -23,11 +23,10 @@ immutable reference-asset calibration and transform records, typed schedule
 records, and a standalone vertical level/floor-to-floor graph. Raster reference
 images can now be imported into the project Asset store, displayed as a shared
 canvas underlay, calibrated in metres per source pixel, and transformed through
-typed undoable edits. PDF first-page import now retains the original PDF beside
+typed undoable edits. PDF page import now retains the original PDF beside
 a validated local PNG preview, so PDF tracing can start from an offline project
-asset. Multi-underlay management, PDF page selection, interactive tracing,
-and known-distance calibration UI are now integrated through the typed Document
-history. Multi-underlay management, PDF page selection, interactive tracing,
+asset. Multiple retained underlays, PDF page selection, and known-distance
+calibration UI are integrated through the typed Document history. Interactive tracing,
 native Apex compatibility, clean-machine packaging, and end-to-end production
 evidence are still open.
 

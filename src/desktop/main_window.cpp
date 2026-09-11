@@ -1980,7 +1980,7 @@ public:
         }
     }
 
-    QString importReferenceImage(const QString& path) {
+    QString importReferenceImage(const QString& path, int page_index = 0) {
         try {
             if (!m_document->is_editable()) {
                 throw std::invalid_argument("This document is read-only.");
@@ -2002,15 +2002,18 @@ public:
                 if (pdf.load(cleaned) != QPdfDocument::Error::None || pdf.pageCount() < 1) {
                     throw std::invalid_argument("The reference PDF could not be decoded.");
                 }
-                const auto page_points = pdf.pagePointSize(0);
+                if (page_index < 0 || page_index >= pdf.pageCount()) {
+                    throw std::invalid_argument("The selected PDF page does not exist.");
+                }
+                const auto page_points = pdf.pagePointSize(page_index);
                 if (!(page_points.width() > 0.0) || !(page_points.height() > 0.0) ||
                     !std::isfinite(page_points.width()) || !std::isfinite(page_points.height())) {
-                    throw std::invalid_argument("The reference PDF has no valid first page.");
+                    throw std::invalid_argument("The reference PDF has no valid selected page.");
                 }
                 const auto pixels = [](qreal points) {
                     return std::clamp(static_cast<int>(std::lround(points * 2.0)), 256, 4096);
                 };
-                image = pdf.render(0, QSize(pixels(page_points.width()), pixels(page_points.height())));
+                image = pdf.render(page_index, QSize(pixels(page_points.width()), pixels(page_points.height())));
                 if (image.isNull()) throw std::invalid_argument("The reference PDF page could not be rasterized.");
                 QByteArray preview_bytes;
                 QBuffer preview_buffer(&preview_bytes);
@@ -2021,8 +2024,8 @@ public:
                 preview.reserve(static_cast<std::size_t>(preview_bytes.size()));
                 for (const auto value : preview_bytes) preview.push_back(static_cast<std::byte>(value));
                 render_asset = Asset::create(new_id("reference-preview"), "image/png",
-                    std::move(preview), { {"content", "pdf-first-page-preview"},
-                                          {"page_index", 0}, {"page_count", pdf.pageCount()} });
+                    std::move(preview), { {"content", "pdf-page-preview"},
+                                          {"page_index", page_index}, {"page_count", pdf.pageCount()} });
                 mime = QStringLiteral("application/pdf");
             } else {
                 image = QImage::fromData(raw);
@@ -2941,7 +2944,7 @@ public:
                     temporary_canvas->setEntities(
                         m_architectural_view_entities[architectural_view_index(view_kind)]);
                     temporary_canvas->setLabels(m_measurementCanvas->labels());
-                    temporary_canvas->setReference(m_measurementCanvas->reference());
+                    temporary_canvas->setReferences(m_measurementCanvas->references());
                     viewport_canvas = temporary_canvas.get();
                 }
                 const auto viewport_center = viewport_canvas->contentCenter();
@@ -3831,7 +3834,19 @@ public:
             owner, QStringLiteral("Import reference image"), {},
             QStringLiteral("Reference files (*.pdf *.png *.jpg *.jpeg *.bmp *.tif *.tiff)"));
         if (!selected.isEmpty()) {
-            (void)importReferenceImage(selected);
+            int page_index = 0;
+            if (QFileInfo(selected).suffix().compare(QStringLiteral("pdf"), Qt::CaseInsensitive) == 0) {
+                QPdfDocument pdf;
+                if (pdf.load(selected) == QPdfDocument::Error::None && pdf.pageCount() > 1) {
+                    bool accepted = false;
+                    const auto page = QInputDialog::getInt(owner, QStringLiteral("PDF reference page"),
+                        QStringLiteral("Page to import as a raster underlay:"), 1, 1,
+                        pdf.pageCount(), 1, &accepted);
+                    if (!accepted) return;
+                    page_index = page - 1;
+                }
+            }
+            (void)importReferenceImage(selected, page_index);
         }
     }
 
@@ -5314,7 +5329,7 @@ private:
         });
         std::vector<CanvasEntity> all_geometry;
         std::vector<CanvasLabel> all_labels;
-        std::optional<CanvasReference> reference_underlay;
+        std::vector<CanvasReference> reference_underlays;
         all_geometry.reserve(snapshot.entities().size());
         const auto append_geometry_error = [&](const QString& message) {
             if (!m_plan_geometry_error.isEmpty()) {
@@ -5326,9 +5341,6 @@ private:
         for (const auto& [id, entity] : snapshot.entities()) {
             if (entity.type == "reference_asset") {
                 try {
-                    if (reference_underlay.has_value()) {
-                        throw std::invalid_argument("only one reference underlay is supported in this checkpoint");
-                    }
                     const auto asset_id = read_string(entity.properties, "asset_id");
                     if (!asset_id.has_value()) throw std::invalid_argument("asset_id is required");
                     const auto render_asset_id = read_string(entity.properties, "render_asset_id")
@@ -5361,11 +5373,11 @@ private:
                         if (!value.is_boolean()) throw std::invalid_argument("reference boolean property is invalid");
                         return value.get<bool>();
                     };
-                    reference_underlay = CanvasReference{
+                    reference_underlays.push_back(CanvasReference{
                         id_from(id), image, *position, metres_per_source_unit, transform_scale,
                         rotation, boolean_property("flip_horizontal", false),
                         boolean_property("flip_vertical", false), intensity,
-                        boolean_property("visible", true), id_from(id) == m_selected_id};
+                        boolean_property("visible", true), id_from(id) == m_selected_id});
                 } catch (const std::exception& error) {
                     append_geometry_error(QStringLiteral("Reference %1: %2")
                                               .arg(id_from(id), QString::fromUtf8(error.what())));
@@ -5670,8 +5682,8 @@ private:
         }
         m_measurementCanvas->setLabels(labels);
         m_architecturalCanvas->setLabels(std::move(labels));
-        m_measurementCanvas->setReference(reference_underlay);
-        m_architecturalCanvas->setReference(std::move(reference_underlay));
+        m_measurementCanvas->setReferences(reference_underlays);
+        m_architecturalCanvas->setReferences(std::move(reference_underlays));
         m_plan_error_banner->setText(m_plan_geometry_error);
         m_plan_error_banner->setVisible(!m_plan_geometry_error.isEmpty());
         m_measurementCanvas->setSelectedId(m_selected_id);

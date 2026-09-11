@@ -162,7 +162,13 @@ void PlanCanvas::setLabels(std::vector<CanvasLabel> labels) {
 }
 
 void PlanCanvas::setReference(std::optional<CanvasReference> reference) {
-    m_reference = std::move(reference);
+    std::vector<CanvasReference> references;
+    if (reference) references.push_back(std::move(*reference));
+    setReferences(std::move(references));
+}
+
+void PlanCanvas::setReferences(std::vector<CanvasReference> references) {
+    m_references = std::move(references);
     update();
 }
 
@@ -190,7 +196,9 @@ void PlanCanvas::clearPreview() {
 
 void PlanCanvas::fitView() {
     if (m_entities.empty() && m_labels.empty() &&
-        !(m_reference.has_value() && m_reference->visible && !m_reference->image.isNull())) {
+        !std::any_of(m_references.begin(), m_references.end(), [](const auto& reference) {
+            return reference.visible && !reference.image.isNull();
+        })) {
         m_view_center = {0.0, 0.0};
         m_scale = 80.0;
         update();
@@ -224,16 +232,18 @@ void PlanCanvas::fitView() {
     for (const auto& label : m_labels) {
         include(label.position);
     }
-    if (m_reference.has_value() && m_reference->visible && !m_reference->image.isNull() &&
-        std::isfinite(m_reference->metres_per_source_unit) &&
-        m_reference->metres_per_source_unit > 0.0 && std::isfinite(m_reference->scale) &&
-        m_reference->scale > 0.0) {
-        const auto width = m_reference->image.width() * m_reference->metres_per_source_unit *
-                           m_reference->scale;
-        const auto height = m_reference->image.height() * m_reference->metres_per_source_unit *
-                            m_reference->scale;
-        include({m_reference->position.x - width * 0.5, m_reference->position.y - height * 0.5});
-        include({m_reference->position.x + width * 0.5, m_reference->position.y + height * 0.5});
+    for (const auto& reference : m_references) {
+        if (reference.visible && !reference.image.isNull() &&
+            std::isfinite(reference.metres_per_source_unit) &&
+            reference.metres_per_source_unit > 0.0 && std::isfinite(reference.scale) &&
+            reference.scale > 0.0) {
+            const auto width = reference.image.width() * reference.metres_per_source_unit *
+                               reference.scale;
+            const auto height = reference.image.height() * reference.metres_per_source_unit *
+                                reference.scale;
+            include({reference.position.x - width * 0.5, reference.position.y - height * 0.5});
+            include({reference.position.x + width * 0.5, reference.position.y + height * 0.5});
+        }
     }
     if (!has_content) {
         m_view_center = {0.0, 0.0};
@@ -314,16 +324,18 @@ Vec2 PlanCanvas::contentCenter() const noexcept {
         }
     }
     for (const auto& label : m_labels) include(label.position);
-    if (m_reference.has_value() && m_reference->visible && !m_reference->image.isNull() &&
-        std::isfinite(m_reference->metres_per_source_unit) &&
-        m_reference->metres_per_source_unit > 0.0 && std::isfinite(m_reference->scale) &&
-        m_reference->scale > 0.0) {
-        const auto width = m_reference->image.width() * m_reference->metres_per_source_unit *
-                           m_reference->scale;
-        const auto height = m_reference->image.height() * m_reference->metres_per_source_unit *
-                            m_reference->scale;
-        include({m_reference->position.x - width * 0.5, m_reference->position.y - height * 0.5});
-        include({m_reference->position.x + width * 0.5, m_reference->position.y + height * 0.5});
+    for (const auto& reference : m_references) {
+        if (reference.visible && !reference.image.isNull() &&
+            std::isfinite(reference.metres_per_source_unit) &&
+            reference.metres_per_source_unit > 0.0 && std::isfinite(reference.scale) &&
+            reference.scale > 0.0) {
+            const auto width = reference.image.width() * reference.metres_per_source_unit *
+                               reference.scale;
+            const auto height = reference.image.height() * reference.metres_per_source_unit *
+                                reference.scale;
+            include({reference.position.x - width * 0.5, reference.position.y - height * 0.5});
+            include({reference.position.x + width * 0.5, reference.position.y + height * 0.5});
+        }
     }
     return has_content ? Vec2{(minimum.x + maximum.x) * 0.5,
                               (minimum.y + maximum.y) * 0.5}
@@ -341,7 +353,9 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     auto view_center = explicit_center.value_or(m_view_center);
     if (!explicit_scale.has_value() && fit_to_content &&
         (!m_entities.empty() || !m_labels.empty() ||
-         (m_reference.has_value() && m_reference->visible && !m_reference->image.isNull()))) {
+         std::any_of(m_references.begin(), m_references.end(), [](const auto& reference) {
+            return reference.visible && !reference.image.isNull();
+        }))) {
         Vec2 minimum{std::numeric_limits<double>::max(), std::numeric_limits<double>::max()};
         Vec2 maximum{std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest()};
         bool has_content = false;
@@ -369,16 +383,18 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
         for (const auto& label : m_labels) {
             include(label.position);
         }
-        if (m_reference.has_value() && m_reference->visible && !m_reference->image.isNull() &&
-            std::isfinite(m_reference->metres_per_source_unit) &&
-            m_reference->metres_per_source_unit > 0.0 && std::isfinite(m_reference->scale) &&
-            m_reference->scale > 0.0) {
-            const auto width = m_reference->image.width() *
-                               m_reference->metres_per_source_unit * m_reference->scale;
-            const auto height = m_reference->image.height() *
-                                m_reference->metres_per_source_unit * m_reference->scale;
-            include({m_reference->position.x - width * 0.5, m_reference->position.y - height * 0.5});
-            include({m_reference->position.x + width * 0.5, m_reference->position.y + height * 0.5});
+        for (const auto& reference : m_references) {
+            if (reference.visible && !reference.image.isNull() &&
+                std::isfinite(reference.metres_per_source_unit) &&
+                reference.metres_per_source_unit > 0.0 && std::isfinite(reference.scale) &&
+                reference.scale > 0.0) {
+                const auto width = reference.image.width() *
+                                   reference.metres_per_source_unit * reference.scale;
+                const auto height = reference.image.height() *
+                                    reference.metres_per_source_unit * reference.scale;
+                include({reference.position.x - width * 0.5, reference.position.y - height * 0.5});
+                include({reference.position.x + width * 0.5, reference.position.y + height * 0.5});
+            }
         }
         if (has_content) {
             const auto width = std::max(maximum.x - minimum.x, 0.1);
@@ -397,8 +413,8 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     painter.scale(scale, -scale);
     painter.translate(-view_center.x, -view_center.y);
 
-    if (m_reference.has_value() && m_reference->visible) {
-        drawReference(painter, *m_reference);
+    for (const auto& reference : m_references) {
+        if (reference.visible) drawReference(painter, reference);
     }
 
     if (m_grid_enabled && !fit_to_content) {
@@ -711,7 +727,25 @@ QString PlanCanvas::hitTest(QPointF point) const {
             result = label.id;
         }
     }
-    return best <= hit_pixels ? result : QString{};
+    if (best <= hit_pixels) return result;
+    const auto model = toModel(point, rect());
+    // Underlays sit beneath geometry; pick the topmost visible reference only
+    // when no authored geometry or label was hit.
+    for (auto it = m_references.rbegin(); it != m_references.rend(); ++it) {
+        const auto& reference = *it;
+        if (!reference.visible || reference.image.isNull() ||
+            !std::isfinite(reference.rotation_degrees)) continue;
+        const auto radians = reference.rotation_degrees * std::numbers::pi / 180.0;
+        const auto dx = model.x - reference.position.x;
+        const auto dy = model.y - reference.position.y;
+        const auto x = dx * std::cos(radians) + dy * std::sin(radians);
+        const auto y = -dx * std::sin(radians) + dy * std::cos(radians);
+        const auto unit = reference.metres_per_source_unit * reference.scale;
+        if (std::isfinite(unit) && unit > 0.0 &&
+            std::abs(x) <= reference.image.width() * unit * 0.5 &&
+            std::abs(y) <= reference.image.height() * unit * 0.5) return reference.id;
+    }
+    return {};
 }
 
 void PlanCanvas::updateCursor(QPointF point) {
