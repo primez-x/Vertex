@@ -2513,6 +2513,19 @@ public:
                 painter.restore();
                 painter.setPen(QPen(QColor(115, 125, 138), std::max(1.0, paper_scale * 0.6)));
                 painter.drawRect(viewport_rect);
+                const auto view_caption = QString::fromStdString(view->name).trimmed().isEmpty()
+                    ? QString::fromLatin1(architectural_view_name(view_kind)).toUpper()
+                    : QString::fromStdString(view->name).trimmed().toUpper();
+                painter.setPen(QColor(45, 52, 60));
+                painter.setFont(QFont(QStringLiteral("Inter"),
+                                      std::max(6, static_cast<int>(8.0 * paper_scale))));
+                painter.drawText(viewport_rect.adjusted(4.0 * paper_scale,
+                                                        3.0 * paper_scale,
+                                                        -4.0 * paper_scale,
+                                                        -3.0 * paper_scale),
+                                 Qt::AlignLeft | Qt::AlignTop,
+                                 view_caption + QStringLiteral("  •  1:%1")
+                                     .arg(QString::number(viewport.scale_denominator, 'f', 0)));
             }
 
             // Schedule placements are part of the persisted sheet graph. Draw

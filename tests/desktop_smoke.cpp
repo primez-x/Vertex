@@ -674,8 +674,9 @@ int main(int argc, char** argv) {
     require(svg_output.open(QIODevice::ReadOnly | QIODevice::Text),
             "draft SVG should be readable for schedule placement verification");
     const auto svg_text = svg_output.readAll();
-    require(svg_text.contains("DOORS SCHEDULE"),
-            "draft SVG should render the persisted doors schedule placement");
+    require(svg_text.contains("DOORS SCHEDULE") && svg_text.contains("ELEVATION") &&
+                svg_text.contains("SECTION"),
+            "draft SVG should render the persisted schedule and coordinated view captions");
     svg_output.close();
     const auto svg_fingerprint_path = std::filesystem::path(svg_path.wstring() + L".fingerprint.json");
     require(std::filesystem::file_size(svg_fingerprint_path) > 0,
