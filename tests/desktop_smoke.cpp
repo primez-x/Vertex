@@ -7,6 +7,7 @@
 #include "../src/desktop/plan_canvas.hpp"
 
 #include <QApplication>
+#include <QFile>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -227,6 +228,13 @@ void test_six_form_authoring_and_quantity_history() {
     require(window.document().snapshot().entities().at(exact_id.toStdString()).properties.at("quantity_entries").at("/width_m") == receipt,
             "fractional input survives save/reopen without losing provenance");
     require(window.exportDraftPdf(directory.filePath("six-forms.pdf")), "the six-form scene exports through the shared PDF renderer");
+    const auto svg = directory.filePath("six-forms.svg");
+    require(window.exportDraftSvg(svg), "the six-form scene exports through the shared SVG renderer");
+    QFile svg_file(svg);
+    require(svg_file.open(QIODevice::ReadOnly | QIODevice::Text), "draft SVG should be readable");
+    const auto svg_text = QString::fromUtf8(svg_file.readAll());
+    require(svg_text.contains("<svg") && svg_text.contains("DRAFT"),
+            "draft SVG should contain vector markup and its draft stamp");
 }
 
 }  // namespace
@@ -448,6 +456,9 @@ int main(int argc, char** argv) {
     const auto pdf_path =
         std::filesystem::path(temporary_directory.path().toStdWString()) / "desktop-smoke.pdf";
     const auto pdf_path_qstring = QString::fromStdWString(pdf_path.wstring());
+    const auto svg_path =
+        std::filesystem::path(temporary_directory.path().toStdWString()) / "desktop-smoke.svg";
+    const auto svg_path_qstring = QString::fromStdWString(svg_path.wstring());
     auto column = sketch::encode_building_entity(
         sketch::RectangularColumn{"", {1.0, 2.0, 0.0}, 0.3, 0.4, 3.0, 0.0},
         {{"private_note", "preserve this"}});
@@ -516,6 +527,8 @@ int main(int argc, char** argv) {
     const auto revision_before_pdf = window.document().revision();
     require(window.exportDraftPdf(pdf_path_qstring), "draft PDF export should succeed locally");
     require(std::filesystem::file_size(pdf_path) > 0, "draft PDF should be nonempty");
+    require(window.exportDraftSvg(svg_path_qstring), "draft SVG export should succeed locally");
+    require(std::filesystem::file_size(svg_path) > 0, "draft SVG should be nonempty");
     require(window.document().revision() == revision_before_pdf,
             "draft output must not mutate the semantic document");
     require(window.saveProjectAs(project_path_qstring),
@@ -561,8 +574,12 @@ int main(int argc, char** argv) {
     require(window.selectEntity(column_id), "select malformed loaded building object");
     const auto protected_output =
         QString::fromStdWString((project_path.parent_path() / "must-not-exist.pdf").wstring());
-    require(!window.exportDraftPdf(protected_output) && !window.showPrintPreview() &&
-                !std::filesystem::exists(std::filesystem::path(protected_output.toStdWString())),
+    const auto protected_svg =
+        QString::fromStdWString((project_path.parent_path() / "must-not-exist.svg").wstring());
+    require(!window.exportDraftPdf(protected_output) && !window.exportDraftSvg(protected_svg) &&
+                !window.showPrintPreview() &&
+                !std::filesystem::exists(std::filesystem::path(protected_output.toStdWString())) &&
+                !std::filesystem::exists(std::filesystem::path(protected_svg.toStdWString())),
             "invalid plan geometry must block output before creating a file or print dialog");
     auto* plan_error = window.findChild<QLabel*>(QStringLiteral("planGeometryError"));
     require(plan_error && !plan_error->isHidden() && !plan_error->text().isEmpty(),

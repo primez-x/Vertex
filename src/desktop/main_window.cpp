@@ -56,6 +56,7 @@
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSizePolicy>
+#include <QSvgGenerator>
 #include <QStyle>
 #include <QStyleOptionViewItem>
 #include <QStatusBar>
@@ -1901,6 +1902,51 @@ public:
         }
     }
 
+    bool exportDraftSvg(const QString& path) {
+        refreshOutput();
+        if (!m_plan_geometry_error.isEmpty()) {
+            setError(QStringLiteral("SVG export blocked: %1").arg(m_plan_geometry_error));
+            return false;
+        }
+        if (path.trimmed().isEmpty()) {
+            setError(QStringLiteral("Choose an SVG destination."));
+            return false;
+        }
+        try {
+            constexpr int width = 1600;
+            constexpr int height = 1200;
+            QSvgGenerator generator;
+            generator.setFileName(path);
+            generator.setSize(QSize(width, height));
+            generator.setViewBox(QRect(0, 0, width, height));
+            generator.setTitle(QStringLiteral("Property Studio draft drawing"));
+            generator.setDescription(QStringLiteral("Draft output from the shared vector canvas"));
+            QPainter painter(&generator);
+            if (!painter.isActive()) {
+                setError(QStringLiteral("SVG export could not open the destination."));
+                return false;
+            }
+            m_measurementCanvas->renderScene(
+                painter, QRectF(0.0, 0.0, width, height), true, Qt::white);
+            painter.resetTransform();
+            painter.setPen(QColor(150, 50, 50));
+            painter.drawText(QRectF(30.0, 30.0, width - 60.0, 80.0),
+                             Qt::TextWordWrap | Qt::AlignRight | Qt::AlignTop,
+                             draftOutputStamp());
+            painter.end();
+            if (!QFileInfo::exists(path) || QFileInfo(path).size() <= 0) {
+                setError(QStringLiteral("SVG export did not produce a file."));
+                return false;
+            }
+            clearError();
+            owner->statusBar()->showMessage(QStringLiteral("Draft SVG exported locally."), 5000);
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("SVG export failed: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     bool exportNativeViewImage(const QString& path) {
         if (path.trimmed().isEmpty()) {
             setError(QStringLiteral("Choose an image destination."));
@@ -2020,6 +2066,11 @@ public:
             {QStringLiteral("Dark theme"), [this] { applyTheme(WorkspaceTheme::dark); }},
             {QStringLiteral("High contrast theme"), [this] { applyTheme(WorkspaceTheme::high_contrast); }},
             {QStringLiteral("Export draft PDF"), [this] { exportFromDialog(); }},
+            {QStringLiteral("Export draft SVG"), [this] {
+                const auto selected = QFileDialog::getSaveFileName(
+                    owner, QStringLiteral("Export draft SVG"), {}, QStringLiteral("SVG document (*.svg)"));
+                if (!selected.isEmpty()) exportDraftSvg(selected);
+            }},
             {QStringLiteral("Print preview (draft)"), [this] { showPrintPreview(); }},
             {QStringLiteral("About internal checkpoint"), [this] { showAbout(); }},
         };
@@ -4729,6 +4780,10 @@ bool MainWindow::saveProjectAs(const QString& path) {
 
 bool MainWindow::exportDraftPdf(const QString& path) {
     return m_impl->exportDraftPdf(path);
+}
+
+bool MainWindow::exportDraftSvg(const QString& path) {
+    return m_impl->exportDraftSvg(path);
 }
 
 bool MainWindow::exportNativeViewImage(const QString& path) {

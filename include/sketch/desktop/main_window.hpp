@@ -115,6 +115,7 @@ public:
     // Empty until scheduling begins for a workspace-backed recovery project.
     [[nodiscard]] QString recoveryCopyPath() const;
     [[nodiscard]] bool exportDraftPdf(const QString& path);
+    [[nodiscard]] bool exportDraftSvg(const QString& path);
     [[nodiscard]] bool exportNativeViewImage(const QString& path);
     [[nodiscard]] bool showPrintPreview();
 

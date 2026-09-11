@@ -155,6 +155,11 @@ as enabled controls. The Theme toolbar menu and command palette select light,
 dark, or high-contrast palettes; these presentation controls do not alter
 document geometry or measurement units.
 
+Draft PDF and SVG export use the same fit-to-content vector scene as the
+interactive preview and print callback. Both outputs carry the visible draft
+stamp and remain separate from the future authoritative fingerprint/currentness
+gate.
+
 Open loads into a temporary `LoadResult` and swaps the document only after a
 successful load, so corrupt, unsupported, or unreadable files leave the
 current document intact. Saves use `ProjectStore` exclusively. The current

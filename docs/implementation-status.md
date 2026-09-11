@@ -389,7 +389,9 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   Its parser repairs pass Debug/Release and independent re-review, including
   canonical ordering, signed/unsigned limits and typed UTF-8 errors. The privacy
   guarantee excludes snapshot-derived payloads; caller dependency metadata is
-  public and unredacted. Output pipeline integration and qualification remain open.
+  public and unredacted. Preview, draft PDF, draft SVG, and print share the
+  retained PlanCanvas vector renderer and visible draft stamp. Fingerprint/currentness
+  wiring, persisted sheet layout, and production output qualification remain open.
 - Release import inspection resolves 34 selected application/component
   binaries on this machine. The Qt dry-run exposed default plugin expansion;
   an explicit current-component allowlist is recorded. Clean-machine packaging,

@@ -2199,9 +2199,10 @@
       "blocker": null,
       "implementation_sources": [
         "src/desktop/plan_canvas.cpp",
-        "src/desktop/main_window.cpp"
+        "src/desktop/main_window.cpp",
+        "tests/desktop_smoke.cpp"
       ],
-      "implementation_note": "Draft PDF/print use one canvas geometry renderer; full vector-scene/fingerprint pipeline and SVG remain open."
+      "implementation_note": "Preview, draft PDF, draft SVG, and print use one canvas geometry renderer with a visible draft stamp; fingerprint/currentness wiring and authoritative output fixtures remain open."
     },
     {
       "id": "IO-OUTPUT-002",
