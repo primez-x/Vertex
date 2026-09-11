@@ -1835,6 +1835,13 @@ public:
             "DRAFT — VIEW FILTER ACTIVE • floor/layer filters applied • view filters do not change totals");
     }
 
+    [[nodiscard]] QPageSize::PageSizeId selectedPageSize() const noexcept {
+        if (m_pageSizeCombo == nullptr || m_pageSizeCombo->currentData().isNull()) {
+            return QPageSize::A4;
+        }
+        return static_cast<QPageSize::PageSizeId>(m_pageSizeCombo->currentData().toInt());
+    }
+
     bool saveProject() {
         if (m_file_path.empty()) {
             const auto selected = QFileDialog::getSaveFileName(
@@ -1874,7 +1881,7 @@ public:
         }
         try {
             QPdfWriter writer(path);
-            writer.setPageSize(QPageSize(QPageSize::A4));
+            writer.setPageSize(QPageSize(selectedPageSize()));
             writer.setResolution(144);
             QPainter painter(&writer);
             if (!painter.isActive()) {
@@ -1999,6 +2006,7 @@ public:
                                  setError(QStringLiteral("Printing blocked: %1").arg(m_plan_geometry_error));
                                  return;
                              }
+                             printer->setPageSize(QPageSize(selectedPageSize()));
                              QPainter painter(printer);
                              const auto page = printer->pageRect(QPrinter::DevicePixel);
                              m_measurementCanvas->renderScene(painter, QRectF(page), true, Qt::white);
@@ -2752,10 +2760,26 @@ private:
         theme_button->setMenu(theme_menu);
         theme_button->setPopupMode(QToolButton::InstantPopup);
         toolbar->addWidget(theme_button);
-        toolbar->addWidget(new QLabel(QStringLiteral("Units"), toolbar));
-        m_unitsCombo = new QComboBox(toolbar);
-        m_unitsCombo->addItems({QStringLiteral("Imperial (ft/in)"), QStringLiteral("Metric (m/mm)")});
-        toolbar->addWidget(m_unitsCombo);
+         toolbar->addWidget(new QLabel(QStringLiteral("Units"), toolbar));
+         m_unitsCombo = new QComboBox(toolbar);
+         m_unitsCombo->addItems({QStringLiteral("Imperial (ft/in)"), QStringLiteral("Metric (m/mm)")});
+         toolbar->addWidget(m_unitsCombo);
+         toolbar->addWidget(new QLabel(QStringLiteral("Sheet"), toolbar));
+         m_pageSizeCombo = new QComboBox(toolbar);
+         m_pageSizeCombo->setObjectName(QStringLiteral("outputPageSize"));
+         const std::vector<std::pair<QString, QPageSize::PageSizeId>> page_sizes{
+             {QStringLiteral("Letter"), QPageSize::Letter},
+             {QStringLiteral("Legal"), QPageSize::Legal},
+             {QStringLiteral("Tabloid"), QPageSize::Tabloid},
+             {QStringLiteral("A4"), QPageSize::A4},
+             {QStringLiteral("A3"), QPageSize::A3},
+         };
+         for (const auto& [label, page_size] : page_sizes) {
+             m_pageSizeCombo->addItem(label, static_cast<int>(page_size));
+         }
+         m_pageSizeCombo->setCurrentIndex(m_pageSizeCombo->findData(static_cast<int>(QPageSize::A4)));
+         m_pageSizeCombo->setToolTip(QStringLiteral("Select the draft PDF and print sheet size"));
+         toolbar->addWidget(m_pageSizeCombo);
 
         auto* workspace_group = new QActionGroup(owner);
         workspace_group->setExclusive(true);
@@ -4554,6 +4578,7 @@ private:
     ProjectViewFilter m_view_filter;
     QString m_active_layer_id;
     QComboBox* m_drawing_layer_combo{};
+    QComboBox* m_pageSizeCombo{};
     QLabel* m_drawing_context_label{};
     QLabel* m_visibility_label{};
     QPushButton* m_show_all_button{};

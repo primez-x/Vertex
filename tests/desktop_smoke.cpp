@@ -7,6 +7,7 @@
 #include "../src/desktop/plan_canvas.hpp"
 
 #include <QApplication>
+#include <QComboBox>
 #include <QFile>
 #include <QLabel>
 #include <QLineEdit>
@@ -529,6 +530,11 @@ int main(int argc, char** argv) {
     require(std::filesystem::file_size(pdf_path) > 0, "draft PDF should be nonempty");
     require(window.exportDraftSvg(svg_path_qstring), "draft SVG export should succeed locally");
     require(std::filesystem::file_size(svg_path) > 0, "draft SVG should be nonempty");
+    auto* page_size = window.findChild<QComboBox*>(QStringLiteral("outputPageSize"));
+    require(page_size && page_size->count() == 5, "output sheet selector should expose five page sizes");
+    page_size->setCurrentText(QStringLiteral("A3"));
+    require(window.exportDraftPdf(pdf_path_qstring), "A3 draft PDF export should succeed locally");
+    require(std::filesystem::file_size(pdf_path) > 0, "A3 draft PDF should be nonempty");
     require(window.document().revision() == revision_before_pdf,
             "draft output must not mutate the semantic document");
     require(window.saveProjectAs(project_path_qstring),

@@ -391,7 +391,9 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   guarantee excludes snapshot-derived payloads; caller dependency metadata is
   public and unredacted. Preview, draft PDF, draft SVG, and print share the
   retained PlanCanvas vector renderer and visible draft stamp. Fingerprint/currentness
-  wiring, persisted sheet layout, and production output qualification remain open.
+  wiring, persisted sheet layout, printer calibration, and production output
+  qualification remain open. The desktop output selector now applies Letter,
+  Legal, Tabloid, A4, or A3 to draft PDF and print preview.
 - Release import inspection resolves 34 selected application/component
   binaries on this machine. The Qt dry-run exposed default plugin expansion;
   an explicit current-component allowlist is recorded. Clean-machine packaging,
