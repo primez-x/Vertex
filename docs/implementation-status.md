@@ -387,6 +387,17 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   binaries on this machine. The Qt dry-run exposed default plugin expansion;
   an explicit current-component allowlist is recorded. Clean-machine packaging,
   complete notices, corresponding source and offline qualification remain open.
+- Compatibility and interchange foundations now include a fail-closed Apex
+  Standard/Pro/module evidence matrix, declared IFC/DXF/PDF/PROJ worker profiles,
+  and deterministic field/DISTO adapter contracts. These artifacts validate
+  supplied manifests and attestations only; native Apex parsers, real worker
+  binaries, device/application exchanges, runtime isolation, and representative
+  fidelity fixtures remain open production work.
+- Multipage project semantics, reusable assemblies, and optional offline
+  assistance contracts are implemented as standalone typed models. They retain
+  stable metadata, explicit acceptance gates, provenance, and deterministic JSON;
+  Document persistence, geometry/quantity binding, visible UI, actual local
+  suggestion generation, and full save/print/export integration remain open.
 
 ## Verification boundary
 

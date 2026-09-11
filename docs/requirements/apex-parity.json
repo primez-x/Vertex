@@ -433,10 +433,16 @@
         "qt_lgpl_obligations"
       ],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Automated and manual dependency review finds no prohibited baseline dependency and verifies the selected dynamic-linking and relink path.",
       "package": 2,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "scripts/distribution_inventory.py",
+        "tests/test_distribution_inventory.py",
+        "docs/dependencies/distribution-inventory.md"
+      ],
+      "implementation_note": "Dependency inventory and notice checks are implemented; complete license review, dynamic-link/relink evidence, and production gate remain open."
     },
     {
       "id": "COMP-GEO-001",
@@ -492,10 +498,17 @@
         "ifc_mvd"
       ],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Worker versions, formats, capabilities, resources, and failure behavior are recorded; worker failure leaves the core project usable.",
       "package": 2,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/interchange_profile.hpp",
+        "src/core/interchange_profile.cpp",
+        "tests/interchange_profile_tests.cpp",
+        "docs/interchange-profiles.md"
+      ],
+      "implementation_note": "Fail-closed IFC/DXF/PDF/PROJ worker declarations and attestations are implemented; real worker binaries, broker/runtime enforcement, and representative fixtures remain open."
     },
     {
       "id": "COMP-IO-002",
@@ -509,10 +522,17 @@
         "qt_licensing"
       ],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "The exact Qt module set builds offline, is license-audited, and produces the same vector scene used by preview and supported output formats.",
       "package": 2,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/interchange_profile.hpp",
+        "src/core/interchange_profile.cpp",
+        "tests/interchange_profile_tests.cpp",
+        "docs/interchange-profiles.md"
+      ],
+      "implementation_note": "The exact Qt PDF/PrintSupport allowlist is declared and validated; actual module audit, vector scene integration, and offline package qualification remain open."
     },
     {
       "id": "COMP-IO-003",
@@ -526,10 +546,17 @@
         "proj_network"
       ],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Required coordinate operations complete from bundled resources while a network monitor confirms no download or remote callback.",
       "package": 2,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/interchange_profile.hpp",
+        "src/core/interchange_profile.cpp",
+        "tests/interchange_profile_tests.cpp",
+        "docs/interchange-profiles.md"
+      ],
+      "implementation_note": "PROJ local-resource/network-denial requirements are declared fail-closed; bundled resources, runtime enforcement, and monitored operation fixtures remain open."
     },
     {
       "id": "GEO-BASE-001",
@@ -1157,10 +1184,17 @@
       "requirement": "Support multipage projects with subject information, area attributes, page-level presentation, and shared project data.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "A multipage fixture preserves subject and area metadata, page order, independent view settings, and linked model references after save/reopen.",
       "package": 6,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/multipage_document.hpp",
+        "src/core/multipage_document.cpp",
+        "tests/multipage_document_tests.cpp",
+        "docs/multipage-projects.md"
+      ],
+      "implementation_note": "Multipage subject/shared data, areas, stable links, page order, and view semantics are implemented as a standalone contract; Document persistence, UI, print/export, and application-level save/reopen remain open."
     },
     {
       "id": "APX-DOC-002",
@@ -1259,10 +1293,17 @@
       "requirement": "Support DISTO measurement input through an adapter that targets an explicitly selected field and retains units and provenance.",
       "source_urls": [],
       "evidence_status": "needs_evidence",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "At least one selected DISTO model/transport fixture records a reading in the intended field without silently overwriting another measurement.",
       "package": 6,
-      "blocker": "Exact DISTO model, firmware, transport, and available test hardware must be identified and exercised."
+      "blocker": "Exact DISTO model, firmware, transport, and available test hardware must be identified and exercised.",
+      "implementation_sources": [
+        "include/sketch/field_adapter_contract.hpp",
+        "src/core/field_adapter_contract.cpp",
+        "tests/field_adapter_contract_tests.cpp",
+        "docs/field-adapter-contracts.md"
+      ],
+      "implementation_note": "Offline DISTO reading/assignment and provenance contracts are implemented; exact model/firmware/transport, device adapter, and hardware fixture evidence remain required."
     },
     {
       "id": "APX-SPEC-001",
@@ -1292,10 +1333,17 @@
       "requirement": "Provide appraisal-software integrations through isolated, versioned adapters with explicit field mapping and failure behavior.",
       "source_urls": [],
       "evidence_status": "needs_evidence",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Each supported appraisal application/version has an exchange fixture, field mapping, round-trip or one-way fidelity report, and offline failure test.",
       "package": 6,
-      "blocker": "Actual target appraisal applications, versions, exchange formats, and available caller interfaces are not yet identified."
+      "blocker": "Actual target appraisal applications, versions, exchange formats, and available caller interfaces are not yet identified.",
+      "implementation_sources": [
+        "include/sketch/field_adapter_contract.hpp",
+        "src/core/field_adapter_contract.cpp",
+        "tests/field_adapter_contract_tests.cpp",
+        "docs/field-adapter-contracts.md"
+      ],
+      "implementation_note": "Versioned appraisal field-mapping descriptors and deterministic one-way payload contracts are implemented; target applications, adapters, and exchange fixtures remain to be discovered and exercised."
     },
     {
       "id": "APX-INT-002",
@@ -1303,10 +1351,17 @@
       "requirement": "Document and implement caller protocols for external integrations without coupling them to the drawing engine.",
       "source_urls": [],
       "evidence_status": "needs_evidence",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Each caller protocol has a versioned adapter contract, capability negotiation, timeout/error semantics, and a recorded compatibility fixture.",
       "package": 6,
-      "blocker": "Caller protocols and exact external integration contracts require discovery from representative applications and observed exchanges."
+      "blocker": "Caller protocols and exact external integration contracts require discovery from representative applications and observed exchanges.",
+      "implementation_sources": [
+        "include/sketch/field_adapter_contract.hpp",
+        "src/core/field_adapter_contract.cpp",
+        "tests/field_adapter_contract_tests.cpp",
+        "docs/field-adapter-contracts.md"
+      ],
+      "implementation_note": "Caller identity/version/mapping compatibility and failure semantics are declared; real caller protocols, capability negotiation, timeout enforcement, isolation, and compatibility fixtures remain open."
     },
     {
       "id": "APX-NATIVE-AX5-001",
@@ -1314,10 +1369,16 @@
       "requirement": "Import and preserve supported native Apex v5 projects with geometry, curves, classifications, dimensions, labels, symbols, imagery, and metadata where representable.",
       "source_urls": [],
       "evidence_status": "needs_evidence",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Representative Apex v5 fixtures open with a field-by-field fidelity report and round-trip or preservation result for every supported data class.",
       "package": 6,
-      "blocker": "Representative native Apex v5 files and format evidence are required; PDF tracing cannot satisfy this row."
+      "blocker": "Representative native Apex v5 files and format evidence are required; PDF tracing cannot satisfy this row.",
+      "implementation_sources": [
+        "scripts/apex_compatibility_matrix.py",
+        "tests/test_apex_compatibility_matrix.py",
+        "docs/apex-compatibility-matrix.md"
+      ],
+      "implementation_note": "Evidence schema and hash comparison tooling are implemented; native Apex v5 fixtures, parser/import/export behavior, and independent fidelity certification remain open."
     },
     {
       "id": "APX-NATIVE-AX7-001",
@@ -1325,10 +1386,16 @@
       "requirement": "Import, edit, and preserve supported native Apex v7 projects with geometry, curves, classifications, dimensions, labels, symbols, imagery, and metadata where representable.",
       "source_urls": [],
       "evidence_status": "needs_evidence",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Representative Apex v7 fixtures open, edit, save, and export with a field-by-field fidelity report and no silent loss of required content.",
       "package": 6,
-      "blocker": "Representative native Apex v7 files and format evidence are required; PDF tracing cannot satisfy this row."
+      "blocker": "Representative native Apex v7 files and format evidence are required; PDF tracing cannot satisfy this row.",
+      "implementation_sources": [
+        "scripts/apex_compatibility_matrix.py",
+        "tests/test_apex_compatibility_matrix.py",
+        "docs/apex-compatibility-matrix.md"
+      ],
+      "implementation_note": "Evidence schema and hash comparison tooling are implemented; native Apex v7 fixtures, parser/import/export behavior, and independent fidelity certification remain open."
     },
     {
       "id": "APX-NATIVE-LEGACY-001",
@@ -1336,10 +1403,16 @@
       "requirement": "Export declared legacy Apex-compatible versions with explicit subset, loss, and round-trip behavior.",
       "source_urls": [],
       "evidence_status": "needs_evidence",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Each declared legacy export has a real consumer fixture, output comparison, and visible report for unsupported or transformed content.",
       "package": 6,
-      "blocker": "Target legacy versions and consumer fixtures are not yet available."
+      "blocker": "Target legacy versions and consumer fixtures are not yet available.",
+      "implementation_sources": [
+        "scripts/apex_compatibility_matrix.py",
+        "tests/test_apex_compatibility_matrix.py",
+        "docs/apex-compatibility-matrix.md"
+      ],
+      "implementation_note": "Legacy target evidence and output comparison schema are implemented; declared legacy versions, real consumers, and compatibility export behavior remain open."
     },
     {
       "id": "APX-COMPAT-001",
@@ -1355,10 +1428,16 @@
         "apex_define_first"
       ],
       "evidence_status": "needs_evidence",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "The ledger records the installed edition/module inventory, observed behavior, settings, version, and fixture for every required capability.",
       "package": 1,
-      "blocker": "Installed Apex editions, enabled modules, settings, and version information must be collected."
+      "blocker": "Installed Apex editions, enabled modules, settings, and version information must be collected.",
+      "implementation_sources": [
+        "scripts/apex_compatibility_matrix.py",
+        "tests/test_apex_compatibility_matrix.py",
+        "docs/apex-compatibility-matrix.md"
+      ],
+      "implementation_note": "Standard/Pro/module inventory is required and validated by the evidence manifest; installed edition/module observations and independent audit evidence remain open."
     },
     {
       "id": "APX-COMPAT-002",
@@ -1366,10 +1445,16 @@
       "requirement": "Compare representative Apex projects and expected outputs across geometry, curves, classifications, dimensions, labels, symbols, imagery, metadata, calculations, and print/export.",
       "source_urls": [],
       "evidence_status": "needs_evidence",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "A compatibility report compares paired source/replacement projects and outputs, identifies any loss, and leaves no required mismatch unclassified.",
       "package": 1,
-      "blocker": "Representative projects, source outputs, and acceptance expectations are not yet available."
+      "blocker": "Representative projects, source outputs, and acceptance expectations are not yet available.",
+      "implementation_sources": [
+        "scripts/apex_compatibility_matrix.py",
+        "tests/test_apex_compatibility_matrix.py",
+        "docs/apex-compatibility-matrix.md"
+      ],
+      "implementation_note": "Paired project/output hashes and per-field observations are represented by the evidence manifest; representative projects, outputs, and independent comparison remain open."
     },
     {
       "id": "ARCH-MOD-001",
@@ -1509,10 +1594,17 @@
       "requirement": "Provide reusable assemblies with separate type and instance properties, materials, and quantity behavior.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Changing a type updates its instances according to explicit rules while instance overrides remain visible and undoable.",
       "package": 4,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/assembly_model.hpp",
+        "src/core/assembly_model.cpp",
+        "tests/assembly_model_tests.cpp",
+        "docs/assemblies.md"
+      ],
+      "implementation_note": "Reusable assembly types, instance overrides, materials, quantities, immutable snapshots, and update previews are implemented; Document/geometry/quantity/schedule/UI integration remains open."
     },
     {
       "id": "ARCH-MOD-009",
@@ -1788,10 +1880,17 @@
       "requirement": "Provide optional offline suggested tracing from plans or reference images.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "A local model or deterministic assistant suggests trace geometry on a fixture without network access and labels every suggestion unverified.",
       "package": 7,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/assistance_contract.hpp",
+        "src/core/assistance_contract.cpp",
+        "tests/assistance_contract_tests.cpp",
+        "docs/assistance-contract.md"
+      ],
+      "implementation_note": "Offline tracing suggestion and acceptance contracts are implemented; local model/deterministic generator, visible preview, and document command integration remain open."
     },
     {
       "id": "ASSIST-002",
@@ -1799,10 +1898,17 @@
       "requirement": "Provide optional offline dimension extraction from supported plans and references.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Extracted dimensions are visibly provisional, include source location/confidence, and require acceptance before becoming document commands.",
       "package": 7,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/assistance_contract.hpp",
+        "src/core/assistance_contract.cpp",
+        "tests/assistance_contract_tests.cpp",
+        "docs/assistance-contract.md"
+      ],
+      "implementation_note": "Offline dimension-extraction proposal provenance and acceptance gates are implemented; extraction runtime, source confidence evidence, and command integration remain open."
     },
     {
       "id": "ASSIST-003",
@@ -1810,10 +1916,17 @@
       "requirement": "Provide optional assisted label placement and natural-language commands through the same command and permission model as manual edits.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Suggestions preview as normal typed commands, identify affected entities, require acceptance, and are fully undoable.",
       "package": 7,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/assistance_contract.hpp",
+        "src/core/assistance_contract.cpp",
+        "tests/assistance_contract_tests.cpp",
+        "docs/assistance-contract.md"
+      ],
+      "implementation_note": "Assisted label placement and natural-language command envelopes require explicit acceptance and normal command validation; producers, dispatcher, and UI remain open."
     },
     {
       "id": "ASSIST-004",
@@ -1821,10 +1934,17 @@
       "requirement": "Assistance never silently invents measurements, changes classifications, or modifies accepted geometry; disabling it does not affect deterministic workflows.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Assistance-off and malformed-suggestion tests complete draw/edit/calculate/save/print/export, and unaccepted suggestions leave no semantic changes.",
       "package": 7,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/assistance_contract.hpp",
+        "src/core/assistance_contract.cpp",
+        "tests/assistance_contract_tests.cpp",
+        "docs/assistance-contract.md"
+      ],
+      "implementation_note": "Assistance-off and unaccepted-proposal safety semantics are implemented in the contract; full draw/edit/calculate/save/print/export integration evidence remains open."
     },
     {
       "id": "ASSIST-005",
@@ -1832,10 +1952,17 @@
       "requirement": "Distributed assistance assets and processing libraries have offline resource paths, provenance, and license records.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "The offline package contains or explicitly omits optional assets, reports missing local resources, and passes the same source/license audit as core dependencies.",
       "package": 7,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/assistance_contract.hpp",
+        "src/core/assistance_contract.cpp",
+        "tests/assistance_contract_tests.cpp",
+        "docs/assistance-contract.md"
+      ],
+      "implementation_note": "Offline resource/provenance/license declarations and missing-resource gates are implemented; package file/hash containment and complete license audit remain open."
     },
   {
       "id": "REC-001",
@@ -1939,10 +2066,17 @@
         "ifc_mvd"
       ],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Representative IFC fixtures export/import with a fidelity report for geometry, types, properties, materials, relationships, and unreconstructed content.",
       "package": 6,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/interchange_profile.hpp",
+        "src/core/interchange_profile.cpp",
+        "tests/interchange_profile_tests.cpp",
+        "docs/interchange-profiles.md"
+      ],
+      "implementation_note": "The IFC4 ADD2 TC1 Reference View 1.2 target and fail-closed worker contract are declared; parser/exporter, editable reconstruction, reference preservation, and fidelity fixtures remain open."
     },
     {
       "id": "IO-DXF-001",
@@ -1950,10 +2084,17 @@
       "requirement": "Support a declared DXF R2013 subset covering lines, arcs, polylines, text, dimensions, hatches, and blocks.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Subset fixtures round-trip supported entities and report unsupported entities without blocking native project use.",
       "package": 6,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/interchange_profile.hpp",
+        "src/core/interchange_profile.cpp",
+        "tests/interchange_profile_tests.cpp",
+        "docs/interchange-profiles.md"
+      ],
+      "implementation_note": "The DXF R2013 subset and unsupported-entity policy are declared; parser/exporter, entity roundtrips, and fidelity fixtures remain open."
     },
     {
       "id": "IO-PDF-001",
