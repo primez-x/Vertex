@@ -1825,7 +1825,7 @@
         "tests/sheet_view_entity_codec_tests.cpp",
         "docs/sheets-views.md"
       ],
-      "implementation_note": "Coordinated sheets with title blocks, revisions, callouts, schedule references, page sizes, and independent viewport scales are implemented as immutable semantic records and persist through the typed Document entity. New desktop projects seed a validated default plan sheet; draft PDF/SVG/print now consume its page, viewport, title-block, and scale data, and sheet number/title-block plus viewport bounds/scale edits commit through Document history. Schedule placement rendering, printer receipts, and production output qualification remain open."
+      "implementation_note": "Coordinated sheets with title blocks, revisions, callouts, schedule references, page sizes, and independent viewport scales are implemented as immutable semantic records and persist through the typed Document entity. New desktop projects seed a validated default plan sheet; draft PDF/SVG/print now consume its page, viewport, title-block, scale, and persisted schedule placement data, and sheet number/title-block plus viewport bounds/scale edits commit through Document history. Schedule placement editing, printer receipts, and production output qualification remain open."
     },
     {
       "id": "ARCH-EDIT-001",
@@ -2224,7 +2224,7 @@
         "src/desktop/main_window.cpp",
         "tests/desktop_smoke.cpp"
       ],
-      "implementation_note": "Preview, draft PDF, draft SVG, and print use one shared canvas geometry renderer; draft exports now render persisted sheet bounds, independent viewport scales, and title-block data with a visible draft stamp. PDF, SVG, and native 3D image exports emit adjacent fingerprint manifests; currentness blocking, printer receipts, and authoritative output fixtures remain open."
+      "implementation_note": "Preview, draft PDF, draft SVG, and print use one shared canvas geometry renderer; draft exports now render persisted sheet bounds, independent viewport scales, title-block data, and revision-bound schedule placements with a visible draft stamp. PDF, SVG, and native 3D image exports emit adjacent fingerprint manifests; currentness blocking, printer receipts, and authoritative output fixtures remain open."
     },
     {
       "id": "IO-OUTPUT-002",
@@ -2262,7 +2262,7 @@
         "tests/desktop_smoke.cpp",
         "tests/output_fingerprint_tests.cpp"
       ],
-      "implementation_note": "Draft output stamping, invalid-geometry blocking, and fingerprint mismatch checks are implemented; integrated stale calculations/assets/reference fixtures and visible authority wiring remain open."
+      "implementation_note": "Draft output stamping, invalid-geometry blocking, fingerprint mismatch checks, and revision-bound persisted schedule placement rendering are implemented; integrated stale calculations/assets/reference fixtures and visible authority wiring remain open."
     },
     {
       "id": "SEC-WORKER-001",

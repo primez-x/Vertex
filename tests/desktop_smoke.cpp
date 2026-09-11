@@ -613,6 +613,13 @@ int main(int argc, char** argv) {
     pdf_fingerprint.close();
     require(window.exportDraftSvg(svg_path_qstring), "draft SVG export should succeed locally");
     require(std::filesystem::file_size(svg_path) > 0, "draft SVG should be nonempty");
+    QFile svg_output(svg_path_qstring);
+    require(svg_output.open(QIODevice::ReadOnly | QIODevice::Text),
+            "draft SVG should be readable for schedule placement verification");
+    const auto svg_text = svg_output.readAll();
+    require(svg_text.contains("DOORS SCHEDULE"),
+            "draft SVG should render the persisted doors schedule placement");
+    svg_output.close();
     const auto svg_fingerprint_path = std::filesystem::path(svg_path.wstring() + L".fingerprint.json");
     require(std::filesystem::file_size(svg_fingerprint_path) > 0,
             "draft SVG must have an adjacent output fingerprint");

@@ -160,7 +160,9 @@ SheetViewModel default_sheet_view_model() {
     sheet.height_mm = 297.0;
     sheet.title_block = {"Untitled property", "Default plan", "", ""};
     sheet.viewports.push_back({"viewport-plan", "view-plan", {10.0, 10.0, 400.0, 277.0}, 100.0});
-    return SheetViewModel::create({std::move(plan_view)}, {std::move(sheet)});
+    sheet.schedules.push_back({"schedule-doors", "doors", {260.0, 220.0, 150.0, 65.0}});
+    return SheetViewModel::create({std::move(plan_view)}, {std::move(sheet)},
+                                  {"doors", "windows", "rooms", "materials"});
 }
 
 json point_json(Vec2 point) {
@@ -2286,6 +2288,78 @@ public:
                 painter.restore();
                 painter.setPen(QPen(QColor(115, 125, 138), std::max(1.0, paper_scale * 0.6)));
                 painter.drawRect(viewport_rect);
+            }
+
+            // Schedule placements are part of the persisted sheet graph. Draw
+            // their revision-bound rows from the same document projection used
+            // by the Schedules dialog so printed output cannot drift from the
+            // editable source model.
+            const auto schedule_projection = scheduleSnapshot();
+            for (const auto& placement : sheet.schedules) {
+                const QRectF schedule_rect(
+                    page.left() + placement.bounds.x_mm * paper_scale,
+                    page.top() + placement.bounds.y_mm * paper_scale,
+                    placement.bounds.width_mm * paper_scale,
+                    placement.bounds.height_mm * paper_scale);
+                const auto schedule_name =
+                    QString::fromStdString(placement.schedule_id).trimmed().toLower();
+                std::optional<ScheduleRowKind> kind;
+                if (schedule_name.contains(QStringLiteral("door"))) kind = ScheduleRowKind::door;
+                else if (schedule_name.contains(QStringLiteral("window"))) kind = ScheduleRowKind::window;
+                else if (schedule_name.contains(QStringLiteral("room"))) kind = ScheduleRowKind::room;
+                else if (schedule_name.contains(QStringLiteral("material"))) kind = ScheduleRowKind::material;
+                QString heading = schedule_name.isEmpty() ? QStringLiteral("SCHEDULE")
+                                                            : schedule_name.toUpper() + QStringLiteral(" SCHEDULE");
+                std::vector<const ScheduleRow*> rows;
+                if (kind) {
+                    for (const auto& row : schedule_projection.snapshot.rows)
+                        if (row.kind == *kind) rows.push_back(&row);
+                }
+                painter.save();
+                painter.setClipRect(schedule_rect);
+                painter.fillRect(schedule_rect, Qt::white);
+                painter.setPen(QPen(QColor(45, 52, 60), std::max(1.0, paper_scale * 0.6)));
+                painter.drawRect(schedule_rect);
+                const auto header_height = std::max(12.0, 16.0 * paper_scale);
+                painter.fillRect(QRectF(schedule_rect.left(), schedule_rect.top(),
+                                        schedule_rect.width(), header_height),
+                                 QColor(229, 235, 241));
+                painter.setPen(QColor(35, 41, 48));
+                painter.setFont(QFont(QStringLiteral("Inter"),
+                                      std::max(6, static_cast<int>(8.0 * paper_scale))));
+                painter.drawText(QRectF(schedule_rect.left() + 4.0 * paper_scale,
+                                        schedule_rect.top(), schedule_rect.width() - 8.0 * paper_scale,
+                                        header_height), Qt::AlignLeft | Qt::AlignVCenter, heading);
+                const auto row_height = std::max(10.0, 14.0 * paper_scale);
+                const auto available_rows = std::max(0, static_cast<int>(
+                    std::floor((schedule_rect.height() - header_height) / row_height)));
+                for (int index = 0; index < available_rows; ++index) {
+                    const QRectF row_rect(schedule_rect.left(), schedule_rect.top() + header_height +
+                                               static_cast<double>(index) * row_height,
+                                           schedule_rect.width(), row_height);
+                    painter.setPen(QPen(QColor(196, 203, 211), std::max(1.0, paper_scale * 0.35)));
+                    painter.drawLine(row_rect.bottomLeft(), row_rect.bottomRight());
+                    painter.setPen(QColor(50, 57, 65));
+                    QString text = index < static_cast<int>(rows.size())
+                        ? QStringLiteral("%1  %2")
+                              .arg(QString::fromStdString(rows[static_cast<std::size_t>(index)]->mark),
+                                   QString::fromStdString(rows[static_cast<std::size_t>(index)]->object_id))
+                        : QString();
+                    if (index < static_cast<int>(rows.size())) {
+                        const auto& cells = rows[static_cast<std::size_t>(index)]->cells;
+                        int appended = 0;
+                        for (const auto& [column, cell] : cells) {
+                            if (appended++ == 2) break;
+                            text += QStringLiteral("  %1: %2")
+                                        .arg(QString::fromStdString(column), schedule_value_text(cell.value));
+                        }
+                    }
+                    if (text.isEmpty() && index == 0) text = QStringLiteral("No rows");
+                    painter.drawText(row_rect.adjusted(4.0 * paper_scale, 0.0,
+                                                       -4.0 * paper_scale, 0.0),
+                                     Qt::AlignLeft | Qt::AlignVCenter, text);
+                }
+                painter.restore();
             }
 
             const auto title_height = std::max(24.0, 26.0 * paper_scale);
