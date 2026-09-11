@@ -196,10 +196,17 @@
       "requirement": "The production application targets Windows 11 x64, supports imperial and metric units, and serves residential and light-commercial projects.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Supported OS, unit profiles, and representative residential and light-commercial fixtures are listed and pass the final acceptance workflow.",
       "package": 1,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/product_scope.hpp",
+        "src/core/product_scope.cpp",
+        "tests/product_scope_tests.cpp",
+        "docs/product-scope.md"
+      ],
+      "implementation_note": "Windows 11 x64, both unit systems, both target markets, both workspaces, and offline ownership are represented by a strict scope contract; representative production fixtures and final acceptance remain open."
     },
     {
       "id": "CORE-SCOPE-002",
@@ -612,10 +619,18 @@
       "requirement": "Provide alignment, snapping, point jumping, automatic closure, and bay-window completion while retaining exact geometry.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Keyboard and pointer fixtures show each behavior, expose the resulting constraint or closure, and reopen without drift.",
       "package": 4,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/geometry_operations.hpp",
+        "src/core/geometry_operations.cpp",
+        "tests/geometry_operations_tests.cpp",
+        "docs/geometry-operations.md",
+        "src/desktop/plan_canvas.cpp"
+      ],
+      "implementation_note": "Point jump, exact closure, bay completion, alignment/snap behavior and logical shortcut mappings have bounded geometry/UI foundations; physical shortcut verification, full command integration, and parity fixtures remain open."
     },
     {
       "id": "GEO-CON-001",
@@ -1311,10 +1326,17 @@
       "requirement": "Provide survey and metes-and-bounds workflows with traverse geometry, acreage calculation, closure diagnostics, and output.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Survey fixtures import or enter bearings/distances, report closure and acreage, preserve traverse provenance, and export the declared result.",
       "package": 6,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/survey_contract.hpp",
+        "src/core/survey_contract.cpp",
+        "tests/survey_contract_tests.cpp",
+        "docs/survey-georeferencing-contracts.md"
+      ],
+      "implementation_note": "Survey traverse legs, closure diagnostics, simple-polygon area, acreage, and provenance are implemented as a standalone contract; UI, persisted project binding, Apex survey exchange, legal-survey behavior, and production fixtures remain open."
     },
     {
       "id": "APX-SPEC-002",
@@ -1322,10 +1344,17 @@
       "requirement": "Provide the Pro georeferencing workflow with explicit coordinate reference, control points, residuals, and offline resources.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "A georeferencing fixture records control points and residuals, applies the selected transform, and reopens without a network request.",
       "package": 6,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/georeferencing_contract.hpp",
+        "src/core/georeferencing_contract.cpp",
+        "tests/georeferencing_contract_tests.cpp",
+        "docs/survey-georeferencing-contracts.md"
+      ],
+      "implementation_note": "Explicit projected-metre CRS, affine transform, control-point residuals, and offline resource declarations are validated; PROJ execution/resource verification, persisted UI workflow, Apex module behavior, and network-denied fixtures remain open."
     },
     {
       "id": "APX-INT-001",
@@ -1773,10 +1802,17 @@
       "requirement": "Every supported architectural object supports creation, selection, property editing, appropriate transforms, duplication, deletion, undo/redo, and save/reopen.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Object-family fixtures execute the complete lifecycle and compare semantic, geometric, view, schedule, and persistence state.",
       "package": 5,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/architectural_workflow_contract.hpp",
+        "src/core/architectural_workflow_contract.cpp",
+        "tests/architectural_workflow_contract_tests.cpp",
+        "docs/architectural-workflow-contract.md"
+      ],
+      "implementation_note": "Architectural create/select/property-edit/transform/duplicate/delete intents and single-transaction output requirements are validated as immutable descriptors; live Document mutation, UI binding, type schemas, and user-observed undo/save/reopen remain open."
     },
     {
       "id": "ARCH-REL-001",
@@ -1801,10 +1837,17 @@
       "requirement": "Support complete residential and light-commercial remodel documentation from existing conditions through alternatives and coordinated output.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "End-to-end residential and light-commercial remodel fixtures produce editable model, comparison views, schedules, and sheets from one project.",
       "package": 5,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/architectural_workflow_contract.hpp",
+        "src/core/architectural_workflow_contract.cpp",
+        "tests/architectural_workflow_contract_tests.cpp",
+        "docs/architectural-workflow-contract.md"
+      ],
+      "implementation_note": "Coordinated plan/elevation/section/3D/schedule output requirements are scoped to model and sheet revisions; actual projection/render/layout/export and end-to-end residential/light-commercial deliverables remain open."
     },
     {
       "id": "UX-WORK-001",
@@ -1858,10 +1901,19 @@
       "requirement": "Support keyboard navigation, predictable focus, accessible properties and commands, high contrast, and layouts from 1366x768 through 4K at 100%, 150%, and 200% scaling.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Accessibility and DPI fixtures complete core workflows without clipped controls, lost focus, inaccessible properties, or unreadable contrast.",
       "package": 8,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/workspace_accessibility.hpp",
+        "src/core/workspace_accessibility.cpp",
+        "tests/workspace_accessibility_tests.cpp",
+        "docs/workspace-accessibility.md",
+        "scripts/production_qualification.py",
+        "docs/production-qualification.md"
+      ],
+      "implementation_note": "Keyboard/focus/properties/high-contrast themes and DPI layouts are declared by a strict profile and qualification manifest; physical keyboard, assistive-technology, visual, and clean-layout evidence remain open."
     },
     {
       "id": "UX-INPUT-001",
@@ -1869,10 +1921,19 @@
       "requirement": "Provide pen/touch-specific controls and an on-screen measurement keypad while preserving keyboard precision paths.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Real pen/touch fixtures enter and commit measurements through the keypad, preserve units/provenance, and remain undoable.",
       "package": 5,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/workspace_accessibility.hpp",
+        "src/core/workspace_accessibility.cpp",
+        "tests/workspace_accessibility_tests.cpp",
+        "docs/workspace-accessibility.md",
+        "scripts/production_qualification.py",
+        "docs/production-qualification.md"
+      ],
+      "implementation_note": "Pen/touch controls and an on-screen keypad are declared by the interaction profile and qualification manifest; physical pen/touch runs, device drivers, and end-to-end keypad command integration remain open."
     },
     {
       "id": "ASSIST-001",
@@ -2310,10 +2371,17 @@
       "requirement": "Pass an integrated residential production fixture exercising measurement, architectural authoring, editable 3D, plans, elevations, sections, schedules, alternatives, revisions, sheets, save/reopen, print, and export.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "The fixture completes the full workflow and its expected semantic, calculation, output, recovery, and fidelity assertions pass.",
       "package": 9,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "scripts/production_qualification.py",
+        "tests/test_production_qualification.py",
+        "docs/production-qualification.md",
+        "docs/production-qualification.pending.json"
+      ],
+      "implementation_note": "Residential production fixture evidence is represented by a fail-closed manifest contract; no real fixture, runtime capture, or qualification result is supplied."
     },
     {
       "id": "OPS-QA-003",
@@ -2321,10 +2389,17 @@
       "requirement": "Pass an integrated light-commercial production fixture exercising multiple levels, assemblies, structural objects, schedules, quantities, sheets, and coordinated views.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "The fixture completes the full workflow and its expected semantic, calculation, output, recovery, and fidelity assertions pass.",
       "package": 9,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "scripts/production_qualification.py",
+        "tests/test_production_qualification.py",
+        "docs/production-qualification.md",
+        "docs/production-qualification.pending.json"
+      ],
+      "implementation_note": "Light-commercial production fixture evidence is represented by a fail-closed manifest contract; no real fixture, runtime capture, or qualification result is supplied."
     },
     {
       "id": "OPS-QA-004",
@@ -2347,10 +2422,17 @@
       "requirement": "Verify real pen/touch input, keyboard navigation, focus behavior, accessible properties, themes, high contrast, and supported DPI layouts.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Recorded device and accessibility fixtures complete the core workflows at 100%, 150%, and 200% scaling without usability blockers.",
       "package": 9,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "scripts/production_qualification.py",
+        "tests/test_production_qualification.py",
+        "docs/production-qualification.md",
+        "docs/production-qualification.pending.json"
+      ],
+      "implementation_note": "Real pen/touch, keyboard/focus, accessibility, theme, and DPI evidence are represented by a fail-closed manifest contract; no physical-device qualification result is supplied."
     },
     {
       "id": "OPS-PACK-001",

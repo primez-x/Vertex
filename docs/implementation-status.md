@@ -398,6 +398,22 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   stable metadata, explicit acceptance gates, provenance, and deterministic JSON;
   Document persistence, geometry/quantity binding, visible UI, actual local
   suggestion generation, and full save/print/export integration remain open.
+- The product scope and interaction qualification contracts now enumerate the
+  Windows 11 x64 target, both markets, both workspaces, both unit systems,
+  themes, DPI layouts, keyboard/focus/property access, pen/touch controls, and
+  the measurement keypad. Production qualification manifests cover the
+  residential, light-commercial, and accessibility runs but intentionally ship
+  empty; physical input and integrated runtime observations remain required.
+- Survey/metes-and-bounds and Pro georeferencing now have deterministic local
+  contracts for quadrant-bearing traverses, closure/acreage diagnostics,
+  projected-metre affine transforms, residuals, and offline resource
+  declarations. They do not execute PROJ, verify resources, import Apex files,
+  or replace the required specialist-module fixtures.
+- Architectural transaction and output descriptors now cover create, select,
+  property edit, transform, duplicate/delete intent and coordinated
+  plan/elevation/section/3D/schedule issue requirements. Live Document history,
+  projection/render/export, and complete residential/light-commercial output
+  remain integration work.
 
 ## Verification boundary
 

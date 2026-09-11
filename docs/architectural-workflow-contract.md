@@ -1,0 +1,11 @@
+# Architectural workflow descriptor foundation
+
+`architectural_workflow_contract.hpp` supplies detached immutable transaction and output requirement values for ARCH-EDIT-001 and ARCH-OUTPUT-001. These are foundations, not completed product workflows.
+
+Transactions preserve ordered create, select, property edit, transform, duplicate and delete intent. IDs are checked against a supplied initial ID snapshot, simulated in order and never reused during a transaction. Invalid enum values, missing targets, collisions, irrelevant payloads and nonfinite transforms fail before a descriptor is returned. The undo label declares one undoable transaction; no live history stack or inverse operations are implemented. Selection denotes intent for one object; multi-selection policy belongs to the adapter.
+
+Properties are opaque textual semantic values. Type IDs and property keys have lexical validation, not a building-type/property registry. Transforms declare translation in metres, Z rotation in radians and a positive uniform scale; adapters must enforce type-specific legality, units, geometry validity and hosted relationships. Measurement boundaries are neither imported nor converted into architectural objects here.
+
+Output contracts scope plans, elevations, sections, 3D views and schedules to known architectural IDs and sheets under one explicit model revision and issue revision. Each sheet must have requirements. A package can intentionally request only some output kinds; it does not certify a complete permit set. Outputs and identity sets serialize canonically; transaction operation order is retained. JSON export is a deterministic descriptor, with no import or persistence codec yet.
+
+Still open: Document revision compare-and-apply and atomic mutations; captured before/after state and live undo/redo; property/type schema enforcement; hosted-object duplicate/delete policy; Document/UI/OCCT integration; reuse of existing SheetViewModel and schedule generation adapters; projection, rendering, layout and export; real revision freshness checks; and end-to-end residential and light-commercial fixtures. The descriptor tests establish only local contract validation, immutability and deterministic serialization, not generated deliverable correctness.
