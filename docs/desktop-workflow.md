@@ -115,6 +115,14 @@ validates the selected closed boundary and previews the complete profile with
 `saveProject`, `exportDraftPdf`, `exportNativeViewImage`, and
 `showPrintPreview` for the normal workflow.
 
+The `Reference` command imports a local PNG, JPEG, BMP, or TIFF into the
+portable Document Asset store and creates a `reference_asset` record. The
+decoded raster is drawn beneath the shared measurement and architectural
+canvases; the inspector edits model position, metres-per-pixel calibration,
+scale, rotation, flips, intensity, and visibility through one undoable command.
+Source bytes remain immutable in the project. PDF page decoding, multiple
+underlays, and interactive tracing are still pending production work.
+
 ## Interaction and persistence
 
 The left navigator expands project, building, floor, and layer nodes. The tool

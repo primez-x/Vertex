@@ -1976,6 +1976,125 @@ public:
         }
     }
 
+    QString importReferenceImage(const QString& path) {
+        try {
+            if (!m_document->is_editable()) {
+                throw std::invalid_argument("This document is read-only.");
+            }
+            const auto cleaned = path.trimmed();
+            if (cleaned.isEmpty()) throw std::invalid_argument("Choose a raster image file.");
+            QFile file(cleaned);
+            if (!file.open(QIODevice::ReadOnly)) {
+                throw std::invalid_argument("The reference image could not be opened.");
+            }
+            const auto raw = file.readAll();
+            if (raw.isEmpty()) throw std::invalid_argument("The reference image is empty.");
+            QImage image = QImage::fromData(raw);
+            if (image.isNull()) {
+                throw std::invalid_argument("Only decodable PNG, JPEG, BMP, and TIFF images are supported.");
+            }
+            const auto format = image.format();
+            QString mime;
+            if (format == QImage::Format_Invalid) {
+                throw std::invalid_argument("The reference image format is invalid.");
+            }
+            const auto suffix = QFileInfo(cleaned).suffix().trimmed().toLower();
+            if (suffix == QStringLiteral("png")) mime = QStringLiteral("image/png");
+            else if (suffix == QStringLiteral("jpg") || suffix == QStringLiteral("jpeg"))
+                mime = QStringLiteral("image/jpeg");
+            else if (suffix == QStringLiteral("bmp")) mime = QStringLiteral("image/bmp");
+            else if (suffix == QStringLiteral("tif") || suffix == QStringLiteral("tiff"))
+                mime = QStringLiteral("image/tiff");
+            else {
+                throw std::invalid_argument("Reference image extension must be PNG, JPEG, BMP, or TIFF.");
+            }
+            std::vector<std::byte> bytes;
+            bytes.reserve(static_cast<std::size_t>(raw.size()));
+            for (const auto value : raw) bytes.push_back(static_cast<std::byte>(value));
+            const auto source = authoringSnapshot();
+            const auto asset_id = new_id("reference-asset");
+            const auto entity_id = new_id("reference");
+            auto asset = Asset::create(asset_id, mime.toStdString(), std::move(bytes),
+                                       { {"source_path", QFileInfo(cleaned).fileName().toStdString()},
+                                         {"width_px", image.width()}, {"height_px", image.height()},
+                                         {"content", "raster-reference"} });
+            auto entity = Entity::create("reference_asset",
+                {{"asset_id", asset_id},
+                 {"source_path", QFileInfo(cleaned).fileName().toStdString()},
+                 {"mime_type", mime.toStdString()},
+                 {"position_m", {0.0, 0.0}},
+                 {"metres_per_source_unit", 0.01},
+                 {"scale", 1.0}, {"rotation_degrees", 0.0},
+                 {"flip_horizontal", false}, {"flip_vertical", false},
+                 {"intensity", 0.72}, {"visible", true}});
+            entity.id = entity_id;
+            const auto command = ApplyEntityChanges{
+                source.revision(), {EntityChange::upsert(std::move(entity))},
+                {AssetChange::upsert(std::move(asset))}, "Import reference image"};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            m_selected_id = id_from(entity_id);
+            clearError();
+            refresh();
+            return m_selected_id;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Reference image: %1").arg(QString::fromUtf8(error.what())));
+            return {};
+        }
+    }
+
+    bool editReferenceTransform(const QString& reference_id, const QString& x_metres,
+                                const QString& y_metres, const QString& metres_per_source_unit,
+                                const QString& scale, const QString& rotation_degrees,
+                                const QString& intensity, bool flip_horizontal,
+                                bool flip_vertical, bool visible) {
+        try {
+            if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
+            const auto parse_finite = [](const QString& text, const char* message) {
+                bool ok = false;
+                const auto value = text.trimmed().toDouble(&ok);
+                if (!ok || !std::isfinite(value)) throw std::invalid_argument(message);
+                return value;
+            };
+            const auto x = parse_finite(x_metres, "Reference X must be finite metres.");
+            const auto y = parse_finite(y_metres, "Reference Y must be finite metres.");
+            const auto calibration = parse_finite(
+                metres_per_source_unit, "Reference calibration must be finite.");
+            const auto transform_scale = parse_finite(scale, "Reference scale must be finite.");
+            const auto rotation = parse_finite(rotation_degrees, "Reference rotation must be finite.");
+            const auto alpha = parse_finite(intensity, "Reference intensity must be finite.");
+            if (!(calibration > 0.0) || !(transform_scale > 0.0) || alpha < 0.0 || alpha > 1.0) {
+                throw std::invalid_argument("Reference calibration/scale must be positive and intensity must be 0..1.");
+            }
+            const auto source = authoringSnapshot();
+            const auto found = source.entities().find(reference_id.trimmed().toStdString());
+            if (found == source.entities().end() || found->second.type != "reference_asset") {
+                throw std::invalid_argument("Reference image was not found.");
+            }
+            auto updated = found->second;
+            updated.properties["position_m"] = json::array({x, y});
+            updated.properties["metres_per_source_unit"] = calibration;
+            updated.properties["scale"] = transform_scale;
+            updated.properties["rotation_degrees"] = rotation;
+            updated.properties["intensity"] = alpha;
+            updated.properties["flip_horizontal"] = flip_horizontal;
+            updated.properties["flip_vertical"] = flip_vertical;
+            updated.properties["visible"] = visible;
+            const auto command = ApplyEntityChanges{
+                source.revision(), {EntityChange::upsert(std::move(updated))}, {},
+                "Edit reference transform"};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            m_selected_id = reference_id.trimmed();
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Reference transform: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     bool beginBoundaryDrawing(BoundaryAuthoringMode mode, QString classification) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This project is read-only."));
@@ -2739,6 +2858,7 @@ public:
                     temporary_canvas->setEntities(
                         m_architectural_view_entities[architectural_view_index(view_kind)]);
                     temporary_canvas->setLabels(m_measurementCanvas->labels());
+                    temporary_canvas->setReference(m_measurementCanvas->reference());
                     viewport_canvas = temporary_canvas.get();
                 }
                 const auto viewport_center = viewport_canvas->contentCenter();
@@ -3600,6 +3720,15 @@ public:
         dialog.exec();
     }
 
+    void showReferenceImport() {
+        const auto selected = QFileDialog::getOpenFileName(
+            owner, QStringLiteral("Import reference image"), {},
+            QStringLiteral("Raster images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)"));
+        if (!selected.isEmpty()) {
+            (void)importReferenceImage(selected);
+        }
+    }
+
     void showCommandPalette() {
         QDialog dialog(owner);
         dialog.setWindowTitle(QStringLiteral("Command search"));
@@ -3631,6 +3760,7 @@ public:
             {QStringLiteral("Measurement workspace"), [this] { setWorkspace(Workspace::measurement); }},
             {QStringLiteral("Architectural workspace"), [this] { setWorkspace(Workspace::architectural); }},
             {QStringLiteral("Add labels and symbols"), [this] { showAnnotationEditor(); }},
+            {QStringLiteral("Import reference image"), [this] { showReferenceImport(); }},
             {QStringLiteral("Open schedules"), [this] { showSchedules(); }},
             {QStringLiteral("Edit drawing sheet settings"), [this] { showSheetSettings(); }},
             {QStringLiteral("Edit sheet viewport settings"), [this] { showViewportSettings(); }},
@@ -4362,6 +4492,7 @@ private:
         toolbar->addSeparator();
         m_palette_action = toolbar->addAction(QStringLiteral("Commands"));
         m_annotation_action = toolbar->addAction(QStringLiteral("Annotations"));
+        m_reference_action = toolbar->addAction(QStringLiteral("Reference"));
         m_schedule_action = toolbar->addAction(QStringLiteral("Schedules"));
         m_sheet_action = toolbar->addAction(QStringLiteral("Sheet settings"));
         m_viewport_action = toolbar->addAction(QStringLiteral("Viewport settings"));
@@ -4438,6 +4569,8 @@ private:
                          [this] { showCommandPalette(); });
         QObject::connect(m_annotation_action, &QAction::triggered, owner,
                          [this] { showAnnotationEditor(); });
+        QObject::connect(m_reference_action, &QAction::triggered, owner,
+                         [this] { showReferenceImport(); });
         QObject::connect(m_schedule_action, &QAction::triggered, owner,
                          [this] { showSchedules(); });
         QObject::connect(m_sheet_action, &QAction::triggered, owner,
@@ -4762,6 +4895,51 @@ private:
                                  m_annotation_rotation_edit->text(), m_annotation_scale_edit->text(),
                                  m_annotation_visible_check->isChecked());
         });
+        m_reference_group = new QGroupBox(QStringLiteral("Reference image"), inspector_body);
+        m_reference_group->setObjectName(QStringLiteral("referenceProperties"));
+        auto* reference_layout = new QFormLayout(m_reference_group);
+        m_reference_x_edit = new QLineEdit(m_reference_group);
+        m_reference_x_edit->setObjectName(QStringLiteral("referenceX"));
+        reference_layout->addRow(QStringLiteral("X (m)"), m_reference_x_edit);
+        m_reference_y_edit = new QLineEdit(m_reference_group);
+        m_reference_y_edit->setObjectName(QStringLiteral("referenceY"));
+        reference_layout->addRow(QStringLiteral("Y (m)"), m_reference_y_edit);
+        m_reference_calibration_edit = new QLineEdit(m_reference_group);
+        m_reference_calibration_edit->setObjectName(QStringLiteral("referenceCalibration"));
+        m_reference_calibration_edit->setToolTip(QStringLiteral("Model metres per source pixel"));
+        reference_layout->addRow(QStringLiteral("Metres / pixel"), m_reference_calibration_edit);
+        m_reference_scale_edit = new QLineEdit(m_reference_group);
+        m_reference_scale_edit->setObjectName(QStringLiteral("referenceScale"));
+        reference_layout->addRow(QStringLiteral("Scale"), m_reference_scale_edit);
+        m_reference_rotation_edit = new QLineEdit(m_reference_group);
+        m_reference_rotation_edit->setObjectName(QStringLiteral("referenceRotation"));
+        reference_layout->addRow(QStringLiteral("Rotation (deg)"), m_reference_rotation_edit);
+        m_reference_intensity_edit = new QLineEdit(m_reference_group);
+        m_reference_intensity_edit->setObjectName(QStringLiteral("referenceIntensity"));
+        reference_layout->addRow(QStringLiteral("Intensity (0..1)"), m_reference_intensity_edit);
+        m_reference_flip_horizontal_check = new QCheckBox(QStringLiteral("Flip horizontally"), m_reference_group);
+        m_reference_flip_horizontal_check->setObjectName(QStringLiteral("referenceFlipHorizontal"));
+        reference_layout->addRow(m_reference_flip_horizontal_check);
+        m_reference_flip_vertical_check = new QCheckBox(QStringLiteral("Flip vertically"), m_reference_group);
+        m_reference_flip_vertical_check->setObjectName(QStringLiteral("referenceFlipVertical"));
+        reference_layout->addRow(m_reference_flip_vertical_check);
+        m_reference_visible_check = new QCheckBox(QStringLiteral("Visible"), m_reference_group);
+        m_reference_visible_check->setObjectName(QStringLiteral("referenceVisible"));
+        reference_layout->addRow(m_reference_visible_check);
+        m_apply_reference_button = new QPushButton(QStringLiteral("Apply reference"), m_reference_group);
+        m_apply_reference_button->setObjectName(QStringLiteral("applyReference"));
+        reference_layout->addRow(m_apply_reference_button);
+        m_reference_group->setVisible(false);
+        inspector_layout->addWidget(m_reference_group);
+        QObject::connect(m_apply_reference_button, &QPushButton::clicked, owner, [this] {
+            (void)editReferenceTransform(
+                m_selected_id, m_reference_x_edit->text(), m_reference_y_edit->text(),
+                m_reference_calibration_edit->text(), m_reference_scale_edit->text(),
+                m_reference_rotation_edit->text(), m_reference_intensity_edit->text(),
+                m_reference_flip_horizontal_check->isChecked(),
+                m_reference_flip_vertical_check->isChecked(),
+                m_reference_visible_check->isChecked());
+        });
         m_constraint_button = new QPushButton(QStringLiteral("Dimensions and constraints…"), inspector_body);
         m_constraint_button->setObjectName(QStringLiteral("editWallConstraints"));
         inspector_layout->addWidget(m_constraint_button);
@@ -4978,6 +5156,7 @@ private:
         });
         std::vector<CanvasEntity> all_geometry;
         std::vector<CanvasLabel> all_labels;
+        std::optional<CanvasReference> reference_underlay;
         all_geometry.reserve(snapshot.entities().size());
         const auto append_geometry_error = [&](const QString& message) {
             if (!m_plan_geometry_error.isEmpty()) {
@@ -4987,6 +5166,52 @@ private:
         };
         std::map<std::string, std::vector<HostedOpening>, std::less<>> openings_by_wall;
         for (const auto& [id, entity] : snapshot.entities()) {
+            if (entity.type == "reference_asset") {
+                try {
+                    if (reference_underlay.has_value()) {
+                        throw std::invalid_argument("only one reference underlay is supported in this checkpoint");
+                    }
+                    const auto asset_id = read_string(entity.properties, "asset_id");
+                    if (!asset_id.has_value()) throw std::invalid_argument("asset_id is required");
+                    const auto asset = snapshot.assets().find(*asset_id);
+                    if (asset == snapshot.assets().end()) {
+                        throw std::invalid_argument("referenced asset is missing");
+                    }
+                    const QByteArray raw(reinterpret_cast<const char*>(asset->second.bytes.data()),
+                                         static_cast<qsizetype>(asset->second.bytes.size()));
+                    const auto image = QImage::fromData(raw);
+                    if (image.isNull()) throw std::invalid_argument("raster asset could not be decoded");
+                    const auto position = read_point(
+                        entity.properties.contains("position_m")
+                            ? entity.properties.at("position_m") : json{});
+                    if (!position.has_value()) throw std::invalid_argument("position_m must be [x, y]");
+                    const auto metres_per_source_unit =
+                        read_number(entity.properties, "metres_per_source_unit", 0.01);
+                    const auto transform_scale = read_number(entity.properties, "scale", 1.0);
+                    const auto rotation = read_number(entity.properties, "rotation_degrees", 0.0);
+                    const auto intensity = read_number(entity.properties, "intensity", 1.0);
+                    if (!(metres_per_source_unit > 0.0) || !(transform_scale > 0.0) ||
+                        !std::isfinite(metres_per_source_unit) || !std::isfinite(transform_scale) ||
+                        !std::isfinite(rotation) || !std::isfinite(intensity) || intensity < 0.0 ||
+                        intensity > 1.0) {
+                        throw std::invalid_argument("reference transform is invalid");
+                    }
+                    const auto boolean_property = [&](std::string_view key, bool fallback) {
+                        const auto value = entity.properties.value(std::string(key), json(fallback));
+                        if (!value.is_boolean()) throw std::invalid_argument("reference boolean property is invalid");
+                        return value.get<bool>();
+                    };
+                    reference_underlay = CanvasReference{
+                        id_from(id), image, *position, metres_per_source_unit, transform_scale,
+                        rotation, boolean_property("flip_horizontal", false),
+                        boolean_property("flip_vertical", false), intensity,
+                        boolean_property("visible", true), id_from(id) == m_selected_id};
+                } catch (const std::exception& error) {
+                    append_geometry_error(QStringLiteral("Reference %1: %2")
+                                              .arg(id_from(id), QString::fromUtf8(error.what())));
+                }
+                continue;
+            }
             if (entity.type != "opening") {
                 continue;
             }
@@ -5285,6 +5510,8 @@ private:
         }
         m_measurementCanvas->setLabels(labels);
         m_architecturalCanvas->setLabels(std::move(labels));
+        m_measurementCanvas->setReference(reference_underlay);
+        m_architecturalCanvas->setReference(std::move(reference_underlay));
         m_plan_error_banner->setText(m_plan_geometry_error);
         m_plan_error_banner->setVisible(!m_plan_geometry_error.isEmpty());
         m_measurementCanvas->setSelectedId(m_selected_id);
@@ -5750,6 +5977,7 @@ private:
         m_constraint_button->setEnabled(wall && m_document->is_editable());
         const bool opening = entity.has_value() && entity->type == "opening";
         const bool slab = entity.has_value() && entity->type == "slab";
+        const bool reference_asset = entity.has_value() && entity->type == "reference_asset";
         const bool building_object = entity && can_recognize_building_entity_type(entity->type);
         const bool editable_geometry = wall || opening || slab ||
             (entity && is_closed_boundary_entity(entity->type));
@@ -5759,6 +5987,59 @@ private:
         m_delete_annotation_button->setEnabled(editable && annotation_context.has_value());
         m_annotation_group->setVisible(annotation_context.has_value());
         m_annotation_group->setEnabled(editable && annotation_context.has_value());
+        m_reference_group->setVisible(reference_asset);
+        m_reference_group->setEnabled(editable && reference_asset);
+        if (reference_asset) {
+            m_inspector_context->setText(
+                QStringLiteral("Reference image\n%1")
+                    .arg(QString::fromStdString(read_string(entity->properties, "source_path")
+                                                    .value_or("embedded raster"))));
+            const auto position = read_point(
+                entity->properties.contains("position_m")
+                    ? entity->properties.at("position_m") : json{});
+            const auto set_value = [](QLineEdit* field, double value) {
+                QSignalBlocker blocker(field);
+                field->setText(QString::number(value, 'g', 12));
+            };
+            set_value(m_reference_x_edit, position ? position->x : 0.0);
+            set_value(m_reference_y_edit, position ? position->y : 0.0);
+            set_value(m_reference_calibration_edit,
+                      read_number(entity->properties, "metres_per_source_unit", 0.01));
+            set_value(m_reference_scale_edit, read_number(entity->properties, "scale", 1.0));
+            set_value(m_reference_rotation_edit,
+                      read_number(entity->properties, "rotation_degrees", 0.0));
+            set_value(m_reference_intensity_edit,
+                      read_number(entity->properties, "intensity", 1.0));
+            const auto boolean_property = [&](std::string_view key, bool fallback) {
+                const auto value = entity->properties.value(std::string(key), json(fallback));
+                return value.is_boolean() ? value.get<bool>() : fallback;
+            };
+            {
+                QSignalBlocker blocker(m_reference_flip_horizontal_check);
+                m_reference_flip_horizontal_check->setChecked(
+                    boolean_property("flip_horizontal", false));
+            }
+            {
+                QSignalBlocker blocker(m_reference_flip_vertical_check);
+                m_reference_flip_vertical_check->setChecked(boolean_property("flip_vertical", false));
+            }
+            {
+                QSignalBlocker blocker(m_reference_visible_check);
+                m_reference_visible_check->setChecked(boolean_property("visible", true));
+            }
+            m_geometry_form->setRowVisible(m_length_edit, false);
+            m_geometry_form->setRowVisible(m_classification_combo, false);
+            m_geometry_form->setRowVisible(m_height_edit, false);
+            m_geometry_form->setRowVisible(m_thickness_edit, false);
+            m_length_edit->setEnabled(false);
+            m_height_edit->setEnabled(false);
+            m_thickness_edit->setEnabled(false);
+            m_classification_combo->setEnabled(false);
+            m_read_only_label->setText(editable ? QString{} : QStringLiteral("Read-only: %1")
+                                                                      .arg(QString::fromStdString(m_document->read_only_reason())));
+            refreshCalculationInspector(std::nullopt);
+            return;
+        }
         if (annotation_context.has_value()) {
             m_inspector_context->setText(*annotation_context);
             {
@@ -5816,6 +6097,7 @@ private:
             refreshCalculationInspector(std::nullopt);
             return;
         }
+        m_reference_group->setVisible(false);
         m_geometry_form->setRowVisible(m_length_edit, editable_geometry);
         m_geometry_form->setRowVisible(m_classification_combo, editable_geometry);
         m_geometry_form->setRowVisible(m_height_edit, wall || opening);
@@ -6597,6 +6879,17 @@ private:
     QLineEdit* m_annotation_scale_edit{};
     QCheckBox* m_annotation_visible_check{};
     QPushButton* m_apply_annotation_button{};
+    QGroupBox* m_reference_group{};
+    QLineEdit* m_reference_x_edit{};
+    QLineEdit* m_reference_y_edit{};
+    QLineEdit* m_reference_calibration_edit{};
+    QLineEdit* m_reference_scale_edit{};
+    QLineEdit* m_reference_rotation_edit{};
+    QLineEdit* m_reference_intensity_edit{};
+    QCheckBox* m_reference_flip_horizontal_check{};
+    QCheckBox* m_reference_flip_vertical_check{};
+    QCheckBox* m_reference_visible_check{};
+    QPushButton* m_apply_reference_button{};
     QPushButton* m_constraint_button{};
     QToolButton* m_grid_button{};
     QToolButton* m_snap_button{};
@@ -6612,6 +6905,7 @@ private:
     QAction* m_architectural_action{};
     QAction* m_palette_action{};
     QAction* m_annotation_action{};
+    QAction* m_reference_action{};
     QAction* m_schedule_action{};
     QAction* m_sheet_action{};
     QAction* m_viewport_action{};
@@ -6806,6 +7100,21 @@ bool MainWindow::deleteAnnotation(const QString& annotation_id) {
     return m_impl->deleteAnnotation(annotation_id);
 }
 
+QString MainWindow::importReferenceImage(const QString& path) {
+    return m_impl->importReferenceImage(path);
+}
+
+bool MainWindow::editReferenceTransform(const QString& reference_id, const QString& x_metres,
+                                        const QString& y_metres,
+                                        const QString& metres_per_source_unit,
+                                        const QString& scale, const QString& rotation_degrees,
+                                        const QString& intensity, bool flip_horizontal,
+                                        bool flip_vertical, bool visible) {
+    return m_impl->editReferenceTransform(reference_id, x_metres, y_metres,
+                                          metres_per_source_unit, scale, rotation_degrees,
+                                          intensity, flip_horizontal, flip_vertical, visible);
+}
+
 bool MainWindow::undoCommand() {
     return m_impl->undoCommand();
 }
@@ -6816,6 +7125,10 @@ bool MainWindow::redoCommand() {
 
 void MainWindow::showAnnotationEditor() {
     m_impl->showAnnotationEditor();
+}
+
+void MainWindow::showReferenceImport() {
+    m_impl->showReferenceImport();
 }
 
 bool MainWindow::createNewProject() {

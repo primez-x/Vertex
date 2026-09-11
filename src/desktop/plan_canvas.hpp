@@ -3,6 +3,7 @@
 #include "sketch/geometry.hpp"
 
 #include <QColor>
+#include <QImage>
 #include <QRectF>
 #include <QString>
 #include <QWidget>
@@ -43,6 +44,23 @@ struct CanvasLabel {
     double text_height_metres{0.15};
 };
 
+// A raster underlay is a retained presentation value sourced from a
+// Document Asset. Source pixels never become measurement truth; the explicit
+// metres-per-source-unit calibration controls its model-space footprint.
+struct CanvasReference {
+    QString id;
+    QImage image;
+    Vec2 position{};
+    double metres_per_source_unit{0.01};
+    double scale{1.0};
+    double rotation_degrees{};
+    bool flip_horizontal{};
+    bool flip_vertical{};
+    double intensity{1.0};
+    bool visible{true};
+    bool selected{false};
+};
+
 struct BoundaryDraftLabel {
     Vec2 position{};
     QString text;
@@ -72,6 +90,10 @@ public:
     void setSelectedId(const QString& entity_id);
     void setLabels(std::vector<CanvasLabel> labels);
     [[nodiscard]] const std::vector<CanvasLabel>& labels() const noexcept { return m_labels; }
+    void setReference(std::optional<CanvasReference> reference);
+    [[nodiscard]] const std::optional<CanvasReference>& reference() const noexcept {
+        return m_reference;
+    }
     void setBoundaryPreview(std::vector<Vec2> points);
     void setWallPreview(std::optional<std::pair<Vec2, Vec2>> wall);
     void setBoundaryDraftPreview(std::optional<BoundaryDraftPreview> preview);
@@ -122,6 +144,7 @@ private:
     void drawSegment(QPainter& painter, const Segment& segment) const;
     void drawLabels(QPainter& painter, const QRectF& viewport, double scale,
                     Vec2 view_center, bool output, QColor background) const;
+    void drawReference(QPainter& painter, const CanvasReference& reference) const;
     void renderSceneWithTransform(QPainter& painter, const QRectF& viewport,
                                   bool fit_to_content, QColor background,
                                   std::optional<double> explicit_scale,
@@ -129,6 +152,7 @@ private:
 
     std::vector<CanvasEntity> m_entities;
     std::vector<CanvasLabel> m_labels;
+    std::optional<CanvasReference> m_reference;
     std::vector<Vec2> m_boundary_preview;
     std::optional<std::pair<Vec2, Vec2>> m_wall_preview;
     std::optional<BoundaryDraftPreview> m_boundary_draft_preview;

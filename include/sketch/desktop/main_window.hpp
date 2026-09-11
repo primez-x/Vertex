@@ -172,6 +172,19 @@ public:
                                       const QString& scale,
                                       bool visible);
     [[nodiscard]] bool deleteAnnotation(const QString& annotation_id);
+    // Imports a local raster into the project Asset store and creates a
+    // reference_asset entity with an explicit, editable calibration scale.
+    [[nodiscard]] QString importReferenceImage(const QString& path);
+    [[nodiscard]] bool editReferenceTransform(const QString& reference_id,
+                                              const QString& x_metres,
+                                              const QString& y_metres,
+                                              const QString& metres_per_source_unit,
+                                              const QString& scale,
+                                              const QString& rotation_degrees,
+                                              const QString& intensity,
+                                              bool flip_horizontal,
+                                              bool flip_vertical,
+                                              bool visible);
     [[nodiscard]] bool undoCommand();
     [[nodiscard]] bool redoCommand();
 
@@ -189,6 +202,7 @@ public:
 
     void showCommandPalette();
     void showAnnotationEditor();
+    void showReferenceImport();
     void showConstraintEditor();
     void fitView();
 

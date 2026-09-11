@@ -161,6 +161,11 @@ void PlanCanvas::setLabels(std::vector<CanvasLabel> labels) {
     update();
 }
 
+void PlanCanvas::setReference(std::optional<CanvasReference> reference) {
+    m_reference = std::move(reference);
+    update();
+}
+
 void PlanCanvas::setBoundaryPreview(std::vector<Vec2> points) {
     m_boundary_preview = std::move(points);
     update();
@@ -184,7 +189,8 @@ void PlanCanvas::clearPreview() {
 }
 
 void PlanCanvas::fitView() {
-    if (m_entities.empty() && m_labels.empty()) {
+    if (m_entities.empty() && m_labels.empty() &&
+        !(m_reference.has_value() && m_reference->visible && !m_reference->image.isNull())) {
         m_view_center = {0.0, 0.0};
         m_scale = 80.0;
         update();
@@ -217,6 +223,17 @@ void PlanCanvas::fitView() {
     }
     for (const auto& label : m_labels) {
         include(label.position);
+    }
+    if (m_reference.has_value() && m_reference->visible && !m_reference->image.isNull() &&
+        std::isfinite(m_reference->metres_per_source_unit) &&
+        m_reference->metres_per_source_unit > 0.0 && std::isfinite(m_reference->scale) &&
+        m_reference->scale > 0.0) {
+        const auto width = m_reference->image.width() * m_reference->metres_per_source_unit *
+                           m_reference->scale;
+        const auto height = m_reference->image.height() * m_reference->metres_per_source_unit *
+                            m_reference->scale;
+        include({m_reference->position.x - width * 0.5, m_reference->position.y - height * 0.5});
+        include({m_reference->position.x + width * 0.5, m_reference->position.y + height * 0.5});
     }
     if (!has_content) {
         m_view_center = {0.0, 0.0};
@@ -297,6 +314,17 @@ Vec2 PlanCanvas::contentCenter() const noexcept {
         }
     }
     for (const auto& label : m_labels) include(label.position);
+    if (m_reference.has_value() && m_reference->visible && !m_reference->image.isNull() &&
+        std::isfinite(m_reference->metres_per_source_unit) &&
+        m_reference->metres_per_source_unit > 0.0 && std::isfinite(m_reference->scale) &&
+        m_reference->scale > 0.0) {
+        const auto width = m_reference->image.width() * m_reference->metres_per_source_unit *
+                           m_reference->scale;
+        const auto height = m_reference->image.height() * m_reference->metres_per_source_unit *
+                            m_reference->scale;
+        include({m_reference->position.x - width * 0.5, m_reference->position.y - height * 0.5});
+        include({m_reference->position.x + width * 0.5, m_reference->position.y + height * 0.5});
+    }
     return has_content ? Vec2{(minimum.x + maximum.x) * 0.5,
                               (minimum.y + maximum.y) * 0.5}
                        : m_view_center;
@@ -311,7 +339,9 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     }
     auto scale = explicit_scale.value_or(m_scale);
     auto view_center = explicit_center.value_or(m_view_center);
-    if (!explicit_scale.has_value() && fit_to_content && (!m_entities.empty() || !m_labels.empty())) {
+    if (!explicit_scale.has_value() && fit_to_content &&
+        (!m_entities.empty() || !m_labels.empty() ||
+         (m_reference.has_value() && m_reference->visible && !m_reference->image.isNull()))) {
         Vec2 minimum{std::numeric_limits<double>::max(), std::numeric_limits<double>::max()};
         Vec2 maximum{std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest()};
         bool has_content = false;
@@ -339,6 +369,17 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
         for (const auto& label : m_labels) {
             include(label.position);
         }
+        if (m_reference.has_value() && m_reference->visible && !m_reference->image.isNull() &&
+            std::isfinite(m_reference->metres_per_source_unit) &&
+            m_reference->metres_per_source_unit > 0.0 && std::isfinite(m_reference->scale) &&
+            m_reference->scale > 0.0) {
+            const auto width = m_reference->image.width() *
+                               m_reference->metres_per_source_unit * m_reference->scale;
+            const auto height = m_reference->image.height() *
+                                m_reference->metres_per_source_unit * m_reference->scale;
+            include({m_reference->position.x - width * 0.5, m_reference->position.y - height * 0.5});
+            include({m_reference->position.x + width * 0.5, m_reference->position.y + height * 0.5});
+        }
         if (has_content) {
             const auto width = std::max(maximum.x - minimum.x, 0.1);
             const auto height = std::max(maximum.y - minimum.y, 0.1);
@@ -355,6 +396,10 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     painter.translate(viewport.center());
     painter.scale(scale, -scale);
     painter.translate(-view_center.x, -view_center.y);
+
+    if (m_reference.has_value() && m_reference->visible) {
+        drawReference(painter, *m_reference);
+    }
 
     if (m_grid_enabled && !fit_to_content) {
         drawGrid(painter, viewport, scale, view_center);
@@ -815,6 +860,32 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
         painter.drawText(bounds, Qt::AlignCenter, label.text);
         painter.restore();
     }
+    painter.restore();
+}
+
+void PlanCanvas::drawReference(QPainter& painter, const CanvasReference& reference) const {
+    if (reference.image.isNull() || !std::isfinite(reference.position.x) ||
+        !std::isfinite(reference.position.y) ||
+        !(reference.metres_per_source_unit > 0.0) || !(reference.scale > 0.0) ||
+        !std::isfinite(reference.metres_per_source_unit) || !std::isfinite(reference.scale)) {
+        return;
+    }
+    auto image = reference.image;
+    if (reference.flip_horizontal || reference.flip_vertical) {
+        image = image.mirrored(reference.flip_horizontal, reference.flip_vertical);
+    }
+    const auto width = image.width() * reference.metres_per_source_unit * reference.scale;
+    const auto height = image.height() * reference.metres_per_source_unit * reference.scale;
+    if (!(width > 0.0) || !(height > 0.0) || !std::isfinite(width) || !std::isfinite(height)) {
+        return;
+    }
+    painter.save();
+    painter.translate(reference.position.x, reference.position.y);
+    if (std::isfinite(reference.rotation_degrees)) {
+        painter.rotate(reference.rotation_degrees);
+    }
+    painter.setOpacity(std::clamp(reference.intensity, 0.0, 1.0));
+    painter.drawImage(QRectF(-width * 0.5, -height * 0.5, width, height), image);
     painter.restore();
 }
 

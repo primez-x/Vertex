@@ -1164,7 +1164,7 @@
         "tests/reference_asset_tests.cpp",
         "docs/reference-assets.md"
       ],
-      "implementation_note": "Reference asset catalog validates PDF/raster signatures, identity, page selection, and immutable source metadata; decoder/render/project persistence integration remains open."
+      "implementation_note": "Reference asset catalog validates PDF/raster signatures, identity, page selection, and immutable source metadata; the desktop now imports decodable PNG/JPEG/BMP/TIFF files into Document assets and renders one persisted raster underlay, while PDF decoding and multi-underlay management remain open."
     },
     {
       "id": "APX-TRACE-002",
@@ -1182,7 +1182,7 @@
         "tests/reference_asset_tests.cpp",
         "docs/reference-assets.md"
       ],
-      "implementation_note": "Calibration stores known source distance, unit, scale, and provenance with deterministic validation; project save/reopen and calibrated tracing fixtures remain open."
+      "implementation_note": "Calibration stores known source distance, unit, scale, and provenance with deterministic validation; the desktop exposes and persists metres-per-source-pixel calibration through the reference inspector, while known-distance calibration dialogs and calibrated tracing fixtures remain open."
     },
     {
       "id": "APX-TRACE-003",
@@ -1200,7 +1200,7 @@
         "tests/reference_asset_tests.cpp",
         "docs/reference-assets.md"
       ],
-      "implementation_note": "Independent resize/rotation/flip/intensity/visibility edits preserve immutable source bytes in the catalog; UI undo/redo and actual tracing/edit lifecycle remain open."
+      "implementation_note": "Independent resize/rotation/flip/intensity/visibility edits preserve immutable source bytes in the catalog; the desktop inspector applies these transform edits through typed Document undo/redo, while interactive tracing/edit lifecycle remains open."
     },
     {
       "id": "APX-DOC-001",

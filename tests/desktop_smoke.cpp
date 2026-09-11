@@ -10,6 +10,7 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QFile>
+#include <QImage>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -318,6 +319,43 @@ int main(int argc, char** argv) {
         window.document().snapshot().entities().at("annotations-1"));
     require(annotation_state.labels.size() == 1 && annotation_state.symbols.size() == 1,
             "annotation undo should restore the persisted child");
+
+    QTemporaryDir reference_directory;
+    require(reference_directory.isValid(), "reference fixture needs a temporary directory");
+    const auto reference_path = reference_directory.filePath("trace.png");
+    QImage reference_image(40, 20, QImage::Format_ARGB32);
+    reference_image.fill(QColor(220, 240, 255));
+    require(reference_image.save(reference_path, "PNG"), "reference fixture should save a PNG");
+    const auto reference_id = window.importReferenceImage(reference_path);
+    require(!reference_id.isEmpty(), "a local raster should import into the document");
+    const auto reference_snapshot = window.document().snapshot();
+    const auto reference_entity = reference_snapshot.entities().find(reference_id.toStdString());
+    require(reference_entity != reference_snapshot.entities().end() &&
+                reference_entity->second.type == "reference_asset",
+            "reference import should create a typed reference entity");
+    const auto reference_asset_id = reference_entity->second.properties.at("asset_id").get<std::string>();
+    require(reference_snapshot.assets().contains(reference_asset_id),
+            "reference import should retain source bytes in the project asset store");
+    auto* reference_canvas = dynamic_cast<sketch::desktop::PlanCanvas*>(
+        window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    require(reference_canvas != nullptr && reference_canvas->reference().has_value() &&
+                !reference_canvas->reference()->image.isNull(),
+            "reference import should feed the shared canvas underlay");
+    require(window.editReferenceTransform(reference_id, QStringLiteral("1.25"), QStringLiteral("-0.5"),
+                                          QStringLiteral("0.02"), QStringLiteral("1.5"),
+                                          QStringLiteral("15"), QStringLiteral("0.4"), true,
+                                          false, true),
+            "reference calibration and transform should use typed document history");
+    const auto transformed_reference = window.document().snapshot().entities().at(reference_id.toStdString());
+    require(transformed_reference.properties.at("position_m") ==
+                nlohmann::json::array({1.25, -0.5}) &&
+                transformed_reference.properties.at("metres_per_source_unit") == 0.02 &&
+                transformed_reference.properties.at("rotation_degrees") == 15.0 &&
+                transformed_reference.properties.at("intensity") == 0.4 &&
+                transformed_reference.properties.at("flip_horizontal") == true,
+            "reference transform should persist calibration, placement, and presentation");
+    require(window.undoCommand() && window.redoCommand(),
+            "reference transform should participate in undo and redo");
     require(window.editArchitecturalViewPresentation(
                 QStringLiteral("view-plan"), QStringLiteral("1.5"), QStringLiteral("80"),
                 QStringLiteral("0.7"), QStringLiteral("0.25"), true,
