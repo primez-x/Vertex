@@ -6,6 +6,7 @@
 #include "sketch/desktop/building_object_dialog.hpp"
 #include "support/noninteractive_errors.hpp"
 #include "../src/desktop/plan_canvas.hpp"
+#include "../src/desktop/draft_image_stamp.hpp"
 
 #include <QApplication>
 #include <QComboBox>
@@ -248,6 +249,38 @@ void test_six_form_authoring_and_quantity_history() {
 int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QApplication application(argc, argv);
+    {
+        QTemporaryDir stamp_directory;
+        require(stamp_directory.isValid(), "stamp test directory should be available");
+        const auto path = stamp_directory.filePath("native.png");
+        QImage original(640, 360, QImage::Format_ARGB32);
+        original.fill(QColor(17, 31, 47, 90));
+        require(original.save(path), "stamp fixture should be writable");
+        const auto stamp = QStringLiteral("DRAFT — internal checkpoint");
+        require(sketch::desktop::stampDraftImage(path, stamp), "native image should receive a draft stamp");
+        const QImage stamped(path);
+        require(stamped.width() == original.width() && stamped.height() > original.height(),
+                "draft footer should extend the image without covering the model");
+        require(stamped.copy(original.rect()) == original,
+                "draft stamp should preserve model pixels including alpha");
+        bool has_text = false;
+        for (int y = original.height(); y < stamped.height(); ++y) {
+            for (int x = 0; x < stamped.width(); ++x) {
+                const auto pixel = stamped.pixelColor(x, y);
+                if (pixel.red() > pixel.green() + 30 && pixel.red() > pixel.blue() + 30) has_text = true;
+            }
+        }
+        require(has_text, "draft footer must contain visible red text");
+        const auto missing = stamp_directory.filePath("missing.png");
+        require(!sketch::desktop::stampDraftImage(missing, stamp), "unreadable image must fail stamping");
+        require(!QFile::exists(missing), "failed stamping must not create an image");
+        const auto blocked = stamp_directory.filePath("blocked.png");
+        require(original.save(blocked), "blocked stamp fixture should be writable initially");
+        require(QFile::setPermissions(blocked, QFileDevice::ReadOwner), "stamp fixture should become read-only");
+        require(!sketch::desktop::stampDraftImage(blocked, stamp), "unwritable image must fail stamping");
+        require(QFile::setPermissions(blocked, QFileDevice::ReadOwner | QFileDevice::WriteOwner),
+                "stamp fixture permissions should be restored");
+    }
     test_organization_context();
     test_six_form_authoring_and_quantity_history();
     auto document = std::make_shared<sketch::Document>(sketch::Document::create());

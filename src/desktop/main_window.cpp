@@ -1,6 +1,7 @@
 #include "sketch/desktop/main_window.hpp"
 
 #include "plan_canvas.hpp"
+#include "draft_image_stamp.hpp"
 
 #include "sketch/architecture.hpp"
 #include "sketch/building_entity.hpp"
@@ -79,6 +80,7 @@
 #include <QToolBar>
 #include <QToolButton>
 #include <QTimer>
+#include <QTemporaryDir>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
@@ -3317,15 +3319,38 @@ public:
                                             .arg(reason));
             return false;
         }
-        if (!m_nativeModelView->exportViewImage(path)) {
+        QTemporaryDir staging;
+        if (!staging.isValid()) {
+            setError(QStringLiteral("Native OCCT 3D export could not stage its draft image."));
+            return false;
+        }
+        const auto staged_path = staging.filePath(QFileInfo(path).fileName());
+        if (!m_nativeModelView->exportViewImage(staged_path)) {
             const auto reason = m_nativeModelView->lastError();
             setError(reason.isEmpty() ? QStringLiteral("Native OCCT 3D export failed.")
                                       : QStringLiteral("Native OCCT 3D export failed: %1")
                                             .arg(reason));
             return false;
         }
-        if (!QFileInfo::exists(path) || QFileInfo(path).size() <= 0) {
+        if (!QFileInfo::exists(staged_path) || QFileInfo(staged_path).size() <= 0) {
             setError(QStringLiteral("Native OCCT 3D export did not produce an image."));
+            return false;
+        }
+        if (!stampDraftImage(staged_path, draftOutputStamp())) {
+            setError(QStringLiteral("Native OCCT 3D export could not write its draft stamp."));
+            return false;
+        }
+        QFile stamped(staged_path);
+        if (!stamped.open(QIODevice::ReadOnly)) {
+            setError(QStringLiteral("Native OCCT 3D export could not reopen its stamped image."));
+            return false;
+        }
+        const auto bytes = stamped.readAll();
+        QSaveFile destination(path);
+        if (stamped.error() != QFileDevice::NoError || bytes.isEmpty() ||
+            !destination.open(QIODevice::WriteOnly) || destination.write(bytes) != bytes.size() ||
+            !destination.commit()) {
+            setError(QStringLiteral("Native OCCT 3D export could not save its stamped image."));
             return false;
         }
         try {

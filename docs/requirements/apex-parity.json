@@ -2271,7 +2271,7 @@
         "tests/desktop_smoke.cpp",
         "tests/output_fingerprint_tests.cpp"
       ],
-      "implementation_note": "Draft output stamping, invalid-geometry blocking, fingerprint mismatch checks, and revision-bound persisted schedule placement rendering are implemented; integrated stale calculations/assets/reference fixtures and visible authority wiring remain open."
+      "implementation_note": "Draft output stamping covers PDF, SVG, print, and native 3D images; native image export stages a visible draft/filter footer before atomic destination replacement and fails on read/stamp/write errors while retaining the fingerprint sidecar. Invalid-geometry blocking, fingerprint mismatch checks, and revision-bound persisted schedule placement rendering are implemented; integrated stale calculations/assets/reference fixtures and visible authority wiring remain open."
     },
     {
       "id": "SEC-WORKER-001",

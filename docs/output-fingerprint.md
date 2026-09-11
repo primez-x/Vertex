@@ -8,6 +8,18 @@ exports now write an adjacent `<output>.fingerprint.json` manifest generated
 from the same document snapshot and view state used for rendering. Print
 preview remains transient and is still pending a printer-job receipt.
 
+Native 3D image exports also carry the same visible draft/checkpoint stamp as
+the drawing outputs, including the active view-filter warning when applicable.
+A Qt image post-process adds a white footer with red text beneath the native
+framebuffer, preserving the model pixels and PNG transparency. It keeps the
+detected image encoding; lossy formats still incur their normal re-encoding.
+The image is staged and stamped before atomic destination replacement, and
+read/stamp/write failures block successful export. The adjacent fingerprint
+manifest remains part of the export. Desktop smoke tests cover visible footer
+pixels, preservation of the original RGBA region, and read/write failures;
+these helper checks do not qualify native framebuffer rendering or production
+output.
+
 Version 1 hashes a compact canonical JSON manifest. Its serialized document
 summary contains only:
 
