@@ -1825,7 +1825,7 @@
         "tests/sheet_view_entity_codec_tests.cpp",
         "docs/sheets-views.md"
       ],
-      "implementation_note": "Coordinated sheets with title blocks, revisions, callouts, schedule references, page sizes, and independent viewport scales are implemented as immutable semantic records and persist through the typed Document entity. New desktop projects seed a validated default plan sheet; draft PDF/SVG/print now consume its page, viewport, title-block, and scale data. UI editing, schedule placement rendering, and production output qualification remain open."
+      "implementation_note": "Coordinated sheets with title blocks, revisions, callouts, schedule references, page sizes, and independent viewport scales are implemented as immutable semantic records and persist through the typed Document entity. New desktop projects seed a validated default plan sheet; draft PDF/SVG/print now consume its page, viewport, title-block, and scale data, and sheet number/title-block edits commit through Document history. Viewport/layout editing, schedule placement rendering, and production output qualification remain open."
     },
     {
       "id": "ARCH-EDIT-001",

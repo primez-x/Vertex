@@ -8,8 +8,9 @@ boundaries. New desktop projects start with a validated default plan view,
 sheet, title block, and independently scaled viewport in that entity. Draft
 PDF, SVG, and print output now consumes the persisted sheet dimensions,
 viewport bounds/scales, title block and active vector canvas through one
-renderer. Desktop sheet editing, schedule placement rendering, and production
-output qualification remain open. The shared
+renderer. Desktop sheet title-block/number editing now commits through the
+typed Document history; viewport/layout editing, schedule placement rendering,
+and production output qualification remain open. The shared
 architectural projection engine now derives analytical plan, elevation, and
 section edges from supported building solids; see
 `docs/architectural-projections.md` for its explicit boundary and remaining

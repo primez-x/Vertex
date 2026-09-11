@@ -40,6 +40,14 @@ public:
     [[nodiscard]] bool editScheduleCell(const QString& object_id,
                                         const QString& column,
                                         const QString& replacement);
+    // Updates the active drawing sheet title block through the typed sheet
+    // codec and normal Document history.
+    [[nodiscard]] bool editSheetMetadata(const QString& sheet_id,
+                                         const QString& number,
+                                         const QString& project,
+                                         const QString& title,
+                                         const QString& author,
+                                         const QString& issue_date);
 
     [[nodiscard]] Workspace workspace() const noexcept;
     void setWorkspace(Workspace workspace);

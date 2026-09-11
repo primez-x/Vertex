@@ -188,6 +188,15 @@ SheetViewModel SheetViewModel::with_view(CoordinatedView replacement) const {
     return create(std::move(changed), sheets_, schedule_ids_);
 }
 
+SheetViewModel SheetViewModel::with_sheet(DrawingSheet replacement) const {
+    auto changed = sheets_;
+    const auto found = std::find_if(changed.begin(), changed.end(),
+        [&](const auto& sheet) { return sheet.id == replacement.id; });
+    require(found != changed.end(), "cannot replace unknown drawing sheet");
+    *found = std::move(replacement);
+    return create(views_, std::move(changed), schedule_ids_);
+}
+
 nlohmann::json SheetViewModel::to_json() const {
     return {{"schema", "sketch.sheet_view_model"}, {"version", 1}, {"views", views_},
         {"sheets", sheets_}, {"schedule_ids", schedule_ids_}};

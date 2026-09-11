@@ -1173,6 +1173,72 @@ public:
         }
     }
 
+    [[nodiscard]] bool editSheetMetadata(const QString& sheet_id, const QString& number,
+                                          const QString& project, const QString& title,
+                                          const QString& author, const QString& issue_date) {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        try {
+            if (number.trimmed().isEmpty())
+                throw std::invalid_argument("Sheet number cannot be empty");
+            const auto source = authoringSnapshot();
+            const Entity* sheet_entity = nullptr;
+            std::optional<SheetViewModel> model;
+            for (const auto& [id, candidate] : source.entities()) {
+                (void)id;
+                if (candidate.type != kSheetViewEntityType) continue;
+                try {
+                    auto decoded = decode_sheet_view_entity(candidate);
+                    const auto sheet_matches = sheet_id.trimmed().isEmpty() ||
+                        std::any_of(decoded.sheets().begin(), decoded.sheets().end(),
+                            [&](const auto& sheet) {
+                                return sheet.id == sheet_id.trimmed().toStdString();
+                            });
+                    if (sheet_matches) {
+                        model = std::move(decoded);
+                        sheet_entity = &candidate;
+                        break;
+                    }
+                } catch (const std::exception&) {
+                    // Let the selected typed entity report its validation
+                    // failure below rather than silently editing another one.
+                    if (sheet_id.trimmed().isEmpty()) throw;
+                }
+            }
+            if (sheet_entity == nullptr || !model || model->sheets().empty())
+                throw std::invalid_argument("Drawing sheet was not found");
+            const auto selected_sheet_id = sheet_id.trimmed().isEmpty()
+                ? model->sheets().front().id : sheet_id.trimmed().toStdString();
+            const auto found = std::find_if(model->sheets().begin(), model->sheets().end(),
+                [&](const auto& sheet) { return sheet.id == selected_sheet_id; });
+            if (found == model->sheets().end())
+                throw std::invalid_argument("Drawing sheet identity was not found");
+            auto replacement = *found;
+            replacement.number = number.trimmed().toStdString();
+            replacement.title_block.project = project.toStdString();
+            replacement.title_block.title = title.toStdString();
+            replacement.title_block.author = author.toStdString();
+            replacement.title_block.issue_date = issue_date.toStdString();
+            const auto updated_model = model->with_sheet(std::move(replacement));
+            auto updated_entity = *sheet_entity;
+            updated_entity.properties = make_sheet_view_entity(
+                updated_entity.id, updated_model).properties;
+            const ApplyEntityChanges command{
+                source.revision(), {EntityChange::upsert(std::move(updated_entity))}, {},
+                "Edit drawing sheet metadata"};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Sheet edit: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     [[nodiscard]] Workspace workspace() const noexcept { return m_workspace; }
 
     void setWorkspace(Workspace workspace) {
@@ -2548,6 +2614,50 @@ public:
         dialog.exec();
     }
 
+    void showSheetSettings() {
+        const auto context = captureModalContext();
+        const auto source = authoringSnapshot();
+        const auto sheet_entity = std::find_if(source.entities().begin(), source.entities().end(),
+            [](const auto& entry) { return entry.second.type == kSheetViewEntityType; });
+        if (sheet_entity == source.entities().end()) {
+            setError(QStringLiteral("No typed drawing sheet is available."));
+            return;
+        }
+        try {
+            const auto model = decode_sheet_view_entity(sheet_entity->second);
+            if (model.sheets().empty()) throw std::invalid_argument("no drawing sheets are defined");
+            const auto& sheet = model.sheets().front();
+            QDialog dialog(owner);
+            dialog.setWindowTitle(QStringLiteral("Sheet settings"));
+            dialog.setModal(true);
+            auto* form = new QFormLayout(&dialog);
+            auto* number = new QLineEdit(QString::fromStdString(sheet.number), &dialog);
+            auto* project = new QLineEdit(QString::fromStdString(sheet.title_block.project), &dialog);
+            auto* title = new QLineEdit(QString::fromStdString(sheet.title_block.title), &dialog);
+            auto* author = new QLineEdit(QString::fromStdString(sheet.title_block.author), &dialog);
+            auto* issue_date = new QLineEdit(QString::fromStdString(sheet.title_block.issue_date), &dialog);
+            number->setObjectName(QStringLiteral("sheetNumber"));
+            project->setObjectName(QStringLiteral("sheetProject"));
+            title->setObjectName(QStringLiteral("sheetTitle"));
+            author->setObjectName(QStringLiteral("sheetAuthor"));
+            issue_date->setObjectName(QStringLiteral("sheetIssueDate"));
+            form->addRow(QStringLiteral("Sheet number"), number);
+            form->addRow(QStringLiteral("Project"), project);
+            form->addRow(QStringLiteral("Title"), title);
+            form->addRow(QStringLiteral("Author"), author);
+            form->addRow(QStringLiteral("Issue date"), issue_date);
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+            form->addRow(buttons);
+            QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+            QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+            if (dialog.exec() != QDialog::Accepted || !modalContextUnchanged(context)) return;
+            (void)editSheetMetadata(QString::fromStdString(sheet.id), number->text(),
+                                    project->text(), title->text(), author->text(), issue_date->text());
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Sheet settings: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
     void showCommandPalette() {
         QDialog dialog(owner);
         dialog.setWindowTitle(QStringLiteral("Command search"));
@@ -2579,6 +2689,7 @@ public:
             {QStringLiteral("Measurement workspace"), [this] { setWorkspace(Workspace::measurement); }},
             {QStringLiteral("Architectural workspace"), [this] { setWorkspace(Workspace::architectural); }},
             {QStringLiteral("Open schedules"), [this] { showSchedules(); }},
+            {QStringLiteral("Edit drawing sheet settings"), [this] { showSheetSettings(); }},
             {QStringLiteral("Select tool"), [this] { setTool(CanvasTool::select); }},
             {QStringLiteral("Draw measurement boundary"), [this] { setTool(CanvasTool::boundary); }},
             {QStringLiteral("Define area before drawing"),
@@ -3303,6 +3414,7 @@ private:
         toolbar->addSeparator();
         m_palette_action = toolbar->addAction(QStringLiteral("Commands"));
         m_schedule_action = toolbar->addAction(QStringLiteral("Schedules"));
+        m_sheet_action = toolbar->addAction(QStringLiteral("Sheet settings"));
         m_about_action = toolbar->addAction(QStringLiteral("About"));
         toolbar->addSeparator();
         auto* theme_menu = new QMenu(owner);
@@ -3374,6 +3486,8 @@ private:
                          [this] { showCommandPalette(); });
         QObject::connect(m_schedule_action, &QAction::triggered, owner,
                          [this] { showSchedules(); });
+        QObject::connect(m_sheet_action, &QAction::triggered, owner,
+                         [this] { showSheetSettings(); });
         QObject::connect(m_about_action, &QAction::triggered, owner, [this] { showAbout(); });
         QObject::connect(m_unitsCombo, &QComboBox::currentIndexChanged, owner,
                          [this](int index) { setMetricUnits(index == 1); });
@@ -5306,6 +5420,7 @@ private:
     QAction* m_architectural_action{};
     QAction* m_palette_action{};
     QAction* m_schedule_action{};
+    QAction* m_sheet_action{};
     QAction* m_about_action{};
 };
 
@@ -5329,6 +5444,12 @@ DocumentScheduleProjection MainWindow::scheduleSnapshot() const {
 bool MainWindow::editScheduleCell(const QString& object_id, const QString& column,
                                    const QString& replacement) {
     return m_impl->editScheduleCell(object_id, column, replacement);
+}
+
+bool MainWindow::editSheetMetadata(const QString& sheet_id, const QString& number,
+                                   const QString& project, const QString& title,
+                                   const QString& author, const QString& issue_date) {
+    return m_impl->editSheetMetadata(sheet_id, number, project, title, author, issue_date);
 }
 
 Workspace MainWindow::workspace() const noexcept {

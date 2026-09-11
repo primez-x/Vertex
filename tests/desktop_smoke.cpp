@@ -574,6 +574,16 @@ int main(int argc, char** argv) {
             "invalid building geometry must not mutate the document");
     require(window.commitBuildingObject(column, before_invalid_column).isEmpty(),
             "object creation must reject an existing identity");
+    require(window.editSheetMetadata(QStringLiteral("sheet-1"), QStringLiteral("A-102"),
+                                     QStringLiteral("Sample property"), QStringLiteral("Issued plans"),
+                                     QStringLiteral("Field designer"), QStringLiteral("2026-09-11")),
+            "sheet metadata must commit through the typed Document command path");
+    const auto edited_sheet_entity = window.document().snapshot().entities().at("sheet-view-1");
+    require(edited_sheet_entity.properties.at("model").at("sheets").at(0).at("number") == "A-102" &&
+                edited_sheet_entity.properties.at("model").at("sheets").at(0).at("title_block").at("title") == "Issued plans",
+            "sheet metadata edit must persist in the canonical sheet/view entity");
+    require(window.undoCommand() && window.redoCommand(),
+            "sheet metadata edit must participate in normal document history");
     const auto revision_before_pdf = window.document().revision();
     require(window.exportDraftPdf(pdf_path_qstring), "draft PDF export should succeed locally");
     require(std::filesystem::file_size(pdf_path) > 0, "draft PDF should be nonempty");

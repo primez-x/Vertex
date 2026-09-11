@@ -52,6 +52,16 @@ void coordination_and_isolation() {
     require(placements[0].scale_denominator == 50 && placements[1].scale_denominator == 100 &&
         placements[0].view_id == placements[1].view_id, "same view has independent sheet scales");
     require(original.to_json() == saved, "original snapshot immutable");
+    auto sheet = original.sheets().front();
+    sheet.title_block.title = "Issued plans";
+    sheet.title_block.author = "Architect";
+    const auto changed_sheet = original.with_sheet(sheet);
+    require(changed_sheet.sheets().front().title_block.title == "Issued plans" &&
+                changed_sheet.sheets().front().viewports == original.sheets().front().viewports,
+            "sheet metadata edits must preserve coordinated viewport placement");
+    require(original.to_json() == saved, "original sheet snapshot must remain immutable");
+    sheet.id = "unknown";
+    rejects([&] { (void)original.with_sheet(sheet); });
     plan.id = "unknown";
     rejects([&] { (void)original.with_view(plan); });
     auto views = original.views(); auto sheets = original.sheets();

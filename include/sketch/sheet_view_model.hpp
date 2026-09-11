@@ -97,6 +97,9 @@ public:
     [[nodiscard]] const std::vector<DrawingSheet>& sheets() const noexcept { return sheets_; }
     // Updates the shared view definition; viewport references and scales survive.
     [[nodiscard]] SheetViewModel with_view(CoordinatedView replacement) const;
+    // Updates one sheet definition while revalidating every viewport, callout,
+    // schedule placement and cross-sheet reference in the detached snapshot.
+    [[nodiscard]] SheetViewModel with_sheet(DrawingSheet replacement) const;
 private:
     SheetViewModel() = default;
     std::vector<CoordinatedView> views_;
