@@ -1424,7 +1424,7 @@ public:
     [[nodiscard]] bool editArchitecturalViewPresentation(
         const QString& view_id, const QString& cut_depth_m, const QString& far_depth_m,
         const QString& cut_line_mm, const QString& projection_line_mm, bool hatch_enabled,
-        const QString& hatch_pattern, const QString& detail) {
+        const QString& hatch_pattern, const QString& hatch_scale, const QString& detail) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
             return false;
@@ -1441,6 +1441,7 @@ public:
             const auto far = parse_finite(far_depth_m, "Far depth");
             const auto cut_line = parse_finite(cut_line_mm, "Cut line width");
             const auto projection_line = parse_finite(projection_line_mm, "Projection line width");
+            const auto hatch_scale_value = parse_finite(hatch_scale, "Hatch scale");
             ViewDetail detail_value{};
             const auto detail_name = detail.trimmed().toLower();
             if (detail_name == QStringLiteral("coarse")) detail_value = ViewDetail::coarse;
@@ -1482,6 +1483,7 @@ public:
             replacement.presentation.projection_line_mm = projection_line;
             replacement.presentation.hatch_enabled = hatch_enabled;
             replacement.presentation.hatch_pattern = pattern;
+            replacement.presentation.hatch_scale = hatch_scale_value;
             replacement.presentation.detail = detail_value;
             const auto updated_model = model->with_view(std::move(replacement));
             auto updated_entity = *view_entity;
@@ -3122,6 +3124,7 @@ public:
             auto* cut_line = new QLineEdit(number(found->presentation.cut_line_mm), &dialog);
             auto* projection_line = new QLineEdit(number(found->presentation.projection_line_mm), &dialog);
             auto* pattern = new QLineEdit(QString::fromStdString(found->presentation.hatch_pattern), &dialog);
+            auto* hatch_scale = new QLineEdit(number(found->presentation.hatch_scale), &dialog);
             auto* hatch = new QCheckBox(QStringLiteral("Enable material hatching"), &dialog);
             auto* detail = new QComboBox(&dialog);
             detail->addItems({QStringLiteral("Coarse"), QStringLiteral("Medium"), QStringLiteral("Fine")});
@@ -3131,6 +3134,7 @@ public:
             cut_line->setObjectName(QStringLiteral("viewCutLine"));
             projection_line->setObjectName(QStringLiteral("viewProjectionLine"));
             pattern->setObjectName(QStringLiteral("viewHatchPattern"));
+            hatch_scale->setObjectName(QStringLiteral("viewHatchScale"));
             hatch->setObjectName(QStringLiteral("viewHatchEnabled"));
             detail->setObjectName(QStringLiteral("viewDetail"));
             hatch->setChecked(found->presentation.hatch_enabled);
@@ -3139,6 +3143,7 @@ public:
             form->addRow(QStringLiteral("Cut line width (mm)"), cut_line);
             form->addRow(QStringLiteral("Projection line width (mm)"), projection_line);
             form->addRow(QStringLiteral("Hatch pattern"), pattern);
+            form->addRow(QStringLiteral("Hatch scale"), hatch_scale);
             form->addRow(hatch);
             form->addRow(QStringLiteral("Detail"), detail);
             auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
@@ -3148,7 +3153,8 @@ public:
             if (dialog.exec() != QDialog::Accepted || !modalContextUnchanged(context)) return;
             (void)editArchitecturalViewPresentation(
                 QString::fromStdString(found->id), cut->text(), far->text(), cut_line->text(),
-                projection_line->text(), hatch->isChecked(), pattern->text(), detail->currentText());
+                projection_line->text(), hatch->isChecked(), pattern->text(), hatch_scale->text(),
+                detail->currentText());
         } catch (const std::exception& error) {
             setError(QStringLiteral("Architectural view settings: %1")
                          .arg(QString::fromUtf8(error.what())));
@@ -5984,10 +5990,10 @@ bool MainWindow::editSheetSchedulePlacement(const QString& sheet_id, const QStri
 bool MainWindow::editArchitecturalViewPresentation(
     const QString& view_id, const QString& cut_depth_m, const QString& far_depth_m,
     const QString& cut_line_mm, const QString& projection_line_mm, bool hatch_enabled,
-    const QString& hatch_pattern, const QString& detail) {
+    const QString& hatch_pattern, const QString& hatch_scale, const QString& detail) {
     return m_impl->editArchitecturalViewPresentation(
         view_id, cut_depth_m, far_depth_m, cut_line_mm, projection_line_mm, hatch_enabled,
-        hatch_pattern, detail);
+        hatch_pattern, hatch_scale, detail);
 }
 
 Workspace MainWindow::workspace() const noexcept {

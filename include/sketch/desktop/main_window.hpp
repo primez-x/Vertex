@@ -77,6 +77,7 @@ public:
         const QString& projection_line_mm,
         bool hatch_enabled,
         const QString& hatch_pattern,
+        const QString& hatch_scale,
         const QString& detail);
 
     [[nodiscard]] Workspace workspace() const noexcept;

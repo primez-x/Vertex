@@ -260,13 +260,15 @@ int main(int argc, char** argv) {
     require(window.editArchitecturalViewPresentation(
                 QStringLiteral("view-plan"), QStringLiteral("1.5"), QStringLiteral("80"),
                 QStringLiteral("0.7"), QStringLiteral("0.25"), true,
-                QStringLiteral("concrete"), QStringLiteral("fine")),
+                QStringLiteral("concrete"), QStringLiteral("2"), QStringLiteral("fine")),
             "architectural view presentation must commit through typed Document history");
     const auto edited_view_entity = window.document().snapshot().entities().at("sheet-view-1");
     require(edited_view_entity.properties.at("model").at("views").at(0)
                     .at("presentation").at("cut_depth_m") == 1.5 &&
                 edited_view_entity.properties.at("model").at("views").at(0)
-                    .at("presentation").at("detail") == "fine",
+                    .at("presentation").at("detail") == "fine" &&
+                edited_view_entity.properties.at("model").at("views").at(0)
+                    .at("presentation").at("hatch_scale") == 2.0,
             "architectural view presentation edit must persist typed settings");
     require(window.undoCommand() && window.redoCommand(),
             "architectural view presentation edit must participate in normal document history");
