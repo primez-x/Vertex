@@ -91,6 +91,7 @@
       "runtime_names": [
         "Qt6Core.dll",
         "Qt6Gui.dll",
+        "Qt6Network.dll",
         "Qt6PrintSupport.dll",
         "Qt6Widgets.dll",
         "qwindows.dll",
@@ -102,6 +103,7 @@
       "destinations": {
         "Qt6Core.dll": "bin/Qt6Core.dll",
         "Qt6Gui.dll": "bin/Qt6Gui.dll",
+        "Qt6Network.dll": "bin/Qt6Network.dll",
         "Qt6PrintSupport.dll": "bin/Qt6PrintSupport.dll",
         "Qt6Widgets.dll": "bin/Qt6Widgets.dll",
         "qwindows.dll": "plugins/platforms/qwindows.dll",
@@ -370,9 +372,8 @@
       "notice_paths": ["assets/fonts/OFL.txt"]
     },
     {
-      "id": "qtpdf-build",
-      "kind": "build-only",
-      "distribution_status": "excluded",
+      "id": "qtpdf",
+      "kind": "runtime",
       "package": {
         "name": "qtpdf",
         "version": "6.8.3",
@@ -388,12 +389,13 @@
       "notice_paths": [
         ".deps/qt/6.8.3/msvc2022_64/sbom/qtpdf-6.8.3.spdx",
         ".deps/qt/6.8.3/msvc2022_64/sbom/qtpdf-6.8.3.source.spdx"
-      ]
+      ],
+      "runtime_names": ["Qt6Pdf.dll"],
+      "destinations": {"Qt6Pdf.dll": "bin/Qt6Pdf.dll"}
     },
     {
-      "id": "qtsvg-build",
-      "kind": "build-only",
-      "distribution_status": "excluded",
+      "id": "qtsvg",
+      "kind": "runtime",
       "package": {
         "name": "qtsvg",
         "version": "6.8.3",
@@ -406,7 +408,9 @@
         "package_id": "SPDXRef-Package-qtsvg",
         "module_version": "6.8.3"
       },
-      "notice_paths": [".deps/qt/6.8.3/msvc2022_64/sbom/qtsvg-6.8.3.spdx"]
+      "notice_paths": [".deps/qt/6.8.3/msvc2022_64/sbom/qtsvg-6.8.3.spdx"],
+      "runtime_names": ["Qt6Svg.dll"],
+      "destinations": {"Qt6Svg.dll": "bin/Qt6Svg.dll"}
     }
   ]
 }

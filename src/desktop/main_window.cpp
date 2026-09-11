@@ -1632,7 +1632,7 @@ public:
         owner->setPalette(palette);
         QString stylesheet = QStringLiteral(R"(
             QMainWindow { background: $background; }
-            QWidget { font-family: "Segoe UI"; font-size: 13px; }
+            QWidget { font-family: "Inter", "Segoe UI"; font-size: 13px; }
             QDialog { background: $background; }
             QToolBar#primaryToolbar { background: $surface; border: 0; border-bottom: 1px solid $border;
                        padding: 9px 16px; spacing: 5px; min-height: 48px; }
@@ -1685,7 +1685,7 @@ public:
             QTreeWidget::item:focus { border: 1px solid $accent; }
             QHeaderView::section { background: $background; color: $muted;
                 border: 0; border-bottom: 1px solid $border; padding: 6px; }
-            QTabWidget#workspaceTabs::pane { border: 1px solid $border; border-radius: 10px; background: $surface; }
+            QTabWidget#workspaceTabs::pane { border: 0; background: transparent; }
             QTabBar::tab { background: transparent; color: $muted; padding: 10px 18px;
                 margin: 3px 2px; border: 1px solid transparent; border-radius: 8px; }
             QTabBar::tab:selected { background: $selection; color: $accent; border-color: $accent; }
@@ -5125,8 +5125,12 @@ private:
         m_undo_action = add_toolbar_action(QStringLiteral("Undo"), "<path d='M9 7 4 12l5 5'/><path d='M4 12h9a7 7 0 0 1 7 7'/>");
         m_redo_action = add_toolbar_action(QStringLiteral("Redo"), "<path d='m15 7 5 5-5 5'/><path d='M20 12h-9a7 7 0 0 0-7 7'/>");
         toolbar->addSeparator();
-        m_measurement_action = toolbar->addAction(QStringLiteral("Measurement"));
-        m_architectural_action = toolbar->addAction(QStringLiteral("Architectural"));
+        m_measurement_action = toolbar->addAction(
+            modern_toolbar_icon("<path d='M4 5h16v14H4z'/><path d='M8 9h8M8 13h5'/><path d='M17 17l3 3'/><path d='m17 17 2-2'/>"),
+            QStringLiteral("Measurement"));
+        m_architectural_action = toolbar->addAction(
+            modern_toolbar_icon("<path d='M4 20V9l8-5 8 5v11'/><path d='M8 20v-6h8v6'/><path d='M10 10h4'/>"),
+            QStringLiteral("Architectural"));
         toolbar->addSeparator();
         m_palette_action = add_toolbar_action(QStringLiteral("Commands"), "<path d='M5 5h5v5H5zM14 5h5v5h-5zM5 14h5v5H5zM14 14h5v5h-5z'/>");
         auto* shortcut_settings = add_toolbar_action(QStringLiteral("Shortcuts"), "<rect x='3' y='6' width='18' height='12' rx='2'/><path d='M7 10h2M11 10h2M15 10h2M7 14h10'/>");
@@ -5490,6 +5494,10 @@ private:
         m_workspaceTabs->setObjectName(QStringLiteral("workspaceTabs"));
         m_workspaceTabs->setDocumentMode(true);
         m_workspaceTabs->setTabsClosable(false);
+        // Workspace switching is promoted to the primary toolbar. Keep the
+        // tab container for the shared view lifecycle, but remove the
+        // duplicate tab strip so the canvas begins at the content edge.
+        m_workspaceTabs->tabBar()->setVisible(false);
         m_measurementCanvas = new PlanCanvas(m_workspaceTabs);
         m_measurementCanvas->setObjectName(QStringLiteral("measurementPlanCanvas"));
         auto* architectural_body = new QWidget(m_workspaceTabs);

@@ -30,10 +30,9 @@ The report deliberately carries `audit_status: "incomplete"` and both
 qualification flags are false. A passing inventory binds the observed build to
 its evidence; it does not establish clean-machine installation, offline
 operation, complete dynamic-load coverage, corresponding-source completeness,
-license clearance, or commercial redistributability. The Qt SDK SBOM includes
-broader installed modules than the current runtime allowlist, so `qtpdf` and
-`qtsvg` remain recorded as excluded build-only components until their use and
-distribution obligations are separately qualified.
+license clearance, or commercial redistributability. The runtime manifest
+explicitly names the Qt PDF and SVG modules used by the application; their
+license and source obligations remain part of the separate distribution review.
 
 `stage_offline_bundle.py` consumes this report as an immutable input. It
 retains the full inventory under `metadata/distribution-inventory.json`,
