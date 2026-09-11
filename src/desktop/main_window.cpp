@@ -2661,6 +2661,45 @@ public:
         return true;
     }
 
+    bool writePrintReceipt(const QPrinter& printer, const QRectF& page,
+                           const DocumentSnapshot& snapshot) {
+        try {
+            const auto receipt_path = m_file_path.empty()
+                ? (std::filesystem::temp_directory_path() /
+                   "property-studio-print-preview-receipt.json")
+                : std::filesystem::path(m_file_path.wstring() + L".print-receipt.json");
+            const auto page_mm = printer.pageRect(QPrinter::Millimeter);
+            const auto paper_mm = printer.paperRect(QPrinter::Millimeter);
+            const auto payload = json{
+                {"schema", "property-studio.print-receipt.v1"},
+                {"document_revision", snapshot.revision()},
+                {"page_size", m_pageSizeCombo ? m_pageSizeCombo->currentText().toStdString()
+                                                 : std::string("A4")},
+                {"printer_name", printer.printerName().toStdString()},
+                {"output_format", static_cast<int>(printer.outputFormat())},
+                {"resolution_dpi", printer.resolution()},
+                {"logical_dpi", {printer.logicalDpiX(), printer.logicalDpiY()}},
+                {"physical_dpi", {printer.physicalDpiX(), printer.physicalDpiY()}},
+                {"rendered_page_px", {page.x(), page.y(), page.width(), page.height()}},
+                {"driver_page_mm", {page_mm.x(), page_mm.y(), page_mm.width(), page_mm.height()}},
+                {"driver_paper_mm", {paper_mm.x(), paper_mm.y(), paper_mm.width(), paper_mm.height()}},
+                {"verification", "preview-driver-evidence-only"},
+            }.dump(2);
+            QSaveFile file(QString::fromStdWString(receipt_path.wstring()));
+            if (!file.open(QIODevice::WriteOnly | QIODevice::Text) ||
+                file.write(QByteArray::fromStdString(payload)) !=
+                    static_cast<qint64>(payload.size()) || !file.commit()) {
+                setError(QStringLiteral("Print receipt could not be written locally."));
+                return false;
+            }
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Print receipt failed: %1")
+                         .arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     bool exportDraftPdf(const QString& path) {
         refreshOutput();
         if (!m_plan_geometry_error.isEmpty()) {
@@ -2828,6 +2867,7 @@ public:
                                                      page.width() - 48.0, 80.0),
                                               Qt::TextWordWrap | Qt::AlignRight | Qt::AlignTop,
                                               draftOutputStamp());
+                             if (!writePrintReceipt(*printer, QRectF(page), m_document->snapshot())) return;
                          });
         preview->open();
         return true;

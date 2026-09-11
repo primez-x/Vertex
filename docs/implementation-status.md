@@ -393,9 +393,10 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   retained PlanCanvas vector renderer and visible draft stamp. PDF, SVG, and
   native 3D image exports now write adjacent fingerprint manifests that bind
   the document head, view filters/page size, linked processing roles, and
-  running Windows executable digest. Print-job receipts, persisted sheet
-  layout, printer calibration, and production output qualification remain
-  open. The desktop output selector now applies Letter, Legal, Tabloid, A4, or
+  running Windows executable digest. Print preview now writes a local
+  driver-evidence receipt with printer identity, DPI and page rectangles;
+  persisted sheet layout, physical printer calibration, and production output
+  qualification remain open. The desktop output selector now applies Letter, Legal, Tabloid, A4, or
   A3 to draft PDF and print preview.
 - New desktop projects now seed a validated `sheet_view_model` entity with a
   default plan view, A-101 sheet, title block, and independent viewport scale;
@@ -404,7 +405,8 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   sheet number/title-block plus viewport bounds/scale edits use Document
   history; persisted schedule placements now render revision-bound schedule
   rows in draft output, and placement bounds can be edited through typed
-  Document history. Printer receipts and qualification remain open.
+  Document history. Printer receipts now capture driver evidence; physical
+  calibration and qualification remain open.
 - The architectural projection engine now derives analytical plan/elevation
   hidden-line output and true solid-plane section intersections for the
   supported semantic building objects. Frames are validated before OCCT

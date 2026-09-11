@@ -285,7 +285,7 @@
         "include/sketch/output_fingerprint.hpp",
         "src/core/output_fingerprint.cpp"
       ],
-      "implementation_note": "Core digest/manifest/currentness checks are implemented and tested. PDF, SVG, and native 3D image exports now emit adjacent fingerprint manifests; stale-output blocking, print-job receipts, reproducibility fixtures, and production acceptance remain open. Serialized identity excludes private entity and asset payloads."
+      "implementation_note": "Core digest/manifest/currentness checks are implemented and tested. PDF, SVG, and native 3D image exports now emit adjacent fingerprint manifests, and print preview writes a local driver-evidence receipt; stale-output blocking, reproducibility fixtures, physical calibration, and production acceptance remain open. Serialized identity excludes private entity and asset payloads."
     },
     {
       "id": "CORE-DOC-005",
@@ -2244,7 +2244,7 @@
         "src/desktop/main_window.cpp",
         "tests/desktop_smoke.cpp"
       ],
-      "implementation_note": "Letter, Legal, Tabloid, A4, A3, and architectural page sizes plus independent viewport scales are validated; the desktop selector applies the five named sizes to draft PDF/print, the persisted sheet renderer maps viewport bounds/scales to paper coordinates, and viewport bounds/scale edits use typed Document history, while printer calibration and physical output evidence remain open."
+      "implementation_note": "Letter, Legal, Tabloid, A4, A3, and architectural page sizes plus independent viewport scales are validated; the desktop selector applies the five named sizes to draft PDF/print, the persisted sheet renderer maps viewport bounds/scales to paper coordinates, and viewport bounds/scale edits use typed Document history. Print preview records driver page/DPI evidence; physical printer calibration and output evidence remain open."
     },
     {
       "id": "IO-OUTPUT-003",

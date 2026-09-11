@@ -249,6 +249,26 @@ void test_output_refreshes_current_document_head() {
     require(direct.showPrintPreview(), "valid document should open a draft print preview");
     auto* print_preview = direct.findChild<QPrintPreviewDialog*>();
     require(print_preview != nullptr, "draft preview dialog is missing");
+    const auto print_receipt = std::filesystem::temp_directory_path() /
+        "property-studio-print-preview-receipt.json";
+    std::error_code remove_error;
+    std::filesystem::remove(print_receipt, remove_error);
+    const auto valid_print = direct_output.filePath(QStringLiteral("valid-print.pdf"));
+    QPrinter valid_printer(QPrinter::HighResolution);
+    valid_printer.setOutputFormat(QPrinter::PdfFormat);
+    valid_printer.setOutputFileName(valid_print);
+    print_preview->paintRequested(&valid_printer);
+    require(std::filesystem::exists(print_receipt),
+            "valid print preview should write a local driver receipt");
+    QFile receipt_file(QString::fromStdWString(print_receipt.wstring()));
+    require(receipt_file.open(QIODevice::ReadOnly | QIODevice::Text),
+            "print receipt should be readable");
+    const auto receipt_json = nlohmann::json::parse(receipt_file.readAll().toStdString());
+    require(receipt_json.at("schema") == "property-studio.print-receipt.v1" &&
+                receipt_json.at("verification") == "preview-driver-evidence-only" &&
+                receipt_json.at("physical_dpi").size() == 2,
+            "print receipt should record driver evidence separately from geometry");
+    receipt_file.close();
 
     auto direct_invalid = direct.document().snapshot().entities().at(direct_wall.toStdString());
     direct_invalid.properties.erase("baseline");
