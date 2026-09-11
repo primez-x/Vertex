@@ -2042,6 +2042,86 @@ public:
                                                         : m_measurementCanvas;
     }
 
+    bool renderSheetOutput(QPainter& painter, const QRectF& target, QColor background) {
+        if (target.width() <= 0.0 || target.height() <= 0.0) return false;
+        const auto snapshot = m_document->snapshot();
+        const Entity* sheet_entity = nullptr;
+        for (const auto& [id, entity] : snapshot.entities()) {
+            (void)id;
+            if (entity.type == kSheetViewEntityType) {
+                sheet_entity = &entity;
+                break;
+            }
+        }
+        if (sheet_entity == nullptr) {
+            outputCanvas()->renderScene(painter, target, true, background);
+            return true;
+        }
+        try {
+            const auto model = decode_sheet_view_entity(*sheet_entity);
+            if (model.sheets().empty()) throw std::invalid_argument("no drawing sheets are defined");
+            const auto& sheet = model.sheets().front();
+            const auto paper_scale = std::min(target.width() / sheet.width_mm,
+                                              target.height() / sheet.height_mm);
+            if (!(std::isfinite(paper_scale) && paper_scale > 0.0))
+                throw std::invalid_argument("sheet has no renderable dimensions");
+            const QRectF page(target.center().x() - sheet.width_mm * paper_scale * 0.5,
+                              target.center().y() - sheet.height_mm * paper_scale * 0.5,
+                              sheet.width_mm * paper_scale, sheet.height_mm * paper_scale);
+            painter.save();
+            painter.fillRect(target, background);
+            painter.fillRect(page, Qt::white);
+            painter.setPen(QPen(QColor(45, 52, 60), std::max(1.0, paper_scale)));
+            painter.drawRect(page);
+
+            const auto center = outputCanvas()->contentCenter();
+            const auto find_view = [&](const std::string& id) -> const CoordinatedView* {
+                const auto found = std::find_if(model.views().begin(), model.views().end(),
+                    [&](const auto& view) { return view.id == id; });
+                return found == model.views().end() ? nullptr : &*found;
+            };
+            for (const auto& viewport : sheet.viewports) {
+                const auto* view = find_view(viewport.view_id);
+                if (view == nullptr) continue;
+                const QRectF viewport_rect(
+                    page.left() + viewport.bounds.x_mm * paper_scale,
+                    page.top() + viewport.bounds.y_mm * paper_scale,
+                    viewport.bounds.width_mm * paper_scale,
+                    viewport.bounds.height_mm * paper_scale);
+                painter.save();
+                painter.setClipRect(viewport_rect);
+                const auto model_scale = paper_scale * 1000.0 / viewport.scale_denominator;
+                outputCanvas()->renderSceneAt(painter, viewport_rect, model_scale, center, Qt::white);
+                painter.restore();
+                painter.setPen(QPen(QColor(115, 125, 138), std::max(1.0, paper_scale * 0.6)));
+                painter.drawRect(viewport_rect);
+            }
+
+            const auto title_height = std::max(24.0, 26.0 * paper_scale);
+            const QRectF title_rect(page.right() - 220.0 * paper_scale,
+                                    page.bottom() - title_height,
+                                    220.0 * paper_scale, title_height);
+            painter.setPen(QPen(QColor(45, 52, 60), std::max(1.0, paper_scale * 0.6)));
+            painter.drawRect(title_rect);
+            painter.setPen(QColor(35, 41, 48));
+            painter.setFont(QFont(QStringLiteral("Inter"), std::max(7, static_cast<int>(9.0 * paper_scale))));
+            const auto& title = sheet.title_block;
+            painter.drawText(title_rect.adjusted(8.0 * paper_scale, 4.0 * paper_scale,
+                                                 -8.0 * paper_scale, -4.0 * paper_scale),
+                             Qt::AlignLeft | Qt::AlignVCenter,
+                             QStringLiteral("%1  %2\n%3  %4")
+                                 .arg(QString::fromStdString(sheet.number),
+                                      QString::fromStdString(title.title),
+                                      QString::fromStdString(title.project),
+                                      QString::fromStdString(title.author)));
+            painter.restore();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Sheet output blocked: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     bool saveProject() {
         if (m_file_path.empty()) {
             const auto selected = QFileDialog::getSaveFileName(
@@ -2162,8 +2242,11 @@ public:
                 setError(QStringLiteral("PDF export could not open the destination."));
                 return false;
             }
-            outputCanvas()->renderScene(
-                painter, QRectF(0.0, 0.0, writer.width(), writer.height()), true, Qt::white);
+            if (!renderSheetOutput(painter,
+                                   QRectF(0.0, 0.0, writer.width(), writer.height()), Qt::white)) {
+                painter.end();
+                return false;
+            }
             painter.resetTransform();
             painter.setPen(QColor(150, 50, 50));
             painter.drawText(QRectF(30.0, 30.0, writer.width() - 60.0, 80.0),
@@ -2210,8 +2293,10 @@ public:
                 setError(QStringLiteral("SVG export could not open the destination."));
                 return false;
             }
-            outputCanvas()->renderScene(
-                painter, QRectF(0.0, 0.0, width, height), true, Qt::white);
+            if (!renderSheetOutput(painter, QRectF(0.0, 0.0, width, height), Qt::white)) {
+                painter.end();
+                return false;
+            }
             painter.resetTransform();
             painter.setPen(QColor(150, 50, 50));
             painter.drawText(QRectF(30.0, 30.0, width - 60.0, 80.0),
@@ -2298,7 +2383,7 @@ public:
                              printer->setPageSize(QPageSize(selectedPageSize()));
                              QPainter painter(printer);
                              const auto page = printer->pageRect(QPrinter::DevicePixel);
-                             outputCanvas()->renderScene(painter, QRectF(page), true, Qt::white);
+                             if (!renderSheetOutput(painter, QRectF(page), Qt::white)) return;
                              painter.resetTransform();
                              painter.setPen(QColor(150, 50, 50));
                              painter.drawText(QRectF(page.left() + 24.0, page.top() + 24.0,

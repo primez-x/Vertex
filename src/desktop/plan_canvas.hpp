@@ -81,6 +81,12 @@ public:
     void renderScene(QPainter& painter, const QRectF& viewport) const;
     void renderScene(QPainter& painter, const QRectF& viewport, bool fit_to_content,
                      QColor background) const;
+    // Renders a committed scene at an explicit model-to-device scale and
+    // center. This is used by persisted sheet viewports so paper scale is
+    // independent from the interactive canvas zoom.
+    void renderSceneAt(QPainter& painter, const QRectF& viewport, double scale,
+                       Vec2 view_center, QColor background) const;
+    [[nodiscard]] Vec2 contentCenter() const noexcept;
 
     void setPointClicked(std::function<void(Vec2)> callback);
     void setEntityClicked(std::function<void(QString)> callback);
@@ -113,6 +119,10 @@ private:
     void drawSegment(QPainter& painter, const Segment& segment) const;
     void drawLabels(QPainter& painter, const QRectF& viewport, double scale,
                     Vec2 view_center, bool output, QColor background) const;
+    void renderSceneWithTransform(QPainter& painter, const QRectF& viewport,
+                                  bool fit_to_content, QColor background,
+                                  std::optional<double> explicit_scale,
+                                  std::optional<Vec2> explicit_center) const;
 
     std::vector<CanvasEntity> m_entities;
     std::vector<CanvasLabel> m_labels;

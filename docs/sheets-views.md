@@ -5,9 +5,11 @@ ARCH-VIEW-001/002, ARCH-SHEET-001 and IO-OUTPUT-002. The
 `sheet_view_model` Document entity codec persists this graph through the
 versioned project format and reuses the same validation at create/load/command
 boundaries. New desktop projects start with a validated default plan view,
-sheet, title block, and independently scaled viewport in that entity. These
-requirements are not complete product workflows: desktop editing and
-print/PDF layout integration remain unimplemented here. The shared
+sheet, title block, and independently scaled viewport in that entity. Draft
+PDF, SVG, and print output now consumes the persisted sheet dimensions,
+viewport bounds/scales, title block and active vector canvas through one
+renderer. Desktop sheet editing, schedule placement rendering, and production
+output qualification remain open. The shared
 architectural projection engine now derives analytical plan, elevation, and
 section edges from supported building solids; see
 `docs/architectural-projections.md` for its explicit boundary and remaining

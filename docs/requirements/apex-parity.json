@@ -1825,7 +1825,7 @@
         "tests/sheet_view_entity_codec_tests.cpp",
         "docs/sheets-views.md"
       ],
-      "implementation_note": "Coordinated sheets with title blocks, revisions, callouts, schedule references, page sizes, and independent viewport scales are implemented as immutable semantic records and persist through the typed Document entity. New desktop projects seed a validated default plan sheet, and its content participates in output fingerprint view inputs; UI editing, coordinated layout, and print integration remain open."
+      "implementation_note": "Coordinated sheets with title blocks, revisions, callouts, schedule references, page sizes, and independent viewport scales are implemented as immutable semantic records and persist through the typed Document entity. New desktop projects seed a validated default plan sheet; draft PDF/SVG/print now consume its page, viewport, title-block, and scale data. UI editing, schedule placement rendering, and production output qualification remain open."
     },
     {
       "id": "ARCH-EDIT-001",
@@ -2224,7 +2224,7 @@
         "src/desktop/main_window.cpp",
         "tests/desktop_smoke.cpp"
       ],
-      "implementation_note": "Preview, draft PDF, draft SVG, and print use one canvas geometry renderer with a visible draft stamp. PDF, SVG, and native 3D image exports emit adjacent fingerprint manifests; currentness blocking, printer receipts, and authoritative output fixtures remain open."
+      "implementation_note": "Preview, draft PDF, draft SVG, and print use one shared canvas geometry renderer; draft exports now render persisted sheet bounds, independent viewport scales, and title-block data with a visible draft stamp. PDF, SVG, and native 3D image exports emit adjacent fingerprint manifests; currentness blocking, printer receipts, and authoritative output fixtures remain open."
     },
     {
       "id": "IO-OUTPUT-002",
@@ -2244,7 +2244,7 @@
         "src/desktop/main_window.cpp",
         "tests/desktop_smoke.cpp"
       ],
-      "implementation_note": "Letter, Legal, Tabloid, A4, A3, and architectural page sizes plus independent viewport scales are validated; the desktop selector applies the five named sizes to draft PDF/print, while printer calibration and physical output evidence remain open."
+      "implementation_note": "Letter, Legal, Tabloid, A4, A3, and architectural page sizes plus independent viewport scales are validated; the desktop selector applies the five named sizes to draft PDF/print and the persisted sheet renderer maps viewport bounds/scales to paper coordinates, while printer calibration and physical output evidence remain open."
     },
     {
       "id": "IO-OUTPUT-003",

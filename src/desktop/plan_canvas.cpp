@@ -255,17 +255,63 @@ void PlanCanvas::zoomBy(double factor, QPointF anchor) {
 }
 
 void PlanCanvas::renderScene(QPainter& painter, const QRectF& viewport) const {
-    renderScene(painter, viewport, false, QColor(24, 29, 37));
+    renderSceneWithTransform(painter, viewport, false, QColor(24, 29, 37),
+                             std::nullopt, std::nullopt);
 }
 
 void PlanCanvas::renderScene(QPainter& painter, const QRectF& viewport, bool fit_to_content,
                              QColor background) const {
+    renderSceneWithTransform(painter, viewport, fit_to_content, background,
+                             std::nullopt, std::nullopt);
+}
+
+void PlanCanvas::renderSceneAt(QPainter& painter, const QRectF& viewport, double scale,
+                               Vec2 view_center, QColor background) const {
+    if (!(std::isfinite(scale) && scale > 0.0) || !std::isfinite(view_center.x) ||
+        !std::isfinite(view_center.y)) {
+        return;
+    }
+    renderSceneWithTransform(painter, viewport, false, background, scale, view_center);
+}
+
+Vec2 PlanCanvas::contentCenter() const noexcept {
+    Vec2 minimum{std::numeric_limits<double>::max(), std::numeric_limits<double>::max()};
+    Vec2 maximum{std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest()};
+    bool has_content = false;
+    const auto include = [&](Vec2 point) {
+        if (!std::isfinite(point.x) || !std::isfinite(point.y)) return;
+        minimum.x = std::min(minimum.x, point.x);
+        minimum.y = std::min(minimum.y, point.y);
+        maximum.x = std::max(maximum.x, point.x);
+        maximum.y = std::max(maximum.y, point.y);
+        has_content = true;
+    };
+    for (const auto& entity : m_entities) {
+        for (const auto& segment : entity.segments) {
+            include(segment.start);
+            include(segment.end);
+            if (const auto arc = arc_info(segment)) {
+                for (int index = 1; index < 32; ++index)
+                    include(arc_point(segment, *arc, static_cast<double>(index) / 32.0));
+            }
+        }
+    }
+    for (const auto& label : m_labels) include(label.position);
+    return has_content ? Vec2{(minimum.x + maximum.x) * 0.5,
+                              (minimum.y + maximum.y) * 0.5}
+                       : m_view_center;
+}
+
+void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewport,
+                                          bool fit_to_content, QColor background,
+                                          std::optional<double> explicit_scale,
+                                          std::optional<Vec2> explicit_center) const {
     if (viewport.width() <= 0.0 || viewport.height() <= 0.0) {
         return;
     }
-    auto scale = m_scale;
-    auto view_center = m_view_center;
-    if (fit_to_content && (!m_entities.empty() || !m_labels.empty())) {
+    auto scale = explicit_scale.value_or(m_scale);
+    auto view_center = explicit_center.value_or(m_view_center);
+    if (!explicit_scale.has_value() && fit_to_content && (!m_entities.empty() || !m_labels.empty())) {
         Vec2 minimum{std::numeric_limits<double>::max(), std::numeric_limits<double>::max()};
         Vec2 maximum{std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest()};
         bool has_content = false;
