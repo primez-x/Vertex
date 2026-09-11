@@ -425,10 +425,11 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   assistance contracts are implemented as standalone typed models. A
   Document-derived schedule adapter now generates revision-bound door/window,
   room, and material rows with calculated-cell provenance and explicit
-  diagnostics; desktop exposes the same read-only snapshot API. Stable metadata,
-  editable schedule command dispatch, Document persistence, visible schedule
-  UI, actual local suggestion generation, and full save/print/export integration
-  remain open.
+  diagnostics. Editable source cells dispatch through revision-checked
+  Document commands, persist with the project, participate in undo/redo, and
+  are exposed through the desktop Schedules dialog; grouped material quantities,
+  actual local suggestion generation, and full sheet/save/print/export
+  integration remain open.
 - The product scope and interaction qualification contracts now enumerate the
   Windows 11 x64 target, both markets, both workspaces, both unit systems,
   themes, DPI layouts, keyboard/focus/property access, pen/touch controls, and

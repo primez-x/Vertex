@@ -34,6 +34,12 @@ public:
     // Read-only schedule projection bound to the current shared document
     // revision. Malformed rows are returned as explicit diagnostics.
     [[nodiscard]] DocumentScheduleProjection scheduleSnapshot() const;
+    // Applies an editable schedule source-cell change through the ordinary
+    // Document history. Calculated cells, malformed values, and stale edits
+    // are rejected and reported through lastError().
+    [[nodiscard]] bool editScheduleCell(const QString& object_id,
+                                        const QString& column,
+                                        const QString& replacement);
 
     [[nodiscard]] Workspace workspace() const noexcept;
     void setWorkspace(Workspace workspace);

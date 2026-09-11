@@ -147,7 +147,11 @@ void add_room(const Entity& entity, std::vector<ScheduleRecord>& records,
     if (const auto name = text_field(entity, "name")) record.properties.emplace("name", *name);
     if (const auto boundary_id = text_field(entity, "boundary_id"))
         record.properties.emplace("boundary_id", *boundary_id);
-    record.properties.emplace("gross_area", ScheduleQuantity{area_value, ScheduleUnit::square_metre});
+    record.calculated.emplace("gross_area", ScheduleCalculation{
+        ScheduleQuantity{area_value, ScheduleUnit::square_metre},
+        {{entity.id, area ? "area_m2" : "boundary"}},
+        area ? "Area from the document area_m2 property"
+             : "Area calculated from the closed room boundary"});
     records.push_back(std::move(record));
 }
 
@@ -194,5 +198,72 @@ DocumentScheduleProjection build_document_schedules(const DocumentSnapshot& docu
     return result;
 }
 
-}  // namespace sketch
+ApplyEntityChanges make_document_schedule_edit(const DocumentSnapshot& document,
+                                               const ScheduleEdit& edit) {
+    if (edit.expected_revision != document.revision()) {
+        throw DocumentError(DocumentErrorCode::stale_revision,
+                            "Schedule edit was prepared from an older document revision");
+    }
 
+    const auto projection = build_document_schedules(document);
+    // Re-run the schedule model validation against the captured row so a
+    // hand-built edit cannot bypass calculated-cell or source checks.
+    const auto validated = make_schedule_edit(projection.snapshot, edit.target.object_id,
+                                              edit.target.property, edit.after);
+    if (validated.before != edit.before) {
+        throw std::invalid_argument("Schedule edit does not match the current source value");
+    }
+
+    std::string entity_id = edit.target.object_id;
+    bool material_row = false;
+    constexpr std::string_view material_suffix = ":material";
+    if (entity_id.size() > material_suffix.size() &&
+        entity_id.ends_with(material_suffix)) {
+        material_row = true;
+        entity_id.erase(entity_id.size() - material_suffix.size());
+    }
+    const auto entity = document.entities().find(entity_id);
+    if (entity == document.entities().end())
+        throw std::invalid_argument("Schedule source entity was not found");
+
+    std::string property = edit.target.property;
+    if (material_row) {
+        if (entity->second.type.empty())
+            throw std::invalid_argument("Material schedule source has no entity type");
+        if (property == "name") property = "material_name";
+        else if (property == "volume") property = "volume_m3";
+        else if (property != "mark")
+            throw std::invalid_argument("Material schedule property is not editable");
+    } else if (entity->second.type == "opening") {
+        if (property == "width" || property == "height" || property == "sill" ||
+            property == "offset") {
+            property += "_m";
+        } else if (property != "mark" && property != "wall_id" && property != "description" &&
+                   property != "fire_rated") {
+            throw std::invalid_argument("Opening schedule property is not editable");
+        }
+    } else if (entity->second.type != "room" && entity->second.type != "room_boundary") {
+        throw std::invalid_argument("Schedule source entity type is not editable through schedules");
+    } else if (property != "mark" && property != "name") {
+        throw std::invalid_argument("Room schedule property is not editable");
+    }
+
+    nlohmann::json replacement;
+    if (const auto* string_value = std::get_if<std::string>(&edit.after)) replacement = *string_value;
+    else if (const auto* bool_value = std::get_if<bool>(&edit.after)) replacement = *bool_value;
+    else if (const auto* integer_value = std::get_if<std::int64_t>(&edit.after)) replacement = *integer_value;
+    else if (const auto* double_value = std::get_if<double>(&edit.after)) replacement = *double_value;
+    else if (const auto* quantity_value = std::get_if<ScheduleQuantity>(&edit.after))
+        replacement = quantity_value->value;
+    else
+        throw std::invalid_argument("Unsupported schedule replacement value");
+
+    auto updated = entity->second;
+    updated.properties[property] = std::move(replacement);
+    return ApplyEntityChanges{edit.expected_revision,
+                              {EntityChange::upsert(std::move(updated))},
+                              {},
+                              "Edit schedule " + edit.target.object_id + "." + edit.target.property};
+}
+
+}  // namespace sketch

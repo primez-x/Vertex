@@ -21,5 +21,10 @@ struct DocumentScheduleProjection {
 [[nodiscard]] DocumentScheduleProjection build_document_schedules(
     const DocumentSnapshot& document);
 
-}  // namespace sketch
+// Converts a validated schedule edit into the ordinary revision-checked
+// Document command.  The command updates the source entity rather than a
+// derived schedule copy; calculated cells and stale snapshots are rejected.
+[[nodiscard]] ApplyEntityChanges make_document_schedule_edit(
+    const DocumentSnapshot& document, const ScheduleEdit& edit);
 
+}  // namespace sketch

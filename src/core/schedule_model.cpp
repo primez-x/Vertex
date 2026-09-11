@@ -60,8 +60,12 @@ ScheduleSnapshot build_schedule(const std::vector<ScheduleRecord>& records,
             validate_value(calculation.value);
             for (const auto& ref : calculation.sources) {
                 const auto source = sources.find(ref.object_id);
+                // A semantic room boundary is a first-class geometric source
+                // even when it is not duplicated into the tabular property
+                // map.  It remains provenance-only and therefore cannot be
+                // edited as a schedule cell.
                 if (source == sources.end() || (ref.property != "mark" &&
-                    !source->second->properties.contains(ref.property)))
+                    ref.property != "boundary" && !source->second->properties.contains(ref.property)))
                     throw std::invalid_argument("Missing schedule source: " + ref.object_id + "." + ref.property);
             }
             auto refs = calculation.sources;

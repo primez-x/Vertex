@@ -1781,7 +1781,7 @@
         "tests/schedule_model_tests.cpp",
         "docs/schedules.md"
       ],
-      "implementation_note": "Standalone typed records and a revision-bound Document-derived adapter now generate door/window, room, and material rows with stable marks, source-backed calculated cells and explicit diagnostics; persistence, editable UI and complete sheet/output integration remain open."
+      "implementation_note": "Standalone typed records and a revision-bound Document-derived adapter now generate door/window, room, and material rows with stable marks, source-backed calculated cells and explicit diagnostics; schedule persistence and complete sheet/output integration remain open."
     },
     {
       "id": "ARCH-SCH-002",
@@ -1804,7 +1804,7 @@
         "tests/schedule_model_tests.cpp",
         "docs/schedules.md"
       ],
-      "implementation_note": "Deterministic edit descriptions and fail-closed calculated-cell source references are implemented, and desktop exposes the revision-bound schedule projection; dispatch through Document commands/history and editable schedule UI remain open."
+      "implementation_note": "Deterministic edit descriptions and fail-closed calculated-cell source references are implemented; accepted source-cell edits now dispatch through revision-checked Document commands/history and the desktop dialog exposes the edit action. Complete production schedule/output coverage remains open."
     },
     {
       "id": "ARCH-SHEET-001",

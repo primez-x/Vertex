@@ -453,6 +453,16 @@ int main(int argc, char** argv) {
                 !opening_row->cells.at("area").editable &&
                 schedules.snapshot.revision == window.document().revision(),
             "shared document schedules must include hosted openings with a read-only calculated area");
+    require(window.editScheduleCell(opening_id, QStringLiteral("width"), QStringLiteral("0.7 m")),
+            "editable schedule source cells must commit through the document command path");
+    require(window.document().snapshot().entities().at(opening_id.toStdString()).properties.at("width_m") == 0.7,
+            "schedule edit must update the canonical opening property");
+    require(window.undoCommand() &&
+                window.document().snapshot().entities().at(opening_id.toStdString()).properties.at("width_m") == 0.6,
+            "schedule edit must be undoable from the normal workspace history");
+    require(window.redoCommand() &&
+                window.document().snapshot().entities().at(opening_id.toStdString()).properties.at("width_m") == 0.7,
+            "schedule edit must be redoable from the normal workspace history");
 
     window.setMetricUnits(true);
     require(window.metricUnits(), "metric display toggle should be observable");
