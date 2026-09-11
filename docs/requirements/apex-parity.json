@@ -1032,10 +1032,17 @@
       "requirement": "Provide editable text and label libraries with per-instance content, style, placement, and visibility.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Text library fixtures create, edit, filter, hide, and save labels without changing calculation classifications silently.",
       "package": 6,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/annotation_catalog.hpp",
+        "src/core/annotation_catalog.cpp",
+        "tests/annotation_catalog_tests.cpp",
+        "docs/annotation-catalog.md"
+      ],
+      "implementation_note": "Editable label templates, per-instance content/style/placement/visibility, filtering, and strict serialization are implemented; Document persistence, UI libraries, and output lifecycle remain open."
     },
     {
       "id": "APX-ANNO-002",
@@ -1060,10 +1067,17 @@
       "requirement": "Support editable drawing styles, fills, and visibility controls for areas, objects, and output views.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Style and fill changes affect presentation only, persist across save/reopen, and do not alter analytical geometry.",
       "package": 6,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/annotation_catalog.hpp",
+        "src/core/annotation_catalog.cpp",
+        "tests/annotation_catalog_tests.cpp",
+        "docs/annotation-catalog.md"
+      ],
+      "implementation_note": "Presentation styles, fills, visibility, and target overrides are validated separately from analytical geometry; UI/document persistence and output-view integration remain open."
     },
     {
       "id": "APX-SYM-001",
@@ -1071,10 +1085,17 @@
       "requirement": "Provide an equivalent editable, scalable symbol catalog with more than 200 usable symbols.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "The catalog count exceeds 200, each symbol has preview/scale/placement metadata, and representative symbols survive save, print, and export.",
       "package": 6,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/annotation_catalog.hpp",
+        "src/core/annotation_catalog.cpp",
+        "tests/annotation_catalog_tests.cpp",
+        "docs/annotation-catalog.md"
+      ],
+      "implementation_note": "Deterministic catalog generation produces 216 scaled symbol variants with placement metadata and previews; polished production assets and save/print/export integration remain open."
     },
     {
       "id": "APX-TRACE-001",
@@ -1570,10 +1591,17 @@
       "requirement": "Provide coordinated plans, elevations, and sections that edit and display the same building objects.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "A representative wall/opening/roof edit in any view updates the other views and retains stable references.",
       "package": 5,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/sheet_view_model.hpp",
+        "src/core/sheet_view_model.cpp",
+        "tests/sheet_view_model_tests.cpp",
+        "docs/sheets-views.md"
+      ],
+      "implementation_note": "Immutable coordinated plan/elevation/section view references and frame validation are implemented; shared Document object editing, renderer, and UI synchronization remain open."
     },
     {
       "id": "ARCH-VIEW-002",
@@ -1581,10 +1609,17 @@
       "requirement": "Sections support cut depth, line treatment, material hatching, annotations, and detail overlays.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Section fixtures render and print the selected cut and presentation settings and preserve them in the project.",
       "package": 5,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/sheet_view_model.hpp",
+        "src/core/sheet_view_model.cpp",
+        "tests/sheet_view_model_tests.cpp",
+        "docs/sheets-views.md"
+      ],
+      "implementation_note": "Section cut depth, line treatment, hatching, annotations, and detail-overlay settings are validated and serializable; rendering, persistence, and print fixtures remain open."
     },
     {
       "id": "ARCH-SCH-001",
@@ -1628,10 +1663,17 @@
       "requirement": "Provide coordinated sheets with title blocks, revisions, callouts, schedules, and independently scaled viewports.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Sheet fixtures preserve viewport scale, linked annotations, schedules, title-block data, and revision information through print/export.",
       "package": 5,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/sheet_view_model.hpp",
+        "src/core/sheet_view_model.cpp",
+        "tests/sheet_view_model_tests.cpp",
+        "docs/sheets-views.md"
+      ],
+      "implementation_note": "Coordinated sheets with title blocks, revisions, callouts, schedule references, page sizes, and independent viewport scales are implemented as immutable semantic records; Document/UI/print integration remains open."
     },
     {
       "id": "ARCH-EDIT-001",
@@ -1953,10 +1995,17 @@
       "requirement": "Support Letter, Legal, Tabloid, A4, A3, and architectural sheet sizes with independent scale and printer calibration verification.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Each sheet fixture reports numeric page dimensions and a physical/driver scaling check separately from PDF geometry.",
       "package": 8,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/sheet_view_model.hpp",
+        "src/core/sheet_view_model.cpp",
+        "tests/sheet_view_model_tests.cpp",
+        "docs/sheets-views.md"
+      ],
+      "implementation_note": "Letter, Legal, Tabloid, A4, A3, and architectural page sizes plus independent viewport scales are validated; printer calibration and physical output evidence remain open."
     },
     {
       "id": "IO-OUTPUT-003",
@@ -1988,10 +2037,17 @@
         "appcontainer"
       ],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "A worker security fixture verifies token/container policy, network denial, resource limits, path restrictions, and controlled parent termination.",
       "package": 8,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/import_worker_policy.hpp",
+        "src/core/import_worker_policy.cpp",
+        "tests/import_worker_policy_tests.cpp",
+        "docs/import-worker-security.md"
+      ],
+      "implementation_note": "Fail-closed worker policy and attestation/resource/path checks are implemented; actual Windows AppContainer, Job Object, broker, and fixed-loader enforcement remain adapter work."
     },
     {
       "id": "SEC-WORKER-002",
@@ -2005,10 +2061,17 @@
         "appcontainer"
       ],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Adversarial fixtures terminate or reject safely, leave the core project usable, and produce actionable local diagnostics without network access.",
       "package": 8,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/import_worker_policy.hpp",
+        "src/core/import_worker_policy.cpp",
+        "tests/import_worker_policy_tests.cpp",
+        "docs/import-worker-security.md"
+      ],
+      "implementation_note": "Malformed input, traversal, expansion, timeout, child-process, crash, and module-path rejection decisions are covered by policy tests; process broker integration and adversarial OS fixtures remain open."
     },
     {
       "id": "SEC-PROJ-001",
@@ -2022,10 +2085,17 @@
         "proj_network"
       ],
       "evidence_status": "documented",
-      "implementation_status": "not_started",
+      "implementation_status": "in_progress",
       "acceptance": "Network-denied georeferencing fixtures either use bundled resources or fail locally with no network request.",
       "package": 8,
-      "blocker": null
+      "blocker": null,
+      "implementation_sources": [
+        "include/sketch/import_worker_policy.hpp",
+        "src/core/import_worker_policy.cpp",
+        "tests/import_worker_policy_tests.cpp",
+        "docs/import-worker-security.md"
+      ],
+      "implementation_note": "Policy requires offline PROJ resource declarations and reports missing resources locally; actual PROJ context wiring and network-denied runtime evidence remain open."
     },
     {
       "id": "OPS-PERF-001",

@@ -32,6 +32,14 @@ performance-report harness that computes declared percentile thresholds without
 claiming hardware qualification. Their downstream Document, view, schedule,
 sheet, and acceptance integrations remain open.
 
+The current foundation also has semantic annotation and style records with a
+216-entry parametric symbol catalog, coordinated view/sheet records with
+section presentation settings and independent page scales, and a fail-closed
+import-worker policy covering sandbox attestations, hostile inputs, resource
+limits, and offline PROJ declarations. These APIs are tested in isolation;
+polished assets, rendering, OS sandbox launch, and production integration
+evidence remain open.
+
 Recovery validation now checks lifecycle ordering against the complete Document
 history projection and replays the global navigation stacks/operation registry.
 It rejects malformed IDs, sequences, targets, payload presence and revision

@@ -1,0 +1,76 @@
+#include "sketch/annotation_catalog.hpp"
+#include <cmath>
+#include <cstdlib>
+#include <iostream>
+#include <limits>
+#include <numbers>
+#include <stdexcept>
+
+namespace {
+void require(bool value, const char* message) {
+    if (!value) { std::cerr << message << '\n'; std::exit(1); }
+}
+template<class F> void rejected(F f) {
+    try { f(); } catch (const std::invalid_argument&) { return; }
+    require(false,"Expected invalid_argument");
+}
+}
+
+int main() {
+    using namespace sketch;
+    const auto catalog = default_symbol_catalog();
+    require(catalog.size() == 216,"Expected 24 families with nine dimension variants");
+    validate_symbol_catalog(catalog);
+    const auto repeated = default_symbol_catalog();
+    for (std::size_t i=0;i<catalog.size();++i) {
+        require(catalog[i].id == repeated[i].id && catalog[i].width_metres == repeated[i].width_metres,
+                "Catalog must be deterministic");
+        require(!placed_symbol_preview(catalog[i],{}).empty(),"Every catalog entry must produce preview strokes");
+    }
+    auto labels = default_label_templates();
+    require(filter_label_templates(labels,"room","rooms").size() >= 2,"Label filtering failed");
+    require(filter_label_templates(labels,"","missing").empty(),"Category filtering failed");
+    AnnotationState state;
+    state.labels.push_back(instantiate_label(labels.front(),"label-1"));
+    state.labels[0].content = "Guest bedroom\nNorth wing";
+    state.labels[0].visible = false;
+    state.labels[0].placement = {{4,3},0.25,2};
+    state.labels[0].style.bold = true;
+    state.labels[0].style.fill_pattern = "hatch";
+    state.symbols.push_back({"symbol-1",catalog.front().id,{{10,20},std::numbers::pi/2,2},{},false});
+    state.overrides.push_back({"area","area-1",{},false});
+    state.overrides.push_back({"output_view","print-1",{},true});
+    auto encoded = encode_annotation_state(state,catalog);
+    const auto decoded = decode_annotation_state(nlohmann::json::parse(encoded.dump()),catalog);
+    require(encode_annotation_state(decoded,catalog) == encoded,"JSON roundtrip loses edits");
+    require(labels.front().content == "Bedroom","Instance edits mutated library template");
+    auto transformed = placed_symbol_preview(catalog.front(),state.symbols.front().placement);
+    const auto local = catalog.front().preview.front().start;
+    require(std::abs(transformed.front().start.x-(10-2*local.y)) < 1e-12 &&
+            std::abs(transformed.front().start.y-(20+2*local.x)) < 1e-12,"Placement rotation/scale/translation wrong");
+    auto bad = state;
+    bad.symbols[0].symbol_id = "missing";
+    rejected([&]{validate_annotation_state(bad,catalog);});
+    bad = state; bad.symbols[0].id = bad.labels[0].id;
+    rejected([&]{validate_annotation_state(bad,catalog);});
+    bad = state; bad.overrides.push_back(bad.overrides[0]);
+    rejected([&]{validate_annotation_state(bad,catalog);});
+    bad = state; bad.labels[0].style.stroke_color = "red";
+    rejected([&]{validate_annotation_state(bad,catalog);});
+    bad = state; bad.labels[0].placement.position.x = std::numeric_limits<double>::infinity();
+    rejected([&]{validate_annotation_state(bad,catalog);});
+    rejected([&]{(void)placed_symbol_preview(catalog.front(),{{},0,0.001});});
+    auto malformed = encoded; malformed["version"] = 1.0;
+    rejected([&]{(void)decode_annotation_state(malformed,catalog);});
+    malformed = encoded; malformed["version"] = 2;
+    rejected([&]{(void)decode_annotation_state(malformed,catalog);});
+    malformed = encoded; malformed["labels"][0]["visible"] = "false";
+    rejected([&]{(void)decode_annotation_state(malformed,catalog);});
+    malformed = encoded; malformed["symbols"] = nlohmann::json::object();
+    rejected([&]{(void)decode_annotation_state(malformed,catalog);});
+    auto invalid_catalog = catalog; invalid_catalog.push_back(catalog.front());
+    rejected([&]{validate_symbol_catalog(invalid_catalog);});
+    invalid_catalog = catalog; invalid_catalog[0].preview.clear();
+    rejected([&]{validate_symbol_catalog(invalid_catalog);});
+    std::cout << "annotation_catalog_tests passed\n";
+}
