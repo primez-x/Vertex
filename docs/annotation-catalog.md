@@ -33,12 +33,15 @@ an opaque forward-compatible document envelope. The
 `sketch.annotation_entity` Document codec wraps this state in a strict typed
 entity, uses the deterministic catalog, and is included in the new-project
 scaffold. Visible labels and symbol previews are projected into the shared
-desktop vector canvas and persisted output; interactive annotation authoring,
-style inspectors, and production visual qualification remain open.
+desktop vector canvas and persisted output. The desktop Annotations command
+creates template-backed labels and catalog-backed symbols through normal
+Document history; navigator rows and canvas hit testing expose their stable
+child IDs, and deletion is undoable.
 
-This is a bounded semantic foundation for APX-ANNO-001, APX-ANNO-003 and
-APX-SYM-001, **not completed parity**. GUI authoring, style editing, font
-layout, selection, hit testing, and production visual QA remain open.
+This is a bounded semantic and authoring slice for APX-ANNO-001, APX-ANNO-003
+and APX-SYM-001, **not completed parity**. Style editing, font layout,
+visibility/override inspectors, polished assets, and production visual QA
+remain open.
 Headless tests check every catalog preview, instance edits and JSON roundtrip,
 typed Document admission, save/reopen, filtering, placement mathematics,
 deterministic IDs, and malformed-data rejection.

@@ -2,6 +2,7 @@
 
 #include "sketch/document.hpp"
 #include "sketch/building_entity.hpp"
+#include "sketch/annotation_entity_codec.hpp"
 #include "sketch/desktop/building_object_dialog.hpp"
 #include "support/noninteractive_errors.hpp"
 #include "../src/desktop/plan_canvas.hpp"
@@ -282,6 +283,29 @@ int main(int argc, char** argv) {
                 has_viewport("viewport-elevation", "view-elevation") &&
                 has_viewport("viewport-section", "view-section"),
             "a new sheet must persist a viewport for each coordinated view");
+
+    const auto label_id = window.createAnnotationLabel(
+        QStringLiteral("bedroom"), QStringLiteral("Primary bedroom"), {1.0, 1.0});
+    const auto symbol_id = window.createAnnotationSymbol(
+        QStringLiteral("chair-w1-d1"), {2.0, 1.0});
+    require(!label_id.isEmpty() && !symbol_id.isEmpty(),
+            "annotation authoring should create a label and a symbol");
+    auto annotation_state = decode_annotation_entity(
+        window.document().snapshot().entities().at("annotations-1"));
+    require(annotation_state.labels.size() == 1 && annotation_state.symbols.size() == 1,
+            "annotation authoring should update the typed annotation entity");
+    require(window.selectEntity(label_id), "a persisted annotation child should be selectable");
+    require(window.deleteAnnotation(label_id), "annotation deletion should be undoable");
+    annotation_state = decode_annotation_entity(
+        window.document().snapshot().entities().at("annotations-1"));
+    require(annotation_state.labels.empty() && annotation_state.symbols.size() == 1,
+            "annotation deletion should remove only the selected child");
+    require(window.undoCommand() && window.redoCommand() && window.undoCommand(),
+            "annotation deletion should participate in normal undo and redo");
+    annotation_state = decode_annotation_entity(
+        window.document().snapshot().entities().at("annotations-1"));
+    require(annotation_state.labels.size() == 1 && annotation_state.symbols.size() == 1,
+            "annotation undo should restore the persisted child");
     require(window.editArchitecturalViewPresentation(
                 QStringLiteral("view-plan"), QStringLiteral("1.5"), QStringLiteral("80"),
                 QStringLiteral("0.7"), QStringLiteral("0.25"), true,

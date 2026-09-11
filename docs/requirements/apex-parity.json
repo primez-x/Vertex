@@ -1087,7 +1087,7 @@
         "tests/annotation_entity_codec_tests.cpp",
         "docs/annotation-catalog.md"
       ],
-      "implementation_note": "Editable label templates, per-instance content/style/placement/visibility, filtering, strict serialization, typed Document admission, and save/reopen are implemented; desktop rendering consumes visible persisted labels, while UI libraries, authoring commands, and full output lifecycle remain open."
+      "implementation_note": "Editable label templates, per-instance content/style/placement/visibility, filtering, strict serialization, typed Document admission, save/reopen, and a desktop command for template-backed label creation are implemented; full style editing and output lifecycle remain open."
     },
     {
       "id": "APX-ANNO-002",
@@ -1104,7 +1104,7 @@
         "tests/boundary_dimension_tests.cpp",
         "tests/boundary_workflow_tests.cpp"
       ],
-      "implementation_note": "Semantic dimensions, stable references, placement, and GUI creation are implemented; style/visibility editing, output scale, and complete edit lifecycle evidence remain open."
+      "implementation_note": "Semantic dimensions, stable references, placement, and typed desktop label/symbol authoring are implemented; style/visibility editing, output scale, and complete edit lifecycle evidence remain open."
     },
     {
       "id": "APX-ANNO-003",
@@ -1125,7 +1125,7 @@
         "tests/annotation_entity_codec_tests.cpp",
         "docs/annotation-catalog.md"
       ],
-      "implementation_note": "Presentation styles, fills, visibility, and target overrides are validated separately from analytical geometry; typed Document persistence and shared vector rendering are integrated, while UI editing and output-view style integration remain open."
+      "implementation_note": "Presentation styles, fills, visibility, and target overrides are validated separately from analytical geometry; typed Document persistence, shared vector rendering, and undoable child deletion are integrated, while UI style editing and output-view style integration remain open."
     },
     {
       "id": "APX-SYM-001",
@@ -1146,7 +1146,7 @@
         "tests/annotation_entity_codec_tests.cpp",
         "docs/annotation-catalog.md"
       ],
-      "implementation_note": "Deterministic catalog generation produces 216 scaled symbol variants with placement metadata and previews; typed Document persistence and shared vector preview rendering are integrated, while interactive placement, polished assets, and production save/print/export qualification remain open."
+      "implementation_note": "Deterministic catalog generation produces 216 scaled symbol variants with placement metadata and previews; typed Document persistence, shared vector preview rendering, and a desktop catalog-backed symbol authoring command are integrated, while interactive placement controls, polished assets, and production save/print/export qualification remain open."
     },
     {
       "id": "APX-TRACE-001",

@@ -655,6 +655,17 @@ QString PlanCanvas::hitTest(QPointF point) const {
             }
         }
     }
+    // Labels are retained presentation entities and use the same spatial
+    // selection path as geometry. Keep the hit radius in device pixels so
+    // selection remains stable across zoom and DPI changes.
+    for (const auto& label : m_labels) {
+        const auto screen = toScreen(label.position, rect());
+        const auto candidate = std::hypot(point.x() - screen.x(), point.y() - screen.y());
+        if (candidate < best) {
+            best = candidate;
+            result = label.id;
+        }
+    }
     return best <= hit_pixels ? result : QString{};
 }
 

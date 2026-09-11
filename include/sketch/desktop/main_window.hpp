@@ -153,6 +153,15 @@ public:
     [[nodiscard]] bool editSelectedFactor(const QString& expression);
     [[nodiscard]] bool setSelectedCalculationRule(bool include_in_building,
                                                    bool include_in_living);
+    // Presentation annotations are persisted inside the typed annotation
+    // entity. These commands keep labels/symbols undoable and portable rather
+    // than creating renderer-only state.
+    [[nodiscard]] QString createAnnotationLabel(const QString& template_id,
+                                                const QString& content,
+                                                Vec2 position);
+    [[nodiscard]] QString createAnnotationSymbol(const QString& symbol_id,
+                                                 Vec2 position);
+    [[nodiscard]] bool deleteAnnotation(const QString& annotation_id);
     [[nodiscard]] bool undoCommand();
     [[nodiscard]] bool redoCommand();
 
@@ -169,6 +178,7 @@ public:
     [[nodiscard]] bool showPrintPreview();
 
     void showCommandPalette();
+    void showAnnotationEditor();
     void showConstraintEditor();
     void fitView();
 
