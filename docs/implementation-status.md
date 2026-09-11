@@ -111,14 +111,15 @@ test-only additions verify mixed finish/edit navigation across the baseline and
 validate the Document history projection after navigation; the finish suite was
 rerun in both configurations after those additions.
 
-Save acknowledgement integration must bind a sealed publication to workspace
-identity, owner correlation, role, destination, epoch, both content generations
-and the authoring source digest before accepting a storage receipt. The current
-desktop save path is synchronous and still directly marks its shared Document
-saved. `SaveReceipt` contains only revision, file hash and backup path, so it
-cannot establish those workspace bindings on its own. The future queue must
-preserve stale successful files without clearing current dirty state; owner
-metadata remains correlation data, never proof of a filesystem reservation.
+Save acknowledgement binds a sealed publication to workspace identity, owner
+correlation, role, destination, epoch, both content generations and the
+authoring source digest before accepting a storage receipt. The current desktop
+save path uses that gate synchronously and marks its shared Document saved only
+after acknowledgement. `SaveReceipt` contains only revision, file hash and
+backup path, so it cannot establish those workspace bindings on its own. The
+future queue must preserve stale successful files without clearing current
+dirty state; owner metadata remains correlation data, never proof of a
+filesystem reservation.
 
 Compact persistent history replaces the former deep semantic snapshots. The
 unchanged old-engine corpus (13 fixtures, 66 positions, all eighteen actions)
