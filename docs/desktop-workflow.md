@@ -180,6 +180,11 @@ recovery-backed workspace edits, while preserving numeric and structured JSON
 values. The full object-family schema and visible architectural inspector
 bindings remain under qualification.
 
+New projects also include a typed `sheet_view_model` entity containing a
+default plan view and A-101 sheet. It is validated and saved with the same
+Document revision as geometry; interactive sheet editing and layout rendering
+remain under qualification.
+
 ## Wall dimensions and constraints
 
 In either workspace, select a straight wall and choose **Dimensions and

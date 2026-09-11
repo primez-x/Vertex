@@ -26,6 +26,7 @@
 #include "sketch/project_organization.hpp"
 #include "sketch/project_visibility.hpp"
 #include "sketch/quantity.hpp"
+#include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/visualization/native_model_view.hpp"
 
 #include <QAction>
@@ -135,6 +136,25 @@ FingerprintDependencyGroup fingerprint_not_applicable(std::string reason) {
     group.state = FingerprintGroupState::not_applicable;
     group.reason = std::move(reason);
     return group;
+}
+
+SheetViewModel default_sheet_view_model() {
+    CoordinatedView plan_view;
+    plan_view.id = "view-plan";
+    plan_view.name = "Default plan";
+    plan_view.kind = CoordinatedViewKind::plan;
+    plan_view.origin_m = {0.0, 0.0, 0.0};
+    plan_view.direction = {0.0, 0.0, -1.0};
+    plan_view.up = {0.0, 1.0, 0.0};
+
+    DrawingSheet sheet;
+    sheet.id = "sheet-1";
+    sheet.number = "A-101";
+    sheet.width_mm = 420.0;
+    sheet.height_mm = 297.0;
+    sheet.title_block = {"Untitled property", "Default plan", "", ""};
+    sheet.viewports.push_back({"viewport-plan", "view-plan", {10.0, 10.0, 400.0, 277.0}, 100.0});
+    return SheetViewModel::create({std::move(plan_view)}, {std::move(sheet)});
 }
 
 json point_json(Vec2 point) {
@@ -843,6 +863,7 @@ void ensure_project_scaffold(Document& document) {
                                              {"name", "Default layer"}},
                                         false,
                                         json::object()}),
+            EntityChange::upsert(make_sheet_view_entity("sheet-view-1", default_sheet_view_model())),
         },
         .message = "create project scaffold",
     });
@@ -1917,7 +1938,8 @@ public:
                                                      static_cast<std::size_t>(bytes.size())));
     }
 
-    [[nodiscard]] OutputFingerprintInputs outputFingerprintInputs() const {
+    [[nodiscard]] OutputFingerprintInputs outputFingerprintInputs(
+        const DocumentSnapshot& snapshot) const {
         const auto build_digest = currentExecutableDigest();
         OutputFingerprintInputs inputs;
         inputs.profiles = fingerprint_not_applicable(
@@ -1930,6 +1952,12 @@ public:
                                   m_view_filter.hidden_floor_ids.begin(), m_view_filter.hidden_floor_ids.end())},
                              {"hidden_layer_ids", std::vector<std::string>(
                                   m_view_filter.hidden_layer_ids.begin(), m_view_filter.hidden_layer_ids.end())}};
+        for (const auto& [id, entity] : snapshot.entities()) {
+            if (entity.type != kSheetViewEntityType) continue;
+            view_descriptor["sheet_view_model"] =
+                json{{"entity_id", id}, {"content_sha256", digest_text(entity.properties.dump())}};
+            break;
+        }
         inputs.views = fingerprint_resources({fingerprint_resource(
             "plan-canvas-view", view_descriptor.dump(),
             json{{"renderer", "PlanCanvas"}, {"descriptor_version", 1}})});
@@ -1952,7 +1980,7 @@ public:
 
     bool writeOutputFingerprint(const QString& output_path, const DocumentSnapshot& snapshot,
                                 QString output_kind) {
-        const auto fingerprint = make_output_fingerprint(snapshot, outputFingerprintInputs());
+        const auto fingerprint = make_output_fingerprint(snapshot, outputFingerprintInputs(snapshot));
         const auto payload = json{{"schema", "property-studio.output-fingerprint.v1"},
                                   {"output_kind", output_kind.toStdString()},
                                   {"output_file", QFileInfo(output_path).fileName().toStdString()},

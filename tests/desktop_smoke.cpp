@@ -252,6 +252,9 @@ int main(int argc, char** argv) {
             "measurement and architectural workspaces must share one document");
     require(window.document().snapshot().entities().contains("property-1"),
             "a new document must create the property scaffold before objects");
+    require(window.document().snapshot().entities().contains("sheet-view-1") &&
+                window.document().snapshot().entities().at("sheet-view-1").type == "sheet_view_model",
+            "a new document must include a validated coordinated sheet/view model");
     require(window.document().snapshot().entities().contains("floor-1"),
             "a new document must create the floor scaffold before objects");
 
@@ -568,6 +571,9 @@ int main(int argc, char** argv) {
             "reopened project should preserve the hosted opening entity");
     require(reopened.entities().contains(slab_id.toStdString()),
             "reopened project should preserve the slab entity");
+    require(reopened.entities().contains("sheet-view-1") &&
+                reopened.entities().at("sheet-view-1").type == "sheet_view_model",
+            "save/reopen must preserve the coordinated sheet/view model");
     require(reopened.entities().at(opening_id.toStdString()).properties.at("wall_id") ==
                 wall_id.toStdString(),
             "reopened opening should keep the host reference");

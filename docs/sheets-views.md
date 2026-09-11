@@ -2,10 +2,12 @@
 
 `SheetViewModel` provides a validated immutable semantic foundation for
 ARCH-VIEW-001/002, ARCH-SHEET-001 and IO-OUTPUT-002. The
-`sheet_view_model` Document entity codec now persists this graph through the
+`sheet_view_model` Document entity codec persists this graph through the
 versioned project format and reuses the same validation at create/load/command
-boundaries. These requirements are not complete product workflows: rendering,
-desktop editing and print/PDF output remain unimplemented here.
+boundaries. New desktop projects start with a validated default plan view,
+sheet, title block, and independently scaled viewport in that entity. These
+requirements are not complete product workflows: rendering, desktop editing
+and print/PDF layout integration remain unimplemented here.
 
 Views identify plan, elevation and section definitions by stable ID. A view owns
 its finite origin in metres, orthonormal direction/up frame, cut and far depths,

@@ -397,6 +397,11 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   layout, printer calibration, and production output qualification remain
   open. The desktop output selector now applies Letter, Legal, Tabloid, A4, or
   A3 to draft PDF and print preview.
+- New desktop projects now seed a validated `sheet_view_model` entity with a
+  default plan view, A-101 sheet, title block, and independent viewport scale;
+  the entity survives normal save/reopen and participates in output-fingerprint
+  view inputs. Interactive sheet editing, coordinated layout rendering, and
+  print integration remain open.
 - Release import inspection resolves 34 selected application/component
   binaries on this machine. The Qt dry-run exposed default plugin expansion;
   an explicit current-component allowlist is recorded. Clean-machine packaging,
