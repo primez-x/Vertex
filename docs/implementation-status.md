@@ -399,7 +399,7 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   qualification remain open. The desktop output selector now applies Letter, Legal, Tabloid, A4, or
   A3 to draft PDF and print preview.
 - New desktop projects now seed a validated `sheet_view_model` entity with a
-  default plan view, A-101 sheet, title block, and independent viewport scale;
+  coordinated plan/elevation/section views, an A-101 sheet, title block, and independent viewport scale;
   the entity survives normal save/reopen and participates in output-fingerprint
   view inputs. Draft PDF/SVG/print consume the persisted sheet renderer, and
   sheet number/title-block plus viewport bounds/scale edits use Document

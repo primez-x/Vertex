@@ -153,6 +153,21 @@ SheetViewModel default_sheet_view_model() {
     plan_view.direction = {0.0, 0.0, -1.0};
     plan_view.up = {0.0, 1.0, 0.0};
 
+    CoordinatedView elevation_view;
+    elevation_view.id = "view-elevation";
+    elevation_view.name = "South elevation";
+    elevation_view.kind = CoordinatedViewKind::elevation;
+    elevation_view.direction = {0.0, -1.0, 0.0};
+    elevation_view.up = {0.0, 0.0, 1.0};
+
+    CoordinatedView section_view;
+    section_view.id = "view-section";
+    section_view.name = "Section";
+    section_view.kind = CoordinatedViewKind::section;
+    section_view.origin_m = {0.0, 0.0, 1.2};
+    section_view.direction = {0.0, 0.0, -1.0};
+    section_view.up = {0.0, 1.0, 0.0};
+
     DrawingSheet sheet;
     sheet.id = "sheet-1";
     sheet.number = "A-101";
@@ -161,7 +176,8 @@ SheetViewModel default_sheet_view_model() {
     sheet.title_block = {"Untitled property", "Default plan", "", ""};
     sheet.viewports.push_back({"viewport-plan", "view-plan", {10.0, 10.0, 400.0, 277.0}, 100.0});
     sheet.schedules.push_back({"schedule-doors", "doors", {260.0, 220.0, 150.0, 65.0}});
-    return SheetViewModel::create({std::move(plan_view)}, {std::move(sheet)},
+    return SheetViewModel::create({std::move(section_view), std::move(plan_view),
+                                   std::move(elevation_view)}, {std::move(sheet)},
                                   {"doors", "windows", "rooms", "materials"});
 }
 

@@ -257,18 +257,30 @@ int main(int argc, char** argv) {
             "a new document must include a validated coordinated sheet/view model");
     require(window.document().snapshot().entities().contains("floor-1"),
             "a new document must create the floor scaffold before objects");
+    const auto seeded_sheet = window.document().snapshot().entities().at("sheet-view-1");
+    const auto& seeded_views = seeded_sheet.properties.at("model").at("views");
+    const auto has_view = [&](const char* id, const char* kind) {
+        return std::any_of(seeded_views.begin(), seeded_views.end(), [&](const auto& view) {
+            return view.at("id") == id && view.at("kind") == kind;
+        });
+    };
+    require(has_view("view-plan", "plan") && has_view("view-elevation", "elevation") &&
+                has_view("view-section", "section"),
+            "a new document must persist coordinated plan, elevation and section views");
     require(window.editArchitecturalViewPresentation(
                 QStringLiteral("view-plan"), QStringLiteral("1.5"), QStringLiteral("80"),
                 QStringLiteral("0.7"), QStringLiteral("0.25"), true,
                 QStringLiteral("concrete"), QStringLiteral("2"), QStringLiteral("fine")),
             "architectural view presentation must commit through typed Document history");
     const auto edited_view_entity = window.document().snapshot().entities().at("sheet-view-1");
-    require(edited_view_entity.properties.at("model").at("views").at(0)
-                    .at("presentation").at("cut_depth_m") == 1.5 &&
-                edited_view_entity.properties.at("model").at("views").at(0)
-                    .at("presentation").at("detail") == "fine" &&
-                edited_view_entity.properties.at("model").at("views").at(0)
-                    .at("presentation").at("hatch_scale") == 2.0,
+    const auto plan_view = std::find_if(
+        edited_view_entity.properties.at("model").at("views").begin(),
+        edited_view_entity.properties.at("model").at("views").end(),
+        [](const auto& view) { return view.at("id") == "view-plan"; });
+    require(plan_view != edited_view_entity.properties.at("model").at("views").end() &&
+                plan_view->at("presentation").at("cut_depth_m") == 1.5 &&
+                plan_view->at("presentation").at("detail") == "fine" &&
+                plan_view->at("presentation").at("hatch_scale") == 2.0,
             "architectural view presentation edit must persist typed settings");
     require(window.undoCommand() && window.redoCommand(),
             "architectural view presentation edit must participate in normal document history");
