@@ -172,8 +172,9 @@ public:
                                       const QString& scale,
                                       bool visible);
     [[nodiscard]] bool deleteAnnotation(const QString& annotation_id);
-    // Imports a local raster into the project Asset store and creates a
-    // reference_asset entity with an explicit, editable calibration scale.
+    // Imports a local raster or first-page PDF into the project Asset store and
+    // creates a reference_asset entity with an explicit, editable calibration
+    // scale. PDF source bytes remain alongside a deterministic local preview.
     [[nodiscard]] QString importReferenceImage(const QString& path);
     [[nodiscard]] bool editReferenceTransform(const QString& reference_id,
                                               const QString& x_metres,

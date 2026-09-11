@@ -23,9 +23,11 @@ immutable reference-asset calibration and transform records, typed schedule
 records, and a standalone vertical level/floor-to-floor graph. Raster reference
 images can now be imported into the project Asset store, displayed as a shared
 canvas underlay, calibrated in metres per source pixel, and transformed through
-typed undoable edits. PDF decoding, multi-underlay management, interactive
-tracing, native Apex compatibility, clean-machine packaging, and end-to-end
-production evidence are still open.
+typed undoable edits. PDF first-page import now retains the original PDF beside
+a validated local PNG preview, so PDF tracing can start from an offline project
+asset. Multi-underlay management, PDF page selection, interactive tracing,
+native Apex compatibility, clean-machine packaging, and end-to-end production
+evidence are still open.
 
 The next foundation slice adds immutable room-versus-measurement relationship
 validation, existing/demolished/proposed phase state with mutually exclusive

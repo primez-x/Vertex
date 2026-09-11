@@ -56,7 +56,9 @@
 #include <QMenu>
 #include <QPageSize>
 #include <QPalette>
+#include <QBuffer>
 #include <QPainter>
+#include <QPdfDocument>
 #include <QPdfWriter>
 #include <QPrintPreviewDialog>
 #include <QPrinter>
@@ -1982,31 +1984,58 @@ public:
                 throw std::invalid_argument("This document is read-only.");
             }
             const auto cleaned = path.trimmed();
-            if (cleaned.isEmpty()) throw std::invalid_argument("Choose a raster image file.");
+            if (cleaned.isEmpty()) throw std::invalid_argument("Choose a reference image or PDF.");
             QFile file(cleaned);
             if (!file.open(QIODevice::ReadOnly)) {
                 throw std::invalid_argument("The reference image could not be opened.");
             }
             const auto raw = file.readAll();
             if (raw.isEmpty()) throw std::invalid_argument("The reference image is empty.");
-            QImage image = QImage::fromData(raw);
-            if (image.isNull()) {
-                throw std::invalid_argument("Only decodable PNG, JPEG, BMP, and TIFF images are supported.");
-            }
-            const auto format = image.format();
             QString mime;
-            if (format == QImage::Format_Invalid) {
-                throw std::invalid_argument("The reference image format is invalid.");
-            }
             const auto suffix = QFileInfo(cleaned).suffix().trimmed().toLower();
-            if (suffix == QStringLiteral("png")) mime = QStringLiteral("image/png");
-            else if (suffix == QStringLiteral("jpg") || suffix == QStringLiteral("jpeg"))
-                mime = QStringLiteral("image/jpeg");
-            else if (suffix == QStringLiteral("bmp")) mime = QStringLiteral("image/bmp");
-            else if (suffix == QStringLiteral("tif") || suffix == QStringLiteral("tiff"))
-                mime = QStringLiteral("image/tiff");
-            else {
-                throw std::invalid_argument("Reference image extension must be PNG, JPEG, BMP, or TIFF.");
+            QImage image;
+            std::optional<Asset> render_asset;
+            if (suffix == QStringLiteral("pdf")) {
+                QPdfDocument pdf;
+                if (pdf.load(cleaned) != QPdfDocument::Error::None || pdf.pageCount() < 1) {
+                    throw std::invalid_argument("The reference PDF could not be decoded.");
+                }
+                const auto page_points = pdf.pagePointSize(0);
+                if (!(page_points.width() > 0.0) || !(page_points.height() > 0.0) ||
+                    !std::isfinite(page_points.width()) || !std::isfinite(page_points.height())) {
+                    throw std::invalid_argument("The reference PDF has no valid first page.");
+                }
+                const auto pixels = [](qreal points) {
+                    return std::clamp(static_cast<int>(std::lround(points * 2.0)), 256, 4096);
+                };
+                image = pdf.render(0, QSize(pixels(page_points.width()), pixels(page_points.height())));
+                if (image.isNull()) throw std::invalid_argument("The reference PDF page could not be rasterized.");
+                QByteArray preview_bytes;
+                QBuffer preview_buffer(&preview_bytes);
+                if (!preview_buffer.open(QIODevice::WriteOnly) || !image.save(&preview_buffer, "PNG")) {
+                    throw std::invalid_argument("The reference PDF preview could not be encoded.");
+                }
+                std::vector<std::byte> preview;
+                preview.reserve(static_cast<std::size_t>(preview_bytes.size()));
+                for (const auto value : preview_bytes) preview.push_back(static_cast<std::byte>(value));
+                render_asset = Asset::create(new_id("reference-preview"), "image/png",
+                    std::move(preview), { {"content", "pdf-first-page-preview"},
+                                          {"page_index", 0}, {"page_count", pdf.pageCount()} });
+                mime = QStringLiteral("application/pdf");
+            } else {
+                image = QImage::fromData(raw);
+                if (image.isNull()) {
+                    throw std::invalid_argument("Only decodable PDF, PNG, JPEG, BMP, and TIFF images are supported.");
+                }
+                if (suffix == QStringLiteral("png")) mime = QStringLiteral("image/png");
+                else if (suffix == QStringLiteral("jpg") || suffix == QStringLiteral("jpeg"))
+                    mime = QStringLiteral("image/jpeg");
+                else if (suffix == QStringLiteral("bmp")) mime = QStringLiteral("image/bmp");
+                else if (suffix == QStringLiteral("tif") || suffix == QStringLiteral("tiff"))
+                    mime = QStringLiteral("image/tiff");
+                else {
+                    throw std::invalid_argument("Reference image extension must be PDF, PNG, JPEG, BMP, or TIFF.");
+                }
             }
             std::vector<std::byte> bytes;
             bytes.reserve(static_cast<std::size_t>(raw.size()));
@@ -2022,15 +2051,19 @@ public:
                 {{"asset_id", asset_id},
                  {"source_path", QFileInfo(cleaned).fileName().toStdString()},
                  {"mime_type", mime.toStdString()},
+                 {"render_asset_id", render_asset ? render_asset->id : asset_id},
                  {"position_m", {0.0, 0.0}},
                  {"metres_per_source_unit", 0.01},
                  {"scale", 1.0}, {"rotation_degrees", 0.0},
                  {"flip_horizontal", false}, {"flip_vertical", false},
                  {"intensity", 0.72}, {"visible", true}});
             entity.id = entity_id;
+            std::vector<AssetChange> asset_changes;
+            asset_changes.push_back(AssetChange::upsert(std::move(asset)));
+            if (render_asset) asset_changes.push_back(AssetChange::upsert(std::move(*render_asset)));
             const auto command = ApplyEntityChanges{
                 source.revision(), {EntityChange::upsert(std::move(entity))},
-                {AssetChange::upsert(std::move(asset))}, "Import reference image"};
+                std::move(asset_changes), "Import reference image"};
             (void)Document::preview_command(source, command);
             applyDocumentCommand(command);
             m_selected_id = id_from(entity_id);
@@ -3723,7 +3756,7 @@ public:
     void showReferenceImport() {
         const auto selected = QFileDialog::getOpenFileName(
             owner, QStringLiteral("Import reference image"), {},
-            QStringLiteral("Raster images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)"));
+            QStringLiteral("Reference files (*.pdf *.png *.jpg *.jpeg *.bmp *.tif *.tiff)"));
         if (!selected.isEmpty()) {
             (void)importReferenceImage(selected);
         }
@@ -5173,9 +5206,11 @@ private:
                     }
                     const auto asset_id = read_string(entity.properties, "asset_id");
                     if (!asset_id.has_value()) throw std::invalid_argument("asset_id is required");
-                    const auto asset = snapshot.assets().find(*asset_id);
+                    const auto render_asset_id = read_string(entity.properties, "render_asset_id")
+                        .value_or(*asset_id);
+                    const auto asset = snapshot.assets().find(render_asset_id);
                     if (asset == snapshot.assets().end()) {
-                        throw std::invalid_argument("referenced asset is missing");
+                        throw std::invalid_argument("render asset is missing");
                     }
                     const QByteArray raw(reinterpret_cast<const char*>(asset->second.bytes.data()),
                                          static_cast<qsizetype>(asset->second.bytes.size()));

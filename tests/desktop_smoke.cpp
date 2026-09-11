@@ -13,6 +13,9 @@
 #include <QImage>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPainter>
+#include <QPageSize>
+#include <QPdfWriter>
 #include <QPushButton>
 #include <QToolButton>
 #include <QTemporaryDir>
@@ -356,6 +359,43 @@ int main(int argc, char** argv) {
             "reference transform should persist calibration, placement, and presentation");
     require(window.undoCommand() && window.redoCommand(),
             "reference transform should participate in undo and redo");
+
+    QTemporaryDir pdf_directory;
+    require(pdf_directory.isValid(), "PDF reference fixture needs a temporary directory");
+    const auto reference_pdf_path = pdf_directory.filePath("trace.pdf");
+    {
+        QPdfWriter writer(reference_pdf_path);
+        writer.setPageSize(QPageSize(QPageSize::A4));
+        writer.setResolution(144);
+        QPainter painter(&writer);
+        require(painter.isActive(), "PDF reference fixture should open a writer");
+        painter.setPen(QPen(QColor(60, 80, 100), 8));
+        painter.drawRect(QRectF(40.0, 40.0, 500.0, 320.0));
+        painter.drawLine(QPointF(40.0, 200.0), QPointF(540.0, 200.0));
+        painter.end();
+    }
+    sketch::desktop::MainWindow pdf_window;
+    const auto pdf_id = pdf_window.importReferenceImage(reference_pdf_path);
+    require(!pdf_id.isEmpty(), "a local PDF first page should import into the document");
+    const auto pdf_snapshot = pdf_window.document().snapshot();
+    const auto pdf_entity = pdf_snapshot.entities().find(pdf_id.toStdString());
+    require(pdf_entity != pdf_snapshot.entities().end(), "PDF import should create a reference entity");
+    const auto source_asset_id = pdf_entity->second.properties.at("asset_id").get<std::string>();
+    const auto render_asset_id = pdf_entity->second.properties.at("render_asset_id").get<std::string>();
+    require(pdf_snapshot.assets().at(source_asset_id).media_type == "application/pdf" &&
+                source_asset_id != render_asset_id && pdf_snapshot.assets().contains(render_asset_id),
+            "PDF import should retain source bytes and a separate preview asset");
+    const auto& preview_asset = pdf_snapshot.assets().at(render_asset_id);
+    const QByteArray preview_raw(reinterpret_cast<const char*>(preview_asset.bytes.data()),
+                                 static_cast<qsizetype>(preview_asset.bytes.size()));
+    require(!QImage::fromData(preview_raw).isNull(), "PDF import should decode a local first-page preview");
+    auto* pdf_canvas = dynamic_cast<sketch::desktop::PlanCanvas*>(
+        pdf_window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    require(pdf_canvas != nullptr && pdf_canvas->reference().has_value() &&
+                !pdf_canvas->reference()->image.isNull(),
+            "PDF import should feed the shared canvas underlay");
+    require(pdf_window.undoCommand() && pdf_window.redoCommand(),
+            "PDF import should participate in normal document history");
     require(window.editArchitecturalViewPresentation(
                 QStringLiteral("view-plan"), QStringLiteral("1.5"), QStringLiteral("80"),
                 QStringLiteral("0.7"), QStringLiteral("0.25"), true,

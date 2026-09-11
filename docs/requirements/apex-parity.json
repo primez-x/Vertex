@@ -1164,7 +1164,7 @@
         "tests/reference_asset_tests.cpp",
         "docs/reference-assets.md"
       ],
-      "implementation_note": "Reference asset catalog validates PDF/raster signatures, identity, page selection, and immutable source metadata; the desktop now imports decodable PNG/JPEG/BMP/TIFF files into Document assets and renders one persisted raster underlay, while PDF decoding and multi-underlay management remain open."
+      "implementation_note": "Reference asset catalog validates PDF/raster signatures, identity, page selection, and immutable source metadata; the desktop now imports decodable PNG/JPEG/BMP/TIFF files and the first page of a PDF into Document assets, retaining PDF source bytes beside a validated local PNG preview and rendering one persisted underlay. Multi-underlay management and PDF page selection remain open."
     },
     {
       "id": "APX-TRACE-002",
@@ -1182,7 +1182,7 @@
         "tests/reference_asset_tests.cpp",
         "docs/reference-assets.md"
       ],
-      "implementation_note": "Calibration stores known source distance, unit, scale, and provenance with deterministic validation; the desktop exposes and persists metres-per-source-pixel calibration through the reference inspector, while known-distance calibration dialogs and calibrated tracing fixtures remain open."
+      "implementation_note": "Calibration stores known source distance, unit, scale, and provenance with deterministic validation; the desktop exposes and persists metres-per-source-pixel calibration through the reference inspector, and PDF first-page previews use the same transform. Known-distance calibration dialogs and calibrated tracing fixtures remain open."
     },
     {
       "id": "APX-TRACE-003",

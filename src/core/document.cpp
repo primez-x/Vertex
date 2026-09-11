@@ -270,8 +270,9 @@ void collect_references(const Entity& entity, std::vector<EntityReference>& refe
             }
             continue;
         }
-        if (key == "asset_id" || key == "asset_ids") {
-            const bool collection = key == "asset_ids";
+        if (key == "asset_id" || key == "asset_ids" || key == "render_asset_id" ||
+            key == "render_asset_ids") {
+            const bool collection = key == "asset_ids" || key == "render_asset_ids";
             if (collection) {
                 if (!value.is_array()) {
                     document_error(DocumentErrorCode::invalid_entity,

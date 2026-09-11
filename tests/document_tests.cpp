@@ -262,6 +262,17 @@ void test_asset_id_is_not_misclassified_as_an_entity_reference() {
     });
     require(document.snapshot().assets().contains("photo-1"),
             "asset reference should be accepted when the asset exists in the same command");
+    document.apply(ApplyEntityChanges{
+        .expected_revision = 1,
+        .entity_changes = {EntityChange::upsert(
+            entity("reference-1", "reference_asset",
+                   {{"asset_id", "photo-1"}, {"render_asset_id", "preview-1"}}))},
+        .asset_changes = {AssetChange::upsert(
+            Asset::create("preview-1", "image/png", {std::byte{0x02}}))},
+    });
+    require(document.snapshot().entities().at("reference-1").properties.at("render_asset_id") ==
+                "preview-1",
+            "reference render_asset_id should be validated as an asset reference");
 }
 
 void test_asset_references_are_structurally_validated_atomically() {
