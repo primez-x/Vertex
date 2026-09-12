@@ -7446,7 +7446,9 @@ private:
 
         auto* splitter = new QSplitter(Qt::Horizontal, central);
         splitter->setObjectName(QStringLiteral("workspaceSplitter"));
-        splitter->setContentsMargins(16, 10, 16, 14);
+        // Keep the canvas close to the compact command strip while retaining
+        // a small breathing room around the side panels.
+        splitter->setContentsMargins(16, 4, 16, 14);
         splitter->setChildrenCollapsible(true);
         root_layout->addWidget(splitter, 1);
 
