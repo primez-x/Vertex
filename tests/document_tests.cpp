@@ -486,6 +486,47 @@ void test_embedded_architectural_models_are_validated_at_document_boundary() {
     require(levels_document.revision() == levels_revision,
             "a rejected vertical level graph must not advance the revision");
 
+    const auto bound_graph = sketch::VerticalLevelGraph({{"ground", 0}, {"upper", 3}});
+    auto bound_document = Document::create({
+        entity("property-1", "property"),
+        entity("building-1", "building", {{"property_id", "property-1"}}),
+        entity("floor-1", "floor", {{"building_id", "building-1"},
+                                       {"vertical_level_binding", {
+                                           {"version", 1}, {"graph_id", "levels-1"},
+                                           {"level_id", "ground"}}}}),
+        entity("levels-1", "vertical_levels",
+               {{"model", nlohmann::json::parse(bound_graph.serialize())}}),
+    });
+    require(bound_document.snapshot().entities().at("floor-1").properties
+                    .at("vertical_level_binding").at("level_id") == "ground",
+            "floors should retain a validated vertical level binding");
+    const auto bound_revision = bound_document.revision();
+    auto missing_level_binding = bound_document.snapshot().entities().at("floor-1");
+    missing_level_binding.properties.at("vertical_level_binding").at("level_id") = "missing";
+    require_error(
+        [&] {
+            bound_document.apply(ApplyEntityChanges{
+                .expected_revision = bound_revision,
+                .entity_changes = {EntityChange::upsert(std::move(missing_level_binding))},
+            });
+        },
+        DocumentErrorCode::dangling_reference,
+        "a floor binding must reject a level absent from its graph");
+    require(bound_document.revision() == bound_revision,
+            "a rejected floor level binding must not advance the revision");
+    require_error(
+        [&] {
+            (void)Document::create({
+                entity("property-1", "property"),
+                entity("label-1", "label", {{"vertical_level_binding", {
+                    {"version", 1}, {"graph_id", "levels-1"}, {"level_id", "ground"}}}}),
+                entity("levels-1", "vertical_levels",
+                       {{"model", nlohmann::json::parse(bound_graph.serialize())}}),
+            });
+        },
+        DocumentErrorCode::invalid_entity,
+        "only floor entities may carry a vertical level binding");
+
     const auto relationships = sketch::RoomRelationshipSnapshot::create(
         {{"room-edge-1", sketch::RoomReferenceKind::room_boundary}}, {}).to_json();
     auto relationships_document = Document::create({

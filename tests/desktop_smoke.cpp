@@ -2625,9 +2625,13 @@ void test_vertical_levels_workflow() {
         auto* upper = dialog->findChild<QComboBox*>(QStringLiteral("verticalLinkUpper"));
         auto* save_link = dialog->findChild<QPushButton*>(QStringLiteral("saveVerticalLink"));
         auto* freeze = dialog->findChild<QPushButton*>(QStringLiteral("freezeVerticalLink"));
+        auto* binding_floor = dialog->findChild<QComboBox*>(QStringLiteral("verticalFloorBindingFloor"));
+        auto* binding_level = dialog->findChild<QComboBox*>(QStringLiteral("verticalFloorBindingLevel"));
+        auto* save_binding = dialog->findChild<QPushButton*>(QStringLiteral("saveVerticalFloorBinding"));
+        auto* clear_binding = dialog->findChild<QPushButton*>(QStringLiteral("clearVerticalFloorBinding"));
         require(levels && level_id && elevation && save_level && links && link_id && lower && upper &&
-                    save_link && freeze,
-                "vertical levels editor should expose level and link controls");
+                    save_link && freeze && binding_floor && binding_level && save_binding && clear_binding,
+                "vertical levels editor should expose level, link and floor binding controls");
         level_id->setText(QStringLiteral("ground"));
         elevation->setText(QStringLiteral("0"));
         save_level->click();
@@ -2644,6 +2648,18 @@ void test_vertical_levels_workflow() {
         freeze->click();
         require(links->item(0)->text().contains(QStringLiteral("frozen")),
                 "vertical levels editor should retain a frozen link state");
+        binding_floor->setCurrentIndex(binding_floor->findData(QStringLiteral("floor-1")));
+        binding_level->setCurrentIndex(binding_level->findData(QStringLiteral("ground")));
+        save_binding->click();
+        const auto bound_floor = window.document().snapshot().entities().at("floor-1");
+        const auto graph_id = bound_floor.properties.at("vertical_level_binding").at("graph_id");
+        require(graph_id.is_string() && !graph_id.get<std::string>().empty() &&
+                    window.document().snapshot().entities().contains(graph_id.get<std::string>()) &&
+                    window.document().snapshot().entities().at(graph_id.get<std::string>()).type ==
+                        "vertical_levels",
+                "vertical levels editor should persist the selected graph binding");
+        require(bound_floor.properties.at("vertical_level_binding").at("level_id") == "ground",
+                "vertical levels editor should persist the selected floor level");
         dialog->reject();
     });
     action->trigger();
@@ -2668,6 +2684,9 @@ void test_vertical_levels_workflow() {
     model = find_model();
     require(model.levels().size() == 2 && model.links().front().state == RelationshipState::frozen,
             "vertical level graph should survive project reopen");
+    const auto reopened_floor = window.document().snapshot().entities().at("floor-1");
+    require(reopened_floor.properties.at("vertical_level_binding").at("level_id") == "ground",
+            "floor vertical level binding should survive project reopen");
 }
 
 void test_calculation_deduction_workflow() {

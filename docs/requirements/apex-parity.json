@@ -772,7 +772,7 @@
         "tests/document_tests.cpp",
         "docs/vertical-levels.md"
       ],
-      "implementation_note": "A validated vertical level graph with connected, frozen, and disconnected floor-to-floor links now has strict version-1 JSON decoding, Document admission through the vertical_levels entity, and a Windows Levels editor for revision-checked create/edit/link/freeze/disconnect operations; plan/section/3D propagation remains open."
+      "implementation_note": "A validated vertical level graph with connected, frozen, and disconnected floor-to-floor links now has strict version-1 JSON decoding, Document admission through the vertical_levels entity, explicit validated floor bindings, and a Windows Levels editor for revision-checked create/edit/link/freeze/disconnect/assign operations; plan/section/3D propagation remains open."
     },
     {
       "id": "APX-WF-001",
@@ -1668,10 +1668,14 @@
       "implementation_sources": [
         "include/sketch/vertical_levels.hpp",
         "src/core/vertical_levels.cpp",
+        "src/core/document.cpp",
+        "src/desktop/main_window.cpp",
         "tests/vertical_levels_tests.cpp",
+        "tests/document_tests.cpp",
+        "tests/desktop_smoke.cpp",
         "docs/vertical-levels.md"
       ],
-      "implementation_note": "Vertical level and floor-to-floor relationship semantics are implemented as a standalone graph; reference grids, site/terrain objects, Document binding, and coordinated view propagation remain open."
+      "implementation_note": "Vertical level and floor-to-floor relationship semantics are implemented as a standalone graph. Floors can now bind to a validated graph entity and level through revisioned desktop controls with save/reopen coverage; reference grids, site/terrain objects, automatic placement, and coordinated view propagation remain open."
     },
     {
       "id": "ARCH-MOD-008",

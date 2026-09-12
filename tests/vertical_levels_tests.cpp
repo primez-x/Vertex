@@ -119,9 +119,38 @@ void deterministic_and_bounded() {
         (void)chain.create_link({"back", std::to_string(VerticalLevelGraph::maximum_levels - 1), "0"});
     });
 }
+
+void binding_contract() {
+    const VerticalLevelBinding binding{"levels-1", "ground"};
+    const auto encoded = binding.to_json();
+    require(encoded == nlohmann::json{{"version", 1}, {"graph_id", "levels-1"},
+                                      {"level_id", "ground"}},
+            "Vertical level binding JSON shape is not canonical");
+    require(VerticalLevelBinding::from_json(encoded) == binding,
+            "Vertical level binding did not round-trip");
+
+    auto malformed = encoded;
+    malformed["version"] = 2;
+    rejects(VerticalLevelErrorCode::invalid_input, [&] {
+        (void)VerticalLevelBinding::from_json(malformed);
+    });
+    malformed = encoded;
+    malformed["unexpected"] = true;
+    rejects(VerticalLevelErrorCode::invalid_input, [&] {
+        (void)VerticalLevelBinding::from_json(malformed);
+    });
+    for (const auto& bad : {nlohmann::json{{"version", 1}, {"graph_id", ""}, {"level_id", "ground"}},
+                           nlohmann::json{{"version", 1}, {"graph_id", "levels-1"}, {"level_id", ""}},
+                           nlohmann::json{{"version", 1}, {"graph_id", std::string(129, 'x')},
+                                          {"level_id", "ground"}}}) {
+        rejects(VerticalLevelErrorCode::invalid_input, [&] {
+            (void)VerticalLevelBinding::from_json(bad);
+        });
+    }
+}
 }
 int main() {
-    try { lifecycle(); validation(); deterministic_and_bounded(); }
+    try { lifecycle(); validation(); deterministic_and_bounded(); binding_contract(); }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
     std::cout << "vertical level tests passed\n";
 }

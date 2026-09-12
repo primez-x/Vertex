@@ -33,6 +33,18 @@ struct FloorToFloorLink {
     bool operator==(const FloorToFloorLink&) const = default;
 };
 
+// A floor's persisted association with one level in one validated graph.
+// The graph ID is a Document entity ID; the level ID is resolved inside that
+// graph at the Document validation boundary.
+struct VerticalLevelBinding {
+    std::string graph_entity_id;
+    std::string level_id;
+    bool operator==(const VerticalLevelBinding&) const = default;
+
+    [[nodiscard]] nlohmann::json to_json() const;
+    [[nodiscard]] static VerticalLevelBinding from_json(const nlohmann::json& value);
+};
+
 // Immutable validated value snapshots. Elevations and heights use metres.
 class VerticalLevelGraph {
 public:

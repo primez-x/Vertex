@@ -31,6 +31,28 @@ connected heights agree with the endpoint elevations. The `vertical_levels`
 Document entity uses this decoder at admission, so invalid level data cannot
 enter project history or a saved `.bldproj` file.
 
+## Floor bindings
+
+A floor may bind to one level in one graph through the optional
+`properties.vertical_level_binding` object:
+
+```json
+{
+  "version": 1,
+  "graph_id": "vertical-levels-1",
+  "level_id": "ground"
+}
+```
+
+`graph_id` is a stable `vertical_levels` Document entity ID and `level_id` is
+resolved inside that graph. The binding is admitted only on a `floor` entity;
+the graph must exist, have a valid model, and contain the named level. Missing
+graphs, wrong target types, malformed bindings, and missing levels reject the
+whole command without advancing history. Clearing a binding removes only this
+property and never rewrites world-coordinate geometry. The Windows Levels editor
+exposes assignment and clear controls for every floor, and the binding is
+preserved by undo/redo and save/reopen.
+
 The Windows Architectural workspace exposes **Levels and floor-to-floor links**
 from the More menu and command palette. The editor creates or edits level IDs
 and metre elevations, adds validated connected links, and can freeze or

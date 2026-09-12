@@ -4458,6 +4458,27 @@ public:
             columns->addLayout(level_panel, 1);
             columns->addLayout(link_panel, 1);
             layout->addLayout(columns, 1);
+
+            auto* binding_panel = new QGroupBox(QStringLiteral("Floor level assignment"), &dialog);
+            auto* binding_layout = new QHBoxLayout(binding_panel);
+            binding_layout->setContentsMargins(8, 6, 8, 6);
+            binding_layout->addWidget(new QLabel(QStringLiteral("Floor"), binding_panel));
+            auto* binding_floor = new QComboBox(binding_panel);
+            binding_floor->setObjectName(QStringLiteral("verticalFloorBindingFloor"));
+            binding_floor->setMinimumWidth(190);
+            binding_layout->addWidget(binding_floor, 1);
+            binding_layout->addWidget(new QLabel(QStringLiteral("Level"), binding_panel));
+            auto* binding_level = new QComboBox(binding_panel);
+            binding_level->setObjectName(QStringLiteral("verticalFloorBindingLevel"));
+            binding_level->setMinimumWidth(150);
+            binding_layout->addWidget(binding_level, 1);
+            auto* save_binding = new QPushButton(QStringLiteral("Assign"), binding_panel);
+            save_binding->setObjectName(QStringLiteral("saveVerticalFloorBinding"));
+            auto* clear_binding = new QPushButton(QStringLiteral("Clear"), binding_panel);
+            clear_binding->setObjectName(QStringLiteral("clearVerticalFloorBinding"));
+            binding_layout->addWidget(save_binding);
+            binding_layout->addWidget(clear_binding);
+            layout->addWidget(binding_panel);
             auto* status = new QLabel(&dialog);
             status->setObjectName(QStringLiteral("verticalLevelsStatus"));
             status->setWordWrap(true);
@@ -4482,14 +4503,19 @@ public:
                     ? levels->currentItem()->data(Qt::UserRole).toString() : level_id->text().trimmed();
                 const auto selected_link_id = links->currentItem()
                     ? links->currentItem()->data(Qt::UserRole).toString() : link_id->text().trimmed();
+                const auto selected_binding_floor_id = binding_floor->currentData().toString();
                 const QSignalBlocker level_blocker(levels);
                 const QSignalBlocker link_blocker(links);
                 const QSignalBlocker lower_blocker(link_lower);
                 const QSignalBlocker upper_blocker(link_upper);
+                const QSignalBlocker binding_floor_blocker(binding_floor);
+                const QSignalBlocker binding_level_blocker(binding_level);
                 levels->clear();
                 links->clear();
                 link_lower->clear();
                 link_upper->clear();
+                binding_floor->clear();
+                binding_level->clear();
                 for (const auto& level : record->model.levels()) {
                     auto* item = new QListWidgetItem(
                         QStringLiteral("%1  ·  %2 m")
@@ -4515,6 +4541,43 @@ public:
                             .arg(state), links);
                     item->setData(Qt::UserRole, QString::fromStdString(link.id));
                 }
+                const auto snapshot_entities = authoringSnapshot().entities();
+                for (const auto& [id, entity] : snapshot_entities) {
+                    if (entity.type != "floor") continue;
+                    const auto name = entity.properties.find("name");
+                    const auto label = name != entity.properties.end() && name->is_string() &&
+                            !name->get<std::string>().empty()
+                        ? QStringLiteral("%1  ·  %2")
+                              .arg(QString::fromStdString(name->get<std::string>()),
+                                   QString::fromStdString(id))
+                        : QString::fromStdString(id);
+                    binding_floor->addItem(label, QString::fromStdString(id));
+                }
+                for (const auto& level : record->model.levels()) {
+                    binding_level->addItem(QString::fromStdString(level.id),
+                                           QString::fromStdString(level.id));
+                }
+                int binding_floor_index = binding_floor->findData(selected_binding_floor_id);
+                if (binding_floor_index < 0 && binding_floor->count() > 0) binding_floor_index = 0;
+                binding_floor->setCurrentIndex(binding_floor_index);
+                const auto selected_floor_id = binding_floor->currentData().toString().toStdString();
+                int binding_level_index = -1;
+                const auto floor = snapshot_entities.find(selected_floor_id);
+                if (floor != snapshot_entities.end() &&
+                    floor->second.properties.contains("vertical_level_binding")) {
+                    try {
+                        const auto binding = VerticalLevelBinding::from_json(
+                            floor->second.properties.at("vertical_level_binding"));
+                        if (binding.graph_entity_id == record->entity_id)
+                            binding_level_index = binding_level->findData(
+                                QString::fromStdString(binding.level_id));
+                    } catch (const std::exception&) {
+                        // The Document boundary rejects malformed bindings; a
+                        // stale dialog keeps the controls usable if the source
+                        // changed while it was open.
+                    }
+                }
+                binding_level->setCurrentIndex(binding_level_index);
                 QListWidgetItem* selected_level = nullptr;
                 for (int index = 0; index < levels->count(); ++index)
                     if (levels->item(index)->data(Qt::UserRole).toString() == selected_level_id)
@@ -4549,11 +4612,19 @@ public:
                         link_upper->setCurrentIndex(link_upper->findData(QString::fromStdString(found->upper_level_id)));
                     }
                 }
-                status->setText(QStringLiteral("%1 level%2 · %3 link%4")
+                std::size_t assigned_floor_count = 0;
+                for (const auto& [id, entity] : snapshot_entities) {
+                    (void)id;
+                    if (entity.type == "floor" && entity.properties.contains("vertical_level_binding"))
+                        ++assigned_floor_count;
+                }
+                status->setText(QStringLiteral("%1 level%2 · %3 link%4 · %5 floor assignment%6")
                     .arg(record->model.levels().size())
                     .arg(record->model.levels().size() == 1 ? QString{} : QStringLiteral("s"))
                     .arg(record->model.links().size())
-                    .arg(record->model.links().size() == 1 ? QString{} : QStringLiteral("s")));
+                    .arg(record->model.links().size() == 1 ? QString{} : QStringLiteral("s"))
+                    .arg(assigned_floor_count)
+                    .arg(assigned_floor_count == 1 ? QString{} : QStringLiteral("s")));
                 const bool has_level = !record->model.levels().empty();
                 const bool has_link = !record->model.links().empty();
                 remove_level->setEnabled(has_level);
@@ -4561,6 +4632,10 @@ public:
                 remove_link->setEnabled(has_link);
                 freeze_link->setEnabled(has_link);
                 disconnect_link->setEnabled(has_link);
+                binding_floor->setEnabled(binding_floor->count() > 0);
+                binding_level->setEnabled(has_level && binding_floor->count() > 0);
+                save_binding->setEnabled(has_level && binding_floor->count() > 0);
+                clear_binding->setEnabled(binding_floor->count() > 0);
             };
             populate();
 
@@ -4673,6 +4748,50 @@ public:
                              [&] { transition_link(true); });
             QObject::connect(disconnect_link, &QPushButton::clicked, &dialog,
                              [&] { transition_link(false); });
+
+            const auto apply_floor_binding = [&](bool clear) {
+                try {
+                    const auto current = current_record();
+                    if (!current) return;
+                    const auto floor_id = binding_floor->currentData().toString().toStdString();
+                    if (floor_id.empty()) throw std::invalid_argument("Choose a floor first.");
+                    const auto source = authoringSnapshot();
+                    const auto floor = source.entities().find(floor_id);
+                    if (floor == source.entities().end() || floor->second.type != "floor")
+                        throw std::invalid_argument("The selected floor is no longer available.");
+                    auto updated = floor->second;
+                    if (clear) {
+                        if (!updated.properties.contains("vertical_level_binding"))
+                            throw std::invalid_argument("The selected floor has no level assignment.");
+                        updated.properties.erase("vertical_level_binding");
+                    } else {
+                        const auto level_id = binding_level->currentData().toString().toStdString();
+                        if (level_id.empty()) throw std::invalid_argument("Choose a level first.");
+                        if (std::none_of(current->model.levels().begin(), current->model.levels().end(),
+                                         [&](const auto& level) { return level.id == level_id; }))
+                            throw std::invalid_argument("The selected level is no longer available.");
+                        updated.properties["vertical_level_binding"] =
+                            VerticalLevelBinding{current->entity_id, level_id}.to_json();
+                    }
+                    const ApplyEntityChanges command{
+                        source.revision(), {EntityChange::upsert(std::move(updated))}, {},
+                        clear ? "Clear floor vertical level" : "Assign floor vertical level"};
+                    (void)Document::preview_command(source, Command{command});
+                    applyDocumentCommand(Command{command});
+                    clearError();
+                    refresh();
+                    populate();
+                    status->setText(clear
+                        ? QStringLiteral("Floor level assignment cleared through document history.")
+                        : QStringLiteral("Floor level assignment saved through document history."));
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            };
+            QObject::connect(save_binding, &QPushButton::clicked, &dialog,
+                             [&] { apply_floor_binding(false); });
+            QObject::connect(clear_binding, &QPushButton::clicked, &dialog,
+                             [&] { apply_floor_binding(true); });
 
             QObject::connect(remove_link, &QPushButton::clicked, &dialog, [&] {
                 try {

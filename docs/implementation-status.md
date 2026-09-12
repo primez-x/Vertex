@@ -22,7 +22,9 @@ at native startup, deterministic source-kit and portable-package manifests,
 immutable reference-asset calibration and transform records, typed schedule
 records, and a versioned vertical level/floor-to-floor graph with strict Document
 admission plus a Windows Levels editor for revision-checked creation, elevation,
-link, freeze, and disconnect operations. Raster reference
+link, freeze, disconnect, and per-floor level-binding operations. Floor bindings
+name the graph entity and level explicitly and are validated against the graph
+before entering history. Raster reference
 images can now be imported into the project Asset store, displayed as a shared
 canvas underlay, calibrated in metres per source pixel, and transformed through
 typed undoable edits. PDF page import now retains the original PDF beside
@@ -49,7 +51,7 @@ record produces one OCCT compound with a top rail, endpoint posts, and bounded
 interior post spacing.  Railing create/edit/transform, plan/elevation/section
 projection, native 3D rendering, quantity receipts, and save/reopen paths use
 the shared document command and codec.  Curved or baluster profiles, stair
-hosting, level connections, and production compatibility certification remain
+hosting, automatic level-driven placement, coordinated propagation, and production compatibility certification remain
 open requirements.
 Interactive plan canvases now include a model-space overview map with viewport
 framing and click-to-recenter navigation. Workspace profiles persist map

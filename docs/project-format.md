@@ -172,6 +172,13 @@ an array of boundary arrays. Its scalar fields are `thickness_m` and `elevation_
 Entered unit text and exact quantity fields are separate semantic properties; display units do
 not change the metre geometry.
 
+Floors may carry an optional version-1 `vertical_level_binding` object with exactly
+`graph_id` and `level_id` (plus `version: 1`). `graph_id` resolves to a `vertical_levels`
+entity and `level_id` resolves inside that graph. The Document validator admits the binding
+only on floors and rejects a missing graph, wrong graph type, malformed model, or missing level.
+Removing the property clears the association without changing world-coordinate geometry.
+See [explicit vertical levels](vertical-levels.md).
+
 For known entity types, the document validates `refs` and `references` arrays as generic entity
 references. It also validates canonical singular and plural reference fields for each known type,
 such as `property_id`, `building_id`, `floor_id`, `wall_id`, `column_id`, `beam_id`, and `sheet_id`;

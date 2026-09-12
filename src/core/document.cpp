@@ -185,6 +185,18 @@ void validate_entity(const Entity& entity) {
                            std::string("invalid annotation entity: ") + error.what());
         }
     }
+    if (entity.properties.contains("vertical_level_binding")) {
+        if (entity.type != "floor") {
+            document_error(DocumentErrorCode::invalid_entity,
+                           "vertical level binding requires a floor entity");
+        }
+        try {
+            (void)VerticalLevelBinding::from_json(entity.properties.at("vertical_level_binding"));
+        } catch (const std::exception& error) {
+            document_error(DocumentErrorCode::invalid_entity,
+                           std::string("invalid vertical level binding: ") + error.what());
+        }
+    }
     const auto validate_embedded_model = [&](auto decoder, std::string_view name) {
         if (!entity.properties.contains("model")) {
             document_error(DocumentErrorCode::invalid_entity,
@@ -290,6 +302,17 @@ void collect_references(const Entity& entity, std::vector<EntityReference>& refe
         return;
     }
     for (const auto& [key, value] : entity.properties.items()) {
+        if (key == "vertical_level_binding") {
+            try {
+                const auto binding = VerticalLevelBinding::from_json(value);
+                references.push_back({binding.graph_entity_id, "vertical_levels",
+                                      EntityReference::Target::entity});
+            } catch (const std::exception& error) {
+                document_error(DocumentErrorCode::invalid_entity,
+                               std::string("invalid vertical level binding: ") + error.what());
+            }
+            continue;
+        }
         if (key == "refs" || key == "references") {
             if (!value.is_array()) {
                 document_error(DocumentErrorCode::invalid_entity,
@@ -398,6 +421,30 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
                                "entity " + id + " reference " + reference.id +
                                    " has type " + target->second.type + ", expected " +
                                    std::string(*reference.expected_type));
+            }
+        }
+        if (entity.type == "floor" && entity.properties.contains("vertical_level_binding")) {
+            try {
+                const auto binding = VerticalLevelBinding::from_json(
+                    entity.properties.at("vertical_level_binding"));
+                const auto graph = entities.find(binding.graph_entity_id);
+                if (graph == entities.end()) {
+                    // The canonical reference pass above reports the missing graph.
+                    continue;
+                }
+                const auto model = VerticalLevelGraph::from_json(graph->second.properties.at("model"));
+                const auto level = std::find_if(model.levels().begin(), model.levels().end(),
+                    [&](const auto& candidate) { return candidate.id == binding.level_id; });
+                if (level == model.levels().end()) {
+                    document_error(DocumentErrorCode::dangling_reference,
+                                   "floor " + id + " vertical level binding references missing level " +
+                                       binding.level_id);
+                }
+            } catch (const DocumentError&) {
+                throw;
+            } catch (const std::exception& error) {
+                document_error(DocumentErrorCode::invalid_entity,
+                               "invalid floor vertical level binding " + id + ": " + error.what());
             }
         }
     }

@@ -21,6 +21,18 @@ void validate_id(const std::string& id) {
         fail(VerticalLevelErrorCode::invalid_input, "Invalid UTF-8 ID");
     }
 }
+void validate_graph_entity_id(const std::string& id) {
+    if (id.empty() || id.size() > 128 ||
+        !std::all_of(id.begin(), id.end(), [](unsigned char character) {
+            return (character >= 'a' && character <= 'z') ||
+                   (character >= 'A' && character <= 'Z') ||
+                   (character >= '0' && character <= '9') || character == '-' ||
+                   character == '_' || character == '.' || character == ':';
+        })) {
+        fail(VerticalLevelErrorCode::invalid_input,
+             "Graph entity ID must contain 1 to 128 ASCII identifier bytes");
+    }
+}
 void exact_fields(const nlohmann::json& value, std::initializer_list<const char*> fields) {
     if (!value.is_object() || value.size() != fields.size())
         fail(VerticalLevelErrorCode::invalid_input, "Invalid vertical level JSON fields");
@@ -40,6 +52,35 @@ const char* state_name(RelationshipState state) {
 }
 VerticalLevelError::VerticalLevelError(VerticalLevelErrorCode code, std::string message)
     : std::invalid_argument(std::move(message)), code_(code) {}
+
+nlohmann::json VerticalLevelBinding::to_json() const {
+    validate_graph_entity_id(graph_entity_id);
+    validate_id(level_id);
+    return nlohmann::json{{"version", 1}, {"graph_id", graph_entity_id}, {"level_id", level_id}};
+}
+
+VerticalLevelBinding VerticalLevelBinding::from_json(const nlohmann::json& value) {
+    try {
+        exact_fields(value, {"version", "graph_id", "level_id"});
+        if (!value.at("version").is_number_integer() || value.at("version") != 1 ||
+            !value.at("graph_id").is_string() || !value.at("level_id").is_string()) {
+            fail(VerticalLevelErrorCode::invalid_input, "Invalid vertical level binding value");
+        }
+        VerticalLevelBinding result{value.at("graph_id").get<std::string>(),
+                                    value.at("level_id").get<std::string>()};
+        validate_graph_entity_id(result.graph_entity_id);
+        validate_id(result.level_id);
+        return result;
+    } catch (const VerticalLevelError&) {
+        throw;
+    } catch (const nlohmann::json::exception& error) {
+        throw VerticalLevelError(VerticalLevelErrorCode::invalid_input,
+                                 std::string("Invalid vertical level binding JSON: ") + error.what());
+    } catch (const std::exception& error) {
+        throw VerticalLevelError(VerticalLevelErrorCode::invalid_input,
+                                 std::string("Invalid vertical level binding JSON: ") + error.what());
+    }
+}
 
 VerticalLevelGraph::VerticalLevelGraph(std::vector<VerticalLevel> levels, std::vector<FloorToFloorLink> links)
     : levels_(std::move(levels)), links_(std::move(links)) {
