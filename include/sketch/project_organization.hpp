@@ -51,4 +51,12 @@ struct ProjectOrganization {
 [[nodiscard]] ProjectOrganization organize_project(
     const std::map<std::string, Entity, std::less<>>& entities);
 
+// Resolve an opt-in level-driven placement into a derived entity copy. The
+// source entity remains unchanged. Entities without a vertical_placement
+// property, or with mode "absolute", are returned byte-for-byte equivalent.
+// Mode "level" requires a valid floor context bound to a vertical level graph
+// and applies level elevation plus offset_m to supported Z coordinates.
+[[nodiscard]] Entity resolve_vertical_placement(const DocumentSnapshot& snapshot,
+                                                const Entity& entity);
+
 }  // namespace sketch

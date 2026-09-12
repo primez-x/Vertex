@@ -772,7 +772,7 @@
         "tests/document_tests.cpp",
         "docs/vertical-levels.md"
       ],
-      "implementation_note": "A validated vertical level graph with connected, frozen, and disconnected floor-to-floor links now has strict version-1 JSON decoding, Document admission through the vertical_levels entity, explicit validated floor bindings, and a Windows Levels editor for revision-checked create/edit/link/freeze/disconnect/assign operations; plan/section/3D propagation remains open."
+      "implementation_note": "A validated vertical level graph with connected, frozen, and disconnected floor-to-floor links now has strict version-1 JSON decoding, Document admission through the vertical_levels entity, explicit validated floor bindings, and a Windows Levels editor for revision-checked create/edit/link/freeze/disconnect/assign operations. Newly created walls, slabs, and architectural objects on a bound floor carry an opt-in versioned level placement record; plan, elevation, section, and native 3D projections resolve it from the same snapshot without mutating source coordinates. Site/terrain tools and full cross-view production qualification remain open."
     },
     {
       "id": "APX-WF-001",
@@ -1681,7 +1681,7 @@
         "docs/vertical-levels.md",
         "docs/reference-grids.md"
       ],
-      "implementation_note": "Vertical level and floor-to-floor relationship semantics are implemented as a standalone graph. Floors can bind to a validated graph entity and level through revisioned desktop controls with save/reopen coverage. Reference grids now have strict version-1 persistence, a revision-checked Windows editor, deterministic rotated line generation, and shared measurement/architectural canvas rendering. Site/terrain objects, grid labels, automatic level-driven placement, and coordinated view propagation remain open."
+      "implementation_note": "Vertical level and floor-to-floor relationship semantics are implemented as a standalone graph. Floors can bind to a validated graph entity and level through revisioned desktop controls with save/reopen coverage. Reference grids now have strict version-1 persistence, a revision-checked Windows editor, deterministic rotated line generation, and shared measurement/architectural canvas rendering. Newly created walls, slabs, and architectural objects on a bound floor resolve through an opt-in level placement record across plan, elevation, section, and native 3D without mutating source coordinates. Site/terrain objects, grid labels, coordinated view propagation, and production qualification remain open."
     },
     {
       "id": "ARCH-MOD-008",

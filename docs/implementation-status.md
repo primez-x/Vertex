@@ -24,7 +24,10 @@ records, and a versioned vertical level/floor-to-floor graph with strict Documen
 admission plus a Windows Levels editor for revision-checked creation, elevation,
 link, freeze, disconnect, and per-floor level-binding operations. Floor bindings
 name the graph entity and level explicitly and are validated against the graph
-before entering history. Raster reference
+before entering history. Newly created walls, slabs, and architectural objects
+on a bound floor opt into a versioned level placement record; plan, elevation,
+section, and native 3D projections resolve that record from the same immutable
+snapshot without rewriting source coordinates. Raster reference
 images can now be imported into the project Asset store, displayed as a shared
 canvas underlay, calibrated in metres per source pixel, and transformed through
 typed undoable edits. PDF page import now retains the original PDF beside
@@ -41,8 +44,8 @@ model-space grids with independent spacing/extents and deterministic major-line
 classification through revision-checked Document commands. Both measurement
 and architectural canvases render the same line list after save/reopen, while
 grids remain presentation aids and cannot affect measurement geometry. Grid
-labels, site/terrain coordination, automatic level-driven placement, and full
-cross-view production qualification remain open.
+labels, site/terrain coordination, and full cross-view production qualification
+remain open.
 
 The architectural object slice now accepts a true flat roof through the
 existing sloped-panel schema: zero rise and zero pitch produce a thickened
@@ -60,7 +63,7 @@ record produces one OCCT compound with a top rail, endpoint posts, and bounded
 interior post spacing.  Railing create/edit/transform, plan/elevation/section
 projection, native 3D rendering, quantity receipts, and save/reopen paths use
 the shared document command and codec.  Curved or baluster profiles, stair
-hosting, automatic level-driven placement, coordinated propagation, and production compatibility certification remain
+hosting, coordinated propagation, and production compatibility certification remain
 open requirements.
 Interactive plan canvases now include a model-space overview map with viewport
 framing and click-to-recenter navigation. Workspace profiles persist map

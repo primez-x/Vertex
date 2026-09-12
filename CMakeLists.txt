@@ -351,7 +351,7 @@ if(SKETCH_BUILD_DESKTOP)
   find_package(Qt6 6.8 CONFIG REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets PrintSupport Pdf Svg)
   add_library(sketch_visualization src/visualization/native_model_view.cpp)
   target_include_directories(sketch_visualization PUBLIC include)
-  target_link_libraries(sketch_visualization PUBLIC sketch_architecture sketch_building_entities sketch_document Qt6::Widgets TKService TKV3d TKOpenGl)
+  target_link_libraries(sketch_visualization PUBLIC sketch_architecture sketch_building_entities sketch_document sketch_project_organization Qt6::Widgets TKService TKV3d TKOpenGl)
   add_library(sketch_plan_canvas src/desktop/plan_canvas.cpp)
   target_include_directories(sketch_plan_canvas PUBLIC include PRIVATE src/desktop)
   target_link_libraries(sketch_plan_canvas PUBLIC Qt6::Widgets sketch_precision

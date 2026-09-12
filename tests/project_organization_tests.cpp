@@ -3,6 +3,7 @@
 #include "support/noninteractive_errors.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
 #include <string_view>
@@ -227,6 +228,84 @@ void test_floor_level_binding_is_exposed_in_context() {
     require(*context == sketch::DrawingContext{"site", "building", "floor", "layer", "upper"},
             "level binding should not change the existing hierarchy context");
 }
+
+void test_level_placement_resolves_without_mutating_source() {
+    const auto graph = sketch::VerticalLevelGraph({{"ground", 1.25}, {"upper", 4.75}},
+                                                  {{"storey", "ground", "upper"}});
+    const auto column = make_entity("column", "column", {
+        {"layer_id", "layer"},
+        {"base_center_m", {2.0, 3.0, 0.15}},
+        {"vertical_placement", {{"version", 1}, {"mode", "level"}, {"offset_m", 0.4}}},
+    });
+    const auto document = sketch::Document::create({
+        make_entity("site", "property"),
+        make_entity("building", "building", {{"property_id", "site"}}),
+        make_entity("floor", "floor", {{"building_id", "building"},
+            {"vertical_level_binding", {{"version", 1}, {"graph_id", "levels"},
+                                           {"level_id", "upper"}}}}),
+        make_entity("layer", "layer", {{"floor_id", "floor"}}),
+        make_entity("levels", "vertical_levels",
+                    {{"model", nlohmann::json::parse(graph.serialize())}}),
+        column,
+    });
+    const auto snapshot = document.snapshot();
+    const auto& source = snapshot.entities().at("column");
+    const auto resolved = sketch::resolve_vertical_placement(snapshot, source);
+    require(std::abs(resolved.properties.at("base_center_m").at(2).get<double>() - 5.3) < 1e-9,
+            "level placement must add the bound level elevation and local offset to Z");
+    require(source.properties.at("base_center_m").at(2) == 0.15,
+            "derived level placement must not mutate source geometry");
+
+    auto moved_graph = graph.with_elevation("upper", 6.0);
+    auto moved = snapshot.entities().at("levels");
+    moved.properties["model"] = nlohmann::json::parse(moved_graph.serialize());
+    std::vector<Entity> copy_entities;
+    copy_entities.reserve(snapshot.entities().size());
+    for (const auto& [id, value] : snapshot.entities()) {
+        (void)id;
+        copy_entities.push_back(value);
+    }
+    sketch::Document copy = sketch::Document::create(std::move(copy_entities));
+    copy.apply(sketch::ApplyEntityChanges{copy.revision(),
+        {sketch::EntityChange::upsert(std::move(moved))}, {}, "move upper level"});
+    const auto moved_snapshot = copy.snapshot();
+    const auto moved_column = sketch::resolve_vertical_placement(
+        moved_snapshot, moved_snapshot.entities().at("column"));
+    require(std::abs(moved_column.properties.at("base_center_m").at(2).get<double>() - 6.55) < 1e-9,
+            "level edits must change the derived placement on the next projection");
+}
+
+void test_level_placement_rejects_invalid_or_unbound_requests() {
+    const auto unbound = make_entity("column", "column", {
+        {"base_center_m", {0.0, 0.0, 0.0}},
+        {"vertical_placement", {{"version", 1}, {"mode", "level"}, {"offset_m", 0.0}}},
+    });
+    const auto document = sketch::Document::create({unbound});
+    const auto unbound_snapshot = document.snapshot();
+    bool rejected = false;
+    try {
+        (void)sketch::resolve_vertical_placement(
+            unbound_snapshot, unbound_snapshot.entities().at("column"));
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    require(rejected, "level placement without a bound floor must fail closed");
+
+    auto malformed = make_entity("column", "column", {
+        {"base_center_m", {0.0, 0.0, 0.0}},
+        {"vertical_placement", {{"version", 1}, {"mode", "unknown"}, {"offset_m", 0.0}}},
+    });
+    const auto malformed_document = sketch::Document::create({malformed});
+    const auto malformed_snapshot = malformed_document.snapshot();
+    rejected = false;
+    try {
+        (void)sketch::resolve_vertical_placement(
+            malformed_snapshot, malformed_snapshot.entities().at("column"));
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    require(rejected, "unknown vertical placement modes must fail closed");
+}
 }  // namespace
 
 int main() {
@@ -240,6 +319,8 @@ int main() {
         test_unresolved_container_descendants_are_not_promoted();
         test_roots_and_children_have_stable_id_order();
         test_floor_level_binding_is_exposed_in_context();
+        test_level_placement_resolves_without_mutating_source();
+        test_level_placement_rejects_invalid_or_unbound_requests();
         std::cout << "Project organization tests passed\n";
         return 0;
     } catch (const std::exception& error) {

@@ -4,6 +4,7 @@
 #include "sketch/document_solid.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/document.hpp"
+#include "sketch/project_organization.hpp"
 #include "sketch/assembly_model.hpp"
 #include <QColor>
 
@@ -333,14 +334,24 @@ public:
                 continue;
             }
 
+            Entity geometry_entity;
+            try {
+                geometry_entity = resolve_vertical_placement(*snapshot, entity);
+            } catch (const std::exception& error) {
+                append_unique(errors, entity.type + " '" + id + "': " + error.what());
+                remove_solid(id);
+                changed = true;
+                continue;
+            }
+
             supported_ids.insert(id);
             const auto hosted = entity.type == "wall"
                                     ? openings_by_wall[id]
                                     : std::vector<const Entity*>{};
-            auto content = entity_content(entity, hosted);
+            auto content = entity_content(geometry_entity, hosted);
             std::optional<std::string> material_color;
-            if (entity.properties.contains("material_assignment")) {
-                const auto& assignment = entity.properties.at("material_assignment");
+            if (geometry_entity.properties.contains("material_assignment")) {
+                const auto& assignment = geometry_entity.properties.at("material_assignment");
                 const auto found = material_colors.find({assignment.at("catalog_id").get<std::string>(),
                     assignment.at("material_id").get<std::string>()});
                 if (found != material_colors.end()) material_color = found->second;
@@ -372,18 +383,18 @@ public:
             std::string parse_error;
             TopoDS_Shape shape;
             try {
-                if (entity.type == "wall") {
+                if (geometry_entity.type == "wall") {
                     Wall wall;
-                    if (!read_document_wall(entity, hosted, wall, parse_error)) {
+                    if (!read_document_wall(geometry_entity, hosted, wall, parse_error)) {
                         append_unique(errors, "wall '" + id + "': " + parse_error);
                         remove_solid(id);
                         changed = true;
                         continue;
                     }
                     shape = make_wall(wall);
-                } else if (entity.type == "slab") {
+                } else if (geometry_entity.type == "slab") {
                     Slab slab;
-                    if (!read_document_slab(entity, slab, parse_error)) {
+                    if (!read_document_slab(geometry_entity, slab, parse_error)) {
                         append_unique(errors, "slab '" + id + "': " + parse_error);
                         remove_solid(id);
                         changed = true;
@@ -391,7 +402,7 @@ public:
                     }
                     shape = make_slab(slab);
                 } else {
-                    shape = make_building_shape(decode_building_entity(entity));
+                    shape = make_building_shape(decode_building_entity(geometry_entity));
                 }
                 if (shape.IsNull()) {
                     append_unique(errors, entity.type + " '" + id + "' produced a null solid");

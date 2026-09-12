@@ -2665,6 +2665,21 @@ void test_vertical_levels_workflow() {
     });
     action->trigger();
 
+    const auto bound_wall = window.createStraightWall({0.0, 0.0}, {2.0, 0.0});
+    require(!bound_wall.isEmpty(), "a bound floor should continue to author walls");
+    const auto bound_wall_entity = window.document().snapshot().entities().at(bound_wall.toStdString());
+    require(bound_wall_entity.properties.at("vertical_placement") ==
+                nlohmann::json{{"version", 1}, {"mode", "level"}, {"offset_m", 0.0}},
+            "new walls on a bound floor should persist level-driven placement");
+    const auto bound_column = window.commitBuildingObject(
+        encode_building_entity(RectangularColumn{"bound-column", {1.0, 1.0, 0.0}, 0.3, 0.3, 2.5, 0.0}),
+        window.document().revision());
+    require(!bound_column.isEmpty(), "a bound floor should continue to author architectural objects");
+    const auto bound_column_entity = window.document().snapshot().entities().at(bound_column.toStdString());
+    require(bound_column_entity.properties.at("vertical_placement") ==
+                nlohmann::json{{"version", 1}, {"mode", "level"}, {"offset_m", 0.0}},
+            "new architectural objects on a bound floor should persist level-driven placement");
+
     const auto find_model = [&] {
         const auto snapshot = window.document().snapshot();
         const auto found = std::find_if(snapshot.entities().begin(), snapshot.entities().end(),

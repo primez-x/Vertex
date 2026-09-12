@@ -58,6 +58,25 @@ for a floor and every hosted layer/object. A malformed or unresolved binding is
 kept visible as an organization diagnostic rather than silently falling back to
 an unbound context.
 
+Walls, slabs, and architectural objects created on a bound floor carry an
+optional `vertical_placement` record:
+
+```json
+{
+  "version": 1,
+  "mode": "level",
+  "offset_m": 0.0
+}
+```
+
+The `level` mode resolves to the bound level elevation plus the local offset at
+projection time. Plan, elevation, section, and native 3D views use this same
+derived copy; the authoritative document keeps the entered world coordinates
+and the level edit remains fully undoable. `mode: "absolute"` preserves the
+source coordinates for imported or explicitly fixed objects. Invalid placement
+records, missing bindings, and unsupported object coordinates fail closed with
+an actionable geometry diagnostic.
+
 The Windows Architectural workspace exposes **Levels and floor-to-floor links**
 from the More menu and command palette. The editor creates or edits level IDs
 and metre elevations, adds validated connected links, and can freeze or
@@ -66,7 +85,7 @@ is a revision-checked Document command, so undo/redo and save/reopen preserve
 the graph exactly.
 
 This is foundational persistence coverage, not complete requirement delivery.
-Building-object floor/ceiling binding, automatic elevation propagation,
-coordinated plan/section/3D views, and file import remain separate work.
+Ceiling binding, site/terrain tools, coordinated view presentation, and file
+import remain separate work.
 Tests cover independent levels, immutable edits, retained heights, malformed
 graphs, deterministic output, and a maximum-size chain.

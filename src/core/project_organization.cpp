@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <set>
 #include <string>
 #include <string_view>
@@ -559,6 +560,125 @@ ProjectOrganization organize_project(const std::map<std::string, Entity, std::le
     for (auto& [unused, node] : result.nodes) {
         (void)unused;
         std::sort(node.children.begin(), node.children.end());
+    }
+    return result;
+}
+
+Entity resolve_vertical_placement(const DocumentSnapshot& snapshot,
+                                  const Entity& entity) {
+    if (!entity.properties.is_object()) {
+        return entity;
+    }
+    const auto property = entity.properties.find("vertical_placement");
+    if (property == entity.properties.end()) {
+        return entity;
+    }
+    const auto& placement = property.value();
+    if (!placement.is_object() || placement.size() != 3 ||
+        !placement.contains("version") || !placement.contains("mode") ||
+        !placement.contains("offset_m") || !placement.at("version").is_number_integer() ||
+        placement.at("version") != 1 || !placement.at("mode").is_string() ||
+        !placement.at("offset_m").is_number()) {
+        throw std::invalid_argument("vertical_placement must be version 1 with mode and offset_m");
+    }
+    const auto mode = placement.at("mode").get<std::string>();
+    const auto offset = placement.at("offset_m").get<double>();
+    if ((mode != "absolute" && mode != "level") || !std::isfinite(offset) ||
+        std::abs(offset) > 1e9) {
+        throw std::invalid_argument("vertical_placement has an invalid mode or offset_m");
+    }
+    if (mode == "absolute") {
+        return entity;
+    }
+    if (entity.type == "opening" || entity.type == "boundary" ||
+        entity.type == "measurement_boundary" || entity.type == "room_boundary" ||
+        entity.type == "room") {
+        throw std::invalid_argument("level placement is supported only for 3D objects and slabs");
+    }
+
+    const auto organization = organize_project(snapshot);
+    const auto context = organization.drawing_context(entity.id);
+    if (!context || context->floor_id.empty()) {
+        throw std::invalid_argument("level placement requires a valid bound floor context");
+    }
+    const auto floor = snapshot.entities().find(context->floor_id);
+    if (floor == snapshot.entities().end() || floor->second.type != "floor" ||
+        !floor->second.properties.is_object() ||
+        !floor->second.properties.contains("vertical_level_binding")) {
+        throw std::invalid_argument("level placement requires a floor level binding");
+    }
+    VerticalLevelBinding binding;
+    try {
+        binding = VerticalLevelBinding::from_json(
+            floor->second.properties.at("vertical_level_binding"));
+    } catch (const std::exception& error) {
+        throw std::invalid_argument(std::string("floor level binding is invalid: ") + error.what());
+    }
+    const auto graph = snapshot.entities().find(binding.graph_entity_id);
+    if (graph == snapshot.entities().end() || graph->second.type != "vertical_levels" ||
+        !graph->second.properties.is_object() || !graph->second.properties.contains("model")) {
+        throw std::invalid_argument("level placement references a missing vertical level graph");
+    }
+    VerticalLevelGraph levels;
+    try {
+        levels = VerticalLevelGraph::from_json(graph->second.properties.at("model"));
+    } catch (const std::exception& error) {
+        throw std::invalid_argument(std::string("vertical level graph is invalid: ") + error.what());
+    }
+    const auto level = std::find_if(levels.levels().begin(), levels.levels().end(),
+        [&](const auto& candidate) { return candidate.id == binding.level_id; });
+    if (level == levels.levels().end()) {
+        throw std::invalid_argument("level placement references a missing vertical level");
+    }
+    const double shift = level->elevation_m + offset;
+    if (!std::isfinite(shift)) {
+        throw std::invalid_argument("resolved level placement is not finite");
+    }
+
+    Entity result = entity;
+    auto translate_vector_z = [&](const char* key) {
+        auto value = result.properties.find(key);
+        if (value == result.properties.end()) return false;
+        if (!value->is_array() || value->size() != 3 ||
+            !value->at(0).is_number() || !value->at(1).is_number() ||
+            !value->at(2).is_number()) {
+            throw std::invalid_argument(std::string("vertical placement coordinate ") + key +
+                                        " must be a finite Vec3");
+        }
+        const auto x = value->at(0).get<double>();
+        const auto y = value->at(1).get<double>();
+        const auto z = value->at(2).get<double>();
+        if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) ||
+            !std::isfinite(z + shift)) {
+            throw std::invalid_argument(std::string("vertical placement coordinate ") + key +
+                                        " is not finite");
+        }
+        (*value)[2] = z + shift;
+        return true;
+    };
+    if (entity.type == "wall" || entity.type == "slab") {
+        auto value = result.properties.find("elevation_m");
+        if (value == result.properties.end() || !value->is_number()) {
+            throw std::invalid_argument("level placement requires a finite elevation_m");
+        }
+        const auto elevation = value->get<double>();
+        if (!std::isfinite(elevation) || !std::isfinite(elevation + shift)) {
+            throw std::invalid_argument("level placement elevation_m is not finite");
+        }
+        *value = elevation + shift;
+        return result;
+    }
+    const bool translated = translate_vector_z("base_center_m") ||
+                            translate_vector_z("base_position_m") ||
+                            translate_vector_z("start_m") ||
+                            translate_vector_z("end_m");
+    if (!translated) {
+        throw std::invalid_argument("level placement object has no supported Z coordinate");
+    }
+    // A beam has two endpoints and must move as one rigid object. The first
+    // short-circuit above intentionally handles start_m; translate end_m too.
+    if (entity.type == "beam") {
+        (void)translate_vector_z("end_m");
     }
     return result;
 }

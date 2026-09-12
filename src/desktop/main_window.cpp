@@ -147,6 +147,15 @@ constexpr std::size_t kMaximumClipboardBytes = 4ULL * 1024ULL * 1024ULL;
 constexpr std::size_t kMaximumClipboardEntities = 128;
 constexpr std::string_view kClipboardFormat = "sketch.document.clipboard";
 
+void add_default_level_placement(json& properties, const DrawingContext& context) {
+    if (!properties.is_object() || properties.contains("vertical_placement") ||
+        context.level_id.empty()) {
+        return;
+    }
+    properties["vertical_placement"] =
+        json{{"version", 1}, {"mode", "level"}, {"offset_m", 0.0}};
+}
+
 json clipboard_entity_json(const Entity& entity) {
     return json{{"id", entity.id}, {"type", entity.type}, {"properties", entity.properties},
                 {"required", entity.required}, {"extensions", entity.extensions}};
@@ -7154,13 +7163,14 @@ public:
         }
         const auto entity_id = new_id("wall");
         const auto id = id_from(entity_id);
-        const auto properties = json{{"floor_id", drawing_context->floor_id},
-                                     {"layer_id", drawing_context->layer_id},
-                                     {"baseline", segment_json(Segment{start, end, 0.0})},
-                                     {"thickness_m", 0.14},
-                                     {"height_m", 2.4384},
-                                     {"elevation_m", 0.0},
-                                     {"classification", classification.toStdString()}};
+        auto properties = json{{"floor_id", drawing_context->floor_id},
+                               {"layer_id", drawing_context->layer_id},
+                               {"baseline", segment_json(Segment{start, end, 0.0})},
+                               {"thickness_m", 0.14},
+                               {"height_m", 2.4384},
+                               {"elevation_m", 0.0},
+                               {"classification", classification.toStdString()}};
+        add_default_level_placement(properties, *drawing_context);
         if (!applyEntity(Entity{entity_id, "wall", properties, false, json::object()},
                          "create straight wall", revision)) {
             return {};
@@ -7199,6 +7209,14 @@ public:
                 candidate.properties.update(canonical.properties);
                 if (entries) candidate.properties["quantity_entries"] = *entries;
                 if (!assignDrawingContext(candidate.properties)) return {};
+                if (candidate.properties.is_object() &&
+                    !candidate.properties.contains("vertical_placement")) {
+                    const auto layer_id = read_string(candidate.properties, "layer_id");
+                    const auto context = layer_id
+                        ? organize_project(snapshot).drawing_context(*layer_id)
+                        : std::nullopt;
+                    if (context) add_default_level_placement(candidate.properties, *context);
+                }
             }
             const auto id = id_from(candidate.id);
             applyDocumentCommand(ApplyEntityChanges{
@@ -7381,13 +7399,14 @@ public:
             for (const auto& hole : holes) {
                 holes_json.push_back(boundary_json(hole));
             }
-            const auto properties = json{{"floor_id", drawing_context->floor_id},
-                                         {"layer_id", drawing_context->layer_id},
-                                         {"boundary", boundary_json(boundary)},
-                                         {"holes", std::move(holes_json)},
-                                         {"thickness_m", thickness},
-                                         {"elevation_m", elevation},
-                                         {"classification", "slab"}};
+            auto properties = json{{"floor_id", drawing_context->floor_id},
+                                   {"layer_id", drawing_context->layer_id},
+                                   {"boundary", boundary_json(boundary)},
+                                   {"holes", std::move(holes_json)},
+                                   {"thickness_m", thickness},
+                                   {"elevation_m", elevation},
+                                   {"classification", "slab"}};
+            add_default_level_placement(properties, *drawing_context);
             if (!applyEntity(Entity{entity_id, "slab", properties, false, json::object()},
                              "create slab", revision)) {
                 return {};
@@ -8293,6 +8312,14 @@ public:
                     for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"})
                         entity.properties.erase(key);
                     if (!assignDrawingContext(entity.properties)) return false;
+                    if (entity.type == "wall" || entity.type == "slab" ||
+                        can_recognize_building_entity_type(entity.type)) {
+                        const auto layer_id = read_string(entity.properties, "layer_id");
+                        if (layer_id) {
+                            const auto context = organize_project(source).drawing_context(*layer_id);
+                            if (context) add_default_level_placement(entity.properties, *context);
+                        }
+                    }
                 }
                 changes.push_back(EntityChange::upsert(std::move(entity)));
             }
@@ -12886,10 +12913,11 @@ private:
             }
             if (can_recognize_building_entity_type(entity.type)) {
                 try {
-                    const auto key = entity.type + '\n' + entity.properties.dump();
+                    const auto resolved = resolve_vertical_placement(snapshot, entity);
+                    const auto key = resolved.type + '\n' + resolved.properties.dump();
                     auto cached = m_plan_projection_cache.find(id);
                     if (cached == m_plan_projection_cache.end() || cached->second.first != key) {
-                        auto projection = project_building_plan(decode_building_entity(entity));
+                        auto projection = project_building_plan(decode_building_entity(resolved));
                         cached = m_plan_projection_cache.insert_or_assign(
                             id, std::make_pair(key, std::move(projection))).first;
                     }
@@ -12906,18 +12934,31 @@ private:
                 entity.type != "slab") {
                 continue;
             }
+            std::optional<Entity> resolved_entity;
+            if (entity.type == "wall" || entity.type == "slab") {
+                try {
+                    resolved_entity = resolve_vertical_placement(snapshot, entity);
+                } catch (const std::exception& error) {
+                    append_geometry_error(QStringLiteral("%1 %2: %3")
+                                              .arg(entity.type == "wall" ? QStringLiteral("Wall")
+                                                                           : QStringLiteral("Slab"),
+                                                   id_from(id), QString::fromUtf8(error.what())));
+                    continue;
+                }
+            }
+            const auto& geometry_entity = resolved_entity ? *resolved_entity : entity;
             Boundary segments;
             if (entity.type == "wall") {
-                const auto baseline = read_required_segment(entity.properties, "baseline");
+                const auto baseline = read_required_segment(geometry_entity.properties, "baseline");
                 if (!baseline.has_value()) {
                     append_geometry_error(QStringLiteral("Wall %1: baseline is invalid or missing")
                                               .arg(id_from(id)));
                     continue;
                 }
                 segments.push_back(*baseline);
-                const auto thickness = read_finite_number(entity.properties, "thickness_m");
-                const auto height = read_finite_number(entity.properties, "height_m");
-                const auto elevation = read_finite_number(entity.properties, "elevation_m");
+                const auto thickness = read_finite_number(geometry_entity.properties, "thickness_m");
+                const auto height = read_finite_number(geometry_entity.properties, "height_m");
+                const auto elevation = read_finite_number(geometry_entity.properties, "elevation_m");
                 if (!thickness.has_value() || !height.has_value() || !elevation.has_value()) {
                     append_geometry_error(QStringLiteral("Wall %1: thickness, height, and elevation are required")
                                               .arg(id_from(id)));
@@ -12933,23 +12974,23 @@ private:
                 }
                 segments = wall_segments_without_openings(segments.front(), openings_by_wall[id]);
             } else if (entity.type == "slab") {
-                const auto boundary = read_required_boundary(entity.properties, "boundary");
+                const auto boundary = read_required_boundary(geometry_entity.properties, "boundary");
                 if (!boundary.has_value()) {
                     append_geometry_error(QStringLiteral("Slab %1: boundary is invalid or missing")
                                               .arg(id_from(id)));
                     continue;
                 }
                 segments = *boundary;
-                const auto key = entity.type + '\n' + entity.properties.dump();
+                const auto key = geometry_entity.type + '\n' + geometry_entity.properties.dump();
                 auto cached = m_plan_slab_validation_cache.find(id);
                 if (cached == m_plan_slab_validation_cache.end() || cached->second.first != key) {
                     QString validation_error;
-                    const auto holes = read_required_holes(entity.properties);
+                    const auto holes = read_required_holes(geometry_entity.properties);
                     if (!holes.has_value()) {
                         validation_error = QStringLiteral("holes must be an array");
                     } else {
-                        const auto thickness = read_finite_number(entity.properties, "thickness_m");
-                        const auto elevation = read_finite_number(entity.properties, "elevation_m");
+                        const auto thickness = read_finite_number(geometry_entity.properties, "thickness_m");
+                        const auto elevation = read_finite_number(geometry_entity.properties, "elevation_m");
                         if (!thickness.has_value() || !elevation.has_value()) {
                             validation_error = QStringLiteral("thickness and elevation are required");
                         } else {
@@ -12987,7 +13028,7 @@ private:
             all_geometry.push_back(CanvasEntity{id_from(id),
                                                 QString::fromStdString(entity.type),
                                                 segments,
-                                                read_number(entity.properties, "thickness_m", 0.08),
+                                                read_number(geometry_entity.properties, "thickness_m", 0.08),
                                                 id_from(id) == m_selected_id});
         }
         // Presentation annotations are kept in a typed entity, but their
@@ -13045,12 +13086,13 @@ private:
             for (const auto& [id, entity] : snapshot.entities()) {
                 try {
                     if (can_recognize_building_entity_type(entity.type)) {
+                        const auto resolved = resolve_vertical_placement(snapshot, entity);
                         const auto key = "view:" + std::to_string(static_cast<int>(kind)) +
-                                         '\n' + entity.type + '\n' + entity.properties.dump();
+                                         '\n' + resolved.type + '\n' + resolved.properties.dump();
                         auto cached = m_plan_projection_cache.find(id);
                         if (cached == m_plan_projection_cache.end() || cached->second.first != key) {
                             auto projection = project_building_view(
-                                decode_building_entity(entity), kind, frame);
+                                decode_building_entity(resolved), kind, frame);
                             cached = m_plan_projection_cache.insert_or_assign(
                                 id, std::make_pair(key, std::move(projection))).first;
                         }
@@ -13060,10 +13102,11 @@ private:
                         continue;
                     }
                     if (entity.type == "wall") {
-                        const auto baseline = read_required_segment(entity.properties, "baseline");
-                        const auto thickness = read_finite_number(entity.properties, "thickness_m");
-                        const auto height = read_finite_number(entity.properties, "height_m");
-                        const auto elevation = read_finite_number(entity.properties, "elevation_m");
+                        const auto resolved = resolve_vertical_placement(snapshot, entity);
+                        const auto baseline = read_required_segment(resolved.properties, "baseline");
+                        const auto thickness = read_finite_number(resolved.properties, "thickness_m");
+                        const auto height = read_finite_number(resolved.properties, "height_m");
+                        const auto elevation = read_finite_number(resolved.properties, "elevation_m");
                         if (!baseline || !thickness || !height || !elevation) {
                             throw std::invalid_argument("wall projection requires baseline, thickness, height, and elevation");
                         }
@@ -13078,10 +13121,11 @@ private:
                         continue;
                     }
                     if (entity.type == "slab") {
-                        const auto boundary = read_required_boundary(entity.properties, "boundary");
-                        const auto holes = read_required_holes(entity.properties);
-                        const auto thickness = read_finite_number(entity.properties, "thickness_m");
-                        const auto elevation = read_finite_number(entity.properties, "elevation_m");
+                        const auto resolved = resolve_vertical_placement(snapshot, entity);
+                        const auto boundary = read_required_boundary(resolved.properties, "boundary");
+                        const auto holes = read_required_holes(resolved.properties);
+                        const auto thickness = read_finite_number(resolved.properties, "thickness_m");
+                        const auto elevation = read_finite_number(resolved.properties, "elevation_m");
                         if (!boundary || !holes || !thickness || !elevation) {
                             throw std::invalid_argument("slab projection requires boundary, holes, thickness, and elevation");
                         }

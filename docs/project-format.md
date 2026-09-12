@@ -179,6 +179,15 @@ only on floors and rejects a missing graph, wrong graph type, malformed model, o
 Removing the property clears the association without changing world-coordinate geometry.
 See [explicit vertical levels](vertical-levels.md).
 
+Walls, slabs, and architectural objects may also carry an optional version-1
+`vertical_placement` object with `mode` (`"level"` or `"absolute"`) and a finite
+`offset_m`. New objects authored on a floor with a level binding default to
+`mode: "level"`; projection resolves the bound elevation plus the offset from
+the current snapshot without rewriting the stored coordinates. Absolute mode,
+including an omitted placement record, preserves source elevation for imported
+or explicitly fixed geometry. The resolver is shared by plan, elevation,
+section, and native 3D output and rejects malformed or unbound level requests.
+
 Reference grids are optional `reference_grid` entities. Their `properties.model`
 is a strict version-1 object containing `origin_m`, `rotation_radians`,
 independent X/Y spacing and extents, `major_every`, axis labels, and `visible`;
