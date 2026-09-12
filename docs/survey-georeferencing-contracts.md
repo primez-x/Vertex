@@ -23,6 +23,16 @@ recalculation. Export writes the versioned JSON contract atomically, retaining
 source reference, legs, local vertices, tolerance, and diagnostics. Invalid
 legs identify their input line. Calculation/export does not alter the project.
 
+Desktop exports add an optional `input_provenance` object, version 1, to the
+version-1 core report. It records `legs_text` and `source_text` verbatim,
+`default_unit` (`m` or `ft`) for suffixless input,
+`closure_tolerance_expression`, and ordered `distances`. Each distance records
+its `leg_id`, one-based `line_number`, `original_expression`, and normalized
+`exact_metres` numerator/denominator. These fields preserve the entered source
+without replacing the calculated metre values. Consumers must validate and
+recompute input before using it as geometry; the report is not an import
+format or a signed survey attestation.
+
 This is a calculator and report workflow; persisted survey geometry in the
 project, Apex survey exchange, DMS entry, and production survey qualification
 remain incomplete.

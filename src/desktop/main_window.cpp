@@ -6557,6 +6557,7 @@ public:
                 if (input->toPlainText().size() > 1024 * 1024)
                     throw std::invalid_argument("Survey input exceeds 1 MiB.");
                 std::vector<SurveyLeg> legs;
+                auto distance_entries = json::array();
                 const auto lines = input->toPlainText().split('\n');
                 int line_number = 0;
                 for (const auto& line : lines) {
@@ -6576,9 +6577,14 @@ public:
                         const auto angle = fields[1].trimmed().toDouble(&ok);
                         if (!ok || !std::isfinite(angle) || angle < 0 || angle > 90)
                             throw std::invalid_argument("Angle must be between 0 and 90 degrees.");
-                        const auto distance = parse_quantity(fields[2].trimmed().toStdString(), unit).metres;
+                        const auto quantity = parse_quantity(fields[2].trimmed().toStdString(), unit);
+                        const auto distance = quantity.metres;
                         if (distance <= 0) throw std::invalid_argument("Distance must be positive.");
                         legs.push_back({"leg-" + std::to_string(legs.size() + 1), quadrants.at(quadrant), angle, distance});
+                        distance_entries.push_back({{"leg_id", legs.back().id},
+                            {"line_number", line_number}, {"original_expression", quantity.original_expression},
+                            {"exact_metres", {{"numerator", quantity.exact_metres.numerator},
+                                              {"denominator", quantity.exact_metres.denominator}}}});
                     } catch (const std::exception& error) {
                         throw std::invalid_argument("Line " + std::to_string(line_number) + ": " + error.what());
                     }
@@ -6593,7 +6599,14 @@ public:
                 if (d.area_m2) summary += QStringLiteral("\nArea: %1 m² · %2 acres")
                     .arg(*d.area_m2, 0, 'f', 4).arg(*d.acres, 0, 'f', 6);
                 else summary += QStringLiteral("\nArea unavailable for this traverse.");
-                report = QString::fromStdString(traverse.serialize());
+                auto report_json = json::parse(traverse.serialize());
+                report_json["input_provenance"] = {
+                    {"version", 1}, {"default_unit", unit == Unit::metre ? "m" : "ft"},
+                    {"legs_text", input->toPlainText().toStdString()},
+                    {"source_text", provenance->text().toStdString()},
+                    {"closure_tolerance_expression", tolerance->text().toStdString()},
+                    {"distances", std::move(distance_entries)}};
+                report = QString::fromStdString(report_json.dump(2));
                 result->setText(summary);
                 export_report->setEnabled(true);
             } catch (const std::exception& error) { result->setText(QString::fromUtf8(error.what())); }

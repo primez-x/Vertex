@@ -1122,7 +1122,7 @@ void test_survey_calculator(const QString& capture_directory) {
         require(source && input && calculate && output && result && !output->isEnabled(),
                 "survey controls and initially disabled export must exist");
         source->setText("Deed fixture");
-        input->setPlainText("NE, 90, 100 m\nSE, 0, 100 m\nSW, 90, 100 m\nNW, 0, 100 m");
+        input->setPlainText("NE, 90, 100000 mm\nSE, 0, 100 m\nSW, 90, 100 m\nNW, 0, 100 m");
         calculate->click();
         require(output->isEnabled() && result->text().contains("10000.0000 m²") &&
                     result->text().contains("2.471054 acres"), "survey calculator must report square area and acres");
@@ -1146,6 +1146,15 @@ void test_survey_calculator(const QString& capture_directory) {
         require(report.at("provenance") == "Deed fixture" && report.at("legs").size() == 4 &&
                     report.at("vertices").size() == 5 && report.at("diagnostics").at("area_m2") == 10000.0,
                 "exported survey must preserve source, legs, vertices, and calculated area");
+        require(report.contains("input_provenance"), "survey export must retain original entry provenance");
+        const auto& entered = report.at("input_provenance");
+        require(entered.at("version") == 1 && entered.at("default_unit") == "ft" &&
+                    entered.at("legs_text") == input->toPlainText().toStdString() &&
+                    entered.at("closure_tolerance_expression") == "0.001 m" &&
+                    entered.at("distances").at(0).at("original_expression") == "100000 mm" &&
+                    entered.at("distances").at(0).at("exact_metres").at("numerator") == 100 &&
+                    entered.at("distances").at(0).at("exact_metres").at("denominator") == 1,
+                "survey export must preserve entered units, expressions, and exact rational metres");
         input->setPlainText("NE, 45, 100 ft");
         require(!output->isEnabled() && result->text().isEmpty(), "edits must invalidate stale survey results");
         calculate->click();
