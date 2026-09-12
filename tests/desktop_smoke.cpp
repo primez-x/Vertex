@@ -1016,6 +1016,100 @@ void test_design_phase_workflow() {
             "active design phase should persist across reopen");
 }
 
+void test_phase_authoring_ownership() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    const auto legacy = window.createStraightWall({0, 0}, {4, 0});
+    auto registry = Entity::create("model_phases", {{"model", ModelPhases::create(
+        {}, {}, {{"a", "A", {}, {}}, {"b", "B", {}, {}}}).to_json()}});
+    registry.id = "authored-phases";
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(registry)}, {}, "phase authoring fixture"});
+    require(window.selectEntity(legacy), "refresh phase authoring fixture");
+    const auto baseline = window.createStraightWall({0, 1}, {4, 1});
+    require(!baseline.isEmpty(), "author baseline wall after phase setup");
+    require(window.selectRemodelingAlternative("a"), "select proposal owner A");
+    const auto proposed_wall = window.createStraightWall({0, 2}, {4, 2});
+    require(!proposed_wall.isEmpty(), "author wall in alternative A");
+    const auto opening = window.createHostedOpening("door", "1 m", "1 m", "0 m", "2 m");
+    require(!opening.isEmpty(), "author hosted opening in alternative A");
+    const Boundary boundary{{{{0, 3}, {4, 3}, 0}, {{4, 3}, {4, 6}, 0},
+                             {{4, 6}, {0, 6}, 0}, {{0, 6}, {0, 3}, 0}}};
+    const auto room = window.createRoomBoundary(boundary, "A room");
+    const auto measurement = window.createBoundary(boundary, "A measurement");
+    require(!room.isEmpty() && !measurement.isEmpty(), "author both boundary roles in alternative A");
+    auto column = encode_building_entity(BuildingObject{
+        RectangularColumn{"phase-column", {7, 2, 0}, 0.4, 0.6, 3, 0}});
+    column.properties["material_name"] = "Phase material";
+    column.properties["volume_m3"] = 0.72;
+    const auto before_column = window.document().snapshot().entities();
+    const auto column_id = window.commitBuildingObject(column, window.document().revision());
+    require(!column_id.isEmpty(), "author building object in alternative A");
+    const auto after_column = window.document().snapshot().entities();
+    require(window.undoCommand() && window.document().snapshot().entities() == before_column,
+            "one undo restores both geometry and phase registry");
+    require(window.redoCommand() && window.document().snapshot().entities() == after_column,
+            "one redo restores geometry identities and phase registry");
+    const auto model = ModelPhases::from_json(after_column.at(registry.id).properties.at("model"));
+    require(model.baseline_ids() == std::vector<std::string>{baseline.toStdString()} &&
+                model.entity_ids().size() == 6 && !model.active_state().contains(legacy.toStdString()),
+            "new objects receive ownership without reclassifying unregistered legacy geometry");
+    QStringList proposals{proposed_wall, opening, room, measurement, column_id};
+    require(window.selectEntity(proposed_wall) && window.copySelection() && window.pasteSelection(),
+            "paste a wall and its hosted opening into the active alternative");
+    const auto pasted = window.document().snapshot().entities();
+    const auto pasted_model = ModelPhases::from_json(pasted.at(registry.id).properties.at("model"));
+    for (const auto& [id, entity] : pasted) {
+        if (after_column.contains(id)) continue;
+        require(pasted_model.active_state().at(id) == ModelPhase::proposed,
+                "compound paste registers every new geometry identity");
+        proposals.push_back(QString::fromStdString(id));
+    }
+    require(proposals.size() == 7 && window.undoCommand() &&
+                window.document().snapshot().entities() == after_column &&
+                window.redoCommand() && window.document().snapshot().entities() == pasted,
+            "compound paste owns wall and opening in one undoable command");
+    require(window.selectRemodelingAlternative(QStringLiteral("a")) &&
+                window.selectEntity(column_id),
+            "select a phase-owned object before deletion");
+    const auto before_delete = window.document().snapshot().entities();
+    const auto delete_ok = window.deleteSelection();
+    require(delete_ok,
+            "deleting a phase-owned object must update the registry atomically");
+    const auto after_delete = window.document().snapshot().entities();
+    const auto deleted_model = ModelPhases::from_json(
+        after_delete.at(registry.id).properties.at("model"));
+    require(!after_delete.contains(column_id.toStdString()) &&
+                std::find(deleted_model.entity_ids().begin(), deleted_model.entity_ids().end(),
+                          column_id.toStdString()) == deleted_model.entity_ids().end() &&
+                window.undoCommand() && window.document().snapshot().entities() == before_delete &&
+                window.redoCommand() && window.document().snapshot().entities() == after_delete,
+            "phase-owned deletion must remain one exact undoable command");
+    proposals.removeAll(column_id);
+    const auto has_material = [&] {
+        const auto schedule = window.scheduleSnapshot();
+        return std::any_of(schedule.snapshot.rows.begin(), schedule.snapshot.rows.end(),
+            [&](const auto& row) { return row.object_id == column_id.toStdString() + ":material"; });
+    };
+    require(!has_material(), "deleting a phase-owned object removes its material schedule row");
+    for (const auto& selection : QStringList{QString(), "b", "a"}) {
+        require(window.selectRemodelingAlternative(selection), "switch ownership view");
+        const bool active = selection == "a";
+        require(window.entityVisible(baseline) && window.entityVisible(legacy),
+                "baseline and legacy remain visible across alternatives");
+        for (const auto& id : proposals) {
+            require(window.entityVisible(id) == active, "proposal visibility follows owning alternative");
+        }
+    }
+    QTemporaryDir directory;
+    const auto path = directory.filePath("phase-authoring.bldproj");
+    const auto saved = window.document().snapshot().entities();
+    require(window.saveProjectAs(path) && window.openProject(path) &&
+                window.document().snapshot().entities() == saved &&
+                window.activeRemodelingAlternative() == "a" && !has_material(),
+            "save and reopen preserve authored geometry, phase ownership and schedule");
+}
+
 void test_room_relationship_workflow() {
     using namespace sketch;
     desktop::MainWindow window;
@@ -1450,6 +1544,7 @@ int main(int argc, char** argv) {
     test_named_revisions();
     test_boundary_transform_workflow();
     test_design_phase_workflow();
+    test_phase_authoring_ownership();
     test_room_relationship_workflow();
     test_vertical_levels_workflow();
     test_assembly_catalog_workflow();

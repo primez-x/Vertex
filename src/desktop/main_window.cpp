@@ -6526,8 +6526,9 @@ public:
             for (const auto& entity : entities) changes.push_back(EntityChange::erase(entity.id));
             const ApplyEntityChanges command{
                 source.revision(), std::move(changes), {}, "Cut selection"};
-            (void)Document::preview_command(source, command);
-            applyDocumentCommand(command);
+            const auto authored = augmentAuthoredCommand(Command{command});
+            (void)Document::preview_command(source, authored);
+            applyAuthoredCommand(authored);
             m_selected_id.clear();
             clearError();
             refresh();
@@ -6665,8 +6666,9 @@ public:
             for (const auto& entity : entities) changes.push_back(EntityChange::erase(entity.id));
             const ApplyEntityChanges command{
                 source.revision(), std::move(changes), {}, "Delete selection"};
-            (void)Document::preview_command(source, command);
-            applyDocumentCommand(command);
+            const auto authored = augmentAuthoredCommand(Command{command});
+            (void)Document::preview_command(source, authored);
+            applyAuthoredCommand(authored);
             m_selected_id.clear();
             clearError();
             refresh();
@@ -9299,7 +9301,77 @@ private:
         *m_document = std::move(candidate);
     }
 
-    void applyDocumentCommand(const Command& command) {
+    Command augmentAuthoredCommand(const Command& command) {
+        // Register only newly authored geometry. Existing unregistered objects
+        // retain their legacy visibility; editing them must not change ownership.
+        auto authored_command = command;
+        if (auto* changes = std::get_if<ApplyEntityChanges>(&authored_command)) {
+            const auto source = authoringSnapshot();
+            if (const auto record = decode_phase_model(source); record &&
+                std::none_of(changes->entity_changes.begin(), changes->entity_changes.end(),
+                    [&](const auto& change) {
+                        return change.kind == EntityChangeKind::erase &&
+                               change.entity_id == record->entity_id;
+                    })) {
+                auto registry = source.entities().at(record->entity_id);
+                auto model = record->model;
+                for (const auto& change : changes->entity_changes) {
+                    if (change.entity_id == record->entity_id ||
+                        change.entity.id == record->entity_id) {
+                        registry = change.entity;
+                        model = ModelPhases::from_json(registry.properties.at("model"));
+                    }
+                }
+                auto ids = model.entity_ids();
+                auto baseline = model.baseline_ids();
+                auto alternatives = model.alternatives();
+                bool changed = false;
+                for (const auto& change : changes->entity_changes) {
+                    if (change.kind != EntityChangeKind::erase) continue;
+                    const auto removed = change.entity_id;
+                    if (removed == record->entity_id) continue;
+                    const auto entity_before = std::find(ids.begin(), ids.end(), removed);
+                    if (entity_before == ids.end()) continue;
+                    ids.erase(entity_before);
+                    std::erase(baseline, removed);
+                    for (auto& alternative : alternatives) {
+                        std::erase(alternative.demolished_ids, removed);
+                        std::erase(alternative.proposed_ids, removed);
+                    }
+                    changed = true;
+                }
+                for (const auto& change : changes->entity_changes) {
+                    if (change.kind != EntityChangeKind::upsert ||
+                        source.entities().contains(change.entity.id) ||
+                        !is_phase_model_entity(change.entity.type) ||
+                        change.entity.type == "building" || change.entity.type == "floor" ||
+                        std::find(ids.begin(), ids.end(), change.entity.id) != ids.end()) continue;
+                    ids.push_back(change.entity.id);
+                    if (model.active_alternative()) {
+                        for (auto& alternative : alternatives) {
+                            if (alternative.id == *model.active_alternative())
+                                alternative.proposed_ids.push_back(change.entity.id);
+                        }
+                    } else {
+                        baseline.push_back(change.entity.id);
+                    }
+                    changed = true;
+                }
+                if (changed) {
+                    registry.properties["model"] = ModelPhases::create(
+                        std::move(ids), std::move(baseline), std::move(alternatives),
+                        model.active_alternative()).to_json();
+                    std::erase_if(changes->entity_changes, [&](const auto& change) {
+                        return change.entity.id == record->entity_id;
+                    });
+                    changes->entity_changes.push_back(EntityChange::upsert(std::move(registry)));
+                }
+            }
+        }
+        return authored_command;
+    }
+
+    void applyAuthoredCommand(const Command& command) {
         if (m_recovery_ledger.empty()) {
             m_document->apply(command);
             return;
@@ -9307,6 +9379,10 @@ private:
         requireWorkspaceDocument();
         auto edit = m_project_workspace->prepare(command);
         commitWorkspaceEdit(edit);
+    }
+
+    void applyDocumentCommand(const Command& command) {
+        applyAuthoredCommand(augmentAuthoredCommand(command));
     }
 
     DocumentSnapshot authoringSnapshot() const {

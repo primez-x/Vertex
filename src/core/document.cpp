@@ -410,9 +410,10 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
                         document_error(DocumentErrorCode::dangling_reference,
                                        "model phases " + id + " references missing entity " + member_id);
                     }
-                    static constexpr std::array<std::string_view, 12> model_roles{
+                    static constexpr std::array<std::string_view, 14> model_roles{
                         "building", "floor", "wall", "opening", "room", "room_boundary",
-                        "slab", "roof", "stair", "column", "beam", "assembly_model"};
+                        "slab", "roof", "stair", "column", "beam", "assembly_model",
+                        "boundary", "measurement_boundary"};
                     const auto& type = entities.at(member_id).type;
                     if (std::find(model_roles.begin(), model_roles.end(), type) == model_roles.end()) {
                         document_error(DocumentErrorCode::invalid_entity,

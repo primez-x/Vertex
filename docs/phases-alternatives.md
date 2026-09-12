@@ -21,6 +21,13 @@ objects from other alternatives are absent. Replacement geometry needs a distinc
 entity ID from the demolished baseline object. This bounded model permits only one
 alternative family; it does not support stacked alternatives or sequential projects.
 
+After phase setup, desktop authoring assigns newly created geometry to the active
+alternative's proposals, or to the shared baseline when baseline is selected.
+Geometry and registry membership are one undoable command, including pasted and
+compound geometry and hosted openings; opening host references remain unchanged.
+Building and floor organization records are not newly enrolled by geometry authoring.
+Editing existing unregistered geometry does not silently enroll or reclassify it.
+
 The optional active selection names exactly one alternative. `nullopt` selects the
 unmodified baseline. `with_active` returns a new value and leaves its source intact;
 callers can retain those values for an undo adapter. `with_alternative` appends a
