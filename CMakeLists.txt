@@ -123,7 +123,7 @@ target_include_directories(sketch_architectural_workflow_contract PUBLIC include
 target_link_libraries(sketch_architectural_workflow_contract PUBLIC sketch_json)
 add_library(sketch_architectural_document_adapter src/core/architectural_document_adapter.cpp)
 target_include_directories(sketch_architectural_document_adapter PUBLIC include)
-target_link_libraries(sketch_architectural_document_adapter PUBLIC sketch_architectural_workflow_contract sketch_document)
+target_link_libraries(sketch_architectural_document_adapter PUBLIC sketch_architectural_workflow_contract sketch_document sketch_building_entities)
 
 add_library(sketch_document src/core/document.cpp src/core/document_digest.cpp src/core/constraint_entity.cpp
   src/core/constraint_integrity.cpp src/core/boundary_entity.cpp src/core/boundary_integrity.cpp
@@ -833,6 +833,8 @@ if(BUILD_TESTING)
     target_compile_options(architectural_document_adapter_tests PRIVATE /W4 /permissive- /utf-8)
   endif()
   add_test(NAME architectural_document_adapter COMMAND architectural_document_adapter_tests)
+  set_tests_properties(architectural_document_adapter PROPERTIES ENVIRONMENT_MODIFICATION
+    "PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
   add_executable(workspace_document_history_tests tests/workspace_document_history_tests.cpp)
   target_link_libraries(workspace_document_history_tests PRIVATE sketch_workspace_document_history)
   add_test(NAME workspace_document_history COMMAND workspace_document_history_tests)

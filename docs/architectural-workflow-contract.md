@@ -4,8 +4,29 @@
 
 Transactions preserve ordered create, select, property edit, transform, duplicate and delete intent. IDs are checked against a supplied initial ID snapshot, simulated in order and never reused during a transaction. Invalid enum values, missing targets, collisions, irrelevant payloads and nonfinite transforms fail before a descriptor is returned. The undo label declares one undoable transaction; the adapter delegates history and inverse state capture to `Document`. Selection denotes intent for one object; multi-selection policy belongs to the adapter.
 
+Transforms applied to a canonical building entity are semantic operations. The
+adapter scales dimensions and local openings, rotates horizontal positions and
+orientation, and applies the translation to model coordinates before rebuilding
+the validated object through the building codec. Beam endpoints and direction
+vectors are transformed together. The old generic `transform` property is not
+left beside changed geometry. Application-owned marks, material assignments,
+quantity receipts, extensions, and other unrelated properties survive.
+
+Wall duplication carries every opening whose `wall_id` names the source wall.
+Cloned openings receive deterministic `duplicate-wall-id:original-opening-id`
+identities and point only to the cloned wall. Deleting a wall removes its
+hosted opening graph in the same atomic Document command; deleting another
+entity does not remove unrelated openings.
+
 The transaction descriptor keeps property payloads as transport-friendly text. The Document adapter decodes valid JSON scalar, object, and array text back to typed values while preserving non-JSON semantic strings such as `4m`. Type IDs and property keys have lexical validation, not a building-type/property registry. Transforms declare translation in metres, Z rotation in radians and a positive uniform scale; adapters must enforce type-specific legality, units, geometry validity and hosted relationships. Measurement boundaries are neither imported nor converted into architectural objects here.
 
 Output contracts scope plans, elevations, sections, 3D views and schedules to known architectural IDs and sheets under one explicit model revision and issue revision. Each sheet must have requirements. A package can intentionally request only some output kinds; it does not certify a complete permit set. Outputs and identity sets serialize canonically; transaction operation order is retained. JSON export is a deterministic descriptor, with no import or persistence codec yet.
 
-Still open: property/type schema enforcement; hosted-object duplicate/delete policy; reuse of SheetViewModel and schedule generation adapters; projection, rendering, layout and export; output revision freshness checks; and end-to-end residential and light-commercial fixtures. Architectural inspector property edits now route through the adapter and preserve typed JSON values in both ordinary and recovery-backed workspace commands. The adapter still does not perform type-specific geometric transforms or hosted relationship updates. The tests establish atomic preview/history and persistence behavior, not generated deliverable correctness.
+Still open: property/type schema enforcement; reuse of SheetViewModel and
+schedule generation adapters; projection, rendering, layout and export; output
+revision freshness checks; and end-to-end residential and light-commercial
+fixtures. Architectural inspector property edits now route through the adapter
+and preserve typed JSON values in both ordinary and recovery-backed workspace
+commands. The adapter's semantic building transforms and wall hosted-object
+policy are covered by atomic preview/history tests; generated deliverable
+correctness remains a separate acceptance requirement.

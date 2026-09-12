@@ -37,8 +37,8 @@ The architectural object slice now accepts a true flat roof through the
 existing sloped-panel schema: zero rise and zero pitch produce a thickened
 planar solid, persist through the entity codec, and project through plan,
 elevation, section, and the editor. Gable roofs continue to require a positive
-rise and pitch. The primary command strip is constrained to a single
-icon-first 12 px row; units, paper size, and view remain compact inline
+rise and pitch. The primary command strip is constrained to a single compact
+24 px logical row with 16 px icons; units, paper size, and view remain compact inline
 selectors, with secondary commands in the More menu. Selecting a sloped,
 flat, or gable roof also exposes contextual run (gable length), span, rise,
 overhang, thickness, and derived pitch
@@ -573,7 +573,10 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   projected-metre affine transforms, residuals, and offline resource
   declarations. They do not execute PROJ, verify resources, import Apex files,
   or replace the required specialist-module fixtures.
-- Architectural transaction and output descriptors now cover create, select,
+- The architectural transaction adapter now applies type-aware transforms to
+  canonical building entities and carries hosted wall openings through
+  duplicate and delete commands, preserving unrelated metadata and ordinary
+  undo/redo. Architectural transaction and output descriptors cover create, select,
   property edit, transform, duplicate/delete intent and coordinated
   plan/elevation/section/3D/schedule issue requirements. Live Document history,
   projection/render/export, and complete residential/light-commercial output

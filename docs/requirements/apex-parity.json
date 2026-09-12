@@ -223,7 +223,7 @@
         "tests/desktop_smoke.cpp",
         "docs/workspace-ui.md"
       ],
-      "implementation_note": "The desktop shell exposes pan, zoom, grid, and independent output controls; the primary toolbar is a fixed 16 px icon row with no redundant header band. Interactive plan canvases now render a model-space overview map with viewport framing and click-to-recenter navigation; asynchronous navigation evidence and the complete acceptance statement remain open."
+      "implementation_note": "The desktop shell exposes pan, zoom, grid, and independent output controls; the primary toolbar is a fixed 24 px logical row with 16 px icons and no redundant header band. Interactive plan canvases now render a model-space overview map with viewport framing and click-to-recenter navigation; asynchronous navigation evidence and the complete acceptance statement remain open."
     },
     {
       "id": "CORE-DOC-001",
@@ -961,7 +961,7 @@
         "tests/desktop_smoke.cpp",
         "docs/desktop-workflow.md"
       ],
-      "implementation_note": "The desktop exposes rotation around a deterministic bounding-box pivot, independent horizontal/vertical reflection, and offsets for identified closed boundaries. Receipt-backed copies and in-place transforms preserve original local construction inputs, topology identities where retained, metadata, and attached dimension placement through atomic commands. Typed transform history uses format 6 for deterministic reconstruction across save, recovery, and exchange. Broader object coverage, linked-relationship propagation, and production qualification remain open."
+      "implementation_note": "The desktop exposes rotation around a deterministic bounding-box pivot, independent horizontal/vertical reflection, and offsets for identified closed boundaries. Receipt-backed copies and in-place transforms preserve original local construction inputs, topology identities where retained, metadata, and attached dimension placement through atomic commands. The architectural transaction path now applies type-aware transforms to canonical building geometry, dimensions, and local vectors while removing stale generic transform markers. Typed transform history uses format 6 for deterministic reconstruction across save, recovery, and exchange. Broader reference/annotation coverage, linked-relationship propagation, visible architectural binding, and production qualification remain open."
     },
     {
       "id": "APX-EDIT-003",
@@ -1005,7 +1005,7 @@
         "tests/desktop_smoke.cpp",
         "docs/desktop-workflow.md"
       ],
-      "implementation_note": "Guarded delete now removes selected walls with owned openings and closed boundaries with dimensions in one undoable command; identified receipt-free boundaries also support same-edge-count redraw redefinition in place with stable reference identities and exact undo/redo. Document validation blocks surviving references and annotation children use the typed annotation delete path. Broader reopen/restore fixtures, receipt-bound derivation, object policies, and production qualification remain open."
+      "implementation_note": "Guarded delete now removes selected walls with owned openings and closed boundaries with dimensions in one undoable command; identified receipt-free boundaries also support same-edge-count redraw redefinition in place with stable reference identities and exact undo/redo. Architectural wall deletion removes only its hosted openings atomically, preserving unrelated objects, and wall duplication creates deterministic fresh opening identities with remapped wall links. Document validation blocks surviving references and annotation children use the typed annotation delete path. Broader reopen/restore fixtures, receipt-bound derivation, object policies, visible architectural binding, and production qualification remain open."
     },
     {
       "id": "APX-EDIT-005",
@@ -1300,7 +1300,7 @@
         "tests/desktop_smoke.cpp",
         "docs/workspace-ui.md"
       ],
-      "implementation_note": "The desktop shell exposes pan, zoom, grid, and independent output controls; the primary toolbar is a fixed 16 px icon row with no redundant header band. Interactive plan canvases now render a model-space overview map with viewport framing and click-to-recenter navigation; asynchronous navigation evidence and the complete acceptance statement remain open."
+      "implementation_note": "The desktop shell exposes pan, zoom, grid, and independent output controls; the primary toolbar is a fixed 24 px logical row with 16 px icons and no redundant header band. Interactive plan canvases now render a model-space overview map with viewport framing and click-to-recenter navigation; asynchronous navigation evidence and the complete acceptance statement remain open."
     },
     {
       "id": "APX-UI-002",
@@ -1908,7 +1908,7 @@
         "tests/architectural_document_adapter_tests.cpp",
         "docs/architectural-workflow-contract.md"
       ],
-      "implementation_note": "Architectural create/select/property-edit/transform/duplicate/delete intents are translated into one revision-fenced atomic Document command with preview, undo, and save/reopen coverage; visible UI binding, type schemas, geometric transforms, and user-observed output remain open."
+      "implementation_note": "Architectural create/select/property-edit/transform/duplicate/delete intents are translated into one revision-fenced atomic Document command with preview, undo, and save/reopen coverage. Recognized building entities receive type-aware canonical transforms, and wall duplication/deletion carries or removes hosted openings with deterministic remapping. Visible UI binding, complete type schemas, cross-view relationship propagation, and user-observed output remain open."
     },
     {
       "id": "ARCH-REL-001",

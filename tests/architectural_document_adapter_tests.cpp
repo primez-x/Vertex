@@ -1,4 +1,5 @@
 #include "sketch/architectural_document_adapter.hpp"
+#include "sketch/building_entity.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/assembly_model.hpp"
@@ -6,6 +7,7 @@
 
 #include <filesystem>
 #include <iostream>
+#include <numbers>
 #include <stdexcept>
 
 namespace {
@@ -49,9 +51,98 @@ void test_material_assignments() {
     std::filesystem::remove(path);
 }
 
+void test_building_transform_updates_canonical_geometry() {
+    using namespace sketch;
+    auto beam = encode_building_entity(Beam{
+        .id = "beam-transform",
+        .start = {1.0, 0.0, 0.0},
+        .end = {5.0, 0.0, 0.0},
+        .up = {0.0, 0.0, 1.0},
+        .width = 0.2,
+        .depth = 0.3,
+    });
+    beam.properties["mark"] = "B-1";
+    beam.properties["material_name"] = "steel";
+    Document document = Document::create({beam});
+    ArchitecturalOperation operation{ArchitecturalAction::transform, beam.id};
+    operation.transform = ArchitecturalTransform{1.0, 2.0, 3.0,
+                                                  std::numbers::pi / 2.0, 2.0};
+    const auto transaction = ArchitecturalTransaction::create(
+        "transform-beam", "r0", {beam.id}, {operation}, "Transform beam");
+
+    const auto preview = preview_architectural_transaction(document.snapshot(), transaction);
+    const auto preview_beam = std::get<Beam>(decode_building_entity(
+        preview.entities().at(beam.id)));
+    require(std::abs(preview_beam.start.x - 1.0) < 1e-9 &&
+                std::abs(preview_beam.start.y - 4.0) < 1e-9 &&
+                std::abs(preview_beam.start.z - 3.0) < 1e-9 &&
+                std::abs(preview_beam.end.x - 1.0) < 1e-9 &&
+                std::abs(preview_beam.end.y - 12.0) < 1e-9 &&
+                std::abs(preview_beam.end.z - 3.0) < 1e-9 &&
+                std::abs(preview_beam.width - 0.4) < 1e-9 &&
+                std::abs(preview_beam.depth - 0.6) < 1e-9,
+            "architectural transform must update the beam's canonical geometry");
+    require(preview.entities().at(beam.id).properties.at("mark") == "B-1" &&
+                preview.entities().at(beam.id).properties.at("material_name") == "steel" &&
+                !preview.entities().at(beam.id).properties.contains("transform"),
+            "architectural transform must preserve unrelated metadata without a stale marker");
+    require(document.snapshot().entities().at(beam.id) == beam,
+            "architectural transform preview must not mutate the source");
+
+    apply_architectural_transaction(document, transaction, document.revision());
+    const auto applied = std::get<Beam>(decode_building_entity(document.snapshot().entities().at(beam.id)));
+    require(std::abs(applied.end.y - 12.0) < 1e-9,
+            "architectural transform command must commit canonical geometry");
+    document.undo(document.revision());
+    require(std::get<Beam>(decode_building_entity(document.snapshot().entities().at(beam.id))).end.x == 5.0,
+            "architectural transform must be undoable");
+    document.redo(document.revision());
+    const auto redone = std::get<Beam>(decode_building_entity(document.snapshot().entities().at(beam.id)));
+    require(std::abs(redone.end.y - 12.0) < 1e-9,
+            "architectural transform redo must restore canonical geometry");
+}
+
+void test_wall_duplicate_and_delete_manage_hosted_openings() {
+    using namespace sketch;
+    auto wall = Entity::create("wall", {{"height_m", 3.0}, {"thickness_m", 0.2}});
+    wall.id = "wall-host";
+    auto opening = Entity::create("opening", {{"wall_id", wall.id},
+                                               {"opening_kind", "door"},
+                                               {"width_m", 0.9}, {"height_m", 2.0},
+                                               {"offset_m", 1.0}, {"sill_m", 0.0}});
+    opening.id = "door-host";
+    Document document = Document::create({wall, opening});
+    ArchitecturalOperation duplicate{ArchitecturalAction::duplicate, wall.id};
+    duplicate.duplicate_id = "wall-copy";
+    const auto copy_transaction = ArchitecturalTransaction::create(
+        "duplicate-wall", "r0", {wall.id, opening.id}, {duplicate}, "Duplicate wall");
+    const auto preview = preview_architectural_transaction(document.snapshot(), copy_transaction);
+    require(preview.entities().contains("wall-copy"), "wall duplicate must create the target wall");
+    require(preview.entities().contains("wall-copy:door-host") &&
+                preview.entities().at("wall-copy:door-host").properties.at("wall_id") == "wall-copy" &&
+                preview.entities().at("door-host").properties.at("wall_id") == wall.id,
+            "wall duplicate must clone hosted openings and remap only the clone owner");
+    apply_architectural_transaction(document, copy_transaction, document.revision());
+    require(document.snapshot().entities().contains("wall-copy:door-host"),
+            "accepted wall duplicate must persist its hosted opening");
+
+    ArchitecturalTransaction erase_transaction = ArchitecturalTransaction::create(
+        "erase-wall", "r1",
+        {wall.id, opening.id, "wall-copy", "wall-copy:door-host"},
+        {{ArchitecturalAction::erase, "wall-copy"}}, "Delete wall");
+    apply_architectural_transaction(document, erase_transaction, document.revision());
+    require(!document.snapshot().entities().contains("wall-copy") &&
+                !document.snapshot().entities().contains("wall-copy:door-host") &&
+                document.snapshot().entities().contains(wall.id) &&
+                document.snapshot().entities().contains(opening.id),
+            "wall deletion must remove only its owned opening graph");
+}
+
 int main() {
     try {
         test_material_assignments();
+        test_building_transform_updates_canonical_geometry();
+        test_wall_duplicate_and_delete_manage_hosted_openings();
         using namespace sketch;
         auto wall = Entity::create("wall", {{"height_m", 3.0}});
         wall.id = "wall-a";

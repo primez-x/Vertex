@@ -2477,7 +2477,7 @@ public:
             QWidget { font-size: 13px; }
             QDialog { background: $background; }
             QToolBar#primaryToolbar { background: $surface; border: 0; border-bottom: 1px solid $border;
-                       padding: 0 3px; spacing: 1px; min-height: 28px; max-height: 28px; }
+                       padding: 0 3px; spacing: 1px; min-height: 24px; max-height: 24px; }
             QToolBar::separator { background: $border; width: 1px; margin: 0 1px; }
             QPushButton, QToolButton { color: $foreground; background: $surface;
                 border: 1px solid $border; border-radius: 8px; padding: 8px 11px; }
@@ -10848,7 +10848,7 @@ private:
             toolbar_layout->setSpacing(1);
         }
         // One compact row with readable icons and usable mouse targets.
-        toolbar->setFixedHeight(28);
+        toolbar->setFixedHeight(24);
         const auto add_toolbar_action = [this, toolbar](const QString& label, const char* icon_paths) {
             auto* action = toolbar->addAction(modern_toolbar_icon(icon_paths), label);
             action->setToolTip(label);
