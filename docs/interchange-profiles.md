@@ -143,3 +143,23 @@ This mapping is a deterministic native-project slice, not Apex native-file
 compatibility or full CAD fidelity. The desktop transaction adapter, active
 floor/layer assignment, original-source asset retention, and clean-machine
 interoperability evidence remain production-gate work.
+
+## Native project mapping for IFC
+
+`sketch/ifc_project_exchange.hpp` adds a bounded IFC4 STEP mapper on top of the
+native document model. Export emits an IFC4 envelope with deterministic owner,
+unit, placement, polyline, wall-axis, slab-footprint, and optional swept-solid
+records. Linear analytical boundaries remain polylines; a closed slab with an
+explicit thickness becomes an `IFCEXTRUDEDAREASOLID`. Curves, slab holes,
+wall thickness/profile data, unsupported architectural entities, and spatial
+relationships are diagnosed instead of silently flattened.
+
+Import accepts the same IFC4 STEP subset and walks product representation
+references to reconstruct editable boundary candidates for walls, slabs,
+roofs, spaces, openings, and proxies. Candidate entities retain the IFC record
+ID/type in `extensions.ifc_source`; placement translations and extrusion depth
+are preserved when representable. Rotated placements, opening host links,
+property sets, materials, and `IFCREL*` relationships remain explicit fidelity
+diagnostics, and `source_retention_required` tells the caller to retain the
+original bytes. The mapper is in-memory and does not claim IFC worker
+isolation, Reference View conformance, or external-application certification.

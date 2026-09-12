@@ -136,7 +136,7 @@ The v1 known types are:
 
 `property`, `building`, `floor`, `layer`, `boundary`, `measurement_boundary`, `room_boundary`,
 `wall`, `opening`, `room`, `slab`, `roof`, `stair`, `railing`, `column`, `beam`, `label`, `sheet`, `view`,
-`constraint`, `reference_grid`, `terrain_surface`, and `dxf_source`.
+`constraint`, `reference_grid`, `terrain_surface`, `dxf_source`, and `ifc_source`.
 
 All geometry properties use metres and radians. A wall and opening can be represented as:
 
@@ -225,6 +225,12 @@ version, mapped candidate count, and stable fidelity diagnostics; it is a
 provenance record and is not drawing geometry. Editable candidates keep their
 source layer and primitive in `extensions.dxf_source`. Removing or replacing
 the source record never changes the mapped geometry.
+
+An imported IFC may retain its original STEP bytes as an asset referenced by an
+`ifc_source` entity. The record follows the same provenance shape as
+`dxf_source`, with IFC4 format, source filename, mapped candidate count, and
+stable fidelity diagnostics; mapped candidates retain an `extensions.ifc_source`
+record identity/type.
 
 For known entity types, the document validates `refs` and `references` arrays as generic entity
 references. It also validates canonical singular and plural reference fields for each known type,

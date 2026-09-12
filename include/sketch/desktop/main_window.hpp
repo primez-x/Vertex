@@ -357,6 +357,10 @@ public:
     // original source bytes as a project asset for any reported gaps.
     [[nodiscard]] bool exportDxf(const QString& path);
     [[nodiscard]] bool importDxf(const QString& path);
+    // Local IFC4 STEP interchange. Export/import use the same fidelity-report
+    // and source-retention rules as DXF.
+    [[nodiscard]] bool exportIfc(const QString& path);
+    [[nodiscard]] bool importIfc(const QString& path);
     [[nodiscard]] bool showPrintPreview();
 
     void showCommandPalette();

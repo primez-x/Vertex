@@ -533,11 +533,15 @@
         "tests/interchange_profile_tests.cpp",
         "include/sketch/dxf_project_exchange.hpp",
         "src/core/dxf_project_exchange.cpp",
-        "tests/dxf_project_exchange_tests.cpp",
-        "tests/dxf_desktop_workflow_tests.cpp",
-        "docs/interchange-profiles.md"
-      ],
-      "implementation_note": "Fail-closed IFC/DXF/PDF/PROJ worker declarations and attestations are implemented; a deterministic native DXF project-mapping slice is now tested separately, while real worker binaries, broker/runtime enforcement, active floor/layer transaction integration, original-source retention, and representative cross-application fixtures remain open."
+    "tests/dxf_project_exchange_tests.cpp",
+    "tests/dxf_desktop_workflow_tests.cpp",
+    "include/sketch/ifc_project_exchange.hpp",
+    "src/core/ifc_project_exchange.cpp",
+    "tests/ifc_project_exchange_tests.cpp",
+    "tests/ifc_desktop_workflow_tests.cpp",
+    "docs/interchange-profiles.md"
+  ],
+  "implementation_note": "Fail-closed IFC/DXF/PDF/PROJ worker declarations and attestations are implemented; deterministic native IFC and DXF project-mapping slices now have core and desktop transaction tests, while real worker binaries, broker/runtime enforcement, active worker isolation, and representative cross-application fixtures remain open."
     },
     {
       "id": "COMP-IO-002",
@@ -2308,9 +2312,12 @@
         "include/sketch/interchange_profile.hpp",
         "src/core/interchange_profile.cpp",
         "tests/interchange_profile_tests.cpp",
-        "docs/interchange-profiles.md"
+        "docs/interchange-profiles.md",
+        "include/sketch/ifc_project_exchange.hpp",
+        "src/core/ifc_project_exchange.cpp",
+        "tests/ifc_project_exchange_tests.cpp"
       ],
-      "implementation_note": "The IFC4 ADD2 TC1 Reference View 1.2 target and fail-closed worker contract are declared; parser/exporter, editable reconstruction, reference preservation, and fidelity fixtures remain open."
+      "implementation_note": "A bounded IFC4 STEP project mapper now exports linear boundaries, wall axes, slab footprints and optional swept solids, and imports reliable product geometry with identifiable source metadata. Worker isolation, Reference View conformance, full types/properties/materials/relationships, desktop source retention, and representative cross-application fixtures remain open."
     },
     {
       "id": "IO-DXF-001",

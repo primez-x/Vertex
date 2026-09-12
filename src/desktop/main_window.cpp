@@ -20,6 +20,7 @@
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/dxf_project_exchange.hpp"
+#include "sketch/ifc_project_exchange.hpp"
 #include "sketch/geometry_operations.hpp"
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/model_phases.hpp"
@@ -9876,6 +9877,142 @@ public:
         }
     }
 
+    bool exportIfc(const QString& path) {
+        if (path.trimmed().isEmpty()) {
+            setError(QStringLiteral("Choose an IFC destination."));
+            return false;
+        }
+        try {
+            const auto source = m_document->snapshot();
+            const auto mapped = export_project_ifc(source);
+            if (mapped.step.empty())
+                throw std::invalid_argument("IFC mapping produced no serializable output.");
+            const QByteArray bytes(mapped.step.data(), static_cast<qsizetype>(mapped.step.size()));
+            QSaveFile destination(path);
+            if (!destination.open(QIODevice::WriteOnly) || destination.write(bytes) != bytes.size() ||
+                !destination.commit()) {
+                setError(QStringLiteral("IFC export could not save the destination."));
+                return false;
+            }
+            json report{{"format", "IFC4 STEP"}, {"source_revision", source.revision()},
+                        {"complete", mapped.diagnostics.empty()}, {"diagnostics", json::array()}};
+            for (const auto& item : mapped.diagnostics)
+                report["diagnostics"].push_back({{"source_id", item.source_id},
+                    {"source_kind", item.source_kind}, {"code", item.code}});
+            const auto report_path = path + QStringLiteral(".fidelity.json");
+            QSaveFile report_file(report_path);
+            const auto report_bytes = QByteArray::fromStdString(report.dump(2));
+            if (!report_file.open(QIODevice::WriteOnly) ||
+                report_file.write(report_bytes) != report_bytes.size() || !report_file.commit()) {
+                setError(QStringLiteral("IFC export report could not be saved."));
+                return false;
+            }
+            if (!writeOutputFingerprint(path, source, QStringLiteral("ifc"))) return false;
+            clearError();
+            owner->statusBar()->showMessage(
+                mapped.diagnostics.empty() ? QStringLiteral("IFC exported locally.")
+                                            : QStringLiteral("IFC exported with fidelity diagnostics."),
+                5000);
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("IFC export failed: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    bool importIfc(const QString& path) {
+        if (path.trimmed().isEmpty()) {
+            setError(QStringLiteral("Choose an IFC file to import."));
+            return false;
+        }
+        try {
+            const QFileInfo info(path);
+            if (!info.exists() || !info.isFile())
+                throw std::invalid_argument("The IFC file does not exist.");
+            constexpr qint64 max_bytes = static_cast<qint64>(IfcExchangeLimits{}.max_bytes);
+            if (info.size() <= 0 || info.size() > max_bytes)
+                throw std::invalid_argument("The IFC file exceeds the local import limit.");
+            QFile input(path);
+            if (!input.open(QIODevice::ReadOnly))
+                throw std::invalid_argument("The IFC file could not be opened.");
+            const auto raw = input.readAll();
+            if (raw.size() != info.size())
+                throw std::invalid_argument("The IFC file could not be read completely.");
+            const auto mapped = import_project_ifc(
+                std::string_view(raw.constData(), static_cast<std::size_t>(raw.size())));
+            const auto source = authoringSnapshot();
+            if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
+
+            std::string layer_id = m_active_layer_id.toStdString();
+            auto layer = source.entities().find(layer_id);
+            if (layer == source.entities().end() || layer->second.type != "layer") {
+                layer = std::find_if(source.entities().begin(), source.entities().end(),
+                    [](const auto& item) { return item.second.type == "layer"; });
+            }
+            if (layer == source.entities().end())
+                throw std::invalid_argument("Create a drawing layer before importing IFC geometry.");
+            layer_id = layer->first;
+            const auto floor_id = layer->second.properties.value("floor_id", std::string{});
+            if (floor_id.empty()) throw std::invalid_argument("The target drawing layer has no floor.");
+
+            std::vector<EntityChange> changes;
+            std::vector<std::string> imported_ids;
+            for (const auto& candidate : mapped.entities) {
+                if (candidate.type != "boundary") continue;
+                auto imported = candidate;
+                imported.id = new_id("boundary");
+                imported.properties["floor_id"] = floor_id;
+                imported.properties["layer_id"] = layer_id;
+                imported_ids.push_back(imported.id);
+                changes.push_back(EntityChange::upsert(std::move(imported)));
+            }
+            const auto asset_id = new_id("ifc-source");
+            std::vector<std::byte> source_bytes;
+            source_bytes.reserve(static_cast<std::size_t>(raw.size()));
+            for (const auto value : raw) source_bytes.push_back(static_cast<std::byte>(value));
+            auto asset = Asset::create(asset_id, "application/step", std::move(source_bytes),
+                {{"format", "IFC4 STEP"}, {"source_path", info.fileName().toStdString()},
+                 {"mapped_entity_count", mapped.entities.size()},
+                 {"source_retention_required", mapped.source_retention_required}});
+            auto source_entity = Entity::create("ifc_source",
+                {{"asset_id", asset_id}, {"format", "IFC4 STEP"},
+                 {"source_path", info.fileName().toStdString()},
+                 {"mapped_entity_count", mapped.entities.size()}, {"diagnostics", json::array()}});
+            for (const auto& item : mapped.diagnostics)
+                source_entity.properties["diagnostics"].push_back({{"source_id", item.source_id},
+                    {"source_kind", item.source_kind}, {"code", item.code}});
+            changes.push_back(EntityChange::upsert(std::move(source_entity)));
+            const auto command = ApplyEntityChanges{source.revision(), std::move(changes),
+                {AssetChange::upsert(std::move(asset))}, "Import IFC"};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            if (!imported_ids.empty()) m_selected_id = id_from(imported_ids.front());
+            m_active_layer_id = id_from(layer_id);
+            clearError();
+            refresh();
+            const auto report_path = path + QStringLiteral(".fidelity.json");
+            QSaveFile report_file(report_path);
+            json report{{"format", "IFC4 STEP"}, {"mapped_entity_count", mapped.entities.size()},
+                        {"source_retention_required", mapped.source_retention_required},
+                        {"diagnostics", json::array()}};
+            for (const auto& item : mapped.diagnostics)
+                report["diagnostics"].push_back({{"source_id", item.source_id},
+                    {"source_kind", item.source_kind}, {"code", item.code}});
+            const auto report_bytes = QByteArray::fromStdString(report.dump(2));
+            if (report_file.open(QIODevice::WriteOnly) && report_file.write(report_bytes) == report_bytes.size())
+                report_file.commit();
+            owner->statusBar()->showMessage(
+                mapped.diagnostics.empty() ? QStringLiteral("IFC imported locally.")
+                                            : QStringLiteral("IFC imported with fidelity diagnostics."),
+                5000);
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("IFC import failed; the current document is unchanged: %1")
+                         .arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     bool showPrintPreview() {
         refreshOutput();
         if (!m_plan_geometry_error.isEmpty()) {
@@ -11060,6 +11197,16 @@ public:
                 const auto selected = QFileDialog::getSaveFileName(
                     owner, QStringLiteral("Export DXF"), {}, QStringLiteral("DXF drawing (*.dxf)"));
                 if (!selected.isEmpty()) exportDxf(selected);
+            }},
+            {QStringLiteral("Import IFC"), [this] {
+                const auto selected = QFileDialog::getOpenFileName(
+                    owner, QStringLiteral("Import IFC"), {}, QStringLiteral("IFC model (*.ifc *.IFC)"));
+                if (!selected.isEmpty()) importIfc(selected);
+            }},
+            {QStringLiteral("Export IFC"), [this] {
+                const auto selected = QFileDialog::getSaveFileName(
+                    owner, QStringLiteral("Export IFC"), {}, QStringLiteral("IFC model (*.ifc)"));
+                if (!selected.isEmpty()) exportIfc(selected);
             }},
             {QStringLiteral("Print preview (draft)"), [this] { showPrintPreview(); }},
             {QStringLiteral("About internal checkpoint"), [this] { showAbout(); }},
@@ -16228,6 +16375,14 @@ bool MainWindow::exportDxf(const QString& path) {
 
 bool MainWindow::importDxf(const QString& path) {
     return m_impl->importDxf(path);
+}
+
+bool MainWindow::exportIfc(const QString& path) {
+    return m_impl->exportIfc(path);
+}
+
+bool MainWindow::importIfc(const QString& path) {
+    return m_impl->importIfc(path);
 }
 
 bool MainWindow::showPrintPreview() {

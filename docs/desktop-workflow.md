@@ -202,6 +202,13 @@ floor/layer. The original DXF bytes are retained as a `dxf_source` asset and
 all unsupported or unbound semantics remain visible in the adjacent report and
 source entity diagnostics.
 
+The same command surface exposes local **Import IFC** and **Export IFC**.
+Export writes the bounded IFC4 STEP subset plus a `.fidelity.json` report.
+Import maps reliable product footprints and axes onto the active floor/layer in
+one undoable command, retains the original STEP bytes as an `ifc_source` asset,
+and keeps unreconstructed properties, materials, placements, and relationships
+visible through the report and source entity diagnostics.
+
 The overflow menu and command palette also provide **Copy selection**, **Cut
 selection**, **Paste selection**, and **Delete selection**. Clipboard data is a
 bounded `sketch.document.clipboard` JSON payload held by the local system

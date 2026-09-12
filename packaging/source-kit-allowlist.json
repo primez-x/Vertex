@@ -535,6 +535,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/ifc_project_exchange.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/import_worker_policy.hpp"
     },
     {
@@ -995,6 +999,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/ifc_project_exchange.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/import_worker_policy.cpp"
     },
     {
@@ -1452,6 +1460,14 @@
     {
       "category": "source",
       "path": "tests/georeferencing_contract_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/ifc_desktop_workflow_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/ifc_project_exchange_tests.cpp"
     },
     {
       "category": "source",

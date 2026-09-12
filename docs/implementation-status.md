@@ -610,6 +610,16 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   for original-byte retention. Desktop floor/layer assignment, source-asset
   retention, Apex native compatibility, external CAD fidelity, and production
   interchange qualification remain open.
+- A bounded IFC4 STEP project mapper now exports deterministic owner/unit
+  records, analytical linear boundaries, wall axes, slab footprints, and
+  optional slab swept solids from immutable snapshots. Import walks the product
+  representation graph and reconstructs editable boundary candidates with
+  `extensions.ifc_source` record identities, placement translations, and
+  extrusion depth where representable. Unsupported products, properties,
+  materials, rotations, and relationships produce explicit source-retention
+  diagnostics. IFC worker isolation, desktop transaction/source-asset wiring,
+  Reference View conformance, and external interoperability fixtures remain
+  open.
 - Multipage project semantics, reusable assemblies, and optional offline
   assistance are implemented as standalone typed models plus a deterministic
   local engine. The engine produces unverified tracing, explicit-unit
