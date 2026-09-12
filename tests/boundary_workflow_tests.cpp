@@ -982,6 +982,74 @@ void test_off_grid_snapped_commit_in_each_workspace() {
     }
 }
 
+void test_receipt_boundary_offset_copy() {
+    MainWindow window;
+    prepare_window(window);
+    auto* target = canvas(window, QStringLiteral("measurementPlanCanvas"));
+    require(window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, "living"), "start copy fixture");
+    send_click(*target, {0,0});
+    send_click(*target, {2,0});
+    send_click(*target, {2,2});
+    send_click(*target, {0,2});
+    send_key(*target, Qt::Key_Return);
+    const auto source = window.document().snapshot();
+    std::string boundary_id;
+    for (const auto& [id, entity] : source.entities())
+        if (entity.properties.contains("boundary_authoring")) boundary_id = id;
+    require(!boundary_id.empty() && window.selectEntity(QString::fromStdString(boundary_id)), "select authored boundary");
+    require(window.transformSelectedBoundary("0",false,false,"7 m","-2 m",true),
+        "offset copy must preserve supported construction receipts");
+    const auto copy_id = window.selectedEntityId().toStdString();
+    const auto copied = window.document().snapshot();
+    const auto& copy = copied.entities().at(copy_id);
+    const auto original_record = sketch::decode_boundary_receipt_envelope(
+        source.entities().at(boundary_id).properties.at("boundary_authoring"));
+    const auto copy_record = sketch::decode_boundary_receipt_envelope(copy.properties.at("boundary_authoring"));
+    require(copy_record.supported() && copy_record.record->boundary_id == copy_id && copy_id != boundary_id &&
+        copy_record.record->anchor.x == original_record.record->anchor.x + 7 &&
+        copy_record.record->anchor.y == original_record.record->anchor.y - 2,
+        "copied receipt owner and anchor must match the new boundary");
+    std::size_t dimensions = 0;
+    for (const auto& [id, entity] : copied.entities()) {
+        if (source.entities().contains(id)) {
+            require(source.entities().at(id) == entity, "offset copy must not mutate source entities");
+            continue;
+        }
+        if (entity.type != "dimension") continue;
+        const auto decoded = sketch::decode_boundary_dimension_entity(entity);
+        require(decoded.supported() && decoded.dimension->boundary_id == copy_id,
+            "copied dimensions must target the copied boundary");
+        require(decoded.dimension->resolve(copy).segment_length() > 0, "copied dimension must resolve");
+        const auto edge = std::find_if(copy_record.record->edges.begin(), copy_record.record->edges.end(),
+            [&](const auto& item) { return item.segment_id == decoded.dimension->segment_id; });
+        require(edge != copy_record.record->edges.end(), "copied label must have a receipt edge");
+        const auto source_edge = original_record.record->edges.at(
+            static_cast<std::size_t>(edge - copy_record.record->edges.begin())).segment_id;
+        bool matched = false;
+        for (const auto& [source_id, source_entity] : source.entities()) {
+            if (source_entity.type != "dimension") continue;
+            const auto source_dimension = sketch::decode_boundary_dimension_entity(source_entity);
+            if (source_dimension.dimension->segment_id != source_edge) continue;
+            require(decoded.dimension->text_position.x == source_dimension.dimension->text_position.x + 7 &&
+                decoded.dimension->text_position.y == source_dimension.dimension->text_position.y - 2 &&
+                decoded.dimension->placement == source_dimension.dimension->placement,
+                "copy must translate label placement and retain placement mode");
+            matched = true;
+        }
+        require(matched, "every copied dimension must originate from a source label");
+        ++dimensions;
+    }
+    require(dimensions == 4, "offset copy must include all four dimension labels");
+    require_both_canvas_labels(window, 8);
+    require(window.undoCommand() && window.document().snapshot().entities() == source.entities() &&
+        window.redoCommand() && window.document().snapshot().entities() == copied.entities(),
+        "boundary and dimension copy must undo and redo atomically");
+    QTemporaryDir directory;
+    const auto path = directory.filePath("receipt-copy.bldproj");
+    require(directory.isValid() && window.saveProjectAs(path) && window.openProject(path) &&
+        window.document().snapshot().entities() == copied.entities(), "receipt copy must survive save/reopen exactly");
+}
+
 void install_test_font() {
     const auto font_id = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"));
     require(font_id >= 0, "boundary workflow test must load the bundled Inter font");
@@ -1007,6 +1075,7 @@ int main(int argc, char** argv) {
         test_off_grid_snap_cursor_rubberband_and_point_receipt_in_both_canvases();
         test_off_grid_define_first_pending_dimension_preview_and_placement();
         test_off_grid_snapped_commit_in_each_workspace();
+        test_receipt_boundary_offset_copy();
         std::cout << "Boundary workflow event tests passed\n";
         return 0;
     } catch (const std::exception& error) {

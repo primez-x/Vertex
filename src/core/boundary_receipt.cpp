@@ -1002,6 +1002,38 @@ bool BoundaryConstructionReplayResult::operator==(
            boundary_id == other.boundary_id && edges == other.edges && receipts == other.receipts;
 }
 
+BoundaryConstructionRecord translated_boundary_construction(
+    const BoundaryConstructionRecord& record, Vec2 offset,
+    const std::map<std::string, std::string, std::less<>>& identity_map) {
+    (void)replay_boundary_construction(record);
+    require_point(offset, "boundary translation offset");
+    auto result = record;
+    const auto translate = [offset](Vec2 point) {
+        const Vec2 translated{point.x + offset.x, point.y + offset.y};
+        require_point(translated, "translated boundary point");
+        return translated;
+    };
+    const auto remap = [&identity_map](std::string& identity) {
+        if (const auto found = identity_map.find(identity); found != identity_map.end()) {
+            identity = found->second;
+        }
+    };
+    result.anchor = translate(result.anchor);
+    remap(result.boundary_id);
+    for (auto& edge : result.edges) {
+        remap(edge.segment_id);
+        remap(edge.start_vertex_id);
+        remap(edge.end_vertex_id);
+        remap(edge.receipt.segment_id);
+        edge.receipt.start = translate(edge.receipt.start);
+        if (edge.receipt.chord_end) {
+            edge.receipt.chord_end = translate(*edge.receipt.chord_end);
+        }
+    }
+    (void)replay_boundary_construction(result);
+    return result;
+}
+
 BoundaryConstructionReplayResult replay_boundary_construction(
     const BoundaryConstructionRecord& record, double tolerance_metres) {
     require_tolerance(tolerance_metres);

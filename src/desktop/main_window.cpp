@@ -1965,6 +1965,17 @@ public:
         }
         const auto revision = source.revision();
         if (clone) {
+            std::optional<BoundaryConstructionRecord> construction;
+            if (original.properties.contains("boundary_authoring")) {
+                if (radians != 0.0 || flip_horizontal || flip_vertical)
+                    throw std::invalid_argument("Construction-bound copies currently support offsets; rotation and reflection require receipt migration.");
+                const auto decoded = decode_boundary_receipt_envelope(original.properties.at("boundary_authoring"));
+                if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+                construction = *decoded.record;
+                // Only this qualified envelope is handled below. Other owned
+                // semantics still pass through the ordinary retirement guard.
+                original.properties.erase("boundary_authoring");
+            }
             LegacyBoundaryIdentityOptions ids;
             ids.segment_ids.reserve(transformed.segments.size());
             ids.vertex_ids.reserve(transformed.segments.size());
@@ -1985,13 +1996,49 @@ public:
                 identities.emplace(transformed.segments[index].segment_id, ids.segment_ids[index]);
                 identities.emplace(transformed.segments[index].start_vertex_id, ids.vertex_ids[index]);
             }
+            std::optional<json> envelope;
+            if (construction) {
+                const auto translated = translated_boundary_construction(*construction, offset, identities);
+                const auto replay = replay_boundary_construction(translated);
+                cloned.segments.clear();
+                for (const auto& edge : replay.edges)
+                    cloned.segments.push_back({edge.segment_id, edge.start_vertex_id, edge.end_vertex_id, edge.segment});
+                envelope = encode_boundary_receipt_envelope(translated);
+            }
             auto metadata = original;
             metadata.id = clone_id;
             remap_entity_references(metadata, identities);
             auto encoded = encode_identified_boundary_entity(cloned, &metadata);
+            if (envelope) encoded.properties["boundary_authoring"] = *envelope;
+            std::vector<EntityChange> changes{EntityChange::upsert(std::move(encoded))};
+            for (const auto& [id, entity] : source.entities()) {
+                if (entity.type != "dimension" || !entity.properties.contains("target") ||
+                    entity.properties.at("target").value("entity_id", std::string{}) != original.id) continue;
+                const auto decoded = decode_boundary_dimension_entity(entity);
+                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                auto dimension = *decoded.dimension;
+                dimension.id = new_id("dimension");
+                dimension.boundary_id = clone_id;
+                dimension.segment_id = identities.at(dimension.segment_id);
+                const auto x = dimension.text_position.x - pivot.x;
+                const auto y = dimension.text_position.y - pivot.y;
+                Vec2 position = dimension.text_position;
+                if (radians != 0.0)
+                    position = {pivot.x + x * std::cos(radians) - y * std::sin(radians),
+                                pivot.y + x * std::sin(radians) + y * std::cos(radians)};
+                if (flip_horizontal) position.x = pivot.x - (position.x - pivot.x);
+                if (flip_vertical) position.y = pivot.y - (position.y - pivot.y);
+                dimension.text_position = {position.x + offset.x, position.y + offset.y};
+                auto dimension_metadata = entity;
+                dimension_metadata.id = dimension.id;
+                auto dimension_ids = identities;
+                dimension_ids.emplace(id, dimension.id);
+                remap_entity_references(dimension_metadata, dimension_ids);
+                changes.push_back(EntityChange::upsert(encode_boundary_dimension_entity(dimension, &dimension_metadata)));
+            }
             return {ApplyEntityChanges{
                 .expected_revision = revision,
-                .entity_changes = {EntityChange::upsert(std::move(encoded))},
+                .entity_changes = std::move(changes),
                 .message = "clone transformed boundary",
             }, clone_id};
         } else {

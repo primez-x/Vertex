@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -162,6 +163,16 @@ struct BoundaryConstructionReplayResult {
 [[nodiscard]] BoundaryConstructionReplayResult replay_boundary_construction(
     const BoundaryConstructionRecord& record,
     double tolerance_metres = default_geometry_tolerance_metres);
+
+// Copy a replayable record with translated captured points and optional typed
+// identity replacements. Expressions, closure vectors and opaque extensions
+// are preserved exactly. Both input and result must replay successfully;
+// invalid offsets or identity replacements throw std::invalid_argument.
+// Even finite offsets can reject when floating-point translation loses the
+// exact closure-vector relationship required by replay.
+[[nodiscard]] BoundaryConstructionRecord translated_boundary_construction(
+    const BoundaryConstructionRecord& record, Vec2 offset,
+    const std::map<std::string, std::string, std::less<>>& identity_map = {});
 
 enum class BoundaryReceiptEnvelopeFormat {
     supported_v1,

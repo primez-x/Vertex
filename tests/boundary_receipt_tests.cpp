@@ -5,6 +5,7 @@
 #include <cmath>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <numbers>
 #include <stdexcept>
 #include <string>
@@ -256,6 +257,95 @@ BoundaryConstructionRecord point_record() {
                  line_to_point(segment_id, points[index], points[next]));
     }
     return result;
+}
+
+void test_translation_preserves_inputs_and_remaps_only_typed_ids() {
+    auto records = all_forms();
+    // Point-native closing inputs avoid recomputing a retained closure vector
+    // after floating-point translation of the tangent arc endpoint.
+    auto& tangent_record = records.back();
+    tangent_record.schema_version = sketch::boundary_receipt_schema_version_v2;
+    auto& tangent_close = tangent_record.edges.back();
+    tangent_close.receipt = line_to_point(tangent_close.segment_id,
+                                         tangent_close.receipt.start, tangent_record.anchor);
+    records.push_back(point_record());
+    const Vec2 offset{8.0, -4.0};
+    for (auto& record : records) {
+        record.extensions["identity"] = record.boundary_id;
+        record.extensions["nested"] = Json{{"segment_id", record.edges[0].segment_id}};
+        const auto original = record;
+        std::map<std::string, std::string, std::less<>> identities;
+        identities[record.boundary_id] = "copy-" + record.boundary_id;
+        for (const auto& edge : record.edges) {
+            for (const auto& id : {edge.segment_id, edge.start_vertex_id, edge.end_vertex_id}) {
+                identities[id] = "copy-" + id;
+            }
+        }
+        const auto translated = sketch::translated_boundary_construction(record, offset, identities);
+        auto expected = original;
+        expected.anchor = {original.anchor.x + offset.x, original.anchor.y + offset.y};
+        expected.boundary_id = identities.at(original.boundary_id);
+        for (auto& edge : expected.edges) {
+            edge.segment_id = identities.at(edge.segment_id);
+            edge.start_vertex_id = identities.at(edge.start_vertex_id);
+            edge.end_vertex_id = identities.at(edge.end_vertex_id);
+            edge.receipt.segment_id = identities.at(edge.receipt.segment_id);
+            edge.receipt.start.x += offset.x;
+            edge.receipt.start.y += offset.y;
+            if (edge.receipt.chord_end) {
+                edge.receipt.chord_end->x += offset.x;
+                edge.receipt.chord_end->y += offset.y;
+            }
+        }
+        require(translated == expected,
+                "translation must retain every expression, closure vector and opaque extension");
+        require(record == original, "translation must leave the source untouched");
+        const auto before = sketch::replay_boundary_construction(original);
+        const auto after = sketch::replay_boundary_construction(translated);
+        for (std::size_t index = 0; index < before.edges.size(); ++index) {
+            const auto& a = before.edges[index].segment;
+            const auto& b = after.edges[index].segment;
+            require(std::abs(b.start.x - (a.start.x + offset.x)) < 1e-7 &&
+                        std::abs(b.start.y - (a.start.y + offset.y)) < 1e-7 &&
+                        std::abs(b.end.x - (a.end.x + offset.x)) < 1e-7 &&
+                        std::abs(b.end.y - (a.end.y + offset.y)) < 1e-7 &&
+                        std::abs(a.sweep_radians - b.sweep_radians) < 1e-12,
+                    "replayed analytical geometry must translate without changing shape");
+        }
+        require(sketch::translated_boundary_construction(original, {}) == original,
+                "zero translation without replacements must preserve identities and input exactly");
+    }
+}
+
+void test_translation_rejects_invalid_inputs_and_results() {
+    const auto original = all_forms().front();
+    const auto tangent_closure = all_forms().back();
+    expect_invalid([&] {
+        (void)sketch::translated_boundary_construction(tangent_closure, {8, -4});
+    }, "translation must reject rounding that invalidates an exact retained closure vector");
+    for (const auto offset : {Vec2{std::numeric_limits<double>::infinity(), 0},
+                              Vec2{0, std::numeric_limits<double>::quiet_NaN()},
+                              Vec2{std::numeric_limits<double>::max(), 0}}) {
+        expect_invalid([&] { (void)sketch::translated_boundary_construction(original, offset); },
+                       "nonfinite offsets and finite offsets destroying replay must reject");
+    }
+    auto invalid_source = original;
+    invalid_source.edges[0].receipt.segment_id = "wrong";
+    expect_invalid([&] {
+        (void)sketch::translated_boundary_construction(
+            invalid_source, {}, {{"wrong", original.edges[0].segment_id}});
+    }, "translation must validate the source before replacements can repair it");
+    expect_invalid([&] {
+        (void)sketch::translated_boundary_construction(original, {}, {{original.boundary_id, ""}});
+    }, "empty replacement identities must reject");
+    expect_invalid([&] {
+        (void)sketch::translated_boundary_construction(
+            original, {}, {{original.edges[0].segment_id, original.edges[1].segment_id}});
+    }, "replacement edge collisions must reject");
+    expect_invalid([&] {
+        (void)sketch::translated_boundary_construction(original, {}, {{"v0", "v1"}});
+    }, "replacement vertex collisions must reject");
+    require(original == all_forms().front(), "failed translations must leave the source untouched");
 }
 
 void test_roundtrip_all_forms_and_exact_values() {
@@ -531,6 +621,8 @@ int main() {
     sketch::testing::noninteractive_errors();
     try {
         test_roundtrip_all_forms_and_exact_values();
+        test_translation_preserves_inputs_and_remaps_only_typed_ids();
+        test_translation_rejects_invalid_inputs_and_results();
         test_point_native_schema_two_roundtrip_and_exact_endpoint_copy();
         test_schema_one_rejects_point_kind_and_replay_version_is_opaque_only_when_positive();
         test_malformed_extra_missing_and_duplicate_fields_reject();

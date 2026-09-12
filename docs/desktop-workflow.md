@@ -383,9 +383,14 @@ Boundary clone mode allocates a new boundary, segment IDs, and vertex IDs. It
 preserves drawing context, area metadata, names, custom properties, extensions,
 and per-edge metadata, while remapping recognized self-references. User text and
 opaque metadata are not rewritten as identifiers. The source entity and its
-relationships remain unchanged. Unhandled geometry-owned receipts or dependent
-semantics reject the copy without changing history; qualified migration for those
-records remains unfinished. Imported anonymous legacy boundaries are promoted
+relationships remain unchanged. Supported construction receipts now accompany
+offset copies, retaining original distance/angle expressions and rebuilding the
+copied geometry through receipt replay. Boundary dimension labels are copied
+with fresh identities and transformed text positions in the same undoable command.
+Receipt-bound rotation/reflection and in-place moves remain unfinished. Some
+offsets also reject when floating-point translation cannot preserve the exact
+closure-vector relationship. Unhandled geometry-owned receipts or dependent
+semantics reject the copy without changing history. Imported anonymous legacy boundaries are promoted
 only when a command can preserve their exact geometry and metadata; an
 in-place transform of such a boundary remains blocked until an explicit
 identity-upgrade path is provided. Unsupported boundary versions fail closed
