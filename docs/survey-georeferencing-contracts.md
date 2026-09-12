@@ -31,13 +31,19 @@ legs identify their input line. Calculation/export does not alter the project.
 drawing layer as one undoable measurement boundary with classification
 `survey`. Measured legs are preserved. A nonzero endpoint residual requires an
 explicit extra segment back to the origin, described in the dialog; geometry
-validation may reject a residual too small to form a valid segment. No bearing
-or distance is silently adjusted. Open traverses cannot be added as areas.
+validation may reject a residual too small to form a valid segment. Alternatively,
+the user may explicitly check **Close the final leg at the origin** for an
+area-bearing traverse within tolerance. This adjusts that leg's endpoint
+instead of creating an extra segment, while retaining the measured calls.
+The choice clears when inputs change. No bearing or distance is silently
+adjusted. Open traverses cannot be added as areas.
 The dialog's document, revision, selection, layer, and units must still match
 the captured drawing context before insertion.
 
 The boundary's `extensions.survey_source` contains version 1, the original
-report, and `added_closing_segment`. This is historical source metadata:
+report, `added_closing_segment`, `adjusted_final_endpoint`, and
+`endpoint_adjustment_m` (east/north offsets, or null when no adjustment was
+selected). This is historical source metadata:
 subsequent boundary edits do not recalculate it or claim to update the original
 survey. Geometry and metadata save/reopen and undo/redo together; the boundary
 uses the common canvas and vector-output path.

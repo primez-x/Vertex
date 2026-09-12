@@ -6560,11 +6560,17 @@ public:
         auto* add_boundary = buttons->addButton(QStringLiteral("Add boundary"), QDialogButtonBox::ActionRole);
         add_boundary->setObjectName(QStringLiteral("surveyAddBoundary"));
         add_boundary->setEnabled(false);
+        auto* close_endpoint = new QCheckBox(QStringLiteral("Close the final leg at the origin (adjust its endpoint)"), &dialog);
+        close_endpoint->setObjectName(QStringLiteral("surveyCloseEndpoint"));
+        close_endpoint->setEnabled(false);
+        layout->addWidget(close_endpoint);
         buttons->addButton(QDialogButtonBox::Close);
         layout->addWidget(buttons);
         std::optional<QString> report;
         const auto invalidate = [&] {
             report.reset(); result->clear(); export_report->setEnabled(false); add_boundary->setEnabled(false);
+            close_endpoint->setChecked(false);
+            close_endpoint->setEnabled(false);
         };
         QObject::connect(input, &QPlainTextEdit::textChanged, &dialog, invalidate);
         QObject::connect(provenance, &QLineEdit::textChanged, &dialog, invalidate);
@@ -6627,6 +6633,7 @@ public:
                 result->setText(summary);
                 export_report->setEnabled(true);
                 add_boundary->setEnabled(d.area_m2.has_value() && m_document->is_editable());
+                close_endpoint->setEnabled(d.area_m2.has_value() && d.linear_error_m > 0.0);
             } catch (const std::exception& error) { result->setText(QString::fromUtf8(error.what())); }
         });
         QObject::connect(add_boundary, &QPushButton::clicked, &dialog, [&] {
@@ -6648,11 +6655,16 @@ public:
                     boundary.push_back({point(vertices[index - 1]), point(vertices[index]), 0.0});
                 const auto start = point(vertices.front());
                 const auto end = point(vertices.back());
-                const bool closing_segment = start.x != end.x || start.y != end.y;
+                const bool adjust_endpoint = close_endpoint->isEnabled() && close_endpoint->isChecked();
+                const bool closing_segment = !adjust_endpoint && (start.x != end.x || start.y != end.y);
+                if (adjust_endpoint) boundary.back().end = start;
                 if (closing_segment) boundary.push_back({end, start, 0.0});
                 const auto id = createBoundary(boundary, QStringLiteral("survey"), drawing_context.revision,
                     {{"survey_source", {{"version", 1}, {"report", source},
-                                        {"added_closing_segment", closing_segment}}}});
+                                        {"added_closing_segment", closing_segment},
+                                        {"adjusted_final_endpoint", adjust_endpoint},
+                                        {"endpoint_adjustment_m", adjust_endpoint ?
+                                            json{{"east", -end.x}, {"north", -end.y}} : json(nullptr)}}}});
                 if (id.isEmpty()) { result->setText(lastError()); return; }
                 drawing_context = captureModalContext();
                 fitView();

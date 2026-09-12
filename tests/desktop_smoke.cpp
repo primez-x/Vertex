@@ -1254,6 +1254,46 @@ void test_survey_calculator(const QString& capture_directory) {
             "inspecting original survey calls must not change the project or insert another boundary");
 }
 
+void test_survey_explicit_endpoint_closure() {
+    sketch::desktop::MainWindow window;
+    auto* action = window.findChild<QAction*>("surveyTraverse");
+    const auto revision = window.document().revision();
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>("surveyCalculator");
+        dialog->findChild<QLineEdit*>("surveyProvenance")->setText("Closure fixture");
+        auto* input = dialog->findChild<QPlainTextEdit*>("surveyLegs");
+        input->setPlainText("NE,90,100 m\nSE,0,100 m\nSW,90,100 m\nNW,0,99.9995 m");
+        dialog->findChild<QPushButton*>("surveyCalculate")->click();
+        auto* close = dialog->findChild<QCheckBox*>("surveyCloseEndpoint");
+        require(close && close->isEnabled() && !close->isChecked(),
+                "closing an endpoint must require an explicit choice for a within-tolerance residual");
+        close->setChecked(true);
+        dialog->findChild<QPushButton*>("surveyAddBoundary")->click();
+        require(window.document().revision() == revision + 1, "explicit endpoint closure must commit once");
+        const auto entity = window.document().snapshot().entities().at(window.selectedEntityId().toStdString());
+        const auto boundary = sketch::boundary_geometry(sketch::decode_identified_boundary_entity(entity));
+        const auto& source = entity.extensions.at("survey_source");
+        require(boundary.size() == 4 && boundary.back().end.x == 0.0 && boundary.back().end.y == 0.0 &&
+                    source.at("adjusted_final_endpoint") == true && source.at("added_closing_segment") == false &&
+                    std::abs(source.at("endpoint_adjustment_m").at("north").get<double>() - 0.0005) < 1e-10 &&
+                    source.at("report").at("vertices").back().at("north_m").get<double>() != 0.0,
+                "adjusted boundary must retain the original residual and record the exact correction");
+        input->setPlainText("NE,90,100 m");
+        require(!close->isChecked() && !close->isEnabled(), "new calls must clear previous endpoint-adjustment consent");
+        input->setPlainText("NE,90,100 m\nSE,0,100 m\nSW,90,100 m\nNW,0,99.9999999999999 m");
+        dialog->findChild<QPushButton*>("surveyCalculate")->click();
+        require(close->isEnabled(), "floating-point-sized residual must permit explicit closure");
+        const auto before_small_residual = window.document().revision();
+        close->setChecked(true);
+        dialog->findChild<QPushButton*>("surveyAddBoundary")->click();
+        require(window.document().revision() == before_small_residual + 1,
+                "explicit closure must avoid creating a degenerate segment for tiny residuals");
+        dialog->reject();
+    });
+    action->trigger();
+    require(window.undoCommand(), "explicit survey closure must remain undoable");
+}
+
 void test_design_phase_workflow() {
     using namespace sketch;
     desktop::MainWindow window;
@@ -1871,6 +1911,7 @@ int main(int argc, char** argv) {
     test_contextual_roof_dimension_inspector();
     test_contextual_gable_roof_inspector(field_ui_capture_directory);
     test_survey_calculator(field_ui_capture_directory);
+    test_survey_explicit_endpoint_closure();
     {
         QTemporaryDir stamp_directory;
         require(stamp_directory.isValid(), "stamp test directory should be available");
