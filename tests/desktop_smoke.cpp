@@ -8,6 +8,7 @@
 #include "sketch/vertical_levels.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/boundary_dimension.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/quantity.hpp"
@@ -489,6 +490,10 @@ void test_material_clipboard_transfer() {
         AssemblyModel::create({{wall_id.toStdString(),wall_id.toStdString(),"#abcdef"},{"unused","Unused"}}, {}, {}).to_json()}});
     catalog.id="transfer-catalog";
     auto wall=source.document().snapshot().entities().at(wall_id.toStdString());
+    wall.properties["name"]=wall_id.toStdString();
+    wall.properties["description"]=wall_id.toStdString();
+    wall.properties["custom_metadata"]={{"entity_id",wall_id.toStdString()}};
+    wall.extensions={{"note",wall_id.toStdString()},{"entity_id",wall_id.toStdString()}};
     wall.properties["material_assignment"]={{"version",1},{"catalog_id",catalog.id},{"material_id",wall_id.toStdString()}};
     source.document().apply(ApplyEntityChanges{source.document().revision(),
         {EntityChange::upsert(catalog),EntityChange::upsert(wall)},{},"assign transfer material"});
@@ -503,6 +508,12 @@ void test_material_clipboard_transfer() {
     require(target.pasteSelection(),"cross-project paste must carry materials and use clipboard root despite destination selection");
     const auto pasted_id=target.selectedEntityId().toStdString();
     const auto pasted=target.document().snapshot();
+    const auto& pasted_wall=pasted.entities().at(pasted_id);
+    require(pasted_wall.properties.at("name")==wall.properties.at("name") &&
+        pasted_wall.properties.at("description")==wall.properties.at("description") &&
+        pasted_wall.properties.at("custom_metadata")==wall.properties.at("custom_metadata") &&
+        pasted_wall.extensions==wall.extensions,
+        "clipboard identity changes must preserve ordinary text and opaque metadata even when matching IDs");
     const auto& assignment=pasted.entities().at(pasted_id).properties.at("material_assignment");
     const auto imported_catalog=assignment.at("catalog_id").get<std::string>();
     require(imported_catalog!=catalog.id,"conflicting catalog identity must not overwrite destination materials");
@@ -524,6 +535,46 @@ void test_material_clipboard_transfer() {
     require(source.selectEntity(wall_id) && source.cutSelection() &&
         source.document().snapshot().entities().contains(catalog.id),
         "cutting assigned geometry must preserve its shared material catalog");
+
+    const auto boundary_id=source.createBoundary(
+        Boundary{{{{0,0},{4,0},0},{{4,0},{4,2},0},{{4,2},{0,2},0},{{0,2},{0,0},0}}},
+        QStringLiteral("measurement"));
+    const auto boundary=decode_identified_boundary_entity(source.document().snapshot().entities().at(boundary_id.toStdString()));
+    auto dimension=encode_boundary_dimension_entity({"clipboard-dimension",boundary.id,
+        boundary.segments.front().segment_id,{2,-1}});
+    dimension.properties["target"]["description"]=boundary.id;
+    source.document().apply(ApplyEntityChanges{source.document().revision(),{EntityChange::upsert(dimension)},{},"clipboard dimension"});
+    require(source.selectEntity(boundary_id) && source.copySelection() && target.pasteSelection(),
+        "identified boundary and dimension paste");
+    const auto copied_snapshot=target.document().snapshot();
+    const auto& copied_boundary=copied_snapshot.entities().at(target.selectedEntityId().toStdString());
+    bool resolved_dimension=false;
+    for(const auto& [id,entity]:copied_snapshot.entities()) {
+        if(entity.type!="dimension") continue;
+        const auto decoded=decode_boundary_dimension_entity(entity);
+        if(!decoded.dimension || decoded.dimension->boundary_id!=copied_boundary.id) continue;
+        require(decoded.dimension->segment_id!=boundary.segments.front().segment_id &&
+            std::abs(decoded.dimension->resolve(copied_boundary).segment_length()-4.0)<1e-9 &&
+            entity.properties.at("target").at("description")==boundary.id,
+            "dimension references must follow fresh segment identities while target metadata stays unchanged");
+        resolved_dimension=true;
+    }
+    require(resolved_dimension,"copied dimension must target copied boundary");
+
+    AnnotationState state;
+    auto label=instantiate_label(default_label_templates().front(),"clipboard-label");
+    label.content=label.id;
+    state.labels.push_back(label);
+    auto annotation=make_annotation_entity("clipboard-annotations",state);
+    annotation.extensions={{"note",label.id}};
+    source.document().apply(ApplyEntityChanges{source.document().revision(),{EntityChange::upsert(annotation)},{},"clipboard annotation"});
+    require(source.selectEntity(QString::fromStdString(label.id)) && source.copySelection() && target.pasteSelection(),
+        "annotation clipboard transfer");
+    const auto copied_annotation=target.document().snapshot().entities().at(target.selectedEntityId().toStdString());
+    const auto copied_state=decode_annotation_entity(copied_annotation);
+    require(copied_state.labels.front().id!=label.id && copied_state.labels.front().content==label.content &&
+        copied_state.labels.front().template_id==label.template_id && copied_annotation.extensions==annotation.extensions,
+        "annotation instance identity must change without rewriting label content, template or extensions");
 }
 
 void test_delete_selection_workflow() {

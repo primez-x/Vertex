@@ -188,6 +188,49 @@ void remap_clipboard_json(json& value,
     }
 }
 
+// Clipboard identities are schema fields, not arbitrary strings. Unknown
+// properties and extensions are opaque user data and must survive unchanged.
+void remap_clipboard_entity(Entity& entity,
+                            const std::map<std::string, std::string, std::less<>>& remap) {
+    const auto reference = [&](json& object, const char* key) {
+        const auto found = object.find(key);
+        if (found != object.end()) remap_clipboard_json(*found, remap);
+    };
+    auto& properties = entity.properties;
+    // Document's top-level entity-reference vocabulary. Asset and catalog-local
+    // identities belong to separate namespaces.
+    for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id",
+             "boundary_id", "wall_id", "opening_id", "room_id", "slab_id", "roof_id",
+             "stair_id", "sheet_id", "view_id", "constraint_id", "label_id", "column_id",
+             "beam_id", "parent_id", "host_id", "target_id", "entity_id"}) {
+        reference(properties, key);
+        reference(properties, (std::string(key) + "s").c_str());
+    }
+    reference(properties, "refs");
+    reference(properties, "references");
+    if (properties.contains("material_assignment"))
+        reference(properties.at("material_assignment"), "catalog_id");
+    if (entity.type == "boundary" || entity.type == "measurement_boundary" ||
+        entity.type == "room_boundary") {
+        if (properties.contains("segments")) {
+            for (auto& segment : properties.at("segments")) {
+                for (const auto* key : {"segment_id", "start_vertex_id", "end_vertex_id"})
+                    reference(segment, key);
+            }
+        }
+    }
+    if (entity.type == "dimension" && properties.contains("target")) {
+        reference(properties.at("target"), "entity_id");
+        reference(properties.at("target"), "segment_id");
+    }
+    if (entity.type == kAnnotationEntityType) {
+        auto& state = properties.at("state");
+        for (const auto* collection : {"labels", "symbols"})
+            for (auto& item : state.at(collection)) reference(item, "id");
+        for (auto& item : state.at("overrides")) reference(item, "target_id");
+    }
+}
+
 std::optional<std::string> annotation_parent_for_child(const DocumentSnapshot& snapshot,
                                                         std::string_view child_id) {
     for (const auto& [id, entity] : snapshot.entities()) {
@@ -7251,18 +7294,7 @@ public:
                 auto entity = original;
                 entity.id = remap.at(original.id);
                 if(entity.type!="assembly_model") {
-                    remap_clipboard_json(entity.properties, remap);
-                    remap_clipboard_json(entity.extensions, remap);
-                    // These values have their own identity/enum namespaces. Only
-                    // the catalog ID is a Document entity reference.
-                    for(const auto* key : {"material_assignment","door_operation"}) {
-                        if(original.properties.contains(key)) entity.properties[key]=original.properties.at(key);
-                    }
-                    if(entity.properties.contains("material_assignment")) {
-                        auto& assignment=entity.properties.at("material_assignment");
-                        const auto catalog=remap.find(assignment.at("catalog_id").get<std::string>());
-                        if(catalog!=remap.end()) assignment["catalog_id"]=catalog->second;
-                    }
+                    remap_clipboard_entity(entity, remap);
                 }
                 const auto placeable = entity.type == "boundary" ||
                     entity.type == "measurement_boundary" || entity.type == "room_boundary" ||

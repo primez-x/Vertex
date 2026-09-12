@@ -205,6 +205,12 @@ owners. Cut and delete remove owned hosted children in one guarded Document
 command, so undo and redo restore the complete graph. Unsupported, malformed,
 oversized, or referenced records fail before mutation.
 
+Paste remaps documented relationship fields and local boundary/annotation
+identities only. Names, descriptions, label content, template and symbol catalog
+identities, unknown property metadata, and extension records retain their exact
+values, even when their text matches a copied entity ID. Dimension target
+metadata is preserved while its boundary and segment references are updated.
+
 The navigator also exposes a persisted Design phase selector. The first use can
 create a baseline registry from the current architectural objects; the manager
 then creates named alternatives with explicit baseline demolitions. Selecting a
