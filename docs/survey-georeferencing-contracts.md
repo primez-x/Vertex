@@ -9,3 +9,20 @@ These standalone C++20 contracts provide local calculation and deterministic JSO
 CRS identifiers and definitions are declarations, not database-validated CRS records. Offline resources require safe relative ASCII paths and lowercase SHA256 declarations, with networking disabled. Files are not opened, resolved, hashed, or loaded; the eventual runtime must verify containment, physical files, digests, the CRS definition, and all required PROJ resources before execution. No networking or filesystem operations occur in these contracts. JSON sorts unordered control points/resources while retaining survey leg order; it is output only, with no deserialize/reopen implementation here.
 
 Focused synthetic tests establish contract behavior only. Real Apex survey/module fixtures, export interoperability, UI workflows, persisted reopen fixtures, Pro transform comparison, bundled PROJ execution, actual resource integrity, and network-denied runtime evidence remain open. No production requirement or release gate is certified by these tests.
+# Desktop survey calculator
+
+The More menu exposes **Survey traverse** for local bearing/distance entry.
+Each nonblank line contains `quadrant, decimal degrees, distance`, for example
+`NE, 45, 100 ft`. NE/SE/SW/NW bearings use the same north/south-relative
+convention as the core contract. Explicit distance units override workspace
+defaults. Source/reference and closure tolerance accompany the calculation.
+
+Calculate reports closure error, perimeter, and area/acreage when available.
+Changing any input invalidates the displayed report and disables export until
+recalculation. Export writes the versioned JSON contract atomically, retaining
+source reference, legs, local vertices, tolerance, and diagnostics. Invalid
+legs identify their input line. Calculation/export does not alter the project.
+
+This is a calculator and report workflow; persisted survey geometry in the
+project, Apex survey exchange, DMS entry, and production survey qualification
+remain incomplete.

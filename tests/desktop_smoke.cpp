@@ -24,6 +24,7 @@
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
+#include <QFileDialog>
 #include <QFont>
 #include <QFontDatabase>
 #include <QImage>
@@ -1103,6 +1104,62 @@ void test_contextual_gable_roof_inspector(const QString& capture_directory) {
             "gable inspector geometry and quantity provenance must survive save/reopen");
 }
 
+void test_survey_calculator(const QString& capture_directory) {
+    sketch::desktop::MainWindow window;
+    QTemporaryDir directory;
+    require(directory.isValid(), "survey export fixture directory");
+    const auto revision = window.document().revision();
+    auto* action = window.findChild<QAction*>("surveyTraverse");
+    require(action, "survey command must be available in the desktop workspace");
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>("surveyCalculator");
+        require(dialog, "survey calculator must open");
+        auto* source = dialog->findChild<QLineEdit*>("surveyProvenance");
+        auto* input = dialog->findChild<QPlainTextEdit*>("surveyLegs");
+        auto* calculate = dialog->findChild<QPushButton*>("surveyCalculate");
+        auto* output = dialog->findChild<QPushButton*>("surveyExport");
+        auto* result = dialog->findChild<QLabel*>("surveyResult");
+        require(source && input && calculate && output && result && !output->isEnabled(),
+                "survey controls and initially disabled export must exist");
+        source->setText("Deed fixture");
+        input->setPlainText("NE, 90, 100 m\nSE, 0, 100 m\nSW, 90, 100 m\nNW, 0, 100 m");
+        calculate->click();
+        require(output->isEnabled() && result->text().contains("10000.0000 m²") &&
+                    result->text().contains("2.471054 acres"), "survey calculator must report square area and acres");
+        QApplication::processEvents();
+        if (!capture_directory.isEmpty())
+            require(dialog->grab().save(capture_directory + "/survey-calculator.png"), "survey capture");
+        const auto native_dialogs_disabled = QCoreApplication::testAttribute(Qt::AA_DontUseNativeDialogs);
+        QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs, true);
+        const auto path = directory.filePath("survey.json");
+        QTimer::singleShot(0, dialog, [&] {
+            auto* picker = dialog->findChild<QFileDialog*>();
+            require(picker, "survey report destination picker");
+            picker->selectFile(path);
+            QMetaObject::invokeMethod(picker, "accept", Qt::DirectConnection);
+        });
+        output->click();
+        QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs, native_dialogs_disabled);
+        QFile saved(path);
+        require(saved.open(QIODevice::ReadOnly), "survey report must be written locally");
+        const auto report = nlohmann::json::parse(saved.readAll().toStdString());
+        require(report.at("provenance") == "Deed fixture" && report.at("legs").size() == 4 &&
+                    report.at("vertices").size() == 5 && report.at("diagnostics").at("area_m2") == 10000.0,
+                "exported survey must preserve source, legs, vertices, and calculated area");
+        input->setPlainText("NE, 45, 100 ft");
+        require(!output->isEnabled() && result->text().isEmpty(), "edits must invalidate stale survey results");
+        calculate->click();
+        require(output->isEnabled() && result->text().contains("Open traverse") &&
+                    result->text().contains("Area unavailable"), "open traverses must not display acreage");
+        input->setPlainText("NE, 91, 100 ft");
+        calculate->click();
+        require(!output->isEnabled() && result->text().contains("Line 1"), "invalid survey leg must identify its line");
+        dialog->reject();
+    });
+    action->trigger();
+    require(window.document().revision() == revision, "survey reports must not silently alter the project");
+}
+
 void test_design_phase_workflow() {
     using namespace sketch;
     desktop::MainWindow window;
@@ -1719,6 +1776,7 @@ int main(int argc, char** argv) {
     test_calculation_deduction_workflow();
     test_contextual_roof_dimension_inspector();
     test_contextual_gable_roof_inspector(field_ui_capture_directory);
+    test_survey_calculator(field_ui_capture_directory);
     {
         QTemporaryDir stamp_directory;
         require(stamp_directory.isValid(), "stamp test directory should be available");

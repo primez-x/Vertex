@@ -78,6 +78,7 @@
 #include <QPrinter>
 #include <QPlainTextEdit>
 #include <QSaveFile>
+#include "sketch/survey_contract.hpp"
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
@@ -6506,6 +6507,116 @@ public:
         }
     }
 
+    void showSurveyCalculator() {
+        QDialog dialog(owner);
+        dialog.setObjectName(QStringLiteral("surveyCalculator"));
+        dialog.setWindowTitle(QStringLiteral("Survey traverse"));
+        dialog.resize(640, 520);
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* form = new QFormLayout;
+        auto* provenance = new QLineEdit(&dialog);
+        provenance->setObjectName(QStringLiteral("surveyProvenance"));
+        form->addRow(QStringLiteral("Source / reference"), provenance);
+        auto* tolerance = new QLineEdit(QStringLiteral("0.001 m"), &dialog);
+        tolerance->setObjectName(QStringLiteral("surveyTolerance"));
+        form->addRow(QStringLiteral("Closure tolerance"), tolerance);
+        layout->addLayout(form);
+        auto* help = new QLabel(QStringLiteral(
+            "One leg per line: quadrant, angle in decimal degrees, distance with units.\n"
+            "Example: NE, 45, 100 ft. Quadrants: NE, SE, SW, NW; angles: 0–90°.\n"
+            "Coordinates start at a local origin. No closure adjustment is applied."), &dialog);
+        help->setWordWrap(true);
+        layout->addWidget(help);
+        auto* input = new QPlainTextEdit(&dialog);
+        input->setObjectName(QStringLiteral("surveyLegs"));
+        input->setAccessibleName(QStringLiteral("Survey bearing and distance legs"));
+        layout->addWidget(input);
+        auto* result = new QLabel(&dialog);
+        result->setObjectName(QStringLiteral("surveyResult"));
+        result->setTextFormat(Qt::PlainText);
+        result->setWordWrap(true);
+        result->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        layout->addWidget(result);
+        auto* buttons = new QDialogButtonBox(&dialog);
+        auto* calculate = buttons->addButton(QStringLiteral("Calculate"), QDialogButtonBox::ActionRole);
+        calculate->setObjectName(QStringLiteral("surveyCalculate"));
+        auto* export_report = buttons->addButton(QStringLiteral("Export report…"), QDialogButtonBox::ActionRole);
+        export_report->setObjectName(QStringLiteral("surveyExport"));
+        export_report->setEnabled(false);
+        buttons->addButton(QDialogButtonBox::Close);
+        layout->addWidget(buttons);
+        std::optional<QString> report;
+        const auto invalidate = [&] { report.reset(); result->clear(); export_report->setEnabled(false); };
+        QObject::connect(input, &QPlainTextEdit::textChanged, &dialog, invalidate);
+        QObject::connect(provenance, &QLineEdit::textChanged, &dialog, invalidate);
+        QObject::connect(tolerance, &QLineEdit::textChanged, &dialog, invalidate);
+        const auto unit = m_metric_units ? Unit::metre : Unit::foot;
+        QObject::connect(calculate, &QPushButton::clicked, &dialog, [&] {
+            invalidate();
+            try {
+                if (input->toPlainText().size() > 1024 * 1024)
+                    throw std::invalid_argument("Survey input exceeds 1 MiB.");
+                std::vector<SurveyLeg> legs;
+                const auto lines = input->toPlainText().split('\n');
+                int line_number = 0;
+                for (const auto& line : lines) {
+                    ++line_number;
+                    if (line.trimmed().isEmpty()) continue;
+                    try {
+                        if (legs.size() >= SurveyTraverse::maximum_legs)
+                            throw std::invalid_argument("Too many survey legs.");
+                        const auto fields = line.split(',');
+                        if (fields.size() != 3) throw std::invalid_argument("Use quadrant, angle, distance.");
+                        const auto quadrant = fields[0].trimmed().toUpper();
+                        const std::map<QString, BearingQuadrant> quadrants{
+                            {"NE", BearingQuadrant::north_east}, {"SE", BearingQuadrant::south_east},
+                            {"SW", BearingQuadrant::south_west}, {"NW", BearingQuadrant::north_west}};
+                        if (!quadrants.contains(quadrant)) throw std::invalid_argument("Use NE, SE, SW, or NW.");
+                        bool ok = false;
+                        const auto angle = fields[1].trimmed().toDouble(&ok);
+                        if (!ok || !std::isfinite(angle) || angle < 0 || angle > 90)
+                            throw std::invalid_argument("Angle must be between 0 and 90 degrees.");
+                        const auto distance = parse_quantity(fields[2].trimmed().toStdString(), unit).metres;
+                        if (distance <= 0) throw std::invalid_argument("Distance must be positive.");
+                        legs.push_back({"leg-" + std::to_string(legs.size() + 1), quadrants.at(quadrant), angle, distance});
+                    } catch (const std::exception& error) {
+                        throw std::invalid_argument("Line " + std::to_string(line_number) + ": " + error.what());
+                    }
+                }
+                const SurveyTraverse traverse(provenance->text().trimmed().toStdString(), std::move(legs),
+                    parse_quantity(tolerance->text().trimmed().toStdString(), unit).metres);
+                const auto& d = traverse.diagnostics();
+                auto summary = QStringLiteral("%1\nClosure error: %2 m (east %3 m; north %4 m)\nPerimeter: %5 m")
+                    .arg(d.closed ? QStringLiteral("Within closure tolerance") : QStringLiteral("Open traverse"))
+                    .arg(d.linear_error_m, 0, 'g', 10).arg(d.east_error_m, 0, 'g', 10)
+                    .arg(d.north_error_m, 0, 'g', 10).arg(d.perimeter_m, 0, 'g', 10);
+                if (d.area_m2) summary += QStringLiteral("\nArea: %1 m² · %2 acres")
+                    .arg(*d.area_m2, 0, 'f', 4).arg(*d.acres, 0, 'f', 6);
+                else summary += QStringLiteral("\nArea unavailable for this traverse.");
+                report = QString::fromStdString(traverse.serialize());
+                result->setText(summary);
+                export_report->setEnabled(true);
+            } catch (const std::exception& error) { result->setText(QString::fromUtf8(error.what())); }
+        });
+        QObject::connect(export_report, &QPushButton::clicked, &dialog, [&] {
+            if (!report) return;
+            const auto captured_report = *report;
+            const auto path = QFileDialog::getSaveFileName(&dialog, QStringLiteral("Export survey report"),
+                QString(), QStringLiteral("Survey report (*.json)"));
+            if (path.isEmpty()) return;
+            if (!report || *report != captured_report) {
+                result->setText(QStringLiteral("Survey input changed. Calculate again before exporting."));
+                return;
+            }
+            QSaveFile file(path);
+            const auto bytes = captured_report.toUtf8();
+            if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit())
+                result->setText(QStringLiteral("Could not save the survey report: %1").arg(file.errorString()));
+        });
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        (void)dialog.exec();
+    }
+
     void refreshRoofDimensionPreview() {
         if (!m_roof_edit_context || m_roof_properties_group->isHidden()) return;
         const auto& context = *m_roof_edit_context;
@@ -9990,6 +10101,9 @@ private:
         // presentation commands remain one click away in an overflow menu,
         // while their QAction identities and shortcuts stay stable.
         auto* more_menu = new QMenu(owner);
+        auto* survey_action = more_menu->addAction(QStringLiteral("Survey traverse…"));
+        survey_action->setObjectName(QStringLiteral("surveyTraverse"));
+        QObject::connect(survey_action, &QAction::triggered, owner, [this] { showSurveyCalculator(); });
         m_copy_action = new QAction(QStringLiteral("Copy selection"), owner);
         m_copy_action->setObjectName(QStringLiteral("copySelection"));
         m_copy_action->setShortcut(QKeySequence::Copy);
