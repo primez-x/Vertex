@@ -203,7 +203,7 @@ void remap_entity_references(Entity& entity,
     for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id",
              "boundary_id", "wall_id", "opening_id", "room_id", "slab_id", "roof_id",
              "stair_id", "sheet_id", "view_id", "constraint_id", "label_id", "column_id",
-             "beam_id", "parent_id", "host_id", "target_id", "entity_id"}) {
+             "beam_id", "railing_id", "parent_id", "host_id", "target_id", "entity_id"}) {
         reference(properties, key);
         reference(properties, (std::string(key) + "s").c_str());
     }
@@ -278,9 +278,9 @@ std::vector<Entity> clipboard_entities_for_selection(const DocumentSnapshot& sna
     }
     const auto root = snapshot.entities().find(root_id);
     if (root == snapshot.entities().end()) return {};
-    static constexpr std::array<std::string_view, 12> supported{
+    static constexpr std::array<std::string_view, 13> supported{
         "boundary", "measurement_boundary", "room_boundary", "wall", "opening", "room",
-        "slab", "roof", "stair", "column", "beam", "annotation_state"};
+        "slab", "roof", "stair", "railing", "column", "beam", "annotation_state"};
     if (std::find(supported.begin(), supported.end(), root->second.type) == supported.end()) {
         return {};
     }
@@ -1032,6 +1032,7 @@ QString schedule_kind_text(ScheduleRowKind kind) {
     case ScheduleRowKind::window: return QStringLiteral("Window");
     case ScheduleRowKind::room: return QStringLiteral("Room");
     case ScheduleRowKind::material: return QStringLiteral("Material");
+    case ScheduleRowKind::material_summary: return QStringLiteral("Material summary");
     }
     return QStringLiteral("Unknown");
 }
@@ -1161,13 +1162,13 @@ bool is_closed_boundary_entity(std::string_view type) {
 
 bool is_architectural_entity(std::string_view type) {
     return type == "wall" || type == "opening" || type == "room" || type == "slab" ||
-           type == "roof" || type == "stair" || type == "column" || type == "beam";
+           type == "roof" || type == "stair" || type == "railing" || type == "column" || type == "beam";
 }
 
 bool is_phase_model_entity(std::string_view type) {
     return type == "building" || type == "floor" || type == "wall" || type == "opening" ||
            type == "room" || type == "room_boundary" || type == "measurement_boundary" ||
-           type == "boundary" || type == "slab" || type == "roof" || type == "stair" ||
+           type == "boundary" || type == "slab" || type == "roof" || type == "stair" || type == "railing" ||
            type == "column" || type == "beam" || type == "assembly_model";
 }
 
@@ -5690,7 +5691,10 @@ public:
     bool editAnnotation(const QString& annotation_id, const QString& content,
                         const QString& x_metres, const QString& y_metres,
                         const QString& rotation_degrees, const QString& scale,
-                        bool visible) {
+                        bool visible, const QString& font_family,
+                        const QString& text_height_mm, const QString& stroke_color,
+                        const QString& fill_color, bool bold, bool italic,
+                        bool style_enabled) {
         try {
             if (!m_document->is_editable()) {
                 throw std::invalid_argument("This document is read-only.");
@@ -5708,6 +5712,20 @@ public:
             const auto instance_scale = parse_finite(scale, "Annotation scale must be finite.");
             if (!(instance_scale > 0.0) || instance_scale > 100.0) {
                 throw std::invalid_argument("Annotation scale must be greater than zero and no more than 100.");
+            }
+            std::optional<AnnotationStyle> replacement_style;
+            if (style_enabled) {
+                const auto family = font_family.trimmed().toStdString();
+                if (family.empty() || family.size() > 256)
+                    throw std::invalid_argument("Annotation font family must be between 1 and 256 characters.");
+                const auto height_mm = parse_finite(
+                    text_height_mm, "Annotation text height must be finite millimetres.");
+                if (!(height_mm > 0.0) || height_mm > 1000.0)
+                    throw std::invalid_argument("Annotation text height must be greater than 0 and no more than 1000 mm.");
+                replacement_style = AnnotationStyle{
+                    family, height_mm / 1000.0, 0.0,
+                    stroke_color.trimmed().toStdString(), fill_color.trimmed().toStdString(),
+                    "none", bold, italic};
             }
             const auto source = authoringSnapshot();
             auto annotation = std::find_if(source.entities().begin(), source.entities().end(),
@@ -5731,6 +5749,12 @@ public:
                 label.placement.rotation_radians = rotation * std::numbers::pi / 180.0;
                 label.placement.scale = instance_scale;
                 label.visible = visible;
+                if (replacement_style) {
+                    auto style = *replacement_style;
+                    style.stroke_width_metres = label.style.stroke_width_metres;
+                    style.fill_pattern = label.style.fill_pattern;
+                    label.style = std::move(style);
+                }
                 found = true;
                 break;
             }
@@ -5741,6 +5765,12 @@ public:
                     symbol.placement.rotation_radians = rotation * std::numbers::pi / 180.0;
                     symbol.placement.scale = instance_scale;
                     symbol.visible = visible;
+                    if (replacement_style) {
+                        auto style = *replacement_style;
+                        style.stroke_width_metres = symbol.style.stroke_width_metres;
+                        style.fill_pattern = symbol.style.fill_pattern;
+                        symbol.style = std::move(style);
+                    }
                     found = true;
                     break;
                 }
@@ -7662,8 +7692,9 @@ public:
             return fail(QStringLiteral("The object editing context changed. Reselect the object before applying changes."));
         const auto context = *m_building_edit_context;
         const auto original = selectedEntity();
-        if (!original || (original->type != "column" && original->type != "beam" && original->type != "stair"))
-            return fail(QStringLiteral("Select a column, beam or stair before applying changes."));
+        if (!original || (original->type != "column" && original->type != "beam" &&
+                          original->type != "stair" && original->type != "railing"))
+            return fail(QStringLiteral("Select a column, beam, stair or railing before applying changes."));
         try {
             BuildingObjectDialog dialog(*original, m_metric_units, owner);
             bool changed = false;
@@ -7824,7 +7855,7 @@ public:
                 const auto placeable = entity.type == "boundary" ||
                     entity.type == "measurement_boundary" || entity.type == "room_boundary" ||
                     entity.type == "wall" || entity.type == "room" || entity.type == "slab" ||
-                    entity.type == "roof" || entity.type == "stair" || entity.type == "column" ||
+                    entity.type == "roof" || entity.type == "stair" || entity.type == "railing" || entity.type == "column" ||
                     entity.type == "beam";
                 if (placeable) {
                     for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"})
@@ -8603,8 +8634,12 @@ public:
                                                             : schedule_name.toUpper() + QStringLiteral(" SCHEDULE");
                 std::vector<const ScheduleRow*> rows;
                 if (kind) {
-                    for (const auto& row : schedule_projection.snapshot.rows)
-                        if (row.kind == *kind) rows.push_back(&row);
+                    for (const auto& row : schedule_projection.snapshot.rows) {
+                        const auto material_schedule = *kind == ScheduleRowKind::material;
+                        if (row.kind == *kind ||
+                            (material_schedule && row.kind == ScheduleRowKind::material_summary))
+                            rows.push_back(&row);
+                    }
                 }
                 painter.save();
                 painter.setClipRect(schedule_rect);
@@ -11732,7 +11767,10 @@ private:
                  {QStringLiteral("Width"), "width_m"}, {QStringLiteral("Depth"), "depth_m"},
                  {QStringLiteral("Radius"), "radius_m"}, {QStringLiteral("Height"), "height_m"},
                  {QStringLiteral("TotalRise"), "total_rise_m"}, {QStringLiteral("Going"), "going_m"},
-                 {QStringLiteral("RiserCount"), "riser_count"}}) {
+                 {QStringLiteral("RiserCount"), "riser_count"},
+                 {QStringLiteral("Length"), "length_m"},
+                 {QStringLiteral("PostSpacing"), "post_spacing_m"},
+                 {QStringLiteral("Thickness"), "thickness_m"}}) {
             const auto label_text = spec.first == QStringLiteral("TotalRise") ? QStringLiteral("Total rise") :
                 spec.first == QStringLiteral("RiserCount") ? QStringLiteral("Risers") : spec.first;
             auto* label = new QLabel(label_text, m_building_properties_group);
@@ -11851,6 +11889,32 @@ private:
         m_annotation_scale_edit = new QLineEdit(m_annotation_group);
         m_annotation_scale_edit->setObjectName(QStringLiteral("annotationScale"));
         annotation_layout->addRow(QStringLiteral("Scale"), m_annotation_scale_edit);
+        m_annotation_font_edit = new QLineEdit(m_annotation_group);
+        m_annotation_font_edit->setObjectName(QStringLiteral("annotationFontFamily"));
+        m_annotation_font_edit->setPlaceholderText(QStringLiteral("sans-serif"));
+        annotation_layout->addRow(QStringLiteral("Font family"), m_annotation_font_edit);
+        m_annotation_text_height_edit = new QLineEdit(m_annotation_group);
+        m_annotation_text_height_edit->setObjectName(QStringLiteral("annotationTextHeightMm"));
+        m_annotation_text_height_edit->setToolTip(QStringLiteral("Paper text height in millimetres"));
+        annotation_layout->addRow(QStringLiteral("Text height (mm)"), m_annotation_text_height_edit);
+        m_annotation_stroke_color_edit = new QLineEdit(m_annotation_group);
+        m_annotation_stroke_color_edit->setObjectName(QStringLiteral("annotationStrokeColor"));
+        m_annotation_stroke_color_edit->setPlaceholderText(QStringLiteral("#RRGGBB"));
+        annotation_layout->addRow(QStringLiteral("Stroke color"), m_annotation_stroke_color_edit);
+        m_annotation_fill_color_edit = new QLineEdit(m_annotation_group);
+        m_annotation_fill_color_edit->setObjectName(QStringLiteral("annotationFillColor"));
+        m_annotation_fill_color_edit->setPlaceholderText(QStringLiteral("#RRGGBB"));
+        annotation_layout->addRow(QStringLiteral("Fill color"), m_annotation_fill_color_edit);
+        auto* annotation_style_flags = new QWidget(m_annotation_group);
+        auto* annotation_style_flags_layout = new QHBoxLayout(annotation_style_flags);
+        annotation_style_flags_layout->setContentsMargins(0, 0, 0, 0);
+        m_annotation_bold_check = new QCheckBox(QStringLiteral("Bold"), annotation_style_flags);
+        m_annotation_bold_check->setObjectName(QStringLiteral("annotationBold"));
+        m_annotation_italic_check = new QCheckBox(QStringLiteral("Italic"), annotation_style_flags);
+        m_annotation_italic_check->setObjectName(QStringLiteral("annotationItalic"));
+        annotation_style_flags_layout->addWidget(m_annotation_bold_check);
+        annotation_style_flags_layout->addWidget(m_annotation_italic_check);
+        annotation_layout->addRow(annotation_style_flags);
         m_annotation_visible_check = new QCheckBox(QStringLiteral("Visible"), m_annotation_group);
         m_annotation_visible_check->setObjectName(QStringLiteral("annotationVisible"));
         annotation_layout->addRow(m_annotation_visible_check);
@@ -11863,7 +11927,13 @@ private:
             (void)editAnnotation(m_selected_id, m_annotation_content_edit->text(),
                                  m_annotation_x_edit->text(), m_annotation_y_edit->text(),
                                  m_annotation_rotation_edit->text(), m_annotation_scale_edit->text(),
-                                 m_annotation_visible_check->isChecked());
+                                 m_annotation_visible_check->isChecked(),
+                                 m_annotation_font_edit->text(),
+                                 m_annotation_text_height_edit->text(),
+                                 m_annotation_stroke_color_edit->text(),
+                                 m_annotation_fill_color_edit->text(),
+                                 m_annotation_bold_check->isChecked(),
+                                 m_annotation_italic_check->isChecked(), true);
         });
         m_reference_group = new QGroupBox(QStringLiteral("Reference image"), inspector_body);
         m_reference_group->setObjectName(QStringLiteral("referenceProperties"));
@@ -13321,7 +13391,8 @@ private:
         m_roof_edit_context.reset();
         m_building_edit_context.reset();
         const bool dimension_object = building_object &&
-            (entity->type == "column" || entity->type == "beam" || entity->type == "stair");
+            (entity->type == "column" || entity->type == "beam" ||
+             entity->type == "stair" || entity->type == "railing");
         m_building_properties_group->setVisible(dimension_object);
         m_building_properties_group->setEnabled(dimension_object && editable);
         m_building_dimensions_error->hide();
@@ -13329,13 +13400,18 @@ private:
             m_building_edit_context = captureModalContext();
             m_building_properties_group->setTitle(QStringLiteral("%1")
                 .arg(entity->type == "column" ? QStringLiteral("Column") :
-                     entity->type == "beam" ? QStringLiteral("Beam") : QStringLiteral("Stair")));
+                     entity->type == "beam" ? QStringLiteral("Beam") :
+                     entity->type == "stair" ? QStringLiteral("Stair") :
+                     QStringLiteral("Railing")));
             for (auto& dimension : m_building_dimensions) {
                 const bool relevant = entity->type == "beam"
                     ? (dimension.suffix == "Width" || dimension.suffix == "Depth")
                     : entity->type == "stair"
                     ? (dimension.suffix == "Width" || dimension.suffix == "TotalRise" ||
                        dimension.suffix == "Going" || dimension.suffix == "RiserCount")
+                    : entity->type == "railing"
+                    ? (dimension.suffix == "Length" || dimension.suffix == "Height" ||
+                       dimension.suffix == "Thickness" || dimension.suffix == "PostSpacing")
                     : building_form == std::optional<std::string>("circular_column")
                     ? (dimension.suffix == "Radius" || dimension.suffix == "Height")
                     : (dimension.suffix == "Width" || dimension.suffix == "Depth" || dimension.suffix == "Height");
@@ -13469,6 +13545,34 @@ private:
                                                 : selected_annotation_symbol->placement.scale;
                 m_annotation_scale_edit->setText(QString::number(instance_scale, 'g', 12));
             }
+            const auto& annotation_style = selected_annotation_label.has_value()
+                                               ? selected_annotation_label->style
+                                               : selected_annotation_symbol->style;
+            {
+                QSignalBlocker blocker(m_annotation_font_edit);
+                m_annotation_font_edit->setText(QString::fromStdString(annotation_style.font_family));
+            }
+            {
+                QSignalBlocker blocker(m_annotation_text_height_edit);
+                m_annotation_text_height_edit->setText(QString::number(
+                    annotation_style.text_height_metres * 1000.0, 'g', 12));
+            }
+            {
+                QSignalBlocker blocker(m_annotation_stroke_color_edit);
+                m_annotation_stroke_color_edit->setText(QString::fromStdString(annotation_style.stroke_color));
+            }
+            {
+                QSignalBlocker blocker(m_annotation_fill_color_edit);
+                m_annotation_fill_color_edit->setText(QString::fromStdString(annotation_style.fill_color));
+            }
+            {
+                QSignalBlocker blocker(m_annotation_bold_check);
+                m_annotation_bold_check->setChecked(annotation_style.bold);
+            }
+            {
+                QSignalBlocker blocker(m_annotation_italic_check);
+                m_annotation_italic_check->setChecked(annotation_style.italic);
+            }
             {
                 QSignalBlocker blocker(m_annotation_visible_check);
                 m_annotation_visible_check->setChecked(selected_annotation_label.has_value()
@@ -13476,6 +13580,12 @@ private:
                                                            : selected_annotation_symbol->visible);
             }
             m_annotation_content_edit->setEnabled(editable && selected_annotation_label.has_value());
+            m_annotation_font_edit->setEnabled(editable);
+            m_annotation_text_height_edit->setEnabled(editable);
+            m_annotation_stroke_color_edit->setEnabled(editable);
+            m_annotation_fill_color_edit->setEnabled(editable);
+            m_annotation_bold_check->setEnabled(editable);
+            m_annotation_italic_check->setEnabled(editable);
             m_geometry_form->setRowVisible(m_length_edit, false);
             m_geometry_form->setRowVisible(m_classification_combo, false);
             m_geometry_form->setRowVisible(m_height_edit, false);
@@ -14640,6 +14750,12 @@ private:
     QLineEdit* m_annotation_y_edit{};
     QLineEdit* m_annotation_rotation_edit{};
     QLineEdit* m_annotation_scale_edit{};
+    QLineEdit* m_annotation_font_edit{};
+    QLineEdit* m_annotation_text_height_edit{};
+    QLineEdit* m_annotation_stroke_color_edit{};
+    QLineEdit* m_annotation_fill_color_edit{};
+    QCheckBox* m_annotation_bold_check{};
+    QCheckBox* m_annotation_italic_check{};
     QCheckBox* m_annotation_visible_check{};
     QPushButton* m_apply_annotation_button{};
     QGroupBox* m_reference_group{};
@@ -14971,9 +15087,14 @@ QString MainWindow::createAnnotationSymbol(const QString& symbol_id, Vec2 positi
 bool MainWindow::editAnnotation(const QString& annotation_id, const QString& content,
                                 const QString& x_metres, const QString& y_metres,
                                 const QString& rotation_degrees, const QString& scale,
-                                bool visible) {
+                                bool visible, QString font_family,
+                                QString text_height_mm, QString stroke_color,
+                                QString fill_color, bool bold, bool italic,
+                                bool style_enabled) {
     return m_impl->editAnnotation(annotation_id, content, x_metres, y_metres,
-                                  rotation_degrees, scale, visible);
+                                  rotation_degrees, scale, visible, font_family,
+                                  text_height_mm, stroke_color, fill_color, bold,
+                                  italic, style_enabled);
 }
 
 bool MainWindow::deleteAnnotation(const QString& annotation_id) {

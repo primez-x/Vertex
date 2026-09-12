@@ -10,7 +10,8 @@ plan's document and authoring work, not a separate release gate.
   Parentage comes from typed `property_id`, `building_id`, `floor_id` and
   `layer_id` references. Names are presentation data, never identity.
 - The navigator must display every object once, including columns, beams,
-  stairs and roofs. Hosted openings inherit their wall's drawing context.
+  stairs, railings and roofs. Hosted openings inherit their wall's drawing
+  context.
   An unassigned object remains visible; the application must not invent a
   relationship to the first building or floor.
 - A derived organization index resolves each object's containment and reports

@@ -75,6 +75,24 @@ struct StairFlight {
 
 [[nodiscard]] TopoDS_Shape make_stair_flight(const StairFlight& flight);
 
+// A straight railing follows a horizontal baseline from base_position in the
+// supplied orientation.  The top rail and vertical posts are real solids;
+// post_spacing is a maximum spacing, with posts always placed at both ends.
+// The shared thickness is used for the square rail and post sections.  This
+// deliberately keeps the first railing form deterministic and editable while
+// leaving curved/guard-specific profiles for a future schema version.
+struct Railing {
+    std::string id;
+    Vec3 base_position{};
+    double orientation_radians{};
+    double length{};
+    double height{};
+    double thickness{};
+    double post_spacing{};
+};
+
+[[nodiscard]] TopoDS_Shape make_railing(const Railing& railing);
+
 // A sloped panel starts at base_position, whose XY location is the lower
 // left corner of the un-overhung horizontal footprint and whose Z is the
 // eave elevation.  run is the horizontal slope direction, span is transverse

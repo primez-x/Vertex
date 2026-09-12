@@ -72,6 +72,8 @@ void select_form(BuildingObjectDialog& dialog, std::string_view form) {
         type = "beam";
     } else if (form == "straight_stair_flight") {
         type = "stair";
+    } else if (form == "straight_railing") {
+        type = "railing";
     } else {
         type = "roof";
     }
@@ -442,9 +444,10 @@ void test_changed_quantity_replaces_only_its_receipt() {
 }
 
 void test_untouched_defaults_submit_identically_in_both_units() {
-    const std::array<std::string_view, 7> forms{
+    const std::array<std::string_view, 8> forms{
         "rectangular_column", "circular_column", "straight_beam",
-        "straight_stair_flight", "sloped_roof_panel", "gable_roof", "hip_roof"};
+        "straight_stair_flight", "straight_railing", "sloped_roof_panel",
+        "gable_roof", "hip_roof"};
 
     for (const auto form : forms) {
         std::optional<nlohmann::json> canonical;

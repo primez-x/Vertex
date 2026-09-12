@@ -10,7 +10,7 @@ Every public builder rejects non-finite coordinates, angles, or dimensions,
 dimensions outside the supported range, degenerate frames, and a result that
 OCCT cannot validate as a non-zero-volume solid.  The current conservative
 limits are coordinates within 1,000,000,000 metres, individual dimensions up
-to 1,000,000 metres, and at most 10,000 stair risers.  These limits protect
+to 1,000,000 metres, and at most 10,000 stair risers or railing posts.  These limits protect
 the modeling kernel from accidental numeric explosions; they are not design
 or code requirements.
 
@@ -35,6 +35,18 @@ Its lower face is `total_rise - thickness` and its upper face is exactly the
 finished flight elevation, so its added volume is
 `width * depth * thickness`.  Landing thickness cannot extend below the
 flight base.
+
+`make_railing` makes a straight, horizontal railing from a shared square
+section.  `base_position` is the lower endpoint of the railing line;
+`orientation_radians` rotates its length counter-clockwise from +X.  The top
+rail is a real box from the base to `length` at `height - thickness`, and
+vertical square posts always occur at both endpoints plus each interior
+`post_spacing` interval.  A spacing interval is never allowed to create more
+than 10,000 posts; non-finite or non-positive dimensions, a thickness at least
+as high as the railing, and an invalid OCCT compound are rejected.  The current
+form models a straight guard or hand rail only.  Curved rails, balusters,
+hosted stair relationships, and code or load checks require a higher-level
+architectural schema.
 
 `make_sloped_roof_panel` makes a rectangular planar prism.  `base_position` is
 the lower-left corner of the un-overhung horizontal footprint at eave

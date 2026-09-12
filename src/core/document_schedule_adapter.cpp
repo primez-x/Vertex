@@ -168,15 +168,51 @@ void add_material(const Entity& entity, const DocumentSnapshot& document,
                   std::map<std::string, AssemblyModel>& catalogs, std::vector<ScheduleRecord>& records,
                   std::vector<std::string>& diagnostics) {
     if (entity.properties.contains("material_assignment")) {
-        const auto& assignment = entity.properties.at("material_assignment");
-        const auto catalog_id = assignment.at("catalog_id").get<std::string>();
-        const auto material_id = assignment.at("material_id").get<std::string>();
-        if (!catalogs.contains(catalog_id))
-            catalogs.emplace(catalog_id, AssemblyModel::from_json(
-                document.entities().at(catalog_id).properties.at("model")));
+        const auto* assignment = field(entity, "material_assignment");
+        if (assignment == nullptr || !assignment->is_object()) {
+            diagnostic(diagnostics, entity, "material_assignment must be an object");
+            return;
+        }
+        const auto catalog_value = assignment->find("catalog_id");
+        const auto material_value = assignment->find("material_id");
+        if (catalog_value == assignment->end() || material_value == assignment->end() ||
+            !catalog_value->is_string() || !material_value->is_string() ||
+            catalog_value->get<std::string>().empty() || material_value->get<std::string>().empty()) {
+            diagnostic(diagnostics, entity,
+                       "material_assignment requires non-empty catalog_id and material_id strings");
+            return;
+        }
+        const auto catalog_id = catalog_value->get<std::string>();
+        const auto material_id = material_value->get<std::string>();
+        try {
+            if (!catalogs.contains(catalog_id)) {
+                const auto catalog = document.entities().find(catalog_id);
+                if (catalog == document.entities().end() || catalog->second.type != "assembly_model") {
+                    diagnostic(diagnostics, entity,
+                               "material_assignment catalog " + catalog_id + " was not found");
+                    return;
+                }
+                const auto model = field(catalog->second, "model");
+                if (model == nullptr) {
+                    diagnostic(diagnostics, entity,
+                               "material_assignment catalog " + catalog_id + " has no model");
+                    return;
+                }
+                catalogs.emplace(catalog_id, AssemblyModel::from_json(*model));
+            }
+        } catch (const std::exception& error) {
+            diagnostic(diagnostics, entity,
+                       "material_assignment catalog " + catalog_id + " is invalid: " + error.what());
+            return;
+        }
         const auto& materials = catalogs.at(catalog_id).materials();
         const auto material = std::find_if(materials.begin(), materials.end(),
             [&](const auto& candidate) { return candidate.id == material_id; });
+        if (material == materials.end()) {
+            diagnostic(diagnostics, entity,
+                       "material_assignment material " + material_id + " was not found in catalog " + catalog_id);
+            return;
+        }
         ScheduleRecord record;
         record.object_id = entity.id + ":material";
         record.kind = ScheduleRowKind::material;
@@ -233,13 +269,19 @@ DocumentScheduleProjection project_schedules(
             if (row.kind == ScheduleRowKind::material) {
                 constexpr std::string_view suffix = ":material";
                 const auto source_id = row.object_id.substr(0, row.object_id.size() - suffix.size());
-                const auto& source = document.entities().at(source_id);
-                if (source.properties.contains("material_assignment")) {
-                    const auto& assignment = source.properties.at("material_assignment");
+                const auto source = document.entities().find(source_id);
+                if (source != document.entities().end() && source->second.properties.contains("material_assignment")) {
+                    const auto* assignment = field(source->second, "material_assignment");
+                    std::string catalog_id;
+                    if (assignment != nullptr && assignment->is_object()) {
+                        const auto catalog = assignment->find("catalog_id");
+                        if (catalog != assignment->end() && catalog->is_string())
+                            catalog_id = catalog->get<std::string>();
+                    }
                     auto& name = row.cells.at("name");
                     name.editable = false;
-                    name.sources = {{source_id, "material_assignment"},
-                        {assignment.at("catalog_id").get<std::string>(), "model"}};
+                    name.sources = {{source_id, "material_assignment"}};
+                    if (!catalog_id.empty()) name.sources.push_back({catalog_id, "model"});
                     name.explanation = "Assigned material name from the Assembly catalog";
                     auto& count = row.cells.at("count");
                     count.editable = false;

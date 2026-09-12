@@ -126,7 +126,7 @@ and a JSON `extensions` object. IDs are document identity and are never derived 
 The v1 known types are:
 
 `property`, `building`, `floor`, `layer`, `boundary`, `measurement_boundary`, `room_boundary`,
-`wall`, `opening`, `room`, `slab`, `roof`, `stair`, `column`, `beam`, `label`, `sheet`, `view`,
+`wall`, `opening`, `room`, `slab`, `roof`, `stair`, `railing`, `column`, `beam`, `label`, `sheet`, `view`,
 and `constraint`.
 
 All geometry properties use metres and radians. A wall and opening can be represented as:

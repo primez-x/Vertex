@@ -8,7 +8,11 @@
 
 namespace sketch {
 
-enum class ScheduleRowKind { door, window, room, material };
+// Material source rows remain tied to one authored entity so their editable
+// fields can round-trip through the document.  Architectural projections may
+// additionally append read-only material_summary rows that aggregate those
+// sources by material identity/name.
+enum class ScheduleRowKind { door, window, room, material, material_summary };
 enum class ScheduleUnit { metre, square_metre, cubic_metre };
 struct ScheduleQuantity {
     double value{};

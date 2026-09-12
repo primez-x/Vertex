@@ -32,6 +32,12 @@ const ScheduleRow& row(const DocumentScheduleProjection& projection, const std::
     if (found == projection.snapshot.rows.end()) throw std::runtime_error("missing material row");
     return *found;
 }
+const ScheduleRow& material_summary(const DocumentScheduleProjection& projection) {
+    const auto found = std::find_if(projection.snapshot.rows.begin(), projection.snapshot.rows.end(),
+        [](const auto& value) { return value.kind == ScheduleRowKind::material_summary; });
+    if (found == projection.snapshot.rows.end()) throw std::runtime_error("missing material summary row");
+    return *found;
+}
 void volume(const DocumentScheduleProjection& projection, const std::string& id, double expected) {
     const auto& cell = row(projection,id).cells.at("volume");
     const auto value = std::get<ScheduleQuantity>(cell.value);
@@ -63,9 +69,18 @@ void test_net_volumes() {
     volume(projection,"column",0.6);
     require(row(projection,"wall").cells.at("volume").sources.size()==3,
         "wall volume provenance must include its hosted opening");
+    const auto& summary = material_summary(projection);
+    require(std::get<std::string>(summary.cells.at("name").value) == "Solid material" &&
+        std::get<std::int64_t>(summary.cells.at("count").value) == 4 &&
+        std::abs(std::get<ScheduleQuantity>(summary.cells.at("volume").value).value -
+                 (5.6 + 19.0 + 76 * 0.2 / std::cos(std::atan(0.5)) + 0.6)) < 1e-7 &&
+        !summary.cells.at("volume").editable && summary.cells.at("volume").sources.size() >= 8,
+        "assigned material summary must aggregate count, net volume, and provenance");
     const auto visible=build_architectural_schedules(document.snapshot(),{"wall"});
-    require(visible.snapshot.rows.size()==1,"takeoff visibility must select objects");
+    require(visible.snapshot.rows.size()==2,"takeoff visibility must select objects and its summary");
     volume(visible,"wall",5.6);
+    require(std::get<std::int64_t>(material_summary(visible).cells.at("count").value) == 1,
+        "visibility filtering must scope grouped material counts");
     bool rejected=false;
     try { (void)make_schedule_edit(projection.snapshot,"wall:material","volume",ScheduleQuantity{7,ScheduleUnit::cubic_metre}); }
     catch (const std::invalid_argument&) { rejected=true; }
@@ -83,8 +98,34 @@ void test_net_volumes() {
         "invalid geometry must omit volume and expose a diagnostic without losing valid rows");
     volume(invalid,"slab",19);
 }
+
+void test_explicit_material_grouping_is_stable_and_normalized() {
+    auto first = Entity::create("room", {{"mark", "R1"}, {"area_m2", 12.0},
+        {"material_name", "  Finish   Paint  "}, {"volume_m3", 0.4}});
+    first.id = "room-a";
+    auto second = Entity::create("room", {{"mark", "R2"}, {"area_m2", 10.0},
+        {"material_name", "finish paint"}, {"volume_m3", 0.6}});
+    second.id = "room-b";
+    auto document = Document::create({first, second});
+    const auto projection = build_architectural_schedules(document.snapshot());
+    const auto& summary = material_summary(projection);
+    require(std::get<std::string>(summary.cells.at("name").value) == "  Finish   Paint  " &&
+        std::get<std::int64_t>(summary.cells.at("count").value) == 2 &&
+        std::abs(std::get<ScheduleQuantity>(summary.cells.at("volume").value).value - 1.0) < 1e-9,
+        "explicit material names must group case-insensitively with collapsed whitespace");
+    const auto repeat = build_architectural_schedules(document.snapshot());
+    require(repeat.snapshot == projection.snapshot && repeat.diagnostics == projection.diagnostics,
+        "material summary IDs and ordering must be deterministic");
+    require(!summary.cells.at("name").editable && !summary.cells.at("count").editable,
+        "grouped material summary properties must remain read-only");
+}
 }
 int main() {
-    try { test_net_volumes(); std::cout<<"architectural schedule tests passed\n"; return 0; }
+    try {
+        test_net_volumes();
+        test_explicit_material_grouping_is_stable_and_normalized();
+        std::cout<<"architectural schedule tests passed\n";
+        return 0;
+    }
     catch(const std::exception& error) { std::cerr<<error.what()<<'\n'; return 1; }
 }

@@ -31,6 +31,16 @@ The unfiltered adapter overload continues to project the whole document.
 Rooms with a stored area expose that measurement as read-only source provenance
 for their calculated gross area.
 
+The architectural adapter augments assigned-material source rows with net solid
+volume and appends deterministic, read-only `material_summary` rows. Assignment
+groups use the catalog/material identity; explicit material rows use a normalized
+name (case-insensitive with collapsed whitespace). Summary rows expose the
+contributing source references, aggregate count, and the sum of net volumes when
+every source has a valid quantity. A missing or invalid source volume keeps the
+count visible but omits the aggregate quantity and emits a diagnostic. Source
+rows remain available for per-object inspection and permitted edits, while sheet
+material placements include both source and summary rows.
+
 `make_schedule_edit` returns a deterministic command description containing the
 source target, expected document revision, prior value and replacement. It
 rejects edits to calculated cells with an explanation naming the sources, type
@@ -43,7 +53,7 @@ cell value, maps schedule fields back to canonical entity properties (including
 hosted opening dimensions and material fields), and rejects calculated cells.
 The desktop Schedules dialog exposes an **Edit selected source cell** action;
 accepted edits refresh calculated values and participate in the ordinary
-undo/redo history. Schedule persistence, grouped material quantities, and
-complete sheet/print layout remain open production work. Tests establish the
-Document-derived projection, command translation, and desktop history path, not
-the complete production acceptance criteria.
+undo/redo history. Schedule persistence and complete sheet/print layout remain
+open production work. Tests establish the Document-derived projection, command
+translation, grouped material aggregation, and desktop history path, not the
+complete production acceptance criteria.

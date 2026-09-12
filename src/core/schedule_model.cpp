@@ -34,7 +34,8 @@ ScheduleSnapshot build_schedule(const std::vector<ScheduleRecord>& records,
     for (const auto& record : records) {
         switch (record.kind) {
         case ScheduleRowKind::door: case ScheduleRowKind::window:
-        case ScheduleRowKind::room: case ScheduleRowKind::material: break;
+        case ScheduleRowKind::room: case ScheduleRowKind::material:
+        case ScheduleRowKind::material_summary: break;
         default: throw std::invalid_argument("Unknown schedule row kind");
         }
         if (record.object_id.empty() || !sources.emplace(record.object_id, &record).second)

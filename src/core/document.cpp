@@ -248,7 +248,7 @@ struct EntityReference {
 };
 
 std::optional<std::optional<std::string_view>> reference_type_for_key(std::string_view key) {
-    static constexpr std::array<std::pair<std::string_view, std::string_view>, 17> typed{{
+    static constexpr std::array<std::pair<std::string_view, std::string_view>, 18> typed{{
         {"property_id", "property"},
         {"building_id", "building"},
         {"floor_id", "floor"},
@@ -266,6 +266,7 @@ std::optional<std::optional<std::string_view>> reference_type_for_key(std::strin
         {"label_id", "label"},
         {"column_id", "column"},
         {"beam_id", "beam"},
+        {"railing_id", "railing"},
     }};
     for (const auto& [candidate, type] : typed) {
         if (key == candidate) {
@@ -413,8 +414,8 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
         }
         if (entity.properties.contains("material_assignment")) {
             try {
-                static constexpr std::array<std::string_view, 9> roles{
-                    "wall", "opening", "room", "room_boundary", "slab", "roof", "stair", "column", "beam"};
+                static constexpr std::array<std::string_view, 10> roles{
+                    "wall", "opening", "room", "room_boundary", "slab", "roof", "stair", "railing", "column", "beam"};
                 if (std::find(roles.begin(), roles.end(), entity.type) == roles.end())
                     document_error(DocumentErrorCode::invalid_entity, "Material assignment requires an architectural object");
                 const auto& assignment = entity.properties.at("material_assignment");
@@ -449,9 +450,9 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
                         document_error(DocumentErrorCode::dangling_reference,
                                        "model phases " + id + " references missing entity " + member_id);
                     }
-                    static constexpr std::array<std::string_view, 14> model_roles{
+                    static constexpr std::array<std::string_view, 15> model_roles{
                         "building", "floor", "wall", "opening", "room", "room_boundary",
-                        "slab", "roof", "stair", "column", "beam", "assembly_model",
+                        "slab", "roof", "stair", "railing", "column", "beam", "assembly_model",
                         "boundary", "measurement_boundary"};
                     const auto& type = entities.at(member_id).type;
                     if (std::find(model_roles.begin(), model_roles.end(), type) == model_roles.end()) {
@@ -668,10 +669,10 @@ std::string sha256_hex(std::span<const std::byte> bytes) {
 }
 
 bool is_known_entity_type(std::string_view type) noexcept {
-    static constexpr std::array<std::string_view, 27> known{
+    static constexpr std::array<std::string_view, 28> known{
         "property",             "building", "floor",  "layer", "boundary",
         "measurement_boundary", "room_boundary", "wall", "opening", "room",
-        "slab",                 "roof",     "stair",  "column", "beam",
+        "slab",                 "roof",     "stair",  "railing", "column", "beam",
         "label",                "sheet",    "view",   "constraint", "dimension",
         "sheet_view_model",    "annotation_state", "reference_asset",
         "assembly_model",      "model_phases", "room_relationships", "vertical_levels"};

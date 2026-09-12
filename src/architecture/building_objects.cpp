@@ -36,6 +36,7 @@ constexpr double tolerance = default_geometry_tolerance_metres;
 constexpr double maximum_dimension = 1'000'000.0;
 constexpr double maximum_coordinate = 1'000'000'000.0;
 constexpr double maximum_angle = 1'000'000.0;
+constexpr std::size_t maximum_railing_posts = 10'000;
 
 void finite_coordinate(const Vec3& point, const char* what) {
     if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)
@@ -413,6 +414,81 @@ TopoDS_Shape make_stair_flight(const StairFlight& flight) {
                                         landing.thickness,
                                         "Stair landing construction failed");
     return make_compound(steps, landing_shape, "Stair flight construction failed");
+}
+
+TopoDS_Shape make_railing(const Railing& railing) {
+    finite_coordinate(railing.base_position, "Railing base position must be finite");
+    finite_angle(railing.orientation_radians, "Railing orientation must be finite");
+    positive_dimension(railing.length, "Railing length must be positive");
+    positive_dimension(railing.height, "Railing height must be positive");
+    positive_dimension(railing.thickness, "Railing thickness must be positive");
+    positive_dimension(railing.post_spacing, "Railing post spacing must be positive");
+    if (!(railing.thickness < railing.height - tolerance)) {
+        throw std::invalid_argument("Railing thickness must be less than its height");
+    }
+
+    // The endpoint posts are mandatory. Interior posts use the requested
+    // maximum spacing, and the count is bounded before any OCCT allocation.
+    const auto interior_count = static_cast<std::size_t>(
+        std::floor((railing.length - tolerance) / railing.post_spacing));
+    if (interior_count > maximum_railing_posts - 2) {
+        throw std::invalid_argument("Railing post count exceeds the supported limit");
+    }
+
+    const auto frame = horizontal_frame(railing.orientation_radians,
+                                        "Railing orientation is invalid");
+    const gp_Pnt base = point(railing.base_position);
+    const auto make_oriented_box = [&](double along_start, double across_start,
+                                       double elevation, double along_size,
+                                       double across_size, double height,
+                                       const char* what) {
+        const auto corner = local_point(base, frame.along, along_start,
+                                        frame.across, across_start, elevation);
+        check_point(corner, what);
+        const gp_Ax2 axes(corner, gp_Dir(0.0, 0.0, 1.0), gp_Dir(frame.along));
+        return make_box(axes, along_size, across_size, height, what);
+    };
+
+    std::vector<TopoDS_Shape> members;
+    members.reserve(interior_count + 3);
+    members.push_back(make_oriented_box(0.0, -railing.thickness * 0.5,
+                                        railing.height - railing.thickness,
+                                        railing.length, railing.thickness,
+                                        railing.thickness,
+                                        "Railing top rail construction failed"));
+    members.push_back(make_oriented_box(-railing.thickness * 0.5,
+                                        -railing.thickness * 0.5, 0.0,
+                                        railing.thickness, railing.thickness,
+                                        railing.height,
+                                        "Railing end post construction failed"));
+    for (std::size_t index = 1; index <= interior_count; ++index) {
+        const auto position = static_cast<double>(index) * railing.post_spacing;
+        if (!(position < railing.length - tolerance)) {
+            break;
+        }
+        members.push_back(make_oriented_box(position - railing.thickness * 0.5,
+                                            -railing.thickness * 0.5, 0.0,
+                                            railing.thickness, railing.thickness,
+                                            railing.height,
+                                            "Railing post construction failed"));
+    }
+    members.push_back(make_oriented_box(railing.length - railing.thickness * 0.5,
+                                        -railing.thickness * 0.5, 0.0,
+                                        railing.thickness, railing.thickness,
+                                        railing.height,
+                                        "Railing end post construction failed"));
+
+    return build_solid(
+        [&] {
+            TopoDS_Compound compound;
+            BRep_Builder builder;
+            builder.MakeCompound(compound);
+            for (const auto& member : members) {
+                builder.Add(compound, member);
+            }
+            return TopoDS_Shape(compound);
+        },
+        "Railing construction failed");
 }
 
 TopoDS_Shape make_sloped_roof_panel(const SlopedRoofPanel& panel) {

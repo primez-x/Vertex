@@ -503,6 +503,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/dxf_exchange.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/field_adapter_contract.hpp"
     },
     {
@@ -947,6 +951,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/dxf_exchange.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/field_adapter_contract.cpp"
     },
     {
@@ -1372,6 +1380,10 @@
     {
       "category": "source",
       "path": "tests/door_operation_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/dxf_exchange_tests.cpp"
     },
     {
       "category": "source",

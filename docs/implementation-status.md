@@ -44,6 +44,13 @@ flat, or gable roof also exposes contextual run (gable length), span, rise,
 overhang, thickness, and derived pitch
 fields in the Inspector; edits use the same validated dialog parser and one
 undoable document command while preserving untouched quantity receipts.
+The same slice now includes a straight railing object: a validated semantic
+record produces one OCCT compound with a top rail, endpoint posts, and bounded
+interior post spacing.  Railing create/edit/transform, plan/elevation/section
+projection, native 3D rendering, quantity receipts, and save/reopen paths use
+the shared document command and codec.  Curved or baluster profiles, stair
+hosting, level connections, and production compatibility certification remain
+open requirements.
 Interactive plan canvases now include a model-space overview map with viewport
 framing and click-to-recenter navigation. Workspace profiles persist map
 visibility and the proportions of the navigator, tool rail, canvas, inspector,
@@ -91,9 +98,11 @@ visible persisted labels/symbol previews now use the shared desktop vector
 renderer. The desktop Annotations command creates template-backed labels and
 catalog-backed symbols through typed Document history; stable child IDs are
 available in the navigator/canvas for selection, undoable deletion, and
-inspector edits to text, position, rotation, scale, and visibility. Font/color
-style inspectors, polished assets, OS sandbox launch, and production
-integration evidence remain open.
+inspector edits to text, position, rotation, scale, and visibility. The
+inspector also edits font family, paper text height, stroke/fill colors, bold,
+and italic flags for labels and symbols through the same typed history command.
+Polished assets, OS sandbox launch, output lifecycle, and production integration
+evidence remain open.
 
 Room/boundary relationship semantics are now surfaced in the Windows desktop:
 the More menu and command palette open a typed editor that lists live room
@@ -560,8 +569,12 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   room, and material rows with calculated-cell provenance and explicit
   diagnostics. Editable source cells dispatch through revision-checked
   Document commands, persist with the project, participate in undo/redo, and
-  are exposed through the desktop Schedules dialog; grouped material quantities
-  and full sheet/save/print/export qualification remain open.
+  are exposed through the desktop Schedules dialog. Architectural projections
+  now append deterministic read-only material-summary rows grouped by catalog
+  identity or normalized explicit name, with source provenance, aggregate counts,
+  net-volume totals when complete, and visible diagnostics when a source
+  quantity is unavailable. Full sheet/save/print/export qualification remains
+  open.
 - The product scope and interaction qualification contracts now enumerate the
   Windows 11 x64 target, both markets, both workspaces, both unit systems,
   themes, DPI layouts, keyboard/focus/property access, pen/touch controls, and

@@ -13,6 +13,7 @@ The canonical entity types are:
 | `column` | `rectangular_column`, `circular_column` |
 | `beam` | `straight_beam` |
 | `stair` | `straight_stair_flight` |
+| `railing` | `straight_railing` |
 | `roof` | `sloped_roof_panel`, `gable_roof`, `hip_roof` |
 
 Every encoded properties object contains integer `version` and a string
@@ -69,6 +70,13 @@ integer `riser_count`, `total_rise_m`, `going_m`, `width_m`, and a required
 `top_landing` key.  `top_landing` is either `null` or an object containing
 `depth_m` and `thickness_m`.
 
+A straight railing uses `base_position_m`, `orientation_rad`, `length_m`,
+`height_m`, `thickness_m`, and `post_spacing_m`.  Its builder places endpoint
+posts and interior posts at the requested spacing, subject to the documented
+10,000-post safety limit.  The form is intentionally independent of a stair
+flight; hosted stair relationships and non-straight railing profiles will use
+later schema versions rather than being inferred from these fields.
+
 A sloped panel uses `base_position_m`, `orientation_rad`, `run_m`, `span_m`,
 `rise_m`, `pitch_rad`, `overhang_m`, and `thickness_m`.  A gable roof uses the
 same orientation, rise, pitch, overhang, and thickness fields with
@@ -99,7 +107,7 @@ variant intentionally emits only the known canonical fields unless the caller
 supplies metadata again.
 
 `can_recognize_building_entity_type` answers only whether the type vocabulary
-is known.  It returns true for `column`, `beam`, `stair`, and `roof` even when
+is known.  It returns true for `column`, `beam`, `stair`, `railing`, and `roof` even when
 the entity's version, form, or geometry is malformed.  Decode success is a
 separate, stricter operation.  Unknown types, versions, and forms fail with
 `std::invalid_argument` and an explanatory message.
@@ -107,6 +115,6 @@ separate, stricter operation.  Unknown types, versions, and forms fail with
 The codec does not expand the generic document validator's semantic model,
 does not claim production-complete stair or roof authoring, and does not
 replace command atomicity, stable links, persistence, material assemblies, or
-regulatory/structural checks. All six current forms have parameter editors;
+regulatory/structural checks. All eight current forms have parameter editors;
 the codec remains usable independently of the UI and supplies the geometry
 and field contract to every caller.

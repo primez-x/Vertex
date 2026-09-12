@@ -72,10 +72,11 @@ The current native solid contract covers:
   `make_wall`; they do not create a second independent presentation.
 * A `slab` entity requires a `boundary` segment array, a `holes` array of
   segment arrays, `thickness_m`, and `elevation_m`.
-* `column`, `beam`, `stair` and `roof` entities use the strict, versioned
-  [building entity format](building-entity-format.md). Both column forms,
-  straight beams, stair flights/landings, sloped panels and gable roofs are
-  rendered from their semantic parameters.
+* `column`, `beam`, `stair`, `railing` and `roof` entities use the strict,
+  versioned [building entity format](building-entity-format.md). Both column
+  forms, straight beams, stair flights/landings, straight railings, sloped
+  panels, gable roofs and hip roofs are rendered from their semantic
+  parameters.
 
 The wall/opening/slab parser accepts the corresponding unitless scalar spellings as a migration
 aid (`thickness`, `height`, `elevation`, `offset`, `width`, and `sill`) but
@@ -153,7 +154,8 @@ unconfirmed termination separately. `native_process_guard` exercises a hidden
 sleeper and normal, nonzero and already-exited children as part of CTest.
 
 The tests also render both column forms, beams, stair flights with landings,
-sloped roof panels and gable roofs through the shared building-entity codec.
+straight railings, sloped roof panels, gable roofs and hip roofs through the
+shared building-entity codec.
 Malformed forms block export, including after a snapshot update while the
 viewport is hidden. Undo restores a valid presentation. Successful framebuffer
 export requires a complete supported model; a partial or stale cache cannot

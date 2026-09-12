@@ -1,9 +1,10 @@
 # Building object plan projection
 
 `sketch::project_building_plan(const BuildingObject&)` derives the visible
-top-down drawing edges for one of the six canonical `BuildingObject` forms:
-rectangular column, circular column, straight beam, stair flight, sloped roof
-panel (including its zero-rise flat-roof case), and gable roof.  Coordinates
+top-down drawing edges for one of the eight canonical `BuildingObject` forms:
+rectangular column, circular column, straight beam, stair flight, straight
+railing, sloped roof panel (including its zero-rise flat-roof case), gable roof,
+and hip roof.  Coordinates
 remain in the document's world XY frame,
 so translation and horizontal rotation are retained.  The result is a
 `Boundary` whose zero-sweep segments are lines and whose nonzero-sweep
@@ -25,7 +26,7 @@ runs OCCT's exact BRep hidden-line pipeline:
 The returned boundary is presentation geometry for PlanCanvas and PDF
 rendering.  It is never an authoring boundary or a calculation input.  The
 first view style is a complete top-down projection without a cut plane,
-floor/elevation filtering, or hidden-line display.  All six forms are
+floor/elevation filtering, or hidden-line display.  All eight forms are
 projected as their complete solids, including roof thickness and stair
 landings.  Invalid semantic dimensions, a null/empty HLR result, missing
 projected p-curves, and unsupported projected curve types throw
@@ -48,7 +49,8 @@ by the plan model.
 
 Regression evidence includes exact segment-multiset comparisons against
 independently constructed rotated columns, horizontal and sloped beams,
-stairs with and without landings, sloped panels and gable roofs. These include
+stairs with and without landings, straight railings, sloped panels, gable roofs,
+and hip roofs. These include
 tread, landing, roof-thickness and ridge edges. The current solid compound
 projection retains coincident edges from distinct solids, including the two
 gable panel ridge edges; the oracle checks their explicit multiplicity rather
@@ -57,6 +59,6 @@ the coordinated-output qualification.
 
 The circle test requires exactly four connected quarter arcs with the expected
 center/radius, one complete winding and no extra edges. Bounds checks still
-cover all six forms; they are not used alone to establish complete edge
-correctness. The desktop workflow also checks that all six forms reach the
+cover all eight forms; they are not used alone to establish complete edge
+correctness. The desktop workflow also checks that all eight forms reach the
 shared plan/PDF scene after reopening.

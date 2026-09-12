@@ -15,7 +15,7 @@ namespace sketch {
 // by make_building_shape; the variant and its Entity properties are the
 // persisted authoring data.
 using BuildingObject = std::variant<RectangularColumn, CircularColumn, Beam,
-                                    StairFlight, SlopedRoofPanel, GableRoof, HipRoof>;
+                                    StairFlight, Railing, SlopedRoofPanel, GableRoof, HipRoof>;
 
 // This predicate only recognizes the canonical entity type vocabulary.  A
 // true result does not imply that an Entity has a supported version, form, or

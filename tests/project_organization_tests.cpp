@@ -32,6 +32,7 @@ void test_real_hierarchy_and_host_membership() {
         make_entity("wall", "wall", {{"layer_id", "walls"}, {"floor_id", "upper"}, {"elevation_m", 3.5}}),
         make_entity("door", "opening", {{"wall_id", "wall"}}),
         make_entity("column", "column", {{"layer_id", "fixtures"}, {"base_center_m", {1.0, 2.0, 0.3}}}),
+        make_entity("railing", "railing", {{"layer_id", "fixtures"}}),
         make_entity("loose", "beam"),
         make_entity("future", "future_optional_object", {{"layer_id", "walls"}, {"payload", 42}}),
     });
@@ -40,6 +41,7 @@ void test_real_hierarchy_and_host_membership() {
     require(organization.nodes.size() == snapshot.entities().size(), "every entity must remain visible");
     require(organization.nodes.at("upper").parent_id == "house", "floor belongs to actual building");
     require(organization.nodes.at("column").parent_id == "fixtures", "column belongs to actual layer");
+    require(organization.nodes.at("railing").parent_id == "fixtures", "railing belongs to actual layer");
     require(organization.nodes.at("door").parent_id == "wall", "opening appears under its host");
     require(organization.drawing_context("door") == organization.drawing_context("wall"),
             "hosted opening inherits the host context");

@@ -121,6 +121,21 @@ void test_all_forms_roundtrip_to_canonical_entities() {
         + stairs.width * stairs.top_landing->depth * stairs.top_landing->thickness;
     require_roundtrip(stairs, "stair", "straight_stair_flight", stair_volume);
 
+    const Railing railing{
+        .id = "railing-1",
+        .base_position = {2.0, -1.0, 0.25},
+        .orientation_radians = 0.2,
+        .length = 3.0,
+        .height = 1.1,
+        .thickness = 0.08,
+        .post_spacing = 0.9,
+    };
+    const auto railing_posts = std::floor((railing.length - 1e-7) /
+                                          railing.post_spacing) + 2.0;
+    const auto railing_volume = railing.length * railing.thickness * railing.thickness +
+        railing_posts * railing.thickness * railing.thickness * railing.height;
+    require_roundtrip(railing, "railing", "straight_railing", railing_volume);
+
     const SlopedRoofPanel panel{
         .id = "roof-shed",
         .base_position = {0.0, 0.0, 4.0},
@@ -185,6 +200,8 @@ void test_recognized_type_is_distinct_from_decode_success() {
             "beam type should be recognized");
     require(can_recognize_building_entity_type("stair"),
             "stair type should be recognized");
+    require(can_recognize_building_entity_type("railing"),
+            "railing type should be recognized");
     require(can_recognize_building_entity_type("roof"),
             "roof type should be recognized");
     require(!can_recognize_building_entity_type("future_building"),

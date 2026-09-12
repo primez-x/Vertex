@@ -246,12 +246,12 @@ generated room entities can be reviewed, edited, undone, and redone through the
 ordinary document history. Nested-loop hole semantics and Apex parity fixtures
 remain explicit qualification work.
 
-`Object…` opens the column, beam, stair and roof parameter editor. Selecting
+`Object…` opens the column, beam, stair, railing and roof parameter editor. Selecting
 one of those objects exposes `Edit object…` in the inspector. Both operations
 validate the candidate before one revision-checked document command; stale
 edits are rejected, metadata is preserved, and normal undo/redo applies.
 Unchanged fields retain their original precision. See
-[building-object-editor.md](building-object-editor.md) for the six forms.
+[building-object-editor.md](building-object-editor.md) for the eight forms.
 
 These objects appear in the native 3D view and in both plan canvases through
 exact OCCT top-down projection. The shared canvas renderer also draws them
@@ -262,7 +262,7 @@ style; those coordinated drawing features remain required.
 
 Imperial feet/inches are the default display and input units. Metric can be
 selected in the top workspace strip. The quantity parser handles exact input
-syntax. The six column/beam/stair/roof forms retain versioned exact quantity
+syntax. The eight column/beam/stair/railing/roof forms retain versioned exact quantity
 receipts alongside their numeric geometry. Their dialog-to-document tests cover
 unrelated edits, opaque future records, undo/redo and save/reopen for every form.
 Other commands still need their complete measurement-provenance integration.
@@ -294,7 +294,7 @@ and delete operations. The adapter preserves unrelated measurement entities,
 supports one-step Document undo, and is covered by a save/reopen fixture. The
 architectural inspector routes property edits through that adapter, including
 recovery-backed workspace edits, while preserving numeric and structured JSON
-values. Selecting a supported column, beam, stair, or roof and choosing
+values. Selecting a supported column, beam, stair, railing, or roof and choosing
 **Transform selection** opens a semantic preview dialog for XYZ translation,
 Z rotation, uniform scale, and clone; Apply commits the same adapter command
 and Cancel leaves history unchanged. Complete object-family schemas and
@@ -382,12 +382,12 @@ previews use the same identity, geometry, and receipt checks as committed edits;
 unchanged transforms do not create history. Room-boundary propagation and
 connected-wall group transforms remain open production work.
 
-When a column, beam, stair, or roof is selected, **Transform selection** uses
+When a column, beam, stair, railing, or roof is selected, **Transform selection** uses
 the architectural transaction adapter instead of the boundary editor. Its
 compact dialog accepts XYZ translation in the active units, Z rotation in
 degrees, a positive uniform scale, and an optional transformed copy. Canonical
 building geometry is rebuilt and validated before Apply; dimensions, beam
-vectors, stair landings, roof openings, metadata, and ordinary undo/redo remain
+vectors, stair landings, railing posts, roof openings, metadata, and ordinary undo/redo remain
 part of the same Document command.
 
 Boundary clone mode allocates a new boundary, segment IDs, and vertex IDs. It

@@ -238,6 +238,45 @@ void test_stairs_have_step_volume_and_optional_landing() {
              "landing extending below stair base should be rejected");
 }
 
+void test_straight_railing_has_end_posts_and_top_rail() {
+    using namespace sketch;
+    const Railing railing{
+        .id = "entry-railing",
+        .base_position = {1.0, 2.0, 0.5},
+        .orientation_radians = std::numbers::pi / 4.0,
+        .length = 3.0,
+        .height = 1.1,
+        .thickness = 0.08,
+        .post_spacing = 1.0,
+    };
+    const auto shape = make_railing(railing);
+    valid_solid(shape, "straight railing should be a valid solid");
+    const auto expected_posts = 4.0; // x = 0, 1, 2, 3
+    const auto expected_volume = railing.length * railing.thickness * railing.thickness +
+        expected_posts * railing.thickness * railing.thickness * railing.height;
+    near(solid_volume(shape), expected_volume, 1e-8,
+         "railing volume should equal its top rail and posts");
+    const auto extent = bounds(shape);
+    require(extent.zmin >= railing.base_position.z - 2e-6,
+            "railing must not extend below its base");
+    require(extent.zmax <= railing.base_position.z + railing.height + 2e-6,
+            "railing must not extend above its height");
+
+    auto invalid = railing;
+    invalid.post_spacing = 0.0;
+    rejected([&] { (void)make_railing(invalid); },
+             "zero railing post spacing should be rejected");
+    invalid = railing;
+    invalid.thickness = invalid.height;
+    rejected([&] { (void)make_railing(invalid); },
+             "railing thickness equal to height should be rejected");
+    invalid = railing;
+    invalid.post_spacing = 0.01;
+    invalid.length = 1000000.0;
+    rejected([&] { (void)make_railing(invalid); },
+             "railing with excessive post count should be rejected");
+}
+
 void test_roofs_are_planar_thickened_panels() {
     using namespace sketch;
     const SlopedRoofPanel panel{
@@ -412,6 +451,7 @@ int main() {
         test_vertical_columns_are_real_solids();
         test_beam_uses_arbitrary_axis_and_local_up();
         test_stairs_have_step_volume_and_optional_landing();
+        test_straight_railing_has_end_posts_and_top_rail();
         test_roofs_are_planar_thickened_panels();
         test_hip_roofs();
         test_roof_openings();

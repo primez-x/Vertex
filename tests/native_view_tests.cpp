@@ -337,6 +337,7 @@ int main(int argc,char** argv) {
                     sketch::Beam{"native-beam", {0,0,2.5}, {4,1,3}, {0,0,1},0.2,0.35},
                     sketch::StairFlight{"native-stair", {0,0,0},0.0,12,2.4,0.25,1.2,
                         sketch::StairLanding{1.2,0.15}},
+                    sketch::Railing{"native-railing", {0,3,0},0.0,4.0,1.1,0.08,1.0},
                     sketch::SlopedRoofPanel{"native-panel", {0,0,3},0.0,4,6,2,
                         std::atan(0.5),0.25,0.15},
                     sketch::GableRoof{"native-gable", {0,0,3},0.0,8,6,1.5,

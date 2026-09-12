@@ -53,7 +53,7 @@ Architectural objects can now reference a catalog material directly from the
 inspector. The optional entity property `material_assignment` contains integer
 `version: 1`, `catalog_id` (the `assembly_model` entity ID), and `material_id`
 (the catalog's internal material ID). Walls, openings, rooms and room boundaries,
-slabs, roofs, stairs, columns, and beams support this binding. Document validation
+slabs, roofs, stairs, railings, columns, and beams support this binding. Document validation
 rejects unsupported versions, unsupported object roles, and missing targets.
 Removing a referenced material or catalog requires detaching its users in the
 same atomic command. Assignment and removal use normal revision-checked history
@@ -76,7 +76,7 @@ object, even if the catalog itself is outside the view. Assigned objects do not
 reuse legacy authored `volume_m3` as a computed material quantity. Unassigned
 legacy material rows retain their existing authored name/volume behavior.
 The architectural schedule additionally measures net solid volume for assigned
-walls, slabs, columns, beams, stairs, and roofs. It uses the same document decoders
+walls, slabs, columns, beams, stairs, railings, and roofs. It uses the same document decoders
 and solid builders as the native view, including wall openings, slab holes, and
 roof cuts. A hidden hosted opening still cuts its wall. The volume cell is
 read-only and identifies the source object and its hosted openings. Invalid or

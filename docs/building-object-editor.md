@@ -99,6 +99,7 @@ then locate its controls without depending on a page implementation:
 | Top landing depth/thickness | `buildingObjectLandingDepth`, `buildingObjectLandingThickness` |
 | Roof run/span/rise | `buildingObjectRun`, `buildingObjectSpan`, `buildingObjectRise` |
 | Gable length | `buildingObjectLength` |
+| Railing length and post spacing | `buildingObjectLength`, `buildingObjectPostSpacing` |
 | Roof overhang/thickness | `buildingObjectOverhang`, `buildingObjectThickness` |
 | Derived roof pitch label | `buildingObjectDerivedPitch` |
 
@@ -140,15 +141,16 @@ the drawing, or create history. Apply still validates the complete candidate
 through the existing geometry builder before a command can commit.
 
 The main-window `buildingDimensions` inspector also exposes rectangular column
-width/depth/height, circular column radius/height, beam width/depth, and straight
-stair width/total rise/going/riser count. Only dimensions applicable to the
+width/depth/height, circular column radius/height, beam width/depth, straight
+stair width/total rise/going/riser count, and straight railing length/height/
+thickness/post spacing. Only dimensions applicable to the
 selected form are shown. `applyBuildingDimensions` sends changed fields through
 the same quantity parser, complete-object validation, and normal replacement
 command as the dialog. Unchanged fields retain their canonical precision and
 metadata. An unchanged form creates no history; invalid input and stale editing
 contexts show `buildingDimensionsError` without changing the document.
-The collapsed **Placement** section exposes column/stair base X/Y/Z, rectangular
-column rotation, stair orientation, and beam start/end X/Y/Z. Angles are labelled
+The collapsed **Placement** section exposes column/stair/railing base X/Y/Z,
+rectangular column rotation, stair/railing orientation, and beam start/end X/Y/Z. Angles are labelled
 in degrees and stored in radians. Coordinate fields reuse the dialog's quantity
 formatting and receipts. **Apply changes** commits dimensions and placement
 together; invalid geometry, including coincident beam endpoints, rejects the
@@ -164,7 +166,10 @@ rewrite untouched high-precision coordinates, angles, vectors, or roof pitch.
 The resulting candidate is still only a value; the caller owns the expected
 revision and atomic `Document` command.
 
-The dialog is a bounded authoring surface.  It does not provide structural,
+The dialog is a bounded authoring surface.  The railing form currently models
+a straight top rail and endpoint/interior posts as one validated solid; it does
+not yet provide baluster profiles, curved runs, stair hosting, level
+connections, or code/load checks.  It does not provide structural,
 code-compliance, material assembly, multi-flight stair, or production-complete
 roof design checks beyond the existing solid builders.  The test executable
 uses Qt's noninteractive error guard and keeps normal runs headless.  For

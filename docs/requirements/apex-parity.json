@@ -1122,7 +1122,7 @@
         "tests/annotation_entity_codec_tests.cpp",
         "docs/annotation-catalog.md"
       ],
-      "implementation_note": "Editable label templates, per-instance content/style/placement/visibility, filtering, strict serialization, typed Document admission, save/reopen, and desktop commands for template-backed creation plus text/placement/visibility editing are implemented; full font/color style editing and output lifecycle remain open."
+      "implementation_note": "Editable label templates, per-instance content/style/placement/visibility, filtering, strict serialization, typed Document admission, save/reopen, and desktop commands for template-backed creation plus text/placement/visibility editing are implemented. The Windows inspector also edits font family, paper text height, stroke/fill colors, bold, and italic flags for labels and symbols through the normal typed history command; output lifecycle and broader style/fill qualification remain open."
     },
     {
       "id": "APX-ANNO-002",
@@ -1653,7 +1653,7 @@
         "tests/building_plan_projection_tests.cpp",
         "tests/desktop_smoke.cpp"
       ],
-      "implementation_note": "Straight stair flights with optional landings have semantic solids, parameter editors, and exact top-down projections. Railings, level connections, remaining forms and coordinated production acceptance remain open."
+      "implementation_note": "Straight stair flights with optional landings and straight railings with validated top rails and endpoint/interior posts have semantic solids, parameter editors, transforms, exact top-down projections, native 3D rendering, and save/reopen coverage. Curved or baluster profiles, stair hosting, level connections and coordinated production acceptance remain open."
     },
     {
       "id": "ARCH-MOD-007",
@@ -1836,6 +1836,9 @@
         "include/sketch/document_schedule_adapter.hpp",
         "src/core/document_schedule_adapter.cpp",
         "tests/document_schedule_adapter_tests.cpp",
+        "include/sketch/architectural_schedule.hpp",
+        "src/architecture/architectural_schedule.cpp",
+        "tests/architectural_schedule_tests.cpp",
         "src/desktop/main_window.cpp",
         "tests/desktop_smoke.cpp",
         "include/sketch/schedule_model.hpp",
@@ -1843,7 +1846,7 @@
         "tests/schedule_model_tests.cpp",
         "docs/schedules.md"
       ],
-      "implementation_note": "Standalone typed records and a revision-bound Document-derived adapter now generate door/window, room, and material rows with stable marks, source-backed calculated cells and explicit diagnostics. Active organization/design-phase masks filter source entities before projection, preserving derived material rows and suppressing hidden-source diagnostics; schedule persistence and complete sheet/output integration remain open."
+      "implementation_note": "Standalone typed records and a revision-bound Document-derived adapter now generate door/window, room, and material rows with stable marks, source-backed calculated cells and explicit diagnostics. Active organization/design-phase masks filter source entities before projection, preserving derived material rows and suppressing hidden-source diagnostics. Architectural projections append deterministic read-only material-summary rows grouped by catalog/material identity or normalized explicit name, with aggregate counts, complete net-volume totals when every source is valid, and all contributing provenance. Schedule persistence and complete sheet/output integration remain open."
     },
     {
       "id": "ARCH-SCH-002",
@@ -2283,9 +2286,12 @@
         "include/sketch/interchange_profile.hpp",
         "src/core/interchange_profile.cpp",
         "tests/interchange_profile_tests.cpp",
+        "include/sketch/dxf_exchange.hpp",
+        "src/core/dxf_exchange.cpp",
+        "tests/dxf_exchange_tests.cpp",
         "docs/interchange-profiles.md"
       ],
-      "implementation_note": "The DXF R2013 subset and unsupported-entity policy are declared; parser/exporter, entity roundtrips, and fidelity fixtures remain open."
+      "implementation_note": "A bounded in-memory ASCII DXF R2013 codec now round-trips LINE, ARC, LWPOLYLINE (including bulges), and plain TEXT with deterministic serialization, hard limits, and explicit unsupported-feature diagnostics. It does not claim dimensions, hatches, blocks, native Apex compatibility, reference preservation, worker isolation, or external CAD fidelity; those fixtures and integrations remain open."
     },
     {
       "id": "IO-PDF-001",

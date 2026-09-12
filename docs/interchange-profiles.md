@@ -52,5 +52,59 @@ Remaining production gates: reviewed pinned adapter binaries and license
 artifacts; broker integration and runtime evidence tied to exact binaries and
 resources; representative IFC/DXF fixtures and fidelity reports; shared vector
 scene PDF/print output; bundled PROJ operation tests with an external network
-monitor; measured worker failure recovery. Unit tests exercise only the portable
-declaration and fail-closed readiness decision, using synthetic attestations.
+monitor; measured worker failure recovery. Profile unit tests exercise only the
+portable declaration and fail-closed readiness decision, using synthetic attestations.
+
+## Native bounded DXF codec
+
+`sketch/dxf_exchange.hpp` supplies an independent, in-memory ASCII DXF R2013
+(`AC1027`) codec. It neither opens paths nor launches processes, loads fonts,
+resolves references, contacts a service, or mutates a project. It is a smaller
+implemented subset than the declared `local.dxf.worker` target above; it does
+not satisfy that worker's reference-preservation or runtime-attestation gates.
+
+The transport records preserve 2D LINE endpoints, ARC center/radius and
+counterclockwise start/end angles, LWPOLYLINE vertices with signed bulges and
+closure, and plain TEXT insertion point/height/rotation/string. Layers and
+R2013 `$INSUNITS` values 0 through 20 are retained without unit conversion.
+Arcs require distinct angles in `[0, 360)` and a positive radius. Polylines
+require at least two vertices; bulges remain analytical values and are never
+tessellated. Labels use baseline/left alignment with default width and no
+oblique angle, mirroring, custom style, or DXF formatting escapes. TEXT
+whitespace is preserved. These group-code mappings follow the
+[Autodesk DXF reference](https://images.autodesk.com/adsk/files/autocad_2013_pdf_dxf_reference_enu.pdf).
+
+Malformed input throws `std::invalid_argument` with a stable message and returns
+no partial result. Nonfinite/oversized numbers, duplicate required singleton
+fields, missing coordinates, inconsistent vertex counts, wrong/missing version,
+unclosed sections, missing EOF, and trailing records are rejected. The parser
+accepts LF and CRLF and requires printable ASCII values; Unicode, binary DXF,
+and encoded text controls are outside this subset. Coordinates, radii, angles,
+and bulges have absolute numeric magnitude capped at `1e12`.
+
+`DxfImportResult::diagnostics` identifies unsupported entities by one-based
+ENTITIES ordinal, entity type, and a stable code. POLYLINE, MTEXT, DIMENSION,
+HATCH, BLOCK/INSERT, CIRCLE, and every other unimplemented type are reported as
+`unsupported_entity`. Unsupported attributes, 3D coordinates, nondefault OCS,
+paper-space entities, widths, and styled text omit the whole affected entity
+with `unsupported_feature`. Unknown sections and header variables produce
+section-level diagnostics. Raw unsupported records are **not** preserved;
+callers must retain the original input if preservation is required and must
+surface the diagnostics before using partial geometry. Handles, ownership IDs,
+subclass markers, and polyline vertex IDs are transport metadata and are not
+retained. No native Apex compatibility or full DXF fidelity is claimed.
+
+Both import and export enforce caller-reducible hard ceilings: 16 MiB, 500,000
+group-code pairs, 50,000 entities, 100,000 aggregate polyline vertices, and
+255 bytes per value. Export uses locale-independent round-trip numeric precision,
+normalizes negative zero, emits LF, and groups entities as lines, arcs,
+polylines, then labels while retaining each vector's order. Repeated export and
+export/import/export are byte-stable within this subset. Export rejects invalid
+records or strings instead of emitting injected group codes.
+
+`dxf_exchange_tests` covers this round trip, CRLF input, bulges, wrapped arcs,
+text whitespace, unsupported-feature diagnostics, malformed input, and both
+input/output resource limits. This is synthetic codec evidence; external CAD
+application interoperability, desktop import/export, transactional project
+mapping, provenance, and retained-source handling remain separate integration
+work.

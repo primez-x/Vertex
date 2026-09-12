@@ -477,7 +477,7 @@ void test_simple_solids_have_exact_edge_sets() {
                      "rotated horizontal beam");
 }
 
-void test_all_six_forms_have_exact_plan_extents() {
+void test_all_eight_forms_have_exact_plan_extents() {
     using namespace sketch;
     const std::vector<BuildingObject> objects{
         RectangularColumn{
@@ -512,6 +512,15 @@ void test_all_six_forms_have_exact_plan_extents() {
             .width = 1.5,
             .top_landing = StairLanding{.depth = 0.5, .thickness = 0.2},
         },
+        Railing{
+            .id = "plan-railing",
+            .base_position = {1.0, -1.0, 0.5},
+            .orientation_radians = 0.2,
+            .length = 3.0,
+            .height = 1.1,
+            .thickness = 0.08,
+            .post_spacing = 0.9,
+        },
         SlopedRoofPanel{
             .id = "plan-shed",
             .base_position = {0.0, 0.0, 4.0},
@@ -539,7 +548,7 @@ void test_all_six_forms_have_exact_plan_extents() {
     for (std::size_t index = 0; index < objects.size(); ++index) {
         const auto projected = project_building_plan(objects[index]);
         require_same_extents(projected_bounds(projected), shape_bounds(objects[index]),
-                              "six-form projection " + std::to_string(index));
+                              "eight-form projection " + std::to_string(index));
     }
 }
 
@@ -665,7 +674,7 @@ void test_invalid_geometry_is_rejected() {
 
 int main() {
     try {
-        test_all_six_forms_have_exact_plan_extents();
+        test_all_eight_forms_have_exact_plan_extents();
         test_simple_solids_have_exact_edge_sets();
         test_rotated_stairs_have_exact_edge_sets();
         test_roof_forms_have_exact_edge_sets();

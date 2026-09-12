@@ -355,7 +355,7 @@ void test_persisted_string_bounds_are_enforced_before_mutation() {
 }
 
 void test_current_architecture_types_and_boundary_links_are_structurally_validated() {
-    for (const auto type : {"measurement_boundary", "room_boundary", "column", "beam"}) {
+    for (const auto type : {"measurement_boundary", "room_boundary", "column", "beam", "railing"}) {
         require(sketch::is_known_entity_type(type),
                 "current architecture entities must be recognized semantic types");
     }
@@ -400,6 +400,9 @@ void test_current_architecture_types_and_boundary_links_are_structurally_validat
             EntityChange::upsert(entity(
                 "beam-1", "beam",
                 {{"floor_id", "floor-1"}, {"column_id", "column-1"}})),
+            EntityChange::upsert(entity(
+                "railing-1", "railing",
+                {{"floor_id", "floor-1"}})),
         },
     });
     require_error(
@@ -412,14 +415,26 @@ void test_current_architecture_types_and_boundary_links_are_structurally_validat
         },
         DocumentErrorCode::invalid_entity,
         "beam_id must reject an existing column target");
+    require_error(
+        [&] {
+            document.apply(ApplyEntityChanges{
+                .expected_revision = 2,
+                .entity_changes = {EntityChange::upsert(
+                    entity("label-railing-typed", "label", {{"railing_id", "column-1"}}))},
+            });
+        },
+        DocumentErrorCode::invalid_entity,
+        "railing_id must reject an existing column target");
     require(document.revision() == 2,
             "architecture reference failures must not advance the revision");
 }
 
 void test_embedded_architectural_models_are_validated_at_document_boundary() {
-    const auto phases = sketch::ModelPhases::create({"wall-1"}, {"wall-1"}, {}).to_json();
+    const auto phases = sketch::ModelPhases::create({"wall-1", "railing-1"},
+        {"wall-1", "railing-1"}, {}).to_json();
     auto document = Document::create({
         entity("wall-1", "wall"),
+        entity("railing-1", "railing"),
         entity("phases-1", "model_phases", {{"model", phases}}),
     });
     require(document.snapshot().entities().contains("phases-1"),

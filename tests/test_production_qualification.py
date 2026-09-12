@@ -40,27 +40,43 @@ class QualificationTests(unittest.TestCase):
         return qa.validate_and_build(self.manifest, root=self.root)
 
     def declare_real_role_artifacts(self):
-        role_artifacts = {}
-        for name, payload in (("application.exe", b"application binary"),
-                              ("source.bldproj", b"source project"),
-                              ("reopened.bldproj", b"reopened project"),
-                              ("observation.json", b"observation evidence")):
+        def reference(run, role, payload):
+            name = run["id"] + "-" + role.replace(":", "-") + ".bin"
             path = self.root / name
             path.write_bytes(payload)
-            role_artifacts[name] = {"path": name, "sha256": hashlib.sha256(payload).hexdigest()}
+            return {"path": name, "sha256": hashlib.sha256(payload).hexdigest(),
+                    "run_id": run["id"], "role": role, "media_type": "application/octet-stream",
+                    "content_description": "Synthetic contract fixture for " + role}
         for run in self.manifest["runs"]:
             run["evidence_kind"] = "real"
-            run["application"] = copy.deepcopy(role_artifacts["application.exe"])
-            run["source_project"] = copy.deepcopy(role_artifacts["source.bldproj"])
-            run["reopened_project"] = copy.deepcopy(role_artifacts["reopened.bldproj"])
-            for observation in run["observations"].values():
-                observation["evidence"] = copy.deepcopy(role_artifacts["observation.json"])
+            for role in ("application", "source_project", "reopened_project"):
+                run[role] = reference(run, role, role.encode())
+            for name, observation in run["observations"].items():
+                observation["evidence"] = reference(run, "observation:" + name, (run["id"] + name).encode())
+            record = {"schema_version": "1.0", "run_id": run["id"], "requirement": run["requirement"],
+                      "recorded_at": run["recorded_at"], "dpi_percent": run.get("dpi_percent"),
+                      "process": {"pid": 123, "exit_code": 0, "application_sha256": run["application"]["sha256"]},
+                      "artifacts": {role: run[role]["sha256"] for role in ("application", "source_project", "reopened_project")},
+                      "observations": {name: {"evidence_sha256": item["evidence"]["sha256"],
+                          "status": item["status"], "expected": item["expected"], "observed": item["observed"]}
+                          for name, item in run["observations"].items()}}
+            run["execution"] = reference(run, "execution", json.dumps(record).encode())
+            run["execution"]["media_type"] = "application/json"
+
+    def rewrite_execution(self, run, mutate):
+        path = self.root / run["execution"]["path"]
+        record = json.loads(path.read_text())
+        mutate(record)
+        payload = json.dumps(record).encode()
+        path.write_bytes(payload)
+        run["execution"]["sha256"] = hashlib.sha256(payload).hexdigest()
 
     def test_synthetic_never_qualifies_and_is_deterministic(self):
         report = self.report()
         self.assertTrue(report["contract_valid"], report["errors"])
         self.assertFalse(report["real_evidence_complete"])
         self.assertFalse(report["qualification_passed"])
+        self.assertFalse(report["production_accepted"])
         self.assertEqual(report["audit_status"], "incomplete")
         self.manifest["runs"].reverse()
         self.assertEqual(report, self.report())
@@ -71,6 +87,9 @@ class QualificationTests(unittest.TestCase):
         self.assertTrue(report["real_evidence_complete"])
         self.assertFalse(report["qualification_passed"])
         self.assertEqual(report["audit_status"], "incomplete")
+        self.assertFalse(report["production_accepted"])
+        self.manifest["runs"].reverse()
+        self.assertEqual(report, self.report())
 
     def test_real_evidence_requires_distinct_nonempty_role_artifacts(self):
         for run in self.manifest["runs"]:
@@ -96,6 +115,62 @@ class QualificationTests(unittest.TestCase):
         self.assertFalse(report["contract_valid"])
         self.assertTrue(any("observation evidence" in error for error in report["errors"]))
 
+    def test_real_references_require_run_role_and_content_declarations(self):
+        self.declare_real_role_artifacts()
+        original = copy.deepcopy(self.manifest)
+        for field in ("run_id", "role", "media_type", "content_description"):
+            self.manifest = copy.deepcopy(original)
+            self.manifest["runs"][0]["application"].pop(field)
+            self.assertFalse(self.report()["contract_valid"], field)
+        self.manifest = copy.deepcopy(original)
+        self.manifest["runs"][0]["observations"]["create"]["evidence"]["role"] = "observation:edit"
+        self.assertFalse(self.report()["contract_valid"])
+
+    def test_real_execution_required_and_bound_to_run_process_and_observations(self):
+        for mutate in (lambda run: run.pop("execution"),
+                       lambda run: self.rewrite_execution(run, lambda record: record.update(run_id="other-run")),
+                       lambda run: self.rewrite_execution(run, lambda record: record["process"].update(pid=True)),
+                       lambda run: self.rewrite_execution(run, lambda record: record["process"].update(application_sha256="0" * 64)),
+                       lambda run: self.rewrite_execution(run, lambda record: record["observations"].pop("recovery")),
+                       lambda run: self.rewrite_execution(run, lambda record: record["observations"]["create"].update(status="fail"))):
+            self.declare_real_role_artifacts()
+            mutate(self.manifest["runs"][0])
+            self.assertFalse(self.report()["contract_valid"])
+
+    def test_real_observation_content_cannot_be_reused_across_runs(self):
+        self.declare_real_role_artifacts()
+        first, second = self.manifest["runs"][:2]
+        evidence = second["observations"]["create"]["evidence"]
+        original = first["observations"]["create"]["evidence"]
+        (self.root / evidence["path"]).write_bytes((self.root / original["path"]).read_bytes())
+        evidence["sha256"] = original["sha256"]
+        self.rewrite_execution(second, lambda record: record["observations"]["create"].update(evidence_sha256=evidence["sha256"]))
+        report = self.report()
+        self.assertFalse(report["contract_valid"])
+        self.assertTrue(any("reused across runs" in error for error in report["errors"]))
+
+    def test_renamed_application_content_cannot_be_a_project(self):
+        self.declare_real_role_artifacts()
+        run = self.manifest["runs"][0]
+        application, project = run["application"], run["source_project"]
+        (self.root / project["path"]).write_bytes((self.root / application["path"]).read_bytes())
+        project["sha256"] = application["sha256"]
+        self.rewrite_execution(run, lambda record: record["artifacts"].update(source_project=project["sha256"]))
+        self.assertFalse(self.report()["contract_valid"])
+
+    def test_execution_invalid_json_and_nonzero_exit_fail_closed(self):
+        for payload in (b"not JSON", b'{"run_id":"one","run_id":"two"}', b"\xff"):
+            self.declare_real_role_artifacts()
+            execution = self.manifest["runs"][0]["execution"]
+            (self.root / execution["path"]).write_bytes(payload)
+            execution["sha256"] = hashlib.sha256(payload).hexdigest()
+            self.assertFalse(self.report()["contract_valid"])
+        self.declare_real_role_artifacts()
+        self.rewrite_execution(self.manifest["runs"][0], lambda record: record["process"].update(exit_code=1))
+        report = self.report()
+        self.assertTrue(report["contract_valid"], report["errors"])
+        self.assertFalse(report["real_evidence_complete"])
+
     def test_missing_coverage_identity_and_observations_fail_closed(self):
         original = copy.deepcopy(self.manifest)
         mutations = [lambda m: m["runs"].pop(), lambda m: m["runs"][0].pop("source_project"),
@@ -113,6 +188,7 @@ class QualificationTests(unittest.TestCase):
         self.declare_real_role_artifacts()
         for status in ("fail", "blocked", "not_run"):
             self.manifest["runs"][0]["observations"]["recovery"]["status"] = status
+            self.rewrite_execution(self.manifest["runs"][0], lambda record: record["observations"]["recovery"].update(status=status))
             report = self.report()
             self.assertTrue(report["contract_valid"], report["errors"])
             self.assertFalse(report["real_evidence_complete"])

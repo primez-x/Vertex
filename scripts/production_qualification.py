@@ -44,6 +44,7 @@ def validate_and_build(manifest, *, root):
     root = pathlib.Path(root).resolve()
     errors, blockers, runs = [], [], []
     coverage, identities = set(), set()
+    observation_owners = {}
 
     def obj(value, label):
         if not isinstance(value, dict):
@@ -57,8 +58,17 @@ def validate_and_build(manifest, *, root):
             return False
         return True
 
-    def artifact(value, label):
+    def artifact(value, label, *, run_id=None, role=None):
         value = obj(value, label)
+        if role is not None:
+            if value.get("run_id") != run_id:
+                errors.append(label + ": run_id must match the containing run")
+            if value.get("role") != role:
+                errors.append(label + ": role must be " + role)
+            text(value.get("content_description"), label + ".content_description")
+            media_type = value.get("media_type")
+            if not isinstance(media_type, str) or not re.fullmatch(r"[\w.+-]+/[\w.+-]+", media_type):
+                errors.append(label + ": media_type must be a MIME type")
         raw, digest = value.get("path"), value.get("sha256")
         if not text(raw, label + ".path"):
             return None
@@ -83,7 +93,10 @@ def validate_and_build(manifest, *, root):
         except (OSError, ValueError, RuntimeError) as error:
             errors.append(f"{label}: {error}")
             return None
-        return {"path": path.as_posix(), "sha256": actual}
+        result = {"path": path.as_posix(), "sha256": actual}
+        if role is not None:
+            result.update({key: value.get(key) for key in ("run_id", "role", "media_type", "content_description")})
+        return result
 
     def evidence_path_key(reference):
         if reference is None:
@@ -133,11 +146,18 @@ def validate_and_build(manifest, *, root):
             errors.append(label + ": evidence_kind must be real or synthetic")
         if kind != "real":
             blockers.append(label + ": real runtime evidence not declared")
-        artifacts = {key: artifact(run.get(key), label + "." + key) for key in ("application", "source_project", "reopened_project")}
+        def run_artifact(value, context, role):
+            return artifact(value, context, run_id=identity, role=role if kind == "real" else None)
+
+        artifacts = {key: run_artifact(run.get(key), label + "." + key, key) for key in ("application", "source_project", "reopened_project")}
         role_path_keys = {evidence_path_key(value) for value in artifacts.values() if value is not None}
         if kind == "real":
             if len(role_path_keys) != len([value for value in artifacts.values() if value is not None]):
                 errors.append(label + ": application, source_project, and reopened_project must be distinct files for real evidence")
+            application = artifacts["application"]
+            if application is not None and any(project is not None and project["sha256"] == application["sha256"]
+                                               for project in (artifacts["source_project"], artifacts["reopened_project"])):
+                errors.append(label + ": project content cannot duplicate the application binary")
         observations = obj(run.get("observations"), label + ".observations")
         for name in sorted(set(observations) - set(checks)):
             errors.append(label + ".observations: unsupported check " + name)
@@ -153,20 +173,61 @@ def validate_and_build(manifest, *, root):
             if status != "pass":
                 blockers.append(context + ": observation has not passed")
             checked[name] = {"expected": observation.get("expected"), "observed": observation.get("observed"),
-                             "status": status, "evidence": artifact(observation.get("evidence"), context + ".evidence")}
+                             "status": status, "evidence": run_artifact(observation.get("evidence"), context + ".evidence", "observation:" + name)}
             if kind == "real" and checked[name]["evidence"] is not None and evidence_path_key(checked[name]["evidence"]) in role_path_keys:
                 errors.append(context + ": observation evidence must be separate from application, source_project, and reopened_project artifacts")
+            if kind == "real" and checked[name]["evidence"] is not None:
+                digest = checked[name]["evidence"]["sha256"]
+                observation_owners.setdefault(digest, set()).add(label)
+                if digest in {item["sha256"] for item in artifacts.values() if item is not None}:
+                    errors.append(context + ": observation evidence content cannot duplicate a role artifact")
+        execution = None
+        if kind == "real":
+            execution = run_artifact(run.get("execution"), label + ".execution", "execution")
+            if execution is not None:
+                context = label + ".execution"
+                if execution["media_type"] != "application/json":
+                    errors.append(context + ": media_type must be application/json")
+                try:
+                    record = obj(load_manifest(root / execution["path"]), context)
+                except (OSError, ValueError, RuntimeError) as error:
+                    errors.append(f"{context}: invalid execution JSON: {error}")
+                    record = {}
+                for key, expected in (("schema_version", "1.0"), ("run_id", identity),
+                                      ("requirement", requirement), ("recorded_at", timestamp), ("dpi_percent", scale)):
+                    if record.get(key) != expected or (key == "dpi_percent" and type(record.get(key)) is not type(expected)):
+                        errors.append(context + ": " + key + " differs from run binding")
+                process = obj(record.get("process"), context + ".process")
+                if type(process.get("pid")) is not int or process["pid"] <= 0:
+                    errors.append(context + ": process.pid must be a positive integer")
+                if type(process.get("exit_code")) is not int:
+                    errors.append(context + ": process.exit_code must be an integer")
+                elif process["exit_code"] != 0:
+                    blockers.append(context + ": recorded process did not exit successfully")
+                expected_artifacts = {key: item["sha256"] if item is not None else None for key, item in artifacts.items()}
+                if record.get("artifacts") != expected_artifacts:
+                    errors.append(context + ": artifacts must bind all role hashes")
+                if process.get("application_sha256") != expected_artifacts["application"] or expected_artifacts["application"] is None:
+                    errors.append(context + ": process application hash differs from application artifact")
+                expected_observations = {key: {"evidence_sha256": item["evidence"]["sha256"] if item["evidence"] else None,
+                                               **{field: item[field] for field in ("status", "expected", "observed")}}
+                                         for key, item in checked.items()}
+                if record.get("observations") != expected_observations:
+                    errors.append(context + ": observations must bind every check, result and evidence hash")
         runs.append({"id": label, "requirement": requirement, "dpi_percent": scale, "evidence_kind": kind,
                      "metadata": {key: run.get(key) for key in ("operator", "recorded_at", "environment", "device", "provenance")},
-                     "artifacts": artifacts, "observations": checked})
+                     "artifacts": artifacts, "observations": checked, "execution": execution})
+    for digest, owners in sorted(observation_owners.items()):
+        if len(owners) > 1:
+            errors.append("observation evidence content reused across runs: " + digest + " (" + ", ".join(sorted(owners)) + ")")
     required = [(key, None) for key in PRODUCTION] + [("OPS-QA-005", scale) for scale in (100, 150, 200)]
     for item in required:
         if item not in coverage:
             errors.append(f"missing required run: {item[0]} dpi={item[1]}")
     return {"schema_version": "1.0", "contract_valid": not errors,
             "real_evidence_complete": not errors and not blockers,
-            "audit_status": "incomplete", "qualification_passed": False,
-            "reason": "Caller-declared evidence and hashes only; independent runtime review remains required.",
+            "audit_status": "incomplete", "qualification_passed": False, "production_accepted": False,
+            "reason": "Caller-declared execution bindings and hashes only; independent runtime review remains required.",
             "errors": sorted(errors), "blockers": sorted(blockers), "runs": sorted(runs, key=lambda run: run["id"])}
 
 
@@ -178,7 +239,7 @@ def main(argv=None):
     try:
         report = validate_and_build(load_manifest(args.manifest), root=args.root)
     except (OSError, ValueError, RuntimeError) as error:
-        print(json.dumps({"audit_status": "incomplete", "qualification_passed": False,
+        print(json.dumps({"audit_status": "incomplete", "qualification_passed": False, "production_accepted": False,
                           "contract_valid": False, "real_evidence_complete": False, "errors": [str(error)]}, sort_keys=True))
         return 2
     print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))

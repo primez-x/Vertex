@@ -1238,6 +1238,7 @@ void test_building_form_authoring_and_quantity_history() {
         CircularColumn{"workflow-round", {3.0, 2.0, 0.0}, 0.25, 3.0},
         Beam{"workflow-beam", {1.0, 2.0, 3.0}, {4.0, 2.0, 3.0}, {0.0, 0.0, 1.0}, 0.2, 0.3},
         StairFlight{"workflow-stair", {5.0, 0.0, 0.0}, 0.0, 4, 0.8, 0.25, 1.0, StairLanding{0.6, 0.15}},
+        Railing{"workflow-railing", {5.0, 2.0, 0.0}, 0.0, 3.0, 1.1, 0.08, 0.9},
         SlopedRoofPanel{"workflow-shed", {0.0, 0.0, 4.0}, 0.0, 4.0, 3.0, 1.0, std::atan(0.25), 0.2, 0.1},
         GableRoof{"workflow-gable", {8.0, 0.0, 4.0}, 0.2, 5.0, 4.0, 1.0, std::atan(0.5), 0.2, 0.1},
         HipRoof{"workflow-hip", {16.0, 0.0, 4.0}, 0.2, 6.0, 4.0, 1.0, std::atan(0.5), 0.2, 0.1},
@@ -1315,8 +1316,8 @@ void test_building_form_authoring_and_quantity_history() {
     require(window.commitBuildingObject(forged, revision, true).isEmpty() && window.document().revision() == revision,
             "oversized unsigned quantity numerators cannot wrap into a valid signed measurement");
     QTemporaryDir directory;
-    require(directory.isValid(), "six-form fixture needs a temporary directory");
-    const auto path = directory.filePath("six-forms.bldproj");
+    require(directory.isValid(), "architectural-form fixture needs a temporary directory");
+    const auto path = directory.filePath("architectural-forms.bldproj");
     require(window.saveProjectAs(path) && window.openProject(path), "all forms save and reopen");
     auto* plan = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
     require(plan != nullptr, "shared plan/PDF scene is available");
@@ -1338,9 +1339,9 @@ void test_building_form_authoring_and_quantity_history() {
     require(window.selectedEntityId().isEmpty(), "queued selection from an old document must not affect a reopened document");
     require(window.document().snapshot().entities().at(exact_id.toStdString()).properties.at("quantity_entries").at("/width_m") == receipt,
             "fractional input survives save/reopen without losing provenance");
-    require(window.exportDraftPdf(directory.filePath("six-forms.pdf")), "the six-form scene exports through the shared PDF renderer");
-    const auto svg = directory.filePath("six-forms.svg");
-    require(window.exportDraftSvg(svg), "the six-form scene exports through the shared SVG renderer");
+    require(window.exportDraftPdf(directory.filePath("architectural-forms.pdf")), "the architectural-form scene exports through the shared PDF renderer");
+    const auto svg = directory.filePath("architectural-forms.svg");
+    require(window.exportDraftSvg(svg), "the architectural-form scene exports through the shared SVG renderer");
     QFile svg_file(svg);
     require(svg_file.open(QIODevice::ReadOnly | QIODevice::Text), "draft SVG should be readable");
     const auto svg_text = QString::fromUtf8(svg_file.readAll());
@@ -1357,6 +1358,7 @@ void test_contextual_building_dimension_inspector(const QString& capture_directo
         CircularColumn{"inspector-round", {3, 2, 0}, 0.25, 3.0},
         Beam{"inspector-beam", {1, 2, 3}, {4, 2, 3}, {0, 0, 1}, 0.2, 0.3},
         StairFlight{"inspector-stair", {5, 0, 0}, 0.0, 4, 0.8, 0.25, 1.0, StairLanding{0.6, 0.15}},
+        Railing{"inspector-railing", {5, 2, 0}, 0.0, 3.0, 1.1, 0.08, 0.9},
     };
     auto* group = window.findChild<QGroupBox*>("buildingDimensions");
     auto* apply = window.findChild<QPushButton*>("applyBuildingDimensions");
@@ -1369,12 +1371,14 @@ void test_contextual_building_dimension_inspector(const QString& capture_directo
         const auto id = window.commitBuildingObject(encode_building_entity(object,
             {{"future_metadata", "retained"}}), window.document().revision());
         require(!id.isEmpty() && window.selectEntity(id) && !group->isHidden(),
-                "each column, beam and stair exposes contextual dimensions");
+                "each column, beam, stair and railing exposes contextual dimensions");
         if (!placement_toggle->isChecked()) placement_toggle->click();
         require(!placement_body->isHidden(), "selected object placement section expands");
         const auto before = window.document().snapshot().entities().at(id.toStdString());
-        const auto suffix = before.type == "column" ? "Height" : "Width";
-        const auto key = before.type == "column" ? "height_m" : "width_m";
+        const auto suffix = before.type == "column" ? "Height" :
+            before.type == "railing" ? "Length" : "Width";
+        const auto key = before.type == "column" ? "height_m" :
+            before.type == "railing" ? "length_m" : "width_m";
         auto* edit = window.findChild<QLineEdit*>(QStringLiteral("contextBuilding") + suffix);
         require(edit && !edit->isHidden() &&
                     std::abs(parse_quantity(edit->text().toStdString(), Unit::metre).metres -
@@ -1393,7 +1397,7 @@ void test_contextual_building_dimension_inspector(const QString& capture_directo
                     window.redoCommand() && window.document().snapshot().entities().at(id.toStdString()) == edited,
                 "building dimension edits undo and redo exactly");
         const auto position_key = before.type == "beam" ? "start_m" :
-            before.type == "stair" ? "base_position_m" : "base_center_m";
+            (before.type == "stair" || before.type == "railing") ? "base_position_m" : "base_center_m";
         require(edited.properties.at(position_key) == before.properties.at(position_key),
                 "dimension-only edits preserve exact untouched placement precision");
         if (id == "inspector-column")
@@ -1509,7 +1513,7 @@ void test_contextual_building_dimension_inspector(const QString& capture_directo
                 window.openProject(directory.filePath("building-inspector.bldproj")),
             "contextual building dimensions save and reopen");
     auto* plan = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
-    for (const auto& id : {"inspector-column", "inspector-round", "inspector-beam", "inspector-stair"}) {
+    for (const auto& id : {"inspector-column", "inspector-round", "inspector-beam", "inspector-stair", "inspector-railing"}) {
         require(window.document().snapshot().entities().at(id) == final_entities.at(id),
                 "edited building geometry and metadata persist exactly");
         require(plan && std::any_of(plan->entities().begin(), plan->entities().end(), [&](const auto& entry) {
@@ -2922,7 +2926,9 @@ int main(int argc, char** argv) {
             "annotation authoring should update the typed annotation entity");
     require(window.editAnnotation(label_id, QStringLiteral("Primary bedroom suite"),
                                   QStringLiteral("3.25"), QStringLiteral("2.5"),
-                                  QStringLiteral("30"), QStringLiteral("1.5"), true),
+                                  QStringLiteral("30"), QStringLiteral("1.5"), true,
+                                  QStringLiteral("Inter"), QStringLiteral("6"),
+                                  QStringLiteral("#112233"), QStringLiteral("#445566"), true, true, true),
             "annotation editing should use the typed command path");
     annotation_state = decode_annotation_entity(
         window.document().snapshot().entities().at("annotations-1"));
@@ -2930,8 +2936,13 @@ int main(int argc, char** argv) {
                 std::abs(annotation_state.labels.front().placement.position.x - 3.25) < 1e-9 &&
                 std::abs(annotation_state.labels.front().placement.position.y - 2.5) < 1e-9 &&
                 std::abs(annotation_state.labels.front().placement.scale - 1.5) < 1e-9 &&
+                annotation_state.labels.front().style.font_family == "Inter" &&
+                std::abs(annotation_state.labels.front().style.text_height_metres - 0.006) < 1e-12 &&
+                annotation_state.labels.front().style.stroke_color == "#112233" &&
+                annotation_state.labels.front().style.fill_color == "#445566" &&
+                annotation_state.labels.front().style.bold && annotation_state.labels.front().style.italic &&
                 annotation_state.labels.front().visible,
-            "annotation editing should persist text, position, scale, and visibility");
+            "annotation editing should persist text, style, position, scale, and visibility");
     require(window.selectEntity(label_id), "a persisted annotation child should be selectable");
     require(window.deleteAnnotation(label_id), "annotation deletion should be undoable");
     annotation_state = decode_annotation_entity(

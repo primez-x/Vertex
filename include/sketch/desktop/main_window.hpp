@@ -268,7 +268,14 @@ public:
                                       const QString& y_metres,
                                       const QString& rotation_degrees,
                                       const QString& scale,
-                                      bool visible);
+                                      bool visible,
+                                      QString font_family = {},
+                                      QString text_height_mm = {},
+                                      QString stroke_color = {},
+                                      QString fill_color = {},
+                                      bool bold = false,
+                                      bool italic = false,
+                                      bool style_enabled = false);
     [[nodiscard]] bool deleteAnnotation(const QString& annotation_id);
     // Imports a local raster or first-page PDF into the project Asset store and
     // creates a reference_asset entity with an explicit, editable calibration

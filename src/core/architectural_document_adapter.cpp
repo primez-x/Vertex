@@ -131,6 +131,13 @@ BuildingObject transform_building_object(BuildingObject object,
                     value.top_landing->depth *= transform.scale;
                     value.top_landing->thickness *= transform.scale;
                 }
+            } else if constexpr (std::is_same_v<Object, Railing>) {
+                value.base_position = transform_point(value.base_position, transform);
+                value.orientation_radians += transform.rotation_z_radians;
+                value.length *= transform.scale;
+                value.height *= transform.scale;
+                value.thickness *= transform.scale;
+                value.post_spacing *= transform.scale;
             } else if constexpr (std::is_same_v<Object, SlopedRoofPanel>) {
                 value.base_position = transform_point(value.base_position, transform);
                 value.orientation_radians += transform.rotation_z_radians;

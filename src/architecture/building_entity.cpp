@@ -221,6 +221,17 @@ Entity encode_one(const StairFlight& object, const Json& metadata) {
     return create_entity("stair", object, std::move(properties), metadata);
 }
 
+Entity encode_one(const Railing& object, const Json& metadata) {
+    auto properties = base_properties("straight_railing");
+    properties["base_position_m"] = vec3_json(object.base_position);
+    properties["orientation_rad"] = object.orientation_radians;
+    properties["length_m"] = object.length;
+    properties["height_m"] = object.height;
+    properties["thickness_m"] = object.thickness;
+    properties["post_spacing_m"] = object.post_spacing;
+    return create_entity("railing", object, std::move(properties), metadata);
+}
+
 void encode_roof_openings(Json& properties, const std::vector<RoofOpening>& openings) {
     if (openings.empty()) return;
     properties["version"] = 2;
@@ -347,6 +358,22 @@ BuildingObject decode_stair(const Entity& entity, const Json& properties,
     };
 }
 
+BuildingObject decode_railing(const Entity& entity, const Json& properties,
+                              std::string_view form) {
+    if (form != "straight_railing") {
+        invalid("Unsupported railing building form: " + std::string(form));
+    }
+    return Railing{
+        .id = entity.id,
+        .base_position = required_vec3(properties, "base_position_m"),
+        .orientation_radians = required_number(properties, "orientation_rad"),
+        .length = required_number(properties, "length_m"),
+        .height = required_number(properties, "height_m"),
+        .thickness = required_number(properties, "thickness_m"),
+        .post_spacing = required_number(properties, "post_spacing_m"),
+    };
+}
+
 BuildingObject decode_roof(const Entity& entity, const Json& properties,
                            std::string_view form) {
     if (form == "sloped_roof_panel") {
@@ -405,7 +432,8 @@ void validate_geometry(const BuildingObject& object) {
 }  // namespace
 
 bool can_recognize_building_entity_type(std::string_view type) noexcept {
-    return type == "column" || type == "beam" || type == "stair" || type == "roof";
+    return type == "column" || type == "beam" || type == "stair" || type == "railing" ||
+           type == "roof";
 }
 
 Entity encode_building_entity(const BuildingObject& object, Json metadata) {
@@ -430,6 +458,8 @@ BuildingObject decode_building_entity(const Entity& entity) {
         object = decode_beam(entity, entity.properties, form);
     } else if (entity.type == "stair") {
         object = decode_stair(entity, entity.properties, form);
+    } else if (entity.type == "railing") {
+        object = decode_railing(entity, entity.properties, form);
     } else {
         object = decode_roof(entity, entity.properties, form);
     }
@@ -449,6 +479,8 @@ TopoDS_Shape make_building_shape(const BuildingObject& object) {
                 return make_beam(value);
             } else if constexpr (std::is_same_v<Object, StairFlight>) {
                 return make_stair_flight(value);
+            } else if constexpr (std::is_same_v<Object, Railing>) {
+                return make_railing(value);
             } else if constexpr (std::is_same_v<Object, SlopedRoofPanel>) {
                 return make_sloped_roof_panel(value);
             } else if constexpr (std::is_same_v<Object, GableRoof>) {

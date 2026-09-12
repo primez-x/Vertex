@@ -49,11 +49,12 @@ struct FormInfo {
     std::string_view label;
 };
 
-constexpr std::array<FormInfo, 7> form_infos{{
+constexpr std::array<FormInfo, 8> form_infos{{
     {"column", "rectangular_column", "Rectangular column"},
     {"column", "circular_column", "Circular column"},
     {"beam", "straight_beam", "Straight beam"},
     {"stair", "straight_stair_flight", "Straight stair flight"},
+    {"railing", "straight_railing", "Straight railing"},
     {"roof", "sloped_roof_panel", "Sloped roof panel"},
     {"roof", "gable_roof", "Gable roof"},
     {"roof", "hip_roof", "Hip roof"},
@@ -384,6 +385,7 @@ private:
         type_combo->addItem(QStringLiteral("Column"), QStringLiteral("column"));
         type_combo->addItem(QStringLiteral("Beam"), QStringLiteral("beam"));
         type_combo->addItem(QStringLiteral("Stair"), QStringLiteral("stair"));
+        type_combo->addItem(QStringLiteral("Railing"), QStringLiteral("railing"));
         type_combo->addItem(QStringLiteral("Roof"), QStringLiteral("roof"));
         selector->addRow(QStringLiteral("Type"), type_combo);
 
@@ -474,6 +476,8 @@ private:
                         return "straight_beam";
                     } else if constexpr (std::is_same_v<Object, StairFlight>) {
                         return "straight_stair_flight";
+                    } else if constexpr (std::is_same_v<Object, Railing>) {
+                        return "straight_railing";
                     } else if constexpr (std::is_same_v<Object, SlopedRoofPanel>) {
                         return "sloped_roof_panel";
                     } else if constexpr (std::is_same_v<Object, GableRoof>) {
@@ -627,6 +631,15 @@ private:
                              });
             fields.at("buildingObjectLandingDepth")->setEnabled(false);
             fields.at("buildingObjectLandingThickness")->setEnabled(false);
+        } else if (form == "straight_railing") {
+            add_coordinate_fields(layout, "Base", "buildingObjectBaseX",
+                                  "buildingObjectBaseY", "buildingObjectBaseZ", {});
+            add_angle_field(layout, "Orientation (degrees)",
+                            "buildingObjectOrientationDegrees", 0.0);
+            add_quantity_field(layout, "Length", "buildingObjectLength", 3.0);
+            add_quantity_field(layout, "Height", "buildingObjectHeight", 1.1);
+            add_quantity_field(layout, "Thickness", "buildingObjectThickness", 0.08);
+            add_quantity_field(layout, "Post spacing", "buildingObjectPostSpacing", 0.9);
         } else if (form == "sloped_roof_panel") {
             add_coordinate_fields(layout, "Base", "buildingObjectBaseX",
                                   "buildingObjectBaseY", "buildingObjectBaseZ", {
@@ -680,7 +693,8 @@ private:
         std::string vector_property;
         if (form == "rectangular_column" || form == "circular_column") {
             vector_property = "base_center_m";
-        } else if (form == "straight_stair_flight" || form == "sloped_roof_panel" ||
+        } else if (form == "straight_stair_flight" || form == "straight_railing" ||
+                   form == "sloped_roof_panel" ||
                    (form == "gable_roof" || form == "hip_roof")) {
             vector_property = "base_position_m";
         }
@@ -756,6 +770,9 @@ private:
         }
         if (field_name == "buildingObjectThickness") {
             return "/thickness_m";
+        }
+        if (field_name == "buildingObjectPostSpacing") {
+            return "/post_spacing_m";
         }
         return {};
     }
@@ -878,6 +895,14 @@ private:
                                has_landing ? value.top_landing->depth : 1.2);
                     set_length("buildingObjectLandingThickness",
                                has_landing ? value.top_landing->thickness : 0.15);
+                } else if constexpr (std::is_same_v<Object, Railing>) {
+                    set_coordinate("buildingObjectBaseX", "buildingObjectBaseY",
+                                   "buildingObjectBaseZ", value.base_position);
+                    set_angle("buildingObjectOrientationDegrees", value.orientation_radians);
+                    set_length("buildingObjectLength", value.length);
+                    set_length("buildingObjectHeight", value.height);
+                    set_length("buildingObjectThickness", value.thickness);
+                    set_length("buildingObjectPostSpacing", value.post_spacing);
                 } else if constexpr (std::is_same_v<Object, SlopedRoofPanel>) {
                     set_coordinate("buildingObjectBaseX", "buildingObjectBaseY",
                                    "buildingObjectBaseZ", value.base_position);
@@ -1259,6 +1284,30 @@ private:
             return StairFlight{
                 original_entity.has_value() ? original_entity->id : std::string{},
                 *base, *orientation, *risers, *total_rise, *going, *width, landing};
+        }
+        if (form == "straight_railing") {
+            const auto* fallback = original_as<Railing>();
+            const auto base = read_coordinate(
+                "buildingObjectBaseX", "buildingObjectBaseY", "buildingObjectBaseZ",
+                QStringLiteral("Base"), fallback != nullptr ? fallback->base_position : Vec3{});
+            const auto orientation = read_angle(
+                "buildingObjectOrientationDegrees", QStringLiteral("Orientation"),
+                fallback != nullptr ? fallback->orientation_radians : 0.0);
+            const auto length = read_length("buildingObjectLength", QStringLiteral("Length"), true,
+                                           fallback != nullptr ? fallback->length : 3.0);
+            const auto height = read_length("buildingObjectHeight", QStringLiteral("Height"), true,
+                                           fallback != nullptr ? fallback->height : 1.1);
+            const auto thickness = read_length("buildingObjectThickness", QStringLiteral("Thickness"), true,
+                                               fallback != nullptr ? fallback->thickness : 0.08);
+            const auto spacing = read_length("buildingObjectPostSpacing", QStringLiteral("Post spacing"), true,
+                                             fallback != nullptr ? fallback->post_spacing : 0.9);
+            if (!base.has_value() || !orientation.has_value() || !length.has_value() ||
+                !height.has_value() || !thickness.has_value() || !spacing.has_value()) {
+                return std::nullopt;
+            }
+            return Railing{
+                original_entity.has_value() ? original_entity->id : std::string{},
+                *base, *orientation, *length, *height, *thickness, *spacing};
         }
         if (form == "sloped_roof_panel") {
             const auto* fallback = original_as<SlopedRoofPanel>();
