@@ -113,9 +113,11 @@ build metadata, documentation, fixtures, and licenses; the portable allowlist
 covers the bundled font, local assistance asset, offline user guide, PROJ
 resources, and required notices. The current Release runtime has a fresh
 dependency inventory, a deterministic source-kit manifest, and an offline
-bundle whose generated verifier passes. These
-artifacts remain qualification inputs: clean-machine installation, offline
-launch/use, complete notices, and production acceptance are still open.
+bundle whose generated verifier passes. A task-owned install of that bundle
+also passes installed-byte verification and the hidden installed-runtime smoke
+on the development host. These artifacts remain qualification inputs:
+clean-machine installation, networking-disabled launch/use, complete notices,
+and production acceptance are still open.
 
 The relationship foundation now has a detached, deterministic geometry proposal
 engine. It resolves explicit `follows` and `derived_from` links target-first,
