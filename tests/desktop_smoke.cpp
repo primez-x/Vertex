@@ -87,7 +87,7 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
     {
         sketch::desktop::MainWindow window;
         auto* toolbar = window.findChild<QToolBar*>(QStringLiteral("primaryToolbar"));
-            require(toolbar != nullptr && toolbar->minimumHeight() == 22 && toolbar->maximumHeight() == 22 &&
+            require(toolbar != nullptr && toolbar->minimumHeight() == 20 && toolbar->maximumHeight() == 20 &&
                     toolbar->iconSize() == QSize(12, 12) &&
                     window.findChild<QWidget*>(QStringLiteral("workspaceTabs")) != nullptr &&
                     window.findChild<QWidget*>(QStringLiteral("workspaceHeader")) == nullptr &&
