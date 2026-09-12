@@ -15,6 +15,7 @@ import json
 import os
 import pathlib
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from typing import Any
@@ -24,6 +25,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCHEMA_VERSION = 1
 INVENTORY_VERSION = 1
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+SHA1_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 COMMIT_RE = re.compile(r"/tree/([0-9a-fA-F]{40})(?:[/?#]|$)")
 PLANEGCS_HASH_RE = re.compile(r"^([0-9a-fA-F]{64})  (upstream/[^\r\n]+)$", re.MULTILINE)
 WINDOWS_ABSOLUTE_RE = re.compile(r"^[A-Za-z]:[\\/]")
@@ -207,6 +209,57 @@ def _validate_source_files(value: Any, field: str) -> list[dict[str, str]]:
     return result
 
 
+def _validate_spdx_hash_overrides(value: Any, field: str) -> dict[str, dict[str, str]]:
+    """Validate explicit provenance for a known-bad SPDX file checksum.
+
+    Some vendor SBOMs have shipped a stale file digest while the pinned
+    archive and installed binary agree.  An override is accepted only when it
+    names the affected relative file, pins the archive bytes, identifies the
+    archive member and the local extraction tool, and records why the
+    exception is necessary.  The archive and member are re-hashed during
+    inventory generation; this is not a free-form trust escape.
+    """
+
+    if value is None:
+        return {}
+    _require(isinstance(value, dict) and bool(value), f"{field} must be a nonempty object")
+    result: dict[str, dict[str, str]] = {}
+    for path_value, item in value.items():
+        path = _canonical_relative(path_value, f"{field} file path")
+        _require(path not in result, f"{field} contains duplicate file path {path}")
+        _require(isinstance(item, dict), f"{field}[{path}] must be an object")
+        _require(set(item) == {
+            "algorithm", "value", "archive_path", "archive_sha256",
+            "archive_member", "tool_path", "reason"
+        }, f"{field}[{path}] has unsupported fields")
+        algorithm = _require_string(item.get("algorithm"), f"{field}[{path}].algorithm").upper()
+        _require(algorithm in {"SHA1", "SHA256"},
+                 f"{field}[{path}].algorithm must be SHA1 or SHA256")
+        digest = _require_string(item.get("value"), f"{field}[{path}].value")
+        pattern = SHA1_RE if algorithm == "SHA1" else SHA256_RE
+        _require(pattern.fullmatch(digest) is not None,
+                 f"{field}[{path}].value is not a valid {algorithm} value")
+        archive_path = _canonical_relative(item.get("archive_path"),
+                                           f"{field}[{path}].archive_path")
+        tool_path = _canonical_relative(item.get("tool_path"),
+                                        f"{field}[{path}].tool_path")
+        archive_member = _canonical_relative(item.get("archive_member"),
+                                             f"{field}[{path}].archive_member")
+        archive_sha256 = _validate_sha256(item.get("archive_sha256"),
+                                          f"{field}[{path}].archive_sha256")
+        reason = _require_string(item.get("reason"), f"{field}[{path}].reason")
+        result[path] = {
+            "algorithm": algorithm,
+            "value": digest.lower(),
+            "archive_path": archive_path,
+            "archive_sha256": archive_sha256,
+            "archive_member": archive_member,
+            "tool_path": tool_path,
+            "reason": reason,
+        }
+    return result
+
+
 def _validate_artifacts(value: Any, field: str) -> list[dict[str, str]]:
     if value is None:
         return []
@@ -282,6 +335,8 @@ def validate_manifest(manifest: Any) -> None:
                 _require_string(source.get("package_id"), f"{field}.source.package_id")
             if source_kind == "qt-spdx":
                 _require_string(source.get("module_version"), f"{field}.source.module_version")
+            _validate_spdx_hash_overrides(source.get("hash_overrides"),
+                                          f"{field}.source.hash_overrides")
         elif source_kind == "planegcs-provenance":
             _canonical_relative(source.get("provenance_path"), f"{field}.source.provenance_path")
         elif source_kind == "bootstrap-dependency":
@@ -493,6 +548,15 @@ def _spdx_context(root: pathlib.Path, component: dict[str, Any]) -> tuple[dict[s
         prefix_relative, prefix_path = _relative_existing_path(root, prefix_relative,
                                                                f"component {component['id']}.source.prefix_path",
                                                                file_only=False)
+    hash_overrides = _validate_spdx_hash_overrides(
+        source.get("hash_overrides"), f"component {component['id']}.source.hash_overrides")
+    spdx_files = _spdx_files(doc, f"component {component['id']} SPDX")
+    spdx_file_paths = {
+        item["fileName"].replace("\\", "/").lstrip("./") for item in spdx_files
+    }
+    for override_path in hash_overrides:
+        _require(override_path in spdx_file_paths,
+                 f"component {component['id']} SPDX override names an unknown file {override_path}")
     context = {
         "kind": "vcpkg" if source_kind == "vcpkg-spdx" else "qt",
         "spdx_path": relative,
@@ -506,12 +570,46 @@ def _spdx_context(root: pathlib.Path, component: dict[str, Any]) -> tuple[dict[s
         "homepage": package.get("homepage"),
         "upstream_sources": upstream_sources,
         "prefix_path": prefix_relative,
+        "hash_overrides": hash_overrides,
         "_prefix_path": prefix_path,
-        "_files": _spdx_files(doc, f"component {component['id']} SPDX"),
+        "_files": spdx_files,
         "_relationships": doc.get("relationships", []),
+        "_hash_overrides": hash_overrides,
     }
     public_context = {key: value for key, value in context.items() if not key.startswith("_")}
     return public_context, context, doc
+
+
+def _archive_member_digest(root: pathlib.Path, override: dict[str, str],
+                           component_id: str) -> str:
+    """Hash one pinned archive member through the repository's local 7-Zip."""
+
+    archive_relative, archive_path = _relative_existing_path(
+        root, override["archive_path"],
+        f"component {component_id} SPDX override archive_path", file_only=True)
+    tool_relative, tool_path = _relative_existing_path(
+        root, override["tool_path"],
+        f"component {component_id} SPDX override tool_path", file_only=True)
+    archive_sha256 = _sha256(archive_path)
+    _require(archive_sha256 == override["archive_sha256"],
+             f"stale SPDX override archive hash for {archive_relative}: "
+             f"expected {override['archive_sha256']}, received {archive_sha256}")
+    member = override["archive_member"]
+    try:
+        completed = subprocess.run(
+            [str(tool_path), "x", "-so", str(archive_path), member],
+            capture_output=True, check=False, timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:
+        _error(f"could not extract SPDX override archive member {member} with {tool_relative}: {exc}")
+    _require(completed.returncode == 0,
+             f"could not extract SPDX override archive member {member} from {archive_relative}: "
+             f"{completed.stderr.decode('utf-8', errors='replace').strip()}")
+    # A corrupted or unexpectedly broad member must not turn inventory into a
+    # memory sink.  Qt plugins are much smaller than this bound.
+    _require(len(completed.stdout) <= 512 * 1024 * 1024,
+             f"SPDX override archive member is unexpectedly large: {member}")
+    algorithm = override["algorithm"].lower()
+    return hashlib.new(algorithm, completed.stdout).hexdigest()
 
 
 def _spdx_file_for_binary(root: pathlib.Path, context: dict[str, Any], module_relative: str,
@@ -576,14 +674,50 @@ def _spdx_file_for_binary(root: pathlib.Path, context: dict[str, Any], module_re
     _require("SHA256" in checksum_map or "SHA1" in checksum_map,
              f"{component_id} SPDX file has no SHA-256 or SHA-1 checksum")
     actual_path = root.joinpath(*module_relative.split("/"))
-    if "SHA256" in checksum_map:
+    override_key = relative.lstrip("./") if prefix_path is not None else module_relative
+    override = context.get("_hash_overrides", {}).get(override_key)
+    if override is not None:
+        override_algorithm = override["algorithm"]
+        _require(override_algorithm in checksum_map,
+                 f"{component_id} SPDX override algorithm {override_algorithm} is not present in the SBOM")
+        spdx_value = checksum_map[override_algorithm]
+        pattern = SHA1_RE if override_algorithm == "SHA1" else SHA256_RE
+        _require(isinstance(spdx_value, str) and pattern.fullmatch(spdx_value) is not None,
+                 f"{component_id} SPDX file {override_algorithm} checksum is malformed")
+        _require(spdx_value.lower() != override["value"],
+                 f"{component_id} SPDX override must document a changed checksum")
+        actual = _sha1(actual_path) if override_algorithm == "SHA1" else _sha256(actual_path)
+        _require(actual == override["value"],
+                 f"stale SPDX override binary hash for {module_relative}: "
+                 f"expected {override['value']}, received {actual}")
+        archive_actual = _archive_member_digest(root, override, component_id)
+        _require(archive_actual == override["value"],
+                 f"SPDX override archive member hash does not match {module_relative}: "
+                 f"expected {override['value']}, received {archive_actual}")
+        # Verify any non-overridden checksum still supplied by the SBOM.
+        for algorithm, expected_value in checksum_map.items():
+            if algorithm == override_algorithm:
+                continue
+            if algorithm == "SHA256":
+                expected = _validate_sha256(expected_value, f"{component_id} SPDX file checksum")
+                actual_value = _sha256(actual_path)
+            elif algorithm == "SHA1":
+                _require(isinstance(expected_value, str) and SHA1_RE.fullmatch(expected_value) is not None,
+                         f"{component_id} SPDX file SHA-1 checksum is malformed")
+                expected = expected_value.lower()
+                actual_value = _sha1(actual_path)
+            else:
+                _error(f"unsupported SPDX checksum algorithm {algorithm} for {module_relative}")
+            _require(actual_value == expected,
+                     f"stale SPDX binary hash for {module_relative}: expected {expected}, received {actual_value}")
+    elif "SHA256" in checksum_map:
         expected = _validate_sha256(checksum_map["SHA256"], f"{component_id} SPDX file checksum")
         actual = _sha256(actual_path)
         if actual != expected:
             _error(f"stale SPDX binary hash for {module_relative}: expected {expected}, received {actual}")
     elif "SHA1" in checksum_map:
         expected_sha1 = checksum_map["SHA1"]
-        _require(isinstance(expected_sha1, str) and re.fullmatch(r"[0-9a-fA-F]{40}", expected_sha1),
+        _require(isinstance(expected_sha1, str) and SHA1_RE.fullmatch(expected_sha1),
                  f"{component_id} SPDX file SHA-1 checksum is malformed")
         actual_sha1 = _sha1(actual_path)
         if actual_sha1 != expected_sha1.lower():
@@ -593,6 +727,14 @@ def _spdx_file_for_binary(root: pathlib.Path, context: dict[str, Any], module_re
         "file_name": item["fileName"],
         "license_concluded": item.get("licenseConcluded"),
         "checksums": checksum_map,
+        **({"verification_override": {
+            "algorithm": override["algorithm"],
+            "value": override["value"],
+            "archive_path": override["archive_path"],
+            "archive_member": override["archive_member"],
+            "archive_sha256": override["archive_sha256"],
+            "reason": override["reason"],
+        }} if override is not None else {}),
     }
 
 

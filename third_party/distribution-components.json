@@ -82,7 +82,99 @@
         "spdx_path": ".deps/qt/6.8.3/msvc2022_64/sbom/qtbase-6.8.3.spdx.json",
         "prefix_path": ".deps/qt/6.8.3/msvc2022_64",
         "package_id": "SPDXRef-Package-qtbase",
-        "module_version": "6.8.3"
+        "module_version": "6.8.3",
+        "hash_overrides": {
+          "./bin/Qt6Core.dll": {
+            "algorithm": "SHA1",
+            "value": "0cabf6343f2201cd3f1478114cecd922e0ffac49",
+            "archive_path": ".deps/downloads/qtbase-Windows-Windows_11_23H2-MSVC2022-Windows-Windows_11_23H2-X86_64.7z",
+            "archive_sha256": "41688269fac0565db956c66d9eecae777d16197e0c02cd81b88640c1f5d73d3f",
+            "archive_member": "bin/Qt6Core.dll",
+            "tool_path": ".deps/vcpkg/downloads/tools/7zip-26.02-windows/7z.exe",
+            "reason": "The pinned Qt archive and installed binary agree; the upstream Qt SPDX SHA-1 for this member is stale."
+          },
+          "./bin/Qt6Gui.dll": {
+            "algorithm": "SHA1",
+            "value": "9c6f1f495ec340231b448421020bb36b0178a093",
+            "archive_path": ".deps/downloads/qtbase-Windows-Windows_11_23H2-MSVC2022-Windows-Windows_11_23H2-X86_64.7z",
+            "archive_sha256": "41688269fac0565db956c66d9eecae777d16197e0c02cd81b88640c1f5d73d3f",
+            "archive_member": "bin/Qt6Gui.dll",
+            "tool_path": ".deps/vcpkg/downloads/tools/7zip-26.02-windows/7z.exe",
+            "reason": "The pinned Qt archive and installed binary agree; the upstream Qt SPDX SHA-1 for this member is stale."
+          },
+          "./bin/Qt6Network.dll": {
+            "algorithm": "SHA1",
+            "value": "fe9a11c62ffc25aecbf92b9c4827588593aaa062",
+            "archive_path": ".deps/downloads/qtbase-Windows-Windows_11_23H2-MSVC2022-Windows-Windows_11_23H2-X86_64.7z",
+            "archive_sha256": "41688269fac0565db956c66d9eecae777d16197e0c02cd81b88640c1f5d73d3f",
+            "archive_member": "bin/Qt6Network.dll",
+            "tool_path": ".deps/vcpkg/downloads/tools/7zip-26.02-windows/7z.exe",
+            "reason": "The pinned Qt archive and installed binary agree; the upstream Qt SPDX SHA-1 for this member is stale."
+          },
+          "./bin/Qt6PrintSupport.dll": {
+            "algorithm": "SHA1",
+            "value": "51bb114b2ac2cad6b86ee8a398d804f250269491",
+            "archive_path": ".deps/downloads/qtbase-Windows-Windows_11_23H2-MSVC2022-Windows-Windows_11_23H2-X86_64.7z",
+            "archive_sha256": "41688269fac0565db956c66d9eecae777d16197e0c02cd81b88640c1f5d73d3f",
+            "archive_member": "bin/Qt6PrintSupport.dll",
+            "tool_path": ".deps/vcpkg/downloads/tools/7zip-26.02-windows/7z.exe",
+            "reason": "The pinned Qt archive and installed binary agree; the upstream Qt SPDX SHA-1 for this member is stale."
+          },
+          "./bin/Qt6Widgets.dll": {
+            "algorithm": "SHA1",
+            "value": "6c22c9a847d2c2ddb6804eeafe9f00829bf3c5bf",
+            "archive_path": ".deps/downloads/qtbase-Windows-Windows_11_23H2-MSVC2022-Windows-Windows_11_23H2-X86_64.7z",
+            "archive_sha256": "41688269fac0565db956c66d9eecae777d16197e0c02cd81b88640c1f5d73d3f",
+            "archive_member": "bin/Qt6Widgets.dll",
+            "tool_path": ".deps/vcpkg/downloads/tools/7zip-26.02-windows/7z.exe",
+            "reason": "The pinned Qt archive and installed binary agree; the upstream Qt SPDX SHA-1 for this member is stale."
+          },
+          "./plugins/platforms/qwindows.dll": {
+            "algorithm": "SHA1",
+            "value": "ef3929adbc16acf0d0824b8c47fc6a9e3ec5a120",
+            "archive_path": ".deps/downloads/qtbase-Windows-Windows_11_23H2-MSVC2022-Windows-Windows_11_23H2-X86_64.7z",
+            "archive_sha256": "41688269fac0565db956c66d9eecae777d16197e0c02cd81b88640c1f5d73d3f",
+            "archive_member": "plugins/platforms/qwindows.dll",
+            "tool_path": ".deps/vcpkg/downloads/tools/7zip-26.02-windows/7z.exe",
+            "reason": "The pinned Qt archive and installed binary agree; the upstream Qt SPDX SHA-1 for this member is stale."
+          },
+          "./plugins/styles/qmodernwindowsstyle.dll": {
+            "algorithm": "SHA1",
+            "value": "a74008a5ad5b7f6a15324fd6d8e0094d78bda506",
+            "archive_path": ".deps/downloads/qtbase-Windows-Windows_11_23H2-MSVC2022-Windows-Windows_11_23H2-X86_64.7z",
+            "archive_sha256": "41688269fac0565db956c66d9eecae777d16197e0c02cd81b88640c1f5d73d3f",
+            "archive_member": "plugins/styles/qmodernwindowsstyle.dll",
+            "tool_path": ".deps/vcpkg/downloads/tools/7zip-26.02-windows/7z.exe",
+            "reason": "The pinned Qt archive and installed binary agree; the upstream Qt SPDX SHA-1 for this member is stale."
+          },
+          "./plugins/imageformats/qgif.dll": {
+            "algorithm": "SHA1",
+            "value": "3e2b4154fc33e47437a4df6accd49e0ae26f9e18",
+            "archive_path": ".deps/downloads/qtbase-Windows-Windows_11_23H2-MSVC2022-Windows-Windows_11_23H2-X86_64.7z",
+            "archive_sha256": "41688269fac0565db956c66d9eecae777d16197e0c02cd81b88640c1f5d73d3f",
+            "archive_member": "plugins/imageformats/qgif.dll",
+            "tool_path": ".deps/vcpkg/downloads/tools/7zip-26.02-windows/7z.exe",
+            "reason": "The pinned Qt archive and installed binary agree; the upstream Qt SPDX SHA-1 for this member is stale."
+          },
+          "./plugins/imageformats/qico.dll": {
+            "algorithm": "SHA1",
+            "value": "557bb4f4fa3a1101e801ad499337924031cc075c",
+            "archive_path": ".deps/downloads/qtbase-Windows-Windows_11_23H2-MSVC2022-Windows-Windows_11_23H2-X86_64.7z",
+            "archive_sha256": "41688269fac0565db956c66d9eecae777d16197e0c02cd81b88640c1f5d73d3f",
+            "archive_member": "plugins/imageformats/qico.dll",
+            "tool_path": ".deps/vcpkg/downloads/tools/7zip-26.02-windows/7z.exe",
+            "reason": "The pinned Qt archive and installed binary agree; the upstream Qt SPDX SHA-1 for this member is stale."
+          },
+          "./plugins/imageformats/qjpeg.dll": {
+            "algorithm": "SHA1",
+            "value": "7f3786afc874199fdac99660bacd92a28eabf726",
+            "archive_path": ".deps/downloads/qtbase-Windows-Windows_11_23H2-MSVC2022-Windows-Windows_11_23H2-X86_64.7z",
+            "archive_sha256": "41688269fac0565db956c66d9eecae777d16197e0c02cd81b88640c1f5d73d3f",
+            "archive_member": "plugins/imageformats/qjpeg.dll",
+            "tool_path": ".deps/vcpkg/downloads/tools/7zip-26.02-windows/7z.exe",
+            "reason": "The pinned Qt archive and installed binary agree; the upstream Qt SPDX SHA-1 for this member is stale."
+          }
+        }
       },
       "notice_paths": [
         ".deps/qt/6.8.3/msvc2022_64/sbom/qtbase-6.8.3.spdx",
@@ -398,7 +490,18 @@
         "spdx_path": ".deps/qt/6.8.3/msvc2022_64/sbom/qtpdf-6.8.3.spdx.json",
         "prefix_path": ".deps/qt/6.8.3/msvc2022_64",
         "package_id": "SPDXRef-Package-qtpdf",
-        "module_version": "6.8.3"
+        "module_version": "6.8.3",
+        "hash_overrides": {
+          "./bin/Qt6Pdf.dll": {
+            "algorithm": "SHA1",
+            "value": "3f6126bdef38a0cc1a31b63b159f9f9d95a94caf",
+            "archive_path": ".deps/downloads/qtpdf-Windows-Windows_11_23H2-MSVC2022-Windows-Windows_11_23H2-X86_64.7z",
+            "archive_sha256": "db722373b94a46019f10812de94c418f8bcff3e333883e3c43351f96e18579f6",
+            "archive_member": "bin/Qt6Pdf.dll",
+            "tool_path": ".deps/vcpkg/downloads/tools/7zip-26.02-windows/7z.exe",
+            "reason": "The pinned Qt archive and installed binary agree; the upstream Qt SPDX SHA-1 for this member is stale."
+          }
+        }
       },
       "notice_paths": [
         ".deps/qt/6.8.3/msvc2022_64/sbom/qtpdf-6.8.3.spdx",
@@ -420,7 +523,18 @@
         "spdx_path": ".deps/qt/6.8.3/msvc2022_64/sbom/qtsvg-6.8.3.spdx.json",
         "prefix_path": ".deps/qt/6.8.3/msvc2022_64",
         "package_id": "SPDXRef-Package-qtsvg",
-        "module_version": "6.8.3"
+        "module_version": "6.8.3",
+        "hash_overrides": {
+          "./bin/Qt6Svg.dll": {
+            "algorithm": "SHA1",
+            "value": "1f30af47dcf17fa8038e400936f655aa4c81fe4c",
+            "archive_path": ".deps/downloads/qtsvg-Windows-Windows_11_23H2-MSVC2022-Windows-Windows_11_23H2-X86_64.7z",
+            "archive_sha256": "48d1d798894cbf8696a0010fcfdeafea652b35159c56ea2060ee85ce3d0048f7",
+            "archive_member": "bin/Qt6Svg.dll",
+            "tool_path": ".deps/vcpkg/downloads/tools/7zip-26.02-windows/7z.exe",
+            "reason": "The pinned Qt archive and installed binary agree; the upstream Qt SPDX SHA-1 for this member is stale."
+          }
+        }
       },
       "notice_paths": [".deps/qt/6.8.3/msvc2022_64/sbom/qtsvg-6.8.3.spdx"],
       "runtime_names": ["Qt6Svg.dll"],

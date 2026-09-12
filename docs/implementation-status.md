@@ -34,10 +34,11 @@ end-to-end production evidence are still open.
 The Windows handoff inputs now include explicit source-kit and portable-package
 allowlists under `packaging/`. The source-kit allowlist covers tracked source,
 build metadata, documentation, fixtures, and licenses; the portable allowlist
-covers the bundled font and required notices. A source-kit manifest can be
-generated from these inputs, while runtime package creation remains blocked
-until the dependency inventory is current and clean-machine qualification is
-complete.
+covers the bundled font and required notices. The current Release runtime has
+a fresh 37-binary dependency inventory, a deterministic 422-file source-kit
+manifest, and a 469-file offline bundle whose generated verifier passes. These
+artifacts remain qualification inputs: clean-machine installation, offline
+launch/use, complete notices, and production acceptance are still open.
 
 The next foundation slice adds immutable room-versus-measurement relationship
 validation, existing/demolished/proposed phase state with mutually exclusive
@@ -455,10 +456,13 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   cut-depth presentation now persists and is editable from the desktop view
   settings command; annotations/hatching, complete sheet layout, and production
   print integration remain open.
-- Release import inspection resolves 34 selected application/component
+- Release import inspection resolves 37 selected application/component
   binaries on this machine. The Qt dry-run exposed default plugin expansion;
-  an explicit current-component allowlist is recorded. Clean-machine packaging,
-  complete notices, corresponding source and offline qualification remain open.
+  an explicit current-component allowlist and pinned archive-member hash
+  overrides for the stale Qt SPDX entries are recorded. The generated offline
+  bundle passes its local verifier; clean-machine installation, complete
+  notices, corresponding-source qualification, and offline runtime evidence
+  remain open.
 - Compatibility and interchange foundations now include a fail-closed Apex
   Standard/Pro/module evidence matrix, declared IFC/DXF/PDF/PROJ worker profiles,
   and deterministic field/DISTO adapter contracts. These artifacts validate

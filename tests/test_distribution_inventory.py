@@ -2,8 +2,10 @@ import hashlib
 import importlib.util
 import json
 import pathlib
+import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -174,6 +176,42 @@ class DistributionInventoryTests(unittest.TestCase):
         with self.assertRaises(inventory.InventoryError) as context:
             inventory.build_inventory(root, manifest)
         self.assertIn("stale source hash", str(context.exception).lower())
+
+    def test_spdx_hash_override_requires_pinned_provenance(self):
+        with self.assertRaises(inventory.InventoryError) as context:
+            inventory._validate_spdx_hash_overrides(
+                {"plugins/qwindows.dll": {
+                    "algorithm": "SHA1",
+                    "value": "0" * 40,
+                }},
+                "component qtbase.source.hash_overrides",
+            )
+        self.assertIn("unsupported fields", str(context.exception).lower())
+
+    def test_spdx_hash_override_hashes_the_pinned_archive_member(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = pathlib.Path(directory.name)
+        archive = root / "qt.7z"
+        tool = root / "7z.exe"
+        archive.write_bytes(b"pinned archive")
+        tool.write_bytes(b"tool")
+        override = {
+            "algorithm": "SHA1",
+            "value": hashlib.sha1(b"member bytes").hexdigest(),
+            "archive_path": "qt.7z",
+            "archive_sha256": digest(archive),
+            "archive_member": "plugins/qwindows.dll",
+            "tool_path": "7z.exe",
+            "reason": "fixture",
+        }
+        completed = subprocess.CompletedProcess(
+            [str(tool)], 0, stdout=b"member bytes", stderr=b"")
+        with mock.patch.object(inventory.subprocess, "run", return_value=completed) as run:
+            actual = inventory._archive_member_digest(root, override, "qtbase")
+        self.assertEqual(actual, override["value"])
+        run.assert_called_once()
+        self.assertIn("plugins/qwindows.dll", run.call_args.args[0])
 
     def test_vcpkg_spdx_ownership_and_notice_are_recorded(self):
         directory, root, manifest, runtime, app, dependency = self.fixture()
