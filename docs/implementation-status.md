@@ -110,9 +110,10 @@ calibration, and production output qualification remain open.
 The Windows handoff inputs now include explicit source-kit and portable-package
 allowlists under `packaging/`. The source-kit allowlist covers tracked source,
 build metadata, documentation, fixtures, and licenses; the portable allowlist
-covers the bundled font and required notices. The current Release runtime has
-a fresh 37-binary dependency inventory, a deterministic 422-file source-kit
-manifest, and a 469-file offline bundle whose generated verifier passes. These
+covers the bundled font, local assistance asset, offline user guide, PROJ
+resources, and required notices. The current Release runtime has a fresh
+dependency inventory, a deterministic source-kit manifest, and an offline
+bundle whose generated verifier passes. These
 artifacts remain qualification inputs: clean-machine installation, offline
 launch/use, complete notices, and production acceptance are still open.
 

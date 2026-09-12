@@ -155,7 +155,7 @@
         "tests/test_stage_portable_package.py",
         "docs/dependencies/portable-package.md"
       ],
-      "implementation_note": "Runtime independence policy and portable staging are implemented; bundled runtime/help completeness, installer creation, and clean-machine offline qualification remain open."
+      "implementation_note": "Runtime independence policy and portable staging are implemented; the portable package now carries a local user guide and PROJ resources, while installer creation and clean-machine offline qualification remain open."
     },
     {
       "id": "CORE-OWN-001",
@@ -2709,7 +2709,7 @@
         "scripts/stage_portable_package.py",
         "docs/dependencies/portable-package.md"
       ],
-      "implementation_note": "Deterministic source-kit and portable-package manifests are implemented with hash, size, path-safety, and allowlist checks; complete artifact inventory, notices/SBOM, offline help bundle, clean-machine rebuild, and final handoff certification remain open."
+      "implementation_note": "Deterministic source-kit and portable-package manifests are implemented with hash, size, path-safety, and allowlist checks; the offline package now includes the local user guide, while complete artifact inventory, notices/SBOM, clean-machine rebuild, and final handoff certification remain open."
     }
   ]
 }

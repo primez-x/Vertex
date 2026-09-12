@@ -56,7 +56,7 @@ that already exists is rejected. The output contains:
 
 | Path | Purpose |
 | --- | --- |
-| `bin/`, `plugins/`, `assets/`, `licenses/` | Runtime files selected by the portable allowlist and inventory. |
+| `bin/`, `plugins/`, `assets/`, `help/`, `licenses/` | Runtime files, local assistance assets, offline user guide, and notices selected by the portable allowlist and inventory. |
 | `source-kit/` | Files named by the source-kit manifest, including their category and hash. |
 | `metadata/distribution-inventory.json` | Exact dependency, license, notice, source, and runtime ownership evidence used for staging. |
 | `metadata/source-kit-manifest.json` | The source-kit input whose file hashes were checked before copying. |

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Property Studio user guide</title>
+  <style>
+    :root { color-scheme: light dark; font: 15px/1.55 "Segoe UI", sans-serif; }
+    body { max-width: 920px; margin: 0 auto; padding: 36px 42px 64px; color: #202733; background: #f7f9fb; }
+    @media (prefers-color-scheme: dark) { body { color: #e9edf2; background: #171b21; } }
+    h1 { margin: 0 0 8px; font-size: 30px; letter-spacing: -0.02em; }
+    h2 { margin: 30px 0 8px; font-size: 20px; }
+    p { margin: 8px 0; }
+    code, kbd { padding: 1px 5px; border-radius: 4px; background: #e3e9ef; font-family: Consolas, monospace; }
+    @media (prefers-color-scheme: dark) { code, kbd { background: #2a333e; } }
+    table { width: 100%; border-collapse: collapse; margin: 12px 0 18px; }
+    th, td { padding: 8px 10px; border-bottom: 1px solid #cbd4de; text-align: left; vertical-align: top; }
+    @media (prefers-color-scheme: dark) { th, td { border-color: #3b4652; } }
+    .note { padding: 12px 15px; border-left: 3px solid #1976a8; background: #e7f2f8; }
+    @media (prefers-color-scheme: dark) { .note { background: #1d3440; } }
+  </style>
+</head>
+<body>
+  <h1>User guide</h1>
+  <p>Property Studio is a local Windows application for property measurement and
+  residential or light-commercial architectural documentation. Projects, calculations,
+  references, and output stay on the machine.</p>
+
+  <h2>Start a project</h2>
+  <p>Use <kbd>Ctrl</kbd>+<kbd>N</kbd> for a new project, <kbd>Ctrl</kbd>+<kbd>O</kbd> to open a
+  <code>.bldproj</code>, and <kbd>Ctrl</kbd>+<kbd>S</kbd> to save. Save As creates a new
+  project copy and preserves the original. The application keeps local recovery copies
+  while a project is being edited.</p>
+
+  <h2>Measurement workspace</h2>
+  <p>Choose <strong>Measurement</strong> for appraisal and floor-plan work. Draw a boundary
+  directly, or choose <strong>Define area before drawing</strong> when the classification and
+  target area should be established first. Enter distances with units such as
+  <code>12 ft 6 in</code>, <code>3/8 in</code>, or <code>4.2 m</code>. Snap, grid, closure,
+  bay completion, and point jumping are available from the command search.</p>
+  <p>Select a closed boundary to inspect its classification, factors, deductions, area,
+  perimeter, and calculation provenance. Every edit is undoable with <kbd>Ctrl</kbd>+<kbd>Z</kbd>.</p>
+
+  <h2>Architectural workspace</h2>
+  <p>Choose <strong>Architectural</strong> to author walls, hosted doors and windows,
+  floors, ceilings, foundations, beams, columns, roofs, stairs, railings, assemblies,
+  and levels. The same semantic objects drive plan, elevation, section, schedule, sheet,
+  and native 3D views. Use the Inspector for the selected object's dimensions and
+  properties; invalid edits are rejected before the document changes.</p>
+  <p>Use <strong>Design phases and alternatives</strong> for existing, demolished, and
+  proposed work. Use <strong>Sheets</strong> and <strong>Schedules</strong> to arrange
+  coordinated output with independent viewport scales.</p>
+
+  <h2>References and assistance</h2>
+  <p>Import a PDF or raster reference from <strong>More</strong>, select the page when
+  needed, and calibrate it from a known distance. Transform and visibility changes keep
+  the original source bytes. <strong>Offline assistance</strong> can suggest tracing,
+  dimensions, labels, or commands; suggestions are marked unverified and require an
+  explicit acceptance before they enter project history.</p>
+
+  <h2>Output</h2>
+  <p>Use <strong>Print preview</strong>, <strong>Export draft PDF</strong>, or
+  <strong>Export draft SVG</strong>. Choose the paper size in the compact toolbar and
+  adjust sheet viewports for independent scales. Draft output carries a visible draft
+  marker and a neighboring fingerprint file that records the influencing project and
+  renderer inputs.</p>
+
+  <h2>Command search and shortcuts</h2>
+  <p>Press <kbd>Ctrl</kbd>+<kbd>K</kbd> and type a command name. The list includes drawing,
+  architectural, output, reference, recovery, and workspace actions. Open
+  <strong>Keyboard shortcuts</strong> from <strong>More</strong> to edit bindings or choose
+  the Apex-compatible subset. Conflicts and reserved text-editing keys are rejected.</p>
+
+  <div class="note"><strong>Project ownership:</strong> the first editor to open a saved
+  project owns its file identity. A second process is placed in a read-only path, and
+  external file changes are reported before replacement.</div>
+</body>
+</html>

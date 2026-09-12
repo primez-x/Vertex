@@ -303,6 +303,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/user-guide.html"
+    },
+    {
+      "category": "docs",
       "path": "docs/vertical-levels.md"
     },
     {

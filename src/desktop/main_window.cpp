@@ -61,6 +61,7 @@
 #include <QCheckBox>
 #include <QClipboard>
 #include <QCoreApplication>
+#include <QDesktopServices>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -119,6 +120,7 @@
 #include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
 #include <QUuid>
+#include <QUrl>
 
 #include <algorithm>
 #include <array>
@@ -12387,6 +12389,7 @@ public:
             std::function<void()> execute;
         };
         std::vector<Command> commands{
+            {QStringLiteral("Open user guide"), [this] { showUserGuide(); }},
             {QStringLiteral("Customize keyboard shortcuts"), [this] { showShortcutSettings(); }},
             {QStringLiteral("Measurement keypad"), [this] { showMeasurementKeypad(); }},
             {QStringLiteral("New project"), [this] { createNewProject(); }},
@@ -12550,6 +12553,27 @@ public:
         repopulate();
         search->setFocus();
         dialog.exec();
+    }
+
+    void showUserGuide() {
+        const auto application_dir = QDir(QCoreApplication::applicationDirPath());
+        const QStringList candidates{
+            application_dir.filePath(QStringLiteral("../help/user-guide.html")),
+            application_dir.filePath(QStringLiteral("help/user-guide.html")),
+            application_dir.filePath(QStringLiteral("../../docs/user-guide.html")),
+        };
+        for (const auto& candidate : candidates) {
+            const QFileInfo info(candidate);
+            if (!info.exists() || !info.isFile()) continue;
+            if (!QDesktopServices::openUrl(QUrl::fromLocalFile(info.absoluteFilePath()))) {
+                setError(QStringLiteral("The local user guide could not be opened."));
+                return;
+            }
+            owner->statusBar()->showMessage(QStringLiteral("Opened the local user guide."), 4000);
+            clearError();
+            return;
+        }
+        setError(QStringLiteral("The local user guide is not installed with this build."));
     }
 
     void fitView() {
@@ -13520,14 +13544,17 @@ private:
         m_terrain_action = new QAction(QStringLiteral("Create terrain surface…"), owner);
         m_terrain_action->setObjectName(QStringLiteral("createTerrainSurface"));
         m_about_action = new QAction(QStringLiteral("About Property Studio"), owner);
-        const std::array<QAction*, 20> secondary_actions{
+        auto* user_guide_action = new QAction(QStringLiteral("User guide…"), owner);
+        user_guide_action->setObjectName(QStringLiteral("userGuide"));
+        const std::array<QAction*, 21> secondary_actions{
             m_annotation_action, m_reference_action, m_schedule_action, m_sheet_action,
             m_viewport_action, m_schedule_placement_action, m_view_action, m_remodel_action,
             m_relationship_action, m_levels_action, m_reference_grid_action, m_assembly_action, m_assistance_action,
             m_workspace_profiles_action, m_revisions_action, m_transform_action, m_redefine_action,
             m_detect_areas_action,
             m_terrain_action,
-            m_about_action};
+            m_about_action,
+            user_guide_action};
         for (auto* action : secondary_actions) {
             owner->addAction(action);
             more_menu->addAction(action);
@@ -13535,6 +13562,7 @@ private:
         more_menu->addSeparator();
         auto* more_action = more_menu->addAction(QStringLiteral("Keyboard shortcuts…"));
         QObject::connect(more_action, &QAction::triggered, owner, [this] { showShortcutSettings(); });
+        QObject::connect(user_guide_action, &QAction::triggered, owner, [this] { showUserGuide(); });
         const auto text_editor_focused = [] {
             auto* focused = QApplication::focusWidget();
             return qobject_cast<QLineEdit*>(focused) != nullptr ||

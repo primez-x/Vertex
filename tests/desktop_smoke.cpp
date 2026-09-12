@@ -129,7 +129,8 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
                     select_tool->iconSize() == QSize(18, 18),
                 "drawing tool rail must stay compact and icon-first");
         auto* settings = window.findChild<QAction*>(QStringLiteral("keyboardShortcutSettings"));
-        require(settings, "shortcut editor must be discoverable");
+        auto* user_guide = window.findChild<QAction*>(QStringLiteral("userGuide"));
+        require(settings && user_guide, "shortcut editor and local user guide must be discoverable");
         const auto* copy = window.findChild<QAction*>(QStringLiteral("copySelection"));
         const auto* cut = window.findChild<QAction*>(QStringLiteral("cutSelection"));
         const auto* paste = window.findChild<QAction*>(QStringLiteral("pasteSelection"));

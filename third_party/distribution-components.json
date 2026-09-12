@@ -94,6 +94,20 @@
       }
     },
     {
+      "id": "property-studio-help",
+      "kind": "asset",
+      "package": {
+        "name": "Property Studio offline user guide",
+        "version": "workspace",
+        "license": "Proprietary"
+      },
+      "source": {
+        "kind": "workspace",
+        "paths": ["docs/user-guide.html"]
+      },
+      "notice_paths": ["LICENSE"]
+    },
+    {
       "id": "planegcs",
       "kind": "runtime",
       "package": {

@@ -45,6 +45,12 @@
     },
     {
       "kind": "asset",
+      "inventory_entry": "property-studio-help",
+      "path": "docs/user-guide.html",
+      "destination": "help/user-guide.html"
+    },
+    {
+      "kind": "asset",
       "inventory_entry": "proj-resources",
       "path": ".deps/native/x64-windows/share/proj/proj.db",
       "destination": "resources/proj/proj.db"
