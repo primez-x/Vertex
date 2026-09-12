@@ -32,6 +32,9 @@ calibration UI, and the explicit **Trace selected reference** boundary workflow
 are integrated through the typed Document history. Automated edge extraction,
 editable PDF geometry, native Apex compatibility, clean-machine packaging, and
 end-to-end production evidence are still open.
+Interactive plan canvases now include a model-space overview map with viewport
+framing and click-to-recenter navigation; map persistence and asynchronous
+navigation qualification remain open.
 
 Drawing-sheet lifecycle is now integrated at the desktop boundary: the sheet
 settings workflow can add a validated page with coordinated viewports, remove a

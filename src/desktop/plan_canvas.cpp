@@ -201,24 +201,12 @@ void PlanCanvas::clearPreview() {
     update();
 }
 
-void PlanCanvas::fitView() {
-    if (m_entities.empty() && m_labels.empty() &&
-        !std::any_of(m_references.begin(), m_references.end(), [](const auto& reference) {
-            return reference.visible && !reference.image.isNull();
-        })) {
-        m_view_center = {0.0, 0.0};
-        m_scale = 80.0;
-        update();
-        return;
-    }
-
+std::optional<std::pair<Vec2, Vec2>> PlanCanvas::contentBounds() const {
     Vec2 minimum{std::numeric_limits<double>::max(), std::numeric_limits<double>::max()};
     Vec2 maximum{std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest()};
     bool has_content = false;
     const auto include = [&](Vec2 point) {
-        if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
-            return;
-        }
+        if (!std::isfinite(point.x) || !std::isfinite(point.y)) return;
         minimum.x = std::min(minimum.x, point.x);
         minimum.y = std::min(minimum.y, point.y);
         maximum.x = std::max(maximum.x, point.x);
@@ -230,15 +218,12 @@ void PlanCanvas::fitView() {
             include(segment.start);
             include(segment.end);
             if (const auto arc = arc_info(segment)) {
-                for (int index = 1; index < 32; ++index) {
+                for (int index = 1; index < 32; ++index)
                     include(arc_point(segment, *arc, static_cast<double>(index) / 32.0));
-                }
             }
         }
     }
-    for (const auto& label : m_labels) {
-        include(label.position);
-    }
+    for (const auto& label : m_labels) include(label.position);
     for (const auto& reference : m_references) {
         if (reference.visible && !reference.image.isNull() &&
             std::isfinite(reference.metres_per_source_unit) &&
@@ -252,12 +237,33 @@ void PlanCanvas::fitView() {
             include({reference.position.x + width * 0.5, reference.position.y + height * 0.5});
         }
     }
-    if (!has_content) {
+    if (!has_content) return std::nullopt;
+    return std::make_pair(minimum, maximum);
+}
+
+QRectF PlanCanvas::overviewMapRect() const noexcept {
+    constexpr qreal width = 180.0;
+    constexpr qreal height = 118.0;
+    constexpr qreal margin = 12.0;
+    const auto available_width = std::max<qreal>(0.0, rect().width() - margin * 2.0);
+    const auto available_height = std::max<qreal>(0.0, rect().height() - margin * 2.0);
+    const auto map_width = std::min(width, available_width);
+    const auto map_height = std::min(height, available_height);
+    if (map_width < 80.0 || map_height < 56.0) return {};
+    return QRectF(rect().right() - margin - map_width + 1.0,
+                  rect().bottom() - margin - map_height + 1.0, map_width, map_height);
+}
+
+void PlanCanvas::fitView() {
+    const auto bounds = contentBounds();
+    if (!bounds) {
         m_view_center = {0.0, 0.0};
         m_scale = 80.0;
         update();
         return;
     }
+    const auto minimum = bounds->first;
+    const auto maximum = bounds->second;
     const auto width = std::max(maximum.x - minimum.x, 0.1);
     const auto height = std::max(maximum.y - minimum.y, 0.1);
     const auto padding = std::max(width, height) * 0.12 + 0.25;
@@ -538,6 +544,109 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
         }
         painter.restore();
     }
+    if (!fit_to_content) drawOverviewMap(painter);
+}
+
+void PlanCanvas::drawOverviewMap(QPainter& painter) const {
+    const auto map = overviewMapRect();
+    const auto bounds = contentBounds();
+    if (map.isEmpty() || !bounds) return;
+
+    const auto inner = map.adjusted(8.0, 8.0, -8.0, -8.0);
+    if (inner.width() <= 0.0 || inner.height() <= 0.0) return;
+    const auto minimum = bounds->first;
+    const auto maximum = bounds->second;
+    const auto span_x = std::max(maximum.x - minimum.x, 0.1);
+    const auto span_y = std::max(maximum.y - minimum.y, 0.1);
+    const auto padding = std::max(span_x, span_y) * 0.08 + 0.1;
+    const auto world_min = Vec2{minimum.x - padding, minimum.y - padding};
+    const auto world_max = Vec2{maximum.x + padding, maximum.y + padding};
+    const auto world_span_x = std::max(world_max.x - world_min.x, 0.1);
+    const auto world_span_y = std::max(world_max.y - world_min.y, 0.1);
+    const auto map_scale = std::min(inner.width() / world_span_x,
+                                    inner.height() / world_span_y);
+    const auto world_center = Vec2{(world_min.x + world_max.x) * 0.5,
+                                   (world_min.y + world_max.y) * 0.5};
+    const auto to_map = [&](Vec2 point) {
+        return QPointF(inner.center().x() + (point.x - world_center.x) * map_scale,
+                       inner.center().y() - (point.y - world_center.y) * map_scale);
+    };
+    const auto light = m_canvas_background.lightnessF() > 0.5;
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(QPen(light ? QColor(185, 198, 216, 235) : QColor(97, 113, 137, 235), 1.0));
+    painter.setBrush(light ? QColor(255, 255, 255, 232) : QColor(17, 25, 38, 236));
+    painter.drawRoundedRect(map, 8.0, 8.0);
+    painter.setClipRect(inner);
+    for (const auto& entity : m_entities) {
+        auto pen_color = color_for(entity);
+        pen_color.setAlpha(light ? 235 : 220);
+        QPen pen(pen_color, entity.selected ? 2.0 : 1.0,
+                 Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+        pen.setCosmetic(true);
+        painter.setPen(pen);
+        for (const auto& segment : entity.segments) {
+            if (segment.sweep_radians == 0.0) {
+                painter.drawLine(to_map(segment.start), to_map(segment.end));
+                continue;
+            }
+            if (const auto arc = arc_info(segment)) {
+                QPainterPath path;
+                path.moveTo(to_map(segment.start));
+                constexpr int samples = 32;
+                for (int index = 1; index <= samples; ++index)
+                    path.lineTo(to_map(arc_point(segment, *arc,
+                                                 static_cast<double>(index) / samples)));
+                painter.drawPath(path);
+            }
+        }
+    }
+    const auto visible_width = width() / std::max(m_scale, minimum_scale);
+    const auto visible_height = height() / std::max(m_scale, minimum_scale);
+    const auto top_left = to_map({m_view_center.x - visible_width * 0.5,
+                                  m_view_center.y + visible_height * 0.5});
+    const auto bottom_right = to_map({m_view_center.x + visible_width * 0.5,
+                                      m_view_center.y - visible_height * 0.5});
+    auto viewport_rect = QRectF(top_left, bottom_right).normalized();
+    QPen viewport_pen(light ? QColor(32, 139, 220, 235) : QColor(103, 202, 255, 245), 1.5,
+                      Qt::DashLine, Qt::RoundCap, Qt::RoundJoin);
+    viewport_pen.setCosmetic(true);
+    painter.setPen(viewport_pen);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRect(viewport_rect);
+    painter.restore();
+
+    painter.save();
+    painter.setPen(QPen(light ? QColor(128, 147, 173, 220) : QColor(120, 143, 174, 220), 1.0));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRoundedRect(map, 8.0, 8.0);
+    painter.restore();
+}
+
+bool PlanCanvas::navigateOverviewMap(QPointF position) {
+    const auto map = overviewMapRect();
+    if (map.isEmpty() || !map.contains(position)) return false;
+    const auto bounds = contentBounds();
+    if (!bounds) return true;
+    const auto inner = map.adjusted(8.0, 8.0, -8.0, -8.0);
+    const auto minimum = bounds->first;
+    const auto maximum = bounds->second;
+    const auto span_x = std::max(maximum.x - minimum.x, 0.1);
+    const auto span_y = std::max(maximum.y - minimum.y, 0.1);
+    const auto padding = std::max(span_x, span_y) * 0.08 + 0.1;
+    const auto world_min = Vec2{minimum.x - padding, minimum.y - padding};
+    const auto world_max = Vec2{maximum.x + padding, maximum.y + padding};
+    const auto world_span_x = std::max(world_max.x - world_min.x, 0.1);
+    const auto world_span_y = std::max(world_max.y - world_min.y, 0.1);
+    const auto map_scale = std::min(inner.width() / world_span_x,
+                                    inner.height() / world_span_y);
+    if (!(map_scale > 0.0) || !std::isfinite(map_scale)) return true;
+    const auto world_center = Vec2{(world_min.x + world_max.x) * 0.5,
+                                   (world_min.y + world_max.y) * 0.5};
+    m_view_center = {world_center.x + (position.x() - inner.center().x()) / map_scale,
+                     world_center.y - (position.y() - inner.center().y()) / map_scale};
+    update();
+    return true;
 }
 
 void PlanCanvas::setPointClicked(std::function<void(Vec2)> callback) {
@@ -592,6 +701,10 @@ void PlanCanvas::mousePressEvent(QMouseEvent* event) {
     }
     if (event->button() != Qt::LeftButton) {
         event->ignore();
+        return;
+    }
+    if (navigateOverviewMap(position)) {
+        event->accept();
         return;
     }
     if (m_tool == CanvasTool::select) {

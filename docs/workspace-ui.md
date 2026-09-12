@@ -21,6 +21,12 @@ light precision surface by default, with a dark canvas following the dark
 workspace theme. Grid lines are deliberately low contrast so geometry and
 dimensions remain the visual focus.
 
+Each interactive plan canvas includes a compact overview map in its lower
+right corner. It draws the same committed geometry in model coordinates and
+shows the current viewport as a dashed frame; clicking any map location
+recenters the live canvas there. The map is an interaction aid only and is
+omitted from PDF, SVG, print, and native-image output.
+
 The toolbar glyphs are bundled inline SVG paths rendered by Qt's SVG module.
 They contain no downloaded assets or runtime web dependency. Dialogs copy the
 resolved workspace palette and stylesheet so shortcut, keypad, sheet, and

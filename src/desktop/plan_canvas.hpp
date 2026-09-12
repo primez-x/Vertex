@@ -108,6 +108,10 @@ public:
     void clearPreview();
     void fitView();
     void zoomBy(double factor, QPointF anchor = {});
+    // Compact in-canvas navigation aid. The map is screen-only and never
+    // participates in printable/exported scene output.
+    [[nodiscard]] QRectF overviewMapRect() const noexcept;
+    [[nodiscard]] Vec2 viewCenter() const noexcept { return m_view_center; }
     void renderScene(QPainter& painter, const QRectF& viewport) const;
     void renderScene(QPainter& painter, const QRectF& viewport, bool fit_to_content,
                      QColor background) const;
@@ -137,6 +141,9 @@ protected:
     void resizeEvent(QResizeEvent* event) override;
 
 private:
+    [[nodiscard]] std::optional<std::pair<Vec2, Vec2>> contentBounds() const;
+    [[nodiscard]] bool navigateOverviewMap(QPointF position);
+    void drawOverviewMap(QPainter& painter) const;
     [[nodiscard]] QPointF toScreen(Vec2 point, const QRectF& viewport) const;
     [[nodiscard]] Vec2 toModel(QPointF point, const QRectF& viewport) const;
     [[nodiscard]] Vec2 snapped(Vec2 point) const;

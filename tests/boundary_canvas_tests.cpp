@@ -374,6 +374,64 @@ void test_effective_cursor_matches_click() {
             "press without preceding motion must use its own snapped coordinates");
 }
 
+void test_overview_map_navigation() {
+    PlanCanvas canvas;
+    canvas.resize(640, 480);
+    canvas.setGridEnabled(false);
+    canvas.setEntities({CanvasEntity{
+        QStringLiteral("overview-rectangle"),
+        QStringLiteral("measurement_boundary"),
+        Boundary{
+            Segment{{-12.0, -8.0}, {12.0, -8.0}, 0.0},
+            Segment{{12.0, -8.0}, {12.0, 8.0}, 0.0},
+            Segment{{12.0, 8.0}, {-12.0, 8.0}, 0.0},
+            Segment{{-12.0, 8.0}, {-12.0, -8.0}, 0.0},
+        },
+        0.08,
+        false,
+    }});
+    canvas.fitView();
+    const auto map = canvas.overviewMapRect();
+    require(map.width() >= 120.0 && map.height() >= 80.0 &&
+                map.right() <= canvas.width() && map.bottom() <= canvas.height(),
+            "overview map must reserve a compact in-canvas navigation surface");
+    const auto interactive = render(canvas, false);
+    QImage plain(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+    plain.fill(background.rgba());
+    require(differing_pixels(interactive, plain, map.toAlignedRect()) > 40,
+            "overview map must render content and viewport affordances");
+
+    // Move the viewport away from the map center, then click a model location
+    // in the map. A real navigation click must update the view center.
+    const auto center_before = canvas.viewCenter();
+    const auto drag_start = QPointF(canvas.rect().center());
+    const auto drag_end = drag_start + QPointF(180.0, -90.0);
+    QMouseEvent press(QEvent::MouseButtonPress, drag_start, drag_start,
+                      Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &press);
+    QMouseEvent move(QEvent::MouseMove, drag_end, drag_end,
+                     Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &move);
+    QMouseEvent release(QEvent::MouseButtonRelease, drag_end, drag_end,
+                        Qt::MiddleButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &release);
+    const auto center_panned = canvas.viewCenter();
+    require(std::abs(center_panned.x - center_before.x) > 1e-9 ||
+                std::abs(center_panned.y - center_before.y) > 1e-9,
+            "canvas pan must move the viewport before overview navigation");
+    const auto map_target = map.topLeft() + QPointF(map.width() * 0.2, map.height() * 0.8);
+    QMouseEvent map_press(QEvent::MouseButtonPress, map_target, map_target,
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &map_press);
+    QMouseEvent map_release(QEvent::MouseButtonRelease, map_target, map_target,
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &map_release);
+    const auto center_overview = canvas.viewCenter();
+    require(std::abs(center_overview.x - center_panned.x) > 1e-9 ||
+                std::abs(center_overview.y - center_panned.y) > 1e-9,
+            "overview map click must recenter the viewport on the selected model location");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -391,6 +449,7 @@ int main(int argc, char** argv) {
         }
         test_boundary_draft_rendering_and_history();
         test_effective_cursor_matches_click();
+        test_overview_map_navigation();
         std::cout << "Boundary canvas tests passed\n";
         return 0;
     } catch (const std::exception& error) {

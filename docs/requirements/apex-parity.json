@@ -223,7 +223,7 @@
         "tests/desktop_smoke.cpp",
         "docs/workspace-ui.md"
       ],
-      "implementation_note": "The desktop shell exposes pan, zoom, grid, and independent output controls; the primary toolbar is a fixed 18 px icon row with no redundant header band. Overview-map behavior, asynchronous navigation evidence, and the complete acceptance statement remain open."
+      "implementation_note": "The desktop shell exposes pan, zoom, grid, and independent output controls; the primary toolbar is a fixed 18 px icon row with no redundant header band. Interactive plan canvases now render a model-space overview map with viewport framing and click-to-recenter navigation; asynchronous navigation evidence and the complete acceptance statement remain open."
     },
     {
       "id": "CORE-DOC-001",
@@ -1289,7 +1289,7 @@
         "tests/desktop_smoke.cpp",
         "docs/workspace-ui.md"
       ],
-      "implementation_note": "The desktop shell exposes pan, zoom, grid, and independent output controls; the primary toolbar is a fixed 18 px icon row with no redundant header band. Overview-map behavior, asynchronous navigation evidence, and the complete acceptance statement remain open."
+      "implementation_note": "The desktop shell exposes pan, zoom, grid, and independent output controls; the primary toolbar is a fixed 18 px icon row with no redundant header band. Interactive plan canvases now render a model-space overview map with viewport framing and click-to-recenter navigation; asynchronous navigation evidence and the complete acceptance statement remain open."
     },
     {
       "id": "APX-UI-002",
@@ -1308,7 +1308,7 @@
         "tests/desktop_smoke.cpp",
         "docs/workspace-accessibility.md"
       ],
-      "implementation_note": "Derived floor/layer masks and native presentation/picking filtering pass focused Debug/Release tests. The desktop now applies light, dark, and high-contrast themes and saves/restores bounded local workspace profiles for workspace, units, grid/snap, view, page size, and visibility filters; overview-map state and complete acceptance remain open."
+      "implementation_note": "Derived floor/layer masks and native presentation/picking filtering pass focused Debug/Release tests. The desktop now applies light, dark, and high-contrast themes and saves/restores bounded local workspace profiles for workspace, units, grid/snap, view, page size, and visibility filters; overview-map state persistence and complete acceptance remain open."
     },
     {
       "id": "APX-UI-003",
