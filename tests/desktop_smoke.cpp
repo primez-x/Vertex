@@ -1111,6 +1111,53 @@ void test_contextual_building_dimension_inspector(const QString& capture_directo
     require(window.selectEntity({}) && group->isHidden(), "dimension inspector hides without an object selection");
 }
 
+void test_material_assignment_inspector(const QString& capture_directory) {
+    using namespace sketch;
+    desktop::MainWindow window;
+    auto catalog = Entity::create("assembly_model", {{"version", 1},
+        {"model", AssemblyModel::create({{"timber", "Timber"}, {"steel", "Steel"}}, {}, {}).to_json()}});
+    window.document().apply(ApplyEntityChanges{window.document().revision(), {EntityChange::upsert(catalog)}, {}, "create materials"});
+    const auto id = window.commitBuildingObject(encode_building_entity(RectangularColumn{
+        "assigned-column", {0,0,0}, 0.4,0.4,3,0}), window.document().revision());
+    require(!id.isEmpty() && window.selectEntity(id), "select material-bearing object");
+    auto* choices = window.findChild<QComboBox*>("materialAssignment");
+    auto* apply = window.findChild<QPushButton*>("assignMaterial");
+    require(choices && choices->count() == 3 && !choices->isHidden(), "inspector exposes local catalog materials");
+    const auto before = window.document().snapshot().entities().at(id.toStdString());
+    choices->setCurrentIndex(choices->findText("Timber"));
+    const auto revision = window.document().revision();
+    apply->click();
+    const auto assigned = window.document().snapshot().entities().at(id.toStdString());
+    require(window.document().revision() == revision + 1 &&
+                assigned.properties.at("material_assignment").at("material_id") == "timber" &&
+                assigned.properties.at("material_assignment").at("catalog_id") == catalog.id,
+            "material selection commits the catalog reference");
+    require(window.undoCommand() && window.document().snapshot().entities().at(id.toStdString()) == before &&
+                window.redoCommand(), "material assignment undo/redo");
+    QTemporaryDir directory;
+    require(window.saveProjectAs(directory.filePath("materials.bldproj")) &&
+                window.openProject(directory.filePath("materials.bldproj")) &&
+                window.document().snapshot().entities().at(id.toStdString()) == assigned && window.selectEntity(id),
+            "material assignment persists with geometry");
+    require(choices->currentText() == "Timber", "reopened inspector resolves material name");
+    if (!capture_directory.isEmpty()) {
+        window.resize(1200, 850); window.show(); QApplication::processEvents(); window.fitView();
+        require(window.grab().save(capture_directory + "/material-inspector.png"), "material inspector capture");
+    }
+    choices->setCurrentIndex(choices->findText("Steel"));
+    auto changed = assigned;
+    changed.properties["intervening_note"] = true;
+    window.document().apply(ApplyEntityChanges{window.document().revision(), {EntityChange::upsert(changed)}, {}, "intervening edit"});
+    const auto stale_revision = window.document().revision();
+    apply->click();
+    require(window.document().revision() == stale_revision &&
+                !window.findChild<QLabel*>("materialAssignmentError")->isHidden(), "stale material editor rejects overwrite");
+    require(window.selectEntity(id), "refresh material editor");
+    choices->setCurrentIndex(0); apply->click();
+    require(!window.document().snapshot().entities().at(id.toStdString()).properties.contains("material_assignment"),
+            "None explicitly removes material assignment");
+}
+
 void test_roof_opening_authoring(const QString& capture_directory) {
     using namespace sketch;
     desktop::MainWindow window;
@@ -2256,6 +2303,7 @@ int main(int argc, char** argv) {
     test_contextual_roof_dimension_inspector();
     test_hip_roof_authoring(field_ui_capture_directory);
     test_roof_opening_authoring(field_ui_capture_directory);
+    test_material_assignment_inspector(field_ui_capture_directory);
     test_contextual_gable_roof_inspector(field_ui_capture_directory);
     test_survey_calculator(field_ui_capture_directory);
     test_survey_explicit_endpoint_closure();

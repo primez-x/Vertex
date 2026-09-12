@@ -1,6 +1,7 @@
 #include "sketch/document_schedule_adapter.hpp"
 
 #include "sketch/geometry.hpp"
+#include "sketch/assembly_model.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -156,8 +157,28 @@ void add_room(const Entity& entity, std::vector<ScheduleRecord>& records,
     records.push_back(std::move(record));
 }
 
-void add_material(const Entity& entity, std::vector<ScheduleRecord>& records,
+void add_material(const Entity& entity, const DocumentSnapshot& document,
+                  std::map<std::string, AssemblyModel>& catalogs, std::vector<ScheduleRecord>& records,
                   std::vector<std::string>& diagnostics) {
+    if (entity.properties.contains("material_assignment")) {
+        const auto& assignment = entity.properties.at("material_assignment");
+        const auto catalog_id = assignment.at("catalog_id").get<std::string>();
+        const auto material_id = assignment.at("material_id").get<std::string>();
+        if (!catalogs.contains(catalog_id))
+            catalogs.emplace(catalog_id, AssemblyModel::from_json(
+                document.entities().at(catalog_id).properties.at("model")));
+        const auto& materials = catalogs.at(catalog_id).materials();
+        const auto material = std::find_if(materials.begin(), materials.end(),
+            [&](const auto& candidate) { return candidate.id == material_id; });
+        ScheduleRecord record;
+        record.object_id = entity.id + ":material";
+        record.kind = ScheduleRowKind::material;
+        record.mark = mark_for(entity, "M-", diagnostics);
+        record.properties.emplace("name", material->name);
+        record.properties.emplace("count", std::int64_t{1});
+        records.push_back(std::move(record));
+        return;
+    }
     const auto material = text_field(entity, "material_name");
     const auto volume = finite_field(entity, "volume_m3");
     if (!material && !volume) return;
@@ -180,18 +201,36 @@ DocumentScheduleProjection project_schedules(
     DocumentScheduleProjection result;
     result.snapshot.revision = document.revision();
     std::vector<ScheduleRecord> records;
+    std::map<std::string, AssemblyModel> catalogs;
     for (const auto& [id, entity] : document.entities()) {
         if (visible_entity_ids && !visible_entity_ids->contains(id)) continue;
         if (entity.type == "opening") add_opening(entity, records, result.diagnostics);
         else if (entity.type == "room" || entity.type == "room_boundary")
             add_room(entity, records, result.diagnostics);
-        add_material(entity, records, result.diagnostics);
+        add_material(entity, document, catalogs, records, result.diagnostics);
     }
     try {
         result.snapshot = build_schedule(records, document.revision());
         // Stored room measurements are primitive provenance for gross_area,
         // but the schedule editor only authorizes room names and marks.
         for (auto& row : result.snapshot.rows) {
+            if (row.kind == ScheduleRowKind::material) {
+                constexpr std::string_view suffix = ":material";
+                const auto source_id = row.object_id.substr(0, row.object_id.size() - suffix.size());
+                const auto& source = document.entities().at(source_id);
+                if (source.properties.contains("material_assignment")) {
+                    const auto& assignment = source.properties.at("material_assignment");
+                    auto& name = row.cells.at("name");
+                    name.editable = false;
+                    name.sources = {{source_id, "material_assignment"},
+                        {assignment.at("catalog_id").get<std::string>(), "model"}};
+                    name.explanation = "Assigned material name from the Assembly catalog";
+                    auto& count = row.cells.at("count");
+                    count.editable = false;
+                    count.sources = {{source_id, "material_assignment"}};
+                    count.explanation = "One object with this material assignment; not a volume takeoff";
+                }
+            }
             if (row.kind != ScheduleRowKind::room) continue;
             const auto source_area = row.cells.find("area_m2");
             if (source_area == row.cells.end()) continue;

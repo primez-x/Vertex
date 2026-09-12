@@ -399,7 +399,36 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
             }
         }
     }
+    std::map<std::string, AssemblyModel> material_catalogs;
     for (const auto& [id, entity] : entities) {
+        if (entity.properties.contains("material_assignment")) {
+            try {
+                static constexpr std::array<std::string_view, 9> roles{
+                    "wall", "opening", "room", "room_boundary", "slab", "roof", "stair", "column", "beam"};
+                if (std::find(roles.begin(), roles.end(), entity.type) == roles.end())
+                    document_error(DocumentErrorCode::invalid_entity, "Material assignment requires an architectural object");
+                const auto& assignment = entity.properties.at("material_assignment");
+                if (!assignment.is_object() || !assignment.at("version").is_number_integer() ||
+                    assignment.at("version") != 1 || !assignment.at("catalog_id").is_string() ||
+                    !assignment.at("material_id").is_string())
+                    document_error(DocumentErrorCode::invalid_entity, "Invalid material assignment");
+                const auto catalog_id = assignment.at("catalog_id").get<std::string>();
+                const auto material_id = assignment.at("material_id").get<std::string>();
+                const auto catalog = entities.find(catalog_id);
+                if (catalog == entities.end())
+                    document_error(DocumentErrorCode::dangling_reference, "Material assignment references a missing catalog");
+                if (catalog->second.type != "assembly_model")
+                    document_error(DocumentErrorCode::invalid_entity, "Material assignment target is not an assembly catalog");
+                if (!material_catalogs.contains(catalog_id))
+                    material_catalogs.emplace(catalog_id, AssemblyModel::from_json(catalog->second.properties.at("model")));
+                const auto& materials = material_catalogs.at(catalog_id).materials();
+                if (std::none_of(materials.begin(), materials.end(), [&](const auto& material) { return material.id == material_id; }))
+                    document_error(DocumentErrorCode::dangling_reference, "Material assignment references a missing material");
+            } catch (const DocumentError&) { throw; }
+            catch (const std::exception& error) {
+                document_error(DocumentErrorCode::invalid_entity, std::string("Invalid material assignment: ") + error.what());
+            }
+        }
         if (entity.type == "model_phases") {
             try {
                 const auto model = ModelPhases::from_json(entity.properties.at("model"));

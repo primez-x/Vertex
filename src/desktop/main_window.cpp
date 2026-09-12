@@ -10996,6 +10996,47 @@ private:
         m_inspector_context = new QLabel(inspector_body);
         m_inspector_context->setWordWrap(true);
         inspector_layout->addWidget(m_inspector_context);
+        m_material_group = new QWidget(inspector_body);
+        auto* material_layout = new QVBoxLayout(m_material_group);
+        material_layout->setContentsMargins(0, 0, 0, 0);
+        auto* material_row = new QHBoxLayout;
+        material_row->addWidget(new QLabel("Material", m_material_group));
+        m_material_combo = new QComboBox(m_material_group);
+        m_material_combo->setObjectName("materialAssignment");
+        m_material_combo->setAccessibleName("Assigned material");
+        m_material_combo->setMinimumWidth(0);
+        m_material_combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        m_material_combo->setToolTip("Materials are managed in the Assembly catalog.");
+        material_row->addWidget(m_material_combo, 1);
+        auto* apply_material = new QPushButton("Apply", m_material_group);
+        apply_material->setObjectName("assignMaterial");
+        material_row->addWidget(apply_material);
+        material_layout->addLayout(material_row);
+        m_material_error = new QLabel(m_material_group);
+        m_material_error->setObjectName("materialAssignmentError");
+        m_material_error->setWordWrap(true);
+        material_layout->addWidget(m_material_error);
+        inspector_layout->addWidget(m_material_group);
+        QObject::connect(apply_material, &QPushButton::clicked, owner, [this] {
+            try {
+                if (!m_material_context || !modalContextUnchanged(*m_material_context))
+                    throw std::invalid_argument("Material editing context changed. Reselect the object.");
+                auto candidate = selectedEntity();
+                if (!candidate) throw std::invalid_argument("Select an architectural object.");
+                const auto prior = candidate->properties.value("material_assignment", json{});
+                const auto encoded = m_material_combo->currentData().toString();
+                if (encoded.isEmpty()) candidate->properties.erase("material_assignment");
+                else candidate->properties["material_assignment"] = json::parse(encoded.toStdString());
+                if (candidate->properties.value("material_assignment", json{}) == prior) { m_material_error->hide(); return; }
+                applyDocumentCommand(ApplyEntityChanges{m_material_context->revision,
+                    {EntityChange::upsert(*candidate)}, {}, "assign material"});
+                clearError();
+                refresh();
+            } catch (const std::exception& error) {
+                m_material_error->setText(QString::fromUtf8(error.what()));
+                m_material_error->show();
+            }
+        });
         m_edit_object_button = new QPushButton(QStringLiteral("Edit object…"), inspector_body);
         m_edit_object_button->setObjectName(QStringLiteral("editBuildingObject"));
         inspector_layout->addWidget(m_edit_object_button);
@@ -12488,6 +12529,34 @@ private:
         const bool project_entity = entity.has_value() && entity->type == "property";
         const bool area_entity = entity.has_value() && is_closed_boundary_entity(entity->type);
         const bool building_object = entity && can_recognize_building_entity_type(entity->type);
+        const bool material_object = wall || opening || slab || building_object ||
+            (entity && (entity->type == "room" || entity->type == "room_boundary"));
+        m_material_group->setVisible(material_object);
+        m_material_group->setEnabled(material_object && m_document->is_editable());
+        m_material_error->hide();
+        m_material_context.reset();
+        if (material_object) {
+            m_material_context = captureModalContext();
+            QSignalBlocker blocker(m_material_combo);
+            m_material_combo->clear();
+            m_material_combo->addItem("None", QString{});
+            const auto assignment = entity->properties.value("material_assignment", json{});
+            for (const auto& [catalog_id, catalog] : inspector_snapshot.entities()) {
+                if (catalog.type != "assembly_model") continue;
+                const auto model = AssemblyModel::from_json(catalog.properties.at("model"));
+                for (const auto& material : model.materials()) {
+                    const json value{{"version", 1}, {"catalog_id", catalog_id}, {"material_id", material.id}};
+                    m_material_combo->addItem(QString::fromStdString(material.name), QString::fromStdString(value.dump()));
+                    const auto index = m_material_combo->count() - 1;
+                    m_material_combo->setItemData(index,
+                        QStringLiteral("%1 / %2").arg(QString::fromStdString(catalog_id),
+                            QString::fromStdString(material.id)), Qt::ToolTipRole);
+                    if (assignment.is_object() && assignment.value("catalog_id", std::string{}) == catalog_id &&
+                        assignment.value("material_id", std::string{}) == material.id)
+                        m_material_combo->setCurrentIndex(index);
+                }
+            }
+        }
         const auto building_form = building_object
             ? read_string(entity->properties, "form") : std::optional<std::string>{};
         const bool sloped_roof_panel = building_object && entity->type == "roof" &&
@@ -13726,6 +13795,10 @@ private:
     std::vector<BuildingDimensionField> m_building_dimensions;
     std::vector<BuildingDimensionField> m_building_placement;
     std::optional<ModalContext> m_building_edit_context;
+    QWidget* m_material_group{};
+    QComboBox* m_material_combo{};
+    QLabel* m_material_error{};
+    std::optional<ModalContext> m_material_context;
     QGroupBox* m_roof_properties_group{};
     QLineEdit* m_roof_run_edit{};
     QLabel* m_roof_run_label{};

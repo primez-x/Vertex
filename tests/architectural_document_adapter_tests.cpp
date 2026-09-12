@@ -17,8 +17,41 @@ void rejects(F&& function) {
 }
 }
 
+void test_material_assignments() {
+    using namespace sketch;
+    auto catalog = Entity::create("assembly_model", {{"version", 1},
+        {"model", AssemblyModel::create({{"wood", "Wood"}}, {}, {}).to_json()}});
+    catalog.id = "material-catalog";
+    auto wall = Entity::create("wall", {{"height_m", 3.0}, {"material_assignment",
+        {{"version", 1}, {"catalog_id", catalog.id}, {"material_id", "wood"}}}});
+    wall.id = "material-wall";
+    auto document = Document::create({catalog, wall});
+    const auto original = document.snapshot();
+    rejects([&] { document.apply(ApplyEntityChanges{document.revision(), {EntityChange::erase(catalog.id)}, {}, "remove catalog"}); });
+    auto empty = catalog;
+    empty.properties["model"] = AssemblyModel::create({}, {}, {}).to_json();
+    rejects([&] { document.apply(ApplyEntityChanges{document.revision(), {EntityChange::upsert(empty)}, {}, "remove referenced material"}); });
+    auto invalid = wall;
+    invalid.properties["material_assignment"]["version"] = 2;
+    rejects([&] { document.apply(ApplyEntityChanges{document.revision(), {EntityChange::upsert(invalid)}, {}, "unknown assignment version"}); });
+    require(document.snapshot().entities() == original.entities() && document.revision() == original.revision(),
+        "invalid material changes must be atomic");
+    auto detached = wall;
+    detached.properties.erase("material_assignment");
+    document.apply(ApplyEntityChanges{document.revision(),
+        {EntityChange::upsert(detached), EntityChange::erase(catalog.id)}, {}, "detach and remove catalog"});
+    document.undo(document.revision());
+    require(document.snapshot().entities() == original.entities(), "material references restore with undo");
+    const auto path = std::filesystem::temp_directory_path() / "sketch-material-reference.bldproj";
+    (void)ProjectStore::save(path, document.snapshot());
+    const auto reopened = ProjectStore::load(path).document;
+    require(reopened.snapshot().entities() == original.entities(), "material references save and reopen");
+    std::filesystem::remove(path);
+}
+
 int main() {
     try {
+        test_material_assignments();
         using namespace sketch;
         auto wall = Entity::create("wall", {{"height_m", 3.0}});
         wall.id = "wall-a";

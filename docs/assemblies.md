@@ -45,7 +45,26 @@ changes are rejected without partial mutation. The list views show the stored
 defaults and overrides, including values that intentionally equal their type
 default.
 
-Geometry bindings and placement, quantity takeoff integration, nested
+Architectural objects can now reference a catalog material directly from the
+inspector. The optional entity property `material_assignment` contains integer
+`version: 1`, `catalog_id` (the `assembly_model` entity ID), and `material_id`
+(the catalog's internal material ID). Walls, openings, rooms and room boundaries,
+slabs, roofs, stairs, columns, and beams support this binding. Document validation
+rejects unsupported versions, unsupported object roles, and missing targets.
+Removing a referenced material or catalog requires detaching its users in the
+same atomic command. Assignment and removal use normal revision-checked history
+and survive project save/reopen. This does not bind objects to assembly instances.
+
+Material schedules resolve the current catalog name and report one assigned
+object per row. Names and counts are read-only with source provenance; renaming
+the catalog material updates derived rows. Visibility filtering applies to the
+object, even if the catalog itself is outside the view. Assigned objects do not
+reuse legacy authored `volume_m3` as a computed material quantity. Unassigned
+legacy material rows retain their existing authored name/volume behavior.
+The catalog currently supplies names, not appearance or physical properties;
+assignment does not change 3D shading or calculate material volume.
+
+Assembly geometry bindings and placement, quantity takeoff integration, nested
 assemblies, material physical properties, and publication workflows remain
 open. Semantic snapshot restoration plus the desktop history checks do not
 establish full production assembly qualification.

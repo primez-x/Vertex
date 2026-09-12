@@ -1,4 +1,5 @@
 #include "sketch/document_schedule_adapter.hpp"
+#include "sketch/assembly_model.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -142,11 +143,42 @@ void test_visibility_uses_source_entities_for_material_rows() {
             "an empty visibility mask must produce no schedule rows");
 }
 
+void test_assigned_material_schedule() {
+    using namespace sketch;
+    auto catalog = entity("catalog", "assembly_model", {{"version", 1},
+        {"model", AssemblyModel::create({{"timber", "Timber"}}, {}, {}).to_json()}});
+    auto column = entity("column", "column", {{"mark", "C1"},
+        {"material_name", "Old label"}, {"volume_m3", 99.0},
+        {"material_assignment", {{"version", 1}, {"catalog_id", "catalog"}, {"material_id", "timber"}}}});
+    auto document = Document::create({catalog, column});
+    const auto projection = build_document_schedules(document.snapshot(), {"column"});
+    require(projection.snapshot.rows.size() == 1 && projection.diagnostics.empty(),
+        "assigned materials must resolve even when their catalog is outside the visibility mask");
+    const auto& row = projection.snapshot.rows.front();
+    require(std::get<std::string>(row.cells.at("name").value) == "Timber" &&
+        std::get<std::int64_t>(row.cells.at("count").value) == 1 && !row.cells.contains("volume"),
+        "assignment must produce current catalog name and object count without claiming legacy volume");
+    require(!row.cells.at("name").editable && row.cells.at("name").sources.size() == 2 &&
+        !row.cells.at("count").editable, "material identity and count must retain read-only provenance");
+    bool rejected = false;
+    try { (void)make_schedule_edit(projection.snapshot, row.object_id, "name", std::string("Wrong")); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected, "schedule must not rename a catalog material through a legacy property");
+    catalog.properties["model"] = AssemblyModel::create({{"timber", "Structural timber"}}, {}, {}).to_json();
+    document.apply(ApplyEntityChanges{document.revision(), {EntityChange::upsert(catalog)}, {}, "rename material"});
+    require(std::get<std::string>(build_document_schedules(document.snapshot()).snapshot.rows.front().cells.at("name").value)
+        == "Structural timber", "catalog renaming must update the derived schedule");
+    document.undo(document.revision());
+    require(build_document_schedules(document.snapshot()).snapshot.rows == projection.snapshot.rows,
+        "undo must restore material schedule values");
+}
+
 }  // namespace
 
 int main() {
     try {
         test_revision_and_opening_schedule();
+        test_assigned_material_schedule();
         test_room_area_and_invalid_rows_are_explicit();
         test_edit_is_a_document_command_with_revision_and_undo_semantics();
         test_visibility_uses_source_entities_for_material_rows();
