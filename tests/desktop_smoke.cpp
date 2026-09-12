@@ -1031,6 +1031,60 @@ void test_contextual_roof_dimension_inspector() {
             "contextual roof edits and metadata must survive save and reopen exactly");
 }
 
+void test_contextual_gable_roof_inspector(const QString& capture_directory) {
+    using namespace sketch;
+    desktop::MainWindow window;
+    auto source = encode_building_entity(GableRoof{
+        "context-gable", {1, 2, 4}, 0.2, 6, 4, 1, std::atan(0.5), 0.2, 0.1},
+        {{"future_roof_metadata", "retain"}});
+    desktop::BuildingObjectDialog exact(source, true);
+    exact.findChild<QLineEdit*>("buildingObjectLength")->setText("31/3 ft");
+    require(exact.submit() && exact.candidate(), "gable exact-length fixture");
+    const auto id = window.commitBuildingObject(*exact.candidate(), window.document().revision());
+    require(!id.isEmpty() && window.selectEntity(id), "select contextual gable fixture");
+    auto* group = window.findChild<QGroupBox*>("roofProperties");
+    auto* span = window.findChild<QLineEdit*>("roofSpan");
+    auto* rise = window.findChild<QLineEdit*>("roofRise");
+    auto* overhang = window.findChild<QLineEdit*>("roofOverhang");
+    auto* apply = window.findChild<QPushButton*>("applyRoofProperties");
+    require(group && !group->isHidden() && span && rise && overhang && apply,
+            "gable selection must expose dimensions directly in the inspector");
+    if (!capture_directory.isEmpty()) {
+        window.resize(1366, 768);
+        require(window.grab().save(capture_directory + QStringLiteral("/gable-inspector.png")),
+                "capture contextual gable inspector for visual review");
+    }
+    const auto before = window.document().snapshot().entities().at(id.toStdString());
+    const auto revision = window.document().revision();
+    span->setText("6 m");
+    rise->setText("2 m");
+    overhang->setText("300 mm");
+    apply->click();
+    const auto edited = window.document().snapshot().entities().at(id.toStdString());
+    require(window.document().revision() == revision + 1 && edited.properties.at("span_m") == 6.0 &&
+                edited.properties.at("rise_m") == 2.0 && edited.properties.at("overhang_m") == 0.3 &&
+                std::abs(edited.properties.at("pitch_rad").get<double>() - std::atan(2.0 / 3.0)) < 1e-12,
+            "gable pitch must derive from half-span in one compound dimension edit");
+    require(edited.extensions == before.extensions &&
+                edited.properties.at("length_m") == before.properties.at("length_m") &&
+                edited.properties.at("quantity_entries").at("/length_m") ==
+                    before.properties.at("quantity_entries").at("/length_m"),
+            "gable inspector must retain untouched exact length and opaque metadata");
+    require(window.undoCommand() && window.document().snapshot().entities().at(id.toStdString()) == before &&
+                window.redoCommand() && window.document().snapshot().entities().at(id.toStdString()) == edited,
+            "gable inspector dimensions must undo and redo exactly");
+    rise->setText("0 m");
+    const auto invalid_revision = window.document().revision();
+    apply->click();
+    require(window.document().revision() == invalid_revision && !window.lastError().isEmpty(),
+            "gable roof must reject zero rise instead of creating an invalid ridge");
+    QTemporaryDir directory;
+    require(directory.isValid() && window.saveProjectAs(directory.filePath("gable.bldproj")) &&
+                window.openProject(directory.filePath("gable.bldproj")) &&
+                window.document().snapshot().entities().at(id.toStdString()) == edited,
+            "gable inspector geometry and quantity provenance must survive save/reopen");
+}
+
 void test_design_phase_workflow() {
     using namespace sketch;
     desktop::MainWindow window;
@@ -1646,6 +1700,7 @@ int main(int argc, char** argv) {
     test_assembly_catalog_workflow();
     test_calculation_deduction_workflow();
     test_contextual_roof_dimension_inspector();
+    test_contextual_gable_roof_inspector(field_ui_capture_directory);
     {
         QTemporaryDir stamp_directory;
         require(stamp_directory.isValid(), "stamp test directory should be available");

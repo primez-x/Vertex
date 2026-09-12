@@ -10,8 +10,8 @@ row remains readable at 1366 px. Project identity is represented by the native
 window title and its unsaved marker, leaving the canvas the first visible
 content below the toolbar.
 
-The Inspector is contextual. Selecting a sloped or flat roof panel exposes
-run, rise, thickness, and derived pitch in place, with one explicit Apply
+The Inspector is contextual. Selecting a sloped, flat, or gable roof exposes
+run (gable length), span, rise, overhang, thickness, and derived pitch in place, with one explicit Apply
 action. A zero rise is shown as a flat panel; invalid values stay in the
 inspector and do not create a history entry. The fields use the same quantity
 parser and atomic document command as the full building-object editor, so

@@ -109,14 +109,17 @@ There is no editable pitch control, so the dialog cannot submit an inconsistent
 pitch/rise pair.  Gable roofs still require a positive rise and pitch.
 
 The main-window Inspector reuses this same editor path for a selected
-`sloped_roof_panel`. Its `roofProperties` group exposes `roofRun`, `roofRise`,
+`sloped_roof_panel` or `gable_roof`. Its `roofProperties` group exposes run
+(labelled Length for a gable), span, rise, overhang, thickness, and derived
+pitch through `roofRun`, `roofSpan`, `roofRise`, `roofOverhang`,
 `roofThickness`, `roofPitch`, and `applyRoofProperties` without opening a
 second dialog. Populating the group captures the document, revision, selection,
 drawing layer, and units. Applying rejects a changed context before parsing
 changed fields and committing one replacement command. Negative rise,
 zero run, zero thickness, malformed quantities, read-only documents, and stale
-revisions are rejected without mutating history. The group is hidden for gable
-roofs and non-roof selections.
+revisions are rejected without mutating history. Gables require positive rise
+and derive pitch from half the full span; panels allow zero rise and use the
+run. The group is hidden for unsupported forms and non-roof selections.
 
 For editing, the constructor first decodes and validates the original entity.
 Malformed or unsupported originals show an inline error and disable Submit.

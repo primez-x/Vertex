@@ -6506,8 +6506,10 @@ public:
         }
     }
 
-    bool editSelectedRoofPanelDimensions(const QString& run_text,
+    bool editSelectedRoofDimensions(const QString& run_text,
+                                         const QString& span_text,
                                          const QString& rise_text,
+                                         const QString& overhang_text,
                                          const QString& thickness_text) {
         if (!m_roof_edit_context || !modalContextUnchanged(*m_roof_edit_context)) {
             setError(QStringLiteral("The roof editing context changed. Reselect the roof before applying dimensions."));
@@ -6515,10 +6517,11 @@ public:
         }
         const auto context = *m_roof_edit_context;
         const auto original = selectedEntity();
+        const auto form = original ? read_string(original->properties, "form") : std::nullopt;
+        const bool gable = form == std::optional<std::string>("gable_roof");
         if (!original || original->type != "roof" ||
-            read_string(original->properties, "form") !=
-                std::optional<std::string>("sloped_roof_panel")) {
-            setError(QStringLiteral("Select a sloped roof panel before applying roof dimensions."));
+            (!gable && form != std::optional<std::string>("sloped_roof_panel"))) {
+            setError(QStringLiteral("Select a supported roof before applying dimensions."));
             return false;
         }
         try {
@@ -6538,8 +6541,11 @@ public:
             };
             // Leave untouched dialog fields at their decoded values so the
             // existing quantity-receipt merge preserves exact expressions.
-            set_if_changed("buildingObjectRun", run_text, m_roof_run_original_text);
+            set_if_changed(gable ? "buildingObjectLength" : "buildingObjectRun",
+                           run_text, m_roof_run_original_text);
+            set_if_changed("buildingObjectSpan", span_text, m_roof_span_original_text);
             set_if_changed("buildingObjectRise", rise_text, m_roof_rise_original_text);
+            set_if_changed("buildingObjectOverhang", overhang_text, m_roof_overhang_original_text);
             set_if_changed("buildingObjectThickness", thickness_text,
                            m_roof_thickness_original_text);
             if (!dialog.submit()) {
@@ -10484,11 +10490,21 @@ private:
         m_roof_run_edit = new QLineEdit(m_roof_properties_group);
         m_roof_run_edit->setObjectName(QStringLiteral("roofRun"));
         m_roof_run_edit->setToolTip(QStringLiteral("Horizontal run of the selected sloped panel"));
-        roof_properties_form->addRow(QStringLiteral("Run"), m_roof_run_edit);
+        m_roof_run_label = new QLabel(QStringLiteral("Run"), m_roof_properties_group);
+        m_roof_run_label->setBuddy(m_roof_run_edit);
+        roof_properties_form->addRow(m_roof_run_label, m_roof_run_edit);
+        m_roof_span_edit = new QLineEdit(m_roof_properties_group);
+        m_roof_span_edit->setObjectName(QStringLiteral("roofSpan"));
+        m_roof_span_edit->setToolTip(QStringLiteral("Full horizontal width across the roof"));
+        roof_properties_form->addRow(QStringLiteral("Span"), m_roof_span_edit);
         m_roof_rise_edit = new QLineEdit(m_roof_properties_group);
         m_roof_rise_edit->setObjectName(QStringLiteral("roofRise"));
         m_roof_rise_edit->setToolTip(QStringLiteral("Rise; enter zero for a flat roof"));
         roof_properties_form->addRow(QStringLiteral("Rise"), m_roof_rise_edit);
+        m_roof_overhang_edit = new QLineEdit(m_roof_properties_group);
+        m_roof_overhang_edit->setObjectName(QStringLiteral("roofOverhang"));
+        m_roof_overhang_edit->setToolTip(QStringLiteral("Horizontal extension beyond the roof footprint"));
+        roof_properties_form->addRow(QStringLiteral("Overhang"), m_roof_overhang_edit);
         m_roof_thickness_edit = new QLineEdit(m_roof_properties_group);
         m_roof_thickness_edit->setObjectName(QStringLiteral("roofThickness"));
         m_roof_thickness_edit->setToolTip(QStringLiteral("Panel thickness measured normal to the roof"));
@@ -10504,8 +10520,10 @@ private:
         m_roof_properties_group->setVisible(false);
         inspector_layout->addWidget(m_roof_properties_group);
         QObject::connect(m_apply_roof_properties_button, &QPushButton::clicked, owner, [this] {
-            (void)editSelectedRoofPanelDimensions(m_roof_run_edit->text(),
+            (void)editSelectedRoofDimensions(m_roof_run_edit->text(),
+                                                   m_roof_span_edit->text(),
                                                    m_roof_rise_edit->text(),
+                                                   m_roof_overhang_edit->text(),
                                                    m_roof_thickness_edit->text());
         });
         m_delete_annotation_button = new QPushButton(QStringLiteral("Delete annotation"), inspector_body);
@@ -11873,6 +11891,8 @@ private:
             ? read_string(entity->properties, "form") : std::optional<std::string>{};
         const bool sloped_roof_panel = building_object && entity->type == "roof" &&
             building_form.has_value() && *building_form == "sloped_roof_panel";
+        const bool gable_roof = building_object && entity->type == "roof" &&
+            building_form.has_value() && *building_form == "gable_roof";
         const bool editable_geometry = wall || opening || slab ||
             (entity && is_closed_boundary_entity(entity->type));
         m_edit_object_button->setVisible(building_object);
@@ -12125,10 +12145,16 @@ private:
             context = QStringLiteral("Roof\n%1").arg(roof_label);
         }
         m_inspector_context->setText(context);
-        if (sloped_roof_panel) {
+        if (sloped_roof_panel || gable_roof) {
             m_roof_edit_context = captureModalContext();
             m_roof_properties_group->setVisible(true);
             m_roof_properties_group->setEnabled(editable);
+            m_roof_run_label->setText(gable_roof ? QStringLiteral("Length") : QStringLiteral("Run"));
+            m_roof_run_edit->setAccessibleName(m_roof_run_label->text());
+            m_roof_run_edit->setToolTip(gable_roof ? QStringLiteral("Length along the ridge")
+                                                 : QStringLiteral("Horizontal run along the slope"));
+            m_roof_rise_edit->setToolTip(gable_roof ? QStringLiteral("Positive ridge height above the eaves")
+                                                  : QStringLiteral("Rise; enter zero for a flat roof"));
             const auto set_roof_value = [&](QLineEdit* field, QString& original_text,
                                             double value) {
                 QSignalBlocker blocker(field);
@@ -12137,9 +12163,13 @@ private:
                 original_text = field->text();
             };
             set_roof_value(m_roof_run_edit, m_roof_run_original_text,
-                           read_number(entity->properties, "run_m", 0.0));
+                           read_number(entity->properties, gable_roof ? "length_m" : "run_m", 0.0));
+            set_roof_value(m_roof_span_edit, m_roof_span_original_text,
+                           read_number(entity->properties, "span_m", 0.0));
             set_roof_value(m_roof_rise_edit, m_roof_rise_original_text,
                            read_number(entity->properties, "rise_m", 0.0));
+            set_roof_value(m_roof_overhang_edit, m_roof_overhang_original_text,
+                           read_number(entity->properties, "overhang_m", 0.0));
             set_roof_value(m_roof_thickness_edit, m_roof_thickness_original_text,
                            read_number(entity->properties, "thickness_m", 0.0));
             const auto pitch = read_number(entity->properties, "pitch_rad", 0.0);
@@ -13034,11 +13064,16 @@ private:
     QPushButton* m_apply_project_details_button{};
     QGroupBox* m_roof_properties_group{};
     QLineEdit* m_roof_run_edit{};
+    QLabel* m_roof_run_label{};
+    QLineEdit* m_roof_span_edit{};
+    QLineEdit* m_roof_overhang_edit{};
     QLineEdit* m_roof_rise_edit{};
     QLineEdit* m_roof_thickness_edit{};
     QLabel* m_roof_pitch_value{};
     QPushButton* m_apply_roof_properties_button{};
     QString m_roof_run_original_text;
+    QString m_roof_span_original_text;
+    QString m_roof_overhang_original_text;
     QString m_roof_rise_original_text;
     QString m_roof_thickness_original_text;
     std::optional<ModalContext> m_roof_edit_context;
