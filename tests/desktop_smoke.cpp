@@ -4,6 +4,7 @@
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
 #include "sketch/assembly_model.hpp"
+#include "sketch/vertical_levels.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/desktop/building_object_dialog.hpp"
@@ -689,6 +690,70 @@ void test_assembly_catalog_workflow() {
             "assembly instance type should survive project reopen");
 }
 
+void test_vertical_levels_workflow() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    auto* action = window.findChild<QAction*>(QStringLiteral("verticalLevels"));
+    require(action, "vertical levels should be discoverable from the workspace actions");
+
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("verticalLevelsDialog"));
+        require(dialog, "vertical levels editor should open from the workspace action");
+        auto* levels = dialog->findChild<QListWidget*>(QStringLiteral("verticalLevelList"));
+        auto* level_id = dialog->findChild<QLineEdit*>(QStringLiteral("verticalLevelId"));
+        auto* elevation = dialog->findChild<QLineEdit*>(QStringLiteral("verticalLevelElevation"));
+        auto* save_level = dialog->findChild<QPushButton*>(QStringLiteral("saveVerticalLevel"));
+        auto* links = dialog->findChild<QListWidget*>(QStringLiteral("verticalLinkList"));
+        auto* link_id = dialog->findChild<QLineEdit*>(QStringLiteral("verticalLinkId"));
+        auto* lower = dialog->findChild<QComboBox*>(QStringLiteral("verticalLinkLower"));
+        auto* upper = dialog->findChild<QComboBox*>(QStringLiteral("verticalLinkUpper"));
+        auto* save_link = dialog->findChild<QPushButton*>(QStringLiteral("saveVerticalLink"));
+        auto* freeze = dialog->findChild<QPushButton*>(QStringLiteral("freezeVerticalLink"));
+        require(levels && level_id && elevation && save_level && links && link_id && lower && upper &&
+                    save_link && freeze,
+                "vertical levels editor should expose level and link controls");
+        level_id->setText(QStringLiteral("ground"));
+        elevation->setText(QStringLiteral("0"));
+        save_level->click();
+        level_id->setText(QStringLiteral("first"));
+        elevation->setText(QStringLiteral("3"));
+        save_level->click();
+        require(levels->count() == 2, "vertical levels editor should create levels through document history");
+        link_id->setText(QStringLiteral("ground-first"));
+        lower->setCurrentIndex(lower->findData(QStringLiteral("ground")));
+        upper->setCurrentIndex(upper->findData(QStringLiteral("first")));
+        save_link->click();
+        require(links->count() == 1, "vertical levels editor should create a floor-to-floor link");
+        links->setCurrentRow(0);
+        freeze->click();
+        require(links->item(0)->text().contains(QStringLiteral("frozen")),
+                "vertical levels editor should retain a frozen link state");
+        dialog->reject();
+    });
+    action->trigger();
+
+    const auto find_model = [&] {
+        const auto snapshot = window.document().snapshot();
+        const auto found = std::find_if(snapshot.entities().begin(), snapshot.entities().end(),
+            [](const auto& entry) { return entry.second.type == "vertical_levels"; });
+        require(found != snapshot.entities().end(), "vertical levels editor should persist its graph");
+        return VerticalLevelGraph::from_json(found->second.properties.at("model"));
+    };
+    auto model = find_model();
+    require(model.levels().size() == 2 && model.links().size() == 1 &&
+                model.floor_to_floor_height("ground-first") == 3 &&
+                model.links().front().state == RelationshipState::frozen,
+            "vertical levels editor should preserve elevations and frozen link provenance");
+    QTemporaryDir directory;
+    require(directory.isValid(), "vertical levels fixture needs a temporary directory");
+    const auto path = directory.filePath(QStringLiteral("levels.bldproj"));
+    require(window.saveProjectAs(path) && window.openProject(path),
+            "vertical levels should save and reopen through the project store");
+    model = find_model();
+    require(model.levels().size() == 2 && model.links().front().state == RelationshipState::frozen,
+            "vertical level graph should survive project reopen");
+}
+
 void test_calculation_deduction_workflow() {
     using namespace sketch;
     desktop::MainWindow window;
@@ -785,6 +850,7 @@ int main(int argc, char** argv) {
     test_shortcuts_and_measurement_keypad(field_ui_capture_directory);
     test_design_phase_workflow();
     test_room_relationship_workflow();
+    test_vertical_levels_workflow();
     test_assembly_catalog_workflow();
     test_calculation_deduction_workflow();
     {

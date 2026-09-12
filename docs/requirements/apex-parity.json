@@ -760,11 +760,13 @@
         "include/sketch/vertical_levels.hpp",
         "src/core/vertical_levels.cpp",
         "src/core/document.cpp",
+        "src/desktop/main_window.cpp",
         "tests/vertical_levels_tests.cpp",
+        "tests/desktop_smoke.cpp",
         "tests/document_tests.cpp",
         "docs/vertical-levels.md"
       ],
-      "implementation_note": "A validated vertical level graph with connected, frozen, and disconnected floor-to-floor links now has strict version-1 JSON decoding and Document admission through the vertical_levels entity; desktop editing and plan/section/3D propagation remain open."
+      "implementation_note": "A validated vertical level graph with connected, frozen, and disconnected floor-to-floor links now has strict version-1 JSON decoding, Document admission through the vertical_levels entity, and a Windows Levels editor for revision-checked create/edit/link/freeze/disconnect operations; plan/section/3D propagation remains open."
     },
     {
       "id": "APX-WF-001",

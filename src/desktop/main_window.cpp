@@ -34,6 +34,7 @@
 #include "sketch/assistance_engine.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/annotation_entity_codec.hpp"
+#include "sketch/vertical_levels.hpp"
 #include "sketch/visualization/native_model_view.hpp"
 
 #include <QAction>
@@ -908,6 +909,11 @@ struct AssemblyModelRecord {
     AssemblyModel model;
 };
 
+struct VerticalLevelRecord {
+    std::string entity_id;
+    VerticalLevelGraph model;
+};
+
 QString assembly_quantity_unit_label(AssemblyQuantityUnit unit) {
     switch (unit) {
     case AssemblyQuantityUnit::count: return QStringLiteral("count");
@@ -967,6 +973,19 @@ std::optional<AssemblyModelRecord> decode_assembly_model(
         }
         return AssemblyModelRecord{
             id, AssemblyModel::from_json(entity.properties.at("model"))};
+    }
+    return std::nullopt;
+}
+
+std::optional<VerticalLevelRecord> decode_vertical_levels(
+    const DocumentSnapshot& snapshot) {
+    for (const auto& [id, entity] : snapshot.entities()) {
+        if (entity.type != "vertical_levels") continue;
+        if (!entity.properties.contains("model")) {
+            throw std::invalid_argument("The vertical level record has no model payload.");
+        }
+        return VerticalLevelRecord{
+            id, VerticalLevelGraph::from_json(entity.properties.at("model"))};
     }
     return std::nullopt;
 }
@@ -2555,6 +2574,373 @@ public:
         } catch (const std::exception& error) {
             setError(QStringLiteral("Assemblies: %1").arg(QString::fromUtf8(error.what())));
             return false;
+        }
+    }
+
+    bool ensureVerticalLevelRecord() {
+        try {
+            const auto source = authoringSnapshot();
+            if (decode_vertical_levels(source).has_value()) return true;
+            const auto model = VerticalLevelGraph{};
+            auto entity = Entity::create("vertical_levels", {
+                {"model", json::parse(model.serialize())}});
+            entity.id = new_id("vertical-levels");
+            const ApplyEntityChanges command{
+                source.revision(), {EntityChange::upsert(std::move(entity))}, {},
+                "Create vertical level graph"};
+            (void)Document::preview_command(source, Command{command});
+            applyDocumentCommand(Command{command});
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Levels: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    bool applyVerticalLevelGraph(const VerticalLevelGraph& model, const QString& message) {
+        try {
+            if (!m_document->is_editable()) {
+                throw std::invalid_argument("This document is read-only.");
+            }
+            const auto source = authoringSnapshot();
+            const auto record = decode_vertical_levels(source);
+            if (!record) throw std::invalid_argument("The vertical level graph is unavailable.");
+            auto entity = source.entities().at(record->entity_id);
+            entity.properties["model"] = json::parse(model.serialize());
+            const ApplyEntityChanges command{
+                source.revision(), {EntityChange::upsert(std::move(entity))}, {},
+                message.toStdString()};
+            (void)Document::preview_command(source, Command{command});
+            applyDocumentCommand(Command{command});
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Levels: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    void showVerticalLevels() {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return;
+        }
+        if (!ensureVerticalLevelRecord()) return;
+        try {
+            QDialog dialog(owner);
+            styleDialog(dialog);
+            dialog.setObjectName(QStringLiteral("verticalLevelsDialog"));
+            dialog.setWindowTitle(QStringLiteral("Levels and floor-to-floor links"));
+            dialog.setModal(true);
+            dialog.resize(820, 570);
+
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* columns = new QHBoxLayout;
+
+            auto* level_panel = new QVBoxLayout;
+            level_panel->addWidget(new QLabel(QStringLiteral("Levels (metres)"), &dialog));
+            auto* levels = new QListWidget(&dialog);
+            levels->setObjectName(QStringLiteral("verticalLevelList"));
+            levels->setSelectionMode(QAbstractItemView::SingleSelection);
+            level_panel->addWidget(levels, 1);
+            auto* level_form = new QFormLayout;
+            auto* level_id = new QLineEdit(&dialog);
+            level_id->setObjectName(QStringLiteral("verticalLevelId"));
+            level_id->setPlaceholderText(QStringLiteral("Stable level ID"));
+            auto* level_elevation = new QLineEdit(&dialog);
+            level_elevation->setObjectName(QStringLiteral("verticalLevelElevation"));
+            level_elevation->setPlaceholderText(QStringLiteral("Elevation in metres"));
+            level_form->addRow(QStringLiteral("ID"), level_id);
+            level_form->addRow(QStringLiteral("Elevation"), level_elevation);
+            level_panel->addLayout(level_form);
+            auto* level_buttons = new QHBoxLayout;
+            auto* save_level = new QPushButton(QStringLiteral("Save level"), &dialog);
+            save_level->setObjectName(QStringLiteral("saveVerticalLevel"));
+            auto* remove_level = new QPushButton(QStringLiteral("Remove level"), &dialog);
+            remove_level->setObjectName(QStringLiteral("removeVerticalLevel"));
+            level_buttons->addWidget(save_level);
+            level_buttons->addWidget(remove_level);
+            level_buttons->addStretch(1);
+            level_panel->addLayout(level_buttons);
+
+            auto* link_panel = new QVBoxLayout;
+            link_panel->addWidget(new QLabel(QStringLiteral("Floor-to-floor links"), &dialog));
+            auto* links = new QListWidget(&dialog);
+            links->setObjectName(QStringLiteral("verticalLinkList"));
+            links->setSelectionMode(QAbstractItemView::SingleSelection);
+            link_panel->addWidget(links, 1);
+            auto* link_form = new QFormLayout;
+            auto* link_id = new QLineEdit(&dialog);
+            link_id->setObjectName(QStringLiteral("verticalLinkId"));
+            link_id->setPlaceholderText(QStringLiteral("Stable link ID"));
+            auto* link_lower = new QComboBox(&dialog);
+            link_lower->setObjectName(QStringLiteral("verticalLinkLower"));
+            auto* link_upper = new QComboBox(&dialog);
+            link_upper->setObjectName(QStringLiteral("verticalLinkUpper"));
+            link_form->addRow(QStringLiteral("ID"), link_id);
+            link_form->addRow(QStringLiteral("Lower"), link_lower);
+            link_form->addRow(QStringLiteral("Upper"), link_upper);
+            link_panel->addLayout(link_form);
+            auto* link_buttons = new QHBoxLayout;
+            auto* save_link = new QPushButton(QStringLiteral("Add link"), &dialog);
+            save_link->setObjectName(QStringLiteral("saveVerticalLink"));
+            auto* remove_link = new QPushButton(QStringLiteral("Remove link"), &dialog);
+            remove_link->setObjectName(QStringLiteral("removeVerticalLink"));
+            auto* freeze_link = new QPushButton(QStringLiteral("Freeze"), &dialog);
+            freeze_link->setObjectName(QStringLiteral("freezeVerticalLink"));
+            auto* disconnect_link = new QPushButton(QStringLiteral("Disconnect"), &dialog);
+            disconnect_link->setObjectName(QStringLiteral("disconnectVerticalLink"));
+            link_buttons->addWidget(save_link);
+            link_buttons->addWidget(remove_link);
+            link_buttons->addWidget(freeze_link);
+            link_buttons->addWidget(disconnect_link);
+            link_panel->addLayout(link_buttons);
+
+            columns->addLayout(level_panel, 1);
+            columns->addLayout(link_panel, 1);
+            layout->addLayout(columns, 1);
+            auto* status = new QLabel(&dialog);
+            status->setObjectName(QStringLiteral("verticalLevelsStatus"));
+            status->setWordWrap(true);
+            status->setTextFormat(Qt::PlainText);
+            layout->addWidget(status);
+            auto* close = new QPushButton(QStringLiteral("Close"), &dialog);
+            close->setObjectName(QStringLiteral("closeVerticalLevels"));
+            close->setDefault(true);
+            auto* footer = new QHBoxLayout;
+            footer->addStretch(1);
+            footer->addWidget(close);
+            layout->addLayout(footer);
+
+            std::optional<VerticalLevelRecord> record;
+            Revision record_revision{};
+            const auto populate = [&] {
+                const auto snapshot = authoringSnapshot();
+                record = decode_vertical_levels(snapshot);
+                if (!record) return;
+                record_revision = snapshot.revision();
+                const auto selected_level_id = levels->currentItem()
+                    ? levels->currentItem()->data(Qt::UserRole).toString() : level_id->text().trimmed();
+                const auto selected_link_id = links->currentItem()
+                    ? links->currentItem()->data(Qt::UserRole).toString() : link_id->text().trimmed();
+                const QSignalBlocker level_blocker(levels);
+                const QSignalBlocker link_blocker(links);
+                const QSignalBlocker lower_blocker(link_lower);
+                const QSignalBlocker upper_blocker(link_upper);
+                levels->clear();
+                links->clear();
+                link_lower->clear();
+                link_upper->clear();
+                for (const auto& level : record->model.levels()) {
+                    auto* item = new QListWidgetItem(
+                        QStringLiteral("%1  ·  %2 m")
+                            .arg(QString::fromStdString(level.id))
+                            .arg(level.elevation_m, 0, 'f', 3), levels);
+                    item->setData(Qt::UserRole, QString::fromStdString(level.id));
+                    link_lower->addItem(QString::fromStdString(level.id),
+                                        QString::fromStdString(level.id));
+                    link_upper->addItem(QString::fromStdString(level.id),
+                                        QString::fromStdString(level.id));
+                }
+                for (const auto& link : record->model.links()) {
+                    const auto state = link.state == RelationshipState::connected
+                        ? QStringLiteral("connected")
+                        : link.state == RelationshipState::frozen
+                            ? QStringLiteral("frozen") : QStringLiteral("disconnected");
+                    auto* item = new QListWidgetItem(
+                        QStringLiteral("%1  ·  %2 → %3  ·  %4 m  ·  %5")
+                            .arg(QString::fromStdString(link.id),
+                                 QString::fromStdString(link.lower_level_id),
+                                 QString::fromStdString(link.upper_level_id))
+                            .arg(record->model.floor_to_floor_height(link.id), 0, 'f', 3)
+                            .arg(state), links);
+                    item->setData(Qt::UserRole, QString::fromStdString(link.id));
+                }
+                QListWidgetItem* selected_level = nullptr;
+                for (int index = 0; index < levels->count(); ++index)
+                    if (levels->item(index)->data(Qt::UserRole).toString() == selected_level_id)
+                        selected_level = levels->item(index);
+                if (!selected_level && levels->count() > 0) selected_level = levels->item(0);
+                levels->setCurrentItem(selected_level);
+                QListWidgetItem* selected_link = nullptr;
+                for (int index = 0; index < links->count(); ++index)
+                    if (links->item(index)->data(Qt::UserRole).toString() == selected_link_id)
+                        selected_link = links->item(index);
+                if (!selected_link && links->count() > 0) selected_link = links->item(0);
+                links->setCurrentItem(selected_link);
+                level_id->clear();
+                level_elevation->clear();
+                if (selected_level) {
+                    const auto id = selected_level->data(Qt::UserRole).toString().toStdString();
+                    const auto found = std::find_if(record->model.levels().begin(), record->model.levels().end(),
+                        [&](const auto& candidate) { return candidate.id == id; });
+                    if (found != record->model.levels().end()) {
+                        level_id->setText(QString::fromStdString(found->id));
+                        level_elevation->setText(QString::number(found->elevation_m, 'g', 15));
+                    }
+                }
+                link_id->clear();
+                if (selected_link) {
+                    const auto id = selected_link->data(Qt::UserRole).toString().toStdString();
+                    const auto found = std::find_if(record->model.links().begin(), record->model.links().end(),
+                        [&](const auto& candidate) { return candidate.id == id; });
+                    if (found != record->model.links().end()) {
+                        link_id->setText(QString::fromStdString(found->id));
+                        link_lower->setCurrentIndex(link_lower->findData(QString::fromStdString(found->lower_level_id)));
+                        link_upper->setCurrentIndex(link_upper->findData(QString::fromStdString(found->upper_level_id)));
+                    }
+                }
+                status->setText(QStringLiteral("%1 level%2 · %3 link%4")
+                    .arg(record->model.levels().size())
+                    .arg(record->model.levels().size() == 1 ? QString{} : QStringLiteral("s"))
+                    .arg(record->model.links().size())
+                    .arg(record->model.links().size() == 1 ? QString{} : QStringLiteral("s")));
+                const bool has_level = !record->model.levels().empty();
+                const bool has_link = !record->model.links().empty();
+                remove_level->setEnabled(has_level);
+                save_link->setEnabled(record->model.levels().size() >= 2);
+                remove_link->setEnabled(has_link);
+                freeze_link->setEnabled(has_link);
+                disconnect_link->setEnabled(has_link);
+            };
+            populate();
+
+            const auto current_record = [&]() -> std::optional<VerticalLevelRecord> {
+                if (!record) return std::nullopt;
+                if (authoringSnapshot().revision() != record_revision) {
+                    populate();
+                    status->setText(QStringLiteral(
+                        "The project changed while the Levels editor was open. Review the refreshed graph."));
+                    return std::nullopt;
+                }
+                return record;
+            };
+
+            QObject::connect(levels, &QListWidget::currentItemChanged, &dialog,
+                             [&](QListWidgetItem*, QListWidgetItem*) { populate(); });
+            QObject::connect(links, &QListWidget::currentItemChanged, &dialog,
+                             [&](QListWidgetItem*, QListWidgetItem*) { populate(); });
+
+            QObject::connect(save_level, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    const auto current = current_record();
+                    if (!current) return;
+                    const auto id = level_id->text().trimmed().toStdString();
+                    if (id.empty()) throw std::invalid_argument("Enter a level ID.");
+                    bool ok = false;
+                    const auto elevation = level_elevation->text().trimmed().toDouble(&ok);
+                    if (!ok || !std::isfinite(elevation))
+                        throw std::invalid_argument("Elevation must be a finite number of metres.");
+                    const auto found = std::find_if(current->model.levels().begin(), current->model.levels().end(),
+                        [&](const auto& candidate) { return candidate.id == id; });
+                    VerticalLevelGraph updated;
+                    if (found == current->model.levels().end()) {
+                        updated = current->model.create_level({id, elevation});
+                    } else {
+                        updated = current->model.with_elevation(id, elevation);
+                    }
+                    if (applyVerticalLevelGraph(updated, QStringLiteral("Save vertical level"))) {
+                        populate();
+                        status->setText(QStringLiteral("Level saved through document history."));
+                    }
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            });
+
+            QObject::connect(remove_level, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    const auto current = current_record();
+                    if (!current) return;
+                    const auto* item = levels->currentItem();
+                    if (!item) throw std::invalid_argument("Choose a level first.");
+                    const auto id = item->data(Qt::UserRole).toString().toStdString();
+                    if (std::any_of(current->model.links().begin(), current->model.links().end(),
+                        [&](const auto& link) { return link.lower_level_id == id || link.upper_level_id == id; }))
+                        throw std::invalid_argument("Remove the level's floor-to-floor links first.");
+                    auto values = current->model.levels();
+                    values.erase(std::remove_if(values.begin(), values.end(),
+                        [&](const auto& level) { return level.id == id; }), values.end());
+                    const auto updated = VerticalLevelGraph(std::move(values), current->model.links());
+                    if (applyVerticalLevelGraph(updated, QStringLiteral("Remove vertical level"))) {
+                        populate();
+                        status->setText(QStringLiteral("Level removed through document history."));
+                    }
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            });
+
+            QObject::connect(save_link, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    const auto current = current_record();
+                    if (!current) return;
+                    const auto id = link_id->text().trimmed().toStdString();
+                    const auto lower = link_lower->currentData().toString().toStdString();
+                    const auto upper = link_upper->currentData().toString().toStdString();
+                    if (id.empty() || lower.empty() || upper.empty())
+                        throw std::invalid_argument("Enter a link ID and choose lower and upper levels.");
+                    const auto updated = current->model.create_link({id, lower, upper});
+                    if (applyVerticalLevelGraph(updated, QStringLiteral("Add vertical link"))) {
+                        populate();
+                        status->setText(QStringLiteral("Floor-to-floor link added through document history."));
+                    }
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            });
+
+            const auto transition_link = [&](bool freeze) {
+                try {
+                    const auto current = current_record();
+                    if (!current) return;
+                    const auto* item = links->currentItem();
+                    if (!item) throw std::invalid_argument("Choose a floor-to-floor link first.");
+                    const auto id = item->data(Qt::UserRole).toString().toStdString();
+                    const auto updated = freeze ? current->model.freeze(id) : current->model.disconnect(id);
+                    if (applyVerticalLevelGraph(updated,
+                            freeze ? QStringLiteral("Freeze vertical link")
+                                   : QStringLiteral("Disconnect vertical link"))) {
+                        populate();
+                        status->setText(freeze
+                            ? QStringLiteral("Link frozen; its height is now retained.")
+                            : QStringLiteral("Link disconnected; its retained height is preserved."));
+                    }
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            };
+            QObject::connect(freeze_link, &QPushButton::clicked, &dialog,
+                             [&] { transition_link(true); });
+            QObject::connect(disconnect_link, &QPushButton::clicked, &dialog,
+                             [&] { transition_link(false); });
+
+            QObject::connect(remove_link, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    const auto current = current_record();
+                    if (!current) return;
+                    const auto* item = links->currentItem();
+                    if (!item) throw std::invalid_argument("Choose a floor-to-floor link first.");
+                    const auto id = item->data(Qt::UserRole).toString().toStdString();
+                    auto values = current->model.links();
+                    values.erase(std::remove_if(values.begin(), values.end(),
+                        [&](const auto& link) { return link.id == id; }), values.end());
+                    const auto updated = VerticalLevelGraph(current->model.levels(), std::move(values));
+                    if (applyVerticalLevelGraph(updated, QStringLiteral("Remove vertical link"))) {
+                        populate();
+                        status->setText(QStringLiteral("Link removed through document history."));
+                    }
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            });
+            QObject::connect(close, &QPushButton::clicked, &dialog, &QDialog::reject);
+            dialog.exec();
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Levels: %1").arg(QString::fromUtf8(error.what())));
         }
     }
 
@@ -6536,6 +6922,8 @@ public:
              [this] { showRemodelingAlternatives(); }},
             {QStringLiteral("Room and boundary relationships"),
              [this] { showRoomRelationships(); }},
+            {QStringLiteral("Edit levels and floor-to-floor links"),
+             [this] { showVerticalLevels(); }},
             {QStringLiteral("Create room boundary from selected geometry"),
              [this] { createRoomBoundaryFromSelection(); }},
             {QStringLiteral("Edit reusable assemblies"),
@@ -7299,14 +7687,16 @@ private:
         m_remodel_action->setObjectName(QStringLiteral("designPhaseSettings"));
         m_relationship_action = new QAction(QStringLiteral("Room relationships…"), owner);
         m_relationship_action->setObjectName(QStringLiteral("roomRelationships"));
+        m_levels_action = new QAction(QStringLiteral("Levels…"), owner);
+        m_levels_action->setObjectName(QStringLiteral("verticalLevels"));
         m_assembly_action = new QAction(QStringLiteral("Assemblies…"), owner);
         m_assembly_action->setObjectName(QStringLiteral("assemblyCatalog"));
         m_assistance_action = new QAction(QStringLiteral("Offline assistance…"), owner);
         m_about_action = new QAction(QStringLiteral("About Property Studio"), owner);
-        const std::array<QAction*, 12> secondary_actions{
+        const std::array<QAction*, 13> secondary_actions{
             m_annotation_action, m_reference_action, m_schedule_action, m_sheet_action,
             m_viewport_action, m_schedule_placement_action, m_view_action, m_remodel_action,
-            m_relationship_action, m_assembly_action, m_assistance_action, m_about_action};
+            m_relationship_action, m_levels_action, m_assembly_action, m_assistance_action, m_about_action};
         for (auto* action : secondary_actions) {
             owner->addAction(action);
             more_menu->addAction(action);
@@ -7408,6 +7798,8 @@ private:
                          [this] { showRemodelingAlternatives(); });
         QObject::connect(m_relationship_action, &QAction::triggered, owner,
                          [this] { showRoomRelationships(); });
+        QObject::connect(m_levels_action, &QAction::triggered, owner,
+                         [this] { showVerticalLevels(); });
         QObject::connect(m_assembly_action, &QAction::triggered, owner,
                          [this] { showAssemblies(); });
         QObject::connect(m_assistance_action, &QAction::triggered, owner,
@@ -10096,6 +10488,7 @@ private:
     QAction* m_view_action{};
     QAction* m_remodel_action{};
     QAction* m_relationship_action{};
+    QAction* m_levels_action{};
     QAction* m_assembly_action{};
     QAction* m_assistance_action{};
     QAction* m_about_action{};
@@ -10375,6 +10768,10 @@ void MainWindow::showRemodelingAlternatives() {
 
 void MainWindow::showRoomRelationships() {
     m_impl->showRoomRelationships();
+}
+
+void MainWindow::showVerticalLevels() {
+    m_impl->showVerticalLevels();
 }
 
 void MainWindow::showAssemblies() {

@@ -31,9 +31,15 @@ connected heights agree with the endpoint elevations. The `vertical_levels`
 Document entity uses this decoder at admission, so invalid level data cannot
 enter project history or a saved `.bldproj` file.
 
+The Windows Architectural workspace exposes **Levels and floor-to-floor links**
+from the More menu and command palette. The editor creates or edits level IDs
+and metre elevations, adds validated connected links, and can freeze or
+disconnect an existing link while retaining its measured height. Every action
+is a revision-checked Document command, so undo/redo and save/reopen preserve
+the graph exactly.
+
 This is foundational persistence coverage, not complete requirement delivery.
-Undoable desktop level editing, building-object floor/ceiling binding, automatic
-elevation propagation, coordinated plan/section/3D views, and file import remain
-separate work.
+Building-object floor/ceiling binding, automatic elevation propagation,
+coordinated plan/section/3D views, and file import remain separate work.
 Tests cover independent levels, immutable edits, retained heights, malformed
 graphs, deterministic output, and a maximum-size chain.
