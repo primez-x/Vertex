@@ -101,6 +101,14 @@ admitted. Cut/delete remove owned children atomically and preserve undo/redo.
 Multi-select, broader relationship-aware edit policies, and production
 compatibility evidence remain open.
 
+Identified receipt-free boundaries now support guarded vertex insertion from the
+desktop command surface. The operation validates a strict interior fraction,
+rebuilds the boundary with fresh IDs, migrates typed references, and commits
+the replacement as one undoable command without leaving duplicate source
+geometry. Legacy anonymous and receipt-bound boundaries are rejected until an
+explicit identity or derivation policy is available; wall/object insertion,
+constraint reporting, and production qualification remain open.
+
 The Architectural workspace now also exposes a compact **Assembly catalog**
 that persists the typed `sketch.assemblies.v1` model in Document history. Users
 can add/remove reusable types and placed instances, rename types, maintain the

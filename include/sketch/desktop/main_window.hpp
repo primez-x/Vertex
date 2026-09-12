@@ -195,6 +195,11 @@ public:
     // Hosted openings and boundary dimensions are removed with their owner;
     // referenced objects are rejected by the document validator.
     [[nodiscard]] bool deleteSelection();
+    // Splits one identified boundary edge at a strict interior fraction,
+    // preserving the original edge identity for the first piece and creating
+    // fresh identities for the inserted vertex and second piece.
+    [[nodiscard]] bool insertSelectedBoundaryVertex(const QString& segment_id,
+                                                    const QString& fraction);
     [[nodiscard]] bool editSelectedClassification(const QString& classification);
     [[nodiscard]] bool editSelectedLength(const QString& expression);
     [[nodiscard]] bool editSelectedHeight(const QString& expression);

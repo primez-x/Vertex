@@ -118,10 +118,11 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
         const auto* cut = window.findChild<QAction*>(QStringLiteral("cutSelection"));
         const auto* paste = window.findChild<QAction*>(QStringLiteral("pasteSelection"));
         const auto* remove = window.findChild<QAction*>(QStringLiteral("deleteSelection"));
+        const auto* insert_vertex = window.findChild<QAction*>(QStringLiteral("insertBoundaryVertex"));
         require(copy && cut && paste && remove && copy->shortcut() == QKeySequence::Copy &&
                     cut->shortcut() == QKeySequence::Cut && paste->shortcut() == QKeySequence::Paste &&
-                    remove->shortcut() == QKeySequence::Delete,
-                "clipboard and delete commands must expose the standard local shortcuts");
+                    remove->shortcut() == QKeySequence::Delete && insert_vertex,
+                "clipboard, delete, and vertex editing commands must be discoverable");
         QTimer::singleShot(0, &window, [&] {
             auto* dialog = window.findChild<QDialog*>(QStringLiteral("keyboardShortcutDialog"));
             require(dialog, "shortcut editor must open");
@@ -510,6 +511,49 @@ void test_delete_selection_workflow() {
             "a closed measurement boundary should be deletable when unreferenced");
     require(!window.document().snapshot().entities().contains(boundary_id.toStdString()),
             "deleted boundary must not remain in the document");
+}
+
+void test_boundary_vertex_insertion_workflow() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    const auto boundary_id = window.createBoundary(
+        Boundary{{{{0.0, 0.0}, {4.0, 0.0}, 0.0},
+                  {{4.0, 0.0}, {4.0, 2.0}, 0.0},
+                  {{4.0, 2.0}, {0.0, 2.0}, 0.0},
+                  {{0.0, 2.0}, {0.0, 0.0}, 0.0}}}, QStringLiteral("measurement"));
+    require(!boundary_id.isEmpty() && window.selectEntity(boundary_id),
+            "vertex insertion fixture must create a selectable boundary");
+    const auto original = window.document().snapshot().entities().at(boundary_id.toStdString());
+    const auto identified = decode_identified_boundary_entity(original);
+    const auto segment_id = QString::fromStdString(identified.segments.front().segment_id);
+    const auto before = window.document().revision();
+    const auto insertion_ok = window.insertSelectedBoundaryVertex(segment_id, QStringLiteral("0.5"));
+    require(insertion_ok &&
+                window.document().revision() == before + 1,
+            "vertex insertion must commit one semantic boundary edit");
+    const auto inserted_id = window.selectedEntityId();
+    require(!inserted_id.isEmpty() && inserted_id != boundary_id &&
+                !window.document().snapshot().entities().contains(boundary_id.toStdString()),
+            "vertex insertion must replace the source with a fresh boundary identity");
+    const auto inserted = decode_identified_boundary_entity(
+        window.document().snapshot().entities().at(inserted_id.toStdString()));
+    require(inserted.segments.size() == identified.segments.size() + 1 &&
+                inserted.segments.front().segment.end.x == 2.0 &&
+                validate_boundary(boundary_geometry(inserted)).empty(),
+            "vertex insertion must split the analytical edge and preserve valid topology");
+    require(window.undoCommand() &&
+                window.document().snapshot().entities().contains(boundary_id.toStdString()) &&
+                decode_identified_boundary_entity(window.document().snapshot().entities().at(
+                    boundary_id.toStdString())).segments.size() == identified.segments.size() &&
+                window.redoCommand() &&
+                decode_identified_boundary_entity(window.document().snapshot().entities().at(
+                    inserted_id.toStdString())).segments.size() == identified.segments.size() + 1,
+            "vertex insertion must be exactly undoable and redoable");
+    const auto rejected_revision = window.document().revision();
+    require(window.selectEntity(inserted_id) &&
+                !window.insertSelectedBoundaryVertex(segment_id, QStringLiteral("1.0")) &&
+                window.document().revision() == rejected_revision,
+            "vertex insertion must reject an endpoint fraction without mutation");
 }
 
 void test_named_revisions() {
@@ -1277,6 +1321,7 @@ int main(int argc, char** argv) {
     test_room_boundary_from_existing_geometry();
     test_selection_clipboard_workflow();
     test_delete_selection_workflow();
+    test_boundary_vertex_insertion_workflow();
     test_named_revisions();
     test_boundary_transform_workflow();
     test_design_phase_workflow();

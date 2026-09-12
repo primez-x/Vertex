@@ -983,7 +983,7 @@
         "tests/desktop_smoke.cpp",
         "docs/desktop-workflow.md"
       ],
-      "implementation_note": "Validated boundary vertex insertion and explicit-ID cloning are implemented; desktop clone mode now creates a distinct identified boundary with undoable persistence and safe context metadata. Wall/object insertion, vertex insertion UI, constraint degrees-of-freedom reporting, and reopen acceptance remain open."
+      "implementation_note": "Validated boundary vertex insertion and explicit-ID cloning are implemented; desktop vertex insertion now performs a guarded fresh-ID replacement for identified receipt-free boundaries, migrates typed references, preserves topology and exact undo/redo, and rejects legacy or receipt-bound edits. Wall/object insertion, constraint degrees-of-freedom reporting, broader lifecycle/reopen acceptance, and production qualification remain open."
     },
     {
       "id": "APX-EDIT-004",

@@ -2918,6 +2918,64 @@ public:
         dialog.exec();
     }
 
+    void showBoundaryVertexInsertion() {
+        QDialog dialog(owner);
+        styleDialog(dialog);
+        dialog.setObjectName(QStringLiteral("boundaryVertexInsertionDialog"));
+        dialog.setWindowTitle(QStringLiteral("Insert boundary vertex"));
+        dialog.resize(440, 220);
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* form = new QFormLayout;
+        auto* segment = new QComboBox(&dialog);
+        segment->setObjectName(QStringLiteral("boundaryVertexSegment"));
+        segment->setAccessibleName(QStringLiteral("Boundary edge"));
+        auto* fraction = new QLineEdit(QStringLiteral("0.5"), &dialog);
+        fraction->setObjectName(QStringLiteral("boundaryVertexFraction"));
+        fraction->setAccessibleName(QStringLiteral("Edge fraction"));
+        form->addRow(QStringLiteral("Edge"), segment);
+        form->addRow(QStringLiteral("Fraction (0..1)"), fraction);
+        layout->addLayout(form);
+        auto* status = new QLabel(&dialog);
+        status->setObjectName(QStringLiteral("boundaryVertexInsertionStatus"));
+        status->setWordWrap(true);
+        layout->addWidget(status);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel,
+                                             &dialog);
+        buttons->setObjectName(QStringLiteral("boundaryVertexInsertionButtons"));
+        layout->addWidget(buttons);
+        const auto selected = selectedEntity();
+        if (!selected.has_value() || !is_closed_boundary_entity(selected->type)) {
+            status->setText(QStringLiteral("Select an identified closed boundary first."));
+            buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+        } else {
+            try {
+                const auto identified = decode_identified_boundary_entity(*selected);
+                for (const auto& edge : identified.segments) {
+                    segment->addItem(QString::fromStdString(edge.segment_id),
+                                     QString::fromStdString(edge.segment_id));
+                }
+                if (segment->count() == 0) {
+                    status->setText(QStringLiteral("The selected boundary has no edges."));
+                    buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+                }
+            } catch (const std::exception& error) {
+                status->setText(QStringLiteral("Boundary is unavailable: %1")
+                                    .arg(QString::fromUtf8(error.what())));
+                buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+            }
+        }
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked,
+                         &dialog, [&] {
+            if (insertSelectedBoundaryVertex(segment->currentData().toString(), fraction->text())) {
+                dialog.accept();
+            } else {
+                status->setText(lastError());
+            }
+        });
+        dialog.exec();
+    }
+
     void styleDialog(QDialog& dialog) const {
         // Top-level Qt dialogs do not always inherit a parent window's style
         // sheet. Copy the already-resolved palette and stylesheet so modal
@@ -6462,6 +6520,108 @@ public:
         }
     }
 
+    bool insertSelectedBoundaryVertex(const QString& segment_id, const QString& fraction_text) {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        try {
+            const auto source = authoringSnapshot();
+            const auto found = source.entities().find(m_selected_id.toStdString());
+            if (found == source.entities().end() || !is_closed_boundary_entity(found->second.type)) {
+                throw std::invalid_argument("Select an identified closed boundary first.");
+            }
+            const auto version = inspect_boundary_entity_version(found->second);
+            if (version.format == BoundaryEntityFormat::unsupported_version) {
+                throw std::invalid_argument("This boundary uses an unsupported model version.");
+            }
+            if (version.format == BoundaryEntityFormat::anonymous_legacy) {
+                throw std::invalid_argument(
+                    "This legacy boundary needs an explicit identity upgrade before vertex insertion.");
+            }
+            if (found->second.properties.contains("boundary_authoring")) {
+                throw std::invalid_argument(
+                    "Receipt-bound boundaries require an explicit derivation policy before vertex insertion.");
+            }
+            bool ok = false;
+            const auto fraction = fraction_text.trimmed().toDouble(&ok);
+            if (!ok || !std::isfinite(fraction) || fraction <= 0.0 || fraction >= 1.0) {
+                throw std::invalid_argument("Insertion fraction must be a finite value strictly between 0 and 1.");
+            }
+            const auto identified = decode_identified_boundary_entity(found->second);
+            const auto target_segment = segment_id.trimmed().toStdString();
+            const auto target_index = std::find_if(
+                identified.segments.begin(), identified.segments.end(),
+                [&](const auto& edge) { return edge.segment_id == target_segment; });
+            if (target_index == identified.segments.end()) {
+                throw std::invalid_argument("The selected boundary edge was not found.");
+            }
+            std::vector<std::string> replacement_segment_ids;
+            std::vector<std::string> replacement_vertex_ids;
+            replacement_segment_ids.reserve(identified.segments.size());
+            replacement_vertex_ids.reserve(identified.segments.size());
+            std::map<std::string, std::string, std::less<>> identity_remap;
+            for (const auto& edge : identified.segments) {
+                const auto next_segment = new_id("segment");
+                replacement_segment_ids.push_back(next_segment);
+                identity_remap.emplace(edge.segment_id, next_segment);
+                replacement_vertex_ids.push_back(new_id("vertex"));
+                identity_remap.emplace(edge.start_vertex_id, replacement_vertex_ids.back());
+            }
+            // clone_boundary supplies each edge's end vertex from the next
+            // slot, so every old vertex identity is covered by its start edge.
+            const auto inserted_boundary_id = new_id(
+                identified.type == "room_boundary" ? "room-boundary" : "boundary");
+            identity_remap.emplace(found->second.id, inserted_boundary_id);
+            auto replacement = clone_boundary(
+                identified, inserted_boundary_id,
+                LegacyBoundaryIdentityOptions{replacement_segment_ids, replacement_vertex_ids},
+                {0.0, 0.0});
+            const auto inserted = insert_boundary_vertex(
+                replacement, replacement_segment_ids[static_cast<std::size_t>(target_index - identified.segments.begin())],
+                fraction, new_id("vertex"), new_id("segment"));
+            // The old edge and vertex IDs are no longer present after a
+            // replacement. Preserve every external semantic link by mapping
+            // the old identities to the corresponding fresh first-piece IDs.
+            const auto inserted_edge = inserted.segments[static_cast<std::size_t>(target_index - identified.segments.begin())];
+            identity_remap[identified.segments[static_cast<std::size_t>(target_index - identified.segments.begin())].segment_id] =
+                inserted_edge.segment_id;
+            identity_remap[identified.segments[static_cast<std::size_t>(target_index - identified.segments.begin())].start_vertex_id] =
+                inserted_edge.start_vertex_id;
+            auto updated = found->second;
+            updated.id = inserted.id;
+            remap_clipboard_json(updated.properties, identity_remap);
+            remap_clipboard_json(updated.extensions, identity_remap);
+            const auto canonical = encode_identified_boundary_entity(inserted);
+            updated.properties["boundary_model_version"] = canonical.properties.at("boundary_model_version");
+            updated.properties["segments"] = canonical.properties.at("segments");
+            if (updated.properties.contains("boundary")) {
+                updated.properties["boundary"] = boundary_json(boundary_geometry(inserted));
+            }
+            std::vector<EntityChange> changes;
+            changes.push_back(EntityChange::erase(found->second.id));
+            for (const auto& [id, entity] : source.entities()) {
+                if (id == found->second.id) continue;
+                auto migrated = entity;
+                remap_clipboard_json(migrated.properties, identity_remap);
+                remap_clipboard_json(migrated.extensions, identity_remap);
+                if (migrated != entity) changes.push_back(EntityChange::upsert(std::move(migrated)));
+            }
+            changes.push_back(EntityChange::upsert(std::move(updated)));
+            const ApplyEntityChanges command{
+                source.revision(), std::move(changes), {}, "Insert boundary vertex"};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            m_selected_id = id_from(inserted.id);
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Insert vertex: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     [[nodiscard]] QString selectedEntityId() const { return m_selected_id; }
 
     bool editSelectedClassification(const QString& classification) {
@@ -8502,6 +8662,7 @@ public:
             {QStringLiteral("Cut selection"), [this] { cutSelection(); }},
             {QStringLiteral("Paste selection"), [this] { pasteSelection(); }},
             {QStringLiteral("Delete selection"), [this] { deleteSelection(); }},
+            {QStringLiteral("Insert boundary vertex"), [this] { showBoundaryVertexInsertion(); }},
             {QStringLiteral("Add building"), [this] { showOrganizationDialog("building"); }},
             {QStringLiteral("Add floor"), [this] { showOrganizationDialog("floor"); }},
             {QStringLiteral("Add drawing layer"), [this] { showOrganizationDialog("layer"); }},
@@ -9422,10 +9583,13 @@ private:
         m_delete_action->setObjectName(QStringLiteral("deleteSelection"));
         m_delete_action->setShortcut(QKeySequence::Delete);
         m_delete_action->setShortcutContext(Qt::WindowShortcut);
+        m_insert_vertex_action = new QAction(QStringLiteral("Insert boundary vertex…"), owner);
+        m_insert_vertex_action->setObjectName(QStringLiteral("insertBoundaryVertex"));
         more_menu->addAction(m_copy_action);
         more_menu->addAction(m_cut_action);
         more_menu->addAction(m_paste_action);
         more_menu->addAction(m_delete_action);
+        more_menu->addAction(m_insert_vertex_action);
         more_menu->addSeparator();
         m_annotation_action = new QAction(QStringLiteral("Annotations"), owner);
         m_reference_action = new QAction(QStringLiteral("Reference image"), owner);
@@ -9479,6 +9643,8 @@ private:
         QObject::connect(m_delete_action, &QAction::triggered, owner, [this, text_editor_focused] {
             if (!text_editor_focused()) (void)deleteSelection();
         });
+        QObject::connect(m_insert_vertex_action, &QAction::triggered, owner,
+                         [this] { showBoundaryVertexInsertion(); });
         auto* more_button = new QToolButton(toolbar);
         more_button->setObjectName(QStringLiteral("moreTools"));
         more_button->setIcon(modern_toolbar_icon("<path d='M5 7h14M5 12h14M5 17h14'/>"));
@@ -12449,6 +12615,7 @@ private:
     QAction* m_cut_action{};
     QAction* m_paste_action{};
     QAction* m_delete_action{};
+    QAction* m_insert_vertex_action{};
     std::vector<ShortcutBinding> m_shortcuts;
     QString m_shortcut_load_error;
     QAction* m_annotation_action{};
@@ -12666,6 +12833,11 @@ bool MainWindow::pasteSelection() {
 
 bool MainWindow::deleteSelection() {
     return m_impl->deleteSelection();
+}
+
+bool MainWindow::insertSelectedBoundaryVertex(const QString& segment_id,
+                                              const QString& fraction) {
+    return m_impl->insertSelectedBoundaryVertex(segment_id, fraction);
 }
 
 bool MainWindow::editSelectedClassification(const QString& classification) {
