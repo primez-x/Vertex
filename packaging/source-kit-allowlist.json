@@ -659,6 +659,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/windows_import_worker.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/workspace_accessibility.hpp"
     },
     {
@@ -1124,6 +1128,10 @@
     {
       "category": "source",
       "path": "src/core/wall_semantics.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/windows_import_worker.cpp"
     },
     {
       "category": "source",
@@ -1704,6 +1712,14 @@
     {
       "category": "source",
       "path": "tests/wall_semantics_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/windows_import_worker_probe.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/windows_import_worker_tests.cpp"
     },
     {
       "category": "source",

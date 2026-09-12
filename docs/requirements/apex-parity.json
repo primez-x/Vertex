@@ -2437,9 +2437,13 @@
         "include/sketch/import_worker_policy.hpp",
         "src/core/import_worker_policy.cpp",
         "tests/import_worker_policy_tests.cpp",
+        "include/sketch/windows_import_worker.hpp",
+        "src/core/windows_import_worker.cpp",
+        "tests/windows_import_worker_tests.cpp",
+        "tests/windows_import_worker_probe.cpp",
         "docs/import-worker-security.md"
       ],
-      "implementation_note": "Fail-closed worker policy and attestation/resource/path checks are implemented; actual Windows AppContainer, Job Object, broker, and fixed-loader enforcement remain adapter work."
+      "implementation_note": "Fail-closed worker policy and attestation/resource/path checks are implemented. The Windows broker now provisions an AppContainer profile, ACL-protected job directory, explicit handle list, controlled environment, suspended launch, Job Object limits, and post-launch token/network attestation; live clean-machine evidence remains required, and the runtime fixture skips when its host process is already inside a parent Job Object."
     },
     {
       "id": "SEC-WORKER-002",
@@ -2461,9 +2465,13 @@
         "include/sketch/import_worker_policy.hpp",
         "src/core/import_worker_policy.cpp",
         "tests/import_worker_policy_tests.cpp",
+        "include/sketch/windows_import_worker.hpp",
+        "src/core/windows_import_worker.cpp",
+        "tests/windows_import_worker_tests.cpp",
+        "tests/windows_import_worker_probe.cpp",
         "docs/import-worker-security.md"
       ],
-      "implementation_note": "Malformed input, traversal, expansion, timeout, child-process, crash, and module-path rejection decisions are covered by policy tests; process broker integration and adversarial OS fixtures remain open."
+      "implementation_note": "Malformed input, traversal, expansion, timeout, child-process, crash, and module-path rejection decisions are covered by policy tests. The native broker rejects unsafe roots and limits output, terminates the whole Job Object on watchdog or output failure, and never returns partial output; adversarial clean-machine OS fixtures and project-survival evidence remain open."
     },
     {
       "id": "SEC-PROJ-001",
@@ -2485,9 +2493,13 @@
         "include/sketch/import_worker_policy.hpp",
         "src/core/import_worker_policy.cpp",
         "tests/import_worker_policy_tests.cpp",
+        "include/sketch/windows_import_worker.hpp",
+        "src/core/windows_import_worker.cpp",
+        "tests/windows_import_worker_tests.cpp",
+        "tests/windows_import_worker_probe.cpp",
         "docs/import-worker-security.md"
       ],
-      "implementation_note": "Policy requires offline PROJ resource declarations and reports missing resources locally; actual PROJ context wiring and network-denied runtime evidence remain open."
+      "implementation_note": "Policy requires offline PROJ resource declarations and reports missing resources locally. The native worker environment sets PROJ_NETWORK=OFF and omits network capabilities; actual PROJ context wiring, bundled-resource fixtures, and network-denied runtime evidence remain open."
     },
     {
       "id": "OPS-PERF-001",

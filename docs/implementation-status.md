@@ -141,8 +141,14 @@ available in the navigator/canvas for selection, undoable deletion, and
 inspector edits to text, position, rotation, scale, and visibility. The
 inspector also edits font family, paper text height, stroke/fill colors, bold,
 and italic flags for labels and symbols through the same typed history command.
-Polished assets, OS sandbox launch, output lifecycle, and production integration
-evidence remain open.
+The Windows broker boundary now creates an AppContainer worker with an
+ACL-protected per-job directory, explicit inherited-handle allowlist,
+controlled offline environment, suspended launch, Job Object limits, and
+post-launch token/network attestation. Its watchdog rejects timeouts and
+partial output without an unsandboxed fallback. The live fixture is skipped
+when the host test process is already inside a parent Job Object; clean-machine
+runtime isolation, PROJ context wiring, output lifecycle, and production
+integration evidence remain open.
 
 Room/boundary relationship semantics are now surfaced in the Windows desktop:
 the More menu and command palette open a typed editor that lists live room
