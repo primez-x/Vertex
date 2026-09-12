@@ -19,7 +19,9 @@ if ($EntryPoints.Count -eq 0) {
                     (Join-Path $qtPrefix 'plugins\imageformats\qico.dll'),
                     (Join-Path $qtPrefix 'plugins\imageformats\qjpeg.dll'))
 }
-$searchDirectories = @($releaseDirectory, [Environment]::SystemDirectory,
+$searchDirectories = @($releaseDirectory,
+                       (Join-Path $projectRoot '.deps\msvc-runtime\14.44.35211.0\bin'),
+                       [Environment]::SystemDirectory,
                        (Join-Path $qtPrefix 'bin'),
                        (Join-Path $projectRoot '.deps\native\x64-windows\bin'))
 $pending = [System.Collections.Generic.Queue[string]]::new()
@@ -54,7 +56,14 @@ while ($pending.Count -gt 0) {
         }
         $resolved = $candidates[0]
         $system = $resolved.StartsWith([Environment]::SystemDirectory + '\', [System.StringComparison]::OrdinalIgnoreCase)
-        $imports += @{ name = $name; kind = $(if ($system) { 'installed-system-runtime' } else { 'local-component' }); resolved = $resolved; candidates = $candidates }
+        # Only package-local alternatives participate in local provenance.
+        # An installed Windows fallback is observed separately, never copied.
+        $localCandidates = @($candidates | Where-Object {
+            !$_.StartsWith([Environment]::SystemDirectory + '\', [System.StringComparison]::OrdinalIgnoreCase)
+        })
+        $imports += @{ name = $name; kind = $(if ($system) { 'installed-system-runtime' } else { 'local-component' });
+            resolved = $resolved; candidates = @(if ($system) { $candidates } else { $localCandidates });
+            system_fallback_available = ($localCandidates.Count -lt $candidates.Count) }
         if (!$system) { $pending.Enqueue($resolved) }
     }
     $modules += @{ path = $path; sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash; imports = $imports }

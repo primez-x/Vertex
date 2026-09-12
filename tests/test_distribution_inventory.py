@@ -116,6 +116,22 @@ class DistributionInventoryTests(unittest.TestCase):
         self.assertNotIn("\\", json.dumps(result))
         self.assertNotIn(str(root), json.dumps(result))
 
+    def test_redistributable_requires_reviewed_hashes(self):
+        directory, root, manifest, runtime, app, dependency = self.fixture()
+        self.addCleanup(directory.cleanup)
+        source = manifest["components"][1]["source"]
+        source.update(kind="redistributable", sha256={"dependency.dll": digest(dependency)})
+        result = inventory.build_inventory(root, manifest)
+        component = next(row for row in result["components"] if row["id"] == "dependency")
+        self.assertEqual(component["package"]["source"]["kind"], "redistributable")
+        self.assertFalse(component["package"]["source"]["licensing_clearance"])
+        source["sha256"]["dependency.dll"] = "0" * 64
+        with self.assertRaises(inventory.InventoryError):
+            inventory.build_inventory(root, manifest)
+        source["sha256"] = {}
+        with self.assertRaises(inventory.InventoryError):
+            inventory.build_inventory(root, manifest)
+
     def test_stale_runtime_hash_fails_closed(self):
         directory, root, manifest, runtime, app, dependency = self.fixture()
         self.addCleanup(directory.cleanup)

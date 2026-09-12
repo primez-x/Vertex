@@ -32,6 +32,7 @@ WINDOWS_ABSOLUTE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
 SOURCE_KINDS = {
     "workspace",
+    "redistributable",
     "vcpkg-spdx",
     "qt-spdx",
     "planegcs-provenance",
@@ -873,6 +874,18 @@ def _prepare_component(root: pathlib.Path, component: dict[str, Any]) -> dict[st
     elif source_kind == "planegcs-provenance":
         source_payload = _planegcs_context(root, component)
         private_source = None
+    elif source_kind == "redistributable":
+        pins = component["source"].get("sha256")
+        _require(isinstance(pins, dict) and bool(pins), "redistributable requires reviewed binary hashes")
+        normalized = {name.casefold(): _validate_sha256(value, "redistributable SHA256")
+                      for name, value in pins.items()}
+        _require(len(normalized) == len(pins) and set(normalized) ==
+                 {name.casefold() for name in component.get("runtime_names", [])},
+                 "redistributable hashes must exactly cover runtime names")
+        source_payload = {"kind": "redistributable", "sha256": normalized,
+                          "source_paths": _describe_paths(root, component["source"], component),
+                          "licensing_clearance": False}
+        private_source = None
     else:
         source_payload = _workspace_context(root, component)
         private_source = None
@@ -942,6 +955,9 @@ def _runtime_inventory(root: pathlib.Path, evidence: dict[str, Any], prepared: d
         _require(isinstance(imports, list), f"{field}.imports must be a list")
         owner = runtime_owners.get(module_path.name.casefold())
         _require(owner is not None, f"unknown ownership for runtime module {module_relative}")
+        if owner["manifest"]["source"]["kind"] == "redistributable":
+            pinned = owner["payload"]["package"]["source"]["sha256"][module_path.name.casefold()]
+            _require(actual_hash == pinned, f"redistributable binary differs from reviewed hash: {module_relative}")
         record = {
             "path": module_relative,
             "name": module_path.name,

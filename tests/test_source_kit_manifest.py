@@ -6,6 +6,7 @@ import json
 import pathlib
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -175,6 +176,77 @@ class SourceKitManifestTests(unittest.TestCase):
 
         self.assertIn("missing", str(context.exception).lower())
         self.assertFalse(output.exists())
+
+    def test_actual_filename_casing_is_verified(self):
+        directory, root, _, allowlist = self.fixture()
+        self.addCleanup(directory.cleanup)
+        output = root / "artifacts" / "source-kit-manifest.json"
+        data = json.loads(allowlist.read_text(encoding="utf-8"))
+        data["entries"] = [{"category": "source", "path": "src/MAIN.cpp"}]
+        write_json(allowlist, data)
+
+        with self.assertRaises(manifest_module.ManifestError) as context:
+            manifest_module.generate_manifest(root, allowlist, output)
+
+        self.assertIn("actual filename", str(context.exception).lower())
+        self.assertFalse(output.exists())
+
+    def test_verify_actual_filename_returns_resolved_file(self):
+        directory, root, files, _ = self.fixture()
+        self.addCleanup(directory.cleanup)
+
+        resolved = manifest_module.verify_actual_filename(root, "src/main.cpp")
+
+        self.assertEqual(resolved, files["source"].resolve())
+
+    def test_tracked_source_scope_uses_git_and_ignores_untracked_or_excluded_paths(self):
+        directory, root, _, _ = self.fixture()
+        self.addCleanup(directory.cleanup)
+        tracked = (
+            b"temp.txt\x00"
+            b"build/property-studio.exe\x00"
+            b".deps/qt/bin/Qt6Core.dll\x00"
+            b"secrets/signing.pem\x00"
+            b"src/main.cpp\x00"
+            b"include/sketch/boundary_transform.hpp\x00"
+        )
+        completed = mock.Mock(returncode=0, stdout=tracked, stderr=b"")
+        with mock.patch.object(manifest_module.subprocess, "run", return_value=completed) as run:
+            paths = manifest_module.tracked_source_kit_files(root)
+
+        self.assertEqual(paths, ["include/sketch/boundary_transform.hpp", "src/main.cpp"])
+        run.assert_called_once()
+        command = run.call_args.args[0]
+        self.assertEqual(command[-4:], ["ls-files", "--cached", "--full-name", "-z"])
+
+    def test_completeness_check_reports_missing_and_category_drift(self):
+        directory, root, _, allowlist = self.fixture()
+        self.addCleanup(directory.cleanup)
+        data = json.loads(allowlist.read_text(encoding="utf-8"))
+        data["entries"] = [
+            {"category": "source", "path": "src/main.cpp"},
+            {"category": "source", "path": "tests/fixtures/sample.json"},
+        ]
+        write_json(allowlist, data)
+        completed = mock.Mock(
+            returncode=0,
+            stdout=(
+                b"src/main.cpp\x00"
+                b"include/sketch/boundary_transform.hpp\x00"
+                b"tests/fixtures/sample.json\x00"
+            ),
+            stderr=b"",
+        )
+        with mock.patch.object(manifest_module.subprocess, "run", return_value=completed):
+            report = manifest_module.check_allowlist_completeness(root, allowlist)
+
+        self.assertFalse(report["complete"])
+        self.assertEqual(report["missing"], ["include/sketch/boundary_transform.hpp"])
+        self.assertEqual(report["classification_mismatches"], [{
+            "path": "tests/fixtures/sample.json",
+            "expected": "fixtures",
+            "actual": "source",
+        }])
 
     def test_stale_optional_hash_is_rejected(self):
         directory, root, _, allowlist = self.fixture()

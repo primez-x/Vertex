@@ -446,6 +446,16 @@ if(BUILD_TESTING)
   add_executable(error_policy_probe tests/error_policy_probe.cpp)
   add_test(NAME noninteractive_test_errors COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/test_error_policy.py" "$<TARGET_FILE:error_policy_probe>")
   add_test(NAME dependency_integrity COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s "${CMAKE_SOURCE_DIR}/tests" -p test_bootstrap.py)
+  foreach(packaging_test IN ITEMS source_kit_manifest update_source_kit_allowlist distribution_inventory stage_portable_package stage_offline_bundle prepare_msvc_runtime installed_runtime)
+    add_test(NAME "packaging_${packaging_test}" COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+      -s "${CMAKE_SOURCE_DIR}/tests" -p "test_${packaging_test}.py")
+  endforeach()
+  # A delivered source kit intentionally contains no Git metadata. Its build
+  # must not query an unrelated parent checkout's index.
+  if(EXISTS "${CMAKE_SOURCE_DIR}/.git")
+    add_test(NAME source_kit_allowlist_contract COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_SOURCE_DIR}/scripts/update_source_kit_allowlist.py" --source-root "${CMAKE_SOURCE_DIR}" --check)
+  endif()
   add_test(NAME production_gate_logic COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s "${CMAKE_SOURCE_DIR}/tests" -p test_requirement_audit.py)
   # Keep the default test-suite explicit: this checks the requirement/gate
   # schema only. Release evidence is evaluated by the separate disabled gate.

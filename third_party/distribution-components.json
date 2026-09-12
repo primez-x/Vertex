@@ -15,6 +15,49 @@
   ],
   "components": [
     {
+      "id": "qt-runtime-config",
+      "kind": "asset",
+      "package": {
+        "name": "Application Qt plugin configuration",
+        "version": "1",
+        "license": "Proprietary"
+      },
+      "source": {
+        "kind": "workspace",
+        "paths": ["packaging/qt.conf"]
+      },
+      "notice_paths": ["LICENSE"]
+    },
+    {
+      "id": "msvc-runtime",
+      "kind": "runtime",
+      "package": {
+        "name": "Microsoft Visual C++ Runtime x64",
+        "version": "14.44.35211.0",
+        "license": "LicenseRef-Microsoft-Visual-Cpp-Runtime"
+      },
+      "source": {
+        "kind": "redistributable",
+        "paths": [".deps/msvc-runtime/14.44.35211.0/manifest.json", ".deps/msvc-runtime/14.44.35211.0/bin"],
+        "sha256": {
+          "msvcp140.dll": "0f885b509a685d2bbfa652fed26b5fb31d88fbdab0a978c641d1c7b8aa460aa9",
+          "msvcp140_1.dll": "bfad5aef4c63a669e3c140655cdfdf395b6c979b400a447bd5dcb65ed8826c3d",
+          "msvcp140_2.dll": "3ea06f0ee098b4823cb79599df3780e7f23cce52c19aac31d2a0d47efe33a5e9",
+          "vcruntime140.dll": "d5e4d9a3e835fa679450145d6a7d94e36573a509317111904d9b3712c30d9066",
+          "vcruntime140_1.dll": "1f2d41c4aa5db0bc33ebf7b66d72943a817d7ce6cbe880502a9403823633093f"
+        }
+      },
+      "notice_paths": [".deps/msvc-runtime/14.44.35211.0/notices/Redist.txt", ".deps/msvc-runtime/14.44.35211.0/notices/ThirdPartyNotices.txt"],
+      "runtime_names": ["msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll", "vcruntime140.dll", "vcruntime140_1.dll"],
+      "destinations": {
+        "msvcp140.dll": "bin/msvcp140.dll",
+        "msvcp140_1.dll": "bin/msvcp140_1.dll",
+        "msvcp140_2.dll": "bin/msvcp140_2.dll",
+        "vcruntime140.dll": "bin/vcruntime140.dll",
+        "vcruntime140_1.dll": "bin/vcruntime140_1.dll"
+      }
+    },
+    {
       "id": "property-studio",
       "kind": "application",
       "package": {
@@ -24,7 +67,7 @@
       },
       "source": {
         "kind": "workspace",
-        "paths": ["src", "include", "CMakeLists.txt"]
+        "paths": ["src", "include", "CMakeLists.txt", "packaging/qt.conf"]
       },
       "notice_paths": ["LICENSE"],
       "runtime_names": ["property-studio.exe"],

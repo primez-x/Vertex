@@ -3,6 +3,24 @@
   "entries": [
     {
       "kind": "asset",
+      "inventory_entry": "qt-runtime-config",
+      "path": "packaging/qt.conf",
+      "destination": "bin/qt.conf"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "msvc-runtime",
+      "path": ".deps/msvc-runtime/14.44.35211.0/notices/Redist.txt",
+      "destination": "licenses/MSVC-Redist.txt"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "msvc-runtime",
+      "path": ".deps/msvc-runtime/14.44.35211.0/notices/ThirdPartyNotices.txt",
+      "destination": "licenses/MSVC-ThirdPartyNotices.txt"
+    },
+    {
+      "kind": "asset",
       "inventory_entry": "inter-font",
       "path": "assets/fonts/Inter.ttf",
       "destination": "assets/fonts/Inter.ttf"

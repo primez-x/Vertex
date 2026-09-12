@@ -6,6 +6,25 @@ can be carried to an offline Windows machine. The result is an installer
 bundle with a PowerShell copy step; it is not a signed MSI, EXE installer, or
 production release.
 
+Prepare the app-local runtime from the licensed SDK's x64 CRT directory using
+`scripts/prepare_msvc_runtime.py --crt-dir <SDK-CRT-directory> --version 14.44.35211.0
+--notice-file <Redist.txt> --notice-file <ThirdPartyNotices.txt>
+--output .deps/msvc-runtime/14.44.35211.0`. This is a developer packaging step;
+it does not install anything globally. The script validates x64 DLL headers,
+copies only five named runtime DLLs, and records portable hashes and provenance.
+The component catalog independently pins their reviewed hashes. Do not copy
+DLLs from System32 or use debug runtimes. See Microsoft's
+[deployment methods](https://learn.microsoft.com/en-us/cpp/windows/choosing-a-deployment-method?view=msvc-170)
+and [redistribution list](https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution).
+Local notice files are evidence inputs, not a licensing-clearance certificate;
+the current Redist.txt is a link stub and licensing qualification remains open.
+
+Run `scripts/inspect-runtime.ps1` after the build and runtime preparation.
+The offline bundler rejects an inventory that leaves a Visual C++ runtime DLL
+classified as an installed Windows dependency. `bin/qt.conf` is also shipped
+so Qt plugins resolve inside the installation without developer environment
+variables.
+
 Generate the three inputs from one checkout and one Release build. Every path
 is explicit so the staging run cannot fall back to a developer SDK or `PATH`:
 
@@ -73,6 +92,24 @@ pwsh -NoProfile -NonInteractive `
   -Root 'C:\Program Files\Property Studio' `
   -ManifestName runtime-manifest.json
 ```
+
+Run a hidden installed-runtime smoke check after the installed-byte verifier:
+
+```powershell
+python scripts/test_installed_runtime.py `
+  --install-root 'C:\Program Files\Property Studio' `
+  --evidence-root artifacts/installed-runtime
+```
+
+This launches both workspaces with private application-data directories, only
+Windows directories on the child PATH, and developer Qt/QML settings removed.
+It captures the two workspaces and native 3D view, samples loaded module paths,
+and checks observed packaged modules against the installed manifest and hashes.
+The five CRT DLLs and Qt Windows platform plugin must be observed inside the
+installation. Each run writes a new evidence directory, including failure
+reports. Sampling cannot establish complete dynamic-load coverage; screenshot
+headers and dimensions are checked automatically, with visual review separate.
+The check does not disable networking or isolate the Windows registry.
 
 The bundle and runtime manifests keep `audit_status: "incomplete"`,
 `installer_qualified: false`, and `offline_qualified: false`. Passing staging

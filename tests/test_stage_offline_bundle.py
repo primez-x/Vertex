@@ -283,6 +283,17 @@ class StageOfflineBundleTests(unittest.TestCase):
             if item.is_file()
         ))
 
+    def test_installed_msvc_runtime_cannot_replace_bundled_dependency(self):
+        fixture = self.fixture()
+        self.addCleanup(fixture[0].cleanup)
+        _, root, inventory_path, source_kit, allowlist, *_ = fixture
+        inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+        inventory["system_runtime_imports"] = ["KERNEL32.dll", "VCRUNTIME140.dll"]
+        write_json(inventory_path, inventory)
+        with self.assertRaisesRegex(stage.BundleError, "Visual C\\+\\+ runtime"):
+            stage.stage_bundle(inventory_path, allowlist, source_kit, root, root / "out", "missing-crt")
+        self.assertFalse((root / "out" / "missing-crt").exists())
+
     def test_missing_source_kit_file_fails_before_publishing_bundle(self):
         fixture = self.fixture()
         self.addCleanup(fixture[0].cleanup)

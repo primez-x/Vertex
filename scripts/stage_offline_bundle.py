@@ -347,6 +347,9 @@ def _inventory_dependency_rows(inventory: Mapping[str, Any]) -> dict[str, Any]:
     system = inventory.get("system_runtime_imports", [])
     contracts = inventory.get("windows_api_contracts", [])
     _require(isinstance(system, list), "distribution inventory system_runtime_imports must be a list")
+    _require(not any(isinstance(name, str) and re.match(
+        r"^(?:msvcp|vcruntime|concrt|vccorlib)\d.*\.dll$", name, re.IGNORECASE) for name in system),
+        "offline bundle must carry its Visual C++ runtime; installed system CRT is not a Windows OS boundary")
     _require(isinstance(contracts, list), "distribution inventory windows_api_contracts must be a list")
     return {
         "runtime": runtime,

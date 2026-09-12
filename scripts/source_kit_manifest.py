@@ -14,6 +14,7 @@ import json
 import os
 import pathlib
 import re
+import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -25,6 +26,61 @@ CATEGORIES = ("source", "build", "docs", "licenses", "fixtures")
 _CATEGORY_SET = frozenset(CATEGORIES)
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 _WINDOWS_ABSOLUTE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+
+# These are the tracked repository areas that make up the source/build
+# handoff.  The list is deliberately explicit: local build trees, dependency
+# checkouts, and generated output are not source-kit inputs.
+SOURCE_KIT_REQUIRED_ROOTS = (
+    "assets/",
+    "cmake/",
+    "docs/",
+    "include/",
+    "packaging/",
+    "scripts/",
+    "src/",
+    "tests/",
+    "third_party/",
+)
+SOURCE_KIT_REQUIRED_FILES = frozenset({
+    ".gitattributes",
+    ".gitignore",
+    "CMakeLists.txt",
+    "CMakePresets.json",
+    "LICENSE",
+    "README.md",
+    "vcpkg.json",
+})
+_SOURCE_KIT_REQUIRED_FILE_KEYS = frozenset(
+    path.casefold() for path in SOURCE_KIT_REQUIRED_FILES
+)
+SOURCE_KIT_EXCLUDED_DIRECTORY_NAMES = frozenset({
+    ".cache",
+    ".deps",
+    ".git",
+    ".pytest_cache",
+    ".venv",
+    "artifacts",
+    "build",
+    "dist",
+    "generated",
+    "local-generated",
+    "out",
+    "tmp",
+})
+SOURCE_KIT_EXCLUDED_FILE_EXTENSIONS = frozenset({
+    ".env",
+    ".key",
+    ".pem",
+    ".pfx",
+    ".p12",
+})
+_SOURCE_KIT_EXCLUDED_FILE_EXTENSIONS_CASEFOLD = frozenset(
+    extension.casefold() for extension in SOURCE_KIT_EXCLUDED_FILE_EXTENSIONS
+)
+_SECRET_FILENAME_RE = re.compile(
+    r"(?:^|[._-])(secret|secrets|credential|credentials|password|passwd|token)(?:[._-]|$)",
+    re.IGNORECASE,
+)
 
 BOUNDARY = (
     "This manifest records only explicitly allowlisted files with observed "
@@ -40,6 +96,70 @@ class ManifestError(ValueError):
 
 # A more descriptive compatibility name for callers that prefer it.
 SourceKitManifestError = ManifestError
+
+
+def is_excluded_source_kit_path(path: str) -> bool:
+    """Return whether a tracked path is outside the source-kit policy.
+
+    This policy is applied to names returned by ``git ls-files``.  It does not
+    walk the checkout and therefore cannot accidentally discover a local
+    generated file or an untracked secret while refreshing the allowlist.
+    """
+
+    normalized = canonical_relative(path, "tracked path")
+    parts = normalized.split("/")
+    if any(part.casefold() in SOURCE_KIT_EXCLUDED_DIRECTORY_NAMES for part in parts[:-1]):
+        return True
+    filename = parts[-1]
+    lowered = filename.casefold()
+    if (
+        lowered.startswith(".env")
+        or pathlib.PurePosixPath(filename).suffix.casefold()
+        in _SOURCE_KIT_EXCLUDED_FILE_EXTENSIONS_CASEFOLD
+    ):
+        return True
+    return _SECRET_FILENAME_RE.search(filename) is not None
+
+
+def is_required_source_kit_path(path: str) -> bool:
+    """Return whether *path* belongs to the tracked source-kit scope."""
+
+    normalized = canonical_relative(path, "tracked path")
+    if is_excluded_source_kit_path(normalized):
+        return False
+    lowered = normalized.casefold()
+    return lowered in _SOURCE_KIT_REQUIRED_FILE_KEYS or any(
+        lowered.startswith(root.casefold()) for root in SOURCE_KIT_REQUIRED_ROOTS
+    )
+
+
+def classify_source_kit_path(path: str) -> str:
+    """Assign a stable manifest category to a source-kit path.
+
+    The classifier intentionally leaves dependency source boundaries visible:
+    tracked ``third_party`` provenance is source material, while installed
+    Qt/SDK and other bootstrap trees under ``.deps`` are excluded and remain
+    represented by their separate dependency inventory.
+    """
+
+    normalized = canonical_relative(path, "tracked path")
+    lowered = normalized.casefold()
+    filename = lowered.rsplit("/", 1)[-1]
+    if (
+        filename == "license"
+        or filename.startswith("license.")
+        or "license" in filename
+        or filename == "copying"
+        or filename.startswith("copying.")
+        or filename.startswith("notice")
+        or lowered == "assets/fonts/ofl.txt"
+    ):
+        return "licenses"
+    if lowered == "readme.md" or lowered.startswith("docs/") or lowered == "packaging/readme.md":
+        return "docs"
+    if lowered.startswith("assets/") or lowered.startswith("tests/fixtures/"):
+        return "fixtures"
+    return "source"
 
 
 def _error(message: str) -> None:
@@ -82,6 +202,61 @@ def canonical_relative(value: Any, field: str = "path") -> str:
     if ".." in path.parts:
         _error(f"{field} contains an unsafe traversal segment")
     return path.as_posix()
+
+
+def list_tracked_files(source_root: pathlib.Path | str,
+                       git_executable: pathlib.Path | str = "git") -> list[str]:
+    """Read tracked path names from the Git index without walking the tree.
+
+    ``git ls-files`` is intentionally the only discovery input.  In
+    particular, ``--others`` is not used, so an untracked local file such as
+    ``temp.txt`` cannot enter a generated source-kit allowlist.
+    """
+
+    root = _resolve_source_root(source_root)
+    executable = _require_string(os.fspath(git_executable), "git executable")
+    command = [executable, "-C", os.fspath(root), "ls-files", "--cached", "--full-name", "-z"]
+    try:
+        completed = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except OSError as exc:
+        _error(f"could not run git ls-files: {exc}")
+    if completed.returncode != 0:
+        try:
+            detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        except AttributeError:
+            detail = str(completed.stderr).strip()
+        suffix = f": {detail}" if detail else ""
+        _error(f"git ls-files failed with exit code {completed.returncode}{suffix}")
+    try:
+        text = completed.stdout.decode("utf-8")
+    except (AttributeError, UnicodeDecodeError) as exc:
+        _error(f"git ls-files returned a non-UTF-8 path: {exc}")
+    paths: list[str] = []
+    seen: set[str] = set()
+    for value in text.split("\x00"):
+        if not value:
+            continue
+        path = canonical_relative(value, "git ls-files path")
+        key = path.casefold()
+        _require(key not in seen, f"git ls-files returned duplicate path: {path}")
+        seen.add(key)
+        paths.append(path)
+    return sorted(paths, key=lambda item: (item.casefold(), item))
+
+
+def tracked_source_kit_files(source_root: pathlib.Path | str,
+                             git_executable: pathlib.Path | str = "git") -> list[str]:
+    """Return the required tracked source-kit paths in stable order."""
+
+    return [
+        path for path in list_tracked_files(source_root, git_executable)
+        if is_required_source_kit_path(path)
+    ]
 
 
 def _validate_sha256(value: Any, field: str) -> str:
@@ -235,16 +410,120 @@ def _normalize_entries(document: Any) -> list[dict[str, Any]]:
     return records
 
 
-def _resolve_input_file(source_root: pathlib.Path, relative: str, field: str) -> pathlib.Path:
-    """Resolve one allowlisted file without following links."""
+def check_allowlist_completeness(
+    source_root: pathlib.Path | str,
+    allowlist: pathlib.Path | str | Mapping[str, Any] | Sequence[Any],
+    *,
+    git_executable: pathlib.Path | str = "git",
+) -> dict[str, Any]:
+    """Compare an explicit allowlist with required tracked source-kit paths.
+
+    The result is an inventory check, not a package qualification claim.  It
+    deliberately ignores untracked files and paths excluded by policy.  A
+    required path is covered only when its spelling and deterministic
+    category both agree; this catches case-only filename drift on Windows as
+    well as newly tracked files omitted from the reviewed allowlist.
+    """
+
+    root = _resolve_source_root(source_root)
+    if isinstance(allowlist, (str, pathlib.Path, os.PathLike)):
+        allowlist_file = _resolve_allowlist_path(root, allowlist)
+        document = _read_allowlist(allowlist_file)
+    else:
+        document = allowlist
+    records = _normalize_entries(document)
+    tracked = list_tracked_files(root, git_executable)
+    required = [path for path in tracked if is_required_source_kit_path(path)]
+    excluded = [path for path in tracked if is_excluded_source_kit_path(path)]
+
+    listed_by_casefold: dict[str, dict[str, Any]] = {}
+    for record in records:
+        listed_by_casefold[record["path"].casefold()] = record
+
+    missing: list[str] = []
+    case_mismatches: list[dict[str, str]] = []
+    classification_mismatches: list[dict[str, str]] = []
+    for path in required:
+        record = listed_by_casefold.get(path.casefold())
+        if record is None:
+            missing.append(path)
+            continue
+        listed_path = record["path"]
+        if listed_path != path:
+            case_mismatches.append({"tracked": path, "allowlisted": listed_path})
+        expected_category = classify_source_kit_path(path)
+        if record["category"] != expected_category:
+            classification_mismatches.append({
+                "path": path,
+                "expected": expected_category,
+                "actual": record["category"],
+            })
+
+    required_keys = {path.casefold() for path in required}
+    extras = sorted(
+        (record["path"] for record in records if record["path"].casefold() not in required_keys),
+        key=lambda item: (item.casefold(), item),
+    )
+    return {
+        "complete": not (missing or case_mismatches or classification_mismatches),
+        "tracked_count": len(tracked),
+        "required_count": len(required),
+        "allowlisted_count": len(records),
+        "tracked": tracked,
+        "required": required,
+        "excluded": excluded,
+        "missing": missing,
+        "case_mismatches": case_mismatches,
+        "classification_mismatches": classification_mismatches,
+        "extras": extras,
+    }
+
+
+# Concise aliases for repository checks and external packaging callers.
+verify_allowlist_completeness = check_allowlist_completeness
+check_tracked_allowlist = check_allowlist_completeness
+
+
+def _resolve_actual_case_path(source_root: pathlib.Path,
+                              relative: str,
+                              field: str) -> pathlib.Path:
+    """Resolve a path while requiring each on-disk name to match its spelling.
+
+    Windows path lookup is case-insensitive.  Enumerating each directory
+    level prevents an allowlist containing ``Main.cpp`` from silently
+    referring to a tracked ``main.cpp`` and makes source-kit destinations
+    portable to case-sensitive consumers.
+    """
 
     current = source_root
     for part in pathlib.PurePosixPath(relative).parts:
-        current = current / part
         if _is_link(current):
             _error(f"{field} cannot contain a symlink or junction: {relative}")
+        try:
+            matches = [entry for entry in os.scandir(current)
+                       if entry.name.casefold() == part.casefold()]
+        except OSError as exc:
+            _error(f"could not inspect {field} parent for {relative}: {exc}")
+        if not matches:
+            _error(f"{field} missing file: {relative}")
+        if len(matches) > 1:
+            _error(f"{field} has ambiguous case-insensitive names: {relative}")
+        actual = matches[0]
+        if actual.name != part:
+            _error(
+                f"{field} actual filename casing differs for {relative}: "
+                f"filesystem has {actual.name}"
+            )
+        current = pathlib.Path(actual.path)
+        if _is_link(current):
+            _error(f"{field} cannot contain a symlink or junction: {relative}")
+    return current
 
-    candidate = source_root.joinpath(*pathlib.PurePosixPath(relative).parts)
+
+def _resolve_input_file(source_root: pathlib.Path, relative: str, field: str) -> pathlib.Path:
+    """Resolve one allowlisted file without following links."""
+
+    candidate = _resolve_actual_case_path(source_root, relative, field)
     if not candidate.exists():
         _error(f"{field} missing file: {relative}")
     if not candidate.is_file():
@@ -255,6 +534,15 @@ def _resolve_input_file(source_root: pathlib.Path, relative: str, field: str) ->
     except (OSError, RuntimeError, ValueError) as exc:
         _error(f"{field} must resolve inside the source root: {relative} ({exc})")
     return resolved
+
+
+def verify_actual_filename(source_root: pathlib.Path | str,
+                           relative: str) -> pathlib.Path:
+    """Resolve one source-kit path and verify its exact on-disk spelling."""
+
+    root = _resolve_source_root(source_root)
+    canonical = canonical_relative(relative, "path")
+    return _resolve_input_file(root, canonical, "path")
 
 
 def _hash_file(path: pathlib.Path) -> tuple[str, int]:
@@ -465,10 +753,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--allowlist", "--allowlist-path", dest="allowlist", required=True,
                         type=pathlib.Path, help="JSON file of explicitly allowlisted files")
     parser.add_argument("--output", "--manifest", "--output-manifest", dest="output",
-                        required=True, type=pathlib.Path,
+                        required=False, type=pathlib.Path,
                         help="output JSON manifest path")
+    parser.add_argument("--check-tracked", "--check", dest="check_tracked", action="store_true",
+                        help="verify the allowlist covers required tracked source paths")
     args = parser.parse_args(argv)
     try:
+        if args.check_tracked:
+            report = check_allowlist_completeness(args.source_root, args.allowlist)
+            status = "PASS" if report["complete"] else "FAIL"
+            print(
+                f"source-kit tracked check: {status}; "
+                f"{report['allowlisted_count']} allowlisted, "
+                f"{report['required_count']} required tracked"
+            )
+            for field in ("missing", "case_mismatches", "classification_mismatches"):
+                for value in report[field]:
+                    print(f"{field}: {value}", file=sys.stderr)
+            return 0 if report["complete"] else 1
+        if args.output is None:
+            parser.error("--output is required unless --check-tracked is used")
         manifest = generate_manifest(args.source_root, args.allowlist, args.output)
     except ManifestError as exc:
         print(f"source-kit manifest: {exc}", file=sys.stderr)
