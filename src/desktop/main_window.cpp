@@ -8780,16 +8780,16 @@ private:
         // through the tooltip/status tip instead of spending vertical space
         // on clipped text beside every icon.
         toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        toolbar->setIconSize(QSize(14, 14));
+        toolbar->setIconSize(QSize(12, 12));
         toolbar->setContentsMargins(0, 0, 0, 0);
         if (auto* toolbar_layout = toolbar->layout()) {
             toolbar_layout->setContentsMargins(0, 0, 0, 0);
             toolbar_layout->setSpacing(1);
         }
         // Keep the command strip compact so the canvas starts close to the
-        // window edge. A 14 px glyph plus the 18 px button content gives a
-        // reliable pointer target without creating a second header band.
-        toolbar->setFixedHeight(20);
+        // window edge. A 12 px glyph plus the 16 px button content keeps the
+        // row practical for mouse input without creating a second header band.
+        toolbar->setFixedHeight(18);
         const auto add_toolbar_action = [this, toolbar](const QString& label, const char* icon_paths) {
             auto* action = toolbar->addAction(modern_toolbar_icon(icon_paths), label);
             action->setToolTip(label);

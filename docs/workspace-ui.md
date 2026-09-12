@@ -2,7 +2,7 @@
 
 Property Studio uses a Windows desktop shell designed around the canvas rather
 than a legacy menu layout. The compact top toolbar keeps file, history,
-workspace, and command actions one click away in a single 20 px hit row. The
+workspace, and command actions one click away in a single 18 px hit row. The
 primary commands use bundled icons with tooltips and accessible names; units,
 paper size, and architectural view remain short inline selectors. Secondary
 authoring and presentation commands live in the **More** menu so the primary
