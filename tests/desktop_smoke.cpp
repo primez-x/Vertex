@@ -943,7 +943,7 @@ void test_contextual_building_dimension_inspector(const QString& capture_directo
     desktop::MainWindow window;
     window.setMetricUnits(true);
     const std::vector<BuildingObject> objects{
-        RectangularColumn{"inspector-column", {1, 2, 0}, 0.4, 0.6, 3.0, 0.2},
+        RectangularColumn{"inspector-column", {1, 2.123456789012345, 0}, 0.4, 0.6, 3.0, 0.23456789012345},
         CircularColumn{"inspector-round", {3, 2, 0}, 0.25, 3.0},
         Beam{"inspector-beam", {1, 2, 3}, {4, 2, 3}, {0, 0, 1}, 0.2, 0.3},
         StairFlight{"inspector-stair", {5, 0, 0}, 0.0, 4, 0.8, 0.25, 1.0, StairLanding{0.6, 0.15}},
@@ -951,12 +951,17 @@ void test_contextual_building_dimension_inspector(const QString& capture_directo
     auto* group = window.findChild<QGroupBox*>("buildingDimensions");
     auto* apply = window.findChild<QPushButton*>("applyBuildingDimensions");
     auto* error = window.findChild<QLabel*>("buildingDimensionsError");
-    require(group && apply && error, "building dimension inspector controls exist");
+    auto* placement_toggle = window.findChild<QToolButton*>("buildingPlacementToggle");
+    auto* placement_body = window.findChild<QWidget*>("buildingPlacement");
+    require(group && apply && error && placement_toggle && placement_body && placement_body->isHidden(),
+            "building inspector has a collapsed placement section");
     for (const auto& object : objects) {
         const auto id = window.commitBuildingObject(encode_building_entity(object,
             {{"future_metadata", "retained"}}), window.document().revision());
         require(!id.isEmpty() && window.selectEntity(id) && !group->isHidden(),
                 "each column, beam and stair exposes contextual dimensions");
+        if (!placement_toggle->isChecked()) placement_toggle->click();
+        require(!placement_body->isHidden(), "selected object placement section expands");
         const auto before = window.document().snapshot().entities().at(id.toStdString());
         const auto suffix = before.type == "column" ? "Height" : "Width";
         const auto key = before.type == "column" ? "height_m" : "width_m";
@@ -977,6 +982,13 @@ void test_contextual_building_dimension_inspector(const QString& capture_directo
         require(window.undoCommand() && window.document().snapshot().entities().at(id.toStdString()) == before &&
                     window.redoCommand() && window.document().snapshot().entities().at(id.toStdString()) == edited,
                 "building dimension edits undo and redo exactly");
+        const auto position_key = before.type == "beam" ? "start_m" :
+            before.type == "stair" ? "base_position_m" : "base_center_m";
+        require(edited.properties.at(position_key) == before.properties.at(position_key),
+                "dimension-only edits preserve exact untouched placement precision");
+        if (id == "inspector-column")
+            require(edited.properties.at("rotation_rad") == before.properties.at("rotation_rad"),
+                    "dimension-only edits preserve exact untouched angle precision");
         edit->setText("-1 m");
         const auto invalid_revision = window.document().revision();
         apply->click();
@@ -985,8 +997,58 @@ void test_contextual_building_dimension_inspector(const QString& capture_directo
                     !error->isHidden() && !error->text().isEmpty(),
                 "invalid dimension leaves document unchanged and shows inline validation");
         require(window.selectEntity(id), "refresh contextual building fields");
+        const auto set_placement = [&](const char* suffix, const char* text) {
+            auto* field = window.findChild<QLineEdit*>(QStringLiteral("contextBuilding") + suffix);
+            require(field && !field->isHidden(), "selected object exposes relevant placement field");
+            field->setText(QString::fromLatin1(text));
+        };
+        const bool beam = before.type == "beam";
+        set_placement(beam ? "StartX" : "BaseX", "1 1/2 ft");
+        set_placement(beam ? "StartY" : "BaseY", "-2 m");
+        set_placement(beam ? "StartZ" : "BaseZ", "0.75 m");
+        if (beam) {
+            set_placement("EndX", "4 m");
+            set_placement("EndY", "-1 m");
+            set_placement("EndZ", "1.25 m");
+        } else if (id != "inspector-round") {
+            set_placement("OrientationDegrees", "45");
+        }
+        const auto placement_revision = window.document().revision();
+        apply->click();
+        const auto placed = window.document().snapshot().entities().at(id.toStdString());
+        require(window.document().revision() == placement_revision + 1 &&
+                    std::abs(placed.properties.at(position_key).at(0).get<double>() - 0.4572) < 1e-12 &&
+                    placed.properties.at(position_key).at(1) == -2.0 &&
+                    placed.properties.at(position_key).at(2) == 0.75 && placed.extensions == edited.extensions,
+                "placement coordinates commit together using quantity parsing");
+        require(placed.properties.at("quantity_entries").contains(std::string("/") + position_key + "/0"),
+                "placement quantity input retains its receipt");
+        if (beam) {
+            require(placed.properties.at("end_m") == nlohmann::json::array({4.0, -1.0, 1.25}),
+                    "beam end coordinates are editable");
+        } else if (id != "inspector-round") {
+            require(std::abs(placed.properties.at(before.type == "column" ? "rotation_rad" : "orientation_rad")
+                                 .get<double>() - std::acos(-1.0) / 4.0) < 1e-12,
+                    "placement orientation accepts degrees and stores radians");
+        }
+        require(window.undoCommand() && window.document().snapshot().entities().at(id.toStdString()) == edited &&
+                    window.redoCommand() && window.document().snapshot().entities().at(id.toStdString()) == placed,
+                "placement edits undo and redo exactly");
+        if (beam) {
+            set_placement("StartX", "4 m");
+            set_placement("StartY", "-1 m");
+            set_placement("StartZ", "1.25 m");
+            edit->setText("2 m");
+            const auto degenerate_revision = window.document().revision();
+            apply->click();
+            require(window.document().revision() == degenerate_revision &&
+                        window.document().snapshot().entities().at(id.toStdString()) == placed && !error->isHidden(),
+                    "degenerate beam endpoints reject dimensions and placement atomically");
+            require(window.selectEntity(id), "reset rejected beam placement fields");
+        }
+        set_placement(beam ? "StartX" : "BaseX", "7 m");
         edit->setText("2 m");
-        auto intervening = edited;
+        auto intervening = placed;
         intervening.properties["external_metadata"] = "intervening";
         window.document().apply(ApplyEntityChanges{
             .expected_revision = window.document().revision(),
@@ -1001,7 +1063,9 @@ void test_contextual_building_dimension_inspector(const QString& capture_directo
     }
     require(window.selectEntity("inspector-round") &&
                 !window.findChild<QLineEdit*>("contextBuildingRadius")->isHidden() &&
-                window.findChild<QLineEdit*>("contextBuildingWidth")->isHidden(),
+                window.findChild<QLineEdit*>("contextBuildingWidth")->isHidden() &&
+                window.findChild<QLineEdit*>("contextBuildingOrientationDegrees")->isHidden() &&
+                window.findChild<QLineEdit*>("contextBuildingStartX")->isHidden(),
             "round columns show radius instead of rectangular section dimensions");
     require(window.selectEntity("inspector-stair") &&
                 !window.findChild<QLineEdit*>("contextBuildingRiserCount")->isHidden() &&
@@ -1026,6 +1090,8 @@ void test_contextual_building_dimension_inspector(const QString& capture_directo
         QApplication::processEvents();
         require(window.grab().save(capture_directory + "/stair-inspector.png"),
                 "capture contextual stair inspector for visual review");
+        require(window.grab().save(capture_directory + "/placement-inspector.png"),
+                "capture expanded placement inspector for visual review");
     }
     const auto final_entities = window.document().snapshot().entities();
     QTemporaryDir directory;

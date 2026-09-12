@@ -135,9 +135,14 @@ selected form are shown. `applyBuildingDimensions` sends changed fields through
 the same quantity parser, complete-object validation, and normal replacement
 command as the dialog. Unchanged fields retain their canonical precision and
 metadata. An unchanged form creates no history; invalid input and stale editing
-contexts show `buildingDimensionsError` without changing the document. Placement,
-orientation, beam endpoints, and landing details remain available in **Edit
-object**.
+contexts show `buildingDimensionsError` without changing the document.
+The collapsed **Placement** section exposes column/stair base X/Y/Z, rectangular
+column rotation, stair orientation, and beam start/end X/Y/Z. Angles are labelled
+in degrees and stored in radians. Coordinate fields reuse the dialog's quantity
+formatting and receipts. **Apply changes** commits dimensions and placement
+together; invalid geometry, including coincident beam endpoints, rejects the
+entire edit. Circular columns have no rotation field. Beam up direction and
+stair landing details remain available in **Edit object**.
 
 For dialog editing, the constructor first decodes and validates the original entity.
 Malformed or unsupported originals show an inline error and disable Submit.

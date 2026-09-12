@@ -6896,11 +6896,11 @@ public:
             return false;
         };
         if (!m_building_edit_context || !modalContextUnchanged(*m_building_edit_context))
-            return fail(QStringLiteral("The object editing context changed. Reselect the object before applying dimensions."));
+            return fail(QStringLiteral("The object editing context changed. Reselect the object before applying changes."));
         const auto context = *m_building_edit_context;
         const auto original = selectedEntity();
         if (!original || (original->type != "column" && original->type != "beam" && original->type != "stair"))
-            return fail(QStringLiteral("Select a column, beam or stair before applying dimensions."));
+            return fail(QStringLiteral("Select a column, beam or stair before applying changes."));
         try {
             BuildingObjectDialog dialog(*original, m_metric_units, owner);
             bool changed = false;
@@ -6912,19 +6912,27 @@ public:
                 field->setText(dimension.edit->text());
                 changed = true;
             }
+            for (const auto& placement : m_building_placement) {
+                if (placement.edit->isHidden() ||
+                    placement.edit->text().trimmed() == placement.original_text.trimmed()) continue;
+                auto* field = dialog.findChild<QLineEdit*>(QStringLiteral("buildingObject") + placement.suffix);
+                if (!field) throw std::runtime_error("The object editor is missing a placement field.");
+                field->setText(placement.edit->text());
+                changed = true;
+            }
             if (!changed) {
                 clearError();
                 m_building_dimensions_error->hide();
                 return true;
             }
-            if (!dialog.submit()) return fail(QStringLiteral("Object dimensions: %1").arg(dialog.lastError()));
+            if (!dialog.submit()) return fail(QStringLiteral("Object changes: %1").arg(dialog.lastError()));
             const auto candidate = dialog.candidate();
-            if (!candidate) return fail(QStringLiteral("Object dimensions did not produce an editable candidate."));
+            if (!candidate) return fail(QStringLiteral("Object changes did not produce an editable candidate."));
             if (!modalContextUnchanged(context)) return fail(m_last_error);
             if (commitBuildingObject(*candidate, context.revision, true).isEmpty()) return fail(m_last_error);
             return true;
         } catch (const std::exception& error) {
-            return fail(QStringLiteral("Object dimensions: %1").arg(QString::fromUtf8(error.what())));
+            return fail(QStringLiteral("Object changes: %1").arg(QString::fromUtf8(error.what())));
         }
     }
 
@@ -10909,12 +10917,46 @@ private:
             building_form_layout->addRow(label, edit);
             m_building_dimensions.push_back({spec.first, spec.second, label, edit, {}});
         }
+        auto* placement_toggle = new QToolButton(m_building_properties_group);
+        placement_toggle->setObjectName(QStringLiteral("buildingPlacementToggle"));
+        placement_toggle->setText(QStringLiteral("Placement"));
+        placement_toggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        placement_toggle->setArrowType(Qt::RightArrow);
+        placement_toggle->setCheckable(true);
+        building_form_layout->addRow(placement_toggle);
+        auto* placement_body = new QWidget(m_building_properties_group);
+        placement_body->setObjectName(QStringLiteral("buildingPlacement"));
+        auto* placement_form = new QFormLayout(placement_body);
+        placement_form->setContentsMargins(0, 0, 0, 0);
+        placement_form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+        placement_form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        for (const auto& suffix : {"BaseX", "BaseY", "BaseZ", "StartX", "StartY", "StartZ",
+                                   "EndX", "EndY", "EndZ", "OrientationDegrees"}) {
+            const auto name = QString::fromLatin1(suffix);
+            const auto text = name == "OrientationDegrees" ? QStringLiteral("Orientation (degrees)")
+                : name.left(name.size() - 1) + QStringLiteral(" ") + name.right(1);
+            auto* label = new QLabel(text, placement_body);
+            auto* edit = new QLineEdit(placement_body);
+            edit->setMinimumWidth(0);
+            edit->setObjectName(QStringLiteral("contextBuilding") + name);
+            edit->setAccessibleName(text);
+            label->setBuddy(edit);
+            placement_form->addRow(label, edit);
+            m_building_placement.push_back({name, nullptr, label, edit, {}});
+        }
+        building_form_layout->addRow(placement_body);
+        placement_body->hide();
+        QObject::connect(placement_toggle, &QToolButton::toggled, owner,
+                         [placement_toggle, placement_body](bool expanded) {
+            placement_toggle->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
+            placement_body->setVisible(expanded);
+        });
         m_building_dimensions_error = new QLabel(m_building_properties_group);
         m_building_dimensions_error->setObjectName(QStringLiteral("buildingDimensionsError"));
         m_building_dimensions_error->setWordWrap(true);
         m_building_dimensions_error->hide();
         building_form_layout->addRow(m_building_dimensions_error);
-        auto* apply_building = new QPushButton(QStringLiteral("Apply object dimensions"), m_building_properties_group);
+        auto* apply_building = new QPushButton(QStringLiteral("Apply changes"), m_building_properties_group);
         apply_building->setObjectName(QStringLiteral("applyBuildingDimensions"));
         building_form_layout->addRow(apply_building);
         QObject::connect(apply_building, &QPushButton::clicked, owner, [this] { (void)editSelectedBuildingDimensions(); });
@@ -12318,7 +12360,7 @@ private:
         m_building_dimensions_error->hide();
         if (dimension_object) {
             m_building_edit_context = captureModalContext();
-            m_building_properties_group->setTitle(QStringLiteral("%1 dimensions")
+            m_building_properties_group->setTitle(QStringLiteral("%1")
                 .arg(entity->type == "column" ? QStringLiteral("Column") :
                      entity->type == "beam" ? QStringLiteral("Beam") : QStringLiteral("Stair")));
             for (auto& dimension : m_building_dimensions) {
@@ -12338,6 +12380,24 @@ private:
                 dimension.original_text = dimension.suffix == QStringLiteral("RiserCount")
                     ? QString::number(value, 'f', 0) : format_length(value, m_metric_units);
                 dimension.edit->setText(dimension.original_text);
+            }
+            // Use the canonical dialog's formatting and field availability. Unchanged
+            // inspector text never replaces its decoded values or quantity receipts.
+            BuildingObjectDialog placement_dialog(*entity, m_metric_units, owner);
+            for (auto& placement : m_building_placement) {
+                auto* field = placement_dialog.findChild<QLineEdit*>(QStringLiteral("buildingObject") + placement.suffix);
+                placement.label->setVisible(field != nullptr);
+                placement.edit->setVisible(field != nullptr);
+                if (!field) continue;
+                if (placement.suffix == "OrientationDegrees") {
+                    const auto label = entity->type == "column" ? QStringLiteral("Rotation (degrees)")
+                                                               : QStringLiteral("Orientation (degrees)");
+                    placement.label->setText(label);
+                    placement.edit->setAccessibleName(label);
+                }
+                QSignalBlocker blocker(placement.edit);
+                placement.original_text = field->text();
+                placement.edit->setText(placement.original_text);
             }
         }
         m_delete_annotation_button->setVisible(annotation_context.has_value());
@@ -13514,6 +13574,7 @@ private:
     QGroupBox* m_building_properties_group{};
     QLabel* m_building_dimensions_error{};
     std::vector<BuildingDimensionField> m_building_dimensions;
+    std::vector<BuildingDimensionField> m_building_placement;
     std::optional<ModalContext> m_building_edit_context;
     QGroupBox* m_roof_properties_group{};
     QLineEdit* m_roof_run_edit{};
