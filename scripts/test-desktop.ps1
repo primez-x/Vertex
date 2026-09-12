@@ -27,7 +27,8 @@ $evidence = @()
 foreach ($workspace in @('measurement', 'architectural')) {
     foreach ($case in @(@{ Size = '1366x768'; Scale = '1' },
                         @{ Size = '1920x1080'; Scale = '1' },
-                        @{ Size = '1366x768'; Scale = '1.5' })) {
+                        @{ Size = '1366x768'; Scale = '1.5' },
+                        @{ Size = '1366x768'; Scale = '2' })) {
         $stem = "$workspace-$($case.Size)-$($case.Scale)"
         if ($IncludeReference) { $stem += '-reference' }
         $imagePath = Join-Path $outputDirectory "$stem.png"
