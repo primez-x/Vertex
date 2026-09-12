@@ -12,9 +12,9 @@ redo, and save acknowledgement. Typed relationship validation and portable
 package staging are present as bounded, separately testable slices.
 
 These additions are still development checkpoints. Apex native import/export,
-device and appraisal adapters, recovery retention cleanup and broader restore
-qualification, installer and source-kit qualification, and production
-acceptance evidence remain open in the requirements ledger.
+device and appraisal adapters, broader recovery restore qualification, installer
+and source-kit qualification, and production acceptance evidence remain open in
+the requirements ledger.
 
 The current checkpoint also includes read-only recovery-copy discovery with
 source-path and hash matching, a fail-closed offline-independence policy wired
@@ -148,7 +148,10 @@ background publication, ordered barriers, exception capture, and explicit
 draining/cancellation semantics. An owner-thread autosave scheduler now enforces
 two-second quiet debounce and a 30-second maximum interval while preserving
 stale/failure retry semantics. Desktop queue/scheduler wiring is now integrated
-for explicit saves and timed recovery copies; restart restoration remains open.
+for explicit saves and timed recovery copies. Save As now removes only an
+unchanged, role- and owner-matched recovery copy, rebases the next copy beside
+the new destination, and reports a cleanup issue while retaining any changed
+or foreign file. Restart restoration remains open.
 
 Workspace navigation now orders document commands, session activation and
 discard and finish in one in-memory history. Undo/redo restores exact archived drafts,
@@ -177,9 +180,9 @@ actual resource policy. Current document/draft values are detached; archival
 inputs are shared immutable values. Captures survive edits and owner destruction.
 Capture grants no save acknowledgement or filesystem ownership authority.
 Persisted counters are restored by the core v4 archive route. Desktop
-workspace-command routing, background I/O, save watermarks, and startup
-selection of unsaved unbound recovery copies are integrated; retention cleanup
-and broader restart qualification remain open.
+workspace-command routing, background I/O, save watermarks, startup selection of
+unsaved unbound recovery copies, and ownership-verified Save As cleanup/rebasing
+are integrated; broader restart qualification remains open.
 
 The v24r full integrated checkpoint passes 74/74 tests in Debug (94.81 seconds)
 and Release (20.37 seconds). All 227
@@ -205,9 +208,10 @@ candidate documents, instance/epoch/full-source checks, detached previews and
 no mutable Document escape. Core archive restoration now validates and detaches
 the decoded aggregate before installing it in a fresh workspace. The guarded
 desktop open path now uses this API. Internal aggregate v4 persistence, the
-save acknowledgement boundary, and startup selection of unsaved unbound
-recovery copies are implemented and used by the guarded desktop paths;
-retention cleanup and production qualification remain open.
+save acknowledgement boundary, startup selection of unsaved unbound recovery
+copies, and ownership-verified Save As cleanup/rebasing are implemented and
+used by the guarded desktop paths; broader restart recovery and production
+qualification remain open.
 Explicit Revise Input is implemented in memory: canonical replay regenerates
 IDs, preserves local history/counter floors and opaque extensions, and records
 the original retired namespace and finish event on a fresh activation bound to

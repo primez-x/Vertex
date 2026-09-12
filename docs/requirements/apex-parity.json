@@ -2156,7 +2156,7 @@
         "docs/workspace-autosave-scheduler.md",
         "docs/workspace-save-queue.md"
       ],
-      "implementation_note": "Owner-thread scheduling, queued immutable captures, guarded recovery archives, timed coverage for recovered, legacy, and untitled projects, read-only recovery-candidate discovery, startup selection of unsaved unbound copies, and a native Recover action are implemented; crash/power interruption fixtures, retention cleanup, and final restore qualification remain open."
+      "implementation_note": "Owner-thread scheduling, queued immutable captures, guarded recovery archives, timed coverage for recovered, legacy, and untitled projects, read-only recovery-candidate discovery, startup selection of unsaved unbound copies, a native Recover action, and ownership-verified Save As cleanup/rebasing are implemented; crash/power interruption fixtures, broader restart qualification, and final restore certification remain open."
     },
     {
       "id": "REC-002",

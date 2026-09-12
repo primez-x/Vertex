@@ -42,5 +42,7 @@ unsaved unbound copy directly, or presents the same list when several copies are
 available. Declining the prompt leaves the new workspace untouched; the explicit
 Recover action remains available. Saved-project recovery copies stay in their
 project directory and are discovered when that directory is chosen. The
-implementation does not simulate concurrent path replacement, retention cleanup,
-or final restore authorization.
+implementation does not simulate concurrent path replacement or final restore
+authorization. Save As cleanup is a separate owner-thread operation: it removes
+only an unchanged, role-validated recovery copy belonging to the current
+session and retains any changed or foreign file.

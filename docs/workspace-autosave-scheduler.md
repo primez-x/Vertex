@@ -21,5 +21,9 @@ it with `ProjectWorkspace`, `WorkspaceSaveQueue`, and
 archive after the quiet interval, with v4 recovery metadata and a guarded
 destination hash. Legacy documents are rebased into a detached workspace for
 capture; an explicit save advances the recovery watermark only after the
-publication barrier acknowledges the saved state. Recovery discovery/opening,
-retention cleanup, and unfinished live boundary input remain separate work.
+publication barrier acknowledges the saved state. Recovery discovery/opening
+and unfinished live boundary input remain separate work. A successful Save As
+re-destines the session's recovery archive beside the new project, and removes
+the previous copy only after its recovery role, archive ID, document ID, owner
+token, and last trusted fingerprint still match. Changed, malformed, or
+foreign files are retained and reported as a cleanup issue.

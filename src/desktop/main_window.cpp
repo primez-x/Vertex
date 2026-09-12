@@ -1256,6 +1256,18 @@ std::filesystem::path filesystem_path(const QString& path) {
     return std::filesystem::path(path.toStdWString());
 }
 
+bool same_filesystem_path(const std::filesystem::path& left,
+                          const std::filesystem::path& right) {
+    const auto normalized_left = left.lexically_normal();
+    const auto normalized_right = right.lexically_normal();
+#ifdef _WIN32
+    return QString::fromStdWString(normalized_left.wstring()).compare(
+               QString::fromStdWString(normalized_right.wstring()), Qt::CaseInsensitive) == 0;
+#else
+    return normalized_left == normalized_right;
+#endif
+}
+
 bool has_entity(const Document& document, const QString& entity_id) {
     const auto snapshot = document.snapshot();
     return snapshot.entities().contains(entity_id.toStdString());
@@ -8541,6 +8553,70 @@ private:
         m_autosave_retry_after = {};
     }
 
+    [[nodiscard]] std::filesystem::path autosaveDirectoryForCurrentProject() const {
+        auto directory = m_file_path.empty()
+            ? filesystem_path(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)) /
+                "recovery"
+            : m_file_path.parent_path();
+        if (directory.empty()) directory = std::filesystem::current_path();
+        return directory;
+    }
+
+    void rebaseAutosaveDestination() {
+        if (m_autosave_archive_id.empty()) return;
+        const auto next = autosaveDirectoryForCurrentProject() /
+            ("recovery-" + m_autosave_archive_id + ".bldproj");
+        if (!same_filesystem_path(next, m_autosave_path)) {
+            m_autosave_path = next;
+            // A path change invalidates the CAS fingerprint captured for the
+            // previous destination. The next capture must create the new
+            // recovery file rather than compare it with the old one.
+            m_autosave_sha256.clear();
+        }
+    }
+
+    // Remove only the exact recovery copy previously owned by this desktop
+    // session. A changed, malformed, aliased, or foreign file is retained so
+    // Save As can never delete user data merely because a generated filename
+    // happens to match. This is deliberately a best-effort cleanup boundary:
+    // the final fingerprint check narrows the replacement window, while the
+    // ordinary recovery publication remains guarded by its own CAS write.
+    [[nodiscard]] bool cleanupAutosaveCopy(const std::filesystem::path& path,
+                                           const std::string& archive_id,
+                                           const std::string& document_id,
+                                           const std::string& owner_token,
+                                           const std::string& expected_hash) const {
+        if (path.empty()) return true;
+        std::error_code status_error;
+        if (!std::filesystem::exists(path, status_error)) return !status_error;
+        if (status_error || !std::filesystem::is_regular_file(
+                std::filesystem::symlink_status(path, status_error)) || status_error)
+            return false;
+        if (archive_id.empty() || document_id.empty() || owner_token.empty() || expected_hash.empty() ||
+            path.filename() != std::filesystem::path("recovery-" + archive_id + ".bldproj"))
+            return false;
+        try {
+            const auto loaded = ProjectStore::load_archive(path, ArchiveRole::recovery_copy);
+            if (!loaded.supported() || !loaded.recovery.decoded ||
+                !loaded.recovery.decoded->recovery_copy)
+                return false;
+            const auto& record = *loaded.recovery.decoded->recovery_copy;
+            if (record.archive_id != archive_id || record.document_id != document_id ||
+                record.owner_token != owner_token)
+                return false;
+            if (loaded.file_sha256 != expected_hash) return false;
+            // Check the bytes again immediately before removal. This does not
+            // claim an adversarial filesystem lock, but it avoids deleting a
+            // replacement that arrived between archive load and cleanup.
+            if (ProjectStore::file_sha256(path) != loaded.file_sha256) return false;
+            std::error_code remove_error;
+            if (!std::filesystem::remove(path, remove_error) || remove_error) return false;
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+
     void waitForSaveBarrier() {
         const auto barrier = m_save_queue.enqueue_barrier();
         while (m_completed_barrier < barrier) {
@@ -8578,11 +8654,8 @@ private:
                 m_autosave_sha256.clear();
                 m_autosave_retry_after = {};
                 m_autosave_archive_id = make_stable_id();
-                auto directory = m_file_path.empty()
-                    ? filesystem_path(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)) / "recovery"
-                    : m_file_path.parent_path();
-                if (directory.empty()) directory = std::filesystem::current_path();
-                m_autosave_path = directory / ("recovery-" + m_autosave_archive_id + ".bldproj");
+                m_autosave_path = autosaveDirectoryForCurrentProject() /
+                    ("recovery-" + m_autosave_archive_id + ".bldproj");
             }
             const auto edited_generation = recovery_project
                 ? m_project_workspace->edited_generation() : m_document->revision();
@@ -8652,7 +8725,14 @@ private:
             setError(QStringLiteral("This document is read-only and cannot be saved."));
             return false;
         }
+        if (!m_autosave_path.empty() && same_filesystem_path(path, m_autosave_path)) {
+            setError(QStringLiteral("The selected project path is reserved for recovery data."));
+            return false;
+        }
         try {
+            const auto previous_autosave_path = m_autosave_path;
+            const auto previous_autosave_archive_id = m_autosave_archive_id;
+            const auto previous_autosave_document_id = m_autosave_document_id;
             const auto snapshot = m_document->snapshot();
             const auto source_digest = document_authoring_source_digest_v1(snapshot);
             if (source_digest != document_authoring_source_digest_v1(m_project_workspace->snapshot())) {
@@ -8700,6 +8780,9 @@ private:
             // Synchronous API compatibility: storage runs on the worker, while
             // this explicit barrier deliberately does not pump reentrant UI events.
             waitForSaveBarrier();
+            // A queued recovery completion may have supplied the only trusted
+            // fingerprint for the old copy while the barrier was draining.
+            const auto previous_autosave_hash = m_autosave_sha256;
             auto completion = std::move(m_completed_saves.at(sequence));
             m_completed_saves.erase(sequence);
             if (completion.error) std::rethrow_exception(completion.error);
@@ -8726,11 +8809,22 @@ private:
             if (refresh_draft_source) m_boundary_source = m_document->snapshot();
             m_file_path = path;
             m_file_sha256 = receipt.file_sha256;
+            const bool same_destination = !previous_autosave_path.empty() &&
+                same_filesystem_path(previous_autosave_path, path);
+            const bool cleanup_ok = previous_autosave_path.empty() || same_destination ||
+                cleanupAutosaveCopy(previous_autosave_path, previous_autosave_archive_id,
+                    previous_autosave_document_id, m_save_owner_token, previous_autosave_hash);
+            if (!same_destination && cleanup_ok) m_autosave_sha256.clear();
+            rebaseAutosaveDestination();
             clearError();
             refresh();
-            owner->statusBar()->showMessage(hasBoundaryDraftChanges()
+            auto status = hasBoundaryDraftChanges()
                 ? QStringLiteral("Saved committed geometry. The unfinished boundary is still unsaved.")
-                : QStringLiteral("Saved revision %1.").arg(receipt.revision), 6000);
+                : QStringLiteral("Saved revision %1.").arg(receipt.revision);
+            if (!cleanup_ok) {
+                status += QStringLiteral(" Recovery copy retained; cleanup pending.");
+            }
+            owner->statusBar()->showMessage(status, 6000);
             return true;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Save failed; the document remains open: %1")

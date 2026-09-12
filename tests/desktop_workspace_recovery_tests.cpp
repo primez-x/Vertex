@@ -253,9 +253,28 @@ void run() {
             autosaved.document().snapshot().saved_revision_optional() == saved_marker,
             "recovery completion does not mark ordinary document saved");
         // Existence follows the atomic rename; the owner barrier also waits
-        // for the worker to release its Windows read/write locks.
-        require(autosaved.saveProjectAs(qt_path(directory / "autosave-barrier.bldproj")),
+        // for the worker to release its Windows read/write locks. Save As
+        // must retire the old owned copy and rebase future recovery beside
+        // the new project destination.
+        const auto migrated_directory = directory / "migrated";
+        std::filesystem::create_directories(migrated_directory);
+        const auto migrated_destination = migrated_directory / "autosave-barrier.bldproj";
+        const auto old_recovery_path = recovery_path;
+        require(autosaved.saveProjectAs(qt_path(migrated_destination)),
             "drain automatic recovery publication before reading it");
+        const auto rebased_recovery_path =
+            std::filesystem::path(autosaved.recoveryCopyPath().toStdWString());
+        require(rebased_recovery_path != old_recovery_path &&
+            rebased_recovery_path.parent_path() == migrated_directory &&
+            !std::filesystem::exists(old_recovery_path),
+            "Save As removes the owned recovery copy and rebases its destination");
+        require(!std::filesystem::exists(rebased_recovery_path),
+            "rebased recovery destination waits for a newer edit");
+        require(!autosaved.createStraightWall({0, 4}, {4, 4}).isEmpty(),
+            "edit after recovery destination rebase");
+        wait_until([&] { return std::filesystem::exists(rebased_recovery_path); },
+            "rebased recovery destination receives the next edit");
+        recovery_path = rebased_recovery_path;
         const auto recovered = ProjectStore::load_archive(recovery_path, ArchiveRole::recovery_copy);
         require(recovered.supported() && recovered.recovery.decoded->recovery_copy &&
             recovered.recovery.decoded->recovery_copy->checkpoint_generation ==
@@ -267,7 +286,7 @@ void run() {
         require(ProjectStore::file_sha256(destination) == source_hash, "automatic recovery never overwrites source");
         { std::ofstream changed(recovery_path, std::ios::binary | std::ios::app); changed << "external change"; }
         const auto changed_hash = ProjectStore::file_sha256(recovery_path);
-        require(!autosaved.createStraightWall({0, 4}, {4, 4}).isEmpty(), "edit after external recovery modification");
+        require(!autosaved.createStraightWall({0, 5}, {4, 5}).isEmpty(), "edit after external recovery modification");
         wait_until([&] { return autosaved.lastError().contains("Recovery copy failed"); },
             "external recovery change causes guarded worker failure");
         require(autosaved.document().dirty() && ProjectStore::file_sha256(recovery_path) == changed_hash,
@@ -275,6 +294,28 @@ void run() {
     }
     // Destruction joins the queue even following errors; no job keeps files open.
     require(std::filesystem::remove(recovery_path), "shutdown releases recovery destination");
+    {
+        desktop::MainWindow cleanup_guard;
+        cleanup_guard.document().mark_saved(cleanup_guard.document().revision());
+        require(cleanup_guard.openProject(qt_path(destination)), "open cleanup guard fixture");
+        require(!cleanup_guard.createStraightWall({0, 9}, {4, 9}).isEmpty(),
+            "edit cleanup guard fixture");
+        wait_until([&] {
+            if (cleanup_guard.recoveryCopyPath().isEmpty()) return false;
+            recovery_path = std::filesystem::path(cleanup_guard.recoveryCopyPath().toStdWString());
+            return std::filesystem::exists(recovery_path);
+        }, "cleanup guard publishes its recovery copy");
+        const auto changed_recovery_path = recovery_path;
+        { std::ofstream changed(changed_recovery_path, std::ios::binary | std::ios::app); changed << "foreign change"; }
+        const auto cleanup_destination_directory = directory / "cleanup-migrated";
+        std::filesystem::create_directories(cleanup_destination_directory);
+        require(cleanup_guard.saveProjectAs(qt_path(
+            cleanup_destination_directory / "cleanup-guard.bldproj")),
+            "Save As succeeds when its prior recovery copy changed");
+        require(std::filesystem::exists(changed_recovery_path),
+            "changed recovery copy is retained when cleanup ownership cannot be proven");
+    }
+    require(std::filesystem::remove(recovery_path), "changed recovery destination is released");
     {
         desktop::MainWindow closing;
         closing.document().mark_saved(closing.document().revision());
@@ -308,12 +349,40 @@ void run() {
             recovery_path = std::filesystem::path(untitled.recoveryCopyPath().toStdWString());
             return std::filesystem::exists(recovery_path);
         }, "untitled projects receive automatic recovery copies");
-        require(untitled.saveProjectAs(qt_path(directory / "untitled-autosave-barrier.bldproj")),
+        const auto old_untitled_recovery_path = recovery_path;
+        const auto pre_save_untitled_recovery =
+            ProjectStore::load_archive(old_untitled_recovery_path, ArchiveRole::recovery_copy);
+        require(pre_save_untitled_recovery.supported() &&
+            pre_save_untitled_recovery.recovery.decoded->recovery_copy &&
+            !pre_save_untitled_recovery.recovery.decoded->recovery_copy->source_path,
+            "untitled recovery copy carries no source path before its first Save As");
+        const auto untitled_migrated_directory = directory / "untitled-migrated";
+        std::filesystem::create_directories(untitled_migrated_directory);
+        const auto untitled_destination =
+            untitled_migrated_directory / "untitled-autosave-barrier.bldproj";
+        require(untitled.saveProjectAs(qt_path(untitled_destination)),
             "drain untitled recovery publication before reading it");
+        const auto rebased_untitled_recovery_path =
+            std::filesystem::path(untitled.recoveryCopyPath().toStdWString());
+        require(rebased_untitled_recovery_path != old_untitled_recovery_path &&
+            rebased_untitled_recovery_path.parent_path() == untitled_migrated_directory &&
+            !std::filesystem::exists(old_untitled_recovery_path),
+            "untitled Save As removes its owned recovery copy and rebases the destination");
+        require(!std::filesystem::exists(rebased_untitled_recovery_path),
+            "untitled rebased recovery destination waits for a newer edit");
+        require(!untitled.createStraightWall({0, 8}, {4, 8}).isEmpty(),
+            "edit after untitled recovery destination rebase");
+        wait_until([&] { return std::filesystem::exists(rebased_untitled_recovery_path); },
+            "untitled rebased recovery destination receives the next edit");
+        recovery_path = rebased_untitled_recovery_path;
         const auto untitled_recovery = ProjectStore::load_archive(recovery_path, ArchiveRole::recovery_copy);
         require(untitled_recovery.supported() && untitled_recovery.recovery.decoded->recovery_copy &&
-            !untitled_recovery.recovery.decoded->recovery_copy->source_path,
-            "untitled recovery copy carries role metadata without a source path");
+            untitled_recovery.recovery.decoded->recovery_copy->source_path &&
+            std::filesystem::path(std::u8string(
+                untitled_recovery.recovery.decoded->recovery_copy->source_path->begin(),
+                untitled_recovery.recovery.decoded->recovery_copy->source_path->end())) ==
+                untitled_destination,
+            "untitled recovery copy records its new source path after Save As");
         require(document_authoring_source_digest_v1(untitled_recovery.archive->document()) ==
             document_authoring_source_digest_v1(untitled.document().snapshot()),
             "untitled recovery copy contains legacy direct edits");

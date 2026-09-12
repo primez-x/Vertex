@@ -53,6 +53,7 @@ role. A legacy destination can be upgraded with its expected hash and a retained
 backup; promotion and independent-copy operations remain separate work.
 
 The desktop now supplies live save acknowledgement, long-lived workspace
-ownership, and startup selection for unsaved unbound recovery copies. Exact-byte
-copying of opaque files, retention cleanup, and final restore authorization
-remain separate qualification work.
+ownership, startup selection for unsaved unbound recovery copies, and
+ownership-verified Save As cleanup/rebasing for its generated recovery copy.
+Exact-byte copying of opaque files and final restore authorization remain
+separate qualification work.
