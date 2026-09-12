@@ -898,6 +898,42 @@ std::vector<std::string> solver_diagnostics(
 
 }  // namespace
 
+void rebase_wall_length_receipt(Entity& wall, const Segment& transformed_baseline) {
+    auto section = wall.extensions.find("constraint_authoring");
+    if (section == wall.extensions.end()) {
+        return;
+    }
+    if (!section->is_object() || !section->contains("version") ||
+        !section->at("version").is_number_integer() || section->at("version") != 1) {
+        invalid("Wall has unsupported constraint_authoring extension metadata: " + wall.id);
+    }
+    auto receipt = section->find("last_length_entry");
+    if (receipt == section->end()) {
+        return;
+    }
+    (void)validate_length_receipt(*receipt, wall);
+    const auto original = read_baseline(wall);
+    const auto& transformed = transformed_baseline;
+    const auto original_length = std::hypot(original.end.x - original.start.x,
+                                             original.end.y - original.start.y);
+    const auto transformed_length = std::hypot(transformed.end.x - transformed.start.x,
+                                                transformed.end.y - transformed.start.y);
+    if (transformed.sweep_radians != 0.0 ||
+        !std::isfinite(transformed.start.x) || !std::isfinite(transformed.start.y) ||
+        !std::isfinite(transformed.end.x) || !std::isfinite(transformed.end.y) ||
+        !std::isfinite(original_length) || !std::isfinite(transformed_length) ||
+        transformed_length <= 0.0 ||
+        std::abs(transformed_length - original_length) > constraint_linear_tolerance_metres) {
+        invalid("Wall length receipt requires a finite length-preserving straight transform: " + wall.id);
+    }
+    auto updated = *receipt;
+    update_baseline_json(updated.at("baseline"), transformed);
+    auto transformed_wall = wall;
+    set_baseline(transformed_wall, transformed);
+    (void)validate_length_receipt(updated, transformed_wall);
+    receipt->swap(updated);
+}
+
 class ConstraintAuthoringBuilder final {
 public:
     static ConstraintAuthoringPreview build(const DocumentSnapshot& snapshot,

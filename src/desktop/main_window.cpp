@@ -8,6 +8,7 @@
 #include <QDoubleSpinBox>
 #include "sketch/architectural_schedule.hpp"
 #include "sketch/document_solid.hpp"
+#include "sketch/constraint_authoring.hpp"
 #include "sketch/desktop/hosted_opening_dialog.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/building_plan_projection.hpp"
@@ -1799,6 +1800,79 @@ public:
         }
     }
 
+    bool transformWallSelection(const DocumentSnapshot& source, const Entity& original,
+                                const QString& rotation_degrees, bool flip_horizontal,
+                                bool flip_vertical, const QString& offset_x,
+                                const QString& offset_y, bool clone) {
+        auto graph = clipboard_entities_for_selection(source, original.id);
+        std::vector<const Entity*> openings;
+        for (const auto& entity : graph) if (entity.type == "opening") openings.push_back(&entity);
+        Wall wall;
+        std::string diagnostic;
+        if (!read_document_wall(original, openings, wall, diagnostic))
+            throw std::invalid_argument(diagnostic);
+        validate_wall_semantics(wall);
+        bool valid_angle = true;
+        const auto degrees = rotation_degrees.trimmed().isEmpty() ? 0.0 : rotation_degrees.toDouble(&valid_angle);
+        if (!valid_angle || !std::isfinite(degrees) || std::abs(degrees) > 360000.0)
+            throw std::invalid_argument("Rotation must be finite and between -360000 and 360000 degrees.");
+        const auto offset = [this](const QString& value) {
+            return value.trimmed().isEmpty() ? 0.0 :
+                parse_quantity(value.trimmed().toStdString(), m_metric_units ? Unit::metre : Unit::foot).metres;
+        };
+        const Vec2 translation{offset(offset_x), offset(offset_y)};
+        const auto radians = degrees * std::numbers::pi / 180.0;
+        const Vec2 pivot{std::midpoint(wall.baseline.start.x, wall.baseline.end.x),
+                         std::midpoint(wall.baseline.start.y, wall.baseline.end.y)};
+        const auto transform = [&](Vec2 point) {
+            const double x = point.x - pivot.x, y = point.y - pivot.y;
+            double rx = x * std::cos(radians) - y * std::sin(radians);
+            double ry = x * std::sin(radians) + y * std::cos(radians);
+            if (flip_horizontal) rx = -rx;
+            if (flip_vertical) ry = -ry;
+            return Vec2{pivot.x + rx + translation.x, pivot.y + ry + translation.y};
+        };
+        auto baseline = wall.baseline;
+        baseline.start = transform(baseline.start);
+        baseline.end = transform(baseline.end);
+        const bool reflected = flip_horizontal != flip_vertical;
+        if (reflected) baseline.sweep_radians = -baseline.sweep_radians;
+        wall.baseline = baseline;
+        validate_wall_semantics(wall);
+        std::map<std::string, std::string, std::less<>> identities;
+        if (clone) for (const auto& entity : graph) identities.emplace(entity.id, new_id(entity.type));
+        std::vector<EntityChange> changes;
+        for (auto entity : graph) {
+            if (entity.type == "wall") {
+                rebase_wall_length_receipt(entity, baseline);
+                const auto geometry = segment_json(baseline);
+                for (const auto& [key, value] : geometry.items()) entity.properties["baseline"][key] = value;
+            } else if (reflected && entity.properties.contains("door_operation")) {
+                auto operation = decode_door_operation(entity.properties.at("door_operation"));
+                operation.swing_left = !operation.swing_left;
+                entity.properties["door_operation"] = encode_door_operation(operation);
+            }
+            if (clone) {
+                entity.id = identities.at(entity.id);
+                remap_entity_references(entity, identities);
+            }
+            if (clone || entity != source.entities().at(entity.id))
+                changes.push_back(EntityChange::upsert(std::move(entity)));
+        }
+        if (changes.empty()) {
+            clearError();
+            return true;
+        }
+        const ApplyEntityChanges command{source.revision(), std::move(changes), {},
+            clone ? "Clone transformed wall" : "Transform wall"};
+        (void)Document::preview_command(source, command);
+        applyDocumentCommand(command);
+        m_selected_id = id_from(clone ? identities.at(original.id) : original.id);
+        clearError();
+        refresh();
+        return true;
+    }
+
     [[nodiscard]] bool transformSelectedBoundary(const QString& rotation_degrees,
                                                   bool flip_horizontal,
                                                   bool flip_vertical,
@@ -1816,8 +1890,11 @@ public:
             }
             const auto source = authoringSnapshot();
             const auto found = source.entities().find(m_selected_id.toStdString());
+            if (found != source.entities().end() && found->second.type == "wall")
+                return transformWallSelection(source, found->second, rotation_degrees, flip_horizontal,
+                    flip_vertical, offset_x, offset_y, clone);
             if (found == source.entities().end() || !is_closed_boundary_entity(found->second.type)) {
-                throw std::invalid_argument("Select an identified closed boundary first.");
+                throw std::invalid_argument("Select a wall or an identified closed boundary first.");
             }
             auto original = found->second;
             const auto version = inspect_boundary_entity_version(original);
@@ -1930,7 +2007,7 @@ public:
             refresh();
             return true;
         } catch (const std::exception& error) {
-            setError(QStringLiteral("Boundary transform: %1").arg(QString::fromUtf8(error.what())));
+            setError(QStringLiteral("Transform: %1").arg(QString::fromUtf8(error.what())));
             return false;
         }
     }
@@ -2925,14 +3002,15 @@ public:
     }
 
     void showBoundaryTransformEditor() {
+        const auto context = captureModalContext();
         QDialog dialog(owner);
         styleDialog(dialog);
         dialog.setObjectName(QStringLiteral("boundaryTransformDialog"));
-        dialog.setWindowTitle(QStringLiteral("Transform boundary"));
+        dialog.setWindowTitle(QStringLiteral("Transform selection"));
         dialog.resize(520, 330);
         auto* layout = new QVBoxLayout(&dialog);
         auto* help = new QLabel(QStringLiteral(
-            "Transforms use the selected boundary's bounding-box center as the pivot. Rotation is in degrees; offsets use the current input units. Clone keeps the original boundary and its later history."),
+            "Pivot: boundary bounds center or wall endpoint midpoint. Rotation is in degrees; offsets use the current input units."),
             &dialog);
         help->setWordWrap(true);
         layout->addWidget(help);
@@ -2956,7 +3034,7 @@ public:
         flip_vertical->setObjectName(QStringLiteral("boundaryFlipVertical"));
         layout->addWidget(flip_horizontal);
         layout->addWidget(flip_vertical);
-        auto* clone = new QCheckBox(QStringLiteral("Create a clone; keep the selected boundary"), &dialog);
+        auto* clone = new QCheckBox(QStringLiteral("Create a copy"), &dialog);
         clone->setObjectName(QStringLiteral("boundaryClone"));
         layout->addWidget(clone);
         auto* status = new QLabel(&dialog);
@@ -2968,6 +3046,10 @@ public:
         layout->addWidget(buttons);
         QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
         QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, [&] {
+            if (!modalContextUnchanged(context)) {
+                status->setText(lastError());
+                return;
+            }
             if (transformSelectedBoundary(rotation->text(), flip_horizontal->isChecked(),
                                           flip_vertical->isChecked(), offset_x->text(),
                                           offset_y->text(), clone->isChecked())) {
@@ -2977,8 +3059,8 @@ public:
             }
         });
         if (!selectedEntity().has_value() ||
-            !is_closed_boundary_entity(selectedEntity()->type)) {
-            status->setText(QStringLiteral("Select an identified closed boundary first."));
+            (!is_closed_boundary_entity(selectedEntity()->type) && selectedEntity()->type != "wall")) {
+            status->setText(QStringLiteral("Select a wall or an identified closed boundary first."));
             buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
         }
         dialog.exec();
@@ -9626,7 +9708,7 @@ public:
             }},
             {QStringLiteral("Manage workspace profiles"), [this] { showWorkspaceProfiles(); }},
             {QStringLiteral("Named revisions and comparison"), [this] { showRevisionHistory(); }},
-            {QStringLiteral("Transform selected boundary"), [this] { showBoundaryTransformEditor(); }},
+            {QStringLiteral("Transform selection"), [this] { showBoundaryTransformEditor(); }},
             {QStringLiteral("Measurement workspace"), [this] { setWorkspace(Workspace::measurement); }},
             {QStringLiteral("Architectural workspace"), [this] { setWorkspace(Workspace::architectural); }},
             {QStringLiteral("Add labels and symbols"), [this] { showAnnotationEditor(); }},
@@ -10624,7 +10706,7 @@ private:
         m_workspace_profiles_action->setObjectName(QStringLiteral("workspaceProfiles"));
         m_revisions_action = new QAction(QStringLiteral("Named revisions…"), owner);
         m_revisions_action->setObjectName(QStringLiteral("revisionHistory"));
-        m_transform_action = new QAction(QStringLiteral("Transform boundary…"), owner);
+        m_transform_action = new QAction(QStringLiteral("Transform selection…"), owner);
         m_transform_action->setObjectName(QStringLiteral("boundaryTransform"));
         m_redefine_action = new QAction(QStringLiteral("Redefine boundary…"), owner);
         m_redefine_action->setObjectName(QStringLiteral("boundaryRedefinition"));

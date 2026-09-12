@@ -225,10 +225,10 @@ public:
     [[nodiscard]] bool editSelectedAreaAttributes(const QString& attributes_json);
     [[nodiscard]] bool setSelectedCalculationRule(bool include_in_building,
                                                    bool include_in_living);
-    // Applies an analytic transform to the selected identified boundary. The
-    // pivot is the source boundary's bounding-box center; offsets use the
-    // current input unit. Clone mode creates a new boundary and leaves the
-    // source untouched.
+    // Applies an analytic transform to a selected identified boundary or wall.
+    // Pivot: boundary endpoint bounds center or wall endpoint midpoint. Offsets
+    // use the current input unit. Wall clones include hosted openings; originals
+    // remain unchanged. The name is retained for existing callers.
     [[nodiscard]] bool transformSelectedBoundary(const QString& rotation_degrees,
                                                  bool flip_horizontal,
                                                  bool flip_vertical,

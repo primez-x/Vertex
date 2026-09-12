@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -281,6 +282,68 @@ void test_nested_metadata_and_receipt_validation() {
                     "relation edit retained a stale receipt");
         }
     }
+}
+
+void test_rigid_transform_rebases_length_receipt_without_losing_metadata() {
+    auto original = wall("wall-a", {0, 0}, {3, 4});
+    original.extensions["constraint_authoring"] =
+        {{"version", 1}, {"future_section", {1, 2}}, {"last_length_entry",
+            {{"version", 1}, {"original_expression", "500 cm"}, {"entered_unit", "cm"},
+             {"exact_metres", {{"numerator", 5}, {"denominator", 1}, {"opaque", true}}},
+             {"baseline", segment_json({0, 0}, {3, 4})}, {"future_receipt", "retain"}}}};
+    original.extensions["constraint_authoring"]["last_length_entry"]["baseline"]["opaque"] = true;
+    for (const auto& transformed : std::vector<Segment>{
+             {{10, -2}, {13, 2}, 0}, {{10, -2}, {6, 1}, 0}}) {
+        auto actual = original;
+        auto expected = original;
+        auto& expected_baseline = expected.extensions["constraint_authoring"]
+                                     ["last_length_entry"]["baseline"];
+        expected_baseline["start"] = {transformed.start.x, transformed.start.y};
+        expected_baseline["end"] = {transformed.end.x, transformed.end.y};
+        expected_baseline["sweep_radians"] = transformed.sweep_radians;
+        rebase_wall_length_receipt(actual, transformed);
+        require(actual == expected,
+                "rigid receipt transform changed properties, exact input, or opaque metadata");
+        actual.properties["baseline"] = segment_json(transformed.start, transformed.end);
+        rebase_wall_length_receipt(actual, transformed);
+    }
+
+    const Segment valid{{10, -2}, {6, 1}, 0};
+    const auto reject = [&](Entity value, const Segment& transformed) {
+        const auto before = value;
+        bool rejected = false;
+        try { rebase_wall_length_receipt(value, transformed); }
+        catch (const std::exception&) { rejected = true; }
+        require(rejected && value == before,
+                "invalid receipt transform was accepted or mutated its input");
+    };
+    auto bad = original;
+    bad.extensions["constraint_authoring"]["version"] = 2;
+    reject(bad, valid);
+    bad.extensions["constraint_authoring"] = "malformed";
+    reject(bad, valid);
+    bad = original;
+    bad.extensions["constraint_authoring"]["last_length_entry"]["version"] = 2;
+    reject(bad, valid);
+    bad = original;
+    bad.extensions["constraint_authoring"]["last_length_entry"].erase("exact_metres");
+    reject(bad, valid);
+    bad = original;
+    bad.extensions["constraint_authoring"]["last_length_entry"]["baseline"]["end"] = {4, 3};
+    reject(bad, valid);
+    reject(original, {{0, 0}, {6, 0}, 0});
+    reject(original, {{0, 0}, {3, 4}, 0.1});
+    reject(original, {{0, 0}, {std::numeric_limits<double>::infinity(), 4}, 0});
+    reject(original, {{0, 0}, {3, 4}, std::numeric_limits<double>::quiet_NaN()});
+
+    auto absent = wall("wall-a", {0, 0}, {3, 4});
+    auto before = absent;
+    rebase_wall_length_receipt(absent, valid);
+    require(absent == before, "missing receipt was not a no-op");
+    absent.extensions["constraint_authoring"] = {{"version", 1}, {"opaque", true}};
+    before = absent;
+    rebase_wall_length_receipt(absent, valid);
+    require(absent == before, "empty supported receipt envelope was not a no-op");
 }
 
 void test_connected_resize_moves_only_an_explicit_component() {
@@ -771,6 +834,7 @@ int main() {
     try {
         test_resize_twelve_to_fourteen_feet_with_either_anchor_and_exact_receipt();
         test_nested_metadata_and_receipt_validation();
+        test_rigid_transform_rebases_length_receipt_without_losing_metadata();
         test_connected_resize_moves_only_an_explicit_component();
         test_disabled_connected_movement_freezes_other_walls_and_rejects_conflict();
         test_solver_conflicts_use_semantic_wall_diagnostics();

@@ -9,6 +9,7 @@
 #include "sketch/project_store.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_dimension.hpp"
+#include "sketch/constraint_entity.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/quantity.hpp"
@@ -480,6 +481,82 @@ void test_selection_clipboard_workflow() {
     require(!window.pasteSelection() && window.document().revision() == malformed_revision &&
                 window.lastError().contains(QStringLiteral("clipboard"), Qt::CaseInsensitive),
             "malformed clipboard data must fail closed without mutation");
+}
+
+void test_wall_transform_workflow(const QString& capture_directory) {
+    using namespace sketch;
+    desktop::MainWindow window;
+    const auto wall_id=window.createStraightWall({0,0},{4,0});
+    require(window.selectEntity(wall_id),"select transform wall");
+    const auto opening_id=window.createHostedOpening("door","1 m","1 m","0 m","2 m");
+    auto opening=window.document().snapshot().entities().at(opening_id.toStdString());
+    opening.properties["door_operation"]={{"version",1},{"hinge","start"},{"side","left"},{"angle_degrees",90}};
+    window.document().apply(ApplyEntityChanges{window.document().revision(),{EntityChange::upsert(opening)},{},"door transform fixture"});
+    require(window.selectEntity(wall_id),"reselect transform wall");
+    const auto before=window.document().snapshot();
+    require(window.transformSelectedBoundary("90",false,false,"1 m","3 m",false),
+        "wall rotation and translation must use the selection transform command");
+    const auto rotated=window.document().snapshot();
+    const auto& baseline=rotated.entities().at(wall_id.toStdString()).properties.at("baseline");
+    require(std::abs(baseline.at("start")[0].get<double>()-3)<1e-9 &&
+        std::abs(baseline.at("start")[1].get<double>()-1)<1e-9 &&
+        std::abs(baseline.at("end")[0].get<double>()-3)<1e-9 &&
+        std::abs(baseline.at("end")[1].get<double>()-5)<1e-9 &&
+        rotated.entities().at(opening.id)==opening,
+        "rigid wall motion must preserve dimensions and hosted opening coordinates");
+    require(window.undoCommand() && window.document().snapshot().entities()==before.entities() &&
+        window.redoCommand() && window.document().snapshot().entities()==rotated.entities(),
+        "wall transform must undo and redo exactly");
+    require(window.transformSelectedBoundary("0",true,false,"0","0",false),"mirror wall graph");
+    require(window.document().snapshot().entities().at(opening.id).properties.at("door_operation").at("side")=="right",
+        "reflection must mirror hosted door swing side");
+    const auto mirrored=window.document().snapshot();
+    require(window.transformSelectedBoundary("0",false,false,"5 m","0",true),"clone transformed wall with openings");
+    const auto clone_id=window.selectedEntityId().toStdString();
+    const auto cloned=window.document().snapshot();
+    require(clone_id!=wall_id.toStdString() && cloned.entities().at(wall_id.toStdString())==mirrored.entities().at(wall_id.toStdString()),
+        "wall clone must preserve source geometry");
+    bool hosted=false;
+    for(const auto& [id,entity]:cloned.entities()) if(entity.type=="opening" && entity.properties.value("wall_id","")==clone_id) {
+        require(id!=opening.id && entity.properties.at("offset_m")==opening.properties.at("offset_m") &&
+            entity.properties.at("door_operation").at("side")=="right","clone must preserve local opening geometry and handing");
+        hosted=true;
+    }
+    require(hosted && window.undoCommand() && window.document().snapshot().entities()==mirrored.entities(),
+        "wall clone and hosted openings must be one undoable command");
+    require(window.selectEntity(wall_id),"select original after undo");
+    const auto vertical=encode_constraint_entity({"transform-vertical",ConstraintRelationKind::vertical,
+        {{wall_id.toStdString(),WallEndpointRole::start},{wall_id.toStdString(),WallEndpointRole::end}}});
+    window.document().apply(ApplyEntityChanges{window.document().revision(),{EntityChange::upsert(vertical)},{},"lock vertical"});
+    const auto constrained=window.document().snapshot();
+    require(!window.transformSelectedBoundary("45",false,false,"0","0",false) &&
+        window.document().snapshot().entities()==constrained.entities() && window.document().revision()==constrained.revision(),
+        "incompatible rigid transform must preserve hard constraints and reject without mutation");
+    window.document().apply(ApplyEntityChanges{window.document().revision(),{EntityChange::erase(vertical.id)},{},"remove test constraint"});
+    auto curved=window.document().snapshot().entities().at(wall_id.toStdString());
+    curved.properties["baseline"]["sweep_radians"]=0.75;
+    window.document().apply(ApplyEntityChanges{window.document().revision(),{EntityChange::upsert(curved)},{},"curved transform fixture"});
+    require(window.transformSelectedBoundary("30",true,false,"2 m","1 m",false) &&
+        window.document().snapshot().entities().at(wall_id.toStdString()).properties.at("baseline").at("sweep_radians")==-0.75,
+        "curved wall reflection must reverse analytical arc orientation");
+    QTemporaryDir stored;
+    const auto path=stored.filePath("transformed-wall.bldproj");
+    require(stored.isValid() && window.saveProjectAs(path),"save transformed wall project");
+    desktop::MainWindow reopened;
+    require(reopened.openProject(path) &&
+        reopened.document().snapshot().entities()==window.document().snapshot().entities(),
+        "transformed walls and hosted openings must survive project save and reopen");
+    QTimer::singleShot(0,&window,[&] {
+        auto* dialog=window.findChild<QDialog*>("boundaryTransformDialog");
+        require(dialog && dialog->findChild<QDialogButtonBox*>("boundaryTransformButtons")->button(QDialogButtonBox::Apply)->isEnabled(),
+            "transform editor must enable wall selection");
+        if(!capture_directory.isEmpty()) {
+            QDir().mkpath(capture_directory);
+            require(dialog->grab().save(capture_directory+"/wall-transform.png"),"save wall transform editor capture");
+        }
+        dialog->reject();
+    });
+    window.showBoundaryTransformEditor();
 }
 
 void test_material_clipboard_transfer() {
@@ -2561,6 +2638,7 @@ int main(int argc, char** argv) {
     test_workspace_profiles();
     test_room_boundary_from_existing_geometry();
     test_selection_clipboard_workflow();
+    test_wall_transform_workflow(field_ui_capture_directory);
     test_material_clipboard_transfer();
     test_delete_selection_workflow();
     test_boundary_vertex_insertion_workflow();

@@ -344,10 +344,10 @@ The wall constraint integration remains under qualification. Curved-wall
 constraints, persistent boundary vertex bindings, level dependency propagation
 and the complete production constraint workflow are still required.
 
-## Boundary transforms
+## Selection transforms
 
-The **Transform boundary** command is available from **More** and the command
-palette when a supported identified closed boundary is selected. It previews an
+The **Transform selection** command is available from **More** and the command
+palette when a supported identified closed boundary or wall is selected. It applies an
 analytic rotation around the boundary bounding-box center, independent
 horizontal/vertical reflections, and X/Y offsets in the active input units.
 Newly authored boundaries receive stable segment and vertex identities before
@@ -357,7 +357,19 @@ those identities so the operation can be undone and redone exactly. A boundary
 with receipt or dependent-reference semantics is rejected until those
 relationships have an explicit transform policy.
 
-Clone mode allocates a new boundary, segment IDs, and vertex IDs, carries only
+The same **Transform selection** command accepts straight and curved walls.
+Their pivot is the endpoint midpoint. Rotation, reflections, and translation
+preserve wall dimensions and hosted-opening distances along the baseline.
+A single reflection reverses the analytical arc sweep and stored door swing
+side; two reflections retain both. The existing hard constraints remain active
+and incompatible transforms reject atomically. Valid wall length-entry receipts
+retain their exact expression while their recorded baseline follows the move.
+Wall copy mode creates fresh wall/opening identities together and retains their
+material assignments. It does not copy external constraints or room links.
+Room-boundary propagation, connected-wall group transforms, and live transform
+previews remain open production work.
+
+Boundary clone mode allocates a new boundary, segment IDs, and vertex IDs, carries only
 safe drawing context and area metadata, and leaves the source entity and its
 relationships unchanged. Imported anonymous legacy boundaries are promoted
 only when a command can preserve their exact geometry and metadata; an
@@ -377,7 +389,7 @@ a split retains it, the new second piece starts without it, and unaffected
 edges keep their metadata. Unhandled directional receipts on a split edge
 reject the edit atomically rather than being discarded or duplicated.
 Legacy anonymous and receipt-bound boundaries fail
-closed until their identity and derivation policies are explicit. Wall/object
+closed until their identity and derivation policies are explicit. Additional object
 transforms, receipt-bound derivation edits, and full linked-relationship
 qualification remain open. The **Create room boundary
 from selected geometry** command can also assemble the selected wall's
