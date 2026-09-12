@@ -908,6 +908,32 @@ struct AssemblyModelRecord {
     AssemblyModel model;
 };
 
+QString assembly_quantity_unit_label(AssemblyQuantityUnit unit) {
+    switch (unit) {
+    case AssemblyQuantityUnit::count: return QStringLiteral("count");
+    case AssemblyQuantityUnit::metre: return QStringLiteral("m");
+    case AssemblyQuantityUnit::square_metre: return QStringLiteral("m2");
+    case AssemblyQuantityUnit::cubic_metre: return QStringLiteral("m3");
+    case AssemblyQuantityUnit::kilogram: return QStringLiteral("kg");
+    }
+    throw std::invalid_argument("Unknown assembly quantity unit");
+}
+
+AssemblyQuantityUnit assembly_quantity_unit(const QString& value) {
+    const auto normalized = value.trimmed().toLower();
+    if (normalized == QStringLiteral("count")) return AssemblyQuantityUnit::count;
+    if (normalized == QStringLiteral("m")) return AssemblyQuantityUnit::metre;
+    if (normalized == QStringLiteral("m2")) return AssemblyQuantityUnit::square_metre;
+    if (normalized == QStringLiteral("m3")) return AssemblyQuantityUnit::cubic_metre;
+    if (normalized == QStringLiteral("kg")) return AssemblyQuantityUnit::kilogram;
+    throw std::invalid_argument("Choose a valid quantity unit.");
+}
+
+QString assembly_quantity_text(const AssemblyQuantityProperty& value) {
+    return QStringLiteral("%1 %2")
+        .arg(QString::number(value.value, 'g', 12), assembly_quantity_unit_label(value.unit));
+}
+
 std::optional<PhaseModelRecord> decode_phase_model(const DocumentSnapshot& snapshot) {
     for (const auto& [id, entity] : snapshot.entities()) {
         if (entity.type != "model_phases") continue;
@@ -2544,7 +2570,7 @@ public:
             dialog.setObjectName(QStringLiteral("assemblyCatalogDialog"));
             dialog.setWindowTitle(QStringLiteral("Assembly catalog"));
             dialog.setModal(true);
-            dialog.resize(760, 500);
+            dialog.resize(900, 650);
 
             auto* layout = new QVBoxLayout(&dialog);
             auto* columns = new QHBoxLayout;
@@ -2601,6 +2627,133 @@ public:
             columns->addLayout(instance_panel, 1);
             layout->addLayout(columns, 1);
 
+            auto* data_tabs = new QTabWidget(&dialog);
+            data_tabs->setObjectName(QStringLiteral("assemblyDataTabs"));
+            data_tabs->setDocumentMode(true);
+
+            auto* type_data_page = new QWidget(data_tabs);
+            auto* type_data_layout = new QVBoxLayout(type_data_page);
+            auto* type_schema = new QListWidget(type_data_page);
+            type_schema->setObjectName(QStringLiteral("assemblyTypeSchemaList"));
+            type_schema->setSelectionMode(QAbstractItemView::SingleSelection);
+            type_schema->setToolTip(QStringLiteral(
+                "Properties, material slots, and quantities declared by the selected reusable type."));
+            type_data_layout->addWidget(type_schema, 1);
+            auto* type_entry_form = new QFormLayout;
+            auto* type_entry_kind = new QComboBox(type_data_page);
+            type_entry_kind->setObjectName(QStringLiteral("assemblyTypeEntryKind"));
+            type_entry_kind->addItem(QStringLiteral("Property"), QStringLiteral("property"));
+            type_entry_kind->addItem(QStringLiteral("Material slot"), QStringLiteral("material"));
+            type_entry_kind->addItem(QStringLiteral("Quantity"), QStringLiteral("quantity"));
+            auto* type_entry_key = new QLineEdit(type_data_page);
+            type_entry_key->setObjectName(QStringLiteral("assemblyTypeEntryKey"));
+            type_entry_key->setPlaceholderText(QStringLiteral("Key or slot"));
+            auto* type_entry_value = new QLineEdit(type_data_page);
+            type_entry_value->setObjectName(QStringLiteral("assemblyTypeEntryValue"));
+            type_entry_value->setPlaceholderText(QStringLiteral("Default value or material ID"));
+            auto* type_entry_unit = new QComboBox(type_data_page);
+            type_entry_unit->setObjectName(QStringLiteral("assemblyTypeEntryUnit"));
+            for (const auto& unit : {AssemblyQuantityUnit::count, AssemblyQuantityUnit::metre,
+                                     AssemblyQuantityUnit::square_metre, AssemblyQuantityUnit::cubic_metre,
+                                     AssemblyQuantityUnit::kilogram}) {
+                type_entry_unit->addItem(assembly_quantity_unit_label(unit),
+                                         assembly_quantity_unit_label(unit));
+            }
+            type_entry_form->addRow(QStringLiteral("Kind"), type_entry_kind);
+            type_entry_form->addRow(QStringLiteral("Key"), type_entry_key);
+            type_entry_form->addRow(QStringLiteral("Value"), type_entry_value);
+            type_entry_form->addRow(QStringLiteral("Unit"), type_entry_unit);
+            type_data_layout->addLayout(type_entry_form);
+            auto* type_entry_buttons = new QHBoxLayout;
+            auto* save_type_entry = new QPushButton(QStringLiteral("Save entry"), type_data_page);
+            save_type_entry->setObjectName(QStringLiteral("saveAssemblyTypeEntry"));
+            auto* remove_type_entry = new QPushButton(QStringLiteral("Remove entry"), type_data_page);
+            remove_type_entry->setObjectName(QStringLiteral("removeAssemblyTypeEntry"));
+            type_entry_buttons->addWidget(save_type_entry);
+            type_entry_buttons->addWidget(remove_type_entry);
+            type_entry_buttons->addStretch(1);
+            type_data_layout->addLayout(type_entry_buttons);
+            data_tabs->addTab(type_data_page, QStringLiteral("Type schema"));
+
+            auto* material_page = new QWidget(data_tabs);
+            auto* material_layout = new QVBoxLayout(material_page);
+            auto* materials = new QListWidget(material_page);
+            materials->setObjectName(QStringLiteral("assemblyMaterialList"));
+            materials->setSelectionMode(QAbstractItemView::SingleSelection);
+            material_layout->addWidget(materials, 1);
+            auto* material_form = new QFormLayout;
+            auto* material_id = new QLineEdit(material_page);
+            material_id->setObjectName(QStringLiteral("assemblyMaterialId"));
+            material_id->setPlaceholderText(QStringLiteral("Material ID"));
+            auto* material_name = new QLineEdit(material_page);
+            material_name->setObjectName(QStringLiteral("assemblyMaterialName"));
+            material_name->setPlaceholderText(QStringLiteral("Material name"));
+            material_form->addRow(QStringLiteral("ID"), material_id);
+            material_form->addRow(QStringLiteral("Name"), material_name);
+            material_layout->addLayout(material_form);
+            auto* material_buttons = new QHBoxLayout;
+            auto* add_material = new QPushButton(QStringLiteral("Save material"), material_page);
+            add_material->setObjectName(QStringLiteral("saveAssemblyMaterial"));
+            auto* remove_material = new QPushButton(QStringLiteral("Remove material"), material_page);
+            remove_material->setObjectName(QStringLiteral("removeAssemblyMaterial"));
+            material_buttons->addWidget(add_material);
+            material_buttons->addWidget(remove_material);
+            material_buttons->addStretch(1);
+            material_layout->addLayout(material_buttons);
+            auto* material_note = new QLabel(QStringLiteral(
+                "Material slots on a type must reference an ID in this local catalog."), material_page);
+            material_note->setWordWrap(true);
+            material_layout->addWidget(material_note);
+            data_tabs->addTab(material_page, QStringLiteral("Materials"));
+
+            auto* override_page = new QWidget(data_tabs);
+            auto* override_layout = new QVBoxLayout(override_page);
+            auto* overrides = new QListWidget(override_page);
+            overrides->setObjectName(QStringLiteral("assemblyInstanceOverrideList"));
+            overrides->setSelectionMode(QAbstractItemView::SingleSelection);
+            override_layout->addWidget(overrides, 1);
+            auto* override_form = new QFormLayout;
+            auto* override_kind = new QComboBox(override_page);
+            override_kind->setObjectName(QStringLiteral("assemblyInstanceOverrideKind"));
+            override_kind->addItem(QStringLiteral("Property"), QStringLiteral("property"));
+            override_kind->addItem(QStringLiteral("Material slot"), QStringLiteral("material"));
+            override_kind->addItem(QStringLiteral("Quantity"), QStringLiteral("quantity"));
+            auto* override_key = new QLineEdit(override_page);
+            override_key->setObjectName(QStringLiteral("assemblyInstanceOverrideKey"));
+            override_key->setPlaceholderText(QStringLiteral("Declared key or slot"));
+            auto* override_value = new QLineEdit(override_page);
+            override_value->setObjectName(QStringLiteral("assemblyInstanceOverrideValue"));
+            override_value->setPlaceholderText(QStringLiteral("Override value or material ID"));
+            auto* override_unit = new QComboBox(override_page);
+            override_unit->setObjectName(QStringLiteral("assemblyInstanceOverrideUnit"));
+            for (const auto& unit : {AssemblyQuantityUnit::count, AssemblyQuantityUnit::metre,
+                                     AssemblyQuantityUnit::square_metre, AssemblyQuantityUnit::cubic_metre,
+                                     AssemblyQuantityUnit::kilogram}) {
+                override_unit->addItem(assembly_quantity_unit_label(unit),
+                                       assembly_quantity_unit_label(unit));
+            }
+            override_form->addRow(QStringLiteral("Kind"), override_kind);
+            override_form->addRow(QStringLiteral("Key"), override_key);
+            override_form->addRow(QStringLiteral("Value"), override_value);
+            override_form->addRow(QStringLiteral("Unit"), override_unit);
+            override_layout->addLayout(override_form);
+            auto* override_buttons = new QHBoxLayout;
+            auto* save_override = new QPushButton(QStringLiteral("Save override"), override_page);
+            save_override->setObjectName(QStringLiteral("saveAssemblyInstanceOverride"));
+            auto* remove_override = new QPushButton(QStringLiteral("Remove override"), override_page);
+            remove_override->setObjectName(QStringLiteral("removeAssemblyInstanceOverride"));
+            override_buttons->addWidget(save_override);
+            override_buttons->addWidget(remove_override);
+            override_buttons->addStretch(1);
+            override_layout->addLayout(override_buttons);
+            auto* override_note = new QLabel(QStringLiteral(
+                "Overrides are explicit instance data. Quantity units must match the type declaration."),
+                override_page);
+            override_note->setWordWrap(true);
+            override_layout->addWidget(override_note);
+            data_tabs->addTab(override_page, QStringLiteral("Instance overrides"));
+            layout->addWidget(data_tabs, 1);
+
             auto* status = new QLabel(&dialog);
             status->setObjectName(QStringLiteral("assemblyCatalogStatus"));
             status->setWordWrap(true);
@@ -2616,17 +2769,143 @@ public:
 
             std::optional<AssemblyModelRecord> record;
             Revision record_revision{};
+            const auto refresh_materials = [&] {
+                const auto selected_id = materials->currentItem()
+                    ? materials->currentItem()->data(Qt::UserRole).toString() : QString{};
+                const QSignalBlocker blocker(materials);
+                materials->clear();
+                for (const auto& material : record->model.materials()) {
+                    auto* item = new QListWidgetItem(
+                        QStringLiteral("%1  ·  %2")
+                            .arg(QString::fromStdString(material.name),
+                                 QString::fromStdString(material.id)), materials);
+                    item->setData(Qt::UserRole, QString::fromStdString(material.id));
+                }
+                QListWidgetItem* selected = nullptr;
+                for (int index = 0; index < materials->count(); ++index) {
+                    if (materials->item(index)->data(Qt::UserRole).toString() == selected_id) {
+                        selected = materials->item(index);
+                        break;
+                    }
+                }
+                if (!selected && materials->count() > 0) selected = materials->item(0);
+                materials->setCurrentItem(selected);
+                material_id->clear();
+                material_name->clear();
+                if (selected) {
+                    const auto id = selected->data(Qt::UserRole).toString().toStdString();
+                    const auto found = std::find_if(record->model.materials().begin(),
+                                                    record->model.materials().end(),
+                        [&](const auto& candidate) { return candidate.id == id; });
+                    if (found != record->model.materials().end()) {
+                        material_id->setText(QString::fromStdString(found->id));
+                        material_name->setText(QString::fromStdString(found->name));
+                    }
+                }
+            };
+            const auto refresh_type_editor = [&] {
+                const QSignalBlocker schema_blocker(type_schema);
+                const QSignalBlocker kind_blocker(type_entry_kind);
+                const QSignalBlocker unit_blocker(type_entry_unit);
+                type_schema->clear();
+                type_entry_key->clear();
+                type_entry_value->clear();
+                type_entry_unit->setCurrentIndex(0);
+                if (!record) return;
+                const auto* selected = types->currentItem();
+                if (!selected) return;
+                const auto id = selected->data(Qt::UserRole).toString().toStdString();
+                const auto found = std::find_if(record->model.types().begin(),
+                                                record->model.types().end(),
+                    [&](const auto& candidate) { return candidate.id == id; });
+                if (found == record->model.types().end()) return;
+                type_id->setText(QString::fromStdString(found->id));
+                type_name->setText(QString::fromStdString(found->name));
+                const auto add_entry = [&](const QString& kind, const QString& key,
+                                           const QString& value, const QString& unit = QString{}) {
+                    auto* item = new QListWidgetItem(
+                        QStringLiteral("%1  ·  %2 = %3")
+                            .arg(kind, key, value), type_schema);
+                    item->setData(Qt::UserRole, kind);
+                    item->setData(Qt::UserRole + 1, key);
+                    item->setData(Qt::UserRole + 2, value);
+                    item->setData(Qt::UserRole + 3, unit);
+                };
+                for (const auto& [key, value] : found->properties)
+                    add_entry(QStringLiteral("Property"), QString::fromStdString(key),
+                              QString::fromStdString(value));
+                for (const auto& [key, value] : found->materials)
+                    add_entry(QStringLiteral("Material slot"), QString::fromStdString(key),
+                              QString::fromStdString(value));
+                for (const auto& [key, value] : found->quantities) {
+                    const auto unit = assembly_quantity_unit_label(value.unit);
+                    add_entry(QStringLiteral("Quantity"), QString::fromStdString(key),
+                              assembly_quantity_text(value), unit);
+                }
+            };
+            const auto refresh_instance_editor = [&] {
+                const QSignalBlocker blocker(overrides);
+                const QSignalBlocker kind_blocker(override_kind);
+                const QSignalBlocker unit_blocker(override_unit);
+                overrides->clear();
+                override_key->clear();
+                override_value->clear();
+                override_unit->setCurrentIndex(0);
+                if (!record) return;
+                const auto* selected = instances->currentItem();
+                if (!selected) return;
+                const auto id = selected->data(Qt::UserRole).toString().toStdString();
+                const auto found = std::find_if(record->model.instances().begin(),
+                                                record->model.instances().end(),
+                    [&](const auto& candidate) { return candidate.id == id; });
+                if (found == record->model.instances().end()) return;
+                instance_id->setText(QString::fromStdString(found->id));
+                const auto type = std::find_if(record->model.types().begin(),
+                                               record->model.types().end(),
+                    [&](const auto& candidate) { return candidate.id == found->type_id; });
+                const auto add_entry = [&](const QString& kind, const QString& key,
+                                           const QString& value, const QString& unit = QString{}) {
+                    auto* item = new QListWidgetItem(
+                        QStringLiteral("%1  ·  %2 = %3")
+                            .arg(kind, key, value), overrides);
+                    item->setData(Qt::UserRole, kind);
+                    item->setData(Qt::UserRole + 1, key);
+                    item->setData(Qt::UserRole + 2, value);
+                    item->setData(Qt::UserRole + 3, unit);
+                };
+                for (const auto& [key, value] : found->property_overrides)
+                    add_entry(QStringLiteral("Property"), QString::fromStdString(key),
+                              QString::fromStdString(value));
+                for (const auto& [key, value] : found->material_overrides)
+                    add_entry(QStringLiteral("Material slot"), QString::fromStdString(key),
+                              QString::fromStdString(value));
+                for (const auto& [key, value] : found->quantity_overrides)
+                    add_entry(QStringLiteral("Quantity"), QString::fromStdString(key),
+                              assembly_quantity_text(value), assembly_quantity_unit_label(value.unit));
+                if (type != record->model.types().end()) {
+                    for (int index = 0; index < override_unit->count(); ++index) {
+                        if (override_unit->itemData(index).toString() == QStringLiteral("count")) {
+                            override_unit->setCurrentIndex(index);
+                            break;
+                        }
+                    }
+                }
+            };
             const auto populate = [&] {
                 const auto snapshot = authoringSnapshot();
                 record = decode_assembly_model(snapshot);
                 if (!record) return;
                 record_revision = snapshot.revision();
+                const auto selected_type_id = types->currentItem()
+                    ? types->currentItem()->data(Qt::UserRole).toString()
+                    : type_id->text().trimmed();
+                const auto selected_instance_id = instances->currentItem()
+                    ? instances->currentItem()->data(Qt::UserRole).toString()
+                    : instance_id->text().trimmed();
                 const QSignalBlocker type_blocker(types);
                 const QSignalBlocker instance_blocker(instances);
                 const QSignalBlocker combo_blocker(instance_type);
                 types->clear();
-                type_id->clear();
-                type_name->clear();
                 instance_type->clear();
                 for (const auto& type : record->model.types()) {
                     auto* item = new QListWidgetItem(
@@ -2651,17 +2930,27 @@ public:
                         instances);
                     item->setData(Qt::UserRole, QString::fromStdString(instance.id));
                 }
-                const auto selected_type = types->currentItem();
-                if (selected_type) {
-                    const auto id = selected_type->data(Qt::UserRole).toString().toStdString();
-                    const auto found = std::find_if(record->model.types().begin(),
-                                                    record->model.types().end(),
-                        [&](const auto& candidate) { return candidate.id == id; });
-                    if (found != record->model.types().end()) {
-                        type_id->setText(QString::fromStdString(found->id));
-                        type_name->setText(QString::fromStdString(found->name));
+                QListWidgetItem* selected_type = nullptr;
+                for (int index = 0; index < types->count(); ++index) {
+                    if (types->item(index)->data(Qt::UserRole).toString() == selected_type_id) {
+                        selected_type = types->item(index);
+                        break;
                     }
                 }
+                if (!selected_type && types->count() > 0) selected_type = types->item(0);
+                types->setCurrentItem(selected_type);
+                QListWidgetItem* selected_instance = nullptr;
+                for (int index = 0; index < instances->count(); ++index) {
+                    if (instances->item(index)->data(Qt::UserRole).toString() == selected_instance_id) {
+                        selected_instance = instances->item(index);
+                        break;
+                    }
+                }
+                if (!selected_instance && instances->count() > 0) selected_instance = instances->item(0);
+                instances->setCurrentItem(selected_instance);
+                refresh_materials();
+                refresh_type_editor();
+                refresh_instance_editor();
                 status->setText(QStringLiteral("%1 reusable type%2 · %3 placed instance%4")
                     .arg(record->model.types().size())
                     .arg(record->model.types().size() == 1 ? QString{} : QStringLiteral("s"))
@@ -2671,20 +2960,89 @@ public:
                 rename_type->setEnabled(has_type);
                 remove_type->setEnabled(has_type);
                 add_instance->setEnabled(has_type);
+                remove_instance->setEnabled(!record->model.instances().empty());
+                save_type_entry->setEnabled(has_type);
+                remove_type_entry->setEnabled(has_type);
+                save_override->setEnabled(!record->model.instances().empty());
+                remove_override->setEnabled(!record->model.instances().empty());
+                remove_material->setEnabled(!record->model.materials().empty());
             };
             populate();
 
+            const auto entry_kind_id = [](const QString& label) -> QString {
+                if (label == QStringLiteral("Property")) return QStringLiteral("property");
+                if (label == QStringLiteral("Material slot")) return QStringLiteral("material");
+                return QStringLiteral("quantity");
+            };
             QObject::connect(types, &QListWidget::currentItemChanged, &dialog,
                              [&](QListWidgetItem* current, QListWidgetItem*) {
                                  if (!current || !record) return;
-                                 const auto id = current->data(Qt::UserRole).toString().toStdString();
-                                 const auto found = std::find_if(record->model.types().begin(),
-                                                                 record->model.types().end(),
-                                     [&](const auto& candidate) { return candidate.id == id; });
-                                 if (found == record->model.types().end()) return;
-                                 type_id->setText(QString::fromStdString(found->id));
-                                 type_name->setText(QString::fromStdString(found->name));
+                                 refresh_type_editor();
                              });
+            QObject::connect(instances, &QListWidget::currentItemChanged, &dialog,
+                             [&](QListWidgetItem* current, QListWidgetItem*) {
+                                 if (!current || !record) return;
+                                 refresh_instance_editor();
+                             });
+            QObject::connect(type_schema, &QListWidget::currentItemChanged, &dialog,
+                             [&](QListWidgetItem* current, QListWidgetItem*) {
+                                 if (!current) return;
+                                 const QSignalBlocker kind_blocker(type_entry_kind);
+                                 const QSignalBlocker unit_blocker(type_entry_unit);
+                                 const auto kind = entry_kind_id(current->data(Qt::UserRole).toString());
+                                 const auto kind_index = type_entry_kind->findData(kind);
+                                 if (kind_index >= 0) type_entry_kind->setCurrentIndex(kind_index);
+                                 type_entry_key->setText(current->data(Qt::UserRole + 1).toString());
+                                 const auto value = current->data(Qt::UserRole + 2).toString();
+                                 type_entry_value->setText(kind == QStringLiteral("Quantity")
+                                     ? value.section(u' ', 0, 0) : value);
+                                 const auto unit = current->data(Qt::UserRole + 3).toString();
+                                 if (!unit.isEmpty()) {
+                                     const auto unit_index = type_entry_unit->findData(unit);
+                                     if (unit_index >= 0) type_entry_unit->setCurrentIndex(unit_index);
+                                 }
+                             });
+            QObject::connect(overrides, &QListWidget::currentItemChanged, &dialog,
+                             [&](QListWidgetItem* current, QListWidgetItem*) {
+                                 if (!current) return;
+                                 const QSignalBlocker kind_blocker(override_kind);
+                                 const QSignalBlocker unit_blocker(override_unit);
+                                 const auto kind = entry_kind_id(current->data(Qt::UserRole).toString());
+                                 const auto kind_index = override_kind->findData(kind);
+                                 if (kind_index >= 0) override_kind->setCurrentIndex(kind_index);
+                                 override_key->setText(current->data(Qt::UserRole + 1).toString());
+                                 const auto value = current->data(Qt::UserRole + 2).toString();
+                                 override_value->setText(kind == QStringLiteral("Quantity")
+                                     ? value.section(u' ', 0, 0) : value);
+                                 const auto unit = current->data(Qt::UserRole + 3).toString();
+                                 if (!unit.isEmpty()) {
+                                     const auto unit_index = override_unit->findData(unit);
+                                     if (unit_index >= 0) override_unit->setCurrentIndex(unit_index);
+                                 }
+                             });
+            QObject::connect(materials, &QListWidget::currentItemChanged, &dialog,
+                             [&](QListWidgetItem* current, QListWidgetItem*) {
+                                 if (!current || !record) return;
+                                 const auto id = current->data(Qt::UserRole).toString().toStdString();
+                                 const auto found = std::find_if(record->model.materials().begin(),
+                                                                 record->model.materials().end(),
+                                     [&](const auto& candidate) { return candidate.id == id; });
+                                 if (found == record->model.materials().end()) return;
+                                 material_id->setText(QString::fromStdString(found->id));
+                                 material_name->setText(QString::fromStdString(found->name));
+                             });
+            const auto sync_type_unit = [&] {
+                type_entry_unit->setEnabled(type_entry_kind->currentData().toString() == QStringLiteral("quantity"));
+            };
+            const auto sync_override_unit = [&] {
+                override_unit->setEnabled(override_kind->currentData().toString() == QStringLiteral("quantity"));
+            };
+            QObject::connect(type_entry_kind, &QComboBox::currentIndexChanged, &dialog,
+                             [&](int) { sync_type_unit(); });
+            QObject::connect(override_kind, &QComboBox::currentIndexChanged, &dialog,
+                             [&](int) { sync_override_unit(); });
+            sync_type_unit();
+            sync_override_unit();
 
             const auto current_record = [&]() -> std::optional<AssemblyModelRecord> {
                 if (!record) return std::nullopt;
@@ -2696,6 +3054,187 @@ public:
                 }
                 return record;
             };
+
+            const auto selected_type_id = [&]() -> std::string {
+                const auto* item = types->currentItem();
+                return item ? item->data(Qt::UserRole).toString().toStdString() : std::string{};
+            };
+            const auto selected_instance_id = [&]() -> std::string {
+                const auto* item = instances->currentItem();
+                return item ? item->data(Qt::UserRole).toString().toStdString() : std::string{};
+            };
+            const auto read_quantity = [](QLineEdit* value, QComboBox* unit) {
+                bool ok = false;
+                const auto number = value->text().trimmed().toDouble(&ok);
+                if (!ok || !std::isfinite(number) || number < 0)
+                    throw std::invalid_argument("Enter a finite, nonnegative quantity.");
+                const auto parsed_unit = assembly_quantity_unit(unit->currentData().toString());
+                if (parsed_unit == AssemblyQuantityUnit::count && std::floor(number) != number)
+                    throw std::invalid_argument("Count quantities must be whole numbers.");
+                return AssemblyQuantityProperty{number, parsed_unit};
+            };
+
+            QObject::connect(add_material, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    const auto current = current_record();
+                    if (!current) return;
+                    const auto id = material_id->text().trimmed().toStdString();
+                    const auto name = material_name->text().trimmed().toStdString();
+                    if (id.empty() || name.empty())
+                        throw std::invalid_argument("Enter a material ID and name.");
+                    auto material_copy = current->model.materials();
+                    material_copy.push_back({id, name});
+                    const auto updated = AssemblyModel::create(
+                        std::move(material_copy), current->model.types(), current->model.instances());
+                    if (applyAssemblyModel(updated, QStringLiteral("Save assembly material"))) {
+                        populate();
+                        data_tabs->setCurrentWidget(material_page);
+                        status->setText(QStringLiteral("Material saved through document history."));
+                    }
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            });
+
+            QObject::connect(remove_material, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    const auto current = current_record();
+                    if (!current) return;
+                    const auto* item = materials->currentItem();
+                    if (!item) throw std::invalid_argument("Choose a material first.");
+                    const auto id = item->data(Qt::UserRole).toString().toStdString();
+                    auto material_copy = current->model.materials();
+                    material_copy.erase(std::remove_if(material_copy.begin(), material_copy.end(),
+                        [&](const auto& candidate) { return candidate.id == id; }), material_copy.end());
+                    const auto updated = AssemblyModel::create(
+                        std::move(material_copy), current->model.types(), current->model.instances());
+                    if (applyAssemblyModel(updated, QStringLiteral("Remove assembly material"))) {
+                        populate();
+                        data_tabs->setCurrentWidget(material_page);
+                        status->setText(QStringLiteral("Material removed through document history."));
+                    }
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            });
+
+            QObject::connect(save_type_entry, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    const auto current = current_record();
+                    if (!current) return;
+                    const auto id = selected_type_id();
+                    if (id.empty()) throw std::invalid_argument("Choose a reusable type first.");
+                    const auto key = type_entry_key->text().trimmed().toStdString();
+                    const auto value = type_entry_value->text().trimmed().toStdString();
+                    if (key.empty() || value.empty())
+                        throw std::invalid_argument("Enter a key and value.");
+                    auto replacement = *std::find_if(current->model.types().begin(),
+                                                     current->model.types().end(),
+                        [&](const auto& candidate) { return candidate.id == id; });
+                    const auto kind = type_entry_kind->currentData().toString();
+                    if (kind == QStringLiteral("property")) {
+                        replacement.properties[key] = value;
+                    } else if (kind == QStringLiteral("material")) {
+                        replacement.materials[key] = value;
+                    } else {
+                        replacement.quantities[key] = read_quantity(type_entry_value, type_entry_unit);
+                    }
+                    const auto updated = current->model.with_type(std::move(replacement));
+                    if (applyAssemblyModel(updated, QStringLiteral("Save assembly type entry"))) {
+                        populate();
+                        data_tabs->setCurrentWidget(type_data_page);
+                        status->setText(QStringLiteral("Type schema entry saved through document history."));
+                    }
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            });
+
+            QObject::connect(remove_type_entry, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    const auto current = current_record();
+                    if (!current) return;
+                    const auto id = selected_type_id();
+                    if (id.empty()) throw std::invalid_argument("Choose a reusable type first.");
+                    const auto* entry = type_schema->currentItem();
+                    if (!entry) throw std::invalid_argument("Choose a type schema entry first.");
+                    auto replacement = *std::find_if(current->model.types().begin(),
+                                                     current->model.types().end(),
+                        [&](const auto& candidate) { return candidate.id == id; });
+                    const auto key = entry->data(Qt::UserRole + 1).toString().toStdString();
+                    const auto kind = entry_kind_id(entry->data(Qt::UserRole).toString());
+                    if (kind == QStringLiteral("property")) replacement.properties.erase(key);
+                    else if (kind == QStringLiteral("material")) replacement.materials.erase(key);
+                    else replacement.quantities.erase(key);
+                    const auto updated = current->model.with_type(std::move(replacement));
+                    if (applyAssemblyModel(updated, QStringLiteral("Remove assembly type entry"))) {
+                        populate();
+                        data_tabs->setCurrentWidget(type_data_page);
+                        status->setText(QStringLiteral("Type schema entry removed through document history."));
+                    }
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            });
+
+            QObject::connect(save_override, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    const auto current = current_record();
+                    if (!current) return;
+                    const auto id = selected_instance_id();
+                    if (id.empty()) throw std::invalid_argument("Choose a placed instance first.");
+                    const auto key = override_key->text().trimmed().toStdString();
+                    const auto value = override_value->text().trimmed().toStdString();
+                    if (key.empty() || value.empty())
+                        throw std::invalid_argument("Enter a key and value.");
+                    auto replacement = *std::find_if(current->model.instances().begin(),
+                                                     current->model.instances().end(),
+                        [&](const auto& candidate) { return candidate.id == id; });
+                    const auto kind = override_kind->currentData().toString();
+                    if (kind == QStringLiteral("property")) {
+                        replacement.property_overrides[key] = value;
+                    } else if (kind == QStringLiteral("material")) {
+                        replacement.material_overrides[key] = value;
+                    } else {
+                        replacement.quantity_overrides[key] = read_quantity(override_value, override_unit);
+                    }
+                    const auto updated = current->model.with_instance(std::move(replacement));
+                    if (applyAssemblyModel(updated, QStringLiteral("Save assembly instance override"))) {
+                        populate();
+                        data_tabs->setCurrentWidget(override_page);
+                        status->setText(QStringLiteral("Instance override saved through document history."));
+                    }
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            });
+
+            QObject::connect(remove_override, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    const auto current = current_record();
+                    if (!current) return;
+                    const auto id = selected_instance_id();
+                    if (id.empty()) throw std::invalid_argument("Choose a placed instance first.");
+                    const auto* entry = overrides->currentItem();
+                    if (!entry) throw std::invalid_argument("Choose an instance override first.");
+                    auto replacement = *std::find_if(current->model.instances().begin(),
+                                                     current->model.instances().end(),
+                        [&](const auto& candidate) { return candidate.id == id; });
+                    const auto key = entry->data(Qt::UserRole + 1).toString().toStdString();
+                    const auto kind = entry_kind_id(entry->data(Qt::UserRole).toString());
+                    if (kind == QStringLiteral("property")) replacement.property_overrides.erase(key);
+                    else if (kind == QStringLiteral("material")) replacement.material_overrides.erase(key);
+                    else replacement.quantity_overrides.erase(key);
+                    const auto updated = current->model.with_instance(std::move(replacement));
+                    if (applyAssemblyModel(updated, QStringLiteral("Remove assembly instance override"))) {
+                        populate();
+                        data_tabs->setCurrentWidget(override_page);
+                        status->setText(QStringLiteral("Instance override removed through document history."));
+                    }
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            });
 
             QObject::connect(add_type, &QPushButton::clicked, &dialog, [&] {
                 try {

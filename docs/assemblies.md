@@ -29,16 +29,23 @@ catalogs by ID and map keys lexicographically, rejects unexpected fields and
 invalid references, and round-trips without losing override provenance. Returned
 JSON and resolved values are detached copies.
 
-The Windows Architectural workspace now exposes an **Assembly catalog** from
-the More menu and command palette. It creates the typed `assembly_model`
-record on demand, adds and removes reusable types and placed instances, and
-renames types through normal revision-fenced Document history. A type cannot be
-removed while an instance still references it, so the catalog never leaves a
-dangling placement. The editor is intentionally compact and keeps the model's
-typed identity separate from geometric placement.
+The Windows Architectural workspace exposes an **Assembly catalog** from the
+More menu and command palette. It creates the typed `assembly_model` record on
+demand, adds and removes reusable types and placed instances, renames types,
+and edits the local material catalog through normal revision-fenced Document
+history. A type cannot be removed while an instance still references it, so the
+catalog never leaves a dangling placement.
 
-This is not the complete architecture workspace feature. Property/material/
-quantity override editing, geometry bindings and placement, quantity takeoff
-integration, nested assemblies, material physical properties, and publication
-workflows remain open. Semantic snapshot restoration plus the desktop history
-checks do not establish full production assembly qualification.
+The catalog's Type schema tab edits named text properties, material slots, and
+dimensioned quantities. The Instance overrides tab edits explicit per-instance
+property, material-slot, and quantity overrides. Each save is a single
+undoable replacement validated by `AssemblyModel`: undeclared keys, unknown
+materials, negative or non-finite values, fractional counts, and quantity-unit
+changes are rejected without partial mutation. The list views show the stored
+defaults and overrides, including values that intentionally equal their type
+default.
+
+Geometry bindings and placement, quantity takeoff integration, nested
+assemblies, material physical properties, and publication workflows remain
+open. Semantic snapshot restoration plus the desktop history checks do not
+establish full production assembly qualification.

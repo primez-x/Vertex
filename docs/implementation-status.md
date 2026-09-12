@@ -80,10 +80,12 @@ segments, area, classification, and source-independent history are persisted.
 
 The Architectural workspace now also exposes a compact **Assembly catalog**
 that persists the typed `sketch.assemblies.v1` model in Document history. Users
-can add/remove reusable types and placed instances, rename types, and save or
-reopen the catalog without dangling type references. Property/material/
-quantity overrides, geometric placement, quantity takeoff integration, and
-publication qualification remain open.
+can add/remove reusable types and placed instances, rename types, maintain the
+local material catalog, declare typed properties/material slots/quantities, and
+edit explicit per-instance overrides. Invalid references and dimension changes
+are rejected atomically and every accepted change is undoable and survives
+save/reopen. Geometric placement, quantity takeoff integration, nested
+assemblies, and publication qualification remain open.
 
 The coordinated sheet/view graph now has a versioned `sheet_view_model` entity
 codec at the Document boundary. Document creation, command admission and

@@ -588,8 +588,24 @@ void test_assembly_catalog_workflow() {
         auto* add_type = dialog->findChild<QPushButton*>(QStringLiteral("addAssemblyType"));
         auto* instance_type = dialog->findChild<QComboBox*>(QStringLiteral("assemblyInstanceType"));
         auto* add_instance = dialog->findChild<QPushButton*>(QStringLiteral("addAssemblyInstance"));
+        auto* type_entry_kind = dialog->findChild<QComboBox*>(QStringLiteral("assemblyTypeEntryKind"));
+        auto* type_entry_key = dialog->findChild<QLineEdit*>(QStringLiteral("assemblyTypeEntryKey"));
+        auto* type_entry_value = dialog->findChild<QLineEdit*>(QStringLiteral("assemblyTypeEntryValue"));
+        auto* type_entry_unit = dialog->findChild<QComboBox*>(QStringLiteral("assemblyTypeEntryUnit"));
+        auto* save_type_entry = dialog->findChild<QPushButton*>(QStringLiteral("saveAssemblyTypeEntry"));
+        auto* type_schema = dialog->findChild<QListWidget*>(QStringLiteral("assemblyTypeSchemaList"));
+        auto* override_kind = dialog->findChild<QComboBox*>(QStringLiteral("assemblyInstanceOverrideKind"));
+        auto* override_key = dialog->findChild<QLineEdit*>(QStringLiteral("assemblyInstanceOverrideKey"));
+        auto* override_value = dialog->findChild<QLineEdit*>(QStringLiteral("assemblyInstanceOverrideValue"));
+        auto* override_unit = dialog->findChild<QComboBox*>(QStringLiteral("assemblyInstanceOverrideUnit"));
+        auto* save_override = dialog->findChild<QPushButton*>(QStringLiteral("saveAssemblyInstanceOverride"));
+        auto* override_list = dialog->findChild<QListWidget*>(QStringLiteral("assemblyInstanceOverrideList"));
         require(types && instances && type_id && type_name && add_type && instance_type && add_instance,
                 "assembly editor should expose catalog and instance controls");
+        require(type_entry_kind && type_entry_key && type_entry_value && type_entry_unit && save_type_entry &&
+                    type_schema && override_kind && override_key && override_value && override_unit &&
+                    save_override && override_list,
+                "assembly editor should expose typed schema and instance override controls");
         type_id->setText(QStringLiteral("wall-basic"));
         type_name->setText(QStringLiteral("Basic wall assembly"));
         add_type->click();
@@ -600,6 +616,34 @@ void test_assembly_catalog_workflow() {
         instance_type->setCurrentIndex(instance_type->findData(QStringLiteral("wall-basic")));
         add_instance->click();
         require(instances->count() == 1, "assembly editor should add a typed instance");
+        types->setCurrentRow(0);
+        type_entry_kind->setCurrentIndex(type_entry_kind->findData(QStringLiteral("property")));
+        type_entry_key->setText(QStringLiteral("finish"));
+        type_entry_value->setText(QStringLiteral("paint"));
+        save_type_entry->click();
+        require(type_schema->count() == 1 && type_schema->item(0)->text().contains(QStringLiteral("finish")),
+                "assembly editor should persist a typed property declaration");
+        type_entry_kind->setCurrentIndex(type_entry_kind->findData(QStringLiteral("quantity")));
+        type_entry_key->setText(QStringLiteral("waste"));
+        type_entry_value->setText(QStringLiteral("1.5"));
+        type_entry_unit->setCurrentIndex(type_entry_unit->findData(QStringLiteral("m2")));
+        save_type_entry->click();
+        require(type_schema->count() == 2 && type_schema->item(1)->text().contains(QStringLiteral("waste")),
+                "assembly editor should persist a typed quantity declaration");
+        instances->setCurrentRow(0);
+        override_kind->setCurrentIndex(override_kind->findData(QStringLiteral("property")));
+        override_key->setText(QStringLiteral("finish"));
+        override_value->setText(QStringLiteral("wood"));
+        save_override->click();
+        require(override_list->count() == 1 && override_list->item(0)->text().contains(QStringLiteral("wood")),
+                "assembly editor should persist a per-instance property override");
+        override_kind->setCurrentIndex(override_kind->findData(QStringLiteral("quantity")));
+        override_key->setText(QStringLiteral("waste"));
+        override_value->setText(QStringLiteral("2.5"));
+        override_unit->setCurrentIndex(override_unit->findData(QStringLiteral("m2")));
+        save_override->click();
+        require(override_list->count() == 2 && override_list->item(1)->text().contains(QStringLiteral("2.5")),
+                "assembly editor should persist a dimensioned quantity override");
         dialog->reject();
     });
     action->trigger();
@@ -614,12 +658,22 @@ void test_assembly_catalog_workflow() {
     auto model = find_model();
     require(model.types().size() == 1 && model.instances().size() == 1,
             "assembly catalog edits should retain type and instance records");
-    require(window.undoCommand() && window.undoCommand(),
+    require(model.types().front().properties.at("finish") == "paint" &&
+                model.types().front().quantities.at("waste").value == 1.5 &&
+                model.types().front().quantities.at("waste").unit == AssemblyQuantityUnit::square_metre &&
+                model.instances().front().property_overrides.at("finish") == "wood" &&
+                model.instances().front().quantity_overrides.at("waste").value == 2.5 &&
+                model.instances().front().quantity_overrides.at("waste").unit == AssemblyQuantityUnit::square_metre &&
+                model.resolve(model.instances().front().id).properties.at("finish") == "wood",
+            "assembly catalog edits should retain typed declarations and resolve overrides");
+    require(window.undoCommand() && window.undoCommand() && window.undoCommand() &&
+                window.undoCommand() && window.undoCommand() && window.undoCommand(),
             "assembly catalog edits should participate in normal undo history");
     model = find_model();
     require(model.types().empty() && model.instances().empty(),
             "undo should remove the instance and type without leaving a partial model");
-    require(window.redoCommand() && window.redoCommand(),
+    require(window.redoCommand() && window.redoCommand() && window.redoCommand() &&
+                window.redoCommand() && window.redoCommand() && window.redoCommand(),
             "assembly catalog edits should be redoable");
     model = find_model();
     require(model.types().size() == 1 && model.instances().size() == 1,
