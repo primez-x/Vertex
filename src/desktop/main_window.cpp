@@ -12212,6 +12212,7 @@ private:
             const auto preview = preview_boundary_commit(authoringSnapshot(), intent);
             if (!preview.accepted()) throw std::invalid_argument(preview.diagnostics().empty()
                 ? "boundary commit was rejected" : preview.diagnostics().front());
+            QString committed_id;
             if (m_redefine_boundary_id.has_value()) {
                 const auto created_id = preview.created_boundary_ids().front();
                 const auto created = preview.candidate_entities().find(created_id);
@@ -12220,12 +12221,15 @@ private:
                 }
                 const auto replacement = decode_identified_boundary_entity(created->second);
                 const auto source_id = *m_redefine_boundary_id;
-                m_selected_id = source_id;
                 const auto classification = QString::fromStdString(
                     read_string(created->second.properties, "classification").value_or(""));
                 if (!redefineSelectedBoundary(boundary_geometry(replacement), classification)) {
                     throw std::invalid_argument(lastError().toStdString());
                 }
+                // Redefinition updates the existing entity in place. Keep the
+                // source selection instead of selecting the temporary preview
+                // identity used to validate the replacement.
+                committed_id = source_id;
                 m_redefine_boundary_id.reset();
             } else if (m_recovery_ledger.empty()) {
                 (void)apply_boundary_commit(*m_document, preview);
@@ -12234,7 +12238,10 @@ private:
                 auto edit = m_project_workspace->prepare_boundary_commit(preview);
                 commitWorkspaceEdit(edit);
             }
-            m_selected_id = QString::fromStdString(preview.created_boundary_ids().front());
+            if (committed_id.isEmpty()) {
+                committed_id = QString::fromStdString(preview.created_boundary_ids().front());
+            }
+            m_selected_id = committed_id;
             clearPreview();
             m_tool = CanvasTool::select;
             syncToolControls();
