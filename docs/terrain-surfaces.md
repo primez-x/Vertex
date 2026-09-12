@@ -30,7 +30,7 @@ non-zero plan footprint, and no undirected edge may be shared by more than two t
 
 The current authoring command is **Create terrain surface from selected boundary**. It accepts
 one elevation quantity per straight vertex of a closed convex boundary. The command creates a
-centroid fan, validates the native faces before mutation, and stores the source boundary ID
+centroid fan, validates the native faces before mutation, and stores the source entity ID
 and original elevation expressions as inspectable metadata. The original boundary remains a
 separate measurement or room object.
 

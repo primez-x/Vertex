@@ -215,7 +215,8 @@ references. It also validates canonical singular and plural reference fields for
 such as `property_id`, `building_id`, `floor_id`, `wall_id`, `column_id`, `beam_id`, and `sheet_id`;
 a referenced entity must exist and have the named type. `boundary_id` continues to mean the exact
 `boundary` type; the distinct `measurement_boundary` and `room_boundary` types carry their own
-`floor_id` and `layer_id` links. `parent_id`, `host_id`, `target_id`, and `entity_id` are generic
+`floor_id` and `layer_id` links. `parent_id`, `host_id`, `target_id`, `entity_id`, and
+`source_entity_id` are generic
 references. `asset_id` and `asset_ids` resolve against the pinned asset map; a missing asset or
 deletion of an asset still in use rejects the complete command. This is structural referential
 validation for ordinary entities. Known persisted wall constraints additionally enforce their

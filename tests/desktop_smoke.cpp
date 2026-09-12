@@ -1253,7 +1253,7 @@ void test_terrain_surface_workflow() {
     require(terrain_entity.type == "terrain_surface" &&
                 terrain_entity.properties.at("model").at("points").size() == 5 &&
                 terrain_entity.properties.at("model").at("triangles").size() == 4 &&
-                terrain_entity.properties.at("source_boundary_id") == source.toStdString(),
+                terrain_entity.properties.at("source_entity_id") == source.toStdString(),
             "terrain authoring must persist a centroid fan and source metadata");
     auto* plan = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
     require(plan != nullptr && std::any_of(plan->entities().begin(), plan->entities().end(),

@@ -7545,7 +7545,7 @@ public:
                                          {"building_id", context->building_id},
                                          {"floor_id", context->floor_id},
                                          {"layer_id", context->layer_id},
-                                         {"source_boundary_id", selected->id},
+                                         {"source_entity_id", selected->id},
                                          {"elevation_expressions", elevation_expressions},
                                          {"model", surface.to_json()}};
             if (!applyEntity(Entity{entity_id, "terrain_surface", properties, false,

@@ -577,6 +577,23 @@ void test_embedded_architectural_models_are_validated_at_document_boundary() {
     require(terrain_document.revision() == terrain_revision,
             "a rejected terrain surface must not advance the revision");
 
+    auto linked_terrain = entity("terrain-linked", "terrain_surface",
+                                 {{"source_entity_id", "room-source"},
+                                  {"model", terrain_model}});
+    auto linked_document = Document::create({
+        entity("room-source", "room_boundary"), std::move(linked_terrain),
+    });
+    const auto linked_revision = linked_document.revision();
+    require_error(
+        [&] {
+            linked_document.apply(ApplyEntityChanges{
+                .expected_revision = linked_revision,
+                .entity_changes = {EntityChange::erase("room-source")},
+            });
+        },
+        DocumentErrorCode::dangling_reference,
+        "terrain source references must protect their source boundary");
+
     const auto relationships = sketch::RoomRelationshipSnapshot::create(
         {{"room-edge-1", sketch::RoomReferenceKind::room_boundary}}, {}).to_json();
     auto relationships_document = Document::create({

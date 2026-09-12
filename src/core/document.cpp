@@ -300,8 +300,9 @@ std::optional<std::optional<std::string_view>> reference_type_for_key(std::strin
         }
     }
     if (key == "parent_id" || key == "host_id" || key == "target_id" ||
-        key == "entity_id" || key == "parent_ids" || key == "host_ids" ||
-        key == "target_ids" || key == "entity_ids") {
+        key == "entity_id" || key == "source_entity_id" || key == "parent_ids" ||
+        key == "host_ids" || key == "target_ids" || key == "entity_ids" ||
+        key == "source_entity_ids") {
         return std::optional<std::string_view>{};
     }
     return std::nullopt;
