@@ -119,10 +119,11 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
         const auto* paste = window.findChild<QAction*>(QStringLiteral("pasteSelection"));
         const auto* remove = window.findChild<QAction*>(QStringLiteral("deleteSelection"));
         const auto* insert_vertex = window.findChild<QAction*>(QStringLiteral("insertBoundaryVertex"));
+        const auto* redefine = window.findChild<QAction*>(QStringLiteral("boundaryRedefinition"));
         require(copy && cut && paste && remove && copy->shortcut() == QKeySequence::Copy &&
                     cut->shortcut() == QKeySequence::Cut && paste->shortcut() == QKeySequence::Paste &&
-                    remove->shortcut() == QKeySequence::Delete && insert_vertex,
-                "clipboard, delete, and vertex editing commands must be discoverable");
+                    remove->shortcut() == QKeySequence::Delete && insert_vertex && redefine,
+                "clipboard, delete, and boundary editing commands must be discoverable");
         QTimer::singleShot(0, &window, [&] {
             auto* dialog = window.findChild<QDialog*>(QStringLiteral("keyboardShortcutDialog"));
             require(dialog, "shortcut editor must open");
@@ -554,6 +555,49 @@ void test_boundary_vertex_insertion_workflow() {
                 !window.insertSelectedBoundaryVertex(segment_id, QStringLiteral("1.0")) &&
                 window.document().revision() == rejected_revision,
             "vertex insertion must reject an endpoint fraction without mutation");
+}
+
+void test_boundary_redefinition_workflow() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    const auto boundary_id = window.createBoundary(
+        Boundary{{{{0.0, 0.0}, {4.0, 0.0}, 0.0},
+                  {{4.0, 0.0}, {4.0, 2.0}, 0.0},
+                  {{4.0, 2.0}, {0.0, 2.0}, 0.0},
+                  {{0.0, 2.0}, {0.0, 0.0}, 0.0}}}, QStringLiteral("measurement"));
+    require(!boundary_id.isEmpty() && window.selectEntity(boundary_id),
+            "redefinition fixture must create a selectable boundary");
+    const auto original_model = decode_identified_boundary_entity(
+        window.document().snapshot().entities().at(boundary_id.toStdString()));
+    const auto before = window.document().revision();
+    const auto replacement = Boundary{{{{0.0, 0.0}, {5.0, 0.0}, 0.0},
+                                       {{5.0, 0.0}, {5.0, 3.0}, 0.0},
+                                       {{5.0, 3.0}, {0.0, 3.0}, 0.0},
+                                       {{0.0, 3.0}, {0.0, 0.0}, 0.0}}};
+    require(window.redefineSelectedBoundary(replacement, QStringLiteral("living")) &&
+                window.document().revision() == before + 1,
+            "redefinition must commit one semantic boundary edit");
+    const auto updated = window.document().snapshot().entities().at(boundary_id.toStdString());
+    const auto model = decode_identified_boundary_entity(updated);
+    require(model.segments.size() == 4 && model.segments.front().segment.end.x == 5.0 &&
+                model.segments[1].segment.end.y == 3.0 &&
+                updated.properties.at("classification") == "living",
+            "redefinition must preserve identity while replacing analytical geometry and classification");
+    require(window.undoCommand() &&
+                decode_identified_boundary_entity(window.document().snapshot().entities().at(
+                    boundary_id.toStdString())).segments.front().segment.end.x == 4.0 &&
+                window.redoCommand() &&
+                decode_identified_boundary_entity(window.document().snapshot().entities().at(
+                    boundary_id.toStdString())).segments.front().segment.end.x == 5.0 &&
+                original_model.segments.front().segment_id == model.segments.front().segment_id &&
+                original_model.segments.front().start_vertex_id == model.segments.front().start_vertex_id,
+            "redefinition must be exactly undoable and retain stable edge identities");
+    const auto rejected_revision = window.document().revision();
+    auto open = replacement;
+    open.pop_back();
+    require(window.selectEntity(boundary_id) && !window.redefineSelectedBoundary(open) &&
+                window.document().revision() == rejected_revision,
+            "redefinition must reject invalid topology without mutation");
 }
 
 void test_named_revisions() {
@@ -1322,6 +1366,7 @@ int main(int argc, char** argv) {
     test_selection_clipboard_workflow();
     test_delete_selection_workflow();
     test_boundary_vertex_insertion_workflow();
+    test_boundary_redefinition_workflow();
     test_named_revisions();
     test_boundary_transform_workflow();
     test_design_phase_workflow();

@@ -2976,6 +2976,38 @@ public:
         dialog.exec();
     }
 
+    void showBoundaryRedefinition() {
+        const auto selected = selectedEntity();
+        if (!selected.has_value() || !is_closed_boundary_entity(selected->type)) {
+            setError(QStringLiteral("Select an identified closed boundary first."));
+            return;
+        }
+        try {
+            const auto version = inspect_boundary_entity_version(*selected);
+            if (version.format == BoundaryEntityFormat::unsupported_version) {
+                throw std::invalid_argument("This boundary uses an unsupported model version.");
+            }
+            if (version.format == BoundaryEntityFormat::anonymous_legacy) {
+                throw std::invalid_argument(
+                    "This legacy boundary needs an explicit identity upgrade before redefinition.");
+            }
+            if (selected->properties.contains("boundary_authoring")) {
+                throw std::invalid_argument(
+                    "Receipt-bound boundaries require an explicit derivation policy before redefinition.");
+            }
+            const auto source_id = m_selected_id;
+            const auto classification = QString::fromStdString(
+                read_string(selected->properties, "classification").value_or(""));
+            if (!beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, classification)) return;
+            m_redefine_boundary_id = source_id;
+            owner->statusBar()->showMessage(
+                QStringLiteral("Redefining boundary  •  draw the replacement with the same number of edges"),
+                6000);
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Redefine boundary: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
     void styleDialog(QDialog& dialog) const {
         // Top-level Qt dialogs do not always inherit a parent window's style
         // sheet. Copy the already-resolved palette and stylesheet so modal
@@ -5763,6 +5795,10 @@ public:
             setError(QStringLiteral("This project is read-only."));
             return false;
         }
+        // Starting a fresh authoring session clears any pending redraw target;
+        // the explicit redefinition command reinstates it after this setup
+        // succeeds.
+        m_redefine_boundary_id.reset();
         const auto context = requireDrawingContext();
         if (!context || !confirmDiscardBoundaryDraft()) return false;
         const auto modal_context = captureModalContext();
@@ -6618,6 +6654,67 @@ public:
             return true;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Insert vertex: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    bool redefineSelectedBoundary(const Boundary& boundary, const QString& classification) {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        try {
+            const auto source = authoringSnapshot();
+            const auto found = source.entities().find(m_selected_id.toStdString());
+            if (found == source.entities().end() || !is_closed_boundary_entity(found->second.type)) {
+                throw std::invalid_argument("Select an identified closed boundary first.");
+            }
+            const auto version = inspect_boundary_entity_version(found->second);
+            if (version.format == BoundaryEntityFormat::unsupported_version) {
+                throw std::invalid_argument("This boundary uses an unsupported model version.");
+            }
+            if (version.format == BoundaryEntityFormat::anonymous_legacy) {
+                throw std::invalid_argument(
+                    "This legacy boundary needs an explicit identity upgrade before redefinition.");
+            }
+            if (found->second.properties.contains("boundary_authoring")) {
+                throw std::invalid_argument(
+                    "Receipt-bound boundaries require an explicit derivation policy before redefinition.");
+            }
+            const auto diagnostics = validate_boundary(boundary);
+            if (!diagnostics.empty()) {
+                throw std::invalid_argument(diagnostics.front().message);
+            }
+            const auto original = decode_identified_boundary_entity(found->second);
+            if (original.segments.size() != boundary.size()) {
+                throw std::invalid_argument(
+                    "Redefinition must preserve the boundary edge count so existing references remain valid.");
+            }
+            auto replacement = original;
+            for (std::size_t index = 0; index < replacement.segments.size(); ++index) {
+                replacement.segments[index].segment = boundary[index];
+            }
+            auto updated = encode_identified_boundary_entity(replacement, &found->second);
+            const auto name = classification.trimmed();
+            if (!name.isEmpty()) {
+                updated.properties["classification"] = name.toStdString();
+                if (updated.type == "room_boundary") updated.properties["name"] = name.toStdString();
+            }
+            if (updated.properties.contains("boundary")) {
+                updated.properties["boundary"] = boundary_json(boundary);
+            }
+            const ApplyEntityChanges command{
+                source.revision(),
+                {EntityChange::upsert(std::move(updated))},
+                {},
+                "Redefine boundary"};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Redefine boundary: %1").arg(QString::fromUtf8(error.what())));
             return false;
         }
     }
@@ -8663,6 +8760,7 @@ public:
             {QStringLiteral("Paste selection"), [this] { pasteSelection(); }},
             {QStringLiteral("Delete selection"), [this] { deleteSelection(); }},
             {QStringLiteral("Insert boundary vertex"), [this] { showBoundaryVertexInsertion(); }},
+            {QStringLiteral("Redefine boundary"), [this] { showBoundaryRedefinition(); }},
             {QStringLiteral("Add building"), [this] { showOrganizationDialog("building"); }},
             {QStringLiteral("Add floor"), [this] { showOrganizationDialog("floor"); }},
             {QStringLiteral("Add drawing layer"), [this] { showOrganizationDialog("layer"); }},
@@ -9613,12 +9711,15 @@ private:
         m_revisions_action->setObjectName(QStringLiteral("revisionHistory"));
         m_transform_action = new QAction(QStringLiteral("Transform boundary…"), owner);
         m_transform_action->setObjectName(QStringLiteral("boundaryTransform"));
+        m_redefine_action = new QAction(QStringLiteral("Redefine boundary…"), owner);
+        m_redefine_action->setObjectName(QStringLiteral("boundaryRedefinition"));
         m_about_action = new QAction(QStringLiteral("About Property Studio"), owner);
-        const std::array<QAction*, 16> secondary_actions{
+        const std::array<QAction*, 17> secondary_actions{
             m_annotation_action, m_reference_action, m_schedule_action, m_sheet_action,
             m_viewport_action, m_schedule_placement_action, m_view_action, m_remodel_action,
             m_relationship_action, m_levels_action, m_assembly_action, m_assistance_action,
-            m_workspace_profiles_action, m_revisions_action, m_transform_action, m_about_action};
+            m_workspace_profiles_action, m_revisions_action, m_transform_action, m_redefine_action,
+            m_about_action};
         for (auto* action : secondary_actions) {
             owner->addAction(action);
             more_menu->addAction(action);
@@ -9761,6 +9862,8 @@ private:
                          [this] { showRevisionHistory(); });
         QObject::connect(m_transform_action, &QAction::triggered, owner,
                          [this] { showBoundaryTransformEditor(); });
+        QObject::connect(m_redefine_action, &QAction::triggered, owner,
+                         [this] { showBoundaryRedefinition(); });
         QObject::connect(m_about_action, &QAction::triggered, owner, [this] { showAbout(); });
         QObject::connect(m_unitsCombo, &QComboBox::currentIndexChanged, owner,
                          [this](int index) { setMetricUnits(index == 1); });
@@ -11981,7 +12084,22 @@ private:
             const auto preview = preview_boundary_commit(authoringSnapshot(), intent);
             if (!preview.accepted()) throw std::invalid_argument(preview.diagnostics().empty()
                 ? "boundary commit was rejected" : preview.diagnostics().front());
-            if (m_recovery_ledger.empty()) {
+            if (m_redefine_boundary_id.has_value()) {
+                const auto created_id = preview.created_boundary_ids().front();
+                const auto created = preview.candidate_entities().find(created_id);
+                if (created == preview.candidate_entities().end()) {
+                    throw std::invalid_argument("the replacement boundary was not present in the preview");
+                }
+                const auto replacement = decode_identified_boundary_entity(created->second);
+                const auto source_id = *m_redefine_boundary_id;
+                m_selected_id = source_id;
+                const auto classification = QString::fromStdString(
+                    read_string(created->second.properties, "classification").value_or(""));
+                if (!redefineSelectedBoundary(boundary_geometry(replacement), classification)) {
+                    throw std::invalid_argument(lastError().toStdString());
+                }
+                m_redefine_boundary_id.reset();
+            } else if (m_recovery_ledger.empty()) {
                 (void)apply_boundary_commit(*m_document, preview);
             } else {
                 requireWorkspaceDocument();
@@ -12002,6 +12120,7 @@ private:
     void cancelTool() {
         clearPreview();
         m_pending_wall_start.reset();
+        m_redefine_boundary_id.reset();
         setTool(CanvasTool::select);
     }
 
@@ -12089,6 +12208,7 @@ private:
         m_boundary_context.reset();
         m_boundary_document.reset();
         m_pending_wall_start.reset();
+        m_redefine_boundary_id.reset();
     }
 
     void openFromDialog() {
@@ -12521,6 +12641,7 @@ private:
     std::optional<DocumentSnapshot> m_boundary_source;
     std::optional<DrawingContext> m_boundary_context;
     std::shared_ptr<Document> m_boundary_document;
+    std::optional<QString> m_redefine_boundary_id;
     AssistanceSession m_assistance_session;
     QString m_last_boundary_classification{QStringLiteral("measurement")};
     QToolButton* m_define_boundary_button{};
@@ -12616,6 +12737,7 @@ private:
     QAction* m_paste_action{};
     QAction* m_delete_action{};
     QAction* m_insert_vertex_action{};
+    QAction* m_redefine_action{};
     std::vector<ShortcutBinding> m_shortcuts;
     QString m_shortcut_load_error;
     QAction* m_annotation_action{};
@@ -12840,6 +12962,11 @@ bool MainWindow::insertSelectedBoundaryVertex(const QString& segment_id,
     return m_impl->insertSelectedBoundaryVertex(segment_id, fraction);
 }
 
+bool MainWindow::redefineSelectedBoundary(const Boundary& boundary,
+                                           const QString& classification) {
+    return m_impl->redefineSelectedBoundary(boundary, classification);
+}
+
 bool MainWindow::editSelectedClassification(const QString& classification) {
     return m_impl->editSelectedClassification(classification);
 }
@@ -13044,6 +13171,10 @@ bool MainWindow::restoreNamedRevision(const QString& name, const QString& path) 
 
 void MainWindow::showBoundaryTransformEditor() {
     m_impl->showBoundaryTransformEditor();
+}
+
+void MainWindow::showBoundaryRedefinition() {
+    m_impl->showBoundaryRedefinition();
 }
 
 void MainWindow::fitView() {

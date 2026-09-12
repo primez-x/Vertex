@@ -1005,7 +1005,7 @@
         "tests/desktop_smoke.cpp",
         "docs/desktop-workflow.md"
       ],
-      "implementation_note": "Guarded delete now removes selected walls with owned openings and closed boundaries with dimensions in one undoable command; Document validation blocks surviving references and annotation children use the typed annotation delete path. Reopen/redefine lifecycle commands, broader object policies, and production qualification remain open."
+      "implementation_note": "Guarded delete now removes selected walls with owned openings and closed boundaries with dimensions in one undoable command; identified receipt-free boundaries also support same-edge-count redraw redefinition in place with stable reference identities and exact undo/redo. Document validation blocks surviving references and annotation children use the typed annotation delete path. Broader reopen/restore fixtures, receipt-bound derivation, object policies, and production qualification remain open."
     },
     {
       "id": "APX-EDIT-005",

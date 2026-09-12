@@ -109,6 +109,13 @@ geometry. Legacy anonymous and receipt-bound boundaries are rejected until an
 explicit identity or derivation policy is available; wall/object insertion,
 constraint reporting, and production qualification remain open.
 
+The same desktop path now supports **Redefine boundary…** for identified
+receipt-free boundaries. A redraw with the original edge count replaces the
+analytical segments in place, preserves stable segment and vertex references,
+updates optional classification metadata, and records one exact undoable
+Document command. Invalid topology and edge-count changes fail closed; broad
+reopen/restore fixtures and receipt-bound derivation policy remain open.
+
 The Architectural workspace now also exposes a compact **Assembly catalog**
 that persists the typed `sketch.assemblies.v1` model in Document history. Users
 can add/remove reusable types and placed instances, rename types, maintain the

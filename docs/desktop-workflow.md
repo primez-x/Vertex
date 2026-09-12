@@ -360,7 +360,14 @@ qualification remain open. The **Create room boundary
 from selected geometry** command can also assemble the selected wall's
 connected analytical component into one room boundary. It preserves the
 source walls, rejects open/branched/disconnected topology, and commits the
- room through normal document history.
+room through normal document history.
+
+**Redefine boundary…** starts the same Draw First editor against the selected
+identified boundary. Finish with the same number of edges to replace its
+analytical geometry in place while retaining stable edge and vertex references;
+the change is one guarded, undoable Document command. Invalid topology, legacy
+anonymous data, receipt-bound authoring, and edge-count changes fail before
+mutation. The command remains available from **More** and the command palette.
 
 `scripts/test-constraint-editor.ps1` captures the dialog at normal and 150 percent
 scale with the bundled font and a 15-second process timeout. It exercises both

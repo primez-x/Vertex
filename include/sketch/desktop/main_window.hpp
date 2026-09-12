@@ -200,6 +200,12 @@ public:
     // fresh identities for the inserted vertex and second piece.
     [[nodiscard]] bool insertSelectedBoundaryVertex(const QString& segment_id,
                                                     const QString& fraction);
+    // Replaces the selected identified boundary's analytical geometry while
+    // retaining its entity, segment, and vertex identities. The replacement
+    // must have the same edge count so existing typed references remain valid.
+    // An optional nonempty classification updates the stored classification.
+    [[nodiscard]] bool redefineSelectedBoundary(const Boundary& boundary,
+                                                const QString& classification = {});
     [[nodiscard]] bool editSelectedClassification(const QString& classification);
     [[nodiscard]] bool editSelectedLength(const QString& expression);
     [[nodiscard]] bool editSelectedHeight(const QString& expression);
@@ -309,6 +315,7 @@ public:
     void showWorkspaceProfiles();
     void showRevisionHistory();
     void showBoundaryTransformEditor();
+    void showBoundaryRedefinition();
     // Writes an immutable copy of a named revision without changing the
     // current document or its later history.
     [[nodiscard]] bool restoreNamedRevision(const QString& name, const QString& path);
