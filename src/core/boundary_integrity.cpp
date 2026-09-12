@@ -141,7 +141,11 @@ std::map<std::string, Entity, std::less<>> translated_boundary_entities(
     if (const auto unsupported = validate_boundary_integrity(source))
         throw std::invalid_argument(*unsupported);
     if (translation.offset.x == 0.0 && translation.offset.y == 0.0) return source;
-    const auto translated = translated_boundary_construction(*decoded.record, translation.offset);
+    // Keep historical v1/v2 translation proofs byte-replayable. Framed records
+    // retain local inputs and compose a world-space offset instead.
+    const auto translated = decoded.record->schema_version == boundary_receipt_schema_version_v3
+        ? transformed_boundary_construction(*decoded.record, PlanarTransform{{},0,false,false,translation.offset})
+        : translated_boundary_construction(*decoded.record, translation.offset);
     const auto replay = replay_boundary_construction(translated);
     boundary.segments.clear();
     for (const auto& edge : replay.edges)

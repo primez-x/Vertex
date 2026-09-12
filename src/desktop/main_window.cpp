@@ -1982,15 +1982,8 @@ public:
                     dimension.boundary_id = identities.at(original.id);
                     dimension.segment_id = identities.at(dimension.segment_id);
                 }
-                const auto x = dimension.text_position.x - pivot.x;
-                const auto y = dimension.text_position.y - pivot.y;
-                Vec2 position = dimension.text_position;
-                if (radians != 0.0)
-                    position = {pivot.x + x * std::cos(radians) - y * std::sin(radians),
-                                pivot.y + x * std::sin(radians) + y * std::cos(radians)};
-                if (flip_horizontal) position.x = pivot.x - (position.x - pivot.x);
-                if (flip_vertical) position.y = pivot.y - (position.y - pivot.y);
-                dimension.text_position = {position.x + offset.x, position.y + offset.y};
+                dimension.text_position = transform_point(dimension.text_position,
+                    PlanarTransform{pivot,radians,flip_horizontal,flip_vertical,offset});
                 auto dimension_metadata = entity;
                 dimension_metadata.id = dimension.id;
                 auto dimension_ids = identities;
@@ -2004,8 +1997,6 @@ public:
         if (clone) {
             std::optional<BoundaryConstructionRecord> construction;
             if (original.properties.contains("boundary_authoring")) {
-                if (radians != 0.0 || flip_horizontal || flip_vertical)
-                    throw std::invalid_argument("Construction-bound copies currently support offsets; rotation and reflection require receipt migration.");
                 const auto decoded = decode_boundary_receipt_envelope(original.properties.at("boundary_authoring"));
                 if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
                 construction = *decoded.record;
@@ -2035,7 +2026,8 @@ public:
             }
             std::optional<json> envelope;
             if (construction) {
-                const auto translated = translated_boundary_construction(*construction, offset, identities);
+                const auto translated = transformed_boundary_construction(*construction,
+                    PlanarTransform{pivot,radians,flip_horizontal,flip_vertical,offset}, identities);
                 const auto replay = replay_boundary_construction(translated);
                 cloned.segments.clear();
                 for (const auto& edge : replay.edges)

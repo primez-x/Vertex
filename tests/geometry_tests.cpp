@@ -373,7 +373,34 @@ void test_analytic_bounds() {
     require(rejected,"invalid arc values must reject bounds");
 }
 
+void test_planar_transforms() {
+    using namespace sketch;
+    const PlanarTransform transform{{2,1},std::numbers::pi/2,true,false,{5,-3}};
+    const auto point = transform_point({1,-0.5},transform);
+    require_near(point.x,5.5,1e-12,"compound transform X");
+    require_near(point.y,-3,1e-12,"compound transform Y");
+    const Segment arc{{-2,0},{2,0},std::numbers::pi};
+    const auto moved = transform_segment(arc,transform);
+    require_near(segment_length(moved),segment_length(arc),1e-12,"rigid transform preserves arc length");
+    require(moved.sweep_radians == -arc.sweep_radians,"one reflection reverses arc direction");
+    auto twice = transform;
+    twice.flip_vertical = true;
+    require(transform_segment(arc,twice).sweep_radians == arc.sweep_radians,"two reflections retain arc direction");
+    const auto untouched = transform_point({-0.0,7},{});
+    require(std::signbit(untouched.x) && untouched.y == 7,"identity transform preserves signed zero");
+    require_invalid_argument([&] { auto bad=transform; bad.offset.x=std::numeric_limits<double>::infinity();
+        (void)transform_point({0,0},bad); },"nonfinite transform must reject");
+    require_invalid_argument([&] { (void)transform_point({std::numeric_limits<double>::max(),0},
+        PlanarTransform{{},0,false,false,{std::numeric_limits<double>::max(),0}}); },"overflowing output must reject");
+    const PlanarTransform rotation{{0,0},0.321,false,false,{}};
+    auto reverse = rotation; reverse.rotation_radians = -rotation.rotation_radians;
+    const auto restored=transform_segment(transform_segment(arc,rotation),reverse);
+    require_near(restored.start.x,arc.start.x,1e-12,"inverse rotation restores start");
+    require_near(restored.end.y,arc.end.y,1e-12,"inverse rotation restores end");
+}
+
 int main() {
+    test_planar_transforms();
     test_analytic_bounds();
     test_linear_boundaries();
     test_arcs_have_analytic_length_and_area();

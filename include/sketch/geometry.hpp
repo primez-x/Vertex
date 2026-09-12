@@ -22,6 +22,25 @@ struct Segment {
 
 using Boundary = std::vector<Segment>;
 
+struct PlanarTransform {
+    Vec2 pivot{};
+    double rotation_radians{};
+    bool flip_horizontal{};
+    bool flip_vertical{};
+    Vec2 offset{};
+
+    bool operator==(const PlanarTransform& other) const noexcept {
+        return pivot.x == other.pivot.x && pivot.y == other.pivot.y &&
+            rotation_radians == other.rotation_radians && flip_horizontal == other.flip_horizontal &&
+            flip_vertical == other.flip_vertical && offset.x == other.offset.x && offset.y == other.offset.y;
+    }
+};
+
+// Rotate around pivot, reflect X/Y around pivot, then translate. Parameters and
+// output must be finite. A reflected circular arc reverses its signed sweep.
+[[nodiscard]] Vec2 transform_point(Vec2 point, const PlanarTransform& transform);
+[[nodiscard]] Segment transform_segment(const Segment& segment, const PlanarTransform& transform);
+
 struct Bounds2 {
     Vec2 minimum;
     Vec2 maximum;

@@ -19,6 +19,7 @@ namespace sketch {
 // emits version two for current session output.
 inline constexpr std::uint32_t boundary_receipt_schema_version_v1 = 1;
 inline constexpr std::uint32_t boundary_receipt_schema_version_v2 = 2;
+inline constexpr std::uint32_t boundary_receipt_schema_version_v3 = 3;
 inline constexpr std::uint32_t boundary_receipt_schema_version =
     boundary_receipt_schema_version_v1;
 inline constexpr std::uint32_t boundary_receipt_latest_schema_version =
@@ -135,6 +136,9 @@ struct BoundaryConstructionRecord {
     std::string boundary_id;
     std::vector<ConstructionTopologyEdge> edges;
     nlohmann::json extensions = nlohmann::json::object();
+    // Schema three only: receipts and anchor remain in their original local
+    // frame; replay applies these world-space operations in order.
+    std::vector<PlanarTransform> transforms;
 
     bool operator==(const BoundaryConstructionRecord&) const noexcept;
 };
@@ -170,13 +174,21 @@ struct BoundaryConstructionReplayResult {
 // invalid offsets or identity replacements throw std::invalid_argument.
 // Even finite offsets can reject when floating-point translation loses the
 // exact closure-vector relationship required by replay.
+// Schema three rejects here; use transformed_boundary_construction instead.
 [[nodiscard]] BoundaryConstructionRecord translated_boundary_construction(
     const BoundaryConstructionRecord& record, Vec2 offset,
+    const std::map<std::string, std::string, std::less<>>& identity_map = {});
+
+// Preserve all local construction inputs and append a transform frame. The
+// result opts into schema three. Optional replacements affect typed IDs only.
+[[nodiscard]] BoundaryConstructionRecord transformed_boundary_construction(
+    const BoundaryConstructionRecord& record, const PlanarTransform& transform,
     const std::map<std::string, std::string, std::less<>>& identity_map = {});
 
 enum class BoundaryReceiptEnvelopeFormat {
     supported_v1,
     supported_v2,
+    supported_v3,
     unsupported_version,
 };
 
@@ -196,7 +208,7 @@ struct BoundaryReceiptDecodeResult {
 };
 
 // inspect validates only the envelope shape needed to identify its positive
-// schema version. decode strictly validates known v1/v2; an unknown positive
+// schema version. decode strictly validates known v1/v2/v3; an unknown positive
 // schema or replay version is returned as opaque original JSON so a caller can
 // preserve it.
 [[nodiscard]] BoundaryReceiptEnvelopeVersion inspect_boundary_receipt_envelope(

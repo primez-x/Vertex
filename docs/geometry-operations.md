@@ -20,6 +20,20 @@ half-angle differences to avoid losing the curve height through subtraction of
 nearly equal center and radius values. The desktop uses these shared bounds for
 boundary transform pivots and fitting retained canvas geometry.
 
+`PlanarTransform`, `transform_point`, and `transform_segment` share the desktop
+operation order: rotation about a pivot, X/Y reflection about that pivot, then
+offset. Finite inputs and output are required. Arc sweep reverses for one
+reflection and is retained for two. Identity transforms preserve signed zero.
+Receipt schema 3 uses these primitives to transform replayed geometry while
+retaining the original local measurement inputs.
+Replay checks transformed endpoints against an origin-relative reference and
+each analytical edge length against its original length after every frame.
+Non-finite residuals or cumulative shape drift beyond the geometry tolerance
+(normally 1e-7 metres) reject the operation. Pure translation rounding is also
+accumulated and checked, so an offset cannot silently disappear below coordinate
+resolution. These checks do not certify arbitrary-scale affine placement;
+coordinates must remain representable at the required precision.
+
 For nearly parallel straight segments, overlapping axis-aligned bounds alone
 do not imply an uncertain intersection. The validator can prove separation
 when both endpoints lie strictly on the same side of the other segment's line,

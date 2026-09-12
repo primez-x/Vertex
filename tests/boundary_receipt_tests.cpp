@@ -259,6 +259,182 @@ BoundaryConstructionRecord point_record() {
     return result;
 }
 
+void test_transform_frames_preserve_local_inputs_and_compose() {
+    auto records = all_forms();
+    records.push_back(point_record());
+    const std::vector<sketch::PlanarTransform> operations{
+        {{2, -1}, std::numbers::pi / 3, false, false, {}},
+        {{-3, 2}, 0, true, false, {}},
+        {{1, 4}, 0, false, true, {}},
+        {{}, 0, true, true, {8, -4}},
+        {{}, 0, false, false, {0.125, -0.25}}};
+    for (auto original : records) {
+        original.extensions["boundary_id"] = original.boundary_id;
+        original.extensions["segment_id"] = original.edges.front().segment_id;
+        const auto original_json = sketch::encode_boundary_receipt_envelope(original);
+        require(!original_json.contains("transforms"), "legacy encoding must omit transforms");
+        auto transformed = original;
+        auto expected = sketch::replay_boundary_construction(original);
+        for (const auto& operation : operations) {
+            transformed = sketch::transformed_boundary_construction(transformed, operation);
+            expected.anchor = sketch::transform_point(expected.anchor, operation);
+            for (auto& edge : expected.edges) {
+                edge.segment = sketch::transform_segment(edge.segment, operation);
+            }
+            require(sketch::replay_boundary_construction(transformed) == expected,
+                    "all receipt kinds must replay then apply ordered transforms exactly");
+            require(transformed.edges == original.edges &&
+                        transformed.anchor.x == original.anchor.x &&
+                        transformed.anchor.y == original.anchor.y &&
+                        transformed.extensions == original.extensions,
+                    "transforms must preserve every local coordinate, expression and extension");
+            const auto encoded = sketch::encode_boundary_receipt_envelope(transformed);
+            require(encoded.at("segments") == original_json.at("segments") &&
+                        encoded.at("anchor") == original_json.at("anchor"),
+                    "schema three must serialize original local receipts");
+            const auto decoded = sketch::decode_boundary_receipt_envelope(Json::parse(encoded.dump()));
+            require(decoded.supported() && *decoded.record == transformed,
+                    "transform frames must roundtrip exactly through JSON text");
+        }
+        require(transformed.schema_version == sketch::boundary_receipt_schema_version_v3 &&
+                    transformed.transforms.size() == operations.size(),
+                "transform operations must opt into schema three and append frames");
+        std::map<std::string, std::string, std::less<>> identities;
+        identities[original.boundary_id] = "copy-boundary";
+        for (const auto& edge : original.edges) {
+            for (const auto& id : {edge.segment_id, edge.start_vertex_id, edge.end_vertex_id}) {
+                identities[id] = "copy-" + id;
+            }
+        }
+        auto expected_copy = transformed;
+        expected_copy.transforms.push_back({});
+        expected_copy.boundary_id = identities.at(expected_copy.boundary_id);
+        for (auto& edge : expected_copy.edges) {
+            edge.segment_id = identities.at(edge.segment_id);
+            edge.start_vertex_id = identities.at(edge.start_vertex_id);
+            edge.end_vertex_id = identities.at(edge.end_vertex_id);
+            edge.receipt.segment_id = identities.at(edge.receipt.segment_id);
+        }
+        require(sketch::transformed_boundary_construction(transformed, {}, identities) == expected_copy,
+                "reidentification must remap typed IDs only, preserving opaque extensions");
+        require(sketch::encode_boundary_receipt_envelope(original) == original_json,
+                "transforming must leave legacy source encoding unchanged");
+    }
+    require(sketch::boundary_receipt_latest_schema_version == 2,
+            "ordinary current authoring must continue to use schema two");
+}
+
+void test_transform_frame_validation() {
+    const auto square = [](double extent) {
+        auto record = base_record();
+        record.schema_version = sketch::boundary_receipt_schema_version_v2;
+        const Vec2 points[]{{0,0},{extent,0},{extent,extent},{0,extent}};
+        for (std::size_t i=0; i<4; ++i) {
+            const auto id = "precision-edge-" + std::to_string(i);
+            add_edge(record,i,id,"precision-v"+std::to_string(i),"precision-v"+std::to_string((i+1)%4),
+                line_to_point(id,points[i],points[(i+1)%4]));
+        }
+        return record;
+    };
+    expect_invalid([&] { (void)sketch::transformed_boundary_construction(square(3),
+        sketch::PlanarTransform{{},0,false,false,{1e16,0}}); },
+        "finite transform must reject a three-metre edge rounded into four metres");
+    auto accumulated = sketch::transformed_boundary_construction(square(3),
+        sketch::PlanarTransform{{},0,false,false,{1e8,1e8}});
+    for (int i=0; i<100; ++i)
+        accumulated.transforms.push_back({{1e8,1e8},1e-6,false,false,{}});
+    expect_invalid([&] { (void)sketch::replay_boundary_construction(accumulated); },
+        "small per-frame rounding errors must not accumulate into shape distortion");
+    auto distant = sketch::transformed_boundary_construction(square(4),
+        sketch::PlanarTransform{{},0,false,false,{1e16,0}});
+    expect_invalid([&] { (void)sketch::transformed_boundary_construction(distant,
+        sketch::PlanarTransform{{},0,false,false,{1,0}}); },
+        "an offset larger than tolerance must not silently disappear below coordinate resolution");
+    auto small_offset = sketch::transformed_boundary_construction(square(4),
+        sketch::PlanarTransform{{},0,false,false,{1,0}});
+    expect_invalid([&] { (void)sketch::transformed_boundary_construction(small_offset,
+        sketch::PlanarTransform{{},0,false,false,{1e16,0}}); },
+        "a large offset must not erase the previous anchor displacement");
+    auto accumulated_offsets = sketch::transformed_boundary_construction(square(3),
+        sketch::PlanarTransform{{},0,false,false,{1e8,0}});
+    for (int i=0; i<100; ++i) accumulated_offsets.transforms.push_back({{},0,false,false,{0.1,0}});
+    expect_invalid([&] { (void)sketch::replay_boundary_construction(accumulated_offsets); },
+        "translation rounding must be bounded cumulatively");
+    const auto original = all_forms().front();
+    const auto framed = sketch::transformed_boundary_construction(original, {});
+    const auto encoded = sketch::encode_boundary_receipt_envelope(framed);
+    const auto reject = [](const Json& value) {
+        expect_invalid([&] { (void)sketch::decode_boundary_receipt_envelope(value); },
+                       "malformed transform envelope must reject");
+    };
+    auto bad = encoded;
+    bad.erase("transforms");
+    reject(bad);
+    bad = encoded;
+    bad["transforms"] = Json::object();
+    reject(bad);
+    for (const auto* field : {"pivot", "rotation_radians", "flip_horizontal", "flip_vertical", "offset"}) {
+        bad = encoded;
+        bad["transforms"][0].erase(field);
+        reject(bad);
+        bad = encoded;
+        bad["transforms"][0][field] = "wrong";
+        reject(bad);
+    }
+    bad = encoded;
+    bad["transforms"][0]["unexpected"] = true;
+    reject(bad);
+    bad = encoded;
+    bad["transforms"][0]["flip_horizontal"] = 1;
+    reject(bad);
+    bad = encoded;
+    bad["transforms"][0]["rotation_radians"] = std::numeric_limits<double>::infinity();
+    reject(bad);
+    for (const auto version : {1, 2}) {
+        bad = encoded;
+        bad["version"] = version;
+        reject(bad);
+        auto legacy = original;
+        legacy.schema_version = version;
+        legacy.transforms.push_back({});
+        expect_invalid([&] { (void)sketch::replay_boundary_construction(legacy); },
+                       "legacy records cannot carry transform frames");
+    }
+    bad = encoded;
+    bad["version"] = 999;
+    bad["transforms"] = "future";
+    const auto opaque = sketch::decode_boundary_receipt_envelope(bad);
+    require(!opaque.supported() && *opaque.original_envelope == bad,
+            "future transform schemas must remain opaque");
+    bad = encoded;
+    bad["replay_version"] = 999;
+    bad.erase("transforms");
+    require(!sketch::decode_boundary_receipt_envelope(bad).supported(),
+            "future replay dialect must remain opaque before frame parsing");
+    for (const auto transform : {
+             sketch::PlanarTransform{{std::numeric_limits<double>::infinity(), 0}, 0, false, false, {}},
+             sketch::PlanarTransform{{}, std::numeric_limits<double>::quiet_NaN(), false, false, {}},
+             sketch::PlanarTransform{{}, 0, false, false, {0, std::numeric_limits<double>::infinity()}},
+             sketch::PlanarTransform{{}, 0, false, false, {std::numeric_limits<double>::max(), 0}}}) {
+        expect_invalid([&] { (void)sketch::transformed_boundary_construction(original, transform); },
+                       "nonfinite frames and finite frames collapsing geometry must reject");
+    }
+    expect_invalid([&] { (void)sketch::translated_boundary_construction(framed, {}); },
+                   "legacy translation must reject schema three with a diagnostic");
+    expect_invalid([&] {
+        (void)sketch::transformed_boundary_construction(original, {}, {{"v0", "v1"}});
+    }, "transform reidentification must reject vertex collisions");
+    expect_invalid([&] {
+        (void)sketch::transformed_boundary_construction(original, {}, {{original.boundary_id, ""}});
+    }, "transform reidentification must reject empty identities");
+    auto invalid_source = original;
+    invalid_source.edges[0].receipt.segment_id = "wrong";
+    expect_invalid([&] {
+        (void)sketch::transformed_boundary_construction(
+            invalid_source, {}, {{"wrong", original.edges[0].segment_id}});
+    }, "transforms must validate the source before remapping can repair it");
+}
+
 void test_translation_preserves_inputs_and_remaps_only_typed_ids() {
     auto records = all_forms();
     // Point-native closing inputs avoid recomputing a retained closure vector
@@ -621,6 +797,8 @@ int main() {
     sketch::testing::noninteractive_errors();
     try {
         test_roundtrip_all_forms_and_exact_values();
+        test_transform_frames_preserve_local_inputs_and_compose();
+        test_transform_frame_validation();
         test_translation_preserves_inputs_and_remaps_only_typed_ids();
         test_translation_rejects_invalid_inputs_and_results();
         test_point_native_schema_two_roundtrip_and_exact_endpoint_copy();

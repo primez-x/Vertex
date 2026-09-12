@@ -384,8 +384,9 @@ preserves drawing context, area metadata, names, custom properties, extensions,
 and per-edge metadata, while remapping recognized self-references. User text and
 opaque metadata are not rewritten as identifiers. The source entity and its
 relationships remain unchanged. Supported construction receipts now accompany
-offset copies, retaining original distance/angle expressions and rebuilding the
-copied geometry through receipt replay. Boundary dimension labels are copied
+rotated, reflected, and offset copies. Receipt schema 3 retains the original
+local inputs and an ordered transform sequence; replay builds the world geometry.
+Boundary dimension labels are copied
 with fresh identities and transformed text positions in the same undoable command.
 For supported in-place transforms, dimension labels move with their boundary
 while retaining their identities, placement mode, and metadata. Rotation,
@@ -395,9 +396,11 @@ boundary and dimension identities, records the translation intent in history,
 and reconstructs the entire expected state during restore. Ordinary entity
 edits still cannot rewrite construction inputs. These projects use format 5
 to retain the intent through save, recovery, and exchange.
-Receipt-bound rotation/reflection remain unfinished. Some
-offsets also reject when floating-point translation cannot preserve the exact
-closure-vector relationship. Unhandled geometry-owned receipts or dependent
+Receipt-bound in-place rotation/reflection remain unfinished. Existing schema
+1/2 in-place offsets retain their historical replay rules and can reject when
+translation cannot preserve the exact closure vector. Copies use schema 3 to
+avoid rewriting that vector, and subsequent offsets append another transform.
+Unhandled geometry-owned receipts or dependent
 semantics reject the copy without changing history. Imported anonymous legacy boundaries are promoted
 only when a command can preserve their exact geometry and metadata; an
 in-place transform of such a boundary remains blocked until an explicit

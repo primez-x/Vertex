@@ -69,6 +69,26 @@ receipt fields. Schema v1 remains closed to the eight kinds above and rejects
 v1 records retain their version when re-encoded. The SQLite storage version
 remains 3 for either envelope.
 
+Receipt schema v3 adds a required `transforms` array. Each entry has exactly
+`pivot`, `rotation_radians`, `flip_horizontal`, `flip_vertical`, and `offset`.
+Points are finite two-number arrays, rotation is a finite number, and flips are
+Booleans. Replay first reconstructs the original local receipts using schema-v2
+rules, then applies each transform in order: rotate about the pivot, reflect X
+and Y about the pivot as requested, and translate. An odd number of reflections
+reverses arc sweep. Each resulting boundary must remain valid. Replay rejects
+non-finite residuals, endpoint or analytical-length drift beyond its geometry
+tolerance, and accumulated pure-translation rounding beyond that tolerance;
+see `geometry-operations.md` for the precision contract.
+
+The stored anchor, receipt coordinates, closure vectors, exact quantities, and
+entered expressions remain local and unchanged. Replayed edges and anchor are
+world coordinates; replayed receipts still contain their original local inputs.
+Copies may remap typed identities. Extensions are preserved without interpreting
+identifier-shaped user data. An empty transform array is valid. Schema v1/v2
+reject the transforms field and retain their original encodings; new drawing
+sessions still emit v2. The SQLite receipt storage minimum remains format 3;
+explicit in-place translation history independently requires format 5.
+
 Point construction copies the finite endpoint directly into a straight segment
 after checking its exact start and minimum chord length. It performs no angle
 conversion or synthetic quantity parsing. It records a coordinate-defined edge;

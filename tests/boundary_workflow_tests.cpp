@@ -1005,9 +1005,10 @@ void test_receipt_boundary_offset_copy() {
     const auto original_record = sketch::decode_boundary_receipt_envelope(
         source.entities().at(boundary_id).properties.at("boundary_authoring"));
     const auto copy_record = sketch::decode_boundary_receipt_envelope(copy.properties.at("boundary_authoring"));
+    const auto copy_replay = sketch::replay_boundary_construction(*copy_record.record);
     require(copy_record.supported() && copy_record.record->boundary_id == copy_id && copy_id != boundary_id &&
-        copy_record.record->anchor.x == original_record.record->anchor.x + 7 &&
-        copy_record.record->anchor.y == original_record.record->anchor.y - 2,
+        copy_replay.anchor.x == original_record.record->anchor.x + 7 &&
+        copy_replay.anchor.y == original_record.record->anchor.y - 2,
         "copied receipt owner and anchor must match the new boundary");
     std::size_t dimensions = 0;
     for (const auto& [id, entity] : copied.entities()) {
@@ -1061,6 +1062,34 @@ void test_receipt_boundary_offset_copy() {
         window.undoCommand() && window.document().snapshot().entities() == copied.entities() &&
         window.redoCommand() && window.document().snapshot().entities() == moved.entities(),
         "translated receipts and dimensions must save, reopen, undo, and redo exactly");
+    require(window.selectEntity(QString::fromStdString(boundary_id)) &&
+        window.transformSelectedBoundary("90",true,false,"8 m","0",true),
+        "receipt-backed copy must support rotation and reflection without rewriting measurements");
+    const auto rotated_id = window.selectedEntityId().toStdString();
+    const auto rotated_state = window.document().snapshot();
+    const auto& rotated_entity = rotated_state.entities().at(rotated_id);
+    const auto rotated_record = sketch::decode_boundary_receipt_envelope(rotated_entity.properties.at("boundary_authoring"));
+    require(rotated_record.supported() && rotated_record.record->schema_version == 3 &&
+        rotated_record.record->transforms.size() == 1, "rotated receipt copy must record its coordinate transform");
+    for (std::size_t i=0; i<original_record.record->edges.size(); ++i) {
+        auto expected = original_record.record->edges[i].receipt;
+        expected.segment_id = rotated_record.record->edges[i].segment_id;
+        require(expected == rotated_record.record->edges[i].receipt,
+            "rotation must preserve every original construction input except copied identity");
+    }
+    const auto rotated_boundary = sketch::decode_identified_boundary_entity(rotated_entity);
+    require(std::abs(rotated_boundary.segments[0].segment.start.x-8)<1e-12 &&
+        std::abs(rotated_boundary.segments[0].segment.start.y)<1e-12 &&
+        std::abs(rotated_boundary.segments[0].segment.end.y-2)<1e-12,
+        "rotated and reflected copy must have the expected world geometry");
+    require_both_canvas_labels(window,12);
+    require(window.transformSelectedBoundary("0",false,false,"0","3 m",false),
+        "a transformed receipt copy must support subsequent in-place offsets");
+    const auto shifted_rotated = window.document().snapshot();
+    require(window.saveProjectAs(path) && window.openProject(path) &&
+        window.document().snapshot().entities() == shifted_rotated.entities() &&
+        window.undoCommand() && window.document().snapshot().entities() == rotated_state.entities(),
+        "composed receipt transforms must survive storage and undo exactly");
 }
 
 void install_test_font() {

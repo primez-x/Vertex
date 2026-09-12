@@ -556,6 +556,33 @@ Segment arc_from_start_tangent(Vec2 start, double tangent_radians, double arc_le
     return result;
 }
 
+Vec2 transform_point(Vec2 point, const PlanarTransform& transform) {
+    if (!finite(point) || !finite(transform.pivot) || !finite(transform.offset) ||
+        !std::isfinite(transform.rotation_radians))
+        throw std::invalid_argument("planar transform requires finite points and parameters");
+    if (transform.rotation_radians != 0.0) {
+        const auto x = point.x - transform.pivot.x;
+        const auto y = point.y - transform.pivot.y;
+        const auto cosine = std::cos(transform.rotation_radians);
+        const auto sine = std::sin(transform.rotation_radians);
+        point = {transform.pivot.x + x * cosine - y * sine,
+                 transform.pivot.y + x * sine + y * cosine};
+    }
+    if (transform.flip_horizontal) point.x = transform.pivot.x - (point.x - transform.pivot.x);
+    if (transform.flip_vertical) point.y = transform.pivot.y - (point.y - transform.pivot.y);
+    if (transform.offset.x != 0.0) point.x += transform.offset.x;
+    if (transform.offset.y != 0.0) point.y += transform.offset.y;
+    if (!finite(point)) throw std::invalid_argument("planar transform exceeds numeric range");
+    return point;
+}
+
+Segment transform_segment(const Segment& segment, const PlanarTransform& transform) {
+    require_finite_segment(segment);
+    return {transform_point(segment.start, transform), transform_point(segment.end, transform),
+            transform.flip_horizontal != transform.flip_vertical && segment.sweep_radians != 0.0
+                ? -segment.sweep_radians : segment.sweep_radians};
+}
+
 Bounds2 segment_bounds(const Segment& segment) {
     require_finite_segment(segment);
     Bounds2 result{{std::min(segment.start.x, segment.end.x), std::min(segment.start.y, segment.end.y)},

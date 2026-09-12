@@ -733,7 +733,8 @@ bool ReplayedConstructionReceipt::operator==(const ReplayedConstructionReceipt& 
 bool BoundaryConstructionRecord::operator==(const BoundaryConstructionRecord& other) const noexcept {
     return schema_version == other.schema_version && replay_version == other.replay_version &&
            same_point(anchor, other.anchor) && boundary_id == other.boundary_id &&
-           edges == other.edges && extensions == other.extensions;
+           edges == other.edges && extensions == other.extensions &&
+           transforms == other.transforms;
 }
 
 ReplayedConstructionReceipt replay_construction_receipt(
@@ -1005,6 +1006,9 @@ bool BoundaryConstructionReplayResult::operator==(
 BoundaryConstructionRecord translated_boundary_construction(
     const BoundaryConstructionRecord& record, Vec2 offset,
     const std::map<std::string, std::string, std::less<>>& identity_map) {
+    if (record.schema_version == boundary_receipt_schema_version_v3) {
+        invalid("schema three translation requires transformed_boundary_construction");
+    }
     (void)replay_boundary_construction(record);
     require_point(offset, "boundary translation offset");
     auto result = record;
@@ -1034,9 +1038,94 @@ BoundaryConstructionRecord translated_boundary_construction(
     return result;
 }
 
+BoundaryConstructionRecord transformed_boundary_construction(
+    const BoundaryConstructionRecord& record, const PlanarTransform& transform,
+    const std::map<std::string, std::string, std::less<>>& identity_map) {
+    (void)replay_boundary_construction(record);
+    auto result = record;
+    const auto remap = [&identity_map](std::string& identity) {
+        if (const auto found = identity_map.find(identity); found != identity_map.end()) {
+            identity = found->second;
+        }
+    };
+    remap(result.boundary_id);
+    for (auto& edge : result.edges) {
+        remap(edge.segment_id);
+        remap(edge.start_vertex_id);
+        remap(edge.end_vertex_id);
+        remap(edge.receipt.segment_id);
+    }
+    result.schema_version = boundary_receipt_schema_version_v3;
+    result.transforms.push_back(transform);
+    (void)replay_boundary_construction(result);
+    return result;
+}
+
 BoundaryConstructionReplayResult replay_boundary_construction(
     const BoundaryConstructionRecord& record, double tolerance_metres) {
     require_tolerance(tolerance_metres);
+    if (record.schema_version == boundary_receipt_schema_version_v3) {
+        auto local = record;
+        local.schema_version = boundary_receipt_schema_version_v2;
+        local.transforms.clear();
+        auto result = replay_boundary_construction(local, tolerance_metres);
+        Boundary reference;
+        std::vector<double> original_lengths;
+        for (const auto& edge : result.edges) {
+            auto relative = edge.segment;
+            relative.start = {relative.start.x - result.anchor.x, relative.start.y - result.anchor.y};
+            relative.end = {relative.end.x - result.anchor.x, relative.end.y - result.anchor.y};
+            reference.push_back(relative);
+            original_lengths.push_back(segment_length(edge.segment));
+        }
+        Vec2 translation_error{};
+        const auto require_precision = [tolerance_metres](double error) {
+            if (!std::isfinite(error) || error > tolerance_metres) {
+                invalid("transformed boundary exceeds coordinate precision tolerance");
+            }
+        };
+        for (const auto& transform : record.transforms) {
+            const PlanarTransform linear{{}, transform.rotation_radians,
+                transform.flip_horizontal, transform.flip_vertical, {}};
+            translation_error = transform_point(translation_error, linear);
+            const auto previous_anchor = result.anchor;
+            result.anchor = transform_point(result.anchor, transform);
+            if (transform.rotation_radians == 0 && !transform.flip_horizontal && !transform.flip_vertical) {
+                // TwoSum retains the addition residual even when one operand
+                // is too small to survive subtraction from the rounded sum.
+                const auto rounding_error = [](double before, double offset, double after) {
+                    const double virtual_offset = after - before;
+                    return -((before - (after - virtual_offset)) + (offset - virtual_offset));
+                };
+                translation_error.x += rounding_error(previous_anchor.x, transform.offset.x, result.anchor.x);
+                translation_error.y += rounding_error(previous_anchor.y, transform.offset.y, result.anchor.y);
+            }
+            require_precision(std::hypot(translation_error.x, translation_error.y));
+            Boundary geometry;
+            geometry.reserve(result.edges.size());
+            for (std::size_t index = 0; index < result.edges.size(); ++index) {
+                auto& edge = result.edges[index];
+                reference[index] = transform_segment(reference[index], linear);
+                edge.segment = transform_segment(edge.segment, transform);
+                const auto check_endpoint = [&](Vec2 world, Vec2 relative) {
+                    require_precision(std::hypot((world.x - result.anchor.x) - relative.x,
+                                                 (world.y - result.anchor.y) - relative.y));
+                };
+                check_endpoint(edge.segment.start, reference[index].start);
+                check_endpoint(edge.segment.end, reference[index].end);
+                require_precision(std::abs(segment_length(edge.segment) - original_lengths[index]));
+                geometry.push_back(edge.segment);
+            }
+            const auto diagnostics = validate_boundary(geometry, tolerance_metres);
+            if (!diagnostics.empty()) {
+                invalid("transformed boundary geometry: " + diagnostics.front().message);
+            }
+        }
+        return result;
+    }
+    if (!record.transforms.empty()) {
+        invalid("boundary transforms require schema version three");
+    }
     if (record.schema_version != boundary_receipt_schema_version_v1 &&
         record.schema_version != boundary_receipt_schema_version_v2) {
         invalid("unsupported boundary receipt schema version");
@@ -1131,6 +1220,9 @@ BoundaryReceiptEnvelopeVersion inspect_boundary_receipt_envelope(const Json& env
     if (value == boundary_receipt_schema_version_v2) {
         return {BoundaryReceiptEnvelopeFormat::supported_v2, value, {}};
     }
+    if (value == boundary_receipt_schema_version_v3) {
+        return {BoundaryReceiptEnvelopeFormat::supported_v3, value, {}};
+    }
     return {BoundaryReceiptEnvelopeFormat::unsupported_version, value,
             "unsupported boundary_authoring envelope version"};
 }
@@ -1150,7 +1242,8 @@ BoundaryReceiptDecodeResult decode_boundary_receipt_envelope(const Json& envelop
     const auto version = read_positive_uint(envelope.at("version"),
                                             "boundary_authoring envelope version");
     if (version != boundary_receipt_schema_version_v1 &&
-        version != boundary_receipt_schema_version_v2) {
+        version != boundary_receipt_schema_version_v2 &&
+        version != boundary_receipt_schema_version_v3) {
         invalid("unsupported boundary receipt version");
     }
     const auto replay_version = read_positive_uint(envelope.at("replay_version"),
@@ -1159,11 +1252,18 @@ BoundaryReceiptDecodeResult decode_boundary_receipt_envelope(const Json& envelop
         return {std::nullopt, envelope, version,
                 "unsupported boundary_authoring replay_version"};
     }
-    require_keys(
-        envelope,
-        {"version", "replay_version", "boundary_id", "anchor", "segments", "extensions"},
-        {"version", "replay_version", "boundary_id", "anchor", "segments", "extensions"},
-        "boundary_authoring envelope");
+    if (version == boundary_receipt_schema_version_v3) {
+        require_keys(envelope,
+                     {"version", "replay_version", "boundary_id", "anchor", "segments", "extensions", "transforms"},
+                     {"version", "replay_version", "boundary_id", "anchor", "segments", "extensions", "transforms"},
+                     "boundary_authoring envelope");
+    } else {
+        require_keys(
+            envelope,
+            {"version", "replay_version", "boundary_id", "anchor", "segments", "extensions"},
+            {"version", "replay_version", "boundary_id", "anchor", "segments", "extensions"},
+            "boundary_authoring envelope");
+    }
     const auto boundary_id = read_string(envelope.at("boundary_id"),
                                          "boundary_authoring boundary_id");
     require_identifier(boundary_id, "boundary_authoring boundary_id");
@@ -1180,6 +1280,22 @@ BoundaryReceiptDecodeResult decode_boundary_receipt_envelope(const Json& envelop
     record.anchor = anchor;
     record.boundary_id = boundary_id;
     record.extensions = extensions;
+    if (version == boundary_receipt_schema_version_v3) {
+        const auto& transforms = envelope.at("transforms");
+        require_array(transforms, "boundary transforms");
+        for (const auto& value : transforms) {
+            require_keys(value,
+                         {"pivot", "rotation_radians", "flip_horizontal", "flip_vertical", "offset"},
+                         {"pivot", "rotation_radians", "flip_horizontal", "flip_vertical", "offset"},
+                         "boundary transform");
+            record.transforms.push_back({
+                read_point(value.at("pivot"), "transform pivot"),
+                read_double(value.at("rotation_radians"), "transform rotation_radians"),
+                read_bool(value.at("flip_horizontal"), "transform flip_horizontal"),
+                read_bool(value.at("flip_vertical"), "transform flip_vertical"),
+                read_point(value.at("offset"), "transform offset")});
+        }
+    }
     std::set<std::string, std::less<>> segment_ids;
     for (std::size_t index = 0; index < encoded_segments.size(); ++index) {
         const auto& value = encoded_segments[index];
@@ -1211,7 +1327,8 @@ BoundaryReceiptDecodeResult decode_boundary_receipt_envelope(const Json& envelop
 
 Json encode_boundary_receipt_envelope(const BoundaryConstructionRecord& record) {
     if (record.schema_version != boundary_receipt_schema_version_v1 &&
-        record.schema_version != boundary_receipt_schema_version_v2) {
+        record.schema_version != boundary_receipt_schema_version_v2 &&
+        record.schema_version != boundary_receipt_schema_version_v3) {
         invalid("unsupported boundary receipt schema version");
     }
     if (record.replay_version != boundary_receipt_replay_version) {
@@ -1229,12 +1346,24 @@ Json encode_boundary_receipt_envelope(const BoundaryConstructionRecord& record) 
                  {"end_vertex_id", edge.end_vertex_id},
                  {"receipt", write_receipt(receipt)}});
     }
-    return Json{{"version", record.schema_version},
+    Json result{{"version", record.schema_version},
                 {"replay_version", record.replay_version},
                 {"boundary_id", record.boundary_id},
                 {"anchor", write_point(record.anchor, "boundary construction anchor")},
                 {"segments", std::move(encoded_segments)},
                 {"extensions", record.extensions}};
+    if (record.schema_version == boundary_receipt_schema_version_v3) {
+        result["transforms"] = Json::array();
+        for (const auto& transform : record.transforms) {
+            result["transforms"].push_back(Json{
+                {"pivot", write_point(transform.pivot, "transform pivot")},
+                {"rotation_radians", transform.rotation_radians},
+                {"flip_horizontal", transform.flip_horizontal},
+                {"flip_vertical", transform.flip_vertical},
+                {"offset", write_point(transform.offset, "transform offset")}});
+        }
+    }
+    return result;
 }
 
 }  // namespace sketch
