@@ -12,8 +12,12 @@ Focused synthetic tests establish contract behavior only. Real Apex survey/modul
 # Desktop survey calculator
 
 The More menu exposes **Survey traverse** for local bearing/distance entry.
-Each nonblank line contains `quadrant, decimal degrees, distance`, for example
-`NE, 45, 100 ft`. NE/SE/SW/NW bearings use the same north/south-relative
+Each nonblank line contains `quadrant, angle, distance`, for example
+`NE, 45, 100 ft` or `NE, 45:30:15.5, 100 ft`. Angles accept decimal degrees
+or `degrees:minutes:seconds`; DMS degrees/minutes must be integers, and seconds
+may be fractional. Minutes and seconds must be below 60 and the full bearing
+cannot exceed 90 degrees. Incomplete DMS calls are rejected, not guessed.
+NE/SE/SW/NW bearings use the same north/south-relative
 convention as the core contract. Explicit distance units override workspace
 defaults. Source/reference and closure tolerance accompany the calculation.
 
@@ -56,5 +60,5 @@ shown for correction with report export disabled. The default-unit selector
 is explicit and independent of project display units. This is native report
 reopening, not Apex interchange or a signed survey attestation.
 
-Updating existing traverses from survey calls, Apex survey exchange, DMS entry,
+Updating existing traverses from survey calls, Apex survey exchange,
 and production survey qualification remain incomplete.

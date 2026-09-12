@@ -1123,7 +1123,7 @@ void test_survey_calculator(const QString& capture_directory) {
         require(source && input && calculate && output && result && !output->isEnabled(),
                 "survey controls and initially disabled export must exist");
         source->setText("Deed fixture");
-        input->setPlainText("NE, 90, 100000 mm\nSE, 0, 100 m\nSW, 90, 100 m\nNW, 0, 100 m");
+        input->setPlainText("NE, 90:0:0, 100000 mm\nSE, 0:0:0, 100 m\nSW, 90, 100 m\nNW, 0, 100 m");
         calculate->click();
         require(output->isEnabled() && result->text().contains("10000.0000 m²") &&
                     result->text().contains("2.471054 acres"), "survey calculator must report square area and acres");
@@ -1205,7 +1205,7 @@ void test_survey_calculator(const QString& capture_directory) {
         open_fixture();
         require(input->toPlainText() == restored_input && result->text().contains("Unsupported"),
                 "unsupported report version must not replace current entries");
-        input->setPlainText("NE, 45, 100 ft");
+        input->setPlainText("NE, 45:30:15.5, 100 ft");
         require(!output->isEnabled() && result->text().isEmpty(), "edits must invalidate stale survey results");
         calculate->click();
         require(output->isEnabled() && result->text().contains("Open traverse") &&

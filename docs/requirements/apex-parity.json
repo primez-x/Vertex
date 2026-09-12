@@ -1385,7 +1385,7 @@
         "tests/survey_contract_tests.cpp",
         "docs/survey-georeferencing-contracts.md"
       ],
-      "implementation_note": "Survey traverse legs, closure diagnostics, simple-polygon area, acreage, and provenance are implemented. The desktop supports entry, calculation, report export/reopen with recomputation, and insertion of closed traverses as undoable project boundaries retaining original source metadata. Desktop tests cover stale-context rejection, save/reopen, history, and shared SVG output. Updating existing traverses from calls, Apex survey exchange, DMS entry, legal-survey behavior, and production fixtures remain open."
+      "implementation_note": "Survey traverse legs, closure diagnostics, simple-polygon area, acreage, and provenance are implemented. The desktop supports decimal and degrees:minutes:seconds entry, calculation, report export/reopen with recomputation, and insertion of closed traverses as undoable project boundaries retaining original source metadata. Desktop tests cover stale-context rejection, save/reopen, history, and shared SVG output. Updating existing traverses from calls, Apex survey exchange, legal-survey behavior, and production fixtures remain open."
     },
     {
       "id": "APX-SPEC-002",

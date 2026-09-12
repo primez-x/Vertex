@@ -1,6 +1,8 @@
 #include "sketch/survey_contract.hpp"
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <cmath>
 #include <numbers>
 #include <set>
@@ -35,6 +37,48 @@ bool intersects(SurveyVertex a, SurveyVertex b, SurveyVertex c, SurveyVertex d) 
         (x==0 && on(a,b,c)) || (y==0 && on(a,b,d)) || (z==0 && on(c,d,a)) || (w==0 && on(c,d,b));
 }
 }
+double parse_survey_angle(std::string_view expression) {
+    check(expression.size() <= 128, "Bearing angle is too long");
+    const auto trim = [](std::string_view value) {
+        while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) value.remove_prefix(1);
+        while (!value.empty() && (value.back() == ' ' || value.back() == '\t')) value.remove_suffix(1);
+        return value;
+    };
+    const auto number = [&](std::string_view value, bool integer) {
+        value = trim(value);
+        check(!value.empty(), "Missing bearing angle component");
+        check(std::all_of(value.begin(), value.end(), [integer](char c) {
+            return (c >= '0' && c <= '9') || (!integer && c == '.');
+        }), "Use unsigned decimal numbers in a bearing angle");
+        double result{};
+        const auto parsed = std::from_chars(value.data(), value.data() + value.size(), result);
+        check(parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() && std::isfinite(result),
+              "Invalid bearing angle number");
+        return result;
+    };
+    expression = trim(expression);
+    if (expression.find(':') == std::string_view::npos) {
+        const auto degrees = number(expression, false);
+        check(degrees <= 90, "Angle must be between 0 and 90 degrees");
+        return degrees;
+    }
+    std::array<std::string_view, 3> parts;
+    for (std::size_t index = 0; index < 2; ++index) {
+        const auto separator = expression.find(':');
+        check(separator != std::string_view::npos, "Use degrees:minutes:seconds for a DMS bearing");
+        parts[index] = expression.substr(0, separator);
+        expression.remove_prefix(separator + 1);
+    }
+    parts[2] = expression;
+    const auto degrees = number(parts[0], true);
+    const auto minutes = number(parts[1], true);
+    const auto seconds = number(parts[2], false);
+    check(degrees <= 90 && minutes < 60 && seconds < 60 &&
+              (degrees < 90 || (minutes == 0 && seconds == 0)),
+          "DMS bearing requires degrees 0–90 and minutes/seconds below 60");
+    return degrees + minutes / 60.0 + seconds / 3600.0;
+}
+
 SurveyTraverse::SurveyTraverse(std::string provenance, std::vector<SurveyLeg> legs, double tolerance)
     : provenance_(std::move(provenance)), legs_(std::move(legs)), tolerance_(finite(tolerance)) {
     text(provenance_);

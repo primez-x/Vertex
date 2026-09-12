@@ -6530,8 +6530,9 @@ public:
         form->addRow(QStringLiteral("Unsuffixed distances"), input_units);
         layout->addLayout(form);
         auto* help = new QLabel(QStringLiteral(
-            "One leg per line: quadrant, angle in decimal degrees, distance with units.\n"
-            "Example: NE, 45, 100 ft. Quadrants: NE, SE, SW, NW; angles: 0–90°.\n"
+            "One leg per line: quadrant, angle, distance with units.\n"
+            "Example: NE, 45:30:15, 100 ft. Angles accept decimal degrees or degrees:minutes:seconds.\n"
+            "Quadrants: NE, SE, SW, NW; angles: 0–90°.\n"
             "Coordinates start at a local origin. No closure adjustment is applied.\n"
             "Add boundary retains measured legs and adds a closing segment to the origin if needed."), &dialog);
         help->setWordWrap(true);
@@ -6590,10 +6591,7 @@ public:
                             {"NE", BearingQuadrant::north_east}, {"SE", BearingQuadrant::south_east},
                             {"SW", BearingQuadrant::south_west}, {"NW", BearingQuadrant::north_west}};
                         if (!quadrants.contains(quadrant)) throw std::invalid_argument("Use NE, SE, SW, or NW.");
-                        bool ok = false;
-                        const auto angle = fields[1].trimmed().toDouble(&ok);
-                        if (!ok || !std::isfinite(angle) || angle < 0 || angle > 90)
-                            throw std::invalid_argument("Angle must be between 0 and 90 degrees.");
+                        const auto angle = parse_survey_angle(fields[1].trimmed().toStdString());
                         const auto quantity = parse_quantity(fields[2].trimmed().toStdString(), unit);
                         const auto distance = quantity.metres;
                         if (distance <= 0) throw std::invalid_argument("Distance must be positive.");

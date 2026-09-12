@@ -1,9 +1,13 @@
 #pragma once
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace sketch {
+// Quadrant angle in decimal degrees or D:M:S (fractional seconds allowed).
+// Degree/minute fields in D:M:S are integers; bounds are [0,90], [0,60), [0,60).
+[[nodiscard]] double parse_survey_angle(std::string_view expression);
 enum class BearingQuadrant { north_east, south_east, south_west, north_west };
 struct SurveyLeg { std::string id; BearingQuadrant quadrant; double angle_degrees{}; double distance_m{}; };
 struct SurveyVertex { double east_m{}, north_m{}; };

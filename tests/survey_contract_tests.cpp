@@ -9,6 +9,13 @@ void require(bool ok) { if (!ok) throw std::runtime_error("survey assertion fail
 template<class F> void rejects(F f) { try { f(); } catch (const std::invalid_argument&) { return; } throw std::runtime_error("invalid survey accepted"); }
 int main() {
     try {
+        require(parse_survey_angle(" 45.5 ") == 45.5);
+        require(parse_survey_angle("45:30:0") == 45.5);
+        require(std::abs(parse_survey_angle("12 : 34 : 56.25") - (12 + 34.0/60 + 56.25/3600)) < 1e-12);
+        require(parse_survey_angle("90:0:0") == 90 && parse_survey_angle("0:0:0") == 0);
+        for (const auto* invalid : {"", "-1", "nan", "1e1", "91", "90:0:0.1", "1:60:0",
+                                   "1:0:60", "1.5:0:0", "1:2.5:0", "1:2", "1:2:3:4", "1::3"})
+            rejects([&] { (void)parse_survey_angle(invalid); });
         const std::vector<SurveyLeg> square{{"a", BearingQuadrant::north_east, 0, 100}, {"b", BearingQuadrant::north_east, 90, 100}, {"c", BearingQuadrant::south_east, 0, 100}, {"d", BearingQuadrant::south_west, 90, 100}};
         const SurveyTraverse survey("entered fixture", square, 1e-6);
         require(survey.diagnostics().closed && std::abs(*survey.diagnostics().area_m2 - 10000) < 1e-7);
