@@ -35,6 +35,17 @@ def main():
         exported = json.loads((extracted / "project.json").read_text(encoding="utf-8"))
         assert exported["document"]["document_id"] == created["document_id"]
         assert exported["revisions"]
+        migrated = root / "migrated.bldproj"
+        migration = invoke("migrate", project, migrated)
+        assert migration["migrated_from"].endswith(project.name)
+        assert migration["migrated_to"].endswith(migrated.name)
+        assert migration["source_preserved"] is True
+        assert migration["source_file_sha256"] != "0" * 64
+        assert migration["destination_file_sha256"] == hashlib.sha256(migrated.read_bytes()).hexdigest()
+        migrated_info = invoke("inspect", migrated)
+        assert migrated_info["document_id"] == created["document_id"]
+        assert migrated_info["revision"] == created["revision"]
+        invoke("migrate", project, migrated, success=False)
         invoke("extract", project, extracted, success=False)
         corrupt = root / "broken.bldproj"
         corrupt.write_bytes(b"not a database")

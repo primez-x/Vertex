@@ -39,7 +39,8 @@ Json describe(const sketch::DocumentSnapshot& snapshot) {
 int run(int argc, wchar_t** argv) {
     if (argc < 3) {
         std::cerr << "Usage: property-cli <new|inspect|validate> <project.bldproj>\n"
-                  << "       property-cli extract <project.bldproj> <new-directory>\n";
+                  << "       property-cli extract <project.bldproj> <new-directory>\n"
+                  << "       property-cli migrate <project.bldproj> <new-project.bldproj>\n";
         return 2;
     }
     const std::wstring command(argv[1]);
@@ -62,6 +63,29 @@ int run(int argc, wchar_t** argv) {
             info["production_or_geometry_certification"] = false;
         }
         std::cout << info.dump(2) << '\n';
+        return 0;
+    }
+    if (command == L"migrate" && argc == 4) {
+        const auto destination = std::filesystem::absolute(argv[3]);
+        const auto loaded = sketch::ProjectStore::load(file);
+        const auto source_hash = loaded.file_sha256;
+        const auto source_revision = loaded.document.revision();
+        const auto required_format = sketch::ProjectStore::required_format_version(
+            loaded.document.snapshot());
+        // ProjectStore::save is copy based: it refuses an existing destination,
+        // validates the complete snapshot, and leaves the source untouched.
+        const auto receipt = sketch::ProjectStore::save(destination,
+                                                         loaded.document.snapshot());
+        std::cout << Json({{"migrated_from", utf8(file)},
+                           {"migrated_to", utf8(destination)},
+                           {"source_file_sha256", source_hash},
+                           {"destination_file_sha256", receipt.file_sha256},
+                           {"source_revision", source_revision},
+                           {"destination_revision", receipt.revision},
+                           {"format_version", required_format},
+                           {"source_preserved", sketch::ProjectStore::file_sha256(file) == source_hash}})
+                     .dump(2)
+                  << '\n';
         return 0;
     }
     if (command == L"extract" && argc == 4) {

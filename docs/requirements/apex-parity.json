@@ -379,9 +379,11 @@
       "package": 3,
       "blocker": null,
       "implementation_sources": [
-        "src/cli/main.cpp"
+        "src/cli/main.cpp",
+        "tests/test_cli.py",
+        "docs/project-format.md"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "Inspect, validate, extract, and copy based migrate commands now report local fingerprints and preserve the source; malformed/incomplete fixtures, broader migration reports, and production qualification remain open."
     },
     {
       "id": "CORE-DOC-010",

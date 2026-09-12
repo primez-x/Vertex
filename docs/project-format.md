@@ -5,6 +5,15 @@ document snapshot and the complete command history known when that snapshot was 
 The file is an interchange/save artifact. The current foundation keeps the working document
 in memory; it does not claim to be a live SQLite working journal.
 
+The bundled `property-cli` provides local format operations without a hosted service:
+`inspect` reports document identity, revision, entity/asset counts, history, and editability;
+`validate` loads and checks the storage, structural references, logical digest, and asset bytes;
+`extract` writes a new JSON-and-assets directory; and `migrate <source> <destination>` loads a
+supported project and writes a validated copy at the current storage version. Migration refuses
+an existing destination, reports source and destination SHA-256 fingerprints, and verifies that
+the source hash is unchanged. A failed migration leaves the source and any existing destination
+untouched.
+
 Version 2 retains the v1 table structure and adds a mandatory compatibility
 boundary for identified geometry. Any identified boundary, boundary draft or
 dimension in retained history requires v2, including an undone or deleted
