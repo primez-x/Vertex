@@ -2,6 +2,7 @@
 
 #include "sketch/geometry.hpp"
 #include "sketch/room_relationships.hpp"
+#include "sketch/document.hpp"
 
 #include <string>
 #include <vector>
@@ -21,6 +22,7 @@ struct RelationshipGeometry {
 
 struct RelationshipGeometryChange {
     std::string source_id;
+    RoomReferenceKind source_kind{};
     PlanarTransform transform;
     Boundary geometry;
     std::vector<std::string> driver_ids;

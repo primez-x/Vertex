@@ -347,7 +347,8 @@ RoomRelationshipGeometryResult propose_room_relationship_geometry(
                                     blocked.insert(source_id);
                                 } else {
                                     working_records.at(source_id).geometry = candidate;
-                                    RelationshipGeometryChange change{source_id, transforms.front(),
+                                    RelationshipGeometryChange change{source_id, role->second,
+                                                                      transforms.front(),
                                                                       std::move(candidate),
                                                                       driver_list->second};
                                     changes[source_id] = std::move(change);

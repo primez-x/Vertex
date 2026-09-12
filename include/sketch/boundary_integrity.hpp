@@ -19,7 +19,8 @@ namespace sketch {
 // separately checked against its retained source revision by Document.
 void validate_boundary_transition(
     const std::map<std::string, Entity, std::less<>>& before,
-    const std::map<std::string, Entity, std::less<>>& after);
+    const std::map<std::string, Entity, std::less<>>& after,
+    bool allow_explicit_relationship_transform = false);
 void record_boundary_identities(BoundaryIdentityHistory& history,
     const std::map<std::string, Entity, std::less<>>& entities);
 void record_boundary_identity_transition(BoundaryIdentityHistory& history,

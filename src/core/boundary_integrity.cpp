@@ -3,6 +3,7 @@
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/boundary_transform.hpp"
+#include <cmath>
 #include <set>
 
 namespace sketch {
@@ -14,6 +15,88 @@ bool exact_entity(const Entity& left, const Entity& right) {
 bool identified_v1(const Entity& entity) {
     return can_recognize_boundary_entity_type(entity.type) &&
         inspect_boundary_entity_version(entity).format == BoundaryEntityFormat::identified_v1;
+}
+
+bool same_geometry(const Boundary& left, const Boundary& right,
+                   double tolerance = default_geometry_tolerance_metres) {
+    if (left.size() != right.size()) return false;
+    for (std::size_t index = 0; index < left.size(); ++index) {
+        const auto distance = [](Vec2 a, Vec2 b) {
+            return std::hypot(a.x - b.x, a.y - b.y);
+        };
+        if (distance(left[index].start, right[index].start) > tolerance ||
+            distance(left[index].end, right[index].end) > tolerance ||
+            std::abs(left[index].sweep_radians - right[index].sweep_radians) >
+                std::max(1e-12, tolerance)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool same_record_without_transforms(const BoundaryConstructionRecord& left,
+                                    const BoundaryConstructionRecord& right) {
+    return left.replay_version == right.replay_version && left.anchor.x == right.anchor.x &&
+        left.anchor.y == right.anchor.y && left.boundary_id == right.boundary_id &&
+        left.edges == right.edges && left.extensions == right.extensions;
+}
+
+bool valid_explicit_relationship_transform(const Entity& previous, const Entity& next) {
+    if (!identified_v1(previous) || !identified_v1(next) ||
+        !previous.properties.contains("boundary_authoring") ||
+        !next.properties.contains("boundary_authoring")) {
+        return false;
+    }
+    try {
+        const auto old_receipt = decode_boundary_receipt_envelope(
+            previous.properties.at("boundary_authoring"));
+        const auto new_receipt = decode_boundary_receipt_envelope(
+            next.properties.at("boundary_authoring"));
+        if (!old_receipt.supported() || !new_receipt.supported()) return false;
+        const auto& old_record = *old_receipt.record;
+        const auto& new_record = *new_receipt.record;
+        if (new_record.schema_version != boundary_receipt_schema_version_v3 ||
+            new_record.transforms.empty() ||
+            !same_record_without_transforms(old_record, new_record)) {
+            return false;
+        }
+        if (old_record.schema_version == boundary_receipt_schema_version_v3) {
+            if (new_record.transforms.size() != old_record.transforms.size() + 1) return false;
+            for (std::size_t index = 0; index < old_record.transforms.size(); ++index) {
+                if (!(new_record.transforms[index] == old_record.transforms[index])) return false;
+            }
+        } else if (new_record.transforms.size() != 1) {
+            return false;
+        }
+        const auto old_replay = replay_boundary_construction(old_record);
+        const auto new_replay = replay_boundary_construction(new_record);
+        Boundary old_geometry;
+        Boundary new_geometry;
+        old_geometry.reserve(old_replay.edges.size());
+        new_geometry.reserve(new_replay.edges.size());
+        for (const auto& edge : old_replay.edges) old_geometry.push_back(edge.segment);
+        for (const auto& edge : new_replay.edges) new_geometry.push_back(edge.segment);
+        const auto next_boundary = boundary_geometry(decode_identified_boundary_entity(next));
+        if (!same_geometry(new_geometry, next_boundary) ||
+            new_geometry.size() != old_geometry.size()) return false;
+        const auto& transform = new_record.transforms.back();
+        Boundary transformed;
+        transformed.reserve(old_geometry.size());
+        for (const auto& segment : old_geometry) transformed.push_back(transform_segment(segment, transform));
+        if (!same_geometry(transformed, new_geometry)) return false;
+
+        auto previous_metadata = previous;
+        auto next_metadata = next;
+        previous_metadata.properties.erase("segments");
+        previous_metadata.properties.erase("boundary_authoring");
+        next_metadata.properties.erase("segments");
+        next_metadata.properties.erase("boundary_authoring");
+        return previous_metadata == next_metadata &&
+            previous_metadata.properties.dump() == next_metadata.properties.dump() &&
+            previous_metadata.extensions.dump() == next_metadata.extensions.dump();
+    } catch (const std::exception&) {
+        return false;
+    }
 }
 } // namespace
 
@@ -272,7 +355,8 @@ std::optional<std::string> validate_boundary_integrity(
 }
 
 void validate_boundary_transition(const std::map<std::string, Entity, std::less<>>& before,
-                                  const std::map<std::string, Entity, std::less<>>& after) {
+                                  const std::map<std::string, Entity, std::less<>>& after,
+                                  bool allow_explicit_relationship_transform) {
     for (const auto& [id, entity] : before) {
         const auto found = after.find(id);
         if (found == after.end()) continue;
@@ -285,7 +369,9 @@ void validate_boundary_transition(const std::map<std::string, Entity, std::less<
         if (previous_receipt &&
             (decode_identified_boundary_entity(entity) != decode_identified_boundary_entity(found->second) ||
              entity.properties.at("boundary_authoring").dump() !=
-                 found->second.properties.at("boundary_authoring").dump()))
+                 found->second.properties.at("boundary_authoring").dump()) &&
+            !(allow_explicit_relationship_transform &&
+              valid_explicit_relationship_transform(entity, found->second)))
             throw std::invalid_argument("Boundary " + id +
                 ": construction-bound geometry, topology and inputs require an explicit derivation edit");
         if (entity.type == "dimension") {

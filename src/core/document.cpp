@@ -584,9 +584,10 @@ void validate_constraint_change(const std::map<std::string, Entity, std::less<>>
 
 void validate_boundary_change(const BoundaryIdentityHistory& history,
                               const std::map<std::string, Entity, std::less<>>& before,
-                              const std::map<std::string, Entity, std::less<>>& after) {
+                              const std::map<std::string, Entity, std::less<>>& after,
+                              bool allow_explicit_relationship_transform = false) {
     try {
-        validate_boundary_transition(before, after);
+        validate_boundary_transition(before, after, allow_explicit_relationship_transform);
         validate_boundary_identity_transition(history, before, after);
     }
     catch (const std::exception& error) {
@@ -951,7 +952,8 @@ Revision Document::apply(const Command& command) {
                 }
                 next_unsupported_constraints = validate_state(next.entities, next.assets);
                 validate_constraint_change(current.entities, next.entities);
-                validate_boundary_change(boundary_identity_history_, current.entities, next.entities);
+                validate_boundary_change(boundary_identity_history_, current.entities, next.entities,
+                                         next.action == "Propagate room relationships");
                 record_boundary_identity_transition(next_identity_history, current.entities, next.entities);
             } else if constexpr (std::is_same_v<CommandType, TranslateBoundary>) {
                 next.action = "Translate boundary";
@@ -1249,7 +1251,8 @@ Document Document::restore(DocumentSnapshot snapshot) {
                 if (same_state(expected, previous))
                     document_error(DocumentErrorCode::invalid_history,
                                    "Unchanged boundary transform cannot create a history record");
-            } else validate_boundary_change(identity_history, previous.entities, record.entities);
+            } else validate_boundary_change(identity_history, previous.entities, record.entities,
+                                            record.action == "Propagate room relationships");
             record_boundary_identity_transition(identity_history, previous.entities, record.entities);
         } else record_boundary_identities(identity_history, record.entities);
     }

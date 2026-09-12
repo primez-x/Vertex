@@ -120,8 +120,11 @@ supports rigid rotation/translation propagation through dependency chains,
 requires agreement among multi-wall drivers, and reports missing, invalid,
 deformed, reflected, or manually conflicting geometry without mutating either
 snapshot. Stable segment and vertex identity migration, revision-checked
-Document commit wiring, visible previews, and production cross-view
-qualification remain open.
+Document commit wiring, construction-receipt transform proofs, dependent
+dimension-anchor updates, and undo/redo coverage are now implemented through
+a revision-bound preview/apply adapter. The Windows editor still needs a
+visible propagation preview/confirmation surface, and production cross-view
+qualification remains open.
 
 The next foundation slice adds immutable room-versus-measurement relationship
 validation, existing/demolished/proposed phase state with mutually exclusive
