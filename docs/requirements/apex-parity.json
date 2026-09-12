@@ -1064,9 +1064,11 @@
       "implementation_status": "in_progress",
       "implementation_sources": [
         "src/calculations/calculations.cpp",
-        "tests/calculation_tests.cpp"
+        "src/desktop/main_window.cpp",
+        "tests/calculation_tests.cpp",
+        "tests/desktop_smoke.cpp"
       ],
-      "implementation_note": "Deduction contributions, profile provenance, overlap handling, classifications, factors, and rounding deltas are implemented; calculation-inspector UI and documented same-type Auto-Subtract compatibility remain open."
+      "implementation_note": "Deduction contributions, profile provenance, overlap handling, classifications, factors, rounding deltas, and an offline contained-boundary editor are implemented. The editor persists deduction_ids, validates same-floor containment and nested-reference rules, and exposes requested versus marginally applied amounts; documented same-type Auto-Subtract compatibility and production certification remain open."
     },
     {
       "id": "APX-ANNO-001",

@@ -118,6 +118,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <set>
 #include <stdexcept>
 #include <thread>
 #include <type_traits>
@@ -979,6 +980,34 @@ std::vector<RoomReference> document_room_references(const DocumentSnapshot& snap
         if (kind) result.push_back({id, *kind});
     }
     return result;
+}
+
+std::vector<std::string> read_deduction_ids(const json& properties) {
+    if (!properties.contains("deduction_ids")) return {};
+    const auto& value = properties.at("deduction_ids");
+    if (!value.is_array()) {
+        throw std::invalid_argument("deduction_ids must be an array of entity IDs");
+    }
+    std::vector<std::string> result;
+    std::set<std::string, std::less<>> seen;
+    result.reserve(value.size());
+    for (const auto& item : value) {
+        if (!item.is_string()) {
+            throw std::invalid_argument("deduction_ids must contain only entity IDs");
+        }
+        const auto id = item.get<std::string>();
+        if (id.empty() || !seen.insert(id).second) {
+            throw std::invalid_argument("deduction_ids must contain unique nonempty entity IDs");
+        }
+        result.push_back(id);
+    }
+    return result;
+}
+
+json deduction_ids_json(const QStringList& ids) {
+    json value = json::array();
+    for (const auto& id : ids) value.push_back(id.trimmed().toStdString());
+    return value;
 }
 
 std::vector<std::string> phase_model_entity_ids(const DocumentSnapshot& snapshot) {
@@ -4151,6 +4180,98 @@ public:
         }
     }
 
+    bool setSelectedDeductions(const QStringList& deduction_ids) {
+        const auto entity = selectedEntity();
+        if (!entity.has_value() || !is_closed_boundary_entity(entity->type)) {
+            setError(QStringLiteral("Select a closed boundary before editing deductions."));
+            return false;
+        }
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        try {
+            const auto snapshot = m_document->snapshot();
+            const auto& entities = snapshot.entities();
+            const auto floor_id = read_string(entity->properties, "floor_id");
+            if (!floor_id.has_value() || floor_id->empty()) {
+                throw std::invalid_argument("The selected boundary has no floor reference.");
+            }
+            const auto floor = entities.find(*floor_id);
+            if (floor == entities.end() || floor->second.type != "floor") {
+                throw std::invalid_argument("The selected boundary references an unknown floor.");
+            }
+            auto building_id = read_string(entity->properties, "building_id");
+            if (!building_id.has_value() || building_id->empty()) {
+                building_id = read_string(floor->second.properties, "building_id");
+            }
+            if (!building_id.has_value() || building_id->empty()) {
+                throw std::invalid_argument("The selected boundary has no building reference.");
+            }
+            const auto classification = read_string(entity->properties, "classification");
+            if (!classification.has_value() || classification->empty()) {
+                throw std::invalid_argument("Assign a classification before editing deductions.");
+            }
+            const auto property = propertyEntity();
+            if (!property.has_value()) {
+                throw std::invalid_argument("The calculation profile is unavailable.");
+            }
+            const auto profile = read_calculation_profile(property->properties);
+            const auto base = read_boundary(entity->properties);
+            const auto base_diagnostics = validate_boundary(base);
+            if (!base_diagnostics.empty()) {
+                throw std::invalid_argument("The selected boundary is invalid: " +
+                                            base_diagnostics.front().message);
+            }
+            const auto factor = read_stored_factor(entity->properties);
+            std::vector<AreaDeduction> deductions;
+            deductions.reserve(deduction_ids.size());
+            std::set<std::string, std::less<>> seen;
+            for (const auto& raw_id : deduction_ids) {
+                const auto id = raw_id.trimmed().toStdString();
+                if (id.empty() || !seen.insert(id).second) {
+                    throw std::invalid_argument("Choose each deduction boundary only once.");
+                }
+                if (id == entity->id) {
+                    throw std::invalid_argument("A boundary cannot deduct itself.");
+                }
+                const auto found = entities.find(id);
+                if (found == entities.end() || !is_closed_boundary_entity(found->second.type)) {
+                    throw std::invalid_argument("Deduction boundary " + id + " is unavailable.");
+                }
+                const auto candidate_floor = read_string(found->second.properties, "floor_id");
+                if (!candidate_floor.has_value() || *candidate_floor != *floor_id) {
+                    throw std::invalid_argument("Deduction boundaries must be on the active floor.");
+                }
+                const auto boundary = read_boundary(found->second.properties);
+                const auto diagnostics = validate_boundary(boundary);
+                if (!diagnostics.empty()) {
+                    throw std::invalid_argument("Deduction boundary " + id + " is invalid: " +
+                                                diagnostics.front().message);
+                }
+                if (!read_deduction_ids(found->second.properties).empty()) {
+                    throw std::invalid_argument("A deduction boundary cannot contain another deduction.");
+                }
+                deductions.push_back({id, boundary});
+            }
+            MeasurementArea area{entity->id, *building_id, *floor_id, *classification,
+                                 base, deductions, factor.rational};
+            (void)calculate_area(area, profile);
+
+            auto properties = entity->properties;
+            if (deduction_ids.isEmpty()) {
+                properties.erase("deduction_ids");
+            } else {
+                properties["deduction_ids"] = deduction_ids_json(deduction_ids);
+            }
+            return editSelectedProperties(std::move(properties), "edit area deductions");
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Deductions must be valid and inside the selected boundary: %1")
+                         .arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     bool setSelectedCalculationRule(bool include_in_building, bool include_in_living) {
         const auto entity = selectedEntity();
         if (!entity.has_value() || !is_closed_boundary_entity(entity->type)) {
@@ -7229,6 +7350,19 @@ private:
         m_calculation_perimeter_value->setObjectName(QStringLiteral("calculationPerimeter"));
         configure_value_label(m_calculation_perimeter_value);
         calculation_layout->addRow(QStringLiteral("Perimeter"), m_calculation_perimeter_value);
+        m_calculation_deductions_list = new QListWidget(calculation_group);
+        m_calculation_deductions_list->setObjectName(QStringLiteral("calculationDeductions"));
+        m_calculation_deductions_list->setSelectionMode(QAbstractItemView::SingleSelection);
+        m_calculation_deductions_list->setMinimumHeight(0);
+        m_calculation_deductions_list->setMaximumHeight(72);
+        m_calculation_deductions_list->setAlternatingRowColors(false);
+        calculation_layout->addRow(QStringLiteral("Deductions"), m_calculation_deductions_list);
+        m_edit_deductions_button = new QPushButton(QStringLiteral("Edit deductions…"), calculation_group);
+        m_edit_deductions_button->setObjectName(QStringLiteral("editDeductions"));
+        m_edit_deductions_button->setAccessibleName(QStringLiteral("Edit area deductions"));
+        calculation_layout->addRow(m_edit_deductions_button);
+        QObject::connect(m_edit_deductions_button, &QPushButton::clicked, owner,
+                         [this] { showDeductionEditor(); });
         m_calculation_rounding_value = new QLabel(calculation_group);
         m_calculation_rounding_value->setObjectName(QStringLiteral("calculationRounding"));
         m_calculation_rounding_value->setWordWrap(true);
@@ -8028,6 +8162,8 @@ private:
                 error ? QStringLiteral("color:#d56b6b; font-weight:600;") : QString{});
         };
         const auto clear_controls = [&] {
+            m_calculation_deductions_list->clear();
+            m_edit_deductions_button->setEnabled(false);
             {
                 QSignalBlocker blocker(m_factor_edit);
                 m_factor_edit->clear();
@@ -8107,6 +8243,25 @@ private:
         }
         const auto factor_value = static_cast<double>(factor.rational.numerator) /
                                   static_cast<double>(factor.rational.denominator);
+        std::vector<std::string> selected_deduction_ids;
+        try {
+            selected_deduction_ids = read_deduction_ids(selected->properties);
+        } catch (const std::exception& error) {
+            clear_controls();
+            set_calculation_error(QStringLiteral("deduction references are invalid: %1")
+                                      .arg(QString::fromUtf8(error.what())));
+            return;
+        }
+        m_calculation_deductions_list->clear();
+        for (const auto& id : selected_deduction_ids) {
+            auto* item = new QListWidgetItem(id_from(id), m_calculation_deductions_list);
+            item->setData(Qt::UserRole, id_from(id));
+        }
+        if (selected_deduction_ids.empty()) {
+            auto* item = new QListWidgetItem(QStringLiteral("None"), m_calculation_deductions_list);
+            item->setFlags(item->flags() & ~Qt::ItemIsSelectable);
+        }
+        m_edit_deductions_button->setEnabled(editable);
 
         m_calculation_profile_version->setText(
             QStringLiteral("Profile version %1").arg(persisted_profile.version));
@@ -8141,10 +8296,23 @@ private:
 
         try {
             const auto& entities = snapshot.entities();
+            std::set<std::string, std::less<>> referenced_deductions;
+            for (const auto& [id, entity] : entities) {
+                if (!is_closed_boundary_entity(entity.type)) continue;
+                for (const auto& deduction_id : read_deduction_ids(entity.properties)) {
+                    if (deduction_id == id) {
+                        throw std::invalid_argument("Boundary " + id + " cannot deduct itself");
+                    }
+                    referenced_deductions.insert(deduction_id);
+                }
+            }
             std::vector<MeasurementArea> areas;
             areas.reserve(entities.size());
             for (const auto& [id, entity] : entities) {
                 if (!is_closed_boundary_entity(entity.type)) {
+                    continue;
+                }
+                if (referenced_deductions.contains(id)) {
                     continue;
                 }
                 const auto floor_id = read_string(entity.properties, "floor_id");
@@ -8180,12 +8348,37 @@ private:
                                                 "' has no calculation profile rule; assign it before calculating totals");
                 }
                 const auto stored_factor = read_stored_factor(entity.properties);
+                std::vector<AreaDeduction> deductions;
+                for (const auto& deduction_id : read_deduction_ids(entity.properties)) {
+                    const auto deduction = entities.find(deduction_id);
+                    if (deduction == entities.end() ||
+                        !is_closed_boundary_entity(deduction->second.type)) {
+                        throw std::invalid_argument("Boundary " + id +
+                                                    " references an unavailable deduction " + deduction_id);
+                    }
+                    const auto deduction_floor = read_string(deduction->second.properties, "floor_id");
+                    if (!deduction_floor.has_value() || *deduction_floor != *floor_id) {
+                        throw std::invalid_argument("Deduction " + deduction_id +
+                                                    " must be on the same floor as boundary " + id);
+                    }
+                    const auto deduction_boundary = read_boundary(deduction->second.properties);
+                    const auto deduction_diagnostics = validate_boundary(deduction_boundary);
+                    if (!deduction_diagnostics.empty()) {
+                        throw std::invalid_argument("Deduction " + deduction_id + " is invalid: " +
+                                                    deduction_diagnostics.front().message);
+                    }
+                    if (!read_deduction_ids(deduction->second.properties).empty()) {
+                        throw std::invalid_argument("Deduction " + deduction_id +
+                                                    " cannot contain another deduction");
+                    }
+                    deductions.push_back({deduction_id, deduction_boundary});
+                }
                 areas.push_back(MeasurementArea{id,
                                                 *building_id,
                                                 *floor_id,
                                                 *entity_classification,
                                                 boundary,
-                                                {},
+                                                std::move(deductions),
                                                 stored_factor.rational});
             }
             const auto report = calculate_areas(areas, display_profile);
@@ -8208,6 +8401,23 @@ private:
             m_calculation_factored_value->setText(format_area(factored));
             m_calculation_perimeter_value->setText(
                 format_length(selected_result->perimeter_metres, m_metric_units));
+            m_calculation_deductions_list->clear();
+            if (selected_result->deductions.empty()) {
+                auto* item = new QListWidgetItem(QStringLiteral("None"), m_calculation_deductions_list);
+                item->setFlags(item->flags() & ~Qt::ItemIsSelectable);
+            } else {
+                for (const auto& trace : selected_result->deductions) {
+                    const auto applied = format_area(
+                        display_area(trace.applied_square_metres, display_profile));
+                    const auto requested = format_area(
+                        display_area(trace.requested_square_metres, display_profile));
+                    auto* item = new QListWidgetItem(
+                        QStringLiteral("%1  ·  applied %2 of %3")
+                            .arg(id_from(trace.id), applied, requested),
+                        m_calculation_deductions_list);
+                    item->setData(Qt::UserRole, id_from(trace.id));
+                }
+            }
             m_calculation_rounding_value->setText(
                 QStringLiteral("Rounded to %1 decimal places\nUnrounded: %2 %3\nDisplayed: %4\nDifference: %5 %3")
                     .arg(display_profile.decimal_places)
@@ -8921,6 +9131,142 @@ private:
     }
 
 public:
+    void showDeductionEditor() {
+        const auto selected = selectedEntity();
+        if (!selected || !is_closed_boundary_entity(selected->type)) {
+            setError(QStringLiteral("Select a closed boundary before editing deductions."));
+            return;
+        }
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return;
+        }
+        const auto context = captureModalContext();
+        try {
+            const auto snapshot = authoringSnapshot();
+            const auto floor_id = read_string(selected->properties, "floor_id");
+            if (!floor_id.has_value() || floor_id->empty()) {
+                throw std::invalid_argument("The selected boundary has no floor reference.");
+            }
+            QDialog dialog(owner);
+            styleDialog(dialog);
+            dialog.setObjectName(QStringLiteral("calculationDeductionDialog"));
+            dialog.setWindowTitle(QStringLiteral("Area deductions"));
+            dialog.setModal(true);
+            dialog.resize(560, 420);
+            auto* layout = new QVBoxLayout(&dialog);
+
+            auto* source = new QComboBox(&dialog);
+            source->setObjectName(QStringLiteral("calculationDeductionSource"));
+            source->setToolTip(QStringLiteral("Choose a closed boundary on the active floor to subtract."));
+            layout->addWidget(new QLabel(QStringLiteral("Closed boundary to subtract"), &dialog));
+            layout->addWidget(source);
+
+            auto* list = new QListWidget(&dialog);
+            list->setObjectName(QStringLiteral("calculationDeductionList"));
+            list->setSelectionMode(QAbstractItemView::SingleSelection);
+            layout->addWidget(new QLabel(QStringLiteral("Deductions applied to this area"), &dialog));
+            layout->addWidget(list, 1);
+
+            auto* list_buttons = new QHBoxLayout();
+            auto* add = new QPushButton(QStringLiteral("Add deduction"), &dialog);
+            add->setObjectName(QStringLiteral("addCalculationDeduction"));
+            auto* remove = new QPushButton(QStringLiteral("Remove selected"), &dialog);
+            remove->setObjectName(QStringLiteral("removeCalculationDeduction"));
+            list_buttons->addStretch(1);
+            list_buttons->addWidget(add);
+            list_buttons->addWidget(remove);
+            layout->addLayout(list_buttons);
+
+            auto* status = new QLabel(&dialog);
+            status->setObjectName(QStringLiteral("calculationDeductionStatus"));
+            status->setWordWrap(true);
+            status->setTextFormat(Qt::PlainText);
+            layout->addWidget(status);
+
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel,
+                                                 &dialog);
+            buttons->setObjectName(QStringLiteral("calculationDeductionButtons"));
+            layout->addWidget(buttons);
+
+            QStringList staged;
+            for (const auto& id : read_deduction_ids(selected->properties))
+                staged.push_back(id_from(id));
+            const auto label_for = [&](const Entity& entity) {
+                auto type = QString::fromStdString(entity.type);
+                type.replace(QLatin1Char('_'), QLatin1Char(' '));
+                if (!type.isEmpty()) type[0] = type[0].toUpper();
+                const auto name = read_string(entity.properties, "name");
+                return name.has_value() && !name->empty()
+                    ? QStringLiteral("%1  ·  %2").arg(QString::fromStdString(*name), id_from(entity.id))
+                    : QStringLiteral("%1  ·  %2").arg(type, id_from(entity.id));
+            };
+            for (const auto& [id, candidate] : snapshot.entities()) {
+                if (id == selected->id || !is_closed_boundary_entity(candidate.type)) continue;
+                const auto candidate_floor = read_string(candidate.properties, "floor_id");
+                if (!candidate_floor.has_value() || *candidate_floor != *floor_id) continue;
+                const auto boundary = read_boundary(candidate.properties);
+                if (validate_boundary(boundary).empty()) {
+                    source->addItem(label_for(candidate), id_from(id));
+                }
+            }
+
+            const auto refresh_list = [&] {
+                list->clear();
+                for (const auto& id : staged) {
+                    const auto found = snapshot.entities().find(id.toStdString());
+                    const auto label = found == snapshot.entities().end()
+                        ? QStringLiteral("Missing boundary  ·  %1").arg(id)
+                        : label_for(found->second);
+                    auto* item = new QListWidgetItem(label, list);
+                    item->setData(Qt::UserRole, id);
+                }
+                remove->setEnabled(list->currentItem() != nullptr);
+                if (staged.isEmpty()) status->setText(QStringLiteral("No deductions selected."));
+            };
+            refresh_list();
+            add->setEnabled(source->count() > 0);
+
+            QObject::connect(add, &QPushButton::clicked, &dialog, [&] {
+                const auto id = source->currentData().toString();
+                if (id.isEmpty() || staged.contains(id)) {
+                    status->setText(QStringLiteral("Choose a boundary that is not already selected."));
+                    return;
+                }
+                staged.push_back(id);
+                refresh_list();
+                status->setText(QStringLiteral("Deduction staged. Apply to validate and save it."));
+            });
+            QObject::connect(remove, &QPushButton::clicked, &dialog, [&] {
+                if (!list->currentItem()) return;
+                staged.removeAll(list->currentItem()->data(Qt::UserRole).toString());
+                refresh_list();
+                status->setText(staged.isEmpty() ? QStringLiteral("No deductions selected.")
+                                                 : QStringLiteral("Deduction removed from the pending edit."));
+            });
+            QObject::connect(list, &QListWidget::currentRowChanged, &dialog,
+                             [remove](int row) { remove->setEnabled(row >= 0); });
+            QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked,
+                             &dialog, [&] {
+                                 if (!modalContextUnchanged(context)) {
+                                     status->setText(lastError());
+                                     return;
+                                 }
+                                 if (setSelectedDeductions(staged)) {
+                                     dialog.accept();
+                                 } else {
+                                     status->setText(lastError());
+                                 }
+                             });
+            QObject::connect(buttons->button(QDialogButtonBox::Cancel), &QPushButton::clicked,
+                             &dialog, &QDialog::reject);
+            dialog.exec();
+            refreshInspector();
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Deductions: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
     void showConstraintEditor(const QString& initial_length = {}) {
         const auto entity = selectedEntity();
         if (!entity || entity->type != "wall" || !m_document->is_editable()) {
@@ -9142,6 +9488,8 @@ private:
     QLabel* m_calculation_net_value{};
     QLabel* m_calculation_factored_value{};
     QLabel* m_calculation_perimeter_value{};
+    QListWidget* m_calculation_deductions_list{};
+    QPushButton* m_edit_deductions_button{};
     QLabel* m_calculation_rounding_value{};
     QLabel* m_calculation_building_total_value{};
     QLabel* m_calculation_living_total_value{};

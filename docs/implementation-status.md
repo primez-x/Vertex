@@ -373,8 +373,11 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
 - Area calculations handle analytical boundaries, deduction unions, exact
   rational factors, explicit classification rules and inspectable rounding.
   The inspector now exposes area/perimeter/factors, versioned profile rules,
-  totals and rounding details; unknown classifications and overlaps block
-  totals. Its save/reopen and undo/redo workflow tests pass.
+  totals and rounding details, plus a contained-boundary deduction editor that
+  persists `deduction_ids` and reports requested versus marginally applied
+  amounts. Unknown classifications, unresolved deduction references and
+  overlaps block totals. Its save/reopen and undo/redo workflow tests pass;
+  Apex same-type Auto-Subtract compatibility remains open.
 - Document commands, revision history and SQLite snapshots work through the
   CLI and desktop. History, schema and reference repairs passed their recheck.
   UTF-8 byte limits, Windows path aliases and staging-file publication identity

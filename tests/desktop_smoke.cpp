@@ -635,6 +635,82 @@ void test_assembly_catalog_workflow() {
             "assembly instance type should survive project reopen");
 }
 
+void test_calculation_deduction_workflow() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    const auto outer_id = window.createBoundary(
+        Boundary{{{{0.0, 0.0}, {10.0, 0.0}, 0.0},
+                  {{10.0, 0.0}, {10.0, 10.0}, 0.0},
+                  {{10.0, 10.0}, {0.0, 10.0}, 0.0},
+                  {{0.0, 10.0}, {0.0, 0.0}, 0.0}}});
+    const auto hole_id = window.createBoundary(
+        Boundary{{{{2.0, 2.0}, {4.0, 2.0}, 0.0},
+                  {{4.0, 2.0}, {4.0, 4.0}, 0.0},
+                  {{4.0, 4.0}, {2.0, 4.0}, 0.0},
+                  {{2.0, 4.0}, {2.0, 2.0}, 0.0}}});
+    const auto outside_id = window.createBoundary(
+        Boundary{{{{20.0, 20.0}, {22.0, 20.0}, 0.0},
+                  {{22.0, 20.0}, {22.0, 22.0}, 0.0},
+                  {{22.0, 22.0}, {20.0, 22.0}, 0.0},
+                  {{20.0, 22.0}, {20.0, 20.0}, 0.0}}});
+    require(!outer_id.isEmpty() && !hole_id.isEmpty() && !outside_id.isEmpty() &&
+                window.selectEntity(outer_id),
+            "deduction fixture should create and select the base boundary");
+    window.setMetricUnits(true);
+    auto* editor = window.findChild<QPushButton*>(QStringLiteral("editDeductions"));
+    auto* deduction_list = window.findChild<QListWidget*>(QStringLiteral("calculationDeductions"));
+    require(editor && deduction_list, "calculation inspector should expose deduction controls");
+
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("calculationDeductionDialog"));
+        require(dialog, "deduction editor should open from the calculation inspector");
+        auto* source = dialog->findChild<QComboBox*>(QStringLiteral("calculationDeductionSource"));
+        auto* list = dialog->findChild<QListWidget*>(QStringLiteral("calculationDeductionList"));
+        auto* add = dialog->findChild<QPushButton*>(QStringLiteral("addCalculationDeduction"));
+        auto* remove = dialog->findChild<QPushButton*>(QStringLiteral("removeCalculationDeduction"));
+        auto* buttons = dialog->findChild<QDialogButtonBox*>(QStringLiteral("calculationDeductionButtons"));
+        auto* status = dialog->findChild<QLabel*>(QStringLiteral("calculationDeductionStatus"));
+        require(source && list && add && remove && buttons && status,
+                "deduction editor should expose source, list, status, and apply controls");
+        const auto hole_index = source->findData(hole_id);
+        const auto outside_index = source->findData(outside_id);
+        require(hole_index >= 0 && outside_index >= 0,
+                "deduction editor should list closed boundaries on the active floor");
+        source->setCurrentIndex(hole_index);
+        add->click();
+        require(list->count() == 1 && list->item(0)->data(Qt::UserRole).toString() == hole_id,
+                "deduction editor should stage a selected boundary");
+        source->setCurrentIndex(outside_index);
+        add->click();
+        buttons->button(QDialogButtonBox::Apply)->click();
+        require(dialog->isVisible() && status->text().contains(QStringLiteral("inside"), Qt::CaseInsensitive),
+                "an outside deduction must be rejected without closing the editor");
+        list->setCurrentRow(1);
+        remove->click();
+        buttons->button(QDialogButtonBox::Apply)->click();
+    });
+    editor->click();
+
+    const auto stored = window.document().snapshot().entities().at(outer_id.toStdString());
+    require(stored.properties.at("deduction_ids").is_array() &&
+                stored.properties.at("deduction_ids").size() == 1 &&
+                stored.properties.at("deduction_ids").at(0) == hole_id.toStdString(),
+            "accepted deductions should persist as explicit entity references");
+    require(deduction_list->count() == 1 &&
+                deduction_list->item(0)->text().contains(QStringLiteral("4.00 m²")),
+            "calculation inspector should show the applied deduction trace");
+    auto* net = window.findChild<QLabel*>(QStringLiteral("calculationNetArea"));
+    require(net && net->text().contains(QStringLiteral("96.00 m²")),
+            "net area should subtract the contained deduction exactly once");
+    require(window.undoCommand(), "deduction edit should be undoable");
+    require(!window.document().snapshot().entities().at(outer_id.toStdString()).properties.contains("deduction_ids") &&
+                window.redoCommand(),
+            "undo should remove the deduction reference and redo should restore it");
+    require(window.document().snapshot().entities().at(outer_id.toStdString()).properties.at("deduction_ids").at(0) ==
+                hole_id.toStdString(),
+            "redo should restore the explicit deduction reference");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -656,6 +732,7 @@ int main(int argc, char** argv) {
     test_design_phase_workflow();
     test_room_relationship_workflow();
     test_assembly_catalog_workflow();
+    test_calculation_deduction_workflow();
     {
         QTemporaryDir stamp_directory;
         require(stamp_directory.isValid(), "stamp test directory should be available");

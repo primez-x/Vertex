@@ -117,9 +117,16 @@ classification rules. The inspector's building and living checkboxes edit
 that profile through one normal document command and advance its version.
 Unknown or unassigned classifications block totals with an explicit error;
 living area is never inferred from free-form labels. `calculate_areas` also
-rejects unresolved references, invalid geometry, and overlapping areas rather
-than displaying a plausible total. The current slice has no deduction editor;
-deductions remain a calculation-kernel capability for a later bounded task.
+  rejects unresolved references, invalid geometry, and overlapping areas rather
+  than displaying a plausible total. The calculation inspector's **Edit
+  deductions** command lists valid closed boundaries on the active floor and
+  stages add/remove changes before applying them. Applying validates that each
+  deduction is contained by the selected boundary, rejects duplicate or nested
+  deductions, and stores explicit `deduction_ids` on the base entity through
+  normal revision-fenced history. Referenced deduction boundaries are removed
+  from independent area aggregation, while the selected result exposes each
+  requested and newly applied deduction amount. Apex same-type Auto-Subtract
+  compatibility remains an open certification item.
 
 The public methods used by the smoke test are `createBoundary`,
 `createRoomBoundary`,

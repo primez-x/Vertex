@@ -32,10 +32,19 @@ away from zero. Each display result includes its unrounded value, rounded value,
 rounding delta and locale-independent decimal text. Display precision never
 changes a boundary or its stored measurement.
 
+The desktop inspector now provides a local deduction editor. It lists valid
+closed boundaries on the active floor, stages additions and removals without
+mutating the document, and applies a revision-fenced `deduction_ids` array only
+after containment, uniqueness, same-floor, and non-nested checks pass. The
+calculation result lists each deduction with its requested and marginally
+applied amounts. Referenced boundaries are excluded from top-level aggregation
+so the same geometry is not reported as both a standalone area and a hole.
+The editor is deterministic and offline; documented Apex same-type Auto-Subtract
+behavior still needs compatibility fixtures and certification.
+
 `calculation_tests` checks curved area/perimeter, reversed winding, large
 translations, overlapping/full/outside deductions, invalid geometry, factors,
 classification totals, same-floor overlap, unit conversion, and aggregate
 rounding. This service is only part of the required calculation system. A
-document-bound output fingerprint, profile editor, calculation inspector,
-measurement-standard fixtures and complete Apex behavior certification remain
-required work.
+document-bound output fingerprint, profile editor, measurement-standard
+fixtures and complete Apex behavior certification remain required work.
