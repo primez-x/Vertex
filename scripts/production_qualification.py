@@ -74,6 +74,8 @@ def validate_and_build(manifest, *, root):
             selected = (root / path).resolve()
             if not selected.is_relative_to(root) or not selected.is_file():
                 raise ValueError("missing file or path escapes evidence root")
+            if selected.stat().st_size == 0:
+                raise ValueError("evidence file is empty")
             with selected.open("rb") as stream:
                 actual = hashlib.file_digest(stream, "sha256").hexdigest()
             if actual != digest.lower():
@@ -82,6 +84,11 @@ def validate_and_build(manifest, *, root):
             errors.append(f"{label}: {error}")
             return None
         return {"path": path.as_posix(), "sha256": actual}
+
+    def evidence_path_key(reference):
+        if reference is None:
+            return None
+        return (root / pathlib.PurePosixPath(reference["path"])).resolve().as_posix().casefold()
 
     manifest = obj(manifest, "manifest")
     if manifest.get("schema_version") != "1.0":
@@ -127,6 +134,10 @@ def validate_and_build(manifest, *, root):
         if kind != "real":
             blockers.append(label + ": real runtime evidence not declared")
         artifacts = {key: artifact(run.get(key), label + "." + key) for key in ("application", "source_project", "reopened_project")}
+        role_path_keys = {evidence_path_key(value) for value in artifacts.values() if value is not None}
+        if kind == "real":
+            if len(role_path_keys) != len([value for value in artifacts.values() if value is not None]):
+                errors.append(label + ": application, source_project, and reopened_project must be distinct files for real evidence")
         observations = obj(run.get("observations"), label + ".observations")
         for name in sorted(set(observations) - set(checks)):
             errors.append(label + ".observations: unsupported check " + name)
@@ -143,6 +154,8 @@ def validate_and_build(manifest, *, root):
                 blockers.append(context + ": observation has not passed")
             checked[name] = {"expected": observation.get("expected"), "observed": observation.get("observed"),
                              "status": status, "evidence": artifact(observation.get("evidence"), context + ".evidence")}
+            if kind == "real" and checked[name]["evidence"] is not None and evidence_path_key(checked[name]["evidence"]) in role_path_keys:
+                errors.append(context + ": observation evidence must be separate from application, source_project, and reopened_project artifacts")
         runs.append({"id": label, "requirement": requirement, "dpi_percent": scale, "evidence_kind": kind,
                      "metadata": {key: run.get(key) for key in ("operator", "recorded_at", "environment", "device", "provenance")},
                      "artifacts": artifacts, "observations": checked})

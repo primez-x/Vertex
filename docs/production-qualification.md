@@ -50,11 +50,14 @@ evidence must originate from physical input. Synthetic mouse injection is not
 real pen/touch qualification.
 
 A file reference is `{"path":"relative/file.ext","sha256":"64 hexadecimal digits"}`.
-Every reference must exist beneath the explicitly selected evidence root and
-match its declared SHA-256. Absolute paths, traversal, drive-relative paths,
-alternate data streams, and links resolving outside the root are rejected. The
-tool reads only referenced files and does not modify them. Keep evidence stable
-during validation; this is not a hostile-filesystem sandbox or signed attestation.
+Every reference must exist beneath the explicitly selected evidence root, be
+nonempty, and match its declared SHA-256. For a `real` run, the application,
+source project, and reopened project references must name three distinct files;
+one file cannot be reused as proof of all three roles. Absolute paths,
+traversal, drive-relative paths, alternate data streams, and links resolving
+outside the root are rejected. The tool reads only referenced files and does
+not modify them. Keep evidence stable during validation; this is not a hostile
+filesystem sandbox or signed attestation.
 
 Each observation requires nonempty `expected` and `observed` strings, a `status`
 (`pass`, `fail`, `blocked`, or `not_run`), and an `evidence` file reference. Unknown

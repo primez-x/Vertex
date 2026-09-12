@@ -39,6 +39,23 @@ class QualificationTests(unittest.TestCase):
     def report(self):
         return qa.validate_and_build(self.manifest, root=self.root)
 
+    def declare_real_role_artifacts(self):
+        role_artifacts = {}
+        for name, payload in (("application.exe", b"application binary"),
+                              ("source.bldproj", b"source project"),
+                              ("reopened.bldproj", b"reopened project"),
+                              ("observation.json", b"observation evidence")):
+            path = self.root / name
+            path.write_bytes(payload)
+            role_artifacts[name] = {"path": name, "sha256": hashlib.sha256(payload).hexdigest()}
+        for run in self.manifest["runs"]:
+            run["evidence_kind"] = "real"
+            run["application"] = copy.deepcopy(role_artifacts["application.exe"])
+            run["source_project"] = copy.deepcopy(role_artifacts["source.bldproj"])
+            run["reopened_project"] = copy.deepcopy(role_artifacts["reopened.bldproj"])
+            for observation in run["observations"].values():
+                observation["evidence"] = copy.deepcopy(role_artifacts["observation.json"])
+
     def test_synthetic_never_qualifies_and_is_deterministic(self):
         report = self.report()
         self.assertTrue(report["contract_valid"], report["errors"])
@@ -49,12 +66,35 @@ class QualificationTests(unittest.TestCase):
         self.assertEqual(report, self.report())
 
     def test_declared_real_evidence_still_needs_independent_review(self):
-        for run in self.manifest["runs"]:
-            run["evidence_kind"] = "real"
+        self.declare_real_role_artifacts()
         report = self.report()
         self.assertTrue(report["real_evidence_complete"])
         self.assertFalse(report["qualification_passed"])
         self.assertEqual(report["audit_status"], "incomplete")
+
+    def test_real_evidence_requires_distinct_nonempty_role_artifacts(self):
+        for run in self.manifest["runs"]:
+            run["evidence_kind"] = "real"
+        report = self.report()
+        self.assertFalse(report["contract_valid"])
+        self.assertTrue(any("distinct" in error for error in report["errors"]))
+
+        empty = self.root / "empty.bin"
+        empty.write_bytes(b"")
+        self.manifest["runs"][0]["application"] = {
+            "path": "empty.bin", "sha256": hashlib.sha256(b"").hexdigest()
+        }
+        report = self.report()
+        self.assertFalse(report["contract_valid"])
+        self.assertTrue(any("empty" in error for error in report["errors"]))
+
+    def test_real_observation_evidence_cannot_reuse_role_artifacts(self):
+        self.declare_real_role_artifacts()
+        run = self.manifest["runs"][0]
+        run["observations"]["create"]["evidence"] = copy.deepcopy(run["application"])
+        report = self.report()
+        self.assertFalse(report["contract_valid"])
+        self.assertTrue(any("observation evidence" in error for error in report["errors"]))
 
     def test_missing_coverage_identity_and_observations_fail_closed(self):
         original = copy.deepcopy(self.manifest)
@@ -70,8 +110,7 @@ class QualificationTests(unittest.TestCase):
             self.assertFalse(self.report()["contract_valid"])
 
     def test_failure_and_blocked_observations_prevent_complete_evidence(self):
-        for run in self.manifest["runs"]:
-            run["evidence_kind"] = "real"
+        self.declare_real_role_artifacts()
         for status in ("fail", "blocked", "not_run"):
             self.manifest["runs"][0]["observations"]["recovery"]["status"] = status
             report = self.report()
