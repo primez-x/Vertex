@@ -43,6 +43,16 @@ int main() {
                                    2,
                                    {{"living", {true, true}}, {"garage", {true, false}}}};
         auto area = room("a", rectangle(0, 0, 12, 8));
+        auto parcel = room("parcel", rectangle(-1, -1, 100, 100));
+        parcel.scope = AreaScope::site;
+        const auto mixed = calculate_areas({area, parcel}, profile);
+        near(mixed.building.square_metres, 96, 1e-9, "Site enclosure must not add building area");
+        near(mixed.living.square_metres, 96, 1e-9, "Site scope must override a living classification rule");
+        auto overlapping_site = parcel;
+        overlapping_site.id = "second-parcel";
+        rejected([&] { (void)calculate_areas({parcel, overlapping_site}, profile); });
+        overlapping_site.scope = static_cast<AreaScope>(99);
+        rejected([&] { (void)calculate_area(overlapping_site, profile); });
         auto result = calculate_area(area, profile);
         near(result.base_square_metres, 96, 1e-9, "Base area");
         near(result.perimeter_metres, 40, 1e-9, "Boundary perimeter");

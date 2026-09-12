@@ -69,6 +69,8 @@ struct Calculated {
 };
 Calculated calculate(const MeasurementArea& a, const CalculationProfile& p, Vec2 origin) {
     profile_valid(p);
+    if (a.scope != AreaScope::building && a.scope != AreaScope::site)
+        throw std::invalid_argument("Unknown area calculation scope");
     if (a.id.empty() || a.building_id.empty() || a.floor_id.empty() ||
         !p.classifications.contains(a.classification))
         throw std::invalid_argument("Area needs building/floor IDs and an explicit classification rule");
@@ -82,7 +84,7 @@ Calculated calculate(const MeasurementArea& a, const CalculationProfile& p, Vec2
                       base,       perimeter(a.boundary),
                       {},         0,
                       base,       a.factor,
-                      0,          {}};
+                      0,          {}, a.scope};
     std::vector<const AreaDeduction*> ordered;
     for (const auto& d : a.deductions)
         ordered.push_back(&d);
@@ -146,7 +148,7 @@ CalculationReport calculate_areas(const std::vector<MeasurementArea>& areas, con
         auto origin = origins.try_emplace({a->building_id, a->floor_id}, a->boundary.front().start).first;
         auto item = calculate(*a, p, origin->second);
         for (const auto& prior : calculated) {
-            if (prior.result.building_id != a->building_id || prior.result.floor_id != a->floor_id)
+            if (prior.result.scope != a->scope || prior.result.building_id != a->building_id || prior.result.floor_id != a->floor_id)
                 continue;
             double overlap = surface_area(boolean<BRepAlgoAPI_Common>(prior.net, item.net));
             if (overlap > tolerance(std::min(prior.result.net_square_metres, item.result.net_square_metres)))
@@ -155,9 +157,9 @@ CalculationReport calculate_areas(const std::vector<MeasurementArea>& areas, con
         }
         long double value = item.result.factored_square_metres;
         auto rule = p.classifications.at(a->classification);
-        if (rule.building_total)
+        if (a->scope == AreaScope::building && rule.building_total)
             building += value;
-        if (rule.living_total)
+        if (a->scope == AreaScope::building && rule.living_total)
             living += value;
         classifications[a->classification] += value;
         report.areas.push_back(item.result);

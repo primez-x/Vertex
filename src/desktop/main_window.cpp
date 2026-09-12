@@ -789,6 +789,7 @@ CalculationProfile default_calculation_profile() {
         AreaUnit::square_foot,
         2,
         {{"measurement", ClassificationRule{true, false}},
+         {"survey", ClassificationRule{false, false}},
          {"room", ClassificationRule{true, true}},
          {"living", ClassificationRule{true, true}},
          {"interior", ClassificationRule{false, false}},
@@ -5892,6 +5893,7 @@ public:
         // later edit can remain a single undoable semantic command. The
         // upgrade helper preserves the entered geometry and all metadata.
         entity = upgrade_legacy_boundary_entity(entity);
+        if (classification == QStringLiteral("survey")) entity.properties["calculation_scope"] = "site";
         if (!applyEntity(std::move(entity), "create measurement boundary", revision)) {
             return {};
         }
@@ -12020,6 +12022,12 @@ private:
                                                 "' has no calculation profile rule; assign it before calculating totals");
                 }
                 const auto stored_factor = read_stored_factor(entity.properties);
+                if (entity.properties.contains("calculation_scope") && !entity.properties.at("calculation_scope").is_string())
+                    throw std::invalid_argument("Boundary " + id + " has an invalid calculation scope");
+                const auto scope_name = read_string(entity.properties, "calculation_scope")
+                    .value_or(*entity_classification == "survey" ? "site" : "building");
+                if (scope_name != "site" && scope_name != "building")
+                    throw std::invalid_argument("Boundary " + id + " has an unknown calculation scope");
                 std::vector<AreaDeduction> deductions;
                 for (const auto& deduction_id : read_deduction_ids(entity.properties)) {
                     const auto deduction = entities.find(deduction_id);
@@ -12051,7 +12059,8 @@ private:
                                                 *entity_classification,
                                                 boundary,
                                                 std::move(deductions),
-                                                stored_factor.rational});
+                                                stored_factor.rational,
+                                                scope_name == "site" ? AreaScope::site : AreaScope::building});
             }
             const auto report = calculate_areas(areas, display_profile);
             const auto selected_result = std::find_if(

@@ -1227,6 +1227,16 @@ void test_survey_calculator(const QString& capture_directory) {
                 window.document().snapshot().entities().at(survey_id.toStdString()) == added,
             "survey boundary source and geometry must survive project save/reopen");
     require(window.exportDraftSvg(directory.filePath("survey.svg")), "survey boundary must export through shared vector output");
+    auto* units = window.findChild<QComboBox*>("unitSystem");
+    units->setCurrentIndex(units->findText("Metric"));
+    const auto floor_area = window.createBoundary({{{1, -99}, {11, -99}, 0},
+        {{11, -99}, {11, -89}, 0}, {{11, -89}, {1, -89}, 0}, {{1, -89}, {1, -99}, 0}}, "living");
+    require(!floor_area.isEmpty() && window.selectEntity(survey_id), "select parcel surrounding a living area");
+    auto* building_total = window.findChild<QLabel*>("calculationBuildingTotal");
+    auto* living_total = window.findChild<QLabel*>("calculationLivingTotal");
+    require(building_total && living_total && building_total->text().contains("100.00 m²") &&
+                living_total->text().contains("100.00 m²"),
+            "parcel enclosing a building must not block calculations or inflate building/living totals");
 }
 
 void test_design_phase_workflow() {

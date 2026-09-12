@@ -42,6 +42,16 @@ subsequent boundary edits do not recalculate it or claim to update the original
 survey. Geometry and metadata save/reopen and undo/redo together; the boundary
 uses the common canvas and vector-output path.
 
+New survey boundaries persist `properties.calculation_scope = "site"`.
+Earlier survey-classified boundaries without that field are interpreted as
+site scope; other older boundaries default to building scope. Unknown scope
+values or types block desktop calculation. The default profile recognizes
+the survey classification. Site areas retain their own area results and
+classification subtotal, but never contribute to building or living totals.
+They may enclose building areas without triggering same-floor overlap errors;
+overlapping site areas still trigger an error. The scope is independent of
+classification changes once persisted.
+
 Desktop exports add an optional `input_provenance` object, version 1, to the
 version-1 core report. It records `legs_text` and `source_text` verbatim,
 `default_unit` (`m` or `ft`) for suffixless input,

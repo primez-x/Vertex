@@ -10,6 +10,7 @@
 namespace sketch {
 
 enum class AreaUnit { square_metre, square_foot, acre };
+enum class AreaScope { building, site };
 
 struct ClassificationRule {
     bool building_total{};
@@ -39,6 +40,7 @@ struct MeasurementArea {
     Boundary boundary;
     std::vector<AreaDeduction> deductions;
     ExactRational factor{1, 1};
+    AreaScope scope{AreaScope::building};
 };
 
 struct DisplayArea {
@@ -72,6 +74,7 @@ struct AreaCalculation {
     ExactRational factor;
     double factored_square_metres{};
     DisplayArea display;
+    AreaScope scope{AreaScope::building};
 };
 
 struct AreaTotal {
@@ -95,6 +98,8 @@ struct CalculationReport {
 // Aggregation sums unrounded factored results, then rounds once. Duplicate area
 // IDs and positive overlaps on the same building/floor are errors. Adjacent
 // regions and coincident geometry on different floors remain independent.
+// Site and building scopes may overlap; site results never enter building or
+// living totals. Within each scope, ordinary overlap checks still apply.
 [[nodiscard]] CalculationReport calculate_areas(const std::vector<MeasurementArea>& areas,
                                                 const CalculationProfile& profile);
 [[nodiscard]] DisplayArea display_area(double square_metres, const CalculationProfile& profile);
