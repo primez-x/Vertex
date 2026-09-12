@@ -1666,7 +1666,7 @@
       "tests/desktop_smoke.cpp",
       "docs/desktop-workflow.md"
     ],
-    "implementation_note": "Room, appraisal-boundary, and architectural-wall references have separate kinds with independent/follows/derived-from relations and graph validation. A typed room_relationships Document entity and Windows editor now persist and validate declarations through undoable history; geometry propagation, controlled retargeting, and production evidence remain open."
+    "implementation_note": "Room, appraisal-boundary, and architectural-wall references have separate kinds with independent/follows/derived-from relations and graph validation. A typed room_relationships Document entity and Windows editor now persist and validate declarations through undoable history; selected closed geometry can be copied into a distinct named room_boundary entity; geometry propagation, controlled retargeting, and production evidence remain open."
     },
     {
       "id": "ARCH-MOD-010",

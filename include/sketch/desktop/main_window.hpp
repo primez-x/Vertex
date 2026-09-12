@@ -116,6 +116,13 @@ public:
         const Boundary& boundary,
         QString classification = QStringLiteral("measurement"),
         std::optional<Revision> expected_revision = std::nullopt);
+    // Creates a room boundary as a distinct architectural semantic object.
+    // Its geometry remains analytical and independent from appraisal
+    // measurement boundaries, while explicit relationships can connect them.
+    [[nodiscard]] QString createRoomBoundary(
+        const Boundary& boundary,
+        QString classification = QStringLiteral("room"),
+        std::optional<Revision> expected_revision = std::nullopt);
     [[nodiscard]] QString createStraightWall(
         Vec2 start,
         Vec2 end,

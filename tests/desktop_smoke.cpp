@@ -482,8 +482,15 @@ void test_room_relationship_workflow() {
          {{4.0, 0.0}, {4.0, 3.0}, 0.0},
          {{4.0, 3.0}, {0.0, 3.0}, 0.0},
          {{0.0, 3.0}, {0.0, 0.0}, 0.0}}});
-    require(!wall_id.isEmpty() && !boundary_id.isEmpty(),
-            "room relationship fixture should create a wall and measurement boundary");
+    const auto room_id = window.createRoomBoundary({
+        {{{0.25, 0.25}, {3.75, 0.25}, 0.0},
+         {{3.75, 0.25}, {3.75, 2.75}, 0.0},
+         {{3.75, 2.75}, {0.25, 2.75}, 0.0},
+         {{0.25, 2.75}, {0.25, 0.25}, 0.0}}}, QStringLiteral("living"));
+    require(!wall_id.isEmpty() && !boundary_id.isEmpty() && !room_id.isEmpty(),
+            "room relationship fixture should create wall, measurement and room boundaries");
+    require(window.document().snapshot().entities().at(room_id.toStdString()).type == "room_boundary",
+            "room authoring should retain a distinct room-boundary semantic type");
 
     QTimer::singleShot(0, &window, [&] {
         auto* dialog = window.findChild<QDialog*>(QStringLiteral("roomRelationshipsDialog"));
@@ -494,7 +501,8 @@ void test_room_relationship_workflow() {
         auto* list = dialog->findChild<QListWidget*>(QStringLiteral("roomRelationshipList"));
         auto* add = dialog->findChild<QPushButton*>(QStringLiteral("addRoomRelationship"));
         auto* remove = dialog->findChild<QPushButton*>(QStringLiteral("removeRoomRelationship"));
-        require(source && target && kind && list && add && remove,
+        auto* sync = dialog->findChild<QPushButton*>(QStringLiteral("syncRoomRelationships"));
+        require(source && target && kind && list && add && remove && sync,
                 "room relationship editor should expose typed controls");
         const auto source_index = source->findData(boundary_id);
         const auto target_index = target->findData(wall_id);
@@ -510,6 +518,9 @@ void test_room_relationship_workflow() {
         remove->click();
         require(list->count() == 0,
                 "room relationship editor should remove the selected relation");
+        sync->click();
+        require(source->findData(room_id) >= 0,
+                "room relationship editor should synchronize newly created room boundaries");
         dialog->reject();
     });
     window.showRoomRelationships();
@@ -524,8 +535,8 @@ void test_room_relationship_workflow() {
     };
     auto model = RoomRelationshipSnapshot::from_json(
         relationship_entity().properties.at("model"));
-    require(model.references().size() == 2 && model.relations().empty(),
-            "removing the relation should leave the references intact");
+    require(model.references().size() == 3 && model.relations().empty(),
+            "removing the relation should leave the measurement, room and wall references intact");
 
     QTimer::singleShot(0, &window, [&] {
         auto* dialog = window.findChild<QDialog*>(QStringLiteral("roomRelationshipsDialog"));

@@ -3674,6 +3674,69 @@ public:
         return id;
     }
 
+    QString createRoomBoundary(const Boundary& boundary, const QString& classification,
+                               std::optional<Revision> expected_revision = std::nullopt) {
+        const auto revision = expected_revision.value_or(m_document->revision());
+        const auto drawing_context = requireDrawingContext();
+        if (!drawing_context) return {};
+        const auto diagnostics = validate_boundary(boundary);
+        if (!diagnostics.empty()) {
+            setError(QStringLiteral("Room boundary rejected: %1").arg(
+                QString::fromStdString(diagnostics.front().message)));
+            return {};
+        }
+        const auto area = std::abs(signed_area(boundary));
+        if (!std::isfinite(area) || area <= default_geometry_tolerance_metres) {
+            setError(QStringLiteral("Room boundary must enclose a measurable area."));
+            return {};
+        }
+        const auto entity_id = new_id("room-boundary");
+        const auto properties = json{{"floor_id", drawing_context->floor_id},
+                                     {"layer_id", drawing_context->layer_id},
+                                     {"segments", boundary_json(boundary)},
+                                     {"boundary", boundary_json(boundary)},
+                                     {"name", classification.toStdString()},
+                                     {"classification", classification.toStdString()},
+                                     {"area_m2", area},
+                                     {"factor", 1.0},
+                                     {"factor_expression", "1"},
+                                     {"factor_numerator", 1},
+                                     {"factor_denominator", 1}};
+        if (!applyEntity(Entity{entity_id, "room_boundary", properties, false, json::object()},
+                         "create room boundary", revision)) {
+            return {};
+        }
+        m_selected_id = id_from(entity_id);
+        refresh();
+        return m_selected_id;
+    }
+
+    void createRoomBoundaryFromSelection() {
+        const auto context = captureModalContext();
+        const auto selected = selectedEntity();
+        if (!selected || !is_closed_boundary_entity(selected->type)) {
+            setError(QStringLiteral("Select a closed measurement or room boundary first."));
+            return;
+        }
+        const auto boundary = read_boundary(selected->properties);
+        const auto diagnostics = validate_boundary(boundary);
+        if (!diagnostics.empty()) {
+            setError(QStringLiteral("Selected boundary is invalid: %1")
+                         .arg(QString::fromStdString(diagnostics.front().message)));
+            return;
+        }
+        const auto initial = QString::fromStdString(
+            read_string(selected->properties, "classification").value_or("room"));
+        bool accepted = false;
+        const auto classification = QInputDialog::getText(
+            owner, QStringLiteral("Create room boundary"),
+            QStringLiteral("Room name or classification:"), QLineEdit::Normal,
+            initial, &accepted);
+        if (!accepted || classification.trimmed().isEmpty()) return;
+        if (!modalContextUnchanged(context)) return;
+        (void)createRoomBoundary(boundary, classification.trimmed(), context.revision);
+    }
+
     QString createStraightWall(Vec2 start, Vec2 end, const QString& classification,
                                std::optional<Revision> expected_revision = std::nullopt) {
         const auto revision = expected_revision.value_or(m_document->revision());
@@ -5813,6 +5876,8 @@ public:
              [this] { showRemodelingAlternatives(); }},
             {QStringLiteral("Room and boundary relationships"),
              [this] { showRoomRelationships(); }},
+            {QStringLiteral("Create room boundary from selected geometry"),
+             [this] { createRoomBoundaryFromSelection(); }},
             {QStringLiteral("Edit reusable assemblies"),
              [this] { showAssemblies(); }},
             {QStringLiteral("Offline assistance"), [this] { showAssistance(); }},
@@ -9253,6 +9318,11 @@ bool MainWindow::beginBoundaryDrawing(BoundaryAuthoringMode mode, QString classi
 QString MainWindow::createBoundary(const Boundary& boundary, QString classification,
                                    std::optional<Revision> revision) {
     return m_impl->createBoundary(boundary, classification, revision);
+}
+
+QString MainWindow::createRoomBoundary(const Boundary& boundary, QString classification,
+                                       std::optional<Revision> revision) {
+    return m_impl->createRoomBoundary(boundary, classification, revision);
 }
 
 QString MainWindow::createStraightWall(Vec2 start, Vec2 end, QString classification,

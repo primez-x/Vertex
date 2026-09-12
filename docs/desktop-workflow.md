@@ -122,6 +122,7 @@ than displaying a plausible total. The current slice has no deduction editor;
 deductions remain a calculation-kernel capability for a later bounded task.
 
 The public methods used by the smoke test are `createBoundary`,
+`createRoomBoundary`,
 `createStraightWall`, `createHostedOpening`,
 `createSlabFromSelectedBoundary`, `createSlabFromBoundary`, `selectEntity`,
 `editSelectedClassification`, `editSelectedLength`, `editSelectedHeight`,
@@ -190,6 +191,13 @@ history. **Sync references** adds newly created live geometry and removes stale
 endpoints while retaining valid relations. The editor is an authoring slice;
 geometry propagation and controlled retargeting still require explicit follow-up
 operations.
+
+The command palette also provides **Create room boundary from selected
+geometry**. It copies a validated closed measurement or room boundary into a
+new `room_boundary` entity with its own name, classification, area, and
+analytical segments; the source remains unchanged and the new entity is fully
+undoable. This gives architectural rooms a deliberate creation path while
+keeping appraisal measurement geometry separate.
 
 `Object…` opens the column, beam, stair and roof parameter editor. Selecting
 one of those objects exposes `Edit object…` in the inspector. Both operations

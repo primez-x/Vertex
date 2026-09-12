@@ -74,7 +74,9 @@ boundaries, appraisal measurement boundaries, and architectural walls, applies
 validated independent/follows/derived-from declarations through Document
 history, and synchronizes newly created references without silently inventing
 relationships. Geometry propagation, controlled retargeting, and full
-cross-view acceptance remain open.
+cross-view acceptance remain open. A selected closed boundary can now be copied
+into a distinct named `room_boundary` entity from the command palette; its
+segments, area, classification, and source-independent history are persisted.
 
 The Architectural workspace now also exposes a compact **Assembly catalog**
 that persists the typed `sketch.assemblies.v1` model in Document history. Users
