@@ -25,8 +25,8 @@ Output contracts scope plans, elevations, sections, 3D views and schedules to kn
 Still open: property/type schema enforcement; reuse of SheetViewModel and
 schedule generation adapters; projection, rendering, layout and export; output
 revision freshness checks; and end-to-end residential and light-commercial
-fixtures. Architectural inspector property edits now route through the adapter
-and preserve typed JSON values in both ordinary and recovery-backed workspace
-commands. The adapter's semantic building transforms and wall hosted-object
-policy are covered by atomic preview/history tests; generated deliverable
-correctness remains a separate acceptance requirement.
+fixtures. Architectural inspector property edits and the semantic object
+transform dialog now route through the adapter and preserve typed JSON values
+in ordinary Document history. The adapter's semantic building transforms and
+wall hosted-object policy are covered by atomic preview/history tests;
+generated deliverable correctness remains a separate acceptance requirement.

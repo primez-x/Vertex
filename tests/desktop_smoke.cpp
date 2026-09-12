@@ -3590,6 +3590,44 @@ int main(int argc, char** argv) {
                         .at("living_total")
                         .get<bool>(),
             "save and reopen should preserve the exact factor and versioned profile rule");
+    require(window.selectEntity(column_id), "building object should be selected for its transform editor");
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("architecturalTransformDialog"));
+        require(dialog, "architectural object selection should open its semantic transform editor");
+        require(dialog->findChild<QLineEdit*>(QStringLiteral("architecturalTransformScale")) != nullptr &&
+                    dialog->findChild<QLineEdit*>(QStringLiteral("architecturalTransformOffsetZ")) != nullptr,
+                "architectural transform editor must expose scale and vertical translation");
+        dialog->reject();
+    });
+    window.showBoundaryTransformEditor();
+    require(window.selectEntity(column_id) &&
+                window.transformSelectedArchitecturalObject(QStringLiteral("90"),
+                    QStringLiteral("1 m"), QStringLiteral("2 m"), QStringLiteral("0.5 m"),
+                    QStringLiteral("2"), false),
+            "selected architectural objects must support semantic transforms through the desktop command path");
+    const auto transformed_column = sketch::decode_building_entity(
+        window.document().snapshot().entities().at(column_id.toStdString()));
+    const auto& transformed_rectangular = std::get<sketch::RectangularColumn>(transformed_column);
+    require(std::abs(transformed_rectangular.base_center.x + 3.0) < 1e-7 &&
+                std::abs(transformed_rectangular.base_center.y - 4.0) < 1e-7 &&
+                std::abs(transformed_rectangular.base_center.z - 0.5) < 1e-7 &&
+                std::abs(transformed_rectangular.width - 0.6) < 1e-7 &&
+                std::abs(transformed_rectangular.height - 7.0) < 1e-7 &&
+                window.document().snapshot().entities().at(column_id.toStdString()).extensions.at("private_note") ==
+                    "preserve this",
+            "architectural object transforms must update canonical dimensions and preserve metadata");
+    require(window.undoCommand() && window.redoCommand(),
+            "architectural object transforms must participate in normal undo and redo");
+    require(window.selectEntity(column_id) &&
+                window.transformSelectedArchitecturalObject(QStringLiteral("0"),
+                    QStringLiteral("1 m"), QStringLiteral("0 m"), QStringLiteral("0 m"),
+                    QStringLiteral("1"), true),
+            "architectural object transforms must support creating a selected copy");
+    const auto copied_column_id = window.selectedEntityId();
+    require(!copied_column_id.isEmpty() && copied_column_id != column_id &&
+                window.document().snapshot().entities().contains(copied_column_id.toStdString()) &&
+                window.document().snapshot().entities().contains(column_id.toStdString()),
+            "architectural object clone must preserve the source and select the copy");
     require(window.selectEntity(boundary_id), "reopened boundary should be selectable");
     require(edit_object_button->isHidden(), "building object editor must hide for a measurement boundary");
     require(!calculation_status->text().contains(QStringLiteral("blocked"), Qt::CaseInsensitive) &&

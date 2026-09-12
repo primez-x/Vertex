@@ -1905,6 +1905,101 @@ public:
         }
     }
 
+    std::pair<ArchitecturalTransaction, std::string>
+    makeArchitecturalObjectTransformTransaction(
+        const DocumentSnapshot& source, const Entity& original,
+        const QString& rotation_degrees, const QString& offset_x,
+        const QString& offset_y, const QString& offset_z,
+        const QString& uniform_scale, bool clone) const {
+        if (!can_recognize_building_entity_type(original.type)) {
+            throw std::invalid_argument(
+                "Select a column, beam, stair, or roof before transforming an architectural object.");
+        }
+        const auto parse_degrees = [](const QString& text) {
+            if (text.trimmed().isEmpty()) return 0.0;
+            bool ok = false;
+            const auto value = text.trimmed().toDouble(&ok);
+            if (!ok || !std::isfinite(value) || std::abs(value) > 360000.0) {
+                throw std::invalid_argument(
+                    "Rotation must be a finite value between -360000 and 360000 degrees.");
+            }
+            return value * std::numbers::pi / 180.0;
+        };
+        const auto parse_offset = [this](const QString& text) {
+            if (text.trimmed().isEmpty()) return 0.0;
+            return parse_quantity(text.trimmed().toStdString(),
+                                  m_metric_units ? Unit::metre : Unit::foot).metres;
+        };
+        const auto parse_scale = [](const QString& text) {
+            bool ok = false;
+            const auto value = text.trimmed().isEmpty() ? 1.0 :
+                text.trimmed().toDouble(&ok);
+            if ((!text.trimmed().isEmpty() && !ok) || !std::isfinite(value) || value <= 0.0) {
+                throw std::invalid_argument("Uniform scale must be a finite value greater than zero.");
+            }
+            return value;
+        };
+        const ArchitecturalTransform transform{
+            parse_offset(offset_x), parse_offset(offset_y), parse_offset(offset_z),
+            parse_degrees(rotation_degrees), parse_scale(uniform_scale)};
+        if (!std::isfinite(transform.x) || !std::isfinite(transform.y) ||
+            !std::isfinite(transform.z)) {
+            throw std::invalid_argument("Architectural translation must be finite.");
+        }
+        const auto target_id = clone ? new_id(original.type) : original.id;
+        std::vector<ArchitecturalOperation> operations;
+        if (clone) {
+            ArchitecturalOperation duplicate{ArchitecturalAction::duplicate, original.id};
+            duplicate.duplicate_id = target_id;
+            operations.push_back(std::move(duplicate));
+        }
+        ArchitecturalOperation operation{ArchitecturalAction::transform, target_id};
+        operation.transform = transform;
+        operations.push_back(std::move(operation));
+        return {ArchitecturalTransaction::create(
+                    new_id("architectural-tx"), std::to_string(source.revision()),
+                    {original.id}, std::move(operations),
+                    clone ? "Clone transformed architectural object"
+                          : "Transform architectural object"),
+                target_id};
+    }
+
+    [[nodiscard]] bool transformSelectedArchitecturalObject(
+        const QString& rotation_degrees, const QString& offset_x,
+        const QString& offset_y, const QString& offset_z,
+        const QString& uniform_scale, bool clone) {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        try {
+            if (m_boundary_session) {
+                throw std::runtime_error(
+                    "Finish or cancel the active boundary before transforming an architectural object.");
+            }
+            const auto source = authoringSnapshot();
+            const auto found = source.entities().find(m_selected_id.toStdString());
+            if (found == source.entities().end()) {
+                throw std::invalid_argument("Select a column, beam, stair, or roof first.");
+            }
+            const auto [transaction, root] = makeArchitecturalObjectTransformTransaction(
+                source, found->second, rotation_degrees, offset_x, offset_y, offset_z,
+                uniform_scale, clone);
+            (void)preview_architectural_transaction(source, transaction);
+            const auto command = architectural_transaction_command(
+                source, transaction, source.revision());
+            applyDocumentCommand(Command{command});
+            m_selected_id = id_from(root);
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Architectural transform: %1")
+                         .arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     std::pair<Command, std::string> makeBoundaryTransformCommand(
         const DocumentSnapshot& source, Entity original, const QString& rotation_degrees,
         bool flip_horizontal, bool flip_vertical, const QString& offset_x,
@@ -3045,10 +3140,117 @@ public:
         dialog.exec();
     }
 
-    void showBoundaryTransformEditor() {
+    void showArchitecturalObjectTransformEditor() {
         const auto context = captureModalContext();
         const auto source = authoringSnapshot();
         const auto original = selectedEntity();
+        if (!original || !can_recognize_building_entity_type(original->type)) {
+            setError(QStringLiteral("Select a column, beam, stair, or roof first."));
+            return;
+        }
+
+        QDialog dialog(owner);
+        styleDialog(dialog);
+        dialog.setObjectName(QStringLiteral("architecturalTransformDialog"));
+        dialog.setWindowTitle(QStringLiteral("Transform architectural object"));
+        dialog.setModal(true);
+        dialog.resize(480, 390);
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* help = new QLabel(
+            QStringLiteral("Translation uses the current input units. Rotation is around the world Z axis; scale is uniform and positive. Apply commits one undoable semantic operation."),
+            &dialog);
+        help->setWordWrap(true);
+        layout->addWidget(help);
+        auto* form = new QFormLayout;
+        const auto add_field = [&dialog, form](const QString& object_name,
+                                                const QString& label,
+                                                const QString& value) {
+            auto* field = new QLineEdit(value, &dialog);
+            field->setObjectName(object_name);
+            field->setAccessibleName(label);
+            form->addRow(label, field);
+            return field;
+        };
+        auto* rotation = add_field(QStringLiteral("architecturalTransformRotation"),
+                                   QStringLiteral("Rotation (degrees)"), QStringLiteral("0"));
+        auto* offset_x = add_field(QStringLiteral("architecturalTransformOffsetX"),
+                                   QStringLiteral("Offset X"), QStringLiteral("0"));
+        auto* offset_y = add_field(QStringLiteral("architecturalTransformOffsetY"),
+                                   QStringLiteral("Offset Y"), QStringLiteral("0"));
+        auto* offset_z = add_field(QStringLiteral("architecturalTransformOffsetZ"),
+                                   QStringLiteral("Offset Z"), QStringLiteral("0"));
+        auto* scale = add_field(QStringLiteral("architecturalTransformScale"),
+                                QStringLiteral("Uniform scale"), QStringLiteral("1"));
+        layout->addLayout(form);
+        auto* clone = new QCheckBox(QStringLiteral("Create a transformed copy"), &dialog);
+        clone->setObjectName(QStringLiteral("architecturalTransformClone"));
+        layout->addWidget(clone);
+        auto* status = new QLabel(&dialog);
+        status->setObjectName(QStringLiteral("architecturalTransformStatus"));
+        status->setWordWrap(true);
+        layout->addWidget(status);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel,
+                                             &dialog);
+        buttons->setObjectName(QStringLiteral("architecturalTransformButtons"));
+        layout->addWidget(buttons);
+        auto* apply = buttons->button(QDialogButtonBox::Apply);
+
+        const auto update_preview = [&] {
+            try {
+                if (!m_document->is_editable())
+                    throw std::invalid_argument("This document is read-only.");
+                if (!modalContextUnchanged(context))
+                    throw std::invalid_argument(lastError().toStdString());
+                const auto [transaction, root] = makeArchitecturalObjectTransformTransaction(
+                    source, *original, rotation->text(), offset_x->text(), offset_y->text(),
+                    offset_z->text(), scale->text(), clone->isChecked());
+                const auto preview = preview_architectural_transaction(source, transaction);
+                const auto preview_entity = preview.entities().find(root);
+                if (preview_entity == preview.entities().end())
+                    throw std::invalid_argument("The transform preview did not produce its target object.");
+                (void)decode_building_entity(preview_entity->second);
+                status->setText(QStringLiteral("Preview ready at model revision %1. Apply to commit %2.")
+                                    .arg(source.revision())
+                                    .arg(clone->isChecked() ? QStringLiteral("a transformed copy")
+                                                             : QStringLiteral("the object transform")));
+                apply->setEnabled(true);
+            } catch (const std::exception& error) {
+                status->setText(QStringLiteral("Preview: %1").arg(QString::fromUtf8(error.what())));
+                apply->setEnabled(false);
+            }
+        };
+        for (auto* field : {rotation, offset_x, offset_y, offset_z, scale}) {
+            QObject::connect(field, &QLineEdit::textChanged, &dialog,
+                             [&update_preview](const QString&) { update_preview(); });
+        }
+        QObject::connect(clone, &QCheckBox::toggled, &dialog,
+                         [&update_preview](bool) { update_preview(); });
+        QObject::connect(apply, &QPushButton::clicked, &dialog, [&] {
+            if (!modalContextUnchanged(context)) {
+                update_preview();
+                return;
+            }
+            if (transformSelectedArchitecturalObject(rotation->text(), offset_x->text(),
+                                                     offset_y->text(), offset_z->text(),
+                                                     scale->text(), clone->isChecked())) {
+                dialog.accept();
+            } else {
+                status->setText(lastError());
+            }
+        });
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        update_preview();
+        dialog.exec();
+    }
+
+    void showBoundaryTransformEditor() {
+        const auto original = selectedEntity();
+        if (original && can_recognize_building_entity_type(original->type)) {
+            showArchitecturalObjectTransformEditor();
+            return;
+        }
+        const auto context = captureModalContext();
+        const auto source = authoringSnapshot();
         const bool supported_selection = original &&
             (original->type == "wall" || is_closed_boundary_entity(original->type));
         std::optional<std::pair<Command, std::string>> candidate_command;
@@ -14747,6 +14949,14 @@ bool MainWindow::transformSelectedBoundary(const QString& rotation_degrees,
                                            bool clone) {
     return m_impl->transformSelectedBoundary(rotation_degrees, flip_horizontal, flip_vertical,
                                              offset_x, offset_y, clone);
+}
+
+bool MainWindow::transformSelectedArchitecturalObject(
+    const QString& rotation_degrees, const QString& offset_x,
+    const QString& offset_y, const QString& offset_z,
+    const QString& uniform_scale, bool clone) {
+    return m_impl->transformSelectedArchitecturalObject(
+        rotation_degrees, offset_x, offset_y, offset_z, uniform_scale, clone);
 }
 
 QString MainWindow::createAnnotationLabel(const QString& template_id, const QString& content,

@@ -576,7 +576,9 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
 - The architectural transaction adapter now applies type-aware transforms to
   canonical building entities and carries hosted wall openings through
   duplicate and delete commands, preserving unrelated metadata and ordinary
-  undo/redo. Architectural transaction and output descriptors cover create, select,
+  undo/redo. The Windows editor exposes a compact preview dialog for scale,
+  rotation, XYZ translation, clone, and apply/cancel history behavior on
+  recognized architectural objects. Architectural transaction and output descriptors cover create, select,
   property edit, transform, duplicate/delete intent and coordinated
   plan/elevation/section/3D/schedule issue requirements. Live Document history,
   projection/render/export, and complete residential/light-commercial output

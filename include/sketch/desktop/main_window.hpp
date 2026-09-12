@@ -240,6 +240,17 @@ public:
                                                  const QString& offset_x,
                                                  const QString& offset_y,
                                                  bool clone);
+    // Applies a semantic transform to a selected column, beam, stair, or roof
+    // entity. Translation uses the current input units; rotation is Z-axis
+    // degrees and scale is a positive uniform factor. Clone mode leaves the
+    // source unchanged and selects the transformed copy.
+    [[nodiscard]] bool transformSelectedArchitecturalObject(
+        const QString& rotation_degrees,
+        const QString& offset_x,
+        const QString& offset_y,
+        const QString& offset_z,
+        const QString& uniform_scale,
+        bool clone);
     // Presentation annotations are persisted inside the typed annotation
     // entity. These commands keep labels/symbols undoable and portable rather
     // than creating renderer-only state.

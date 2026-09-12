@@ -1904,11 +1904,14 @@
         "src/core/architectural_workflow_contract.cpp",
         "include/sketch/architectural_document_adapter.hpp",
         "src/core/architectural_document_adapter.cpp",
+        "include/sketch/desktop/main_window.hpp",
+        "src/desktop/main_window.cpp",
         "tests/architectural_workflow_contract_tests.cpp",
         "tests/architectural_document_adapter_tests.cpp",
+        "tests/desktop_smoke.cpp",
         "docs/architectural-workflow-contract.md"
       ],
-      "implementation_note": "Architectural create/select/property-edit/transform/duplicate/delete intents are translated into one revision-fenced atomic Document command with preview, undo, and save/reopen coverage. Recognized building entities receive type-aware canonical transforms, and wall duplication/deletion carries or removes hosted openings with deterministic remapping. Visible UI binding, complete type schemas, cross-view relationship propagation, and user-observed output remain open."
+      "implementation_note": "Architectural create/select/property-edit/transform/duplicate/delete intents are translated into one revision-fenced atomic Document command with preview, undo, and save/reopen coverage. Recognized building entities receive type-aware canonical transforms, and wall duplication/deletion carries or removes hosted openings with deterministic remapping. The Windows editor exposes scale, rotation, XYZ translation, clone, and preview controls for recognized building objects. Complete type schemas, cross-view relationship propagation, and user-observed output remain open."
     },
     {
       "id": "ARCH-REL-001",

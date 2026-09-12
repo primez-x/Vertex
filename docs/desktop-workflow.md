@@ -294,8 +294,11 @@ and delete operations. The adapter preserves unrelated measurement entities,
 supports one-step Document undo, and is covered by a save/reopen fixture. The
 architectural inspector routes property edits through that adapter, including
 recovery-backed workspace edits, while preserving numeric and structured JSON
-values. The full object-family schema and visible architectural inspector
-bindings remain under qualification.
+values. Selecting a supported column, beam, stair, or roof and choosing
+**Transform selection** opens a semantic preview dialog for XYZ translation,
+Z rotation, uniform scale, and clone; Apply commits the same adapter command
+and Cancel leaves history unchanged. Complete object-family schemas and
+production output bindings remain under qualification.
 
 New projects also include a typed `sheet_view_model` entity containing a
 default plan view and A-101 sheet. It is validated and saved with the same
@@ -379,6 +382,14 @@ previews use the same identity, geometry, and receipt checks as committed edits;
 unchanged transforms do not create history. Room-boundary propagation and
 connected-wall group transforms remain open production work.
 
+When a column, beam, stair, or roof is selected, **Transform selection** uses
+the architectural transaction adapter instead of the boundary editor. Its
+compact dialog accepts XYZ translation in the active units, Z rotation in
+degrees, a positive uniform scale, and an optional transformed copy. Canonical
+building geometry is rebuilt and validated before Apply; dimensions, beam
+vectors, stair landings, roof openings, metadata, and ordinary undo/redo remain
+part of the same Document command.
+
 Boundary clone mode allocates a new boundary, segment IDs, and vertex IDs. It
 preserves drawing context, area metadata, names, custom properties, extensions,
 and per-edge metadata, while remapping recognized self-references. User text and
@@ -423,9 +434,9 @@ a split retains it, the new second piece starts without it, and unaffected
 edges keep their metadata. Unhandled directional receipts on a split edge
 reject the edit atomically rather than being discarded or duplicated.
 Legacy anonymous and receipt-bound boundaries fail
-closed until their identity and derivation policies are explicit. Additional object
-transforms, receipt-bound derivation edits, and full linked-relationship
-qualification remain open. The **Create room boundary
+closed until their identity and derivation policies are explicit. Receipt-bound
+derivation edits, linked-relationship propagation, and full architectural
+transform qualification remain open. The **Create room boundary
 from selected geometry** command can also assemble the selected wall's
 connected analytical component into one room boundary. It preserves the
 source walls, rejects open/branched/disconnected topology, and commits the
