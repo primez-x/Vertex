@@ -1114,6 +1114,7 @@ void test_contextual_building_dimension_inspector(const QString& capture_directo
 void test_roof_opening_authoring(const QString& capture_directory) {
     using namespace sketch;
     desktop::MainWindow window;
+    window.setMetricUnits(true);
     const auto id = window.commitBuildingObject(encode_building_entity(HipRoof{
         "opening-ui", {0,0,3}, 0, 8,6,1.5,std::atan(0.5),0.2,0.15}), window.document().revision());
     require(!id.isEmpty() && window.selectEntity(id), "select roof for opening authoring");
@@ -1130,7 +1131,11 @@ void test_roof_opening_authoring(const QString& capture_directory) {
         save->click();
         require(window.document().revision() == revision && !dialog->findChild<QLabel*>("roofOpeningsError")->text().isEmpty(),
             "outside opening rejected without history");
-        table->item(0, 0)->setText("-0.5 m");
+        table->item(0, 0)->setText("invalid");
+        save->click();
+        require(dialog->findChild<QLabel*>("roofOpeningsError")->text().contains("Opening 1, X") &&
+                    window.document().revision() == revision, "quantity error identifies opening and column");
+        table->item(0, 0)->setText("-1/2");
         table->item(0, 1)->setText("-0.5 m");
         save->click();
     });
@@ -1139,7 +1144,7 @@ void test_roof_opening_authoring(const QString& capture_directory) {
     require(window.document().revision() == revision + 1 && opened.properties.at("version") == 2 &&
                 opened.properties.at("roof_openings").size() == 1, "opening commits as one semantic edit");
     const auto opening_id = opened.properties.at("roof_openings").at(0).at("id").get<std::string>();
-    require(opened.extensions.at("roof_opening_input").at("entries").at(opening_id).at("x_m").at("original_expression") == "-0.5 m",
+    require(opened.extensions.at("roof_opening_input").at("entries").at(opening_id).at("x_m").at("original_expression") == "-1/2",
             "opening coordinate receipt reaches the document");
     require(window.undoCommand() && window.document().snapshot().entities().at(id.toStdString()) == before &&
                 window.redoCommand(), "opening undo restores the uncut roof");
@@ -1153,6 +1158,39 @@ void test_roof_opening_authoring(const QString& capture_directory) {
                 window.document().snapshot().entities().at(id.toStdString()) == opened,
             "opening geometry and input metadata save/reopen exactly");
     require(window.selectEntity(id), "reselect opened roof");
+    window.setMetricUnits(false);
+    const auto expression_revision = window.document().revision();
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>("roofOpeningsDialog");
+        auto* table = dialog->findChild<QTableWidget*>("roofOpeningsTable");
+        require(table->item(0, 0)->text() == "-1/2 m", "saved suffixless metric expression stays unambiguous in imperial workspace");
+        if (!capture_directory.isEmpty()) {
+            QApplication::processEvents();
+            require(dialog->grab().save(capture_directory + "/opening-expressions.png"), "opening expressions capture");
+        }
+        table->item(0, 0)->setText("-500 mm");
+        dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Save)->click();
+    });
+    command->click();
+    const auto reexpressed = window.document().snapshot().entities().at(id.toStdString());
+    require(window.document().revision() == expression_revision + 1 &&
+                reexpressed.properties == opened.properties &&
+                reexpressed.extensions.at("roof_opening_input").at("entries").at(opening_id).at("x_m").at("original_expression") == "-500 mm",
+            "equivalent entered expression commits its receipt without changing geometry");
+    auto tampered = reexpressed;
+    tampered.extensions["roof_opening_input"]["entries"][opening_id]["x_m"]["exact_metres"]["numerator"] = 777;
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(tampered)}, {}, "tampered input metadata fixture"});
+    require(window.selectEntity(id), "refresh tampered receipt fixture");
+    const auto viewing_revision = window.document().revision();
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>("roofOpeningsDialog");
+        require(dialog->findChild<QTableWidget*>("roofOpeningsTable")->item(0, 0)->text() == "-0.5 m",
+            "invalid receipt falls back to canonical geometry rather than its expression");
+        dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Save)->click();
+    });
+    command->click();
+    require(window.document().revision() == viewing_revision, "viewing an invalid receipt does not rewrite history");
     if (!capture_directory.isEmpty()) {
         window.resize(1200, 850); window.show(); QApplication::processEvents(); window.fitView();
         require(window.grab().save(capture_directory + "/roof-opening.png"), "roof opening plan capture");

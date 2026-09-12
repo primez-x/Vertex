@@ -6916,12 +6916,37 @@ public:
         table->setSelectionBehavior(QAbstractItemView::SelectRows);
         layout->addWidget(table);
         const std::array<const char*, 4> keys{"x_m", "y_m", "width_m", "depth_m"};
+        auto original_receipts = json::object();
+        const auto prior = original->extensions.find("roof_opening_input");
+        if (prior != original->extensions.end() && prior->is_object() &&
+            prior->value("version", json{}) == 1 && prior->contains("entries") && prior->at("entries").is_object())
+            original_receipts = prior->at("entries");
+        const auto restored_expression = [&](const std::string& id, const char* key, double value) {
+            const auto fallback = QString::number(value, 'g', 17) + " m";
+            try {
+                const auto& receipt = original_receipts.at(id).at(key);
+                const auto expression = receipt.at("original_expression").get<std::string>();
+                const auto unit_text = receipt.at("default_unit").get<std::string>();
+                if (expression.empty() || expression.size() > 4096 || (unit_text != "m" && unit_text != "ft")) return fallback;
+                const auto unit = unit_text == "m" ? Unit::metre : Unit::foot;
+                const auto quantity = parse_quantity(expression, unit);
+                const auto& rational = receipt.at("exact_metres");
+                if (!rational.at("numerator").is_number_integer() || !rational.at("denominator").is_number_integer() ||
+                    rational.at("numerator") != quantity.exact_metres.numerator ||
+                    rational.at("denominator") != quantity.exact_metres.denominator || quantity.metres != value) return fallback;
+                const auto current = parse_quantity(expression, context.metric_units ? Unit::metre : Unit::foot);
+                const auto text = QString::fromStdString(expression);
+                return current.exact_metres.numerator == quantity.exact_metres.numerator &&
+                       current.exact_metres.denominator == quantity.exact_metres.denominator
+                    ? text : text + " " + QString::fromStdString(unit_text);
+            } catch (const std::exception&) { return fallback; }
+        };
         const auto append = [&](const json& entry) {
             const auto row = table->rowCount();
             table->insertRow(row);
             for (int column = 0; column < 4; ++column) {
                 const auto value = entry.at(keys[column]).get<double>();
-                const auto text = QString::number(value, 'g', 17) + " m";
+                const auto text = restored_expression(entry.at("id").get<std::string>(), keys[column], value);
                 auto* item = new QTableWidgetItem(text);
                 item->setData(Qt::UserRole, QString::fromStdString(entry.at("id").get<std::string>()));
                 item->setData(Qt::UserRole + 1, text);
@@ -6958,11 +6983,7 @@ public:
                 if (!modalContextUnchanged(context)) throw std::invalid_argument("Roof editing context changed. Reopen the openings editor.");
                 auto candidate = *original;
                 auto entries = json::array();
-                auto receipts = json::object();
-                const auto prior_inputs = original->extensions.find("roof_opening_input");
-                if (prior_inputs != original->extensions.end() && prior_inputs->is_object() &&
-                    prior_inputs->value("version", json{}) == 1 && prior_inputs->contains("entries") &&
-                    prior_inputs->at("entries").is_object()) receipts = prior_inputs->at("entries");
+                auto receipts = original_receipts;
                 for (int row = 0; row < table->rowCount(); ++row) {
                     const auto id = table->item(row, 0)->data(Qt::UserRole).toString().toStdString();
                     json entry{{"id", id}};
@@ -6972,8 +6993,18 @@ public:
                         if (text == item->data(Qt::UserRole + 1).toString()) {
                             entry[keys[column]] = item->data(Qt::UserRole + 2).toDouble();
                         } else {
-                            const auto quantity = parse_quantity(text.toStdString(), context.metric_units ? Unit::metre : Unit::foot);
+                            const auto quantity = [&] {
+                                try { return parse_quantity(text.toStdString(), context.metric_units ? Unit::metre : Unit::foot); }
+                                catch (const std::exception& failure) {
+                                    table->setCurrentCell(row, column);
+                                    table->setFocus();
+                                    throw std::invalid_argument(QStringLiteral("Opening %1, %2: %3")
+                                        .arg(row + 1).arg(table->horizontalHeaderItem(column)->text())
+                                        .arg(QString::fromUtf8(failure.what())).toStdString());
+                                }
+                            }();
                             entry[keys[column]] = quantity.metres;
+                            if (!receipts[id].is_object()) receipts[id] = json::object();
                             receipts[id][keys[column]] = {{"original_expression", quantity.original_expression},
                                 {"default_unit", context.metric_units ? "m" : "ft"},
                                 {"exact_metres", {{"numerator", quantity.exact_metres.numerator},
@@ -6982,7 +7013,9 @@ public:
                     }
                     entries.push_back(std::move(entry));
                 }
-                if (entries == original->properties.value("roof_openings", json::array())) { dialog.accept(); return; }
+                if (entries == original->properties.value("roof_openings", json::array()) && receipts == original_receipts) {
+                    dialog.accept(); return;
+                }
                 for (auto receipt = receipts.begin(); receipt != receipts.end();) {
                     const bool retained = std::any_of(entries.begin(), entries.end(), [&](const auto& entry) {
                         return entry.at("id") == receipt.key();

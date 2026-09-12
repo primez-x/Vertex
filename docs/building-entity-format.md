@@ -42,6 +42,13 @@ expressions, default units and exact metre rationals are retained by opening ID
 under `extensions.roof_opening_input` (version 1, `entries`). These receipts are
 historical input metadata, never authoritative geometry. Removing an opening
 removes its receipt; untouched canonical coordinates retain their precision.
+Reopening displays an original expression only when its stored default unit,
+exact rational and canonical value validate together. A suffixless expression
+gets an explicit unit when necessary after a workspace-unit change. Invalid
+receipts fall back to canonical metre text and do not alter the document merely
+by being viewed. Entering an equivalent expression can create a new input
+receipt without changing the opening geometry. Quantity errors identify the
+opening row and coordinate column.
 
 ```json
 {
