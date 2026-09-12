@@ -347,6 +347,39 @@ class StageOfflineBundleTests(unittest.TestCase):
         self.assertEqual((target / "licenses" / "LICENSE.txt").read_bytes(), b"project license\n")
         self.assertFalse((target / "source-kit").exists())
 
+    def test_powershell_installer_replaces_an_existing_empty_directory_atomically(self):
+        pwsh = shutil.which("pwsh")
+        if pwsh is None:
+            self.skipTest("PowerShell is unavailable")
+        fixture = self.fixture()
+        self.addCleanup(fixture[0].cleanup)
+        _, root, inventory, source_kit, allowlist, *_ = fixture
+        stage.stage_bundle(inventory, allowlist, source_kit, root, root / "out", "replace-empty")
+        bundle = root / "out" / "replace-empty"
+        target = root / "installed"
+        target.mkdir()
+
+        checked = subprocess.run(
+            [pwsh, "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+             str(bundle / "install-offline-bundle.ps1"), "-InstallRoot", str(target)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        self.assertEqual((target / "bin" / "property-studio.exe").read_bytes(), b"application")
+        self.assertFalse(any(path.name.startswith(".installed.") for path in target.parent.iterdir()))
+
+    def test_powershell_installer_uses_transactional_publish(self):
+        fixture = self.fixture()
+        self.addCleanup(fixture[0].cleanup)
+        _, root, inventory, source_kit, allowlist, *_ = fixture
+        stage.stage_bundle(inventory, allowlist, source_kit, root, root / "out", "transaction")
+        installer = (root / "out" / "transaction" / "install-offline-bundle.ps1").read_text(encoding="utf-8")
+        self.assertIn("$stagingRoot", installer)
+        self.assertIn("Move-Item -LiteralPath $stagingRoot", installer)
+        self.assertIn("$backupRoot", installer)
+
     def test_strict_bundle_verifier_rejects_unlisted_files(self):
         fixture = self.fixture()
         self.addCleanup(fixture[0].cleanup)

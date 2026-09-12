@@ -85,8 +85,18 @@ try {
         $targetRoot.StartsWith($sourceRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
         Fail 'install root cannot be the bundle directory or one of its children'
     }
-    Assert-NoReparseChain $targetRoot $targetRoot 'install root'
-    if (Test-Path -LiteralPath $targetRoot) {
+    $targetParent = Split-Path -Path $targetRoot -Parent
+    $targetLeaf = Split-Path -Path $targetRoot -Leaf
+    if ([string]::IsNullOrWhiteSpace($targetParent) -or [string]::IsNullOrWhiteSpace($targetLeaf)) {
+        Fail 'install root must name a directory below an existing parent'
+    }
+    if (-not (Test-Path -LiteralPath $targetParent)) {
+        New-Item -ItemType Directory -Path $targetParent -Force | Out-Null
+    }
+    Assert-NoReparseChain $targetParent $targetParent 'install parent'
+
+    $targetInitiallyExists = Test-Path -LiteralPath $targetRoot
+    if ($targetInitiallyExists) {
         $targetItem = Get-Item -LiteralPath $targetRoot -Force
         if (-not $targetItem.PSIsContainer) {
             Fail 'install root is not a directory'
@@ -97,27 +107,73 @@ try {
         if (@(Get-ChildItem -LiteralPath $targetRoot -Force).Count -ne 0) {
             Fail 'install root must be missing or empty'
         }
-    } else {
-        New-Item -ItemType Directory -Path $targetRoot -Force | Out-Null
     }
 
-    foreach ($entry in @($runtimeManifest.files)) {
-        $relative = ($entry.path -replace '\\', '/')
-        $sourcePath = Resolve-SafeChildPath $sourceRoot $relative 'runtime source path'
-        $targetPath = Resolve-SafeChildPath $targetRoot $relative 'runtime install path'
-        if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
-            Fail "runtime source file is missing: $relative"
+    $installToken = [Guid]::NewGuid().ToString('N')
+    $stagingRoot = Join-Path $targetParent ('.{0}.installing-{1}' -f $targetLeaf, $installToken)
+    $backupRoot = Join-Path $targetParent ('.{0}.backup-{1}' -f $targetLeaf, $installToken)
+    if ((Test-Path -LiteralPath $stagingRoot) -or (Test-Path -LiteralPath $backupRoot)) {
+        Fail 'temporary install paths already exist'
+    }
+    $targetMovedToBackup = $false
+    $publishedRootCreated = $false
+    $published = $false
+    try {
+        New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
+        Assert-NoReparseChain $targetParent $stagingRoot 'staging root'
+
+        foreach ($entry in @($runtimeManifest.files)) {
+            $relative = ($entry.path -replace '\\', '/')
+            $sourcePath = Resolve-SafeChildPath $sourceRoot $relative 'runtime source path'
+            $stagingPath = Resolve-SafeChildPath $stagingRoot $relative 'runtime staging path'
+            if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+                Fail "runtime source file is missing: $relative"
+            }
+            New-Item -ItemType Directory -Path (Split-Path -Parent $stagingPath) -Force | Out-Null
+            Copy-Item -LiteralPath $sourcePath -Destination $stagingPath -Force
         }
-        New-Item -ItemType Directory -Path (Split-Path -Parent $targetPath) -Force | Out-Null
-        Copy-Item -LiteralPath $sourcePath -Destination $targetPath -Force
-    }
-    Copy-Item -LiteralPath $runtimeManifestPath -Destination (Join-Path $targetRoot $runtimeManifestName) -Force
-    Copy-Item -LiteralPath $sourceVerifier -Destination (Join-Path $targetRoot 'verify-offline-bundle.ps1') -Force
+        Copy-Item -LiteralPath $runtimeManifestPath -Destination (Join-Path $stagingRoot $runtimeManifestName) -Force
+        Copy-Item -LiteralPath $sourceVerifier -Destination (Join-Path $stagingRoot 'verify-offline-bundle.ps1') -Force
 
-    $targetVerifier = Join-Path $targetRoot 'verify-offline-bundle.ps1'
-    & $targetVerifier -Root $targetRoot -ManifestName $runtimeManifestName
-    if ($LASTEXITCODE -ne 0) {
-        Fail 'installed runtime verification failed'
+        $stagingVerifier = Join-Path $stagingRoot 'verify-offline-bundle.ps1'
+        & $stagingVerifier -Root $stagingRoot -ManifestName $runtimeManifestName
+        if ($LASTEXITCODE -ne 0) {
+            Fail 'staged runtime verification failed; no files were installed'
+        }
+
+        # Publish by directory rename after the complete staged tree verifies.
+        # If an empty destination existed, retain it beside the staging tree
+        # until the new install has passed its post-publish verification.
+        if ($targetInitiallyExists) {
+            Move-Item -LiteralPath $targetRoot -Destination $backupRoot
+            $targetMovedToBackup = $true
+        }
+        Move-Item -LiteralPath $stagingRoot -Destination $targetRoot
+        $publishedRootCreated = $true
+
+        $targetVerifier = Join-Path $targetRoot 'verify-offline-bundle.ps1'
+        & $targetVerifier -Root $targetRoot -ManifestName $runtimeManifestName
+        if ($LASTEXITCODE -ne 0) {
+            Fail 'installed runtime verification failed'
+        }
+        $published = $true
+    } catch {
+        if (Test-Path -LiteralPath $stagingRoot) {
+            Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        if (-not $published) {
+            if ($publishedRootCreated -and (Test-Path -LiteralPath $targetRoot)) {
+                Remove-Item -LiteralPath $targetRoot -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            if ($targetMovedToBackup -and (Test-Path -LiteralPath $backupRoot) -and
+                -not (Test-Path -LiteralPath $targetRoot)) {
+                Move-Item -LiteralPath $backupRoot -Destination $targetRoot -Force
+            }
+        }
+        throw
+    }
+    if (Test-Path -LiteralPath $backupRoot) {
+        Remove-Item -LiteralPath $backupRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
     Write-Output ("Installed {0} runtime files to {1}; qualification remains incomplete." -f @($runtimeManifest.files).Count, $targetRoot)
     exit 0

@@ -56,8 +56,12 @@ pwsh -NoProfile -NonInteractive `
 ```
 
 Install into a missing or empty directory. The script verifies the bundle,
-copies only the files in `runtime-manifest.json`, copies the verifier and
-runtime manifest, and verifies the installed bytes again:
+builds the complete runtime tree in a sibling staging directory, verifies that
+staged tree, and publishes it with a directory rename. If an empty destination
+already exists, it is moved aside until the published tree passes its second
+verification and is restored automatically if publication fails. The installer
+copies only the files in `runtime-manifest.json`, plus the verifier and runtime
+manifest, and verifies the installed bytes again:
 
 ```powershell
 pwsh -NoProfile -NonInteractive `
