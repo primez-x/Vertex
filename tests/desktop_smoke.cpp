@@ -830,6 +830,29 @@ void test_calculation_deduction_workflow() {
                 window.selectEntity(outer_id),
             "deduction fixture should create and select the base boundary");
     window.setMetricUnits(true);
+    require(window.findChild<QGroupBox*>(QStringLiteral("areaAttributes")) != nullptr &&
+                window.findChild<QPlainTextEdit*>(QStringLiteral("areaAttributesJson")) != nullptr &&
+                window.findChild<QPushButton*>(QStringLiteral("applyAreaAttributes")) != nullptr,
+            "closed-boundary inspector should expose area attributes");
+    const auto attributes_revision = window.document().revision();
+    require(window.editSelectedAreaAttributes(QStringLiteral(
+                "{\"use\":\"conditioned\",\"finish\":\"oak\"}")),
+            "area attributes must commit through the selected boundary");
+    auto attributed = window.document().snapshot().entities().at(outer_id.toStdString());
+    require(window.document().revision() == attributes_revision + 1 &&
+                attributed.properties.at("area_attributes").at("use") == "conditioned" &&
+                window.findChild<QPlainTextEdit*>(QStringLiteral("areaAttributesJson"))->toPlainText()
+                    .contains(QStringLiteral("conditioned")),
+            "area attributes must persist and repopulate the inspector");
+    const auto invalid_attributes_revision = window.document().revision();
+    require(!window.editSelectedAreaAttributes(QStringLiteral("[1,2,3]")) &&
+                window.document().revision() == invalid_attributes_revision,
+            "invalid area attributes must fail without mutation");
+    require(window.undoCommand() &&
+                !window.document().snapshot().entities().at(outer_id.toStdString()).properties.contains(
+                    "area_attributes") &&
+                window.redoCommand() && window.selectEntity(outer_id),
+            "area attribute edits must be undoable and redoable");
     auto* editor = window.findChild<QPushButton*>(QStringLiteral("editDeductions"));
     auto* deduction_list = window.findChild<QListWidget*>(QStringLiteral("calculationDeductions"));
     require(editor && deduction_list, "calculation inspector should expose deduction controls");

@@ -1224,7 +1224,7 @@
         "tests/multipage_document_tests.cpp",
         "docs/multipage-projects.md"
       ],
-      "implementation_note": "Multipage subject/shared data, areas, stable links, page order, and view semantics are implemented as a standalone contract. The desktop sheet_view_model now supports undoable page add/remove, reference-safe lifecycle validation, selected-page PDF/SVG/print output, and save/reopen through Document. The property entity now projects subject name/address/reference and bounded string attributes through the Project details inspector with undoable save/reopen coverage; boundary area-attribute presentation and complete application-level acceptance remain open."
+      "implementation_note": "Multipage subject/shared data, areas, stable links, page order, and view semantics are implemented as a standalone contract. The desktop sheet_view_model now supports undoable page add/remove, reference-safe lifecycle validation, selected-page PDF/SVG/print output, and save/reopen through Document. The property entity now projects subject name/address/reference and bounded string attributes through the Project details inspector, and closed boundaries expose bounded area_attributes through the Area attributes inspector; both have undoable save/reopen coverage. The complete multipage acceptance fixture and production qualification remain open."
     },
     {
       "id": "APX-DOC-002",

@@ -43,8 +43,9 @@ PDF/SVG/print renderer and its output fingerprint. The property entity now
 stores a `subject` object with `name`, `address`, `reference`, and bounded
 string `attributes`; the Project details inspector edits that record through
 the same undoable command path and save/reopen preserves it. Closed-boundary
-area attributes remain part of each boundary's typed properties and are still
-awaiting a dedicated presentation editor. The complete multipage acceptance
-fixture, rendering fidelity, and production qualification remain open. The
-standalone JSON roundtrip is therefore not by itself evidence of the full
-APX-DOC-001 requirement.
+area attributes are stored under each boundary's `area_attributes` object and
+the Area attributes inspector edits them with the same bounded string-object
+validation and history semantics. A complete multipage acceptance fixture,
+rendering fidelity, and production qualification remain open. The standalone
+JSON roundtrip is therefore not by itself evidence of the full APX-DOC-001
+requirement.

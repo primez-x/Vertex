@@ -151,6 +151,11 @@ undo, redo, save, and reopen without a hosted service. Older projects without a
 `subject` object fall back to their existing property name until the details are
 saved.
 
+Selecting a closed measurement or room boundary also exposes **Area
+attributes**. The editor stores a bounded JSON object of string metadata under
+`area_attributes`, validates it before mutation, and keeps the update in the
+same undo/redo and save/reopen path.
+
 The `Reference` command imports a local PNG, JPEG, BMP, TIFF, or a selected page
 of a PDF into the portable Document Asset store and creates a `reference_asset`
 record. Raster source bytes are rendered directly. PDF source bytes remain in

@@ -369,6 +369,25 @@ std::optional<std::string> read_string(const json& object, std::string_view key)
     return object.at(key_string).get<std::string>();
 }
 
+json parse_bounded_string_attributes(const QString& encoded_value) {
+    auto encoded = encoded_value.trimmed().toStdString();
+    if (encoded.empty()) encoded = "{}";
+    const auto attributes = json::parse(encoded);
+    if (!attributes.is_object() || attributes.size() > 256) {
+        throw std::invalid_argument(
+            "Attributes must be a JSON object with at most 256 entries.");
+    }
+    for (const auto& [key, value] : attributes.items()) {
+        if (key.empty() || key.size() > 256 || !value.is_string() ||
+            value.get_ref<const std::string&>().size() > 16384 ||
+            value.get_ref<const std::string&>().find('\0') != std::string::npos) {
+            throw std::invalid_argument(
+                "Attributes must contain short string key/value pairs.");
+        }
+    }
+    return attributes;
+}
+
 std::optional<double> read_finite_number(const json& object, std::string_view key) {
     const auto key_string = std::string(key);
     if (!object.contains(key_string) || !object.at(key_string).is_number()) {
@@ -1470,18 +1489,8 @@ public:
                 throw std::invalid_argument("Project subject text is too long or contains a NUL byte.");
             }
             auto encoded_attributes = attributes_json.trimmed().toStdString();
-            if (encoded_attributes.empty()) encoded_attributes = "{}";
-            const auto attributes = json::parse(encoded_attributes);
-            if (!attributes.is_object() || attributes.size() > 256) {
-                throw std::invalid_argument("Project attributes must be a JSON object with at most 256 entries.");
-            }
-            for (const auto& [key, value] : attributes.items()) {
-                if (key.empty() || key.size() > 256 || value.is_discarded() ||
-                    !value.is_string() || value.get_ref<const std::string&>().size() > 16384 ||
-                    value.get_ref<const std::string&>().find('\0') != std::string::npos) {
-                    throw std::invalid_argument("Project attributes must contain short string key/value pairs.");
-                }
-            }
+            const auto attributes = parse_bounded_string_attributes(
+                QString::fromStdString(encoded_attributes));
             auto updated = *property;
             updated.properties["name"] = subject_name;
             auto subject = updated.properties.value("subject", json::object());
@@ -1497,6 +1506,28 @@ public:
             return true;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Project details: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    [[nodiscard]] bool editSelectedAreaAttributes(const QString& attributes_json) {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        try {
+            const auto entity = selectedEntity();
+            if (!entity.has_value() || !is_closed_boundary_entity(entity->type)) {
+                throw std::invalid_argument("Select a closed boundary before editing its attributes.");
+            }
+            auto updated = *entity;
+            updated.properties["area_attributes"] = parse_bounded_string_attributes(attributes_json);
+            if (!applyEntity(std::move(updated), "edit area attributes")) return false;
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Area attributes: %1").arg(QString::fromUtf8(error.what())));
             return false;
         }
     }
@@ -7273,6 +7304,15 @@ public:
                  m_project_details_group->setVisible(true);
                  m_project_subject_name_edit->setFocus();
              }},
+            {QStringLiteral("Edit selected area attributes"), [this] {
+                 if (m_selected_id.isEmpty() || !selectedEntity().has_value() ||
+                     !is_closed_boundary_entity(selectedEntity()->type)) {
+                     setError(QStringLiteral("Select a closed boundary first."));
+                     return;
+                 }
+                 m_area_attributes_group->setVisible(true);
+                 m_area_attributes_edit->setFocus();
+             }},
             {QStringLiteral("Measurement workspace"), [this] { setWorkspace(Workspace::measurement); }},
             {QStringLiteral("Architectural workspace"), [this] { setWorkspace(Workspace::architectural); }},
             {QStringLiteral("Add labels and symbols"), [this] { showAnnotationEditor(); }},
@@ -8742,6 +8782,24 @@ private:
         m_include_living_check->setObjectName(QStringLiteral("includeLivingTotal"));
         profile_layout->addWidget(m_include_living_check);
         inspector_layout->addWidget(profile_group);
+        m_area_attributes_group = new QGroupBox(QStringLiteral("Area attributes"), inspector_body);
+        m_area_attributes_group->setObjectName(QStringLiteral("areaAttributes"));
+        auto* area_attributes_layout = new QFormLayout(m_area_attributes_group);
+        m_area_attributes_edit = new QPlainTextEdit(m_area_attributes_group);
+        m_area_attributes_edit->setObjectName(QStringLiteral("areaAttributesJson"));
+        m_area_attributes_edit->setPlaceholderText(QStringLiteral("{\"key\": \"value\"}"));
+        m_area_attributes_edit->setMaximumHeight(82);
+        m_area_attributes_edit->setTabChangesFocus(true);
+        area_attributes_layout->addRow(QStringLiteral("Attributes (JSON)"), m_area_attributes_edit);
+        m_apply_area_attributes_button = new QPushButton(QStringLiteral("Apply area attributes"),
+                                                          m_area_attributes_group);
+        m_apply_area_attributes_button->setObjectName(QStringLiteral("applyAreaAttributes"));
+        area_attributes_layout->addRow(m_apply_area_attributes_button);
+        m_area_attributes_group->setVisible(false);
+        inspector_layout->addWidget(m_area_attributes_group);
+        QObject::connect(m_apply_area_attributes_button, &QPushButton::clicked, owner, [this] {
+            (void)editSelectedAreaAttributes(m_area_attributes_edit->toPlainText());
+        });
         m_read_only_label = new QLabel(inspector_body);
         m_read_only_label->setWordWrap(true);
         m_read_only_label->setStyleSheet(QStringLiteral("color:#d59564;"));
@@ -9819,6 +9877,7 @@ private:
         const bool slab = entity.has_value() && entity->type == "slab";
         const bool reference_asset = entity.has_value() && entity->type == "reference_asset";
         const bool project_entity = entity.has_value() && entity->type == "property";
+        const bool area_entity = entity.has_value() && is_closed_boundary_entity(entity->type);
         const bool building_object = entity && can_recognize_building_entity_type(entity->type);
         const bool editable_geometry = wall || opening || slab ||
             (entity && is_closed_boundary_entity(entity->type));
@@ -9830,10 +9889,13 @@ private:
         m_annotation_group->setEnabled(editable && annotation_context.has_value());
         m_project_details_group->setVisible(project_entity);
         m_project_details_group->setEnabled(editable && project_entity);
+        m_area_attributes_group->setVisible(area_entity);
+        m_area_attributes_group->setEnabled(editable && area_entity);
         m_reference_group->setVisible(reference_asset);
         m_reference_group->setEnabled(editable && reference_asset);
         if (reference_asset) {
             m_project_details_group->setVisible(false);
+            m_area_attributes_group->setVisible(false);
             m_inspector_context->setText(
                 QStringLiteral("Reference image\n%1")
                     .arg(QString::fromStdString(read_string(entity->properties, "source_path")
@@ -9886,6 +9948,7 @@ private:
         }
         if (annotation_context.has_value()) {
             m_project_details_group->setVisible(false);
+            m_area_attributes_group->setVisible(false);
             m_inspector_context->setText(*annotation_context);
             {
                 QSignalBlocker blocker(m_annotation_content_edit);
@@ -9983,6 +10046,16 @@ private:
             m_project_subject_address_edit->clear();
             m_project_subject_reference_edit->clear();
             m_project_subject_attributes_edit->clear();
+        }
+        if (area_entity) {
+            const auto attributes = entity->properties.value("area_attributes", json::object());
+            QSignalBlocker blocker(m_area_attributes_edit);
+            m_area_attributes_edit->setPlainText(
+                attributes.is_object() ? QString::fromStdString(attributes.dump(2))
+                                       : QStringLiteral("{}"));
+        } else {
+            QSignalBlocker blocker(m_area_attributes_edit);
+            m_area_attributes_edit->clear();
         }
         m_geometry_form->setRowVisible(m_length_edit, editable_geometry);
         m_geometry_form->setRowVisible(m_classification_combo, editable_geometry);
@@ -10873,6 +10946,9 @@ private:
     QLineEdit* m_project_subject_reference_edit{};
     QPlainTextEdit* m_project_subject_attributes_edit{};
     QPushButton* m_apply_project_details_button{};
+    QGroupBox* m_area_attributes_group{};
+    QPlainTextEdit* m_area_attributes_edit{};
+    QPushButton* m_apply_area_attributes_button{};
     QLabel* m_calculation_status{};
     QLabel* m_calculation_base_value{};
     QLabel* m_calculation_net_value{};
@@ -10971,6 +11047,10 @@ DocumentScheduleProjection MainWindow::scheduleSnapshot() const {
 bool MainWindow::editProjectSubject(const QString& name, const QString& address,
                                     const QString& reference, const QString& attributes_json) {
     return m_impl->editProjectSubject(name, address, reference, attributes_json);
+}
+
+bool MainWindow::editSelectedAreaAttributes(const QString& attributes_json) {
+    return m_impl->editSelectedAreaAttributes(attributes_json);
 }
 
 bool MainWindow::editScheduleCell(const QString& object_id, const QString& column,

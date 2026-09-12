@@ -184,6 +184,10 @@ public:
     [[nodiscard]] bool editSelectedHeight(const QString& expression);
     [[nodiscard]] bool editSelectedThickness(const QString& expression);
     [[nodiscard]] bool editSelectedFactor(const QString& expression);
+    // Stores bounded string attributes on the selected closed boundary. The
+    // JSON object remains inspectable in the native project format and the
+    // update uses the normal undoable Document history.
+    [[nodiscard]] bool editSelectedAreaAttributes(const QString& attributes_json);
     [[nodiscard]] bool setSelectedCalculationRule(bool include_in_building,
                                                    bool include_in_living);
     // Presentation annotations are persisted inside the typed annotation
