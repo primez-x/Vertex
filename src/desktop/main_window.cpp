@@ -46,6 +46,7 @@
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/georeferencing_entity_codec.hpp"
+#include "sketch/georeferencing_runtime.hpp"
 #include "sketch/vertical_levels.hpp"
 #include "sketch/reference_grid.hpp"
 #include "sketch/terrain_surface.hpp"
@@ -59,6 +60,7 @@
 #include <QCloseEvent>
 #include <QCheckBox>
 #include <QClipboard>
+#include <QCoreApplication>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -8250,6 +8252,12 @@ public:
         crs_definition->setObjectName(QStringLiteral("georeferencingCrsDefinition"));
         crs_definition->setPlaceholderText(QStringLiteral("Local projected metre definition"));
         form->addRow(QStringLiteral("CRS definition"), crs_definition);
+        auto* resource_root = new QLineEdit(&dialog);
+        resource_root->setObjectName(QStringLiteral("georeferencingResourceRoot"));
+        resource_root->setPlaceholderText(QStringLiteral("Folder containing proj/"));
+        resource_root->setText(QDir(QCoreApplication::applicationDirPath())
+            .filePath(QStringLiteral("resources")));
+        form->addRow(QStringLiteral("PROJ resource folder"), resource_root);
         layout->addLayout(form);
 
         auto* transform_group = new QGroupBox(QStringLiteral("Supplied affine transform"), &dialog);
@@ -8337,6 +8345,9 @@ public:
         auto* buttons = new QDialogButtonBox(&dialog);
         auto* validate = buttons->addButton(QStringLiteral("Validate"), QDialogButtonBox::ActionRole);
         validate->setObjectName(QStringLiteral("georeferencingValidate"));
+        auto* verify_runtime = buttons->addButton(QStringLiteral("Verify local PROJ"),
+                                                   QDialogButtonBox::ActionRole);
+        verify_runtime->setObjectName(QStringLiteral("georeferencingVerifyRuntime"));
         auto* save = buttons->addButton(QStringLiteral("Save to project"), QDialogButtonBox::ActionRole);
         save->setObjectName(QStringLiteral("georeferencingSave"));
         save->setEnabled(false);
@@ -8460,11 +8471,29 @@ public:
         };
         for (auto* field : {crs_identifier, crs_definition, coefficient_a, coefficient_b,
                             translation_x, coefficient_c, coefficient_d, translation_y,
-                            sample_x, sample_y}) {
+                            sample_x, sample_y, resource_root}) {
             QObject::connect(field, &QLineEdit::textChanged, &dialog, invalidate);
         }
         QObject::connect(control_points, &QPlainTextEdit::textChanged, &dialog, invalidate);
         QObject::connect(resources, &QPlainTextEdit::textChanged, &dialog, invalidate);
+        QObject::connect(verify_runtime, &QPushButton::clicked, &dialog, [&] {
+            try {
+                const auto runtime_contract = build_contract();
+                const auto report = verify_georeferencing_runtime(runtime_contract,
+                    GeoreferencingRuntimeOptions{resource_root->text().trimmed().toStdString(),
+                                                 128ULL * 1024 * 1024});
+                summary->setText(QStringLiteral(
+                    "PROJ %1 verified · %2 resource file%3 · database %4 · networking disabled.")
+                    .arg(QString::fromStdString(report.proj_version))
+                    .arg(report.resources.size())
+                    .arg(report.resources.size() == 1 ? QString{} : QStringLiteral("s"))
+                    .arg(QString::fromStdString(report.database_relative_path)));
+                clearError();
+            } catch (const std::exception& error) {
+                summary->setText(QStringLiteral("PROJ runtime: %1")
+                    .arg(QString::fromUtf8(error.what())));
+            }
+        });
         QObject::connect(validate, &QPushButton::clicked, &dialog, [&] {
             invalidate();
             try {

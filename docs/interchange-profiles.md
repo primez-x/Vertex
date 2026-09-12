@@ -2,7 +2,11 @@
 
 `InterchangeProfile` is a portable declaration and readiness validator for
 COMP-IO-001/002/003 and IO-IFC-001, IO-DXF-001, IO-PDF-001. It does not implement
-an IFC/DXF/PDF parser, exporter, Qt module integration, or PROJ operation.
+an IFC/DXF/PDF parser or exporter. The separate Windows georeferencing runtime
+preflight now opens the pinned PROJ library, verifies declared local resources,
+binds `proj.db`, disables networking, and validates the declared CRS and an
+identity operation; the profile remains a declaration and does not replace
+that runtime evidence.
 The baseline profiles intentionally fail readiness until a reviewed component,
 version, license review, exact module inventory, and real runtime evidence are supplied.
 Adapter IDs are proposed local worker identities, not registered implementations.
@@ -22,7 +26,9 @@ contract. The PDF allowlist is exactly Qt6Core, Qt6Gui, Qt6Pdf, Qt6PrintSupport;
 the real package must audit these modules and their transitive dependencies.
 Other formats require an explicit reviewed module inventory. Module/resource
 names are logical IDs, never filesystem paths. A broker maps them to immutable
-local files and verifies their integrity; this API does not open files.
+local files and verifies their integrity; this API does not open files. The
+PROJ preflight is the only current runtime resource verifier and is invoked
+explicitly by the georeferencing workflow.
 
 Unsupported entities either reject the operation or preserve an identifiable
 reference with a fidelity report. Silent omission is not an available policy.
@@ -52,8 +58,10 @@ Remaining production gates: reviewed pinned adapter binaries and license
 artifacts; broker integration and runtime evidence tied to exact binaries and
 resources; representative IFC/DXF fixtures and fidelity reports; shared vector
 scene PDF/print output; bundled PROJ operation tests with an external network
-monitor; measured worker failure recovery. Profile unit tests exercise only the
-portable declaration and fail-closed readiness decision, using synthetic attestations.
+monitor; and measured worker failure recovery. The local PROJ preflight test
+does not prove the full import-worker sandbox or external network observation.
+Profile unit tests exercise only the portable declaration and fail-closed
+readiness decision, using synthetic attestations.
 
 ## Native bounded DXF codec
 

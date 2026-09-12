@@ -402,6 +402,81 @@
       }
     },
     {
+      "id": "proj",
+      "kind": "runtime",
+      "package": {
+        "name": "proj",
+        "version": "9.8.1",
+        "license": "MIT"
+      },
+      "source": {
+        "kind": "vcpkg-spdx",
+        "spdx_path": ".deps/native/x64-windows/share/proj/vcpkg.spdx.json",
+        "prefix_path": ".deps/native/x64-windows",
+        "package_id": "SPDXRef-port",
+        "paths": [
+          ".deps/native/x64-windows/include/proj.h",
+          ".deps/native/x64-windows/share/proj/proj.db",
+          ".deps/native/x64-windows/share/proj/proj.ini"
+        ]
+      },
+      "notice_paths": [".deps/native/x64-windows/share/proj/copyright"],
+      "runtime_names": ["proj_9.dll"],
+      "destinations": {
+        "proj_9.dll": "bin/proj_9.dll"
+      }
+    },
+    {
+      "id": "proj-resources",
+      "kind": "asset",
+      "package": {
+        "name": "proj",
+        "version": "9.8.1",
+        "license": "MIT"
+      },
+      "source": {
+        "kind": "vcpkg-spdx",
+        "spdx_path": ".deps/native/x64-windows/share/proj/vcpkg.spdx.json",
+        "prefix_path": ".deps/native/x64-windows",
+        "package_id": "SPDXRef-port",
+        "paths": [
+          ".deps/native/x64-windows/share/proj/proj.db",
+          ".deps/native/x64-windows/share/proj/proj.ini"
+        ]
+      },
+      "source_files": [
+        {
+          "path": ".deps/native/x64-windows/share/proj/proj.db",
+          "sha256": "757fb871cfd6192c3e246967e179873f8372f89fcd6cacc2878c895e86d1a194"
+        },
+        {
+          "path": ".deps/native/x64-windows/share/proj/proj.ini",
+          "sha256": "b95ebf0d007339244483d65d571cd887a51806e2bd2c1ab7f47b897d25320d65"
+        }
+      ],
+      "notice_paths": [".deps/native/x64-windows/share/proj/copyright"]
+    },
+    {
+      "id": "sqlite3-runtime",
+      "kind": "runtime",
+      "package": {
+        "name": "sqlite3",
+        "version": "3.53.4",
+        "license": "blessing"
+      },
+      "source": {
+        "kind": "vcpkg-spdx",
+        "spdx_path": ".deps/native/x64-windows/share/sqlite3/vcpkg.spdx.json",
+        "prefix_path": ".deps/native/x64-windows",
+        "package_id": "SPDXRef-port"
+      },
+      "notice_paths": [".deps/native/x64-windows/share/sqlite3/copyright"],
+      "runtime_names": ["sqlite3.dll"],
+      "destinations": {
+        "sqlite3.dll": "bin/sqlite3.dll"
+      }
+    },
+    {
       "id": "sqlite",
       "kind": "static-source",
       "package": {

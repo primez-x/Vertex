@@ -2070,6 +2070,7 @@ void test_georeferencing_workflow(const QString& capture_directory) {
         require(dialog, "georeferencing editor must open");
         auto* identifier = dialog->findChild<QLineEdit*>(QStringLiteral("georeferencingCrsIdentifier"));
         auto* definition = dialog->findChild<QLineEdit*>(QStringLiteral("georeferencingCrsDefinition"));
+        auto* resource_root = dialog->findChild<QLineEdit*>(QStringLiteral("georeferencingResourceRoot"));
         auto* a = dialog->findChild<QLineEdit*>(QStringLiteral("georeferencingA"));
         auto* b = dialog->findChild<QLineEdit*>(QStringLiteral("georeferencingB"));
         auto* tx = dialog->findChild<QLineEdit*>(QStringLiteral("georeferencingTx"));
@@ -2079,12 +2080,13 @@ void test_georeferencing_workflow(const QString& capture_directory) {
         auto* points = dialog->findChild<QPlainTextEdit*>(QStringLiteral("georeferencingControlPoints"));
         auto* resources = dialog->findChild<QPlainTextEdit*>(QStringLiteral("georeferencingOfflineResources"));
         auto* validate = dialog->findChild<QPushButton*>(QStringLiteral("georeferencingValidate"));
+        auto* verify_runtime = dialog->findChild<QPushButton*>(QStringLiteral("georeferencingVerifyRuntime"));
         auto* save = dialog->findChild<QPushButton*>(QStringLiteral("georeferencingSave"));
         auto* summary = dialog->findChild<QLabel*>(QStringLiteral("georeferencingSummary"));
         auto* residuals = dialog->findChild<QPlainTextEdit*>(QStringLiteral("georeferencingResiduals"));
         auto* sample_result = dialog->findChild<QLabel*>(QStringLiteral("georeferencingSampleResult"));
-        require(identifier && definition && a && b && tx && c && d && ty && points && resources &&
-                    validate && save && summary && residuals && sample_result && !save->isEnabled(),
+        require(identifier && definition && resource_root && a && b && tx && c && d && ty && points && resources &&
+                    validate && verify_runtime && save && summary && residuals && sample_result && !save->isEnabled(),
                 "georeferencing controls must exist and start unsaved");
         identifier->setText(QStringLiteral("EPSG:32613"));
         definition->setText(QStringLiteral("fixture projected metre CRS"));

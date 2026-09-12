@@ -1,6 +1,6 @@
 # Native library build
 
-The source dependencies for Open CASCADE, Eigen and Boost are pinned by
+The source dependencies for Open CASCADE, Eigen, Boost, and PROJ are pinned by
 `vcpkg.json` and the matching registry commit in
 `third_party/dependencies.json`. Prepare them explicitly:
 
@@ -20,12 +20,14 @@ compilation to 16 jobs. `-Offline` forbids new source downloads and requires
 the manager, tools and source archives to be cached already. A clean-machine
 offline source-kit build still needs separate qualification.
 
-This manifest selects OCCT 8.0.1, Eigen 5.0.1 and Boost 1.92.0 from the pinned
+This manifest selects OCCT 8.0.1, Eigen 5.0.1, Boost 1.92.0, and PROJ 9.8.1 from the pinned
 registry. The extracted PlaneGCS solver compiles and its guarded adapter tests
 pass with this Eigen version; see [solver qualification](planegcs.md).
 Optional OCCT FreeImage, VTK, TBB and RapidJSON features
 are disabled. FreeType and its transitive dependencies are retained for native
-visualization. The complete shipped license closure remains under audit.
+visualization. PROJ is built with `default-features: false`; its local `proj_9.dll`,
+`proj.db`, and `proj.ini` are the only georeferencing runtime inputs currently
+declared for packaging. The complete shipped license closure remains under audit.
 
 Compile the application-specific architecture engine after provisioning:
 

@@ -15,8 +15,9 @@ recorded module with one manifest owner and one unique package destination;
 Windows API contracts and installed system runtimes are retained as explicit
 system boundaries. Third-party runtime and header inputs are checked against
 their local vcpkg SPDX document and `copyright` file, the Qt SBOM, the pinned
-bootstrap manifest, or PlaneGCS `SOURCE.md`. The output uses repository-relative
-POSIX paths and records SHA-256 hashes, package/version, source location,
+bootstrap manifest, or PlaneGCS `SOURCE.md`. This includes the PROJ runtime DLL
+and its explicitly staged `proj.db` and `proj.ini` resources. The output uses
+repository-relative POSIX paths and records SHA-256 hashes, package/version, source location,
 provenance evidence, and notice hashes.
 
 The pinned Qt 6.8.3 SBOM currently carries stale SHA-1 values for the shipped

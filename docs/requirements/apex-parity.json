@@ -603,9 +603,12 @@
         "include/sketch/interchange_profile.hpp",
         "src/core/interchange_profile.cpp",
         "tests/interchange_profile_tests.cpp",
+        "include/sketch/georeferencing_runtime.hpp",
+        "src/core/georeferencing_runtime.cpp",
+        "tests/georeferencing_runtime_tests.cpp",
         "docs/interchange-profiles.md"
       ],
-      "implementation_note": "PROJ local-resource/network-denial requirements are declared fail-closed; bundled resources, runtime enforcement, and monitored operation fixtures remain open."
+      "implementation_note": "The PROJ profile remains a fail-closed declaration, and the Windows runtime now verifies contained resource files and hashes, binds the local proj.db, disables context networking, validates CRS declarations, and exercises an identity operation. Full worker isolation and externally monitored operation fixtures remain open."
     },
     {
       "id": "GEO-BASE-001",
@@ -1455,9 +1458,12 @@
         "tests/georeferencing_entity_codec_tests.cpp",
         "src/desktop/main_window.cpp",
         "tests/desktop_smoke.cpp",
+        "include/sketch/georeferencing_runtime.hpp",
+        "src/core/georeferencing_runtime.cpp",
+        "tests/georeferencing_runtime_tests.cpp",
         "docs/survey-georeferencing-contracts.md"
       ],
-      "implementation_note": "Explicit projected-metre CRS, affine transform, control-point residuals, and offline resource declarations are validated. Version-1 JSON is strict and derived residuals are recomputed; a typed georeferencing Document entity survives save/reopen. The Windows editor supports persisted CRS/transform/control-point/resource entry, residual and sample-transform feedback, and normal Document history with desktop smoke coverage. PROJ execution/resource verification, Apex module behavior, and network-denied fixtures remain open."
+      "implementation_note": "Explicit projected-metre CRS, affine transform, control-point residuals, and offline resource declarations are validated. Version-1 JSON is strict and derived residuals are recomputed; a typed georeferencing Document entity survives save/reopen. The Windows editor supports persisted CRS/transform/control-point/resource entry, residual and sample-transform feedback, and normal Document history with desktop smoke coverage. The runtime verifies contained resources and hashes, binds the local proj.db, disables networking, validates both CRS declarations, and exercises an identity operation. Apex module behavior, transform comparison, and production fixtures remain open."
     },
     {
       "id": "APX-INT-001",
@@ -2527,9 +2533,12 @@
         "src/core/windows_import_worker.cpp",
         "tests/windows_import_worker_tests.cpp",
         "tests/windows_import_worker_probe.cpp",
+        "include/sketch/georeferencing_runtime.hpp",
+        "src/core/georeferencing_runtime.cpp",
+        "tests/georeferencing_runtime_tests.cpp",
         "docs/import-worker-security.md"
       ],
-      "implementation_note": "Policy requires offline PROJ resource declarations and reports missing resources locally. The native worker environment sets PROJ_NETWORK=OFF and omits network capabilities; actual PROJ context wiring, bundled-resource fixtures, and network-denied runtime evidence remain open."
+      "implementation_note": "Policy requires offline PROJ resource declarations and reports missing resources locally. The native worker environment sets PROJ_NETWORK=OFF and omits network capabilities; the Windows georeferencing runtime additionally disables the PROJ context, binds a contained local database, and fails on missing or mismatched resources. Externally monitored network-denied worker evidence remains open."
     },
     {
       "id": "OPS-PERF-001",

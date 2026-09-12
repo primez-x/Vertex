@@ -162,8 +162,8 @@ controlled offline environment, suspended launch, Job Object limits, and
 post-launch token/network attestation. Its watchdog rejects timeouts and
 partial output without an unsandboxed fallback. The live fixture is skipped
 when the host test process is already inside a parent Job Object; clean-machine
-runtime isolation, PROJ context wiring, output lifecycle, and production
-integration evidence remain open.
+runtime isolation, PROJ output lifecycle, and production integration evidence
+remain open.
 
 Room/boundary relationship semantics are now surfaced in the Windows desktop:
 the More menu and command palette open a typed editor that lists live room
@@ -696,7 +696,11 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   declarations. Georeferencing contracts strictly round-trip through version-1
   JSON and a typed Document entity with save/reopen coverage. The Windows
   desktop exposes the persisted editor with residual and sample-transform
-  feedback. They do not execute PROJ, verify resources, import Apex files, or
+  feedback. The Windows runtime now performs a real PROJ preflight: it
+  contains and hashes every declared resource, binds the local `proj.db`,
+  disables networking, validates both CRS declarations, and exercises an
+  identity operation against the pinned local database. It does not fit or
+  replace the contract's authoritative affine mapping, import Apex files, or
   replace the required specialist-module fixtures.
 - The architectural transaction adapter now applies type-aware transforms to
   canonical building entities and carries hosted wall openings through

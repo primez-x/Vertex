@@ -42,6 +42,24 @@
       "inventory_entry": "assistance-engine",
       "path": "assets/assistance/deterministic-engine-v1.json",
       "destination": "assets/assistance/deterministic-engine-v1.json"
+    },
+    {
+      "kind": "asset",
+      "inventory_entry": "proj-resources",
+      "path": ".deps/native/x64-windows/share/proj/proj.db",
+      "destination": "resources/proj/proj.db"
+    },
+    {
+      "kind": "asset",
+      "inventory_entry": "proj-resources",
+      "path": ".deps/native/x64-windows/share/proj/proj.ini",
+      "destination": "resources/proj/proj.ini"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "proj-resources",
+      "path": ".deps/native/x64-windows/share/proj/copyright",
+      "destination": "licenses/PROJ-COPYRIGHT.txt"
     }
   ]
 }

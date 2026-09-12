@@ -539,6 +539,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/georeferencing_runtime.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/ifc_project_exchange.hpp"
     },
     {
@@ -1023,6 +1027,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/georeferencing_runtime.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/ifc_project_exchange.cpp"
     },
     {
@@ -1504,6 +1512,10 @@
     {
       "category": "source",
       "path": "tests/georeferencing_entity_codec_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/georeferencing_runtime_tests.cpp"
     },
     {
       "category": "source",
