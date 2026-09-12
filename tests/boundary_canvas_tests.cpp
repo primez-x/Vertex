@@ -440,6 +440,27 @@ void test_overview_map_navigation() {
 
 }  // namespace
 
+void test_site_scale_fit() {
+    PlanCanvas canvas;
+    canvas.resize(480, 360);
+    canvas.setGridEnabled(false);
+    canvas.setOverviewMapEnabled(false);
+    for (const double extent : {100.0, 10000.0}) {
+        canvas.setEntities({});
+        const auto blank = render(canvas, false);
+        canvas.setEntities({{"site", "measurement_boundary",
+            {{{0, 0}, {extent, 0}, 0}, {{extent, 0}, {extent, extent}, 0},
+             {{extent, extent}, {0, extent}, 0}, {{0, extent}, {0, 0}, 0}}}});
+        canvas.fitView();
+        const auto fitted = render(canvas, false);
+        require(differing_pixels(blank, fitted, canvas.rect()) > 200,
+                "fit must render site-scale boundaries in the current viewport");
+        require(differing_pixels(blank, fitted, QRect(0, 0, 480, 10)) == 0 &&
+                    differing_pixels(blank, fitted, QRect(0, 350, 480, 10)) == 0,
+                "fit must leave margin around site boundaries");
+    }
+}
+
 int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QApplication application(argc, argv);
@@ -456,6 +477,7 @@ int main(int argc, char** argv) {
         test_boundary_draft_rendering_and_history();
         test_effective_cursor_matches_click();
         test_overview_map_navigation();
+        test_site_scale_fit();
         std::cout << "Boundary canvas tests passed\n";
         return 0;
     } catch (const std::exception& error) {

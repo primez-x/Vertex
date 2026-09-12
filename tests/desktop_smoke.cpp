@@ -1127,6 +1127,10 @@ void test_survey_calculator(const QString& capture_directory) {
         calculate->click();
         require(output->isEnabled() && result->text().contains("10000.0000 m²") &&
                     result->text().contains("2.471054 acres"), "survey calculator must report square area and acres");
+        auto* preview = dynamic_cast<sketch::desktop::PlanCanvas*>(dialog->findChild<QWidget*>("surveyPreview"));
+        require(preview && preview->entities().size() == 1 && preview->entities().front().segments.size() == 4 &&
+                    window.document().revision() == revision,
+                "closed survey must preview measured legs without creating document geometry");
         QApplication::processEvents();
         if (!capture_directory.isEmpty())
             require(dialog->grab().save(capture_directory + "/survey-calculator.png"), "survey capture");
@@ -1207,6 +1211,7 @@ void test_survey_calculator(const QString& capture_directory) {
                 "unsupported report version must not replace current entries");
         input->setPlainText("NE, 45:30:15.5, 100 ft");
         require(!output->isEnabled() && result->text().isEmpty(), "edits must invalidate stale survey results");
+        require(preview->entities().empty(), "editing calls must clear stale preview geometry");
         calculate->click();
         require(output->isEnabled() && result->text().contains("Open traverse") &&
                     result->text().contains("Area unavailable") && !add->isEnabled(),
@@ -1267,7 +1272,13 @@ void test_survey_explicit_endpoint_closure() {
         auto* close = dialog->findChild<QCheckBox*>("surveyCloseEndpoint");
         require(close && close->isEnabled() && !close->isChecked(),
                 "closing an endpoint must require an explicit choice for a within-tolerance residual");
+        auto* preview = dynamic_cast<sketch::desktop::PlanCanvas*>(dialog->findChild<QWidget*>("surveyPreview"));
+        require(preview && preview->entities().size() == 2, "residual must have a separate proposed closure preview");
         close->setChecked(true);
+        require(preview->entities().front().segments.back().end.y != 0.0 &&
+                    preview->entities().back().segments.front().start.y == -100.0 &&
+                    preview->entities().back().segments.front().end.y == 0.0 && window.document().revision() == revision,
+                "endpoint adjustment must preview the proposed final leg while retaining measured geometry");
         dialog->findChild<QPushButton*>("surveyAddBoundary")->click();
         require(window.document().revision() == revision + 1, "explicit endpoint closure must commit once");
         const auto entity = window.document().snapshot().entities().at(window.selectedEntityId().toStdString());

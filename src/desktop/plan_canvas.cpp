@@ -17,7 +17,9 @@
 namespace sketch::desktop {
 namespace {
 
-constexpr double minimum_scale = 8.0;
+// Site surveys can span kilometres. Fit and navigation must not crop them
+// at a building-sized zoom floor; the adaptive grid already scales with zoom.
+constexpr double minimum_scale = 0.0001;
 constexpr double maximum_scale = 4000.0;
 constexpr double output_minimum_scale = 0.05;
 constexpr double pi = std::numbers::pi;

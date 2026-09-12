@@ -6515,7 +6515,7 @@ public:
         QDialog dialog(owner);
         dialog.setObjectName(QStringLiteral("surveyCalculator"));
         dialog.setWindowTitle(QStringLiteral("Survey traverse"));
-        dialog.resize(640, 520);
+        dialog.resize(900, 600);
         auto* layout = new QVBoxLayout(&dialog);
         auto* form = new QFormLayout;
         auto* provenance = new QLineEdit(&dialog);
@@ -6542,7 +6542,18 @@ public:
         auto* input = new QPlainTextEdit(&dialog);
         input->setObjectName(QStringLiteral("surveyLegs"));
         input->setAccessibleName(QStringLiteral("Survey bearing and distance legs"));
-        layout->addWidget(input);
+        auto* entry_split = new QSplitter(Qt::Horizontal, &dialog);
+        entry_split->addWidget(input);
+        auto* preview = new PlanCanvas(entry_split);
+        preview->setObjectName(QStringLiteral("surveyPreview"));
+        preview->setAccessibleName(QStringLiteral("Measured survey traverse preview"));
+        preview->setTool(CanvasTool::select);
+        preview->setOverviewMapEnabled(false);
+        preview->setSnapEnabled(false);
+        preview->setMinimumSize(280, 220);
+        entry_split->addWidget(preview);
+        entry_split->setSizes({340, 520});
+        layout->addWidget(entry_split, 1);
         auto* result = new QLabel(&dialog);
         result->setObjectName(QStringLiteral("surveyResult"));
         result->setTextFormat(Qt::PlainText);
@@ -6567,11 +6578,42 @@ public:
         buttons->addButton(QDialogButtonBox::Close);
         layout->addWidget(buttons);
         std::optional<QString> report;
+        const auto measured_boundary = [](const json& source) {
+            Boundary boundary;
+            const auto& vertices = source.at("vertices");
+            const auto point = [](const json& v) {
+                return Vec2{v.at("east_m").get<double>(), v.at("north_m").get<double>()};
+            };
+            for (std::size_t index = 1; index < vertices.size(); ++index)
+                boundary.push_back({point(vertices[index - 1]), point(vertices[index]), 0.0});
+            return boundary;
+        };
+        const auto refresh_preview = [&] {
+            if (!report) { preview->setEntities({}); return; }
+            const auto source = json::parse(report->toStdString());
+            const auto measured = measured_boundary(source);
+            std::vector<CanvasEntity> geometry{{"survey-measured", "measurement_boundary", measured}};
+            if (!measured.empty() && !source.at("diagnostics").at("area_m2").is_null()) {
+                const auto origin = measured.front().start;
+                const auto end = measured.back().end;
+                if (end.x != origin.x || end.y != origin.y) {
+                    const auto from = close_endpoint->isChecked() ? measured.back().start : end;
+                    geometry.push_back({"survey-proposed-closure", "measurement_boundary",
+                                        {{from, origin, 0.0}}, 0.08, true});
+                }
+            }
+            preview->setEntities(std::move(geometry));
+            preview->setMetricUnits(input_units->currentData().toString() == "m");
+            layout->activate();
+            preview->fitView();
+        };
         const auto invalidate = [&] {
             report.reset(); result->clear(); export_report->setEnabled(false); add_boundary->setEnabled(false);
             close_endpoint->setChecked(false);
             close_endpoint->setEnabled(false);
+            preview->setEntities({});
         };
+        QObject::connect(close_endpoint, &QCheckBox::toggled, &dialog, refresh_preview);
         QObject::connect(input, &QPlainTextEdit::textChanged, &dialog, invalidate);
         QObject::connect(provenance, &QLineEdit::textChanged, &dialog, invalidate);
         QObject::connect(tolerance, &QLineEdit::textChanged, &dialog, invalidate);
@@ -6634,6 +6676,7 @@ public:
                 export_report->setEnabled(true);
                 add_boundary->setEnabled(d.area_m2.has_value() && m_document->is_editable());
                 close_endpoint->setEnabled(d.area_m2.has_value() && d.linear_error_m > 0.0);
+                refresh_preview();
             } catch (const std::exception& error) { result->setText(QString::fromUtf8(error.what())); }
         });
         QObject::connect(add_boundary, &QPushButton::clicked, &dialog, [&] {
@@ -6646,15 +6689,9 @@ public:
                 const auto source = json::parse(report->toStdString());
                 if (source.at("diagnostics").at("area_m2").is_null())
                     throw std::invalid_argument("An open traverse cannot become an area boundary.");
-                Boundary boundary;
-                const auto& vertices = source.at("vertices");
-                const auto point = [](const json& v) {
-                    return Vec2{v.at("east_m").get<double>(), v.at("north_m").get<double>()};
-                };
-                for (std::size_t index = 1; index < vertices.size(); ++index)
-                    boundary.push_back({point(vertices[index - 1]), point(vertices[index]), 0.0});
-                const auto start = point(vertices.front());
-                const auto end = point(vertices.back());
+                auto boundary = measured_boundary(source);
+                const auto start = boundary.front().start;
+                const auto end = boundary.back().end;
                 const bool adjust_endpoint = close_endpoint->isEnabled() && close_endpoint->isChecked();
                 const bool closing_segment = !adjust_endpoint && (start.x != end.x || start.y != end.y);
                 if (adjust_endpoint) boundary.back().end = start;

@@ -22,6 +22,12 @@ convention as the core contract. Explicit distance units override workspace
 defaults. Source/reference and closure tolerance accompany the calculation.
 
 Calculate reports closure error, perimeter, and area/acreage when available.
+The adjacent canvas previews measured legs, including open traverses. A cyan
+segment shows a proposed closure; choosing endpoint adjustment previews the
+replacement final leg while retaining the measured geometry. Previewing,
+panning, and zooming do not change project history. Changing input clears the
+preview together with the report, so stale geometry cannot be mistaken for
+the current calls.
 Changing any input invalidates the displayed report and disables export until
 recalculation. Export writes the versioned JSON contract atomically, retaining
 source reference, legs, local vertices, tolerance, and diagnostics. Invalid
