@@ -101,9 +101,11 @@ Drawing-sheet lifecycle is now integrated at the desktop boundary: the sheet
 settings workflow can add a validated page with coordinated viewports, remove a
 page only when graph references remain valid, and select the page used by draft
 PDF/SVG/print output. Page creation/removal is ordinary undoable Document
-history, and output fingerprints bind the selected sheet. Subject/area metadata
-from the standalone multipage contract, richer layout editing, and production
-output qualification remain open.
+history, and output fingerprints bind the selected sheet. Revisions and
+cross-sheet callouts now have typed add/edit/remove operations, and vector
+sheet output renders their issue rows and target markers. Subject/area metadata
+from the standalone multipage contract, richer layout editing, printer
+calibration, and production output qualification remain open.
 
 The Windows handoff inputs now include explicit source-kit and portable-package
 allowlists under `packaging/`. The source-kit allowlist covers tracked source,

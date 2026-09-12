@@ -76,6 +76,34 @@ public:
                                                   const QString& y_mm,
                                                   const QString& width_mm,
                                                   const QString& height_mm);
+    // Adds, edits, and removes revision rows in a drawing sheet through typed
+    // Document history. The returned ID is empty when the add is rejected.
+    [[nodiscard]] QString addSheetRevision(const QString& sheet_id,
+                                           const QString& date,
+                                           const QString& description);
+    [[nodiscard]] bool editSheetRevision(const QString& sheet_id,
+                                         const QString& revision_id,
+                                         const QString& date,
+                                         const QString& description);
+    [[nodiscard]] bool removeSheetRevision(const QString& sheet_id,
+                                           const QString& revision_id);
+    // Adds, edits, and removes cross-sheet callout markers. Coordinates are
+    // millimetres in the owning sheet; target IDs are validated by the graph.
+    [[nodiscard]] QString addSheetCallout(const QString& sheet_id,
+                                          const QString& label,
+                                          const QString& target_sheet_id,
+                                          const QString& target_viewport_id,
+                                          const QString& x_mm,
+                                          const QString& y_mm);
+    [[nodiscard]] bool editSheetCallout(const QString& sheet_id,
+                                        const QString& callout_id,
+                                        const QString& label,
+                                        const QString& target_sheet_id,
+                                        const QString& target_viewport_id,
+                                        const QString& x_mm,
+                                        const QString& y_mm);
+    [[nodiscard]] bool removeSheetCallout(const QString& sheet_id,
+                                          const QString& callout_id);
     // Creates a validated drawing sheet with one independently scaled
     // viewport per coordinated view. The returned ID is stable in the
     // document and the new page becomes the selected output sheet.

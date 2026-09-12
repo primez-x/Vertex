@@ -2470,6 +2470,188 @@ public:
         }
     }
 
+    [[nodiscard]] bool applySheetModelMutation(
+        const QString& operation, const QString& sheet_id,
+        const std::function<SheetViewModel(const SheetViewModel&)>& mutation) {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        try {
+            const auto source = authoringSnapshot();
+            const auto record = decode_sheet_model(source);
+            if (!record || record->model.sheets().empty())
+                throw std::invalid_argument("No drawing sheets are defined");
+            const auto wanted = sheet_id.trimmed().toStdString();
+            const auto found = std::find_if(record->model.sheets().begin(), record->model.sheets().end(),
+                [&](const auto& sheet) { return wanted.empty() || sheet.id == wanted; });
+            if (found == record->model.sheets().end())
+                throw std::invalid_argument("Drawing sheet identity was not found");
+            const auto updated_model = mutation(record->model);
+            auto updated_entity = source.entities().at(record->entity_id);
+            updated_entity.properties = make_sheet_view_entity(
+                updated_entity.id, updated_model).properties;
+            const ApplyEntityChanges command{
+                source.revision(), {EntityChange::upsert(std::move(updated_entity))}, {},
+                operation.toStdString()};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(operation + QStringLiteral(": ") + QString::fromUtf8(error.what()));
+            return false;
+        }
+    }
+
+    [[nodiscard]] QString addSheetRevision(const QString& sheet_id,
+                                           const QString& date,
+                                           const QString& description) {
+        const auto id = QString::fromStdString(new_id("revision"));
+        const auto accepted = applySheetModelMutation(
+            QStringLiteral("Add sheet revision"), sheet_id,
+            [id, date, description, sheet_id](const SheetViewModel& model) {
+                const auto wanted = sheet_id.trimmed().toStdString();
+                const auto found = std::find_if(model.sheets().begin(), model.sheets().end(),
+                    [&](const auto& sheet) { return wanted.empty() || sheet.id == wanted; });
+                if (found == model.sheets().end())
+                    throw std::invalid_argument("Drawing sheet identity was not found");
+                SheetRevision revision{id.toStdString(), date.toStdString(), description.toStdString()};
+                return model.with_added_revision(found->id, std::move(revision));
+            });
+        return accepted ? id : QString();
+    }
+
+    [[nodiscard]] bool editSheetRevision(const QString& sheet_id, const QString& revision_id,
+                                         const QString& date, const QString& description) {
+        return applySheetModelMutation(
+            QStringLiteral("Edit sheet revision"), sheet_id,
+            [revision_id, date, description, sheet_id](const SheetViewModel& model) {
+                const auto wanted_sheet = sheet_id.trimmed().toStdString();
+                const auto wanted_revision = revision_id.trimmed().toStdString();
+                const auto found = std::find_if(model.sheets().begin(), model.sheets().end(),
+                    [&](const auto& sheet) { return wanted_sheet.empty() || sheet.id == wanted_sheet; });
+                if (found == model.sheets().end())
+                    throw std::invalid_argument("Drawing sheet identity was not found");
+                const auto revision = std::find_if(found->revisions.begin(), found->revisions.end(),
+                    [&](const auto& value) { return value.id == wanted_revision; });
+                if (revision == found->revisions.end())
+                    throw std::invalid_argument("Sheet revision identity was not found");
+                auto replacement = *revision;
+                replacement.date = date.toStdString();
+                replacement.description = description.toStdString();
+                return model.with_revision(found->id, std::move(replacement));
+            });
+    }
+
+    [[nodiscard]] bool removeSheetRevision(const QString& sheet_id,
+                                           const QString& revision_id) {
+        return applySheetModelMutation(
+            QStringLiteral("Remove sheet revision"), sheet_id,
+            [revision_id, sheet_id](const SheetViewModel& model) {
+                const auto wanted_sheet = sheet_id.trimmed().toStdString();
+                const auto wanted_revision = revision_id.trimmed().toStdString();
+                const auto found = std::find_if(model.sheets().begin(), model.sheets().end(),
+                    [&](const auto& sheet) { return wanted_sheet.empty() || sheet.id == wanted_sheet; });
+                if (found == model.sheets().end())
+                    throw std::invalid_argument("Drawing sheet identity was not found");
+                return model.with_removed_revision(found->id, wanted_revision);
+            });
+    }
+
+    [[nodiscard]] QString addSheetCallout(const QString& sheet_id, const QString& label,
+                                          const QString& target_sheet_id,
+                                          const QString& target_viewport_id,
+                                          const QString& x_mm, const QString& y_mm) {
+        const auto id = QString::fromStdString(new_id("callout"));
+        const auto parse = [](const QString& text, const char* name) {
+            bool ok = false;
+            const auto value = text.trimmed().toDouble(&ok);
+            if (!ok || !std::isfinite(value))
+                throw std::invalid_argument(std::string(name) + " must be a finite number");
+            return value;
+        };
+        double x = 0.0, y = 0.0;
+        try {
+            x = parse(x_mm, "Callout X");
+            y = parse(y_mm, "Callout Y");
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Add sheet callout: ") + QString::fromUtf8(error.what()));
+            return {};
+        }
+        const auto accepted = applySheetModelMutation(
+            QStringLiteral("Add sheet callout"), sheet_id,
+            [id, label, target_sheet_id, target_viewport_id, x, y, sheet_id](const SheetViewModel& model) {
+                const auto wanted = sheet_id.trimmed().toStdString();
+                const auto found = std::find_if(model.sheets().begin(), model.sheets().end(),
+                    [&](const auto& sheet) { return wanted.empty() || sheet.id == wanted; });
+                if (found == model.sheets().end())
+                    throw std::invalid_argument("Drawing sheet identity was not found");
+                SheetCallout callout{id.toStdString(), label.toStdString(),
+                                     target_sheet_id.trimmed().toStdString(),
+                                     target_viewport_id.trimmed().toStdString(), x, y};
+                return model.with_added_callout(found->id, std::move(callout));
+            });
+        return accepted ? id : QString();
+    }
+
+    [[nodiscard]] bool editSheetCallout(const QString& sheet_id, const QString& callout_id,
+                                        const QString& label, const QString& target_sheet_id,
+                                        const QString& target_viewport_id, const QString& x_mm,
+                                        const QString& y_mm) {
+        const auto parse = [](const QString& text, const char* name) {
+            bool ok = false;
+            const auto value = text.trimmed().toDouble(&ok);
+            if (!ok || !std::isfinite(value))
+                throw std::invalid_argument(std::string(name) + " must be a finite number");
+            return value;
+        };
+        try {
+            const auto x = parse(x_mm, "Callout X");
+            const auto y = parse(y_mm, "Callout Y");
+            return applySheetModelMutation(
+                QStringLiteral("Edit sheet callout"), sheet_id,
+                [callout_id, label, target_sheet_id, target_viewport_id, x, y, sheet_id](
+                    const SheetViewModel& model) {
+                    const auto wanted_sheet = sheet_id.trimmed().toStdString();
+                    const auto wanted_callout = callout_id.trimmed().toStdString();
+                    const auto found = std::find_if(model.sheets().begin(), model.sheets().end(),
+                        [&](const auto& sheet) { return wanted_sheet.empty() || sheet.id == wanted_sheet; });
+                    if (found == model.sheets().end())
+                        throw std::invalid_argument("Drawing sheet identity was not found");
+                    const auto callout = std::find_if(found->callouts.begin(), found->callouts.end(),
+                        [&](const auto& value) { return value.id == wanted_callout; });
+                    if (callout == found->callouts.end())
+                        throw std::invalid_argument("Sheet callout identity was not found");
+                    auto replacement = *callout;
+                    replacement.label = label.toStdString();
+                    replacement.target_sheet_id = target_sheet_id.trimmed().toStdString();
+                    replacement.target_viewport_id = target_viewport_id.trimmed().toStdString();
+                    replacement.x_mm = x;
+                    replacement.y_mm = y;
+                    return model.with_callout(found->id, std::move(replacement));
+                });
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Edit sheet callout: ") + QString::fromUtf8(error.what()));
+            return false;
+        }
+    }
+
+    [[nodiscard]] bool removeSheetCallout(const QString& sheet_id,
+                                          const QString& callout_id) {
+        return applySheetModelMutation(
+            QStringLiteral("Remove sheet callout"), sheet_id,
+            [callout_id, sheet_id](const SheetViewModel& model) {
+                const auto wanted_sheet = sheet_id.trimmed().toStdString();
+                const auto found = std::find_if(model.sheets().begin(), model.sheets().end(),
+                    [&](const auto& sheet) { return wanted_sheet.empty() || sheet.id == wanted_sheet; });
+                if (found == model.sheets().end())
+                    throw std::invalid_argument("Drawing sheet identity was not found");
+                return model.with_removed_callout(found->id, callout_id.trimmed().toStdString());
+            });
+    }
+
     [[nodiscard]] bool editArchitecturalViewPresentation(
         const QString& view_id, const QString& cut_depth_m, const QString& far_depth_m,
         const QString& cut_line_mm, const QString& projection_line_mm, bool hatch_enabled,
@@ -9831,7 +10013,91 @@ public:
                 painter.restore();
             }
 
+            // Cross-sheet callouts are persisted page annotations. Render the
+            // marker and its target identity on the owning sheet so a printed
+            // page remains understandable when viewed outside the project.
+            for (const auto& callout : sheet.callouts) {
+                const QPointF anchor(page.left() + callout.x_mm * paper_scale,
+                                     page.top() + callout.y_mm * paper_scale);
+                const auto target_sheet = std::find_if(model.sheets().begin(), model.sheets().end(),
+                    [&](const auto& candidate) { return candidate.id == callout.target_sheet_id; });
+                QString target_ref = QString::fromStdString(callout.target_sheet_id + "/" +
+                                                             callout.target_viewport_id);
+                if (target_sheet != model.sheets().end()) {
+                    target_ref = QString::fromStdString(target_sheet->number + " / " +
+                                                        callout.target_viewport_id);
+                }
+                const auto label = QString::fromStdString(callout.label).trimmed();
+                const auto text = (label.isEmpty() ? target_ref
+                                                   : label + QStringLiteral("  →  ") + target_ref);
+                const auto radius = std::max(5.0, 7.0 * paper_scale);
+                painter.save();
+                painter.setPen(QPen(QColor(27, 103, 153), std::max(1.0, paper_scale * 0.7)));
+                painter.setBrush(QColor(224, 242, 254));
+                painter.drawEllipse(anchor, radius, radius);
+                painter.setPen(QColor(17, 73, 109));
+                painter.setFont(QFont(QStringLiteral("Inter"),
+                                      std::max(6, static_cast<int>(8.0 * paper_scale))));
+                painter.drawText(QRectF(anchor.x() + radius + 3.0 * paper_scale,
+                                       anchor.y() - radius,
+                                       std::max(40.0, 170.0 * paper_scale),
+                                       2.0 * radius),
+                                 Qt::AlignLeft | Qt::AlignVCenter, text);
+                painter.restore();
+            }
+
             const auto title_height = std::max(24.0, 26.0 * paper_scale);
+            if (!sheet.revisions.empty()) {
+                const auto header_height = std::max(12.0, 15.0 * paper_scale);
+                const auto row_height = std::max(10.0, 13.0 * paper_scale);
+                const auto available_height = std::max(0.0,
+                    page.height() - title_height - 8.0 * paper_scale);
+                const auto max_rows = std::min<std::size_t>(sheet.revisions.size(),
+                    static_cast<std::size_t>(std::floor(
+                        std::max(0.0, available_height - header_height) / row_height)));
+                if (max_rows > 0) {
+                    const QRectF revision_rect(
+                        page.right() - 220.0 * paper_scale,
+                        page.bottom() - title_height - header_height -
+                            static_cast<double>(max_rows) * row_height,
+                        220.0 * paper_scale,
+                        header_height + static_cast<double>(max_rows) * row_height);
+                    painter.save();
+                    painter.fillRect(revision_rect, Qt::white);
+                    painter.setPen(QPen(QColor(45, 52, 60), std::max(1.0, paper_scale * 0.6)));
+                    painter.drawRect(revision_rect);
+                    painter.fillRect(QRectF(revision_rect.left(), revision_rect.top(),
+                                            revision_rect.width(), header_height),
+                                     QColor(229, 235, 241));
+                    painter.setPen(QColor(35, 41, 48));
+                    painter.setFont(QFont(QStringLiteral("Inter"),
+                                          std::max(6, static_cast<int>(7.5 * paper_scale))));
+                    painter.drawText(revision_rect.adjusted(4.0 * paper_scale, 0.0,
+                                                            -4.0 * paper_scale,
+                                                            -static_cast<double>(max_rows) * row_height),
+                                     Qt::AlignLeft | Qt::AlignVCenter,
+                                     QStringLiteral("REV   DATE   DESCRIPTION"));
+                    for (std::size_t index = 0; index < max_rows; ++index) {
+                        const auto& revision = sheet.revisions[index];
+                        const QRectF row_rect(revision_rect.left(),
+                                              revision_rect.top() + header_height +
+                                                  static_cast<double>(index) * row_height,
+                                              revision_rect.width(), row_height);
+                        painter.setPen(QPen(QColor(196, 203, 211),
+                                            std::max(1.0, paper_scale * 0.35)));
+                        painter.drawLine(row_rect.bottomLeft(), row_rect.bottomRight());
+                        painter.setPen(QColor(50, 57, 65));
+                        const auto row_text = QStringLiteral("%1  %2  %3")
+                            .arg(QString::fromStdString(revision.id),
+                                 QString::fromStdString(revision.date),
+                                 QString::fromStdString(revision.description));
+                        painter.drawText(row_rect.adjusted(4.0 * paper_scale, 0.0,
+                                                           -4.0 * paper_scale, 0.0),
+                                         Qt::AlignLeft | Qt::AlignVCenter, row_text);
+                    }
+                    painter.restore();
+                }
+            }
             const QRectF title_rect(page.right() - 220.0 * paper_scale,
                                     page.bottom() - title_height,
                                     220.0 * paper_scale, title_height);
@@ -9843,11 +10109,12 @@ public:
             painter.drawText(title_rect.adjusted(8.0 * paper_scale, 4.0 * paper_scale,
                                                  -8.0 * paper_scale, -4.0 * paper_scale),
                              Qt::AlignLeft | Qt::AlignVCenter,
-                             QStringLiteral("%1  %2\n%3  %4")
+                             QStringLiteral("%1  %2\n%3  %4  %5")
                                  .arg(QString::fromStdString(sheet.number),
                                       QString::fromStdString(title.title),
                                       QString::fromStdString(title.project),
-                                      QString::fromStdString(title.author)));
+                                      QString::fromStdString(title.author),
+                                      QString::fromStdString(title.issue_date)));
             painter.restore();
             return true;
         } catch (const std::exception& error) {
@@ -10661,7 +10928,7 @@ public:
         dialog.setObjectName(QStringLiteral("sheetSettingsDialog"));
         dialog.setWindowTitle(QStringLiteral("Drawing sheets"));
         dialog.setModal(true);
-        dialog.resize(700, 500);
+        dialog.resize(760, 620);
         auto* root = new QVBoxLayout(&dialog);
         auto* sheet_row = new QHBoxLayout();
         auto* sheet_label = new QLabel(QStringLiteral("Output sheet"), &dialog);
@@ -10699,6 +10966,47 @@ public:
         apply->setObjectName(QStringLiteral("applySheetMetadata"));
         form->addRow(apply);
         root->addLayout(form);
+
+        auto* detail_row = new QHBoxLayout();
+        auto* revisions_box = new QGroupBox(QStringLiteral("Revisions"), &dialog);
+        auto* revisions_layout = new QVBoxLayout(revisions_box);
+        auto* revisions = new QListWidget(revisions_box);
+        revisions->setObjectName(QStringLiteral("sheetRevisionList"));
+        revisions->setSelectionMode(QAbstractItemView::SingleSelection);
+        revisions_layout->addWidget(revisions, 1);
+        auto* revision_buttons = new QHBoxLayout();
+        auto* add_revision = new QPushButton(QStringLiteral("Add"), revisions_box);
+        auto* edit_revision = new QPushButton(QStringLiteral("Edit"), revisions_box);
+        auto* remove_revision = new QPushButton(QStringLiteral("Remove"), revisions_box);
+        add_revision->setObjectName(QStringLiteral("addSheetRevision"));
+        edit_revision->setObjectName(QStringLiteral("editSheetRevision"));
+        remove_revision->setObjectName(QStringLiteral("removeSheetRevision"));
+        revision_buttons->addWidget(add_revision);
+        revision_buttons->addWidget(edit_revision);
+        revision_buttons->addWidget(remove_revision);
+        revisions_layout->addLayout(revision_buttons);
+        detail_row->addWidget(revisions_box, 1);
+
+        auto* callouts_box = new QGroupBox(QStringLiteral("Cross-sheet callouts"), &dialog);
+        auto* callouts_layout = new QVBoxLayout(callouts_box);
+        auto* callouts = new QListWidget(callouts_box);
+        callouts->setObjectName(QStringLiteral("sheetCalloutList"));
+        callouts->setSelectionMode(QAbstractItemView::SingleSelection);
+        callouts_layout->addWidget(callouts, 1);
+        auto* callout_buttons = new QHBoxLayout();
+        auto* add_callout = new QPushButton(QStringLiteral("Add"), callouts_box);
+        auto* edit_callout = new QPushButton(QStringLiteral("Edit"), callouts_box);
+        auto* remove_callout = new QPushButton(QStringLiteral("Remove"), callouts_box);
+        add_callout->setObjectName(QStringLiteral("addSheetCallout"));
+        edit_callout->setObjectName(QStringLiteral("editSheetCallout"));
+        remove_callout->setObjectName(QStringLiteral("removeSheetCallout"));
+        callout_buttons->addWidget(add_callout);
+        callout_buttons->addWidget(edit_callout);
+        callout_buttons->addWidget(remove_callout);
+        callouts_layout->addLayout(callout_buttons);
+        detail_row->addWidget(callouts_box, 1);
+        root->addLayout(detail_row, 1);
+
         auto* status = new QLabel(&dialog);
         status->setObjectName(QStringLiteral("sheetSettingsStatus"));
         status->setWordWrap(true);
@@ -10730,6 +11038,27 @@ public:
                 title->setText(QString::fromStdString(found->title_block.title));
                 author->setText(QString::fromStdString(found->title_block.author));
                 issue_date->setText(QString::fromStdString(found->title_block.issue_date));
+                revisions->clear();
+                for (const auto& revision : found->revisions) {
+                    auto* item = new QListWidgetItem(
+                        QStringLiteral("%1  ·  %2  ·  %3")
+                            .arg(QString::fromStdString(revision.id),
+                                 QString::fromStdString(revision.date),
+                                 QString::fromStdString(revision.description)), revisions);
+                    item->setData(Qt::UserRole, QString::fromStdString(revision.id));
+                }
+                callouts->clear();
+                for (const auto& callout : found->callouts) {
+                    auto* item = new QListWidgetItem(
+                        QStringLiteral("%1  ·  %2  →  %3/%4  ·  (%5, %6 mm)")
+                            .arg(QString::fromStdString(callout.id),
+                                 QString::fromStdString(callout.label),
+                                 QString::fromStdString(callout.target_sheet_id),
+                                 QString::fromStdString(callout.target_viewport_id),
+                                 QString::number(callout.x_mm, 'g', 8),
+                                 QString::number(callout.y_mm, 'g', 8)), callouts);
+                    item->setData(Qt::UserRole, QString::fromStdString(callout.id));
+                }
                 status->setText(QStringLiteral("%1 viewports • %2 callouts • %3 schedule placements • selected for output")
                                     .arg(static_cast<int>(found->viewports.size()))
                                     .arg(static_cast<int>(found->callouts.size()))
@@ -10809,6 +11138,170 @@ public:
                                       QStringLiteral("Remove the selected sheet? This can be undone.")) !=
                 QMessageBox::Yes) return;
             if (removeDrawingSheet(id)) {
+                context = captureModalContext();
+                fill_selector();
+            }
+        });
+
+        const auto sheet_for_tools = [&]() -> std::optional<DrawingSheet> {
+            const auto record = decode_sheet_model(authoringSnapshot());
+            if (!record) return std::nullopt;
+            const auto id = selected_id().toStdString();
+            const auto found = std::find_if(record->model.sheets().begin(), record->model.sheets().end(),
+                [&](const auto& value) { return value.id == id; });
+            if (found == record->model.sheets().end()) return std::nullopt;
+            return *found;
+        };
+        QObject::connect(add_revision, &QPushButton::clicked, &dialog, [&] {
+            if (selected_id().isEmpty()) return;
+            bool accepted = false;
+            const auto date = QInputDialog::getText(&dialog, QStringLiteral("Add revision"),
+                                                    QStringLiteral("Date or issue identifier:"),
+                                                    QLineEdit::Normal, issue_date->text(), &accepted);
+            if (!accepted) return;
+            const auto description = QInputDialog::getText(&dialog, QStringLiteral("Add revision"),
+                                                           QStringLiteral("Description:"),
+                                                           QLineEdit::Normal, {}, &accepted);
+            if (!accepted) return;
+            if (!addSheetRevision(selected_id(), date, description).isEmpty()) {
+                context = captureModalContext();
+                fill_selector();
+            }
+        });
+        QObject::connect(edit_revision, &QPushButton::clicked, &dialog, [&] {
+            const auto* item = revisions->currentItem();
+            if (!item || selected_id().isEmpty()) return;
+            const auto revision_id = item->data(Qt::UserRole).toString();
+            const auto sheet = sheet_for_tools();
+            if (!sheet) return;
+            const auto found = std::find_if(sheet->revisions.begin(), sheet->revisions.end(),
+                [&](const auto& value) { return QString::fromStdString(value.id) == revision_id; });
+            if (found == sheet->revisions.end()) return;
+            bool accepted = false;
+            const auto date = QInputDialog::getText(&dialog, QStringLiteral("Edit revision"),
+                                                    QStringLiteral("Date or issue identifier:"),
+                                                    QLineEdit::Normal, QString::fromStdString(found->date),
+                                                    &accepted);
+            if (!accepted) return;
+            const auto description = QInputDialog::getText(&dialog, QStringLiteral("Edit revision"),
+                                                           QStringLiteral("Description:"),
+                                                           QLineEdit::Normal, QString::fromStdString(found->description),
+                                                           &accepted);
+            if (!accepted) return;
+            if (editSheetRevision(selected_id(), revision_id, date, description)) {
+                context = captureModalContext();
+                fill_selector();
+            }
+        });
+        QObject::connect(remove_revision, &QPushButton::clicked, &dialog, [&] {
+            const auto* item = revisions->currentItem();
+            if (!item || selected_id().isEmpty()) return;
+            if (QMessageBox::question(&dialog, QStringLiteral("Remove revision"),
+                                      QStringLiteral("Remove the selected revision? This can be undone.")) !=
+                QMessageBox::Yes) return;
+            if (removeSheetRevision(selected_id(), item->data(Qt::UserRole).toString())) {
+                context = captureModalContext();
+                fill_selector();
+            }
+        });
+        QObject::connect(add_callout, &QPushButton::clicked, &dialog, [&] {
+            if (selected_id().isEmpty()) return;
+            const auto sheet = sheet_for_tools();
+            if (!sheet) return;
+            const auto record = decode_sheet_model(authoringSnapshot());
+            if (!record || record->model.sheets().size() < 2) {
+                setError(QStringLiteral("Add sheet callout: create a second drawing sheet first."));
+                return;
+            }
+            QStringList target_sheets;
+            for (const auto& candidate : record->model.sheets()) {
+                if (candidate.id == sheet->id) continue;
+                target_sheets.push_back(QStringLiteral("%1  ·  %2")
+                                            .arg(QString::fromStdString(candidate.number),
+                                                 QString::fromStdString(candidate.id)));
+            }
+            bool accepted = false;
+            const auto label = QInputDialog::getText(&dialog, QStringLiteral("Add callout"),
+                                                     QStringLiteral("Label:"), QLineEdit::Normal,
+                                                     QStringLiteral("Section"), &accepted);
+            if (!accepted) return;
+            const auto target_choice = QInputDialog::getItem(&dialog, QStringLiteral("Add callout"),
+                                                             QStringLiteral("Target sheet:"), target_sheets,
+                                                             0, false, &accepted);
+            if (!accepted) return;
+            // Resolve the selected display row by its stable ID rather than
+            // relying on collection order or the target sheet's number.
+            const auto target_pos = std::find_if(record->model.sheets().begin(), record->model.sheets().end(),
+                [&](const auto& candidate) {
+                    return target_choice.endsWith(QString::fromStdString(candidate.id));
+                });
+            if (target_pos == record->model.sheets().end() || target_pos->viewports.empty()) return;
+            QStringList target_viewports;
+            for (const auto& viewport : target_pos->viewports)
+                target_viewports.push_back(QString::fromStdString(viewport.id));
+            const auto viewport = QInputDialog::getItem(&dialog, QStringLiteral("Add callout"),
+                                                        QStringLiteral("Target viewport:"), target_viewports,
+                                                        0, false, &accepted);
+            if (!accepted) return;
+            const auto x = QInputDialog::getText(&dialog, QStringLiteral("Add callout"),
+                                                 QStringLiteral("X on sheet (mm):"), QLineEdit::Normal,
+                                                 QStringLiteral("20"), &accepted);
+            if (!accepted) return;
+            const auto y = QInputDialog::getText(&dialog, QStringLiteral("Add callout"),
+                                                 QStringLiteral("Y on sheet (mm):"), QLineEdit::Normal,
+                                                 QStringLiteral("20"), &accepted);
+            if (!accepted) return;
+            if (!addSheetCallout(selected_id(), label, QString::fromStdString(target_pos->id),
+                                 viewport, x, y).isEmpty()) {
+                context = captureModalContext();
+                fill_selector();
+            }
+        });
+        QObject::connect(edit_callout, &QPushButton::clicked, &dialog, [&] {
+            const auto* item = callouts->currentItem();
+            if (!item || selected_id().isEmpty()) return;
+            const auto sheet = sheet_for_tools();
+            const auto record = decode_sheet_model(authoringSnapshot());
+            if (!sheet || !record) return;
+            const auto found = std::find_if(sheet->callouts.begin(), sheet->callouts.end(),
+                [&](const auto& value) { return QString::fromStdString(value.id) == item->data(Qt::UserRole).toString(); });
+            if (found == sheet->callouts.end()) return;
+            bool accepted = false;
+            const auto label = QInputDialog::getText(&dialog, QStringLiteral("Edit callout"),
+                                                     QStringLiteral("Label:"), QLineEdit::Normal,
+                                                     QString::fromStdString(found->label), &accepted);
+            if (!accepted) return;
+            const auto target_sheet_id = QInputDialog::getText(&dialog, QStringLiteral("Edit callout"),
+                                                               QStringLiteral("Target sheet ID:"),
+                                                               QLineEdit::Normal,
+                                                               QString::fromStdString(found->target_sheet_id), &accepted);
+            if (!accepted) return;
+            const auto target_viewport_id = QInputDialog::getText(&dialog, QStringLiteral("Edit callout"),
+                                                                  QStringLiteral("Target viewport ID:"),
+                                                                  QLineEdit::Normal,
+                                                                  QString::fromStdString(found->target_viewport_id), &accepted);
+            if (!accepted) return;
+            const auto x = QInputDialog::getText(&dialog, QStringLiteral("Edit callout"),
+                                                 QStringLiteral("X on sheet (mm):"), QLineEdit::Normal,
+                                                 QString::number(found->x_mm, 'g', 12), &accepted);
+            if (!accepted) return;
+            const auto y = QInputDialog::getText(&dialog, QStringLiteral("Edit callout"),
+                                                 QStringLiteral("Y on sheet (mm):"), QLineEdit::Normal,
+                                                 QString::number(found->y_mm, 'g', 12), &accepted);
+            if (!accepted) return;
+            if (editSheetCallout(selected_id(), item->data(Qt::UserRole).toString(), label,
+                                 target_sheet_id, target_viewport_id, x, y)) {
+                context = captureModalContext();
+                fill_selector();
+            }
+        });
+        QObject::connect(remove_callout, &QPushButton::clicked, &dialog, [&] {
+            const auto* item = callouts->currentItem();
+            if (!item || selected_id().isEmpty()) return;
+            if (QMessageBox::question(&dialog, QStringLiteral("Remove callout"),
+                                      QStringLiteral("Remove the selected callout? This can be undone.")) !=
+                QMessageBox::Yes) return;
+            if (removeSheetCallout(selected_id(), item->data(Qt::UserRole).toString())) {
                 context = captureModalContext();
                 fill_selector();
             }
@@ -16532,6 +17025,40 @@ bool MainWindow::editSheetSchedulePlacement(const QString& sheet_id, const QStri
                                             const QString& width_mm, const QString& height_mm) {
     return m_impl->editSheetSchedulePlacement(sheet_id, placement_id, x_mm, y_mm, width_mm,
                                               height_mm);
+}
+
+QString MainWindow::addSheetRevision(const QString& sheet_id, const QString& date,
+                                     const QString& description) {
+    return m_impl->addSheetRevision(sheet_id, date, description);
+}
+
+bool MainWindow::editSheetRevision(const QString& sheet_id, const QString& revision_id,
+                                   const QString& date, const QString& description) {
+    return m_impl->editSheetRevision(sheet_id, revision_id, date, description);
+}
+
+bool MainWindow::removeSheetRevision(const QString& sheet_id, const QString& revision_id) {
+    return m_impl->removeSheetRevision(sheet_id, revision_id);
+}
+
+QString MainWindow::addSheetCallout(const QString& sheet_id, const QString& label,
+                                    const QString& target_sheet_id,
+                                    const QString& target_viewport_id,
+                                    const QString& x_mm, const QString& y_mm) {
+    return m_impl->addSheetCallout(sheet_id, label, target_sheet_id, target_viewport_id,
+                                   x_mm, y_mm);
+}
+
+bool MainWindow::editSheetCallout(const QString& sheet_id, const QString& callout_id,
+                                  const QString& label, const QString& target_sheet_id,
+                                  const QString& target_viewport_id, const QString& x_mm,
+                                  const QString& y_mm) {
+    return m_impl->editSheetCallout(sheet_id, callout_id, label, target_sheet_id,
+                                    target_viewport_id, x_mm, y_mm);
+}
+
+bool MainWindow::removeSheetCallout(const QString& sheet_id, const QString& callout_id) {
+    return m_impl->removeSheetCallout(sheet_id, callout_id);
 }
 
 QString MainWindow::createDrawingSheet(const QString& number, const QString& width_mm,

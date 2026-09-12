@@ -13,8 +13,12 @@ active workspace tab. Desktop sheet title-block/number and viewport
 bounds/scale editing now commit through the typed Document history; schedule
 placement rendering, including revision-bound door/window, room and material
 rows, now uses the same schedule projection as the Schedules dialog. Desktop
-schedule placement bounds can be edited through typed Document history; printer
-calibration and production output qualification remain open. The shared
+schedule placement bounds can be edited through typed Document history. Sheet
+revisions and cross-sheet callouts can be added, edited, and removed through
+the same revision-checked history path. Vector sheet output renders callout
+markers with target sheet/viewport references and a revision block beside the
+title block. Printer calibration and production output qualification remain
+open. The shared
 architectural projection engine now derives analytical plan, elevation, and
 section edges from supported building solids; see
 `docs/architectural-projections.md` for its explicit boundary and remaining
@@ -55,7 +59,9 @@ rectangles and callout anchors must lie on the page. Placements may overlap:
 collision/layout policy belongs to an editor. Dates and hatch patterns are
 opaque metadata; no calendar or renderer-specific pattern interpretation is
 implied. Revision IDs are stable identifiers, not chronology inferred from
-lexical order.
+lexical order. The desktop editor exposes the persisted revision and callout
+collections with typed graph validation; callout target sheet and viewport
+references are never inferred from display labels.
 
 Version 1 JSON uses `sketch.sheet_view_model`, rejects unknown/missing fields,
 invalid enum names, nonfinite numeric values, malformed frames and dangling
@@ -63,7 +69,9 @@ references. Collections serialize in ID order (schedule registry lexically),
 independent of insertion order. JSON output and caller inputs are detached from
 the stored snapshot. Import validates the complete graph before returning a
 snapshot. Tests cover coordinated edits, scale independence, input isolation,
-deterministic round trips and malformed geometry, identities and references.
+deterministic round trips and malformed geometry, identities and references,
+including revision and callout replacement, addition, removal, and target
+validation.
 The entity codec tests cover typed Document admission and ProjectStore
 save/reopen, including schema, version, unknown-field and dangling-view
 rejection.

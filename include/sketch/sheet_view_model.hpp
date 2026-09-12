@@ -114,6 +114,24 @@ public:
     // registry identity and revalidating the page bounds and schedule link.
     [[nodiscard]] SheetViewModel with_schedule_placement(
         const std::string& sheet_id, SheetSchedulePlacement replacement) const;
+    // Updates one revision within a sheet while preserving its stable ID.
+    [[nodiscard]] SheetViewModel with_revision(const std::string& sheet_id,
+                                               SheetRevision replacement) const;
+    // Appends a validated revision to a sheet.
+    [[nodiscard]] SheetViewModel with_added_revision(const std::string& sheet_id,
+                                                     SheetRevision addition) const;
+    // Removes one revision from a sheet.
+    [[nodiscard]] SheetViewModel with_removed_revision(const std::string& sheet_id,
+                                                       const std::string& revision_id) const;
+    // Updates one cross-sheet callout while preserving its stable ID.
+    [[nodiscard]] SheetViewModel with_callout(const std::string& sheet_id,
+                                              SheetCallout replacement) const;
+    // Appends a validated cross-sheet callout to a sheet.
+    [[nodiscard]] SheetViewModel with_added_callout(const std::string& sheet_id,
+                                                    SheetCallout addition) const;
+    // Removes one cross-sheet callout from a sheet.
+    [[nodiscard]] SheetViewModel with_removed_callout(const std::string& sheet_id,
+                                                      const std::string& callout_id) const;
 private:
     SheetViewModel() = default;
     std::vector<CoordinatedView> views_;

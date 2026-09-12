@@ -83,6 +83,49 @@ void coordination_and_isolation() {
     rejects([&] { (void)original.with_schedule_placement("unknown", placement); });
     placement.id = "unknown";
     rejects([&] { (void)original.with_schedule_placement("a", placement); });
+
+    auto revision = original.sheets().front().revisions.front();
+    revision.description = "Issued for permit";
+    const auto changed_revision = original.with_revision("a", revision);
+    require(changed_revision.sheets().front().revisions.front() == revision,
+            "revision metadata should update through the typed model");
+    require(changed_revision.sheets().front().callouts == original.sheets().front().callouts,
+            "revision edits must preserve cross-sheet callouts");
+    auto added_revision = revision;
+    added_revision.id = "03";
+    const auto with_revision = original.with_added_revision("a", added_revision);
+    require(with_revision.sheets().front().revisions.size() == 3,
+            "revision additions should be validated and persisted");
+    require(with_revision.with_removed_revision("a", "03").to_json() == original.to_json(),
+            "revision removal should restore the original graph");
+    rejects([&] { (void)original.with_revision("unknown", revision); });
+    revision.id = "missing";
+    rejects([&] { (void)original.with_revision("a", revision); });
+    rejects([&] { (void)original.with_removed_revision("a", "missing"); });
+
+    auto callout = original.sheets().front().callouts.front();
+    callout.label = "A / A202";
+    callout.x_mm = 60;
+    const auto changed_callout = original.with_callout("a", callout);
+    require(changed_callout.sheets().front().callouts.front() == callout,
+            "callout metadata should update through the typed model");
+    auto added_callout = callout;
+    added_callout.id = "elevation-marker";
+    added_callout.target_viewport_id = "elevation-main";
+    added_callout.x_mm = 100;
+    const auto with_callout = original.with_added_callout("a", added_callout);
+    require(with_callout.sheets().front().callouts.size() == 2,
+            "callout additions should be validated and persisted");
+    require(with_callout.with_removed_callout("a", "elevation-marker").to_json() == original.to_json(),
+            "callout removal should restore the original graph");
+    rejects([&] { (void)original.with_callout("unknown", callout); });
+    callout.id = "missing";
+    rejects([&] { (void)original.with_callout("a", callout); });
+    added_callout = original.sheets().front().callouts.front();
+    added_callout.id = "bad-target";
+    added_callout.target_viewport_id = "missing";
+    rejects([&] { (void)original.with_added_callout("a", added_callout); });
+    rejects([&] { (void)original.with_removed_callout("a", "missing"); });
     sheet.id = "unknown";
     rejects([&] { (void)original.with_sheet(sheet); });
     plan.id = "unknown";

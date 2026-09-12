@@ -3881,6 +3881,38 @@ int main(int argc, char** argv) {
             "schedule placement edit must persist its page bounds");
     require(window.undoCommand() && window.redoCommand(),
             "schedule placement edit must participate in normal document history");
+    const auto revision_id = window.addSheetRevision(QStringLiteral("sheet-1"),
+                                                     QStringLiteral("2026-09-12"),
+                                                     QStringLiteral("Permit set"));
+    require(!revision_id.isEmpty(), "sheet revision should be created through Document history");
+    auto sheet_with_revision = sketch::decode_sheet_view_entity(
+        window.document().snapshot().entities().at("sheet-view-1"));
+    require(sheet_with_revision.sheets().front().revisions.size() == 1 &&
+                sheet_with_revision.sheets().front().revisions.front().id == revision_id.toStdString(),
+            "sheet revision should persist in the canonical sheet/view entity");
+    require(window.editSheetRevision(QStringLiteral("sheet-1"), revision_id,
+                                     QStringLiteral("2026-09-13"), QStringLiteral("Issued set")),
+            "sheet revision edit should use the typed command path");
+    require(window.undoCommand() && window.redoCommand(),
+            "sheet revision edit must participate in normal document history");
+    const auto callout_id = window.addSheetCallout(QStringLiteral("sheet-1"),
+                                                   QStringLiteral("Section A"),
+                                                   QStringLiteral("sheet-1"),
+                                                   QStringLiteral("viewport-section"),
+                                                   QStringLiteral("30"), QStringLiteral("30"));
+    require(!callout_id.isEmpty(), "sheet callout should be created through Document history");
+    auto sheet_with_callout = sketch::decode_sheet_view_entity(
+        window.document().snapshot().entities().at("sheet-view-1"));
+    require(sheet_with_callout.sheets().front().callouts.size() == 1 &&
+                sheet_with_callout.sheets().front().callouts.front().id == callout_id.toStdString(),
+            "sheet callout should persist in the canonical sheet/view entity");
+    require(window.editSheetCallout(QStringLiteral("sheet-1"), callout_id,
+                                    QStringLiteral("Section A / A101"), QStringLiteral("sheet-1"),
+                                    QStringLiteral("viewport-section"), QStringLiteral("35"),
+                                    QStringLiteral("35")),
+            "sheet callout edit should use the typed command path");
+    require(window.undoCommand() && window.redoCommand(),
+            "sheet callout edit must participate in normal document history");
     const auto revision_before_pdf = window.document().revision();
     require(window.exportDraftPdf(pdf_path_qstring), "draft PDF export should succeed locally");
     require(std::filesystem::file_size(pdf_path) > 0, "draft PDF should be nonempty");
@@ -3902,8 +3934,9 @@ int main(int argc, char** argv) {
             "draft SVG should be readable for schedule placement verification");
     const auto svg_text = svg_output.readAll();
     require(svg_text.contains("DOORS SCHEDULE") && svg_text.contains("ELEVATION") &&
-                svg_text.contains("SECTION"),
-            "draft SVG should render the persisted schedule and coordinated view captions");
+                svg_text.contains("SECTION") && svg_text.contains("Issued set") &&
+                svg_text.contains("Section A / A101"),
+            "draft SVG should render schedules, coordinated captions, revisions and callouts");
     svg_output.close();
     const auto svg_fingerprint_path = std::filesystem::path(svg_path.wstring() + L".fingerprint.json");
     require(std::filesystem::file_size(svg_fingerprint_path) > 0,
