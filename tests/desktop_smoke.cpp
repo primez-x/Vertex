@@ -1298,17 +1298,17 @@ void test_vertical_levels_workflow() {
 void test_calculation_deduction_workflow() {
     using namespace sketch;
     desktop::MainWindow window;
-    const auto outer_id = window.createBoundary(
+    const auto outer_id = window.createRoomBoundary(
         Boundary{{{{0.0, 0.0}, {10.0, 0.0}, 0.0},
                   {{10.0, 0.0}, {10.0, 10.0}, 0.0},
                   {{10.0, 10.0}, {0.0, 10.0}, 0.0},
                   {{0.0, 10.0}, {0.0, 0.0}, 0.0}}});
-    const auto hole_id = window.createBoundary(
+    const auto hole_id = window.createRoomBoundary(
         Boundary{{{{2.0, 2.0}, {4.0, 2.0}, 0.0},
                   {{4.0, 2.0}, {4.0, 4.0}, 0.0},
                   {{4.0, 4.0}, {2.0, 4.0}, 0.0},
                   {{2.0, 4.0}, {2.0, 2.0}, 0.0}}});
-    const auto outside_id = window.createBoundary(
+    const auto outside_id = window.createRoomBoundary(
         Boundary{{{{20.0, 20.0}, {22.0, 20.0}, 0.0},
                   {{22.0, 20.0}, {22.0, 22.0}, 0.0},
                   {{22.0, 22.0}, {20.0, 22.0}, 0.0},
@@ -1383,7 +1383,8 @@ void test_calculation_deduction_workflow() {
                 deduction_list->item(0)->text().contains(QStringLiteral("4.00 m²")),
             "calculation inspector should show the applied deduction trace");
     auto* net = window.findChild<QLabel*>(QStringLiteral("calculationNetArea"));
-    require(net && net->text().contains(QStringLiteral("96.00 m²")),
+    auto* calculation_status = window.findChild<QLabel*>(QStringLiteral("calculationStatus"));
+    require(net && calculation_status && net->text().contains(QStringLiteral("96.00 m²")),
             "net area should subtract the contained deduction exactly once");
     require(window.undoCommand(), "deduction edit should be undoable");
     require(!window.document().snapshot().entities().at(outer_id.toStdString()).properties.contains("deduction_ids") &&
@@ -1392,6 +1393,32 @@ void test_calculation_deduction_workflow() {
     require(window.document().snapshot().entities().at(outer_id.toStdString()).properties.at("deduction_ids").at(0) ==
                 hole_id.toStdString(),
             "redo should restore the explicit deduction reference");
+
+    const auto phases = ModelPhases::create(
+        {outer_id.toStdString(), hole_id.toStdString()},
+        {outer_id.toStdString(), hole_id.toStdString()},
+        {{"demolish-hole", "Remove deduction", {hole_id.toStdString()}, {}}});
+    auto phase_entity = Entity::create("model_phases", {{"model", phases.to_json()}});
+    phase_entity.id = "calculation-phases";
+    window.document().apply(ApplyEntityChanges{
+        window.document().revision(), {EntityChange::upsert(phase_entity)}, {},
+        "add calculation phase fixture"});
+    require(window.selectEntity(outer_id),
+            "calculation phase fixture should refresh the selected boundary");
+    require(!calculation_status->text().contains(QStringLiteral("blocked"), Qt::CaseInsensitive) &&
+                net->text().contains(QStringLiteral("96.00 m²")),
+            "baseline phase should retain the selected deduction total");
+    require(window.selectRemodelingAlternative(QStringLiteral("demolish-hole")),
+            "calculation phase selection should use the typed document command");
+    require(calculation_status->text().contains(QStringLiteral("blocked"), Qt::CaseInsensitive) &&
+                calculation_status->text().contains(QStringLiteral("hidden by the active design phase"),
+                                                    Qt::CaseInsensitive),
+            "a visible area with a demolished deduction must block stale totals explicitly");
+    const auto phase_undo = window.undoCommand();
+    require(phase_undo && window.selectedEntityId() == outer_id &&
+                !calculation_status->text().contains(QStringLiteral("blocked"), Qt::CaseInsensitive) &&
+                net->text().contains(QStringLiteral("96.00 m²")),
+            "undoing a phase selection should restore the baseline calculation");
 }
 
 }  // namespace

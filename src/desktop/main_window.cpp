@@ -7089,13 +7089,23 @@ public:
             return false;
         }
         try {
+            const auto selection_before = m_selected_id;
             if (m_recovery_ledger.empty()) m_document->undo(m_document->revision());
             else {
                 requireWorkspaceDocument();
                 auto edit = m_project_workspace->prepare_undo();
                 commitWorkspaceEdit(edit);
             }
-            m_selected_id.clear();
+            // Keep the inspector context across edits that leave the selected
+            // entity in the document. Creation and deletion commands already
+            // clear or replace the selection at their mutation boundary, so a
+            // missing identity still fails closed here.
+            if (!selection_before.isEmpty() &&
+                has_entity(*m_document, selection_before)) {
+                m_selected_id = selection_before;
+            } else {
+                m_selected_id.clear();
+            }
             clearError();
             refresh();
             return true;
@@ -7115,11 +7125,18 @@ public:
             return false;
         }
         try {
+            const auto selection_before = m_selected_id;
             if (m_recovery_ledger.empty()) m_document->redo(m_document->revision());
             else {
                 requireWorkspaceDocument();
                 auto edit = m_project_workspace->prepare_redo();
                 commitWorkspaceEdit(edit);
+            }
+            if (!selection_before.isEmpty() &&
+                has_entity(*m_document, selection_before)) {
+                m_selected_id = selection_before;
+            } else if (!selection_before.isEmpty()) {
+                m_selected_id.clear();
             }
             clearError();
             refresh();
@@ -11485,12 +11502,29 @@ private:
 
         try {
             const auto& entities = snapshot.entities();
+            // View filters are presentation-only and must never change area
+            // totals.  The active design phase is semantic, however: a
+            // demolished boundary cannot contribute to a selected total, and
+            // a visible boundary with a hidden deduction is an explicit stale
+            // relationship rather than a silently changed number.
+            const auto phase_visible_ids = visible_project_entities_with_phase(
+                snapshot, ProjectViewFilter{});
+            if (!phase_visible_ids.contains(selected->id)) {
+                throw std::invalid_argument(
+                    "selected boundary is hidden by the active design phase");
+            }
             std::set<std::string, std::less<>> referenced_deductions;
             for (const auto& [id, entity] : entities) {
                 if (!is_closed_boundary_entity(entity.type)) continue;
+                if (!phase_visible_ids.contains(id)) continue;
                 for (const auto& deduction_id : read_deduction_ids(entity.properties)) {
                     if (deduction_id == id) {
                         throw std::invalid_argument("Boundary " + id + " cannot deduct itself");
+                    }
+                    if (!phase_visible_ids.contains(deduction_id)) {
+                        throw std::invalid_argument("Boundary " + id +
+                                                    " references deduction " + deduction_id +
+                                                    " hidden by the active design phase");
                     }
                     referenced_deductions.insert(deduction_id);
                 }
@@ -11499,6 +11533,9 @@ private:
             areas.reserve(entities.size());
             for (const auto& [id, entity] : entities) {
                 if (!is_closed_boundary_entity(entity.type)) {
+                    continue;
+                }
+                if (!phase_visible_ids.contains(id)) {
                     continue;
                 }
                 if (referenced_deductions.contains(id)) {
