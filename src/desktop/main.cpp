@@ -205,6 +205,10 @@ int main(int argc, char** argv) {
     }
     window.show();
 
+    if (!smoke) {
+        QTimer::singleShot(0, &window, [&window] { (void)window.offerStartupRecovery(); });
+    }
+
     if (smoke) {
         const auto output = smoke_output_path(application.arguments());
         const auto native_output = native_smoke_output_path(application.arguments());

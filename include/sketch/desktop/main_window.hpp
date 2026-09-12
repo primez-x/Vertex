@@ -267,6 +267,9 @@ public:
     // Session-specific recovery copy, separate from the ordinary destination.
     // Empty until scheduling begins for a workspace-backed recovery project.
     [[nodiscard]] QString recoveryCopyPath() const;
+    // Offers local startup recovery only when an unsaved recovery copy is
+    // available. Returns true when the selected copy was opened.
+    [[nodiscard]] bool offerStartupRecovery();
     [[nodiscard]] bool exportDraftPdf(const QString& path);
     [[nodiscard]] bool exportDraftSvg(const QString& path);
     [[nodiscard]] bool exportNativeViewImage(const QString& path);

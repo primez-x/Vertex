@@ -84,6 +84,21 @@ void discovery() {
             a.metadata->explicitly_saved_document_revision == snapshot.saved_revision_optional() &&
             a.file_sha256 == recovery_receipt.file_sha256 && a.source_match == RecoverySourceMatch::matched,
             "valid candidate metadata and match");
+    require(!recovery_candidate_has_unsaved_work(a),
+            "a recovery copy at its saved generation must not trigger startup recovery");
+    auto edited = a;
+    edited.metadata->edited_generation = edited.metadata->saved_edited_generation + 1;
+    require(recovery_candidate_has_unsaved_work(edited),
+            "a recovery copy ahead of its saved generation must trigger startup recovery");
+    auto checkpoint_only = a;
+    checkpoint_only.metadata->checkpoint_generation =
+        checkpoint_only.metadata->autosaved_checkpoint_generation + 1;
+    require(recovery_candidate_has_unsaved_work(checkpoint_only),
+            "a recovery copy with an unsaved pointer checkpoint must trigger startup recovery");
+    auto rejected = edited;
+    rejected.loadable = false;
+    require(!recovery_candidate_has_unsaved_work(rejected),
+            "unsupported recovery candidates must never trigger startup recovery");
     require(found.candidates[1].loadable && found.candidates[1].source_match == RecoverySourceMatch::hash_mismatch,
             "hash mismatch must not match source");
     for (std::size_t i : {2U, 3U})

@@ -60,6 +60,13 @@ RecoverySourceMatch match(const RecoveryCopyRecord& record, const fs::path& sour
 }
 }  // namespace
 
+bool recovery_candidate_has_unsaved_work(const RecoveryCandidate& candidate) noexcept {
+    if (!candidate.loadable || candidate.duplicate_archive_id || !candidate.metadata) return false;
+    const auto& metadata = *candidate.metadata;
+    return metadata.edited_generation > metadata.saved_edited_generation ||
+           metadata.checkpoint_generation > metadata.saved_edited_generation;
+}
+
 RecoveryDiscoveryResult discover_recovery_copies(const std::optional<fs::path>& source_project,
                                                   const fs::path& recovery_directory) {
     RecoveryDiscoveryResult result;

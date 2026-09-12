@@ -2,16 +2,21 @@
 #include "sketch/document_digest.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/project_workspace.hpp"
+#include "sketch/recovery_discovery.hpp"
 #include "sketch/workspace_history_record.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <QApplication>
-#include <QTemporaryDir>
+#include <QAbstractButton>
 #include <QElapsedTimer>
+#include <QKeyEvent>
+#include <QMessageBox>
+#include <QMouseEvent>
+#include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QThread>
 #include <QTimer>
-#include <QMouseEvent>
-#include <QKeyEvent>
+#include <QUuid>
 
 #include <filesystem>
 #include <fstream>
@@ -34,6 +39,86 @@ template<class Predicate> void wait_until(Predicate predicate, const char* messa
     }
     require(predicate(), message);
 }
+
+void test_startup_recovery_selection() {
+    using namespace sketch;
+    const auto original_name = QCoreApplication::applicationName();
+    const auto original_test_mode = QStandardPaths::isTestModeEnabled();
+    QStandardPaths::setTestModeEnabled(true);
+    QCoreApplication::setApplicationName(QStringLiteral("PropertyStudio-startup-recovery-") +
+        QUuid::createUuid().toString(QUuid::WithoutBraces));
+    const auto recovery_directory = std::filesystem::path(
+        QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation).toStdWString()) /
+        "recovery";
+    std::filesystem::create_directories(recovery_directory);
+    const auto recovery_path = recovery_directory / "recovery-startup.bldproj";
+    std::string recovered_document_id;
+    {
+        ProjectWorkspace workspace(Document::create().snapshot());
+        auto edit = workspace.prepare(NameRevision{workspace.snapshot().revision(), "Startup edit"});
+        (void)workspace.commit(edit);
+        const auto snapshot = workspace.capture();
+        recovered_document_id = snapshot.document().document_id();
+        const auto history = capture_workspace_history_record(snapshot);
+        RecoveryCopyRecord record;
+        record.archive_id = "startup-recovery";
+        record.owner_token = "test-owner";
+        record.document_id = snapshot.document().document_id();
+        record.workspace_epoch = snapshot.epoch();
+        // Model a recovery capture that is one authoring generation ahead of
+        // the last explicit save. The copy metadata is what startup uses to
+        // decide whether asking the user is warranted.
+        record.edited_generation = 1;
+        record.checkpoint_generation = 1;
+        record.autosaved_checkpoint_generation = 1;
+        record.saved_edited_generation = 0;
+        const RecoveryLedger ledger{
+            {"history", "workspace_history",
+             encode_workspace_history_record(snapshot.document(), history, snapshot.active_boundary())},
+            {"copy", "recovery_copy", encode_recovery_copy_record(record)}};
+        (void)ProjectStore::save_archive(recovery_path,
+            ProjectArchiveSnapshot(snapshot.document(), ledger, ArchiveRole::recovery_copy));
+    }
+    bool responded = false;
+    {
+        desktop::MainWindow window;
+        window.setAttribute(Qt::WA_DontShowOnScreen, true);
+        window.show();
+        QApplication::processEvents();
+        QTimer responder;
+        responder.setInterval(1);
+        QObject::connect(&responder, &QTimer::timeout, &window, [&] {
+            auto* message = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+            if (message == nullptr || responded) return;
+            auto* accept = message->button(QMessageBox::Yes);
+            require(accept != nullptr, "startup recovery prompt must offer recovery");
+            responded = true;
+            accept->click();
+        });
+        responder.start();
+        QTimer timeout;
+        timeout.setSingleShot(true);
+        timeout.setInterval(5000);
+        QObject::connect(&timeout, &QTimer::timeout, &window, [&] {
+            for (auto* widget : QApplication::topLevelWidgets()) {
+                if (auto* dialog = qobject_cast<QDialog*>(widget)) dialog->reject();
+            }
+        });
+        timeout.start();
+        const auto opened = window.offerStartupRecovery();
+        timeout.stop();
+        require(opened, "startup recovery prompt must open the selected copy");
+        responder.stop();
+        require(responded && window.document().snapshot().document_id() == recovered_document_id,
+                "startup recovery must load the persisted recovery document");
+    }
+    std::error_code cleanup_error;
+    std::filesystem::remove_all(recovery_directory, cleanup_error);
+    require(!cleanup_error, "startup recovery fixture cleanup");
+    QCoreApplication::setApplicationName(original_name);
+    QStandardPaths::setTestModeEnabled(original_test_mode);
+}
+
 void run() {
     using namespace sketch;
     QTemporaryDir temporary;
@@ -275,6 +360,7 @@ void run() {
         require(constrained.redoCommand() && constrained.saveProject(),
             "workspace boundary redo preserves saveable recovery ledger");
     }
+    test_startup_recovery_selection();
 }
 }
 

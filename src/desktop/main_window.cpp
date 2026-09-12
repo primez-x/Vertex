@@ -6328,6 +6328,14 @@ public:
             } catch (const StorageError& error) {
                 if (error.code() != StorageErrorCode::unsupported_format) throw;
                 auto loaded = ProjectStore::load_archive(candidate_path, ArchiveRole::ordinary);
+                if (!loaded.supported()) {
+                    // The native Recover action intentionally feeds the same
+                    // guarded open path. Recovery-role archives are accepted
+                    // here only after their role, ledger and workspace state
+                    // pass the archive decoder; opaque or mismatched files
+                    // remain blocked.
+                    loaded = ProjectStore::load_archive(candidate_path, ArchiveRole::recovery_copy);
+                }
                 if (!loaded.supported())
                     throw std::runtime_error("This recovery archive is unsupported and cannot be opened for editing.");
                 candidate_workspace = ProjectWorkspace::restore_archive(
@@ -8734,6 +8742,14 @@ private:
     bool confirmDirtyTransition(const QString& title, const QString& message) {
         waitForSaveBarrier();
         if (!confirmDiscardBoundaryDraft()) return false;
+        // A new window contains only the generated scaffold. It has no user
+        // edits, even though Document quite correctly reports an absent saved
+        // marker as dirty. Let startup recovery replace that pristine shell
+        // without presenting a misleading Save/Discard prompt.
+        if (m_file_path.empty() && m_recovery_ledger.empty() && m_document->revision() == 1 &&
+            !hasBoundaryDraftChanges()) {
+            return true;
+        }
         if (!projectDirty() || !m_document->is_editable()) {
             return true;
         }
@@ -11288,19 +11304,20 @@ private:
         }
     }
 
-    void recoverFromDialog() {
+    bool recoverFromDialog(bool startup_only = false, bool inform_if_empty = true) {
         const auto directory = filesystem_path(
             QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)) / "recovery";
         const auto discovered = discover_recovery_copies(std::nullopt, directory);
         if (!discovered.directory_diagnostic.empty()) {
             setError(QStringLiteral("Recovery discovery failed: %1")
                          .arg(QString::fromUtf8(discovered.directory_diagnostic.c_str())));
-            return;
+            return false;
         }
         QStringList choices;
         std::vector<QString> paths;
         for (const auto& candidate : discovered.candidates) {
-            if (!candidate.loadable || candidate.duplicate_archive_id) continue;
+            if (!candidate.loadable || candidate.duplicate_archive_id ||
+                (startup_only && !recovery_candidate_has_unsaved_work(candidate))) continue;
             auto label = QString::fromStdWString(candidate.path.wstring());
             if (candidate.metadata) {
                 label += QStringLiteral("  [session %1]")
@@ -11310,19 +11327,45 @@ private:
             paths.push_back(QString::fromStdWString(candidate.path.wstring()));
         }
         if (choices.isEmpty()) {
-            QMessageBox::information(owner, QStringLiteral("Recover project"),
-                                     QStringLiteral("No valid local recovery copies were found."));
-            return;
+            if (inform_if_empty) {
+                QMessageBox::information(owner, QStringLiteral("Recover project"),
+                                         QStringLiteral("No valid local recovery copies were found."));
+            }
+            return false;
+        }
+        if (startup_only && choices.size() == 1) {
+            const auto answer = QMessageBox::question(
+                owner, QStringLiteral("Recover previous work"),
+                QStringLiteral("An unsaved local recovery copy is available:\n%1\n\nRecover it now?")
+                    .arg(choices.front()),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+            return answer == QMessageBox::Yes && openProject(paths.front());
         }
         bool accepted = false;
         const auto selected = QInputDialog::getItem(
             owner, QStringLiteral("Recover project"),
             QStringLiteral("Choose a local recovery copy:"), choices, 0, false, &accepted);
-        if (!accepted || selected.isEmpty()) return;
+        if (!accepted || selected.isEmpty()) return false;
         const auto index = choices.indexOf(selected);
-        if (index >= 0 && index < static_cast<int>(paths.size())) openProject(paths[index]);
+        return index >= 0 && index < static_cast<int>(paths.size()) && openProject(paths[index]);
     }
 
+public:
+    bool offerStartupRecovery() {
+        // Startup is called with a fresh untitled document. Keep this guard so
+        // future callers cannot replace a live project or draft unexpectedly.
+        if (!m_file_path.empty() || hasBoundaryDraftChanges()) return false;
+        // The default scaffold is the only revision in a new window. It is
+        // intentionally unsaved, but it has no user edits to protect.
+        if (m_recovery_ledger.empty()) {
+            if (m_document->revision() > 1) return false;
+        } else if (projectDirty()) {
+            return false;
+        }
+        return recoverFromDialog(true, false);
+    }
+
+private:
     struct ModalContext {
         std::shared_ptr<Document> document;
         Revision revision;
@@ -12123,6 +12166,10 @@ bool MainWindow::saveProject() {
 
 QString MainWindow::recoveryCopyPath() const {
     return m_impl->recoveryCopyPath();
+}
+
+bool MainWindow::offerStartupRecovery() {
+    return m_impl->offerStartupRecovery();
 }
 
 bool MainWindow::saveProjectAs(const QString& path) {

@@ -10,8 +10,9 @@ original ledger and source hash, without a reusable document snapshot. The
 complete original archive remains on disk for future exact-byte handling. This is an
 internal persistence API; core workspace restoration now consumes the validated
 decoded aggregate. Desktop has guarded v4 open/save and workspace-command
-coverage; the reusable save queue and autosave scheduler are implemented, while
-desktop scheduling, restart selection, and recovery UI remain open.
+coverage; the reusable save queue, autosave scheduler, and startup recovery
+selection are implemented. Retention cleanup and final restore qualification
+remain open.
 
 Version 4 keeps the five existing document tables and adds one STRICT table:
 
@@ -51,6 +52,7 @@ erase unknown destination records, or implicitly change an existing archive's
 role. A legacy destination can be upgraded with its expected hash and a retained
 backup; promotion and independent-copy operations remain separate work.
 
-This API does not supply a live save acknowledgement, long-lived workspace
-ownership, automatic recovery selection, or exact-byte copying of opaque files.
-Those integration requirements remain open.
+The desktop now supplies live save acknowledgement, long-lived workspace
+ownership, and startup selection for unsaved unbound recovery copies. Exact-byte
+copying of opaque files, retention cleanup, and final restore authorization
+remain separate qualification work.

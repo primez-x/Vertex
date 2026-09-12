@@ -174,8 +174,9 @@ actual resource policy. Current document/draft values are detached; archival
 inputs are shared immutable values. Captures survive edits and owner destruction.
 Capture grants no save acknowledgement or filesystem ownership authority.
 Persisted counters are restored by the core v4 archive route. Desktop
-workspace-command routing, background I/O, and save watermarks are integrated;
-recovery discovery and restart selection remain open.
+workspace-command routing, background I/O, save watermarks, and startup
+selection of unsaved unbound recovery copies are integrated; retention cleanup
+and broader restart qualification remain open.
 
 The v24r full integrated checkpoint passes 74/74 tests in Debug (94.81 seconds)
 and Release (20.37 seconds). All 227
@@ -200,10 +201,10 @@ The workspace publication API passed independent source review. It has private
 candidate documents, instance/epoch/full-source checks, detached previews and
 no mutable Document escape. Core archive restoration now validates and detaches
 the decoded aggregate before installing it in a fresh workspace. The guarded
-desktop open path now uses this API. Internal aggregate v4 persistence and the
-save acknowledgement boundary are implemented and used by the guarded desktop
-save path; remaining restart recovery, retention cleanup, and production
-qualification remain open.
+desktop open path now uses this API. Internal aggregate v4 persistence, the
+save acknowledgement boundary, and startup selection of unsaved unbound
+recovery copies are implemented and used by the guarded desktop paths;
+retention cleanup and production qualification remain open.
 Explicit Revise Input is implemented in memory: canonical replay regenerates
 IDs, preserves local history/counter floors and opaque extensions, and records
 the original retired namespace and finish event on a fresh activation bound to

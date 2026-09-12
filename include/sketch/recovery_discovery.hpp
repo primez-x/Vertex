@@ -33,6 +33,13 @@ struct RecoveryDiscoveryResult {
     std::string directory_diagnostic;
 };
 
+// Returns true only for a validated candidate whose persisted workspace has
+// moved beyond its explicit-save generation. The checkpoint comparison also
+// retains pointer-only authoring state, which can advance independently of
+// semantic edits.
+[[nodiscard]] bool recovery_candidate_has_unsaved_work(
+    const RecoveryCandidate& candidate) noexcept;
+
 // Read-only, nonrecursive discovery. A missing directory is an empty result.
 // Paths containing '..', symlinks and Windows reparse points are rejected.
 // Metadata paths are compared lexically and are never opened or resolved.

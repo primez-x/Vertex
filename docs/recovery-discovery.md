@@ -37,5 +37,10 @@ corrupt archives, duplicate IDs, traversal rejection, filtering, missing paths,
 and unchanged source/recovery hashes. A symlink exclusion check is exercised when
 the environment permits creating symlinks. The native desktop's **Recover…**
 action uses this read-only list to let the user choose a loadable copy before
-the normal guarded open path; it does not simulate concurrent path replacement,
-retention cleanup, or final restore authorization.
+the normal guarded open path. On a fresh launch the shell also offers a single
+unsaved unbound copy directly, or presents the same list when several copies are
+available. Declining the prompt leaves the new workspace untouched; the explicit
+Recover action remains available. Saved-project recovery copies stay in their
+project directory and are discovered when that directory is chosen. The
+implementation does not simulate concurrent path replacement, retention cleanup,
+or final restore authorization.
