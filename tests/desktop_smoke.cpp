@@ -97,9 +97,10 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
         auto* toolbar = window.findChild<QToolBar*>(QStringLiteral("primaryToolbar"));
             auto* more_tools = window.findChild<QToolButton*>(QStringLiteral("moreTools"));
             auto* theme_menu = window.findChild<QToolButton*>(QStringLiteral("themeMenu"));
-            require(toolbar != nullptr && toolbar->minimumHeight() == 14 && toolbar->maximumHeight() == 14 &&
+            require(toolbar != nullptr && toolbar->minimumHeight() == 12 && toolbar->maximumHeight() == 12 &&
+                    toolbar->height() == 12 &&
                     toolbar->toolButtonStyle() == Qt::ToolButtonIconOnly &&
-                    toolbar->iconSize() == QSize(10, 10) && more_tools && theme_menu &&
+                    toolbar->iconSize() == QSize(8, 8) && more_tools && theme_menu &&
                     more_tools->toolButtonStyle() == Qt::ToolButtonIconOnly &&
                     theme_menu->toolButtonStyle() == Qt::ToolButtonIconOnly &&
                     !more_tools->accessibleName().isEmpty() && !theme_menu->accessibleName().isEmpty() &&
@@ -935,6 +936,66 @@ void test_six_form_authoring_and_quantity_history() {
             "draft SVG should contain vector markup and its draft stamp");
 }
 
+void test_contextual_roof_dimension_inspector() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    const SlopedRoofPanel flat_roof{
+        "context-roof", {0.0, 0.0, 4.0}, 0.0, 4.0, 3.0, 0.0, 0.0, 0.2, 0.1};
+    const auto source = encode_building_entity(flat_roof, {{"fixture_metadata", "retained"}});
+    const auto id = window.commitBuildingObject(source, window.document().revision());
+    require(!id.isEmpty() && window.selectEntity(id), "contextual roof fixture should be selectable");
+    QApplication::processEvents();
+
+    auto* group = window.findChild<QGroupBox*>(QStringLiteral("roofProperties"));
+    auto* run = window.findChild<QLineEdit*>(QStringLiteral("roofRun"));
+    auto* rise = window.findChild<QLineEdit*>(QStringLiteral("roofRise"));
+    auto* thickness = window.findChild<QLineEdit*>(QStringLiteral("roofThickness"));
+    auto* pitch = window.findChild<QLabel*>(QStringLiteral("roofPitch"));
+    auto* apply = window.findChild<QPushButton*>(QStringLiteral("applyRoofProperties"));
+    require(group && run && rise && thickness && pitch && apply && !group->isHidden() &&
+                group->isEnabled() && !run->text().isEmpty() && !thickness->text().isEmpty() &&
+                pitch->text() == QStringLiteral("0.000°"),
+            "selecting a flat roof should expose compact contextual dimensions and zero pitch");
+
+    const auto before_revision = window.document().revision();
+    const auto before = window.document().snapshot().entities().at(id.toStdString());
+    rise->setText(QStringLiteral("1 m"));
+    apply->click();
+    QApplication::processEvents();
+    require(window.document().revision() == before_revision + 1,
+            "applying contextual roof dimensions should create one history entry");
+    const auto edited = window.document().snapshot().entities().at(id.toStdString());
+    require(edited.extensions == before.extensions && edited.properties.at("run_m") == before.properties.at("run_m") &&
+                edited.properties.at("thickness_m") == before.properties.at("thickness_m") &&
+                std::abs(edited.properties.at("rise_m").get<double>() - 1.0) < 1e-9 &&
+                std::abs(edited.properties.at("pitch_rad").get<double>() - std::atan(0.25)) < 1e-12,
+            "contextual roof editing should preserve untouched dimensions and derive pitch");
+    auto* plan = dynamic_cast<desktop::PlanCanvas*>(
+        window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    require(plan && std::any_of(plan->entities().begin(), plan->entities().end(), [&](const auto& entry) {
+                return entry.id == id && !entry.segments.empty();
+            }),
+            "contextual roof editing should refresh the shared plan projection");
+
+    require(window.undoCommand() &&
+                window.document().snapshot().entities().at(id.toStdString()) == before &&
+                window.redoCommand() &&
+                window.document().snapshot().entities().at(id.toStdString()).properties.at("rise_m") == 1.0,
+            "contextual roof dimensions should support exact undo and redo");
+    const auto invalid_revision = window.document().revision();
+    rise->setText(QStringLiteral("-1 m"));
+    apply->click();
+    require(window.document().revision() == invalid_revision &&
+                window.lastError().contains(QStringLiteral("zero or greater")),
+            "negative contextual roof rise should be rejected without history mutation");
+
+    const auto wall_id = window.createStraightWall({0.0, 0.0}, {2.0, 0.0});
+    require(!wall_id.isEmpty() && window.selectEntity(wall_id) && group->isHidden(),
+            "contextual roof dimensions should hide for non-roof selections");
+    require(window.selectEntity(id) && !group->isHidden(),
+            "contextual roof dimensions should return when the roof is reselected");
+}
+
 void test_design_phase_workflow() {
     using namespace sketch;
     desktop::MainWindow window;
@@ -1549,6 +1610,7 @@ int main(int argc, char** argv) {
     test_vertical_levels_workflow();
     test_assembly_catalog_workflow();
     test_calculation_deduction_workflow();
+    test_contextual_roof_dimension_inspector();
     {
         QTemporaryDir stamp_directory;
         require(stamp_directory.isValid(), "stamp test directory should be available");

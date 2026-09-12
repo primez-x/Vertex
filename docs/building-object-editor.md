@@ -108,6 +108,15 @@ exactly zero rise to author a flat roof; the derived pitch then displays `0°`.
 There is no editable pitch control, so the dialog cannot submit an inconsistent
 pitch/rise pair.  Gable roofs still require a positive rise and pitch.
 
+The main-window Inspector reuses this same editor path for a selected
+`sloped_roof_panel`. Its `roofProperties` group exposes `roofRun`, `roofRise`,
+`roofThickness`, `roofPitch`, and `applyRoofProperties` without opening a
+second dialog. Applying the group captures the current document revision,
+parses only changed fields, and commits one replacement command. Negative rise,
+zero run, zero thickness, malformed quantities, read-only documents, and stale
+revisions are rejected without mutating history. The group is hidden for gable
+roofs and non-roof selections.
+
 For editing, the constructor first decodes and validates the original entity.
 Malformed or unsupported originals show an inline error and disable Submit.
 Valid edits preserve the original ID, `required` flag, extension metadata, and

@@ -2289,11 +2289,11 @@ public:
             QWidget { font-size: 13px; }
             QDialog { background: $background; }
             QToolBar#primaryToolbar { background: $surface; border: 0; border-bottom: 1px solid $border;
-                       padding: 0 2px; spacing: 0; min-height: 14px; max-height: 14px; }
-            QToolBar::separator { background: $border; width: 1px; margin: 0 2px; }
+                       padding: 0 1px; spacing: 0; min-height: 12px; max-height: 12px; }
+            QToolBar::separator { background: $border; width: 1px; margin: 0 1px; }
             QPushButton, QToolButton { color: $foreground; background: $surface;
                 border: 1px solid $border; border-radius: 8px; padding: 8px 11px; }
-            QToolBar QToolButton { border-color: transparent; padding: 0 3px; min-height: 12px; max-height: 14px; }
+            QToolBar QToolButton { border-color: transparent; padding: 0 2px; min-height: 10px; max-height: 12px; }
             QToolBar QToolButton:hover { background: $selection; border-color: $selection; }
             QToolBar QToolButton:checked { background: $selection; color: $accent; border-color: $accent; }
             QWidget#toolPanel QToolButton { padding: 6px 4px; min-height: 52px; }
@@ -2307,8 +2307,8 @@ public:
                 border: 1px solid $border; border-radius: 8px; padding: 5px 10px; min-height: 20px; }
             QComboBox { padding-right: 24px; }
             QComboBox::drop-down { border: 0; width: 24px; }
-            QToolBar QComboBox { font-size: 11px; padding: 0 3px; min-height: 12px; max-height: 14px; }
-            QToolBar QComboBox::drop-down { width: 16px; }
+            QToolBar QComboBox { font-size: 10px; padding: 0 2px; min-height: 10px; max-height: 12px; }
+            QToolBar QComboBox::drop-down { width: 14px; }
             QComboBox QAbstractItemView, QMenu { background: $surface; color: $foreground;
                 border: 1px solid $border; selection-background-color: $selection;
                 selection-color: $selectedText; padding: 4px; }
@@ -6506,6 +6506,55 @@ public:
         }
     }
 
+    bool editSelectedRoofPanelDimensions(const QString& run_text,
+                                         const QString& rise_text,
+                                         const QString& thickness_text) {
+        const auto context = captureModalContext();
+        const auto original = selectedEntity();
+        if (!original || original->type != "roof" ||
+            read_string(original->properties, "form") !=
+                std::optional<std::string>("sloped_roof_panel")) {
+            setError(QStringLiteral("Select a sloped roof panel before applying roof dimensions."));
+            return false;
+        }
+        try {
+            BuildingObjectDialog dialog(*original, m_metric_units, owner);
+            const auto set_field = [&](const char* name, const QString& value) {
+                auto* field = dialog.findChild<QLineEdit*>(QString::fromLatin1(name));
+                if (field == nullptr) {
+                    throw std::runtime_error("The roof editor is missing a dimension field.");
+                }
+                field->setText(value);
+            };
+            const auto set_if_changed = [&](const char* name, const QString& value,
+                                            const QString& original_text) {
+                if (value.trimmed() != original_text.trimmed()) {
+                    set_field(name, value);
+                }
+            };
+            // Leave untouched dialog fields at their decoded values so the
+            // existing quantity-receipt merge preserves exact expressions.
+            set_if_changed("buildingObjectRun", run_text, m_roof_run_original_text);
+            set_if_changed("buildingObjectRise", rise_text, m_roof_rise_original_text);
+            set_if_changed("buildingObjectThickness", thickness_text,
+                           m_roof_thickness_original_text);
+            if (!dialog.submit()) {
+                setError(QStringLiteral("Roof dimensions: %1").arg(dialog.lastError()));
+                return false;
+            }
+            const auto candidate = dialog.candidate();
+            if (!candidate.has_value()) {
+                setError(QStringLiteral("Roof dimensions did not produce an editable candidate."));
+                return false;
+            }
+            if (!modalContextUnchanged(context)) return false;
+            return !commitBuildingObject(*candidate, context.revision, true).isEmpty();
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Roof dimensions: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     bool cutSelection() {
         try {
             const auto source = authoringSnapshot();
@@ -9836,16 +9885,16 @@ private:
         // through the tooltip/status tip instead of spending vertical space
         // on clipped text beside every icon.
         toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        toolbar->setIconSize(QSize(10, 10));
+        toolbar->setIconSize(QSize(8, 8));
         toolbar->setContentsMargins(0, 0, 0, 0);
         if (auto* toolbar_layout = toolbar->layout()) {
             toolbar_layout->setContentsMargins(0, 0, 0, 0);
             toolbar_layout->setSpacing(1);
         }
         // Keep the command strip compact so the canvas starts close to the
-        // window edge. A 10 px glyph plus the 12 px button content keeps the
+        // window edge. An 8 px glyph plus the 10 px button content keeps the
         // row practical for mouse input without creating a second header band.
-        toolbar->setFixedHeight(14);
+        toolbar->setFixedHeight(12);
         const auto add_toolbar_action = [this, toolbar](const QString& label, const char* icon_paths) {
             auto* action = toolbar->addAction(modern_toolbar_icon(icon_paths), label);
             action->setToolTip(label);
@@ -10425,6 +10474,36 @@ private:
         inspector_layout->addWidget(m_edit_object_button);
         QObject::connect(m_edit_object_button, &QPushButton::clicked, owner,
                          [this] { showBuildingObjectDialog(true); });
+        m_roof_properties_group = new QGroupBox(QStringLiteral("Roof dimensions"), inspector_body);
+        m_roof_properties_group->setObjectName(QStringLiteral("roofProperties"));
+        auto* roof_properties_form = new QFormLayout(m_roof_properties_group);
+        m_roof_run_edit = new QLineEdit(m_roof_properties_group);
+        m_roof_run_edit->setObjectName(QStringLiteral("roofRun"));
+        m_roof_run_edit->setToolTip(QStringLiteral("Horizontal run of the selected sloped panel"));
+        roof_properties_form->addRow(QStringLiteral("Run"), m_roof_run_edit);
+        m_roof_rise_edit = new QLineEdit(m_roof_properties_group);
+        m_roof_rise_edit->setObjectName(QStringLiteral("roofRise"));
+        m_roof_rise_edit->setToolTip(QStringLiteral("Rise; enter zero for a flat roof"));
+        roof_properties_form->addRow(QStringLiteral("Rise"), m_roof_rise_edit);
+        m_roof_thickness_edit = new QLineEdit(m_roof_properties_group);
+        m_roof_thickness_edit->setObjectName(QStringLiteral("roofThickness"));
+        m_roof_thickness_edit->setToolTip(QStringLiteral("Panel thickness measured normal to the roof"));
+        roof_properties_form->addRow(QStringLiteral("Thickness"), m_roof_thickness_edit);
+        m_roof_pitch_value = new QLabel(m_roof_properties_group);
+        m_roof_pitch_value->setObjectName(QStringLiteral("roofPitch"));
+        roof_properties_form->addRow(QStringLiteral("Derived pitch"), m_roof_pitch_value);
+        m_apply_roof_properties_button = new QPushButton(QStringLiteral("Apply roof dimensions"),
+                                                          m_roof_properties_group);
+        m_apply_roof_properties_button->setObjectName(QStringLiteral("applyRoofProperties"));
+        m_apply_roof_properties_button->setAccessibleName(QStringLiteral("Apply roof dimensions"));
+        roof_properties_form->addRow(m_apply_roof_properties_button);
+        m_roof_properties_group->setVisible(false);
+        inspector_layout->addWidget(m_roof_properties_group);
+        QObject::connect(m_apply_roof_properties_button, &QPushButton::clicked, owner, [this] {
+            (void)editSelectedRoofPanelDimensions(m_roof_run_edit->text(),
+                                                   m_roof_rise_edit->text(),
+                                                   m_roof_thickness_edit->text());
+        });
         m_delete_annotation_button = new QPushButton(QStringLiteral("Delete annotation"), inspector_body);
         m_delete_annotation_button->setObjectName(QStringLiteral("deleteAnnotation"));
         m_delete_annotation_button->setVisible(false);
@@ -11786,10 +11865,16 @@ private:
         const bool project_entity = entity.has_value() && entity->type == "property";
         const bool area_entity = entity.has_value() && is_closed_boundary_entity(entity->type);
         const bool building_object = entity && can_recognize_building_entity_type(entity->type);
+        const auto building_form = building_object
+            ? read_string(entity->properties, "form") : std::optional<std::string>{};
+        const bool sloped_roof_panel = building_object && entity->type == "roof" &&
+            building_form.has_value() && *building_form == "sloped_roof_panel";
         const bool editable_geometry = wall || opening || slab ||
             (entity && is_closed_boundary_entity(entity->type));
         m_edit_object_button->setVisible(building_object);
         m_edit_object_button->setEnabled(editable && building_object);
+        m_roof_properties_group->setVisible(false);
+        m_roof_properties_group->setEnabled(false);
         m_delete_annotation_button->setVisible(annotation_context.has_value());
         m_delete_annotation_button->setEnabled(editable && annotation_context.has_value());
         m_annotation_group->setVisible(annotation_context.has_value());
@@ -12027,8 +12112,35 @@ private:
                                                    : QStringLiteral("unknown"));
         } else if (entity->type == "slab") {
             context = QStringLiteral("Slab\nClosed profile");
+        } else if (entity->type == "roof") {
+            const auto roof_label = sloped_roof_panel
+                ? (read_number(entity->properties, "rise_m", 0.0) == 0.0
+                       ? QStringLiteral("Flat panel") : QStringLiteral("Sloped panel"))
+                : QStringLiteral("Gable roof");
+            context = QStringLiteral("Roof\n%1").arg(roof_label);
         }
         m_inspector_context->setText(context);
+        if (sloped_roof_panel) {
+            m_roof_properties_group->setVisible(true);
+            m_roof_properties_group->setEnabled(editable);
+            const auto set_roof_value = [&](QLineEdit* field, QString& original_text,
+                                            double value) {
+                QSignalBlocker blocker(field);
+                field->setText(format_length(value, m_metric_units));
+                field->setModified(false);
+                original_text = field->text();
+            };
+            set_roof_value(m_roof_run_edit, m_roof_run_original_text,
+                           read_number(entity->properties, "run_m", 0.0));
+            set_roof_value(m_roof_rise_edit, m_roof_rise_original_text,
+                           read_number(entity->properties, "rise_m", 0.0));
+            set_roof_value(m_roof_thickness_edit, m_roof_thickness_original_text,
+                           read_number(entity->properties, "thickness_m", 0.0));
+            const auto pitch = read_number(entity->properties, "pitch_rad", 0.0);
+            QSignalBlocker pitch_blocker(m_roof_pitch_value);
+            m_roof_pitch_value->setText(QStringLiteral("%1°")
+                                            .arg(pitch * 180.0 / std::numbers::pi, 0, 'f', 3));
+        }
         {
             QSignalBlocker blocker(m_length_edit);
             m_length_edit->setText(format_length(length, m_metric_units));
@@ -12914,6 +13026,15 @@ private:
     QLineEdit* m_project_subject_reference_edit{};
     QPlainTextEdit* m_project_subject_attributes_edit{};
     QPushButton* m_apply_project_details_button{};
+    QGroupBox* m_roof_properties_group{};
+    QLineEdit* m_roof_run_edit{};
+    QLineEdit* m_roof_rise_edit{};
+    QLineEdit* m_roof_thickness_edit{};
+    QLabel* m_roof_pitch_value{};
+    QPushButton* m_apply_roof_properties_button{};
+    QString m_roof_run_original_text;
+    QString m_roof_rise_original_text;
+    QString m_roof_thickness_original_text;
     QGroupBox* m_area_attributes_group{};
     QPlainTextEdit* m_area_attributes_edit{};
     QPushButton* m_apply_area_attributes_button{};

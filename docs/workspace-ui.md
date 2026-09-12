@@ -2,13 +2,20 @@
 
 Property Studio uses a Windows desktop shell designed around the canvas rather
 than a legacy menu layout. The compact top toolbar keeps file, history,
-workspace, and command actions one click away in a single 14 px hit row. The
+workspace, and command actions one click away in a single 12 px hit row. The
 primary commands use bundled icons with tooltips and accessible names; units,
 paper size, and architectural view remain short inline selectors. Secondary
 authoring and presentation commands live in the **More** menu so the primary
 row remains readable at 1366 px. Project identity is represented by the native
 window title and its unsaved marker, leaving the canvas the first visible
 content below the toolbar.
+
+The Inspector is contextual. Selecting a sloped or flat roof panel exposes
+run, rise, thickness, and derived pitch in place, with one explicit Apply
+action. A zero rise is shown as a flat panel; invalid values stay in the
+inspector and do not create a history entry. The fields use the same quantity
+parser and atomic document command as the full building-object editor, so
+exact untouched dimensions and extension metadata remain intact.
 
 Offline operation is a product guarantee and is not repeated as a persistent
 banner or badge in the drawing workspace.
