@@ -2,7 +2,7 @@
 
 Property Studio uses a Windows desktop shell designed around the canvas rather
 than a legacy menu layout. The compact top toolbar keeps file, history,
-workspace, and command actions one click away in a single 12 px hit row. The
+workspace, and command actions one click away in a single 20 px logical row. The
 primary commands use bundled icons with tooltips and accessible names; units,
 paper size, and architectural view remain short inline selectors. Secondary
 authoring and presentation commands live in the **More** menu so the primary
@@ -37,6 +37,12 @@ saved workspace profiles. Saved profiles also retain the proportions of the
 workspace navigator, tool rail, canvas, inspector, and architectural canvas/3D
 split. The map is an interaction aid only and is omitted
 from PDF, SVG, print, and native-image output.
+
+When a precision drawing tool is active, the canvas shows a small readout beside
+the pointer with the effective snapped X/Y coordinates. Once a boundary draft
+has an anchor, the same readout adds the live delta length and angle. It is an
+editing aid only: selection mode stays quiet and the readout is omitted from
+fitted/exported scenes.
 
 The toolbar glyphs are bundled inline SVG paths rendered by Qt's SVG module.
 They contain no downloaded assets or runtime web dependency. Dialogs copy the

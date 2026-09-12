@@ -68,6 +68,14 @@ visibility and the proportions of the navigator, tool rail, canvas, inspector,
 and architectural canvas/3D split; asynchronous navigation qualification and
 the complete acceptance statement remain open.
 
+Precision drawing tools now show a compact, transient cursor readout directly
+beside the pointer while a drawing tool is active. It reports the effective
+snapped X/Y coordinates and, during an anchored boundary draft, the live
+delta length and angle. The readout is deliberately absent in selection mode
+and is excluded from fitted/exported scenes, so it does not consume workspace
+area or become document output. Physical-input, DPI, and full accessibility
+qualification remain open.
+
 Drawing-sheet lifecycle is now integrated at the desktop boundary: the sheet
 settings workflow can add a validated page with coordinated viewports, remove a
 page only when graph references remain valid, and select the page used by draft

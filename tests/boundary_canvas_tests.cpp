@@ -376,6 +376,50 @@ void test_effective_cursor_matches_click() {
             "press without preceding motion must use its own snapped coordinates");
 }
 
+void test_cursor_measurement_readout_is_transient_and_contextual() {
+    PlanCanvas canvas;
+    canvas.resize(640, 480);
+    canvas.setGridEnabled(false);
+    canvas.setOverviewMapEnabled(false);
+    canvas.setTool(CanvasTool::boundary);
+
+    BoundaryDraftPreview draft;
+    draft.anchor = Vec2{0.0, 0.0};
+    draft.instruction = QStringLiteral("Place next point");
+    canvas.setBoundaryDraftPreview(draft);
+
+    const auto before_pointer = render(canvas, false);
+    const auto position = QRectF(canvas.rect()).center() + QPointF(72.0, -48.0);
+    QMouseEvent move(QEvent::MouseMove, position, position, Qt::NoButton,
+                     Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &move);
+    const auto with_pointer = render(canvas, false);
+    require(differing_pixels(before_pointer, with_pointer,
+                             QRect(0, 0, canvas.width(), canvas.height())) > 30,
+            "active boundary cursor must expose a transient measurement readout");
+
+    // Cursor guidance is an editing affordance. It must never leak into a
+    // fitted/exported scene, even when a draft and a pointer are active.
+    const auto output_before = render(canvas, true);
+    canvas.setBoundaryDraftPreview(std::nullopt);
+    canvas.setTool(CanvasTool::select);
+    const auto output_after = render(canvas, true);
+    require(images_equal(output_before, output_after),
+            "cursor measurement readout must stay out of fitted output");
+
+    // Selecting is intentionally quiet: the readout appears when a precision
+    // drawing tool is active, avoiding a permanent status label over the
+    // canvas during ordinary navigation.
+    canvas.setBoundaryDraftPreview(draft);
+    canvas.setTool(CanvasTool::boundary);
+    const auto drawing_mode = render(canvas, false);
+    canvas.setTool(CanvasTool::select);
+    const auto selected_mode = render(canvas, false);
+    require(differing_pixels(drawing_mode, selected_mode,
+                             QRect(0, 0, canvas.width(), canvas.height())) > 30,
+            "select mode must hide the cursor measurement panel");
+}
+
 void test_overview_map_navigation() {
     PlanCanvas canvas;
     canvas.resize(640, 480);
@@ -654,6 +698,7 @@ int main(int argc, char** argv) {
         }
         test_boundary_draft_rendering_and_history();
         test_effective_cursor_matches_click();
+        test_cursor_measurement_readout_is_transient_and_contextual();
         test_overview_map_navigation();
         test_site_scale_fit();
         test_arc_render_orientation();

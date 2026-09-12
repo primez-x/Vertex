@@ -1976,7 +1976,7 @@
         "tests/desktop_smoke.cpp",
         "docs/workspace-ui.md"
       ],
-      "implementation_note": "The canvas-centered shell, compact tool rail, navigator, and contextual inspector are exercised by the desktop smoke workflow; the fixed toolbar keeps the canvas close to the window edge. Cursor-adjacent measurement and the complete acceptance statement remain open."
+      "implementation_note": "The canvas-centered shell, compact tool rail, navigator, and contextual inspector are exercised by the desktop smoke workflow; the fixed toolbar keeps the canvas close to the window edge. Precision drawing now exposes a compact transient cursor readout for effective coordinates and anchored delta length/angle, excluded from fitted/exported scenes. Physical-input, DPI, and the complete acceptance statement remain open."
     },
     {
       "id": "UX-WORK-002",

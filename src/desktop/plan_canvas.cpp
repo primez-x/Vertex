@@ -78,6 +78,13 @@ double distance(Vec2 left, Vec2 right) {
     return std::hypot(left.x - right.x, left.y - right.y);
 }
 
+QString display_cursor_length(double metres, bool metric) {
+    if (!std::isfinite(metres)) return QStringLiteral("—");
+    if (metric) return QStringLiteral("%1 m").arg(metres, 0, 'f', 3);
+    constexpr double metres_per_foot = 0.3048;
+    return QStringLiteral("%1 ft").arg(metres / metres_per_foot, 0, 'f', 2);
+}
+
 Vec2 operator+(Vec2 left, Vec2 right) {
     return {left.x + right.x, left.y + right.y};
 }
@@ -491,6 +498,10 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     // world transform keeps text upright and readable at its device scale.
     drawLabels(painter, viewport, scale, view_center,
                fit_to_content || explicit_scale.has_value(), background, paper_pixels_per_mm);
+
+    if (!fit_to_content && !explicit_scale.has_value()) {
+        drawCursorReadout(painter, viewport, background);
+    }
 
     if (!fit_to_content) {
         QString instruction;
@@ -941,6 +952,69 @@ void PlanCanvas::drawReferenceGrids(QPainter& painter) const {
             painter.drawLine(QLineF(line.start.x, line.start.y, line.end.x, line.end.y));
         }
     }
+}
+
+void PlanCanvas::drawCursorReadout(QPainter& painter, const QRectF& viewport,
+                                   QColor background) const {
+    if (!m_last_mouse_position || m_tool == CanvasTool::select ||
+        !viewport.contains(*m_last_mouse_position)) {
+        return;
+    }
+    const auto raw_point = toModel(*m_last_mouse_position, viewport);
+    const auto point = snapped(raw_point);
+    if (!std::isfinite(point.x) || !std::isfinite(point.y)) return;
+
+    QString text = QStringLiteral("X %1   Y %2")
+        .arg(display_cursor_length(point.x, m_metric_units),
+             display_cursor_length(point.y, m_metric_units));
+    if (m_boundary_draft_preview && m_boundary_draft_preview->anchor) {
+        const auto anchor = *m_boundary_draft_preview->anchor;
+        const auto dx = point.x - anchor.x;
+        const auto dy = point.y - anchor.y;
+        const auto length = std::hypot(dx, dy);
+        if (std::isfinite(dx) && std::isfinite(dy) && std::isfinite(length)) {
+            const auto angle = std::atan2(dy, dx) * 180.0 / pi;
+            text += QStringLiteral("\nΔ %1   ∠ %2°")
+                .arg(display_cursor_length(length, m_metric_units))
+                .arg(angle, 0, 'f', 1);
+        }
+    }
+
+    painter.save();
+    painter.setRenderHint(QPainter::TextAntialiasing, true);
+    QFont font = painter.font();
+    font.setPixelSize(11);
+    font.setWeight(QFont::Medium);
+    painter.setFont(font);
+    const QFontMetricsF metrics(font, painter.device());
+    const QRectF text_bounds = metrics.boundingRect(QRectF(), Qt::TextExpandTabs, text);
+    const QRectF panel_bounds = text_bounds.adjusted(-9.0, -6.0, 9.0, 6.0);
+    const bool light_surface = background.lightnessF() > 0.5;
+    const auto border = light_surface ? QColor(176, 191, 211, 235)
+                                      : QColor(98, 119, 149, 245);
+    const auto surface = light_surface ? QColor(255, 255, 255, 244)
+                                       : QColor(24, 34, 49, 246);
+    const auto foreground = light_surface ? QColor(31, 48, 69)
+                                          : QColor(232, 240, 251);
+    QPointF top_left = *m_last_mouse_position + QPointF(14.0, 14.0);
+    if (top_left.x() + panel_bounds.width() > viewport.right() - 8.0) {
+        top_left.setX(m_last_mouse_position->x() - panel_bounds.width() - 14.0);
+    }
+    if (top_left.y() + panel_bounds.height() > viewport.bottom() - 8.0) {
+        top_left.setY(m_last_mouse_position->y() - panel_bounds.height() - 14.0);
+    }
+    top_left.setX(std::clamp(top_left.x(), viewport.left() + 8.0,
+                             viewport.right() - panel_bounds.width() - 8.0));
+    top_left.setY(std::clamp(top_left.y(), viewport.top() + 8.0,
+                             viewport.bottom() - panel_bounds.height() - 8.0));
+    const QRectF panel(top_left, panel_bounds.size());
+    painter.setPen(QPen(border, 1.0));
+    painter.setBrush(surface);
+    painter.drawRoundedRect(panel, 6.0, 6.0);
+    painter.setPen(foreground);
+    painter.drawText(panel.adjusted(9.0, 6.0, -9.0, -6.0),
+                     Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap, text);
+    painter.restore();
 }
 
 void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool output,

@@ -176,6 +176,8 @@ private:
     void drawGrid(QPainter& painter, const QRectF& viewport, double scale,
                   Vec2 view_center) const;
     void drawReferenceGrids(QPainter& painter) const;
+    void drawCursorReadout(QPainter& painter, const QRectF& viewport,
+                           QColor background) const;
     void drawEntity(QPainter& painter, const CanvasEntity& entity, bool output,
                     QColor background) const;
     void drawSegment(QPainter& painter, const Segment& segment) const;
