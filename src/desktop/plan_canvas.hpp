@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/geometry.hpp"
+#include "sketch/reference_grid.hpp"
 
 #include <QColor>
 #include <QImage>
@@ -69,6 +70,12 @@ struct CanvasReference {
     bool selected{false};
 };
 
+struct CanvasReferenceGrid {
+    QString id;
+    std::vector<ReferenceGridLine> lines;
+    bool visible{true};
+};
+
 struct BoundaryDraftLabel {
     Vec2 position{};
     QString text;
@@ -108,6 +115,10 @@ public:
     [[nodiscard]] const std::vector<CanvasReference>& references() const noexcept { return m_references; }
     [[nodiscard]] std::optional<CanvasReference> reference() const {
         return m_references.empty() ? std::nullopt : std::optional{m_references.front()};
+    }
+    void setReferenceGrids(std::vector<CanvasReferenceGrid> grids);
+    [[nodiscard]] const std::vector<CanvasReferenceGrid>& referenceGrids() const noexcept {
+        return m_reference_grids;
     }
     void setBoundaryPreview(std::vector<Vec2> points);
     void setWallPreview(std::optional<std::pair<Vec2, Vec2>> wall);
@@ -164,6 +175,7 @@ private:
     void updateCursor(QPointF point);
     void drawGrid(QPainter& painter, const QRectF& viewport, double scale,
                   Vec2 view_center) const;
+    void drawReferenceGrids(QPainter& painter) const;
     void drawEntity(QPainter& painter, const CanvasEntity& entity, bool output,
                     QColor background) const;
     void drawSegment(QPainter& painter, const Segment& segment) const;
@@ -180,6 +192,7 @@ private:
     std::vector<CanvasEntity> m_entities;
     std::vector<CanvasLabel> m_labels;
     std::vector<CanvasReference> m_references;
+    std::vector<CanvasReferenceGrid> m_reference_grids;
     std::vector<Vec2> m_boundary_preview;
     std::optional<std::pair<Vec2, Vec2>> m_wall_preview;
     std::optional<BoundaryDraftPreview> m_boundary_draft_preview;

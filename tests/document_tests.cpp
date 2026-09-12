@@ -3,6 +3,7 @@
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
 #include "sketch/vertical_levels.hpp"
+#include "sketch/reference_grid.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <cstdlib>
@@ -526,6 +527,27 @@ void test_embedded_architectural_models_are_validated_at_document_boundary() {
         },
         DocumentErrorCode::invalid_entity,
         "only floor entities may carry a vertical level binding");
+
+    auto grid_document = Document::create({
+        entity("grid-1", "reference_grid",
+               {{"model", sketch::ReferenceGridModel{}.to_json()}}),
+    });
+    require(grid_document.snapshot().entities().contains("grid-1"),
+            "reference grids should be admitted by the document boundary");
+    const auto grid_revision = grid_document.revision();
+    auto invalid_grid = grid_document.snapshot().entities().at("grid-1");
+    invalid_grid.properties.at("model").at("spacing_x_m") = 0.0;
+    require_error(
+        [&] {
+            grid_document.apply(ApplyEntityChanges{
+                .expected_revision = grid_revision,
+                .entity_changes = {EntityChange::upsert(std::move(invalid_grid))},
+            });
+        },
+        DocumentErrorCode::invalid_entity,
+        "reference grid entities must reject invalid model geometry");
+    require(grid_document.revision() == grid_revision,
+            "a rejected reference grid must not advance the revision");
 
     const auto relationships = sketch::RoomRelationshipSnapshot::create(
         {{"room-edge-1", sketch::RoomReferenceKind::room_boundary}}, {}).to_json();

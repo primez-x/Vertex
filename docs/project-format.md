@@ -127,7 +127,7 @@ The v1 known types are:
 
 `property`, `building`, `floor`, `layer`, `boundary`, `measurement_boundary`, `room_boundary`,
 `wall`, `opening`, `room`, `slab`, `roof`, `stair`, `railing`, `column`, `beam`, `label`, `sheet`, `view`,
-and `constraint`.
+`constraint`, and `reference_grid`.
 
 All geometry properties use metres and radians. A wall and opening can be represented as:
 
@@ -178,6 +178,15 @@ entity and `level_id` resolves inside that graph. The Document validator admits 
 only on floors and rejects a missing graph, wrong graph type, malformed model, or missing level.
 Removing the property clears the association without changing world-coordinate geometry.
 See [explicit vertical levels](vertical-levels.md).
+
+Reference grids are optional `reference_grid` entities. Their `properties.model`
+is a strict version-1 object containing `origin_m`, `rotation_radians`,
+independent X/Y spacing and extents, `major_every`, axis labels, and `visible`;
+all geometry is stored in metres/radians. The model is validated at the
+Document boundary and rendered by both desktop canvases from the same line
+list. Grids are presentation aids only: they do not participate in area
+totals, wall geometry, or measurement truth. See
+[reference grids](reference-grids.md).
 
 For known entity types, the document validates `refs` and `references` arrays as generic entity
 references. It also validates canonical singular and plural reference fields for each known type,

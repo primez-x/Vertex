@@ -1668,14 +1668,20 @@
       "implementation_sources": [
         "include/sketch/vertical_levels.hpp",
         "src/core/vertical_levels.cpp",
+        "include/sketch/reference_grid.hpp",
+        "src/core/reference_grid.cpp",
         "src/core/document.cpp",
         "src/desktop/main_window.cpp",
+        "src/desktop/plan_canvas.hpp",
+        "src/desktop/plan_canvas.cpp",
         "tests/vertical_levels_tests.cpp",
+        "tests/reference_grid_tests.cpp",
         "tests/document_tests.cpp",
         "tests/desktop_smoke.cpp",
-        "docs/vertical-levels.md"
+        "docs/vertical-levels.md",
+        "docs/reference-grids.md"
       ],
-      "implementation_note": "Vertical level and floor-to-floor relationship semantics are implemented as a standalone graph. Floors can now bind to a validated graph entity and level through revisioned desktop controls with save/reopen coverage; reference grids, site/terrain objects, automatic placement, and coordinated view propagation remain open."
+      "implementation_note": "Vertical level and floor-to-floor relationship semantics are implemented as a standalone graph. Floors can bind to a validated graph entity and level through revisioned desktop controls with save/reopen coverage. Reference grids now have strict version-1 persistence, a revision-checked Windows editor, deterministic rotated line generation, and shared measurement/architectural canvas rendering. Site/terrain objects, grid labels, automatic level-driven placement, and coordinated view propagation remain open."
     },
     {
       "id": "ARCH-MOD-008",

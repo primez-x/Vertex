@@ -259,6 +259,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/reference-grids.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/apex-parity.json"
     },
     {
@@ -592,6 +596,10 @@
     {
       "category": "source",
       "path": "include/sketch/reference_asset.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/reference_grid.hpp"
     },
     {
       "category": "source",
@@ -1048,6 +1056,10 @@
     {
       "category": "source",
       "path": "src/core/reference_asset.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/reference_grid.cpp"
     },
     {
       "category": "source",
@@ -1520,6 +1532,10 @@
     {
       "category": "source",
       "path": "tests/reference_asset_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/reference_grid_tests.cpp"
     },
     {
       "category": "source",

@@ -237,6 +237,11 @@ void PlanCanvas::setReferences(std::vector<CanvasReference> references) {
     update();
 }
 
+void PlanCanvas::setReferenceGrids(std::vector<CanvasReferenceGrid> grids) {
+    m_reference_grids = std::move(grids);
+    update();
+}
+
 void PlanCanvas::setBoundaryPreview(std::vector<Vec2> points) {
     m_boundary_preview = std::move(points);
     update();
@@ -422,6 +427,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     if (m_grid_enabled && !fit_to_content) {
         drawGrid(painter, viewport, scale, view_center);
     }
+    drawReferenceGrids(painter);
     for (const auto& entity : m_entities) {
         drawEntity(painter, entity, fit_to_content, background);
     }
@@ -911,6 +917,29 @@ void PlanCanvas::drawGrid(QPainter& painter, const QRectF& viewport, double scal
         const auto index = std::round(y / step);
         painter.setPen(std::fmod(std::abs(index), 5.0) < 0.001 ? major : minor);
         painter.drawLine(QLineF(min_x, y, max_x, y));
+    }
+}
+
+void PlanCanvas::drawReferenceGrids(QPainter& painter) const {
+    const bool light_surface = m_canvas_background.lightnessF() > 0.5;
+    const QColor minor_color = light_surface ? QColor(121, 149, 181, 135)
+                                             : QColor(136, 178, 221, 155);
+    const QColor major_color = light_surface ? QColor(65, 111, 157, 205)
+                                             : QColor(176, 214, 244, 220);
+    for (const auto& grid : m_reference_grids) {
+        if (!grid.visible) continue;
+        for (const auto& line : grid.lines) {
+            if (!std::isfinite(line.start.x) || !std::isfinite(line.start.y) ||
+                !std::isfinite(line.end.x) || !std::isfinite(line.end.y)) {
+                continue;
+            }
+            QPen pen(line.major ? major_color : minor_color,
+                     line.major ? 1.35 : 0.75, Qt::SolidLine,
+                     Qt::SquareCap, Qt::MiterJoin);
+            pen.setCosmetic(true);
+            painter.setPen(pen);
+            painter.drawLine(QLineF(line.start.x, line.start.y, line.end.x, line.end.y));
+        }
     }
 }
 

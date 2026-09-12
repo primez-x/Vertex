@@ -6,6 +6,7 @@
 #include "sketch/assembly_model.hpp"
 #include "sketch/desktop/hosted_opening_dialog.hpp"
 #include "sketch/vertical_levels.hpp"
+#include "sketch/reference_grid.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_dimension.hpp"
@@ -2689,6 +2690,103 @@ void test_vertical_levels_workflow() {
             "floor vertical level binding should survive project reopen");
 }
 
+void test_reference_grid_workflow() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    auto* action = window.findChild<QAction*>(QStringLiteral("referenceGrids"));
+    require(action, "reference grids should be discoverable from the workspace actions");
+
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("referenceGridDialog"));
+        require(dialog, "reference grid editor should open from the workspace action");
+        auto* list = dialog->findChild<QListWidget*>(QStringLiteral("referenceGridList"));
+        auto* name = dialog->findChild<QLineEdit*>(QStringLiteral("referenceGridName"));
+        auto* origin_x = dialog->findChild<QLineEdit*>(QStringLiteral("referenceGridOriginX"));
+        auto* origin_y = dialog->findChild<QLineEdit*>(QStringLiteral("referenceGridOriginY"));
+        auto* rotation = dialog->findChild<QLineEdit*>(QStringLiteral("referenceGridRotation"));
+        auto* spacing_x = dialog->findChild<QLineEdit*>(QStringLiteral("referenceGridSpacingX"));
+        auto* spacing_y = dialog->findChild<QLineEdit*>(QStringLiteral("referenceGridSpacingY"));
+        auto* count_x = dialog->findChild<QLineEdit*>(QStringLiteral("referenceGridCountX"));
+        auto* count_y = dialog->findChild<QLineEdit*>(QStringLiteral("referenceGridCountY"));
+        auto* major_every = dialog->findChild<QLineEdit*>(QStringLiteral("referenceGridMajorEvery"));
+        auto* x_label = dialog->findChild<QLineEdit*>(QStringLiteral("referenceGridXLabel"));
+        auto* y_label = dialog->findChild<QLineEdit*>(QStringLiteral("referenceGridYLabel"));
+        auto* visible = dialog->findChild<QCheckBox*>(QStringLiteral("referenceGridVisible"));
+        auto* new_grid = dialog->findChild<QPushButton*>(QStringLiteral("newReferenceGrid"));
+        auto* save_grid = dialog->findChild<QPushButton*>(QStringLiteral("saveReferenceGrid"));
+        auto* remove_grid = dialog->findChild<QPushButton*>(QStringLiteral("removeReferenceGrid"));
+        require(list && name && origin_x && origin_y && rotation && spacing_x && spacing_y &&
+                    count_x && count_y && major_every && x_label && y_label && visible &&
+                    new_grid && save_grid && remove_grid,
+                "reference grid editor should expose persisted geometry controls");
+        new_grid->click();
+        name->setText(QStringLiteral("Structural grid"));
+        origin_x->setText(QStringLiteral("10"));
+        origin_y->setText(QStringLiteral("-4"));
+        rotation->setText(QStringLiteral("0.25"));
+        spacing_x->setText(QStringLiteral("2"));
+        spacing_y->setText(QStringLiteral("3"));
+        count_x->setText(QStringLiteral("2"));
+        count_y->setText(QStringLiteral("1"));
+        major_every->setText(QStringLiteral("2"));
+        x_label->setText(QStringLiteral("Grid X"));
+        y_label->setText(QStringLiteral("Grid Y"));
+        visible->setChecked(true);
+        save_grid->click();
+        require(list->count() == 1, "reference grid editor should create one persisted grid");
+        const auto snapshot = window.document().snapshot();
+        const auto found = std::find_if(snapshot.entities().begin(), snapshot.entities().end(),
+            [](const auto& entry) { return entry.second.type == "reference_grid"; });
+        require(found != snapshot.entities().end(), "reference grid should be a typed document entity");
+        const auto model = ReferenceGridModel::from_json(found->second.properties.at("model"));
+        require(model.origin_m.x == 10.0 && model.origin_m.y == -4.0 &&
+                    model.rotation_radians == 0.25 && model.spacing_x_m == 2.0 &&
+                    model.spacing_y_m == 3.0 && model.count_x == 2 && model.count_y == 1 &&
+                    model.major_every == 2 && model.visible && model.lines().size() == 8,
+                "reference grid editor should persist the exact validated geometry");
+        auto* canvas_widget = window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas"));
+        auto* canvas = dynamic_cast<desktop::PlanCanvas*>(canvas_widget);
+        require(canvas && canvas->referenceGrids().size() == 1 &&
+                    canvas->referenceGrids().front().lines == model.lines(),
+                "reference grid should render through the shared measurement canvas model");
+        rotation->setText(QStringLiteral("0.5"));
+        save_grid->click();
+        const auto edited_snapshot = window.document().snapshot();
+        const auto edited = std::find_if(edited_snapshot.entities().begin(), edited_snapshot.entities().end(),
+            [](const auto& entry) { return entry.second.type == "reference_grid"; });
+        require(edited != edited_snapshot.entities().end() &&
+                    ReferenceGridModel::from_json(edited->second.properties.at("model"))
+                        .rotation_radians == 0.5,
+                "reference grid edits should update one atomic document revision");
+        require(window.document().revision() >= 3,
+                "reference grid creation and edit should use normal document history");
+        dialog->reject();
+    });
+    action->trigger();
+
+    const auto find_model = [&] {
+        const auto snapshot = window.document().snapshot();
+        const auto found = std::find_if(snapshot.entities().begin(), snapshot.entities().end(),
+            [](const auto& entry) { return entry.second.type == "reference_grid"; });
+        require(found != snapshot.entities().end(), "reference grid should remain in the document");
+        return ReferenceGridModel::from_json(found->second.properties.at("model"));
+    };
+    const auto model = find_model();
+    require(model.rotation_radians == 0.5 && model.lines().size() == 8,
+            "reference grid edit should survive dialog close");
+    QTemporaryDir directory;
+    require(directory.isValid(), "reference grid fixture needs a temporary directory");
+    const auto path = directory.filePath(QStringLiteral("reference-grid.bldproj"));
+    require(window.saveProjectAs(path) && window.openProject(path),
+            "reference grid should save and reopen through the project store");
+    require(find_model() == model, "reference grid geometry should survive project reopen");
+    auto* canvas_widget = window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas"));
+    auto* canvas = dynamic_cast<desktop::PlanCanvas*>(canvas_widget);
+    require(canvas && canvas->referenceGrids().size() == 1 &&
+                canvas->referenceGrids().front().lines == model.lines(),
+            "reopened reference grid should remain bound to the canvas renderer");
+}
+
 void test_calculation_deduction_workflow() {
     using namespace sketch;
     desktop::MainWindow window;
@@ -2849,6 +2947,7 @@ int main(int argc, char** argv) {
     test_phase_authoring_ownership();
     test_room_relationship_workflow();
     test_vertical_levels_workflow();
+    test_reference_grid_workflow();
     test_assembly_catalog_workflow();
     test_material_color_catalog(field_ui_capture_directory);
     test_hosted_opening_editor(field_ui_capture_directory);

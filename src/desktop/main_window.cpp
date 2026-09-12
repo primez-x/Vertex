@@ -42,6 +42,7 @@
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/vertical_levels.hpp"
+#include "sketch/reference_grid.hpp"
 #include "sketch/visualization/native_model_view.hpp"
 
 #include <QAction>
@@ -4816,6 +4817,318 @@ public:
             dialog.exec();
         } catch (const std::exception& error) {
             setError(QStringLiteral("Levels: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
+    void showReferenceGrids() {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return;
+        }
+        try {
+            QDialog dialog(owner);
+            styleDialog(dialog);
+            dialog.setObjectName(QStringLiteral("referenceGridDialog"));
+            dialog.setWindowTitle(QStringLiteral("Reference grids"));
+            dialog.setModal(true);
+            dialog.resize(760, 540);
+
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* columns = new QHBoxLayout;
+
+            auto* list_panel = new QVBoxLayout;
+            list_panel->addWidget(new QLabel(QStringLiteral("Grids"), &dialog));
+            auto* list = new QListWidget(&dialog);
+            list->setObjectName(QStringLiteral("referenceGridList"));
+            list->setSelectionMode(QAbstractItemView::SingleSelection);
+            list_panel->addWidget(list, 1);
+            auto* list_buttons = new QHBoxLayout;
+            auto* new_grid = new QPushButton(QStringLiteral("New"), &dialog);
+            new_grid->setObjectName(QStringLiteral("newReferenceGrid"));
+            auto* remove_grid = new QPushButton(QStringLiteral("Remove"), &dialog);
+            remove_grid->setObjectName(QStringLiteral("removeReferenceGrid"));
+            list_buttons->addWidget(new_grid);
+            list_buttons->addWidget(remove_grid);
+            list_buttons->addStretch(1);
+            list_panel->addLayout(list_buttons);
+
+            auto* form = new QFormLayout;
+            auto* name = new QLineEdit(&dialog);
+            name->setObjectName(QStringLiteral("referenceGridName"));
+            name->setPlaceholderText(QStringLiteral("Grid name"));
+            auto* origin_x = new QLineEdit(&dialog);
+            origin_x->setObjectName(QStringLiteral("referenceGridOriginX"));
+            auto* origin_y = new QLineEdit(&dialog);
+            origin_y->setObjectName(QStringLiteral("referenceGridOriginY"));
+            auto* rotation = new QLineEdit(&dialog);
+            rotation->setObjectName(QStringLiteral("referenceGridRotation"));
+            rotation->setPlaceholderText(QStringLiteral("Radians"));
+            auto* spacing_x = new QLineEdit(&dialog);
+            spacing_x->setObjectName(QStringLiteral("referenceGridSpacingX"));
+            auto* spacing_y = new QLineEdit(&dialog);
+            spacing_y->setObjectName(QStringLiteral("referenceGridSpacingY"));
+            auto* count_x = new QLineEdit(&dialog);
+            count_x->setObjectName(QStringLiteral("referenceGridCountX"));
+            auto* count_y = new QLineEdit(&dialog);
+            count_y->setObjectName(QStringLiteral("referenceGridCountY"));
+            auto* major_every = new QLineEdit(&dialog);
+            major_every->setObjectName(QStringLiteral("referenceGridMajorEvery"));
+            auto* x_label = new QLineEdit(&dialog);
+            x_label->setObjectName(QStringLiteral("referenceGridXLabel"));
+            auto* y_label = new QLineEdit(&dialog);
+            y_label->setObjectName(QStringLiteral("referenceGridYLabel"));
+            auto* visible = new QCheckBox(QStringLiteral("Visible on drawing canvases"), &dialog);
+            visible->setObjectName(QStringLiteral("referenceGridVisible"));
+            form->addRow(QStringLiteral("Name"), name);
+            form->addRow(QStringLiteral("Origin X (m)"), origin_x);
+            form->addRow(QStringLiteral("Origin Y (m)"), origin_y);
+            form->addRow(QStringLiteral("Rotation (rad)"), rotation);
+            form->addRow(QStringLiteral("Spacing X (m)"), spacing_x);
+            form->addRow(QStringLiteral("Spacing Y (m)"), spacing_y);
+            form->addRow(QStringLiteral("Lines each side · X"), count_x);
+            form->addRow(QStringLiteral("Lines each side · Y"), count_y);
+            form->addRow(QStringLiteral("Major every"), major_every);
+            form->addRow(QStringLiteral("X labels"), x_label);
+            form->addRow(QStringLiteral("Y labels"), y_label);
+            form->addRow(QString{}, visible);
+
+            auto* editor_panel = new QVBoxLayout;
+            editor_panel->addWidget(new QLabel(QStringLiteral("Grid geometry"), &dialog));
+            editor_panel->addLayout(form);
+            editor_panel->addStretch(1);
+            auto* save_grid = new QPushButton(QStringLiteral("Save grid"), &dialog);
+            save_grid->setObjectName(QStringLiteral("saveReferenceGrid"));
+            editor_panel->addWidget(save_grid);
+
+            columns->addLayout(list_panel, 1);
+            columns->addLayout(editor_panel, 2);
+            layout->addLayout(columns, 1);
+
+            auto* status = new QLabel(&dialog);
+            status->setObjectName(QStringLiteral("referenceGridStatus"));
+            status->setWordWrap(true);
+            status->setTextFormat(Qt::PlainText);
+            layout->addWidget(status);
+            auto* close = new QPushButton(QStringLiteral("Close"), &dialog);
+            close->setObjectName(QStringLiteral("closeReferenceGrids"));
+            close->setDefault(true);
+            auto* footer = new QHBoxLayout;
+            footer->addStretch(1);
+            footer->addWidget(close);
+            layout->addLayout(footer);
+
+            QString selected_grid_id;
+            bool creating = false;
+            Revision record_revision{};
+
+            const auto set_defaults = [&] {
+                name->setText(QStringLiteral("Reference grid"));
+                origin_x->setText(QStringLiteral("0"));
+                origin_y->setText(QStringLiteral("0"));
+                rotation->setText(QStringLiteral("0"));
+                spacing_x->setText(QStringLiteral("1"));
+                spacing_y->setText(QStringLiteral("1"));
+                count_x->setText(QStringLiteral("10"));
+                count_y->setText(QStringLiteral("10"));
+                major_every->setText(QStringLiteral("5"));
+                x_label->setText(QStringLiteral("A"));
+                y_label->setText(QStringLiteral("1"));
+                visible->setChecked(true);
+            };
+
+            const auto populate = [&] {
+                const auto snapshot = authoringSnapshot();
+                record_revision = snapshot.revision();
+                const auto desired_id = creating
+                    ? QString{}
+                    : !selected_grid_id.isEmpty()
+                        ? selected_grid_id
+                        : (list->currentItem()
+                               ? list->currentItem()->data(Qt::UserRole).toString()
+                               : QString{});
+                const QSignalBlocker list_blocker(list);
+                list->clear();
+                for (const auto& [id, entity] : snapshot.entities()) {
+                    if (entity.type != "reference_grid") continue;
+                    QString label = QString::fromStdString(id);
+                    if (const auto found = entity.properties.find("name");
+                        found != entity.properties.end() && found->is_string() &&
+                        !found->get<std::string>().empty()) {
+                        label = QStringLiteral("%1  ·  %2")
+                                    .arg(QString::fromStdString(found->get<std::string>()),
+                                         QString::fromStdString(id));
+                    }
+                    auto* item = new QListWidgetItem(label, list);
+                    item->setData(Qt::UserRole, QString::fromStdString(id));
+                }
+                QListWidgetItem* selected = nullptr;
+                if (!creating) {
+                    for (int index = 0; index < list->count(); ++index) {
+                        if (list->item(index)->data(Qt::UserRole).toString() == desired_id) {
+                            selected = list->item(index);
+                            break;
+                        }
+                    }
+                    if (!selected && list->count() > 0) selected = list->item(0);
+                }
+                list->setCurrentItem(selected);
+                selected_grid_id = selected ? selected->data(Qt::UserRole).toString() : QString{};
+                if (!selected) {
+                    set_defaults();
+                } else {
+                    const auto found = snapshot.entities().find(selected_grid_id.toStdString());
+                    try {
+                        if (found == snapshot.entities().end() || found->second.type != "reference_grid")
+                            throw std::invalid_argument("The selected reference grid is unavailable.");
+                        const auto model = ReferenceGridModel::from_json(
+                            found->second.properties.at("model"));
+                        const auto grid_name = found->second.properties.value(
+                            "name", std::string{"Reference grid"});
+                        name->setText(QString::fromStdString(grid_name));
+                        origin_x->setText(QString::number(model.origin_m.x, 'g', 15));
+                        origin_y->setText(QString::number(model.origin_m.y, 'g', 15));
+                        rotation->setText(QString::number(model.rotation_radians, 'g', 15));
+                        spacing_x->setText(QString::number(model.spacing_x_m, 'g', 15));
+                        spacing_y->setText(QString::number(model.spacing_y_m, 'g', 15));
+                        count_x->setText(QString::number(model.count_x));
+                        count_y->setText(QString::number(model.count_y));
+                        major_every->setText(QString::number(model.major_every));
+                        x_label->setText(QString::fromStdString(model.x_label));
+                        y_label->setText(QString::fromStdString(model.y_label));
+                        visible->setChecked(model.visible);
+                    } catch (const std::exception& error) {
+                        set_defaults();
+                        status->setText(QStringLiteral("Grid %1 is invalid: %2")
+                                            .arg(selected_grid_id, QString::fromUtf8(error.what())));
+                    }
+                }
+                if (list->count() == 0 && !creating)
+                    status->setText(QStringLiteral("No reference grids. Create one to show a measured layout grid."));
+                else if (!creating)
+                    status->setText(QStringLiteral("%1 reference grid%2")
+                                        .arg(list->count())
+                                        .arg(list->count() == 1 ? QString{} : QStringLiteral("s")));
+            };
+
+            const auto current_source = [&]() -> std::optional<DocumentSnapshot> {
+                const auto source = authoringSnapshot();
+                if (source.revision() != record_revision) {
+                    populate();
+                    status->setText(QStringLiteral(
+                        "The project changed while the Reference grids editor was open. Review the refreshed values."));
+                    return std::nullopt;
+                }
+                return source;
+            };
+
+            populate();
+            QObject::connect(list, &QListWidget::currentItemChanged, &dialog,
+                             [&](QListWidgetItem* current, QListWidgetItem*) {
+                                 creating = false;
+                                 selected_grid_id = current ? current->data(Qt::UserRole).toString()
+                                                            : QString{};
+                                 populate();
+                             });
+            QObject::connect(new_grid, &QPushButton::clicked, &dialog, [&] {
+                creating = true;
+                selected_grid_id.clear();
+                const QSignalBlocker blocker(list);
+                list->clearSelection();
+                set_defaults();
+                status->setText(QStringLiteral("Enter grid geometry, then save the new grid."));
+            });
+            QObject::connect(save_grid, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    const auto source = current_source();
+                    if (!source) return;
+                    const auto parse_double = [](QLineEdit* edit, const char* label) {
+                        bool ok = false;
+                        const auto value = edit->text().trimmed().toDouble(&ok);
+                        if (!ok || !std::isfinite(value)) throw std::invalid_argument(label);
+                        return value;
+                    };
+                    const auto parse_integer = [](QLineEdit* edit, const char* label) {
+                        bool ok = false;
+                        const auto value = edit->text().trimmed().toInt(&ok);
+                        if (!ok) throw std::invalid_argument(label);
+                        return value;
+                    };
+                    const auto grid_name = name->text().trimmed().toStdString();
+                    if (grid_name.empty()) throw std::invalid_argument("Enter a grid name.");
+                    if (grid_name.size() > 256 || grid_name.find('\0') != std::string::npos)
+                        throw std::invalid_argument("Grid name is too long or contains a NUL byte.");
+                    ReferenceGridModel model;
+                    model.origin_m = {parse_double(origin_x, "Origin X must be finite."),
+                                      parse_double(origin_y, "Origin Y must be finite.")};
+                    model.rotation_radians = parse_double(rotation, "Rotation must be finite.");
+                    model.spacing_x_m = parse_double(spacing_x, "X spacing must be finite.");
+                    model.spacing_y_m = parse_double(spacing_y, "Y spacing must be finite.");
+                    model.count_x = parse_integer(count_x, "X line count must be an integer.");
+                    model.count_y = parse_integer(count_y, "Y line count must be an integer.");
+                    model.major_every = parse_integer(major_every, "Major interval must be an integer.");
+                    model.x_label = x_label->text().toStdString();
+                    model.y_label = y_label->text().toStdString();
+                    model.visible = visible->isChecked();
+                    const auto encoded_model = model.to_json();
+
+                    Entity entity;
+                    std::string entity_id;
+                    if (!creating && !selected_grid_id.isEmpty()) {
+                        const auto found = source->entities().find(selected_grid_id.toStdString());
+                        if (found == source->entities().end() || found->second.type != "reference_grid")
+                            throw std::invalid_argument("The selected reference grid is unavailable.");
+                        entity = found->second;
+                        entity_id = entity.id;
+                    } else {
+                        entity = Entity::create("reference_grid");
+                        entity.id = new_id("reference-grid");
+                        entity_id = entity.id;
+                    }
+                    entity.properties["name"] = grid_name;
+                    entity.properties["model"] = encoded_model;
+                    const ApplyEntityChanges command{
+                        source->revision(), {EntityChange::upsert(std::move(entity))}, {},
+                        creating ? "Create reference grid" : "Edit reference grid"};
+                    (void)Document::preview_command(*source, Command{command});
+                    applyDocumentCommand(Command{command});
+                    selected_grid_id = QString::fromStdString(entity_id);
+                    creating = false;
+                    clearError();
+                    refresh();
+                    populate();
+                    status->setText(QStringLiteral("Reference grid saved through document history."));
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            });
+            QObject::connect(remove_grid, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    const auto source = current_source();
+                    if (!source) return;
+                    if (selected_grid_id.isEmpty())
+                        throw std::invalid_argument("Choose a reference grid first.");
+                    const auto found = source->entities().find(selected_grid_id.toStdString());
+                    if (found == source->entities().end() || found->second.type != "reference_grid")
+                        throw std::invalid_argument("The selected reference grid is unavailable.");
+                    const ApplyEntityChanges command{
+                        source->revision(), {EntityChange::erase(found->second.id)}, {},
+                        "Remove reference grid"};
+                    (void)Document::preview_command(*source, Command{command});
+                    applyDocumentCommand(Command{command});
+                    selected_grid_id.clear();
+                    creating = false;
+                    clearError();
+                    refresh();
+                    populate();
+                    status->setText(QStringLiteral("Reference grid removed through document history."));
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            });
+            QObject::connect(close, &QPushButton::clicked, &dialog, &QDialog::reject);
+            dialog.exec();
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Reference grids: %1").arg(QString::fromUtf8(error.what())));
         }
     }
 
@@ -11279,6 +11592,8 @@ private:
         m_relationship_action->setObjectName(QStringLiteral("roomRelationships"));
         m_levels_action = new QAction(QStringLiteral("Levels…"), owner);
         m_levels_action->setObjectName(QStringLiteral("verticalLevels"));
+        m_reference_grid_action = new QAction(QStringLiteral("Reference grids…"), owner);
+        m_reference_grid_action->setObjectName(QStringLiteral("referenceGrids"));
         m_assembly_action = new QAction(QStringLiteral("Assemblies…"), owner);
         m_assembly_action->setObjectName(QStringLiteral("assemblyCatalog"));
         m_assistance_action = new QAction(QStringLiteral("Offline assistance…"), owner);
@@ -11293,10 +11608,10 @@ private:
         m_detect_areas_action = new QAction(QStringLiteral("Detect closed areas…"), owner);
         m_detect_areas_action->setObjectName(QStringLiteral("detectClosedAreas"));
         m_about_action = new QAction(QStringLiteral("About Property Studio"), owner);
-        const std::array<QAction*, 18> secondary_actions{
+        const std::array<QAction*, 19> secondary_actions{
             m_annotation_action, m_reference_action, m_schedule_action, m_sheet_action,
             m_viewport_action, m_schedule_placement_action, m_view_action, m_remodel_action,
-            m_relationship_action, m_levels_action, m_assembly_action, m_assistance_action,
+            m_relationship_action, m_levels_action, m_reference_grid_action, m_assembly_action, m_assistance_action,
             m_workspace_profiles_action, m_revisions_action, m_transform_action, m_redefine_action,
             m_detect_areas_action,
             m_about_action};
@@ -11432,6 +11747,8 @@ private:
                          [this] { showRoomRelationships(); });
         QObject::connect(m_levels_action, &QAction::triggered, owner,
                          [this] { showVerticalLevels(); });
+        QObject::connect(m_reference_grid_action, &QAction::triggered, owner,
+                         [this] { showReferenceGrids(); });
         QObject::connect(m_assembly_action, &QAction::triggered, owner,
                          [this] { showAssemblies(); });
         QObject::connect(m_assistance_action, &QAction::triggered, owner,
@@ -12432,6 +12749,7 @@ private:
         std::vector<CanvasEntity> all_geometry;
         std::vector<CanvasLabel> all_labels;
         std::vector<CanvasReference> reference_underlays;
+        std::vector<CanvasReferenceGrid> reference_grids;
         all_geometry.reserve(snapshot.entities().size());
         const auto append_geometry_error = [&](const QString& message) {
             if (!m_plan_geometry_error.isEmpty()) {
@@ -12441,6 +12759,18 @@ private:
         };
         std::map<std::string, std::vector<HostedOpening>, std::less<>> openings_by_wall;
         for (const auto& [id, entity] : snapshot.entities()) {
+            if (entity.type == "reference_grid") {
+                try {
+                    if (!entity.properties.contains("model"))
+                        throw std::invalid_argument("model is required");
+                    const auto model = ReferenceGridModel::from_json(entity.properties.at("model"));
+                    reference_grids.push_back({id_from(id), model.lines(), model.visible});
+                } catch (const std::exception& error) {
+                    append_geometry_error(QStringLiteral("Reference grid %1: %2")
+                                              .arg(id_from(id), QString::fromUtf8(error.what())));
+                }
+                continue;
+            }
             if (entity.type == "reference_asset") {
                 try {
                     const auto asset_id = read_string(entity.properties, "asset_id");
@@ -12823,6 +13153,8 @@ private:
         m_architecturalCanvas->setLabels(std::move(labels));
         m_measurementCanvas->setReferences(reference_underlays);
         m_architecturalCanvas->setReferences(std::move(reference_underlays));
+        m_measurementCanvas->setReferenceGrids(reference_grids);
+        m_architecturalCanvas->setReferenceGrids(std::move(reference_grids));
         m_plan_error_banner->setText(m_plan_geometry_error);
         m_plan_error_banner->setVisible(!m_plan_geometry_error.isEmpty());
         m_measurementCanvas->setSelectedId(m_selected_id);
@@ -14923,6 +15255,7 @@ private:
     QAction* m_remodel_action{};
     QAction* m_relationship_action{};
     QAction* m_levels_action{};
+    QAction* m_reference_grid_action{};
     QAction* m_assembly_action{};
     QAction* m_assistance_action{};
     QAction* m_workspace_profiles_action{};

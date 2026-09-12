@@ -35,6 +35,15 @@ are integrated through the typed Document history. Automated edge extraction,
 editable PDF geometry, native Apex compatibility, clean-machine packaging, and
 end-to-end production evidence are still open.
 
+The same canvas path now supports validated persisted `reference_grid` entities.
+The Windows Reference grids editor creates, edits, removes, and toggles rotated
+model-space grids with independent spacing/extents and deterministic major-line
+classification through revision-checked Document commands. Both measurement
+and architectural canvases render the same line list after save/reopen, while
+grids remain presentation aids and cannot affect measurement geometry. Grid
+labels, site/terrain coordination, automatic level-driven placement, and full
+cross-view production qualification remain open.
+
 The architectural object slice now accepts a true flat roof through the
 existing sloped-panel schema: zero rise and zero pitch produce a thickened
 planar solid, persist through the entity codec, and project through plan,
