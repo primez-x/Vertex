@@ -759,10 +759,12 @@
       "implementation_sources": [
         "include/sketch/vertical_levels.hpp",
         "src/core/vertical_levels.cpp",
+        "src/core/document.cpp",
         "tests/vertical_levels_tests.cpp",
+        "tests/document_tests.cpp",
         "docs/vertical-levels.md"
       ],
-      "implementation_note": "A standalone validated vertical level graph with connected, frozen, and disconnected floor-to-floor links is implemented; Document persistence and plan/section/3D propagation remain open."
+      "implementation_note": "A validated vertical level graph with connected, frozen, and disconnected floor-to-floor links now has strict version-1 JSON decoding and Document admission through the vertical_levels entity; desktop editing and plan/section/3D propagation remain open."
     },
     {
       "id": "APX-WF-001",

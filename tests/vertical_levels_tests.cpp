@@ -91,6 +91,19 @@ void deterministic_and_bounded() {
     const auto json = nlohmann::json::parse(a.freeze("z").serialize());
     require(json.at("version") == 1 && json.at("links")[1].at("height_m") == 3 &&
             json.at("links")[1].at("state") == "frozen", "Serialization omitted retained state");
+    const auto decoded = VerticalLevelGraph::from_json(json);
+    require(decoded.serialize() == a.freeze("z").serialize(),
+            "Vertical level JSON did not round-trip through the validated decoder");
+    auto malformed = json;
+    malformed.at("links")[0].at("height_m") = -1;
+    rejects(VerticalLevelErrorCode::invalid_input, [&] {
+        (void)VerticalLevelGraph::from_json(malformed);
+    });
+    malformed = json;
+    malformed.at("links")[0].erase("height_m");
+    rejects(VerticalLevelErrorCode::invalid_input, [&] {
+        (void)VerticalLevelGraph::from_json(malformed);
+    });
     const std::string escaped = "quote\"\\\n";
     require(nlohmann::json::parse(VerticalLevelGraph({{escaped, 0}}).serialize()).at("levels")[0].at("id") == escaped,
             "JSON escaping failed");

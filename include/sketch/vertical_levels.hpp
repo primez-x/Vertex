@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/typed_relationships.hpp"
+#include <nlohmann/json.hpp>
 #include <optional>
 
 namespace sketch {
@@ -40,6 +41,7 @@ public:
     static constexpr double height_tolerance_m = 1e-9;
     explicit VerticalLevelGraph(std::vector<VerticalLevel> levels = {},
                                 std::vector<FloorToFloorLink> links = {});
+    [[nodiscard]] static VerticalLevelGraph from_json(const nlohmann::json& value);
     [[nodiscard]] const std::vector<VerticalLevel>& levels() const noexcept { return levels_; }
     [[nodiscard]] const std::vector<FloorToFloorLink>& links() const noexcept { return links_; }
     [[nodiscard]] VerticalLevelGraph create_level(VerticalLevel level) const;

@@ -20,7 +20,8 @@ The current checkpoint also includes read-only recovery-copy discovery with
 source-path and hash matching, a fail-closed offline-independence policy wired
 at native startup, deterministic source-kit and portable-package manifests,
 immutable reference-asset calibration and transform records, typed schedule
-records, and a standalone vertical level/floor-to-floor graph. Raster reference
+records, and a versioned vertical level/floor-to-floor graph with strict Document
+admission. Raster reference
 images can now be imported into the project Asset store, displayed as a shared
 canvas underlay, calibrated in metres per source pixel, and transformed through
 typed undoable edits. PDF page import now retains the original PDF beside

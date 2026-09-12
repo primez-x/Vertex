@@ -25,10 +25,15 @@ disconnected records and reject retained heights on connected records.
 
 `serialize()` emits deterministic version-1 JSON with metre-qualified fields,
 sorted level/link arrays, state, and live or retained height. Signed zero elevations
-are normalized. No deserializer or project persistence integration is included.
+are normalized. `from_json()` accepts only that exact versioned shape, validates
+every field and state, checks finite positive heights, and verifies that encoded
+connected heights agree with the endpoint elevations. The `vertical_levels`
+Document entity uses this decoder at admission, so invalid level data cannot
+enter project history or a saved `.bldproj` file.
 
-This is foundational core coverage, not complete requirement delivery. Document
-entities, undo/redo commands, desktop level editing, building-object floor/ceiling
-binding, automatic elevation propagation, and file import remain separate work.
+This is foundational persistence coverage, not complete requirement delivery.
+Undoable desktop level editing, building-object floor/ceiling binding, automatic
+elevation propagation, coordinated plan/section/3D views, and file import remain
+separate work.
 Tests cover independent levels, immutable edits, retained heights, malformed
 graphs, deterministic output, and a maximum-size chain.

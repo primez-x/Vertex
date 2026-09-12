@@ -2,6 +2,7 @@
 #include "sketch/document_digest.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
+#include "sketch/vertical_levels.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <cstdlib>
@@ -446,6 +447,29 @@ void test_embedded_architectural_models_are_validated_at_document_boundary() {
         },
         DocumentErrorCode::invalid_entity,
         "assembly model entities must carry a validated embedded model");
+
+    const auto levels = sketch::VerticalLevelGraph({{"ground", 0}, {"first", 3}},
+        {{"ground-first", "ground", "first"}});
+    auto levels_document = Document::create({
+        entity("levels-1", "vertical_levels", {{"model", nlohmann::json::parse(levels.serialize())}}),
+    });
+    require(levels_document.snapshot().entities().contains("levels-1"),
+            "vertical level graphs should be admitted by the document boundary");
+    const auto levels_revision = levels_document.revision();
+    auto invalid_levels = nlohmann::json::parse(levels.serialize());
+    invalid_levels.at("links")[0].at("height_m") = -1;
+    require_error(
+        [&] {
+            levels_document.apply(ApplyEntityChanges{
+                .expected_revision = levels_revision,
+                .entity_changes = {EntityChange::upsert(entity(
+                    "levels-1", "vertical_levels", {{"model", invalid_levels}}))},
+            });
+        },
+        DocumentErrorCode::invalid_entity,
+        "vertical level entities must reject invalid serialized links");
+    require(levels_document.revision() == levels_revision,
+            "a rejected vertical level graph must not advance the revision");
 
     const auto relationships = sketch::RoomRelationshipSnapshot::create(
         {{"room-edge-1", sketch::RoomReferenceKind::room_boundary}}, {}).to_json();

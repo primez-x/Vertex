@@ -2,6 +2,7 @@
 #include "sketch/assembly_model.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
+#include "sketch/vertical_levels.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/constraint_integrity.hpp"
@@ -207,6 +208,10 @@ void validate_entity(const Entity& entity) {
         validate_embedded_model([](const nlohmann::json& model) {
             (void)RoomRelationshipSnapshot::from_json(model);
         }, "room relationships");
+    } else if (entity.type == "vertical_levels") {
+        validate_embedded_model([](const nlohmann::json& model) {
+            (void)VerticalLevelGraph::from_json(model);
+        }, "vertical levels");
     }
 }
 
@@ -623,13 +628,13 @@ std::string sha256_hex(std::span<const std::byte> bytes) {
 }
 
 bool is_known_entity_type(std::string_view type) noexcept {
-    static constexpr std::array<std::string_view, 26> known{
+    static constexpr std::array<std::string_view, 27> known{
         "property",             "building", "floor",  "layer", "boundary",
         "measurement_boundary", "room_boundary", "wall", "opening", "room",
         "slab",                 "roof",     "stair",  "column", "beam",
         "label",                "sheet",    "view",   "constraint", "dimension",
         "sheet_view_model",    "annotation_state", "reference_asset",
-        "assembly_model",      "model_phases", "room_relationships"};
+        "assembly_model",      "model_phases", "room_relationships", "vertical_levels"};
     return std::find(known.begin(), known.end(), type) != known.end();
 }
 

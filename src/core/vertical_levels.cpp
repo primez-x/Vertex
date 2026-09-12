@@ -2,8 +2,10 @@
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cmath>
+#include <initializer_list>
 #include <map>
 #include <set>
+#include <string>
 #include <utility>
 
 namespace sketch {
@@ -17,6 +19,14 @@ void validate_id(const std::string& id) {
     try { (void)nlohmann::json(id).dump(); }
     catch (const nlohmann::json::type_error&) {
         fail(VerticalLevelErrorCode::invalid_input, "Invalid UTF-8 ID");
+    }
+}
+void exact_fields(const nlohmann::json& value, std::initializer_list<const char*> fields) {
+    if (!value.is_object() || value.size() != fields.size())
+        fail(VerticalLevelErrorCode::invalid_input, "Invalid vertical level JSON fields");
+    for (const auto* field : fields) {
+        if (!value.contains(field))
+            fail(VerticalLevelErrorCode::invalid_input, "Missing vertical level JSON field");
     }
 }
 const char* state_name(RelationshipState state) {
@@ -88,6 +98,66 @@ VerticalLevelGraph::VerticalLevelGraph(std::vector<VerticalLevel> levels, std::v
             fail(VerticalLevelErrorCode::frozen_height_changed, "Elevation edit changes a frozen floor-to-floor height");
     }
 }
+
+VerticalLevelGraph VerticalLevelGraph::from_json(const nlohmann::json& value) {
+    try {
+        exact_fields(value, {"version", "levels", "links"});
+        if (!value.at("version").is_number_integer() || value.at("version") != 1 ||
+            !value.at("levels").is_array() || !value.at("links").is_array()) {
+            fail(VerticalLevelErrorCode::invalid_input, "Unsupported vertical level JSON version");
+        }
+        std::vector<VerticalLevel> levels;
+        levels.reserve(value.at("levels").size());
+        for (const auto& entry : value.at("levels")) {
+            exact_fields(entry, {"id", "elevation_m"});
+            if (!entry.at("id").is_string() || !entry.at("elevation_m").is_number())
+                fail(VerticalLevelErrorCode::invalid_input, "Invalid vertical level value");
+            levels.push_back({entry.at("id").get<std::string>(), entry.at("elevation_m").get<double>()});
+        }
+        std::vector<FloorToFloorLink> links;
+        links.reserve(value.at("links").size());
+        std::vector<std::pair<std::string, double>> connected_heights;
+        for (const auto& entry : value.at("links")) {
+            exact_fields(entry, {"id", "lower_level_id", "upper_level_id", "state", "height_m"});
+            if (!entry.at("id").is_string() || !entry.at("lower_level_id").is_string() ||
+                !entry.at("upper_level_id").is_string() || !entry.at("state").is_string() ||
+                !entry.at("height_m").is_number()) {
+                fail(VerticalLevelErrorCode::invalid_input, "Invalid vertical link value");
+            }
+            const auto state = entry.at("state").get<std::string>();
+            RelationshipState parsed_state{};
+            if (state == "connected") parsed_state = RelationshipState::connected;
+            else if (state == "frozen") parsed_state = RelationshipState::frozen;
+            else if (state == "disconnected") parsed_state = RelationshipState::disconnected;
+            else fail(VerticalLevelErrorCode::invalid_input, "Unknown vertical link state");
+            const auto height = entry.at("height_m").get<double>();
+            if (!std::isfinite(height) || height <= 0)
+                fail(VerticalLevelErrorCode::invalid_input, "Vertical link height must be finite and positive");
+            links.push_back({entry.at("id").get<std::string>(),
+                             entry.at("lower_level_id").get<std::string>(),
+                             entry.at("upper_level_id").get<std::string>(), parsed_state,
+                             parsed_state == RelationshipState::connected
+                                 ? std::nullopt : std::optional<double>(height)});
+            if (parsed_state == RelationshipState::connected)
+                connected_heights.emplace_back(entry.at("id").get<std::string>(), height);
+        }
+        const auto graph = VerticalLevelGraph(std::move(levels), std::move(links));
+        for (const auto& [id, encoded_height] : connected_heights) {
+            if (std::abs(graph.floor_to_floor_height(id) - encoded_height) > height_tolerance_m)
+                fail(VerticalLevelErrorCode::invalid_input, "Connected vertical link height is inconsistent");
+        }
+        return graph;
+    } catch (const VerticalLevelError&) {
+        throw;
+    } catch (const nlohmann::json::exception& error) {
+        throw VerticalLevelError(VerticalLevelErrorCode::invalid_input,
+                                 std::string("Invalid vertical level JSON: ") + error.what());
+    } catch (const std::exception& error) {
+        throw VerticalLevelError(VerticalLevelErrorCode::invalid_input,
+                                 std::string("Invalid vertical level JSON: ") + error.what());
+    }
+}
+
 VerticalLevelGraph VerticalLevelGraph::create_level(VerticalLevel level) const {
     auto levels = levels_;
     levels.push_back(std::move(level));
