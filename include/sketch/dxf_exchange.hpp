@@ -47,6 +47,25 @@ struct DxfHatch {
     bool solid{true};
     std::string layer{"0"};
 };
+// A block definition contains the same bounded 2D primitive families as the
+// main drawing. Nested blocks, dimensions, hatches, and attributes are not
+// representable in this first block subset.
+struct DxfBlock {
+    std::string name;
+    DxfPoint base;
+    std::vector<DxfLine> lines;
+    std::vector<DxfArc> arcs;
+    std::vector<DxfPolyline> polylines;
+    std::vector<DxfLabel> labels;
+};
+struct DxfInsert {
+    std::string block_name;
+    DxfPoint insertion;
+    double scale_x{1};
+    double scale_y{1};
+    double rotation_degrees{};
+    std::string layer{"0"};
+};
 struct DxfDrawing {
     int insertion_units{}; // R2013 $INSUNITS 0..20, 0 = unspecified. No conversion.
     std::vector<DxfLine> lines;
@@ -55,6 +74,8 @@ struct DxfDrawing {
     std::vector<DxfLabel> labels;
     std::vector<DxfDimension> dimensions;
     std::vector<DxfHatch> hatches;
+    std::vector<DxfBlock> blocks;
+    std::vector<DxfInsert> inserts;
 };
 struct DxfDiagnostic {
     std::size_t entity_index{}; // One-based ENTITIES ordinal; zero for a section.
@@ -77,8 +98,9 @@ struct DxfExchangeLimits {
 // Unsupported entities/features are omitted with stable diagnostics, never executed.
 [[nodiscard]] DxfImportResult parse_dxf_ascii(
     std::string_view bytes, const DxfExchangeLimits& limits = {});
-// Canonical entity order: lines, arcs, polylines, dimensions, hatches, labels
-// (vector order retained within each family).
+// Canonical entity order: block definitions, lines, arcs, polylines,
+// dimensions, hatches, labels, then INSERT references (vector order retained
+// within each family).
 // Unsupported style/3D information is not representable and is never synthesized.
 [[nodiscard]] std::string export_dxf_ascii(
     const DxfDrawing& drawing, const DxfExchangeLimits& limits = {});

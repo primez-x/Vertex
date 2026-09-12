@@ -6,6 +6,7 @@
 #include <initializer_list>
 #include <limits>
 #include <optional>
+#include <set>
 #include <span>
 #include <stdexcept>
 #include <type_traits>
@@ -68,24 +69,25 @@ bool supported(Record r, std::initializer_list<int> specific, const DxfExchangeL
     }
     return ok;
 }
-void entity(DxfImportResult& result, std::string_view type, Record r, std::size_t index,
-    std::size_t& vertices, const DxfExchangeLimits& l) {
+void entity(DxfImportResult& result, DxfDrawing& destination, std::string_view type, Record r,
+    std::size_t index, std::size_t& vertices, const DxfExchangeLimits& l,
+    bool allow_insert = true) {
     auto diagnostic = [&](const char* code) { result.diagnostics.push_back({index, std::string(type), code}); };
     if (type != "LINE" && type != "ARC" && type != "LWPOLYLINE" && type != "TEXT" &&
-        type != "DIMENSION" && type != "HATCH") {
+        type != "DIMENSION" && type != "HATCH" && type != "INSERT") {
         diagnostic("unsupported_entity"); return;
     }
     const auto entity_layer = layer(r, l);
     if (type == "LINE") {
         DxfLine v{point(r, 10, 20), point(r, 11, 21), entity_layer};
         if (!supported(r, {10, 20, 11, 21}, l)) diagnostic("unsupported_feature");
-        else result.drawing.lines.push_back(std::move(v));
+        else destination.lines.push_back(std::move(v));
     } else if (type == "ARC") {
         DxfArc v{point(r, 10, 20), number<double>(mandatory(r, 40)),
             number<double>(mandatory(r, 50)), number<double>(mandatory(r, 51)), entity_layer};
         require(v.radius > 0 && v.start_degrees >= 0 && v.start_degrees < 360 && v.end_degrees >= 0 && v.end_degrees < 360 && v.start_degrees != v.end_degrees);
         if (!supported(r, {10, 20, 40, 50, 51}, l)) diagnostic("unsupported_feature");
-        else result.drawing.arcs.push_back(std::move(v));
+        else destination.arcs.push_back(std::move(v));
     } else if (type == "TEXT") {
         DxfLabel v{point(r, 10, 20), number<double>(mandatory(r, 40)), real(r, 50),
             std::string(mandatory(r, 1)), entity_layer};
@@ -94,7 +96,7 @@ void entity(DxfImportResult& result, std::string_view type, Record r, std::size_
             real(r, 41, 1) == 1 && real(r, 51) == 0 && field(r, 7).value_or("STANDARD") == "STANDARD" &&
             v.text.find('\\') == std::string::npos && v.text.find("%%") == std::string::npos;
         if (!supported(r, {10, 20, 40, 50, 1, 71, 72, 73, 41, 51, 7}, l) || !plain) diagnostic("unsupported_feature");
-        else result.drawing.labels.push_back(std::move(v));
+        else destination.labels.push_back(std::move(v));
     } else if (type == "DIMENSION") {
         DxfDimension v{point(r, 13, 23), point(r, 14, 24), point(r, 10, 20),
             point(r, 11, 21), real(r, 50), std::string(field(r, 1).value_or("")), entity_layer};
@@ -111,7 +113,7 @@ void entity(DxfImportResult& result, std::string_view type, Record r, std::size_
                        v.extension_end.y - v.extension_start.y) <= std::numeric_limits<double>::epsilon()) {
             diagnostic("unsupported_feature");
         } else {
-            result.drawing.dimensions.push_back(std::move(v));
+            destination.dimensions.push_back(std::move(v));
         }
     } else if (type == "HATCH") {
         DxfHatch v{{}, integer(r, 70) == 1, entity_layer};
@@ -159,7 +161,21 @@ void entity(DxfImportResult& result, std::string_view type, Record r, std::size_
         if (!shape || !planar) {
             diagnostic("unsupported_feature");
         } else {
-            result.drawing.hatches.push_back(std::move(v));
+            destination.hatches.push_back(std::move(v));
+        }
+    } else if (type == "INSERT") {
+        DxfInsert v{std::string(mandatory(r, 2)), point(r, 10, 20), real(r, 41, 1),
+                    real(r, 42, 1), real(r, 50), entity_layer};
+        printable(v.block_name, l);
+        const bool plain = integer(r, 66, 0) == 0 && real(r, 40, 1) == 1 &&
+                           real(r, 43, 1) == 1 && real(r, 30) == 0;
+        const bool valid_scale = std::isfinite(v.scale_x) && std::isfinite(v.scale_y) &&
+                                 v.scale_x != 0.0 && v.scale_y != 0.0;
+        if (!allow_insert || !supported(r, {2, 10, 20, 30, 41, 42, 43, 50, 66}, l) ||
+            !plain || !valid_scale) {
+            diagnostic("unsupported_feature");
+        } else {
+            destination.inserts.push_back(std::move(v));
         }
     } else {
         const int count = number<int>(mandatory(r, 90));
@@ -185,9 +201,59 @@ void entity(DxfImportResult& result, std::string_view type, Record r, std::size_
             }
         }
         require(have_y && v.vertices.size() == static_cast<std::size_t>(count));
-        if (!ok) diagnostic("unsupported_feature"); else result.drawing.polylines.push_back(std::move(v));
+        if (!ok) diagnostic("unsupported_feature"); else destination.polylines.push_back(std::move(v));
     }
 }
+
+void parse_block_section(DxfImportResult& result, const std::vector<Pair>& pairs,
+                        std::size_t begin, std::size_t end, std::size_t& entity_count,
+                        std::size_t& vertices, const DxfExchangeLimits& limits) {
+    std::set<std::string, std::less<>> names;
+    std::size_t cursor = begin;
+    while (cursor < end) {
+        require(++entity_count <= limits.max_entities);
+        require(pairs[cursor].code == 0 && pairs[cursor].value == "BLOCK");
+        const std::size_t header_begin = ++cursor;
+        while (cursor < end && pairs[cursor].code != 0) ++cursor;
+        const Record header(pairs.data() + header_begin, cursor - header_begin);
+        const auto name_value = mandatory(header, 2);
+        printable(name_value, limits);
+        require(!name_value.empty() && names.insert(std::string(name_value)).second);
+        const auto base = point(header, 10, 20);
+        const bool plain_header = integer(header, 70, 0) == 0 && real(header, 30) == 0 &&
+                                  field(header, 3).value_or(name_value) == name_value;
+        if (!supported(header, {2, 3, 10, 20, 30, 70}, limits) || !plain_header) {
+            result.diagnostics.push_back({0, "BLOCK", "unsupported_feature"});
+        }
+
+        DxfDrawing contents;
+        bool closed = false;
+        while (cursor < end) {
+            require(pairs[cursor].code == 0);
+            const auto type = pairs[cursor++].value;
+            const std::size_t first = cursor;
+            while (cursor < end && pairs[cursor].code != 0) ++cursor;
+            const Record record(pairs.data() + first, cursor - first);
+            if (type == "ENDBLK") {
+                require(supported(record, {}, limits));
+                closed = true;
+                break;
+            }
+            require(++entity_count <= limits.max_entities);
+            if (type == "DIMENSION" || type == "HATCH" || type == "INSERT") {
+                result.diagnostics.push_back({0, std::string(type), "unsupported_entity"});
+                continue;
+            }
+            entity(result, contents, type, record, 0, vertices, limits, false);
+        }
+        require(closed);
+        if (!plain_header) continue;
+        result.drawing.blocks.push_back({std::string(name_value), base,
+                                         std::move(contents.lines), std::move(contents.arcs),
+                                         std::move(contents.polylines), std::move(contents.labels)});
+    }
+}
+
 class Writer {
 public:
     explicit Writer(const DxfExchangeLimits& limits) : limits_(limits) {}
@@ -232,8 +298,8 @@ DxfImportResult parse_dxf_ascii(std::string_view bytes, const DxfExchangeLimits&
         const auto v = line(); printable(v, l); pairs.push_back({code, v});
     }
     DxfImportResult result;
-    std::size_t i = 0, entity_count = 0, vertices = 0;
-    bool header = false, entities = false, version = false, eof = false, units = false;
+    std::size_t i = 0, entity_count = 0, entity_ordinal = 0, vertices = 0;
+    bool header = false, blocks = false, entities = false, version = false, eof = false, units = false;
     while (i < pairs.size()) {
         const auto p = pairs[i++]; require(p.code == 0);
         if (p.value == "EOF") { require(i == pairs.size()); eof = true; break; }
@@ -254,15 +320,24 @@ DxfImportResult parse_dxf_ascii(std::string_view bytes, const DxfExchangeLimits&
                     result.drawing.insertion_units = number<int>(pairs[first].value); require(result.drawing.insertion_units >= 0 && result.drawing.insertion_units <= 20); }
                 else result.diagnostics.push_back({0, "HEADER", "unsupported_header_variable"});
             }
+        } else if (section == "BLOCKS") {
+            require(!blocks); blocks = true;
+            parse_block_section(result, pairs, begin, end, entity_count, vertices, l);
         } else if (section == "ENTITIES") {
             require(!entities); entities = true;
             for (std::size_t j = begin; j < end;) {
                 require(pairs[j].code == 0 && ++entity_count <= l.max_entities);
                 const auto type = pairs[j++].value; const auto first = j;
                 while (j < end && pairs[j].code != 0) ++j;
-                entity(result, type, Record(pairs.data() + first, j - first), entity_count, vertices, l);
+                entity(result, result.drawing, type, Record(pairs.data() + first, j - first),
+                       ++entity_ordinal, vertices, l);
             }
         } else result.diagnostics.push_back({0, std::string(section), "unsupported_section"});
+    }
+    for (const auto& insert : result.drawing.inserts) {
+        const auto found = std::find_if(result.drawing.blocks.begin(), result.drawing.blocks.end(),
+            [&](const auto& block) { return block.name == insert.block_name; });
+        require(found != result.drawing.blocks.end());
     }
     require(header && version && entities && eof);
     return result;
@@ -277,20 +352,67 @@ std::string export_dxf_ascii(const DxfDrawing& d, const DxfExchangeLimits& l) {
                       d.hatches.size(), d.labels.size()}) {
         require(size <= l.max_entities - count); count += size;
     }
+    require(d.blocks.size() <= l.max_entities - count); count += d.blocks.size();
+    require(d.inserts.size() <= l.max_entities - count); count += d.inserts.size();
+    std::set<std::string, std::less<>> block_names;
+    for (const auto& block : d.blocks) {
+        printable(block.name, l);
+        require(!block.name.empty() && block_names.insert(block.name).second);
+        for (auto size : {block.lines.size(), block.arcs.size(), block.polylines.size(), block.labels.size()}) {
+            require(size <= l.max_entities - count); count += size;
+        }
+    }
+    for (const auto& insert : d.inserts) {
+        printable(insert.block_name, l);
+        require(block_names.contains(insert.block_name));
+    }
     Writer w(l);
-    w.put(0, "SECTION"); w.put(2, "HEADER"); w.put(9, "$ACADVER"); w.put(1, "AC1027");
-    w.put(9, "$INSUNITS"); w.put(70, std::to_string(d.insertion_units)); w.put(0, "ENDSEC"); w.put(0, "SECTION"); w.put(2, "ENTITIES");
-    for (const auto& v : d.lines) { w.begin("LINE", v.layer, "AcDbLine"); w.xy(v.start); w.put(30, 0.0); w.xy(v.end, 11, 21); w.put(31, 0.0); }
-    for (const auto& v : d.arcs) {
-        require(v.radius > 0 && v.start_degrees >= 0 && v.start_degrees < 360 && v.end_degrees >= 0 && v.end_degrees < 360 && v.start_degrees != v.end_degrees);
-        w.begin("ARC", v.layer, "AcDbCircle"); w.xy(v.center); w.put(30, 0.0); w.put(40, v.radius); w.put(100, "AcDbArc"); w.put(50, v.start_degrees); w.put(51, v.end_degrees);
-    }
+    const auto write_line = [&](const DxfLine& v) {
+        w.begin("LINE", v.layer, "AcDbLine"); w.xy(v.start); w.put(30, 0.0);
+        w.xy(v.end, 11, 21); w.put(31, 0.0);
+    };
+    const auto write_arc = [&](const DxfArc& v) {
+        require(v.radius > 0 && v.start_degrees >= 0 && v.start_degrees < 360 &&
+                v.end_degrees >= 0 && v.end_degrees < 360 &&
+                v.start_degrees != v.end_degrees);
+        w.begin("ARC", v.layer, "AcDbCircle"); w.xy(v.center); w.put(30, 0.0);
+        w.put(40, v.radius); w.put(100, "AcDbArc");
+        w.put(50, v.start_degrees); w.put(51, v.end_degrees);
+    };
     std::size_t vertices = 0;
-    for (const auto& v : d.polylines) {
-        require(v.vertices.size() >= 2 && v.vertices.size() <= l.max_vertices - vertices); vertices += v.vertices.size();
-        w.begin("LWPOLYLINE", v.layer, "AcDbPolyline"); w.put(90, std::to_string(v.vertices.size())); w.put(70, v.closed ? "1" : "0");
+    const auto write_polyline = [&](const DxfPolyline& v) {
+        require(v.vertices.size() >= 2 && v.vertices.size() <= l.max_vertices - vertices);
+        vertices += v.vertices.size();
+        w.begin("LWPOLYLINE", v.layer, "AcDbPolyline");
+        w.put(90, std::to_string(v.vertices.size())); w.put(70, v.closed ? "1" : "0");
         for (const auto& vertex : v.vertices) { w.xy(vertex.point); w.put(42, vertex.bulge); }
+    };
+    const auto write_label = [&](const DxfLabel& v) {
+        require(v.height > 0 && v.text.find('\\') == std::string::npos &&
+                v.text.find("%%") == std::string::npos);
+        w.begin("TEXT", v.layer, "AcDbText"); w.xy(v.position); w.put(30, 0.0);
+        w.put(40, v.height); w.put(1, v.text); w.put(50, v.rotation_degrees);
+        w.put(100, "AcDbText");
+    };
+    w.put(0, "SECTION"); w.put(2, "HEADER"); w.put(9, "$ACADVER"); w.put(1, "AC1027");
+    w.put(9, "$INSUNITS"); w.put(70, std::to_string(d.insertion_units)); w.put(0, "ENDSEC");
+    if (!d.blocks.empty()) {
+        w.put(0, "SECTION"); w.put(2, "BLOCKS");
+        for (const auto& block : d.blocks) {
+            w.begin("BLOCK", "0", "AcDbBlockBegin"); w.put(2, block.name); w.put(3, block.name);
+            w.xy(block.base); w.put(30, 0.0); w.put(70, "0");
+            for (const auto& v : block.lines) write_line(v);
+            for (const auto& v : block.arcs) write_arc(v);
+            for (const auto& v : block.polylines) write_polyline(v);
+            for (const auto& v : block.labels) write_label(v);
+            w.begin("ENDBLK", "0", "AcDbBlockEnd");
+        }
+        w.put(0, "ENDSEC");
     }
+    w.put(0, "SECTION"); w.put(2, "ENTITIES");
+    for (const auto& v : d.lines) write_line(v);
+    for (const auto& v : d.arcs) write_arc(v);
+    for (const auto& v : d.polylines) write_polyline(v);
     for (const auto& v : d.dimensions) {
         require(std::isfinite(v.rotation_degrees) && std::abs(v.rotation_degrees) <= 1e12);
         require(v.text.find('\n') == std::string::npos && v.text.find('\r') == std::string::npos);
@@ -318,8 +440,16 @@ std::string export_dxf_ascii(const DxfDrawing& d, const DxfExchangeLimits& l) {
         w.put(97, "0"); w.put(75, "0"); w.put(76, "1");
     }
     for (const auto& v : d.labels) {
-        require(v.height > 0 && v.text.find('\\') == std::string::npos && v.text.find("%%") == std::string::npos);
-        w.begin("TEXT", v.layer, "AcDbText"); w.xy(v.position); w.put(30, 0.0); w.put(40, v.height); w.put(1, v.text); w.put(50, v.rotation_degrees); w.put(100, "AcDbText");
+        write_label(v);
+    }
+    for (const auto& v : d.inserts) {
+        require(std::isfinite(v.scale_x) && std::isfinite(v.scale_y) &&
+                v.scale_x != 0.0 && v.scale_y != 0.0 &&
+                std::isfinite(v.rotation_degrees));
+        w.begin("INSERT", v.layer, "AcDbBlockReference");
+        w.put(2, v.block_name); w.xy(v.insertion); w.put(30, 0.0);
+        w.put(41, v.scale_x); w.put(42, v.scale_y); w.put(43, 1.0);
+        w.put(50, v.rotation_degrees); w.put(66, "0");
     }
     w.put(0, "ENDSEC"); w.put(0, "EOF");
     return std::move(w.bytes);

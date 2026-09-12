@@ -24,6 +24,8 @@ void run() {
     d.labels.push_back({{5, 7}, 2, 45, "  Room A  ", "Labels"});
     d.dimensions.push_back({{1, 2}, {8, 2}, {4.5, 3}, {4.5, 3.5}, 0, "7 m", "Dimensions"});
     d.hatches.push_back({{{0, 0}, {4, 0}, {4, 3}, {0, 3}}, true, "Fill"});
+    d.blocks.push_back({"Window", {0, 0}, {{{0, 0}, {1.2, 0}, "Frame"}}, {}, {}, {}});
+    d.inserts.push_back({"Window", {12, 4}, 1.0, 1.5, 90, "Openings"});
     const auto encoded = export_dxf_ascii(d);
     const auto imported = parse_dxf_ascii(encoded);
     check(imported.diagnostics.empty(), "own export loses fidelity");
@@ -40,14 +42,21 @@ void run() {
     check(imported.drawing.hatches.at(0).boundary.size() == 4 &&
               imported.drawing.hatches.at(0).solid,
           "solid hatch lost");
+    check(imported.drawing.blocks.at(0).name == "Window" &&
+              imported.drawing.blocks.at(0).lines.size() == 1 &&
+              imported.drawing.inserts.at(0).block_name == "Window" &&
+              imported.drawing.inserts.at(0).scale_y == 1.5,
+          "block definition or insert lost");
     check(export_dxf_ascii(imported.drawing) == encoded, "round trip not deterministic");
     auto crlf = encoded;
     for (std::size_t i = 0; i < crlf.size(); ++i) if (crlf[i] == '\n') crlf.insert(i++, 1, '\r');
     check(export_dxf_ascii(parse_dxf_ascii(crlf).drawing) == encoded, "CRLF differs");
-    const auto skipped = parse_dxf_ascii(file("0\nINSERT\n2\n../../external.dwg\n0\nCIRCLE\n10\n0\n20\n0\n40\n2\n"));
+    const auto skipped = parse_dxf_ascii(file("0\nCIRCLE\n10\n0\n20\n0\n40\n2\n0\n3DFACE\n"));
     check(skipped.diagnostics.size() == 2 && skipped.diagnostics[1].entity_index == 2,
         "unsupported entities not reported");
     check(skipped.diagnostics[0].code == "unsupported_entity", "unstable diagnostic");
+    rejects([&] { (void)parse_dxf_ascii(file(
+        "0\nINSERT\n2\nMissing\n10\n0\n20\n0\n")); });
     const auto nonplanar = parse_dxf_ascii(file("0\nLINE\n10\n0\n20\n0\n11\n1\n21\n1\n30\n1\n"));
     check(nonplanar.drawing.lines.empty() && !nonplanar.diagnostics.empty(), "3D silently flattened");
     const auto aligned = parse_dxf_ascii(file("0\nTEXT\n10\n0\n20\n0\n40\n1\n1\nHi\n72\n1\n"));

@@ -68,6 +68,10 @@ counterclockwise start/end angles, LWPOLYLINE vertices with signed bulges and
 closure, plain TEXT insertion point/height/rotation/string, linear DIMENSION
 extension and text points, and one-loop solid polygon HATCH boundaries. Layers
 and R2013 `$INSUNITS` values 0 through 20 are retained without unit conversion.
+BLOCK definitions contain lines, arcs, open/closed bulged polylines, and plain
+text; INSERT records retain the block name, insertion point, independent X/Y
+scale, rotation, and layer. Block names are unique and every insert must name
+a definition in the same file.
 Arcs require distinct angles in `[0, 360)` and a positive radius. Polylines
 require at least two vertices; bulges remain analytical values and are never
 tessellated. Labels use baseline/left alignment with default width and no
@@ -86,8 +90,8 @@ and bulges have absolute numeric magnitude capped at `1e12`.
 `DxfImportResult::diagnostics` identifies unsupported entities by one-based
 ENTITIES ordinal, entity type, and a stable code. POLYLINE, MTEXT, BLOCK/INSERT,
 CIRCLE, and every other unimplemented type are reported as `unsupported_entity`.
-Unsupported dimension types, patterned or multi-loop hatches, unsupported
-attributes, 3D coordinates, nondefault OCS,
+Unsupported dimension types, patterned or multi-loop hatches, nested blocks,
+attributes, unsupported block content, 3D coordinates, nondefault OCS,
 paper-space entities, widths, and styled text omit the whole affected entity
 with `unsupported_feature`. Unknown sections and header variables produce
 section-level diagnostics. Raw unsupported records are **not** preserved;
