@@ -1800,7 +1800,7 @@ public:
         }
     }
 
-    bool transformWallSelection(const DocumentSnapshot& source, const Entity& original,
+    std::pair<ApplyEntityChanges, std::string> makeWallTransformCommand(const DocumentSnapshot& source, const Entity& original,
                                 const QString& rotation_degrees, bool flip_horizontal,
                                 bool flip_vertical, const QString& offset_x,
                                 const QString& offset_y, bool clone) {
@@ -1859,18 +1859,9 @@ public:
             if (clone || entity != source.entities().at(entity.id))
                 changes.push_back(EntityChange::upsert(std::move(entity)));
         }
-        if (changes.empty()) {
-            clearError();
-            return true;
-        }
-        const ApplyEntityChanges command{source.revision(), std::move(changes), {},
-            clone ? "Clone transformed wall" : "Transform wall"};
-        (void)Document::preview_command(source, command);
-        applyDocumentCommand(command);
-        m_selected_id = id_from(clone ? identities.at(original.id) : original.id);
-        clearError();
-        refresh();
-        return true;
+        return {ApplyEntityChanges{source.revision(), std::move(changes), {},
+            clone ? "Clone transformed wall" : "Transform wall"},
+            clone ? identities.at(original.id) : original.id};
     }
 
     [[nodiscard]] bool transformSelectedBoundary(const QString& rotation_degrees,
@@ -1890,9 +1881,18 @@ public:
             }
             const auto source = authoringSnapshot();
             const auto found = source.entities().find(m_selected_id.toStdString());
-            if (found != source.entities().end() && found->second.type == "wall")
-                return transformWallSelection(source, found->second, rotation_degrees, flip_horizontal,
-                    flip_vertical, offset_x, offset_y, clone);
+            if (found != source.entities().end() && found->second.type == "wall") {
+                const auto [command, root] = makeWallTransformCommand(source, found->second,
+                    rotation_degrees, flip_horizontal, flip_vertical, offset_x, offset_y, clone);
+                if (!command.entity_changes.empty()) {
+                    (void)Document::preview_command(source, command);
+                    applyDocumentCommand(command);
+                    m_selected_id = id_from(root);
+                    refresh();
+                }
+                clearError();
+                return true;
+            }
             if (found == source.entities().end() || !is_closed_boundary_entity(found->second.type)) {
                 throw std::invalid_argument("Select a wall or an identified closed boundary first.");
             }
@@ -3003,6 +3003,10 @@ public:
 
     void showBoundaryTransformEditor() {
         const auto context = captureModalContext();
+        const auto source = authoringSnapshot();
+        const auto original = selectedEntity();
+        const bool wall_selected = original && original->type == "wall";
+        std::optional<std::pair<ApplyEntityChanges, std::string>> wall_candidate;
         QDialog dialog(owner);
         styleDialog(dialog);
         dialog.setObjectName(QStringLiteral("boundaryTransformDialog"));
@@ -3037,6 +3041,19 @@ public:
         auto* clone = new QCheckBox(QStringLiteral("Create a copy"), &dialog);
         clone->setObjectName(QStringLiteral("boundaryClone"));
         layout->addWidget(clone);
+        PlanCanvas* preview = nullptr;
+        if (wall_selected) {
+            preview = new PlanCanvas(&dialog);
+            preview->setObjectName("wallTransformPreview");
+            preview->setAccessibleName("Wall transform preview");
+            preview->setMinimumHeight(200);
+            preview->setCanvasBackground(QColor(248, 250, 253));
+            preview->setOverviewMapEnabled(false);
+            preview->setGridEnabled(false);
+            layout->addWidget(preview, 1);
+            layout->addWidget(new QLabel("Gray: original    Blue: proposed", &dialog));
+            dialog.resize(520, 520);
+        }
         auto* status = new QLabel(&dialog);
         status->setObjectName(QStringLiteral("boundaryTransformStatus"));
         status->setWordWrap(true);
@@ -3044,10 +3061,84 @@ public:
         auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel, &dialog);
         buttons->setObjectName(QStringLiteral("boundaryTransformButtons"));
         layout->addWidget(buttons);
+        const auto update_preview = [&] {
+            if (!wall_selected) return;
+            wall_candidate.reset();
+            try {
+                if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
+                if (m_boundary_session) throw std::invalid_argument("Finish or cancel the active boundary before transforming a wall.");
+                if (!modalContextUnchanged(context)) throw std::invalid_argument(lastError().toStdString());
+                auto candidate = makeWallTransformCommand(source, *original, rotation->text(),
+                    flip_horizontal->isChecked(), flip_vertical->isChecked(), offset_x->text(),
+                    offset_y->text(), clone->isChecked());
+                const auto proposed = candidate.first.entity_changes.empty() ? source :
+                    Document::preview_command(source, candidate.first);
+                std::vector<CanvasEntity> geometry;
+                const auto add_graph = [&](const DocumentSnapshot& snapshot, const std::string& root, bool selected) {
+                    const auto graph = clipboard_entities_for_selection(snapshot, root);
+                    std::vector<const Entity*> openings;
+                    for (const auto& entity : graph) if (entity.type == "opening") openings.push_back(&entity);
+                    Wall wall;
+                    std::string error;
+                    if (!read_document_wall(snapshot.entities().at(root), openings, wall, error))
+                        throw std::invalid_argument(error);
+                    validate_wall_semantics(wall);
+                    geometry.push_back({id_from(root), selected ? "wall" : "source",
+                        wall_segments_without_openings(wall.baseline, wall.openings), wall.thickness, selected});
+                    for (const auto* opening : openings) {
+                        if (opening->properties.value("opening_kind", std::string{}) != "door" ||
+                            !opening->properties.contains("door_operation")) continue;
+                        const auto found = std::find_if(wall.openings.begin(), wall.openings.end(),
+                            [&](const auto& item) { return item.id == opening->id; });
+                        geometry.push_back({id_from(opening->id), "opening",
+                            door_plan_symbol(wall.baseline, found->offset, found->width,
+                                decode_door_operation(opening->properties.at("door_operation"))), 0, selected});
+                    }
+                };
+                add_graph(source, original->id, false);
+                add_graph(proposed, candidate.second, true);
+                preview->setEntities(std::move(geometry));
+                preview->fitView();
+                wall_candidate = std::move(candidate);
+                status->clear();
+                buttons->button(QDialogButtonBox::Apply)->setEnabled(true);
+            } catch (const std::exception& error) {
+                preview->setEntities({});
+                status->setText(QString::fromUtf8(error.what()));
+                buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+            }
+        };
+        if (wall_selected) {
+            for (auto* field : {rotation, offset_x, offset_y})
+                QObject::connect(field, &QLineEdit::textChanged, &dialog, update_preview);
+            for (auto* field : {flip_horizontal, flip_vertical, clone})
+                QObject::connect(field, &QCheckBox::toggled, &dialog, update_preview);
+            update_preview();
+        }
         QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
         QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, [&] {
             if (!modalContextUnchanged(context)) {
                 status->setText(lastError());
+                if (wall_selected) {
+                    wall_candidate.reset();
+                    preview->setEntities({});
+                    buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+                }
+                return;
+            }
+            if (wall_selected) {
+                if (!wall_candidate) return;
+                try {
+                    if (!wall_candidate->first.entity_changes.empty()) {
+                        applyDocumentCommand(wall_candidate->first);
+                        m_selected_id = id_from(wall_candidate->second);
+                        refresh();
+                    }
+                    clearError();
+                    dialog.accept();
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
                 return;
             }
             if (transformSelectedBoundary(rotation->text(), flip_horizontal->isChecked(),

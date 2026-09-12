@@ -532,6 +532,16 @@ void test_wall_transform_workflow(const QString& capture_directory) {
     require(!window.transformSelectedBoundary("45",false,false,"0","0",false) &&
         window.document().snapshot().entities()==constrained.entities() && window.document().revision()==constrained.revision(),
         "incompatible rigid transform must preserve hard constraints and reject without mutation");
+    QTimer::singleShot(0,&window,[&] {
+        auto* dialog=window.findChild<QDialog*>("boundaryTransformDialog");
+        dialog->findChild<QLineEdit*>("boundaryRotationDegrees")->setText("45");
+        require(!dialog->findChild<QDialogButtonBox*>("boundaryTransformButtons")->button(QDialogButtonBox::Apply)->isEnabled() &&
+            !dialog->findChild<QLabel*>("boundaryTransformStatus")->text().isEmpty() &&
+            window.document().snapshot().entities()==constrained.entities(),
+            "live preview must expose constraint conflicts without modifying the document");
+        dialog->reject();
+    });
+    window.showBoundaryTransformEditor();
     window.document().apply(ApplyEntityChanges{window.document().revision(),{EntityChange::erase(vertical.id)},{},"remove test constraint"});
     auto curved=window.document().snapshot().entities().at(wall_id.toStdString());
     curved.properties["baseline"]["sweep_radians"]=0.75;
@@ -546,14 +556,57 @@ void test_wall_transform_workflow(const QString& capture_directory) {
     require(reopened.openProject(path) &&
         reopened.document().snapshot().entities()==window.document().snapshot().entities(),
         "transformed walls and hosted openings must survive project save and reopen");
+    const auto before_preview=window.document().snapshot();
     QTimer::singleShot(0,&window,[&] {
         auto* dialog=window.findChild<QDialog*>("boundaryTransformDialog");
         require(dialog && dialog->findChild<QDialogButtonBox*>("boundaryTransformButtons")->button(QDialogButtonBox::Apply)->isEnabled(),
             "transform editor must enable wall selection");
+        auto* preview=dynamic_cast<desktop::PlanCanvas*>(dialog->findChild<QWidget*>("wallTransformPreview"));
+        require(preview && preview->entities().size()==4,"wall preview must show original and proposed wall/opening graphs");
+        auto* x=dialog->findChild<QLineEdit*>("boundaryOffsetX");
+        x->setText("invalid");
+        require(preview->entities().empty() &&
+            !dialog->findChild<QDialogButtonBox*>("boundaryTransformButtons")->button(QDialogButtonBox::Apply)->isEnabled(),
+            "invalid transform must clear stale preview and disable Apply");
+        x->setText("3 m");
+        dialog->findChild<QLineEdit*>("boundaryRotationDegrees")->setText("45");
+        require(preview->entities().size()==4 && window.document().snapshot().entities()==before_preview.entities() &&
+            window.document().revision()==before_preview.revision(),"live transform preview must not mutate document or history");
         if(!capture_directory.isEmpty()) {
             QDir().mkpath(capture_directory);
             require(dialog->grab().save(capture_directory+"/wall-transform.png"),"save wall transform editor capture");
         }
+        dialog->reject();
+    });
+    window.showBoundaryTransformEditor();
+    require(window.document().snapshot().entities()==before_preview.entities() && window.document().revision()==before_preview.revision(),
+        "cancelling transform preview must leave the document unchanged");
+    QString preview_root;
+    QTimer::singleShot(0,&window,[&] {
+        auto* dialog=window.findChild<QDialog*>("boundaryTransformDialog");
+        dialog->findChild<QCheckBox*>("boundaryClone")->setChecked(true);
+        dialog->findChild<QLineEdit*>("boundaryOffsetX")->setText("4 m");
+        auto* preview=dynamic_cast<desktop::PlanCanvas*>(dialog->findChild<QWidget*>("wallTransformPreview"));
+        for(const auto& entity:preview->entities()) if(entity.type=="wall" && entity.selected) preview_root=entity.id;
+        require(!preview_root.isEmpty() && preview_root!=wall_id,"copy preview must allocate its own wall identity");
+        dialog->findChild<QDialogButtonBox*>("boundaryTransformButtons")->button(QDialogButtonBox::Apply)->click();
+    });
+    window.showBoundaryTransformEditor();
+    require(window.selectedEntityId()==preview_root && window.document().revision()==before_preview.revision()+1 &&
+        window.undoCommand() && window.document().snapshot().entities()==before_preview.entities(),
+        "Apply must commit the exact preview identity once and remain undoable");
+    require(window.selectEntity(wall_id),"select wall for stale preview test");
+    QTimer::singleShot(0,&window,[&] {
+        auto* dialog=window.findChild<QDialog*>("boundaryTransformDialog");
+        dialog->findChild<QLineEdit*>("boundaryOffsetX")->setText("4 m");
+        require(!window.createStraightWall({20,20},{21,20}).isEmpty(),"intervening edit fixture");
+        const auto changed=window.document().snapshot();
+        auto* apply=dialog->findChild<QDialogButtonBox*>("boundaryTransformButtons")->button(QDialogButtonBox::Apply);
+        apply->click();
+        auto* preview=dynamic_cast<desktop::PlanCanvas*>(dialog->findChild<QWidget*>("wallTransformPreview"));
+        require(!apply->isEnabled() && preview->entities().empty() &&
+            window.document().snapshot().entities()==changed.entities() && window.document().revision()==changed.revision(),
+            "stale preview must clear and refuse Apply without overwriting intervening edits");
         dialog->reject();
     });
     window.showBoundaryTransformEditor();

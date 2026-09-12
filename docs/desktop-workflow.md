@@ -366,8 +366,13 @@ and incompatible transforms reject atomically. Valid wall length-entry receipts
 retain their exact expression while their recorded baseline follows the move.
 Wall copy mode creates fresh wall/opening identities together and retains their
 material assignments. It does not copy external constraints or room links.
-Room-boundary propagation, connected-wall group transforms, and live transform
-previews remain open production work.
+The wall editor previews the original and proposed wall/opening geometry as
+inputs change, using a detached validated document candidate. Invalid values
+or constraint conflicts clear the preview and disable Apply. Apply commits the
+exact cached command, including copy identities; Cancel creates no history.
+Intervening document or selection changes invalidate the candidate. Room-boundary
+propagation, connected-wall group transforms, and boundary transform previews
+remain open production work.
 
 Boundary clone mode allocates a new boundary, segment IDs, and vertex IDs, carries only
 safe drawing context and area metadata, and leaves the source entity and its
