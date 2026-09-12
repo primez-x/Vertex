@@ -20,6 +20,14 @@ section edges from supported building solids; see
 `docs/architectural-projections.md` for its explicit boundary and remaining
 integration work.
 
+The Drawing sheets dialog also manages the page collection. A new page is
+created through the typed model with a validated size, copied project
+title-block context, and one independently scaled viewport for each
+coordinated view. Removing a page is undoable and fails when it would leave a
+dangling cross-sheet callout or remove the final page. The dialog selects the
+page used by draft PDF, SVG, and print output; that presentation selection is
+included in the output scene fingerprint without dirtying the document.
+
 Views identify plan, elevation and section definitions by stable ID. A view owns
 its finite origin in metres, orthonormal direction/up frame, cut and far depths,
 paper line widths, hatch enable/pattern/scale and detail level. Cut depth is a

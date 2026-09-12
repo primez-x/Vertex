@@ -35,8 +35,12 @@ Tests cover a two-page text serialization/parse roundtrip, subject and area
 metadata, linked models, reordered stable IDs, independent presentation edits,
 invalid references, duplicate IDs/links, numeric validation, and malformed JSON.
 
-This is not wired into `Document`, SQLite/project persistence, desktop page
-management, undo/redo, geometry references, preview, printing, or export. The
-standalone JSON roundtrip is not evidence of application save/reopen. APX-DOC-001
-remains incomplete until those integrations and an application-level fixture
-are delivered. No rendering or output fidelity is claimed.
+The richer `MultipageProject` contract remains a standalone interchange model.
+The application-level `sheet_view_model` entity now supplies the corresponding
+desktop page lifecycle: pages can be added or removed through Document history,
+cross-sheet references are validated, and a selected page drives the shared
+PDF/SVG/print renderer and its output fingerprint. Subject/area metadata from
+this standalone contract is still not projected into the desktop scaffold, and
+the complete multipage acceptance fixture, rendering fidelity, and production
+qualification remain open. The standalone JSON roundtrip is therefore not by
+itself evidence of the full APX-DOC-001 requirement.

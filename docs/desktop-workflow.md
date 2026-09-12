@@ -309,6 +309,12 @@ view descriptor, linked processing roles, and running Windows executable. An
 active filter instead stamps `DRAFT — VIEW FILTER ACTIVE` and explains that
 view filters do not change totals. Draft output does not mutate the document.
 
+The Drawing sheets command manages the persisted page set. Adding a page seeds
+coordinated plan/elevation/section viewports with independent scales; removing
+a page uses the typed graph validator and is undoable. The selected page in
+that dialog is the page rendered by draft PDF, SVG, and print, and its identity
+is bound into the adjacent output fingerprint.
+
 The executable supports:
 
 ```text

@@ -197,6 +197,27 @@ SheetViewModel SheetViewModel::with_sheet(DrawingSheet replacement) const {
     return create(views_, std::move(changed), schedule_ids_);
 }
 
+SheetViewModel SheetViewModel::with_added_sheet(DrawingSheet addition) const {
+    auto changed = sheets_;
+    changed.push_back(std::move(addition));
+    // create() performs the complete detached graph validation, including
+    // identity/number uniqueness and references from the new page to views,
+    // schedules, and other sheets.
+    return create(views_, std::move(changed), schedule_ids_);
+}
+
+SheetViewModel SheetViewModel::with_removed_sheet(const std::string& sheet_id) const {
+    require(sheets_.size() > 1, "cannot remove the only drawing sheet");
+    auto changed = sheets_;
+    const auto found = std::find_if(changed.begin(), changed.end(),
+        [&](const auto& sheet) { return sheet.id == sheet_id; });
+    require(found != changed.end(), "cannot remove unknown drawing sheet");
+    changed.erase(found);
+    // create() rejects any surviving callout that still targets the removed
+    // sheet. Callouts owned by the removed page disappear with that page.
+    return create(views_, std::move(changed), schedule_ids_);
+}
+
 SheetViewModel SheetViewModel::with_viewport(const std::string& sheet_id,
                                              SheetViewport replacement) const {
     auto changed = sheets_;

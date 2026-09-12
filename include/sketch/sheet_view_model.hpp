@@ -100,6 +100,12 @@ public:
     // Updates one sheet definition while revalidating every viewport, callout,
     // schedule placement and cross-sheet reference in the detached snapshot.
     [[nodiscard]] SheetViewModel with_sheet(DrawingSheet replacement) const;
+    // Appends a new drawing sheet after validating all of its viewports,
+    // callouts, schedules, and identity/number uniqueness against the graph.
+    [[nodiscard]] SheetViewModel with_added_sheet(DrawingSheet addition) const;
+    // Removes one drawing sheet. The graph must retain at least one sheet and
+    // no surviving callout may target the removed sheet.
+    [[nodiscard]] SheetViewModel with_removed_sheet(const std::string& sheet_id) const;
     // Updates one viewport within a sheet while preserving its linked view and
     // revalidating all page and callout references.
     [[nodiscard]] SheetViewModel with_viewport(const std::string& sheet_id,

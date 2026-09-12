@@ -914,6 +914,11 @@ struct VerticalLevelRecord {
     VerticalLevelGraph model;
 };
 
+struct SheetModelRecord {
+    std::string entity_id;
+    SheetViewModel model;
+};
+
 QString assembly_quantity_unit_label(AssemblyQuantityUnit unit) {
     switch (unit) {
     case AssemblyQuantityUnit::count: return QStringLiteral("count");
@@ -986,6 +991,14 @@ std::optional<VerticalLevelRecord> decode_vertical_levels(
         }
         return VerticalLevelRecord{
             id, VerticalLevelGraph::from_json(entity.properties.at("model"))};
+    }
+    return std::nullopt;
+}
+
+std::optional<SheetModelRecord> decode_sheet_model(const DocumentSnapshot& snapshot) {
+    for (const auto& [id, entity] : snapshot.entities()) {
+        if (entity.type != kSheetViewEntityType) continue;
+        return SheetModelRecord{id, decode_sheet_view_entity(entity)};
     }
     return std::nullopt;
 }
@@ -2046,6 +2059,158 @@ public:
             // visibility remains fail-open for selection and diagnostics.
             const auto visible = visible_project_entities(m_document->snapshot(), m_view_filter);
             return visible.contains(id.toStdString());
+        }
+    }
+
+    [[nodiscard]] QString createDrawingSheet(const QString& number,
+                                             const QString& width_mm,
+                                             const QString& height_mm,
+                                             const QString& title) {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return {};
+        }
+        try {
+            const auto sheet_number = number.trimmed();
+            if (sheet_number.isEmpty()) throw std::invalid_argument("Sheet number cannot be empty");
+            const auto parse_finite = [](const QString& text, const char* label) {
+                bool ok = false;
+                const auto value = text.trimmed().toDouble(&ok);
+                if (!ok || !std::isfinite(value) || value <= 0.0)
+                    throw std::invalid_argument(std::string(label) + " must be finite and positive");
+                return value;
+            };
+            const auto width = parse_finite(width_mm, "Sheet width");
+            const auto height = parse_finite(height_mm, "Sheet height");
+            const auto source = authoringSnapshot();
+            const auto record = decode_sheet_model(source);
+            if (!record || record->model.sheets().empty())
+                throw std::invalid_argument("No typed drawing sheet is available");
+            for (const auto& sheet : record->model.sheets()) {
+                if (sheet.number == sheet_number.toStdString())
+                    throw std::invalid_argument("Sheet number is already in use");
+            }
+            std::string id;
+            do {
+                id = "sheet-" + make_stable_id();
+            } while (std::any_of(record->model.sheets().begin(), record->model.sheets().end(),
+                                 [&](const auto& sheet) { return sheet.id == id; }));
+            DrawingSheet addition;
+            addition.id = id;
+            addition.number = sheet_number.toStdString();
+            addition.width_mm = width;
+            addition.height_mm = height;
+            addition.title_block = record->model.sheets().front().title_block;
+            addition.title_block.title = title.trimmed().isEmpty()
+                ? std::string("New sheet") : title.trimmed().toStdString();
+
+            // Seed one independently scaled viewport per coordinated view so
+            // a new page is immediately useful.  A small custom page simply
+            // starts blank and can be populated through the viewport editor.
+            const auto& views = record->model.views();
+            constexpr double margin = 10.0;
+            constexpr double gap = 5.0;
+            const auto columns = std::min<std::size_t>(2, std::max<std::size_t>(1, views.size()));
+            const auto rows = views.empty() ? 0U : (views.size() + columns - 1) / columns;
+            const auto usable_width = width - margin * 2.0 - gap * static_cast<double>(columns - 1);
+            const auto usable_height = height - margin * 2.0 - gap * static_cast<double>(rows > 0 ? rows - 1 : 0);
+            const auto cell_width = columns > 0 ? usable_width / static_cast<double>(columns) : 0.0;
+            const auto cell_height = rows > 0 ? usable_height / static_cast<double>(rows) : 0.0;
+            if (cell_width > 0.0 && cell_height > 0.0) {
+                for (std::size_t index = 0; index < views.size(); ++index) {
+                    const auto column = index % columns;
+                    const auto row = index / columns;
+                    addition.viewports.push_back({
+                        id + "-viewport-" + std::to_string(index), views[index].id,
+                        {margin + static_cast<double>(column) * (cell_width + gap),
+                         margin + static_cast<double>(row) * (cell_height + gap),
+                         cell_width, cell_height}, 100.0});
+                }
+            }
+            const auto updated_model = record->model.with_added_sheet(std::move(addition));
+            auto updated_entity = source.entities().at(record->entity_id);
+            updated_entity.properties = make_sheet_view_entity(
+                updated_entity.id, updated_model).properties;
+            const ApplyEntityChanges command{
+                source.revision(), {EntityChange::upsert(std::move(updated_entity))}, {},
+                "Create drawing sheet"};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            m_output_sheet_id = QString::fromStdString(id);
+            clearError();
+            refresh();
+            return QString::fromStdString(id);
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Sheet create: %1").arg(QString::fromUtf8(error.what())));
+            return {};
+        }
+    }
+
+    [[nodiscard]] bool removeDrawingSheet(const QString& sheet_id) {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        try {
+            const auto wanted = sheet_id.trimmed().toStdString();
+            if (wanted.empty()) throw std::invalid_argument("Choose a sheet to remove");
+            const auto source = authoringSnapshot();
+            const auto record = decode_sheet_model(source);
+            if (!record) throw std::invalid_argument("No typed drawing sheet is available");
+            const auto updated_model = record->model.with_removed_sheet(wanted);
+            auto updated_entity = source.entities().at(record->entity_id);
+            updated_entity.properties = make_sheet_view_entity(
+                updated_entity.id, updated_model).properties;
+            const ApplyEntityChanges command{
+                source.revision(), {EntityChange::upsert(std::move(updated_entity))}, {},
+                "Remove drawing sheet"};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            if (m_output_sheet_id == QString::fromStdString(wanted) ||
+                !std::any_of(updated_model.sheets().begin(), updated_model.sheets().end(),
+                             [&](const auto& sheet) { return QString::fromStdString(sheet.id) == m_output_sheet_id; })) {
+                m_output_sheet_id = QString::fromStdString(updated_model.sheets().front().id);
+            }
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Sheet remove: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    [[nodiscard]] bool selectOutputSheet(const QString& sheet_id) {
+        try {
+            const auto wanted = sheet_id.trimmed().toStdString();
+            const auto record = decode_sheet_model(m_document->snapshot());
+            if (!record || !std::any_of(record->model.sheets().begin(), record->model.sheets().end(),
+                                        [&](const auto& sheet) { return sheet.id == wanted; })) {
+                throw std::invalid_argument("Drawing sheet identity was not found");
+            }
+            m_output_sheet_id = QString::fromStdString(wanted);
+            clearError();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Sheet selection: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    [[nodiscard]] QString outputSheetId() const {
+        try {
+            const auto record = decode_sheet_model(m_document->snapshot());
+            if (!record || record->model.sheets().empty()) return {};
+            if (!m_output_sheet_id.isEmpty() &&
+                std::any_of(record->model.sheets().begin(), record->model.sheets().end(),
+                            [&](const auto& sheet) {
+                                return QString::fromStdString(sheet.id) == m_output_sheet_id;
+                            })) {
+                return m_output_sheet_id;
+            }
+            return QString::fromStdString(record->model.sheets().front().id);
+        } catch (const std::exception&) {
+            return {};
         }
     }
 
@@ -5313,6 +5478,7 @@ public:
             m_file_path.clear();
             m_file_sha256.clear();
             m_selected_id.clear();
+            m_output_sheet_id.clear();
             clearPreview();
             m_tool = CanvasTool::select;
             syncToolControls();
@@ -5367,6 +5533,7 @@ public:
             initializeDrawingContext();
             m_file_sha256 = std::move(candidate_sha256);
             m_selected_id.clear();
+            m_output_sheet_id.clear();
             clearPreview();
             m_tool = CanvasTool::select;
             syncToolControls();
@@ -5428,7 +5595,13 @@ public:
         try {
             const auto model = decode_sheet_view_entity(*sheet_entity);
             if (model.sheets().empty()) throw std::invalid_argument("no drawing sheets are defined");
-            const auto& sheet = model.sheets().front();
+            const auto selected_sheet_id = outputSheetId().toStdString();
+            const auto selected_sheet = std::find_if(
+                model.sheets().begin(), model.sheets().end(),
+                [&](const auto& candidate) { return candidate.id == selected_sheet_id; });
+            if (selected_sheet == model.sheets().end())
+                throw std::invalid_argument("selected drawing sheet is no longer available");
+            const auto& sheet = *selected_sheet;
             const auto paper_scale = std::min(target.width() / sheet.width_mm,
                                               target.height() / sheet.height_mm);
             if (!(std::isfinite(paper_scale) && paper_scale > 0.0))
@@ -5697,8 +5870,11 @@ public:
             throw std::invalid_argument("the persisted sheet graph contains no drawing sheets");
         }
         const auto inputs = outputFingerprintInputs(snapshot, false);
+        const auto selected_sheet_id = outputSheetId().toStdString();
         const auto scene = make_sheet_output_scene(snapshot, sheet->first,
-                                                   model.sheets().front().id, inputs);
+                                                   selected_sheet_id.empty() ? model.sheets().front().id
+                                                                             : selected_sheet_id,
+                                                   inputs);
         const auto current = check_sheet_output_scene_current(scene, snapshot, inputs);
         if (!current.valid) {
             throw std::invalid_argument("sheet output scene is invalid: " + current.error);
@@ -6094,45 +6270,157 @@ public:
     }
 
     void showSheetSettings() {
-        const auto context = captureModalContext();
-        const auto source = authoringSnapshot();
-        const auto sheet_entity = std::find_if(source.entities().begin(), source.entities().end(),
-            [](const auto& entry) { return entry.second.type == kSheetViewEntityType; });
-        if (sheet_entity == source.entities().end()) {
-            setError(QStringLiteral("No typed drawing sheet is available."));
-            return;
-        }
+        ModalContext context = captureModalContext();
+        QDialog dialog(owner);
+        styleDialog(dialog);
+        dialog.setObjectName(QStringLiteral("sheetSettingsDialog"));
+        dialog.setWindowTitle(QStringLiteral("Drawing sheets"));
+        dialog.setModal(true);
+        dialog.resize(700, 500);
+        auto* root = new QVBoxLayout(&dialog);
+        auto* sheet_row = new QHBoxLayout();
+        auto* sheet_label = new QLabel(QStringLiteral("Output sheet"), &dialog);
+        auto* selector = new QComboBox(&dialog);
+        selector->setObjectName(QStringLiteral("sheetSelector"));
+        selector->setMinimumWidth(200);
+        selector->setToolTip(QStringLiteral("Select the sheet used by draft PDF, SVG, and print output"));
+        auto* add = new QPushButton(QStringLiteral("Add sheet…"), &dialog);
+        add->setObjectName(QStringLiteral("addSheet"));
+        auto* remove = new QPushButton(QStringLiteral("Remove"), &dialog);
+        remove->setObjectName(QStringLiteral("removeSheet"));
+        sheet_row->addWidget(sheet_label);
+        sheet_row->addWidget(selector, 1);
+        sheet_row->addWidget(add);
+        sheet_row->addWidget(remove);
+        root->addLayout(sheet_row);
+
+        auto* form = new QFormLayout();
+        auto* number = new QLineEdit(&dialog);
+        auto* project = new QLineEdit(&dialog);
+        auto* title = new QLineEdit(&dialog);
+        auto* author = new QLineEdit(&dialog);
+        auto* issue_date = new QLineEdit(&dialog);
+        number->setObjectName(QStringLiteral("sheetNumber"));
+        project->setObjectName(QStringLiteral("sheetProject"));
+        title->setObjectName(QStringLiteral("sheetTitle"));
+        author->setObjectName(QStringLiteral("sheetAuthor"));
+        issue_date->setObjectName(QStringLiteral("sheetIssueDate"));
+        form->addRow(QStringLiteral("Sheet number"), number);
+        form->addRow(QStringLiteral("Project"), project);
+        form->addRow(QStringLiteral("Title"), title);
+        form->addRow(QStringLiteral("Author"), author);
+        form->addRow(QStringLiteral("Issue date"), issue_date);
+        auto* apply = new QPushButton(QStringLiteral("Apply sheet metadata"), &dialog);
+        apply->setObjectName(QStringLiteral("applySheetMetadata"));
+        form->addRow(apply);
+        root->addLayout(form);
+        auto* status = new QLabel(&dialog);
+        status->setObjectName(QStringLiteral("sheetSettingsStatus"));
+        status->setWordWrap(true);
+        root->addWidget(status);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+        root->addWidget(buttons);
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+        const auto selected_id = [&] {
+            return selector->currentData().toString();
+        };
+        const auto fill_fields = [&] {
+            const auto source = authoringSnapshot();
+            const auto record = decode_sheet_model(source);
+            if (!record) {
+                status->setText(QStringLiteral("No drawing sheets are defined."));
+                return;
+            }
+            const auto id = selected_id().toStdString();
+            const auto found = std::find_if(record->model.sheets().begin(), record->model.sheets().end(),
+                                            [&](const auto& sheet) { return sheet.id == id; });
+            if (found == record->model.sheets().end()) {
+                status->setText(QStringLiteral("Choose a drawing sheet."));
+                return;
+            }
+            number->setText(QString::fromStdString(found->number));
+            project->setText(QString::fromStdString(found->title_block.project));
+            title->setText(QString::fromStdString(found->title_block.title));
+            author->setText(QString::fromStdString(found->title_block.author));
+            issue_date->setText(QString::fromStdString(found->title_block.issue_date));
+            status->setText(QStringLiteral("%1 viewports • %2 callouts • %3 schedule placements • selected for output")
+                                .arg(static_cast<int>(found->viewports.size()))
+                                .arg(static_cast<int>(found->callouts.size()))
+                                .arg(static_cast<int>(found->schedules.size())));
+        };
+        const auto fill_selector = [&] {
+            const auto source = authoringSnapshot();
+            const auto record = decode_sheet_model(source);
+            QSignalBlocker block(selector);
+            selector->clear();
+            if (!record) {
+                fill_fields();
+                return;
+            }
+            auto wanted = outputSheetId();
+            int wanted_index = -1;
+            for (int index = 0; index < static_cast<int>(record->model.sheets().size()); ++index) {
+                const auto& sheet = record->model.sheets()[static_cast<std::size_t>(index)];
+                selector->addItem(QStringLiteral("%1  ·  %2")
+                                      .arg(QString::fromStdString(sheet.number),
+                                           QString::fromStdString(sheet.title_block.title)),
+                                  QString::fromStdString(sheet.id));
+                if (QString::fromStdString(sheet.id) == wanted) wanted_index = index;
+            }
+            if (wanted_index < 0 && selector->count() > 0) wanted_index = 0;
+            if (wanted_index >= 0) selector->setCurrentIndex(wanted_index);
+            fill_fields();
+        };
+        QObject::connect(selector, &QComboBox::currentIndexChanged, &dialog,
+                         [&](int index) {
+                             if (index < 0) return;
+                             if (selectOutputSheet(selector->itemData(index).toString())) {
+                                 fill_fields();
+                             }
+                         });
+        QObject::connect(apply, &QPushButton::clicked, &dialog, [&] {
+            if (selected_id().isEmpty()) return;
+            if (!modalContextUnchanged(context)) {
+                context = captureModalContext();
+                fill_selector();
+                return;
+            }
+            if (editSheetMetadata(selected_id(), number->text(), project->text(), title->text(),
+                                  author->text(), issue_date->text())) {
+                context = captureModalContext();
+                fill_selector();
+            }
+        });
+        QObject::connect(add, &QPushButton::clicked, &dialog, [&] {
+            bool accepted = false;
+            const auto new_number = QInputDialog::getText(
+                &dialog, QStringLiteral("Add drawing sheet"), QStringLiteral("Sheet number:"),
+                QLineEdit::Normal, QStringLiteral("A-201"), &accepted).trimmed();
+            if (!accepted || new_number.isEmpty()) return;
+            const auto new_title = QInputDialog::getText(
+                &dialog, QStringLiteral("Add drawing sheet"), QStringLiteral("Sheet title:"),
+                QLineEdit::Normal, QStringLiteral("New sheet"), &accepted).trimmed();
+            if (!accepted) return;
+            if (!createDrawingSheet(new_number, QStringLiteral("420"), QStringLiteral("297"), new_title).isEmpty()) {
+                context = captureModalContext();
+                fill_selector();
+            }
+        });
+        QObject::connect(remove, &QPushButton::clicked, &dialog, [&] {
+            const auto id = selected_id();
+            if (id.isEmpty()) return;
+            if (QMessageBox::question(&dialog, QStringLiteral("Remove drawing sheet"),
+                                      QStringLiteral("Remove the selected sheet? This can be undone.")) !=
+                QMessageBox::Yes) return;
+            if (removeDrawingSheet(id)) {
+                context = captureModalContext();
+                fill_selector();
+            }
+        });
         try {
-            const auto model = decode_sheet_view_entity(sheet_entity->second);
-            if (model.sheets().empty()) throw std::invalid_argument("no drawing sheets are defined");
-            const auto& sheet = model.sheets().front();
-            QDialog dialog(owner);
-            styleDialog(dialog);
-            dialog.setWindowTitle(QStringLiteral("Sheet settings"));
-            dialog.setModal(true);
-            auto* form = new QFormLayout(&dialog);
-            auto* number = new QLineEdit(QString::fromStdString(sheet.number), &dialog);
-            auto* project = new QLineEdit(QString::fromStdString(sheet.title_block.project), &dialog);
-            auto* title = new QLineEdit(QString::fromStdString(sheet.title_block.title), &dialog);
-            auto* author = new QLineEdit(QString::fromStdString(sheet.title_block.author), &dialog);
-            auto* issue_date = new QLineEdit(QString::fromStdString(sheet.title_block.issue_date), &dialog);
-            number->setObjectName(QStringLiteral("sheetNumber"));
-            project->setObjectName(QStringLiteral("sheetProject"));
-            title->setObjectName(QStringLiteral("sheetTitle"));
-            author->setObjectName(QStringLiteral("sheetAuthor"));
-            issue_date->setObjectName(QStringLiteral("sheetIssueDate"));
-            form->addRow(QStringLiteral("Sheet number"), number);
-            form->addRow(QStringLiteral("Project"), project);
-            form->addRow(QStringLiteral("Title"), title);
-            form->addRow(QStringLiteral("Author"), author);
-            form->addRow(QStringLiteral("Issue date"), issue_date);
-            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-            form->addRow(buttons);
-            QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-            QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-            if (dialog.exec() != QDialog::Accepted || !modalContextUnchanged(context)) return;
-            (void)editSheetMetadata(QString::fromStdString(sheet.id), number->text(),
-                                    project->text(), title->text(), author->text(), issue_date->text());
+            fill_selector();
+            dialog.exec();
         } catch (const std::exception& error) {
             setError(QStringLiteral("Sheet settings: %1").arg(QString::fromUtf8(error.what())));
         }
@@ -10389,6 +10677,7 @@ private:
     QComboBox* m_model_phase_combo{};
     QComboBox* m_pageSizeCombo{};
     QComboBox* m_architecturalViewCombo{};
+    QString m_output_sheet_id;
     QLabel* m_drawing_context_label{};
     QLabel* m_visibility_label{};
     QPushButton* m_show_all_button{};
@@ -10540,6 +10829,23 @@ bool MainWindow::editSheetSchedulePlacement(const QString& sheet_id, const QStri
                                             const QString& width_mm, const QString& height_mm) {
     return m_impl->editSheetSchedulePlacement(sheet_id, placement_id, x_mm, y_mm, width_mm,
                                               height_mm);
+}
+
+QString MainWindow::createDrawingSheet(const QString& number, const QString& width_mm,
+                                       const QString& height_mm, const QString& title) {
+    return m_impl->createDrawingSheet(number, width_mm, height_mm, title);
+}
+
+bool MainWindow::removeDrawingSheet(const QString& sheet_id) {
+    return m_impl->removeDrawingSheet(sheet_id);
+}
+
+bool MainWindow::selectOutputSheet(const QString& sheet_id) {
+    return m_impl->selectOutputSheet(sheet_id);
+}
+
+QString MainWindow::outputSheetId() const {
+    return m_impl->outputSheetId();
 }
 
 bool MainWindow::editArchitecturalViewPresentation(

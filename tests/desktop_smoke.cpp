@@ -5,6 +5,7 @@
 #include "sketch/room_relationships.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/vertical_levels.hpp"
+#include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/desktop/building_object_dialog.hpp"
@@ -1465,6 +1466,50 @@ int main(int argc, char** argv) {
             "sheet metadata edit must persist in the canonical sheet/view entity");
     require(window.undoCommand() && window.redoCommand(),
             "sheet metadata edit must participate in normal document history");
+    const auto added_sheet_id = window.createDrawingSheet(QStringLiteral("A-201"),
+                                                          QStringLiteral("420"),
+                                                          QStringLiteral("297"),
+                                                          QStringLiteral("Details"));
+    require(!added_sheet_id.isEmpty() && window.outputSheetId() == added_sheet_id,
+            "creating a drawing sheet should select the new page for output");
+    const auto added_sheet_model = sketch::decode_sheet_view_entity(
+        window.document().snapshot().entities().at("sheet-view-1"));
+    const auto added_sheet = std::find_if(added_sheet_model.sheets().begin(),
+                                          added_sheet_model.sheets().end(),
+        [&](const auto& sheet) { return sheet.id == added_sheet_id.toStdString(); });
+    require(added_sheet != added_sheet_model.sheets().end() &&
+                added_sheet->number == "A-201" && added_sheet->viewports.size() == 3,
+            "new drawing sheet should persist its metadata and coordinated viewports");
+    require(window.exportDraftPdf(pdf_path_qstring),
+            "selected new drawing sheet should render through the shared PDF path");
+    QFile selected_sheet_fingerprint(QString::fromStdWString(
+        std::filesystem::path(pdf_path.wstring() + L".fingerprint.json").wstring()));
+    require(selected_sheet_fingerprint.open(QIODevice::ReadOnly | QIODevice::Text),
+            "selected-sheet PDF fingerprint should be readable");
+    const auto selected_sheet_manifest =
+        nlohmann::json::parse(selected_sheet_fingerprint.readAll().toStdString());
+    selected_sheet_fingerprint.close();
+    bool selected_sheet_bound = false;
+    for (const auto& resource : selected_sheet_manifest.at("fingerprint").at("manifest")
+                                      .at("dependencies").at("views").at("resources")) {
+        if (resource.at("metadata").at("sheet_id") == added_sheet_id.toStdString()) {
+            selected_sheet_bound = true;
+            break;
+        }
+    }
+    require(selected_sheet_bound, "selected-sheet output fingerprint must bind the requested page");
+    require(window.selectOutputSheet(QStringLiteral("sheet-1")) &&
+                window.outputSheetId() == QStringLiteral("sheet-1"),
+            "output sheet selection should be local presentation state");
+    require(window.removeDrawingSheet(added_sheet_id),
+            "drawing sheet removal should use the typed document command path");
+    const auto after_sheet_remove = sketch::decode_sheet_view_entity(
+        window.document().snapshot().entities().at("sheet-view-1"));
+    require(after_sheet_remove.sheets().size() == 1 &&
+                window.outputSheetId() == QStringLiteral("sheet-1"),
+            "removing a sheet should preserve the remaining output page");
+    require(window.undoCommand() && window.redoCommand(),
+            "drawing sheet removal must participate in normal document history");
     require(window.editSheetViewport(QStringLiteral("sheet-1"), QStringLiteral("viewport-plan"),
                                      QStringLiteral("15"), QStringLiteral("15"),
                                      QStringLiteral("390"), QStringLiteral("267"),

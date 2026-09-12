@@ -1224,7 +1224,7 @@
         "tests/multipage_document_tests.cpp",
         "docs/multipage-projects.md"
       ],
-      "implementation_note": "Multipage subject/shared data, areas, stable links, page order, and view semantics are implemented as a standalone contract; Document persistence, UI, print/export, and application-level save/reopen remain open."
+      "implementation_note": "Multipage subject/shared data, areas, stable links, page order, and view semantics are implemented as a standalone contract. The desktop sheet_view_model now supports undoable page add/remove, reference-safe lifecycle validation, selected-page PDF/SVG/print output, and save/reopen through Document; subject/area projection and complete application-level acceptance remain open."
     },
     {
       "id": "APX-DOC-002",

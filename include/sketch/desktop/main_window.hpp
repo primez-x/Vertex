@@ -68,6 +68,20 @@ public:
                                                   const QString& y_mm,
                                                   const QString& width_mm,
                                                   const QString& height_mm);
+    // Creates a validated drawing sheet with one independently scaled
+    // viewport per coordinated view. The returned ID is stable in the
+    // document and the new page becomes the selected output sheet.
+    [[nodiscard]] QString createDrawingSheet(const QString& number,
+                                             const QString& width_mm,
+                                             const QString& height_mm,
+                                             const QString& title);
+    // Removes a drawing sheet through typed graph validation. The last sheet
+    // and sheets targeted by surviving callouts cannot be removed.
+    [[nodiscard]] bool removeDrawingSheet(const QString& sheet_id);
+    // Selects which persisted sheet is used by draft PDF/SVG/print output.
+    // Selection is local presentation state and does not dirty the document.
+    [[nodiscard]] bool selectOutputSheet(const QString& sheet_id);
+    [[nodiscard]] QString outputSheetId() const;
     // Updates persisted architectural view presentation settings through
     // typed validation and normal Document history.
     [[nodiscard]] bool editArchitecturalViewPresentation(

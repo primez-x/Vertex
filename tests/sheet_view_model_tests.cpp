@@ -92,6 +92,41 @@ void coordination_and_isolation() {
     views[0].id = "changed"; sheets[0].number = "changed";
     require(detached.to_json() == saved, "snapshot owns input values");
 }
+void sheet_lifecycle() {
+    const auto original = fixture();
+    auto addition = original.sheets().front();
+    addition.id = "c";
+    addition.number = "A301";
+    addition.title_block.title = "Details";
+    addition.callouts.clear();
+    addition.schedules.clear();
+    const auto appended = original.with_added_sheet(addition);
+    require(appended.sheets().size() == 3 && appended.sheets().back().id == "c",
+            "added sheet should be validated and canonically appended");
+    require(original.sheets().size() == 2, "adding a sheet must preserve the original snapshot");
+    auto duplicate_id = addition;
+    duplicate_id.id = "a";
+    duplicate_id.number = "A302";
+    rejects([&] { (void)original.with_added_sheet(duplicate_id); });
+    auto duplicate_number = addition;
+    duplicate_number.id = "d";
+    duplicate_number.number = "A101";
+    rejects([&] { (void)original.with_added_sheet(duplicate_number); });
+    const auto removed = appended.with_removed_sheet("c");
+    require(removed.to_json() == original.to_json(),
+            "removing the appended sheet should restore the original graph");
+    rejects([&] { (void)original.with_removed_sheet("b"); });
+    const auto without_a = original.with_removed_sheet("a");
+    require(without_a.sheets().size() == 1 && without_a.sheets().front().id == "b",
+            "unreferenced sheet removal should preserve the remaining page");
+    rejects([&] { (void)original.with_removed_sheet("missing"); });
+
+    sketch::CoordinatedView plan{"plan", "Plan"};
+    sketch::DrawingSheet only;
+    only.id = "only"; only.number = "A001"; only.viewports = {{"vp", "plan", {0, 0, 100, 100}, 100}};
+    const auto single = sketch::SheetViewModel::create({plan}, {only});
+    rejects([&] { (void)single.with_removed_sheet("only"); });
+}
 void serialization() {
     const auto saved = fixture().to_json();
     require(sketch::SheetViewModel::from_json(saved).to_json().dump() == saved.dump(), "canonical roundtrip");
@@ -159,7 +194,7 @@ void invalid_values() {
 int main() {
     sketch::testing::noninteractive_errors();
     try {
-        coordination_and_isolation(); serialization(); invalid_values();
+        coordination_and_isolation(); sheet_lifecycle(); serialization(); invalid_values();
         std::cout << "sheet/view model tests passed\n";
         return 0;
     } catch (const std::exception& error) {
