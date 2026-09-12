@@ -1,5 +1,6 @@
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/desktop/building_object_dialog.hpp"
+#include "sketch/desktop/hosted_opening_dialog.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <QApplication>
@@ -38,6 +39,9 @@ void invoke_with_intervention(sketch::desktop::MainWindow& window, QString comma
             if (!current->intervened) { current->intervened = true; intervention(); }
             if (input->textValue().isEmpty()) input->setTextValue("Fixture name");
             input->accept();
+        } else if (auto* opening = dynamic_cast<sketch::desktop::HostedOpeningDialog*>(modal)) {
+            if (!current->intervened) { current->intervened = true; intervention(); }
+            require(opening->submit(), "opening form should submit after the barrier");
         } else if (auto* building = dynamic_cast<sketch::desktop::BuildingObjectDialog*>(modal)) {
             if (!current->intervened) { current->intervened = true; intervention(); }
             require(building->submit(), "building form should submit after the barrier");

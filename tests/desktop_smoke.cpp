@@ -4,6 +4,7 @@
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
 #include "sketch/assembly_model.hpp"
+#include "sketch/desktop/hosted_opening_dialog.hpp"
 #include "sketch/vertical_levels.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/boundary_entity.hpp"
@@ -1964,6 +1965,54 @@ void test_room_relationship_workflow() {
             "room relationship relation should survive project reopen");
 }
 
+void test_hosted_opening_editor(const QString& capture_directory) {
+    using namespace sketch;
+    desktop::MainWindow window;
+    window.setMetricUnits(true);
+    const auto wall = window.createStraightWall({0,0},{6,0},"exterior");
+    require(!wall.isEmpty() && window.selectEntity(wall), "opening editor needs selected host");
+    const auto before = window.document().snapshot();
+    QTimer::singleShot(0,&window,[&] {
+        auto* palette = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        require(palette, "opening command palette opens");
+        auto* search = palette->findChild<QLineEdit*>();
+        search->setText("Create door opening");
+        QTimer::singleShot(0,&window,[&] {
+            auto* dialog = dynamic_cast<desktop::HostedOpeningDialog*>(window.findChild<QDialog*>("hostedOpeningDialog"));
+            require(dialog, "single opening editor replaces chained prompts");
+            auto* offset = dialog->findChild<QLineEdit*>("openingOffset");
+            auto* width = dialog->findChild<QLineEdit*>("openingWidth");
+            auto* button = dialog->findChild<QPushButton*>("createOpening");
+            width->setText("10 m");
+            require(!button->isEnabled() && !dialog->submit() && window.document().revision()==before.revision(),
+                "oversized opening preview must reject without history mutation");
+            offset->setText("1/2 m"); width->setText("1 m");
+            require(button->isEnabled(), "corrected input enables creation");
+            if(!capture_directory.isEmpty()) {
+                QApplication::processEvents();
+                require(dialog->grab().save(capture_directory+"/hosted-opening-editor.png"),"capture hosted opening editor");
+            }
+            require(dialog->submit(), "valid opening submits");
+        });
+        QMetaObject::invokeMethod(search,"returnPressed",Qt::DirectConnection);
+    });
+    window.showCommandPalette();
+    const auto after=window.document().snapshot();
+    const auto opening=std::find_if(after.entities().begin(),after.entities().end(),
+        [](const auto& entry){return entry.second.type=="opening";});
+    require(opening!=after.entities().end() && opening->second.properties.at("offset_m")==0.5 &&
+        opening->second.properties.at("width_m")==1 && after.revision()==before.revision()+1,
+        "opening form must create one exact hosted object in one command");
+    require(window.undoCommand() && window.document().snapshot().entities()==before.entities() &&
+        window.redoCommand(), "single form creation participates in undo and redo");
+    Wall curved{"curved",{{0,0},{4,0},0.5},0.2,3,0,{{"existing",1,1,0,2}}};
+    desktop::HostedOpeningDialog overlap(curved,Unit::metre,false);
+    overlap.findChild<QLineEdit*>("openingOffset")->setText("1.5 m");
+    require(!overlap.submit(), "editor rejects overlapping existing openings on a curved host");
+    overlap.findChild<QLineEdit*>("openingOffset")->setText("2.5 m");
+    require(overlap.submit(), "curved host preview uses along-wall distance");
+}
+
 void test_material_color_catalog(const QString& capture_directory) {
     using namespace sketch;
     desktop::MainWindow window;
@@ -2347,6 +2396,7 @@ int main(int argc, char** argv) {
     test_vertical_levels_workflow();
     test_assembly_catalog_workflow();
     test_material_color_catalog(field_ui_capture_directory);
+    test_hosted_opening_editor(field_ui_capture_directory);
     test_calculation_deduction_workflow();
     test_contextual_building_dimension_inspector(field_ui_capture_directory);
     test_contextual_roof_dimension_inspector();

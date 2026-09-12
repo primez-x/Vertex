@@ -6,6 +6,8 @@
 #include "sketch/architecture.hpp"
 #include <QColorDialog>
 #include "sketch/architectural_schedule.hpp"
+#include "sketch/document_solid.hpp"
+#include "sketch/desktop/hosted_opening_dialog.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/building_plan_projection.hpp"
 #include "sketch/building_view_projection.hpp"
@@ -13635,37 +13637,25 @@ private:
             setError(QStringLiteral("Select a wall before creating a %1 opening.").arg(kind));
             return;
         }
-        bool accepted = false;
-        const auto offset = QInputDialog::getText(
-            owner, QStringLiteral("Create %1 opening").arg(kind),
-            QStringLiteral("Offset along wall:"), QLineEdit::Normal,
-            m_metric_units ? QStringLiteral("0.75 m") : QStringLiteral("2 ft"), &accepted);
-        if (!accepted) {
-            return;
+        try {
+            const auto snapshot = m_document->snapshot();
+            std::vector<const Entity*> openings;
+            for (const auto& [id, entity] : snapshot.entities()) {
+                if (entity.type != "opening") continue;
+                const auto host_id = read_string(entity.properties, "wall_id");
+                if (host_id && *host_id == wall->id) openings.push_back(&entity);
+            }
+            Wall host;
+            std::string error;
+            if (!read_document_wall(*wall, openings, host, error)) throw std::invalid_argument(error);
+            HostedOpeningDialog dialog(host, m_metric_units ? Unit::metre : Unit::foot,
+                kind == QStringLiteral("window"), owner);
+            if (dialog.exec() != QDialog::Accepted || !modalContextUnchanged(context)) return;
+            (void)createHostedOpening(kind, dialog.offsetExpression(), dialog.widthExpression(),
+                dialog.sillExpression(), dialog.heightExpression(), context.revision);
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Opening: %1").arg(QString::fromUtf8(error.what())));
         }
-        const auto width = QInputDialog::getText(
-            owner, QStringLiteral("Create %1 opening").arg(kind),
-            QStringLiteral("Opening width:"), QLineEdit::Normal,
-            m_metric_units ? QStringLiteral("0.9 m") : QStringLiteral("3 ft"), &accepted);
-        if (!accepted) {
-            return;
-        }
-        const auto sill = QInputDialog::getText(
-            owner, QStringLiteral("Create %1 opening").arg(kind),
-            QStringLiteral("Sill height:"), QLineEdit::Normal,
-            m_metric_units ? QStringLiteral("0 m") : QStringLiteral("0 in"), &accepted);
-        if (!accepted) {
-            return;
-        }
-        const auto height = QInputDialog::getText(
-            owner, QStringLiteral("Create %1 opening").arg(kind),
-            QStringLiteral("Opening height:"), QLineEdit::Normal,
-            m_metric_units ? QStringLiteral("2.1 m") : QStringLiteral("7 ft"), &accepted);
-        if (!accepted) {
-            return;
-        }
-        if (!modalContextUnchanged(context)) return;
-        (void)createHostedOpening(kind, offset, width, sill, height, context.revision);
     }
 
     void createSlabFromDialog() {

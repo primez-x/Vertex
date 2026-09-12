@@ -1560,9 +1560,14 @@
       "package": 4,
       "blocker": null,
       "implementation_sources": [
-        "src/architecture/architecture.cpp"
+        "src/architecture/architecture.cpp",
+        "src/desktop/hosted_opening_dialog.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/desktop_smoke.cpp",
+        "tests/modal_authoring_tests.cpp",
+        "docs/hosted-openings.md"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "Hosted door/window cuts now use a single dimension editor with live unrolled elevation preview, complete host-opening semantic validation, revision/context fencing, and one-command undo/redo. The current solid remains a cut in the host; handedness/swing, type-driven assemblies, frame/leaf/glazing geometry, and complete export acceptance remain open."
     },
     {
       "id": "ARCH-MOD-003",
