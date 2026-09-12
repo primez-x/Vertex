@@ -22,6 +22,8 @@ void run() {
     d.arcs.push_back({{4, 5}, 3.5, 300, 30, "Curves"});
     d.polylines.push_back({{{{0, 0}, 0.5}, {{3, 4}, -1}, {{8, 0}, 0}}, true, "Boundary"});
     d.labels.push_back({{5, 7}, 2, 45, "  Room A  ", "Labels"});
+    d.dimensions.push_back({{1, 2}, {8, 2}, {4.5, 3}, {4.5, 3.5}, 0, "7 m", "Dimensions"});
+    d.hatches.push_back({{{0, 0}, {4, 0}, {4, 3}, {0, 3}}, true, "Fill"});
     const auto encoded = export_dxf_ascii(d);
     const auto imported = parse_dxf_ascii(encoded);
     check(imported.diagnostics.empty(), "own export loses fidelity");
@@ -31,6 +33,13 @@ void run() {
     check(imported.drawing.polylines.at(0).vertices.at(1).bulge == -1, "bulge lost");
     check(imported.drawing.polylines.at(0).closed, "closure lost");
     check(imported.drawing.labels.at(0).text == "  Room A  ", "text whitespace lost");
+    check(imported.drawing.dimensions.at(0).extension_end.x == 8 &&
+              imported.drawing.dimensions.at(0).text_position.y == 3.5 &&
+              imported.drawing.dimensions.at(0).text == "7 m",
+          "linear dimension lost");
+    check(imported.drawing.hatches.at(0).boundary.size() == 4 &&
+              imported.drawing.hatches.at(0).solid,
+          "solid hatch lost");
     check(export_dxf_ascii(imported.drawing) == encoded, "round trip not deterministic");
     auto crlf = encoded;
     for (std::size_t i = 0; i < crlf.size(); ++i) if (crlf[i] == '\n') crlf.insert(i++, 1, '\r');
@@ -49,6 +58,14 @@ void run() {
     check(mirrored.drawing.arcs.empty() && !mirrored.diagnostics.empty(), "mirrored OCS silently changed");
     const auto formatted = parse_dxf_ascii(file("0\nTEXT\n10\n0\n20\n0\n40\n1\n1\n%%d\n"));
     check(formatted.drawing.labels.empty() && !formatted.diagnostics.empty(), "text control syntax interpreted as literal");
+    const auto dimension_style = parse_dxf_ascii(file(
+        "0\nDIMENSION\n10\n0\n20\n2\n11\n1\n21\n3\n13\n0\n23\n0\n14\n2\n24\n0\n70\n1\n"));
+    check(dimension_style.drawing.dimensions.empty() && !dimension_style.diagnostics.empty(),
+          "nonlinear dimension type silently changed");
+    const auto hatch_style = parse_dxf_ascii(file(
+        "0\nHATCH\n10\n0\n20\n0\n30\n1\n70\n0\n71\n0\n91\n1\n92\n1\n72\n0\n73\n1\n93\n3\n10\n0\n20\n0\n10\n1\n20\n0\n10\n0\n20\n1\n"));
+    check(hatch_style.drawing.hatches.empty() && !hatch_style.diagnostics.empty(),
+          "non-solid hatch silently changed");
     const auto unknown_group = parse_dxf_ascii(file("0\nLINE\n10\n0\n20\n0\n11\n1\n21\n1\n1000\nexternal-reference\n"));
     check(unknown_group.drawing.lines.empty() && !unknown_group.diagnostics.empty(), "extension data silently discarded");
     auto wrong_version = encoded; wrong_version.replace(wrong_version.find("AC1027"), 6, "AC1015");

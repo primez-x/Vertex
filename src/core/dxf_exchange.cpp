@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <initializer_list>
 #include <limits>
 #include <optional>
 #include <span>
@@ -70,7 +71,8 @@ bool supported(Record r, std::initializer_list<int> specific, const DxfExchangeL
 void entity(DxfImportResult& result, std::string_view type, Record r, std::size_t index,
     std::size_t& vertices, const DxfExchangeLimits& l) {
     auto diagnostic = [&](const char* code) { result.diagnostics.push_back({index, std::string(type), code}); };
-    if (type != "LINE" && type != "ARC" && type != "LWPOLYLINE" && type != "TEXT") {
+    if (type != "LINE" && type != "ARC" && type != "LWPOLYLINE" && type != "TEXT" &&
+        type != "DIMENSION" && type != "HATCH") {
         diagnostic("unsupported_entity"); return;
     }
     const auto entity_layer = layer(r, l);
@@ -93,6 +95,72 @@ void entity(DxfImportResult& result, std::string_view type, Record r, std::size_
             v.text.find('\\') == std::string::npos && v.text.find("%%") == std::string::npos;
         if (!supported(r, {10, 20, 40, 50, 1, 71, 72, 73, 41, 51, 7}, l) || !plain) diagnostic("unsupported_feature");
         else result.drawing.labels.push_back(std::move(v));
+    } else if (type == "DIMENSION") {
+        DxfDimension v{point(r, 13, 23), point(r, 14, 24), point(r, 10, 20),
+            point(r, 11, 21), real(r, 50), std::string(field(r, 1).value_or("")), entity_layer};
+        printable(v.text, l);
+        const bool linear = field(r, 70).has_value() && integer(r, 70) == 0;
+        const bool plain = integer(r, 71) == 0 && integer(r, 72) == 0 &&
+            integer(r, 73) == 0 && integer(r, 74) == 0 &&
+            real(r, 41, 1) == 1 && real(r, 42) == 0 && real(r, 43) == 0 &&
+            real(r, 44) == 0 && real(r, 51) == 0 &&
+            field(r, 3).value_or("").empty();
+        if (!supported(r, {10, 20, 30, 11, 21, 31, 13, 23, 33, 14, 24, 34, 50, 1, 70,
+                           71, 72, 73, 74, 41, 42, 43, 44, 51, 3}, l) || !linear || !plain ||
+            std::hypot(v.extension_end.x - v.extension_start.x,
+                       v.extension_end.y - v.extension_start.y) <= std::numeric_limits<double>::epsilon()) {
+            diagnostic("unsupported_feature");
+        } else {
+            result.drawing.dimensions.push_back(std::move(v));
+        }
+    } else if (type == "HATCH") {
+        DxfHatch v{{}, integer(r, 70) == 1, entity_layer};
+        const auto path_count = integer(r, 91, -1);
+        const auto path_flags = integer(r, 92, -1);
+        const auto edge_type = integer(r, 72, -1);
+        const auto closed = integer(r, 73, -1);
+        const auto vertex_count = integer(r, 93, -1);
+        const auto pattern = field(r, 2).value_or("");
+        const auto associative = integer(r, 71, -1);
+        const auto hatch_style = integer(r, 75, -1);
+        const auto pattern_type = integer(r, 76, -1);
+        const auto source_count = integer(r, 97, -1);
+        bool after_path = false;
+        bool have_y = false;
+        int seen_vertices = 0;
+        for (const auto& p : r) {
+            if (p.code == 93) {
+                after_path = true;
+                continue;
+            }
+            if (!after_path) continue;
+            if (p.code == 10) {
+                require((v.boundary.empty() || have_y) && seen_vertices < vertex_count);
+                v.boundary.push_back({number<double>(p.value), 0.0});
+                have_y = false;
+                ++seen_vertices;
+            } else if (p.code == 20) {
+                require(!v.boundary.empty() && !have_y);
+                v.boundary.back().y = number<double>(p.value);
+                have_y = true;
+            }
+        }
+        require(path_count >= 0 && path_flags >= 0 && vertex_count >= 0 &&
+                static_cast<std::size_t>(vertex_count) <= l.max_vertices - vertices);
+        vertices += static_cast<std::size_t>(vertex_count);
+        const bool shape = path_count == 1 && path_flags == 1 && edge_type == 0 && closed == 1 &&
+            associative == 0 && hatch_style == 0 && pattern_type == 1 && source_count == 0 &&
+            pattern == "SOLID" && v.solid && seen_vertices == vertex_count && have_y &&
+            v.boundary.size() >= 3;
+        const bool planar = supported(r, {2, 10, 20, 30, 70, 71, 72, 73, 75, 76, 91, 92,
+                                          93, 97, 210, 220, 230}, l) &&
+            real(r, 30) == 0 && real(r, 210, 0) == 0 && real(r, 220, 0) == 0 &&
+            real(r, 230, 1) == 1;
+        if (!shape || !planar) {
+            diagnostic("unsupported_feature");
+        } else {
+            result.drawing.hatches.push_back(std::move(v));
+        }
     } else {
         const int count = number<int>(mandatory(r, 90));
         require(count >= 2 && static_cast<std::size_t>(count) <= l.max_vertices - vertices);
@@ -205,7 +273,8 @@ std::string export_dxf_ascii(const DxfDrawing& d, const DxfExchangeLimits& l) {
     require(d.insertion_units >= 0 && d.insertion_units <= 20);
     // Incremental counts avoid overflow on caller-controlled containers.
     std::size_t count = 0;
-    for (auto size : {d.lines.size(), d.arcs.size(), d.polylines.size(), d.labels.size()}) {
+    for (auto size : {d.lines.size(), d.arcs.size(), d.polylines.size(), d.dimensions.size(),
+                      d.hatches.size(), d.labels.size()}) {
         require(size <= l.max_entities - count); count += size;
     }
     Writer w(l);
@@ -221,6 +290,32 @@ std::string export_dxf_ascii(const DxfDrawing& d, const DxfExchangeLimits& l) {
         require(v.vertices.size() >= 2 && v.vertices.size() <= l.max_vertices - vertices); vertices += v.vertices.size();
         w.begin("LWPOLYLINE", v.layer, "AcDbPolyline"); w.put(90, std::to_string(v.vertices.size())); w.put(70, v.closed ? "1" : "0");
         for (const auto& vertex : v.vertices) { w.xy(vertex.point); w.put(42, vertex.bulge); }
+    }
+    for (const auto& v : d.dimensions) {
+        require(std::isfinite(v.rotation_degrees) && std::abs(v.rotation_degrees) <= 1e12);
+        require(v.text.find('\n') == std::string::npos && v.text.find('\r') == std::string::npos);
+        printable(v.text, l);
+        w.begin("DIMENSION", v.layer, "AcDbDimension");
+        w.put(10, v.dimension_line.x); w.put(20, v.dimension_line.y); w.put(30, 0.0);
+        w.xy(v.text_position, 11, 21); w.put(31, 0.0);
+        w.xy(v.extension_start, 13, 23); w.put(33, 0.0);
+        w.xy(v.extension_end, 14, 24); w.put(34, 0.0);
+        w.put(70, "0"); w.put(50, v.rotation_degrees); w.put(1, v.text);
+        w.put(100, "AcDbAlignedDimension");
+    }
+    std::size_t hatch_vertices = vertices;
+    for (const auto& v : d.hatches) {
+        require(v.solid && v.boundary.size() >= 3 &&
+                v.boundary.size() <= l.max_vertices - hatch_vertices);
+        hatch_vertices += v.boundary.size();
+        w.begin("HATCH", v.layer, "AcDbHatch");
+        w.put(10, 0.0); w.put(20, 0.0); w.put(30, 0.0);
+        w.put(210, 0.0); w.put(220, 0.0); w.put(230, 1.0);
+        w.put(2, "SOLID"); w.put(70, "1"); w.put(71, "0"); w.put(91, "1");
+        w.put(92, "1"); w.put(72, "0"); w.put(73, "1");
+        w.put(93, std::to_string(v.boundary.size()));
+        for (const auto& point : v.boundary) { w.xy(point); }
+        w.put(97, "0"); w.put(75, "0"); w.put(76, "1");
     }
     for (const auto& v : d.labels) {
         require(v.height > 0 && v.text.find('\\') == std::string::npos && v.text.find("%%") == std::string::npos);

@@ -2291,7 +2291,7 @@
         "tests/dxf_exchange_tests.cpp",
         "docs/interchange-profiles.md"
       ],
-      "implementation_note": "A bounded in-memory ASCII DXF R2013 codec now round-trips LINE, ARC, LWPOLYLINE (including bulges), and plain TEXT with deterministic serialization, hard limits, and explicit unsupported-feature diagnostics. It does not claim dimensions, hatches, blocks, native Apex compatibility, reference preservation, worker isolation, or external CAD fidelity; those fixtures and integrations remain open."
+      "implementation_note": "A bounded in-memory ASCII DXF R2013 codec now round-trips LINE, ARC, LWPOLYLINE (including bulges), plain TEXT, linear DIMENSION records, and one-loop solid polygon HATCH records with deterministic serialization, hard limits, and explicit unsupported-feature diagnostics. It does not claim blocks/inserts, patterned or multi-loop hatches, native Apex compatibility, reference preservation, worker isolation, or external CAD fidelity; those fixtures and integrations remain open."
     },
     {
       "id": "IO-PDF-001",

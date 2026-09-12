@@ -556,6 +556,12 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   supplied manifests and attestations only; native Apex parsers, real worker
   binaries, device/application exchanges, runtime isolation, and representative
   fidelity fixtures remain open production work.
+- The bounded ASCII DXF R2013 codec now round-trips linear dimensions and
+  one-loop solid polygon hatches in addition to lines, arcs, bulged polylines,
+  and plain text. Unsupported dimension styles, patterned or multi-loop
+  hatches, blocks/inserts, and external CAD fidelity still produce diagnostics
+  or remain open; native project mapping and production interchange evidence
+  are not implied by this codec.
 - Multipage project semantics, reusable assemblies, and optional offline
   assistance are implemented as standalone typed models plus a deterministic
   local engine. The engine produces unverified tracing, explicit-unit

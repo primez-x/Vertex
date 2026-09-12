@@ -65,8 +65,9 @@ not satisfy that worker's reference-preservation or runtime-attestation gates.
 
 The transport records preserve 2D LINE endpoints, ARC center/radius and
 counterclockwise start/end angles, LWPOLYLINE vertices with signed bulges and
-closure, and plain TEXT insertion point/height/rotation/string. Layers and
-R2013 `$INSUNITS` values 0 through 20 are retained without unit conversion.
+closure, plain TEXT insertion point/height/rotation/string, linear DIMENSION
+extension and text points, and one-loop solid polygon HATCH boundaries. Layers
+and R2013 `$INSUNITS` values 0 through 20 are retained without unit conversion.
 Arcs require distinct angles in `[0, 360)` and a positive radius. Polylines
 require at least two vertices; bulges remain analytical values and are never
 tessellated. Labels use baseline/left alignment with default width and no
@@ -83,9 +84,10 @@ and encoded text controls are outside this subset. Coordinates, radii, angles,
 and bulges have absolute numeric magnitude capped at `1e12`.
 
 `DxfImportResult::diagnostics` identifies unsupported entities by one-based
-ENTITIES ordinal, entity type, and a stable code. POLYLINE, MTEXT, DIMENSION,
-HATCH, BLOCK/INSERT, CIRCLE, and every other unimplemented type are reported as
-`unsupported_entity`. Unsupported attributes, 3D coordinates, nondefault OCS,
+ENTITIES ordinal, entity type, and a stable code. POLYLINE, MTEXT, BLOCK/INSERT,
+CIRCLE, and every other unimplemented type are reported as `unsupported_entity`.
+Unsupported dimension types, patterned or multi-loop hatches, unsupported
+attributes, 3D coordinates, nondefault OCS,
 paper-space entities, widths, and styled text omit the whole affected entity
 with `unsupported_feature`. Unknown sections and header variables produce
 section-level diagnostics. Raw unsupported records are **not** preserved;

@@ -27,12 +27,34 @@ struct DxfLabel {
     std::string text;
     std::string layer{"0"};
 };
+// A bounded linear dimension retains the two extension points, the dimension
+// line location, rotation, and an optional text override. Associative blocks,
+// tolerances, alternate units, and annotative styles are outside this subset.
+struct DxfDimension {
+    DxfPoint extension_start;
+    DxfPoint extension_end;
+    DxfPoint dimension_line;
+    DxfPoint text_position;
+    double rotation_degrees{};
+    std::string text;
+    std::string layer{"0"};
+};
+// A solid hatch is represented by one closed planar polygon. Patterned,
+// multi-loop, associative, and edge-defined hatches are reported as
+// unsupported rather than flattened into a misleading fill.
+struct DxfHatch {
+    std::vector<DxfPoint> boundary;
+    bool solid{true};
+    std::string layer{"0"};
+};
 struct DxfDrawing {
     int insertion_units{}; // R2013 $INSUNITS 0..20, 0 = unspecified. No conversion.
     std::vector<DxfLine> lines;
     std::vector<DxfArc> arcs;
     std::vector<DxfPolyline> polylines;
     std::vector<DxfLabel> labels;
+    std::vector<DxfDimension> dimensions;
+    std::vector<DxfHatch> hatches;
 };
 struct DxfDiagnostic {
     std::size_t entity_index{}; // One-based ENTITIES ordinal; zero for a section.
@@ -55,7 +77,8 @@ struct DxfExchangeLimits {
 // Unsupported entities/features are omitted with stable diagnostics, never executed.
 [[nodiscard]] DxfImportResult parse_dxf_ascii(
     std::string_view bytes, const DxfExchangeLimits& limits = {});
-// Canonical entity order: lines, arcs, polylines, labels (vector order retained).
+// Canonical entity order: lines, arcs, polylines, dimensions, hatches, labels
+// (vector order retained within each family).
 // Unsupported style/3D information is not representable and is never synthesized.
 [[nodiscard]] std::string export_dxf_ascii(
     const DxfDrawing& drawing, const DxfExchangeLimits& limits = {});
