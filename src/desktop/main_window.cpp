@@ -1773,11 +1773,11 @@ public:
             QWidget { font-size: 13px; }
             QDialog { background: $background; }
             QToolBar#primaryToolbar { background: $surface; border: 0; border-bottom: 1px solid $border;
-                       padding: 0 8px; spacing: 2px; min-height: 24px; }
+                       padding: 0 6px; spacing: 1px; min-height: 20px; }
             QToolBar::separator { background: $border; width: 1px; margin: 1px 4px; }
             QPushButton, QToolButton { color: $foreground; background: $surface;
                 border: 1px solid $border; border-radius: 8px; padding: 8px 11px; }
-            QToolBar QToolButton { border-color: transparent; padding: 1px 6px; min-height: 18px; }
+            QToolBar QToolButton { border-color: transparent; padding: 0 5px; min-height: 16px; max-height: 20px; }
             QToolBar QToolButton:hover { background: $selection; border-color: $selection; }
             QToolBar QToolButton:checked { background: $selection; color: $accent; border-color: $accent; }
             QWidget#toolPanel QToolButton { padding: 6px 4px; min-height: 52px; }
@@ -1791,7 +1791,7 @@ public:
                 border: 1px solid $border; border-radius: 8px; padding: 5px 10px; min-height: 20px; }
             QComboBox { padding-right: 24px; }
             QComboBox::drop-down { border: 0; width: 24px; }
-            QToolBar QComboBox { padding: 1px 6px; min-height: 14px; }
+            QToolBar QComboBox { padding: 0 5px; min-height: 16px; max-height: 20px; }
             QToolBar QComboBox::drop-down { width: 18px; }
             QComboBox QAbstractItemView, QMenu { background: $surface; color: $foreground;
                 border: 1px solid $border; selection-background-color: $selection;
@@ -6594,11 +6594,11 @@ private:
         toolbar->setMovable(false);
         toolbar->setFloatable(false);
         toolbar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-        toolbar->setIconSize(QSize(14, 14));
+        toolbar->setIconSize(QSize(12, 12));
         // Keep the command strip compact so the canvas starts close to the
-        // window edge. The 14 px glyph plus the 18 px tool-button content
+        // window edge. The 12 px glyph plus the 16 px tool-button content
         // leaves enough room for the bundled 10 pt UI font without clipping.
-        toolbar->setFixedHeight(26);
+        toolbar->setFixedHeight(22);
         const auto add_toolbar_action = [this, toolbar](const QString& label, const char* icon_paths) {
             auto* action = toolbar->addAction(modern_toolbar_icon(icon_paths), label);
             action->setToolTip(label);
