@@ -4,8 +4,11 @@ Property Studio uses a Windows desktop shell designed around the canvas rather
 than a legacy menu layout. The top toolbar keeps file, history, workspace, and
 command actions visible; secondary authoring and presentation commands live in
 the **More** menu so the primary row remains readable at 1366 px. The branded
-header identifies the local project and reports `LOCAL · READY` or
-`LOCAL · UNSAVED` without requiring an account or a network connection.
+header identifies the active project and shows its unsaved state beside the
+project name.
+
+Offline operation is a product guarantee and is not repeated as a persistent
+banner or badge in the drawing workspace.
 
 The main area is a four-part workspace: a project navigator, a tool rail, the
 shared Measurement/Architectural tabs, and a contextual Inspector. Panels use

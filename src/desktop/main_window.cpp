@@ -1642,7 +1642,7 @@ public:
             QToolBar QToolButton { border-color: transparent; padding: 8px 10px; min-height: 30px; }
             QToolBar QToolButton:hover { background: $selection; border-color: $selection; }
             QToolBar QToolButton:checked { background: $selection; color: $accent; border-color: $accent; }
-            QWidget#toolPanel QToolButton { padding: 10px 5px; min-height: 34px; }
+            QWidget#toolPanel QToolButton { padding: 6px 4px; min-height: 52px; }
             QPushButton:hover, QToolButton:hover { background: $selection; border-color: $accent; }
             QPushButton:pressed, QToolButton:pressed, QToolButton:checked {
                 background: $selection; color: $selectedText; border-color: $accent; }
@@ -1662,15 +1662,10 @@ public:
             QLabel#appMark { background: $accent; color: #ffffff; border-radius: 9px;
                 padding: 7px 9px; font-size: 13px; font-weight: 700; }
             QLabel#appTitle { color: $foreground; font-size: 18px; font-weight: 700; }
-            QLabel#appSubtitle { color: $muted; font-size: 11px; }
             QLabel#projectHeader { color: $foreground; font-size: 13px; font-weight: 600; }
             QLabel#panelHeading { color: $muted; font-size: 10px; font-weight: 700;
                 letter-spacing: 1px; }
             QLabel#inspectorHeading { color: $foreground; font-size: 18px; font-weight: 700; }
-            QLabel#offlineBadge { color: $accent; background: $selection; border: 1px solid $accent;
-                border-radius: 10px; padding: 5px 9px; font-size: 11px; font-weight: 700; }
-            QLabel#checkpointBanner { background: $background; color: $muted; border: 1px solid $border;
-                border-radius: 8px; margin: 9px 16px 1px; padding: 8px 12px; font-size: 12px; }
             QWidget#navigatorPanel, QWidget#toolPanel, QWidget#inspectorBody { background: $surface; }
             QWidget#navigatorPanel, QWidget#toolPanel { border: 1px solid $border; border-radius: 10px; }
             QLabel#modelViewUnavailable { background: $surface; color: $muted;
@@ -5285,30 +5280,18 @@ private:
         header_layout->addWidget(app_mark);
         auto* title_column = new QVBoxLayout;
         title_column->setContentsMargins(0, 0, 0, 0);
-        title_column->setSpacing(1);
+        title_column->setSpacing(0);
         auto* app_title = new QLabel(QStringLiteral("Property Studio"), header);
         app_title->setObjectName(QStringLiteral("appTitle"));
         title_column->addWidget(app_title);
-        auto* app_subtitle = new QLabel(QStringLiteral("Offline-first plan + building workspace"), header);
-        app_subtitle->setObjectName(QStringLiteral("appSubtitle"));
-        title_column->addWidget(app_subtitle);
         header_layout->addLayout(title_column);
         header_layout->addSpacing(18);
         m_project_header_label = new QLabel(QStringLiteral("Untitled project"), header);
         m_project_header_label->setObjectName(QStringLiteral("projectHeader"));
         header_layout->addWidget(m_project_header_label);
         header_layout->addStretch();
-        m_header_status_label = new QLabel(QStringLiteral("LOCAL · READY"), header);
-        m_header_status_label->setObjectName(QStringLiteral("offlineBadge"));
-        m_header_status_label->setAlignment(Qt::AlignCenter);
-        header_layout->addWidget(m_header_status_label);
         root_layout->addWidget(header);
 
-        auto* banner = new QLabel(
-            QStringLiteral("Offline ready  ·  your project, calculations, and exports stay on this PC"),
-            central);
-        banner->setObjectName(QStringLiteral("checkpointBanner"));
-        root_layout->addWidget(banner);
         m_plan_error_banner = new QLabel(central);
         m_plan_error_banner->setObjectName(QStringLiteral("planGeometryError"));
         m_plan_error_banner->setWordWrap(true);
@@ -5427,7 +5410,7 @@ private:
 
         auto* tool_panel = new QWidget(splitter);
         tool_panel->setObjectName(QStringLiteral("toolPanel"));
-        tool_panel->setFixedWidth(96);
+        tool_panel->setFixedWidth(104);
         auto* tool_layout = new QVBoxLayout(tool_panel);
         tool_layout->setContentsMargins(7, 14, 7, 14);
         tool_layout->setSpacing(7);
@@ -5438,6 +5421,10 @@ private:
         m_boundary_button->setToolTip(QStringLiteral("Draw measured linework, then choose its area classification"));
         m_define_boundary_button = new QToolButton(tool_panel);
         m_define_boundary_button->setText(QStringLiteral("Define first"));
+        m_define_boundary_button->setIcon(modern_toolbar_icon(
+            "<path d='M5 6h14M5 12h14M5 18h14'/><path d='M8 4v16M16 4v16'/>"));
+        m_define_boundary_button->setIconSize(QSize(20, 20));
+        m_define_boundary_button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         m_define_boundary_button->setObjectName(QStringLiteral("defineFirstBoundary"));
         m_define_boundary_button->setToolTip(QStringLiteral("Choose an area classification before drawing and place each dimension"));
         m_define_boundary_button->setCheckable(true);
@@ -5451,6 +5438,10 @@ private:
         m_wall_button = addToolButton(tool_layout, QStringLiteral("Wall"), CanvasTool::wall);
         m_object_button = new QToolButton(tool_panel);
         m_object_button->setText(QStringLiteral("Object…"));
+        m_object_button->setIcon(modern_toolbar_icon(
+            "<path d='M4 10 12 4l8 6v10H4z'/><path d='M9 20v-6h6v6'/>"));
+        m_object_button->setIconSize(QSize(20, 20));
+        m_object_button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         m_object_button->setToolTip(QStringLiteral("Create a column, beam, stair or roof"));
         m_object_button->setObjectName(QStringLiteral("createBuildingObject"));
         m_object_button->setAutoRaise(true);
@@ -5461,6 +5452,10 @@ private:
         tool_layout->addStretch();
         m_grid_button = new QToolButton(tool_panel);
         m_grid_button->setText(QStringLiteral("Grid"));
+        m_grid_button->setIcon(modern_toolbar_icon(
+            "<path d='M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z'/>"));
+        m_grid_button->setIconSize(QSize(20, 20));
+        m_grid_button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         m_grid_button->setToolTip(QStringLiteral("Toggle measurement grid"));
         m_grid_button->setCheckable(true);
         m_grid_button->setChecked(true);
@@ -5470,6 +5465,10 @@ private:
         tool_layout->addWidget(m_grid_button);
         m_snap_button = new QToolButton(tool_panel);
         m_snap_button->setText(QStringLiteral("Snap"));
+        m_snap_button->setIcon(modern_toolbar_icon(
+            "<path d='M6 5v6a6 6 0 0 0 12 0V5'/><path d='M6 5h4M14 5h4'/>"));
+        m_snap_button->setIconSize(QSize(20, 20));
+        m_snap_button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         m_snap_button->setToolTip(QStringLiteral("Snap points to a 0.25 m grid"));
         m_snap_button->setCheckable(true);
         m_snap_button->setChecked(true);
@@ -5479,6 +5478,10 @@ private:
         tool_layout->addWidget(m_snap_button);
         m_fit_button = new QToolButton(tool_panel);
         m_fit_button->setText(QStringLiteral("Fit"));
+        m_fit_button->setIcon(modern_toolbar_icon(
+            "<path d='M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5'/>"));
+        m_fit_button->setIconSize(QSize(20, 20));
+        m_fit_button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         m_fit_button->setToolTip(QStringLiteral("Fit geometry in both workspace views"));
         m_fit_button->setAutoRaise(true);
         m_fit_button->setMinimumWidth(0);
@@ -5821,6 +5824,25 @@ private:
                                bool checked = false) {
         auto* button = new QToolButton(layout->parentWidget());
         button->setText(label);
+        switch (tool) {
+        case CanvasTool::select:
+            button->setIcon(modern_toolbar_icon(
+                "<path d='M6 3l12 9-6 1-3 7L6 3z'/><path d='m11 16 3 3'/>"));
+            button->setObjectName(QStringLiteral("selectTool"));
+            break;
+        case CanvasTool::boundary:
+            button->setIcon(modern_toolbar_icon(
+                "<path d='M5 5h14v14H5z'/><path d='M5 12h14M12 5v14'/>"));
+            button->setObjectName(QStringLiteral("drawFirstTool"));
+            break;
+        case CanvasTool::wall:
+            button->setIcon(modern_toolbar_icon(
+                "<path d='M5 4v16M19 4v16M5 8h14M5 16h14'/>"));
+            button->setObjectName(QStringLiteral("wallTool"));
+            break;
+        }
+        button->setIconSize(QSize(20, 20));
+        button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         button->setToolTip(tool_name(tool));
         button->setCheckable(true);
         button->setChecked(checked);
@@ -6950,11 +6972,6 @@ private:
             m_project_header_label->setText(project_name +
                 (projectDirty() || hasBoundaryDraftChanges() ? QStringLiteral("  ·  Unsaved changes") : QString{}));
         }
-        if (m_header_status_label) {
-            m_header_status_label->setText(projectDirty() || hasBoundaryDraftChanges()
-                                                ? QStringLiteral("LOCAL · UNSAVED")
-                                                : QStringLiteral("LOCAL · READY"));
-        }
         if (m_measurement_action) {
             QSignalBlocker first(m_measurement_action);
             QSignalBlocker second(m_architectural_action);
@@ -7547,7 +7564,6 @@ private:
     QComboBox* m_pageSizeCombo{};
     QComboBox* m_architecturalViewCombo{};
     QLabel* m_project_header_label{};
-    QLabel* m_header_status_label{};
     QLabel* m_drawing_context_label{};
     QLabel* m_visibility_label{};
     QPushButton* m_show_all_button{};

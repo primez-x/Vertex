@@ -83,8 +83,11 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
         require(window.findChild<QWidget*>(QStringLiteral("primaryToolbar")) != nullptr &&
                     window.findChild<QWidget*>(QStringLiteral("workspaceHeader")) != nullptr &&
                     window.findChild<QLabel*>(QStringLiteral("appTitle")) != nullptr &&
-                    window.findChild<QWidget*>(QStringLiteral("workspaceTabs")) != nullptr,
-                "modern workspace shell must expose its branded header, grouped toolbar, and tabs");
+                    window.findChild<QWidget*>(QStringLiteral("workspaceTabs")) != nullptr &&
+                    window.findChild<QWidget*>(QStringLiteral("checkpointBanner")) == nullptr &&
+                    window.findChild<QWidget*>(QStringLiteral("offlineBadge")) == nullptr &&
+                    window.findChild<QWidget*>(QStringLiteral("appSubtitle")) == nullptr,
+                "modern workspace shell must expose its branded header, grouped toolbar, and tabs without redundant status copy");
         auto* settings = window.findChild<QAction*>(QStringLiteral("keyboardShortcutSettings"));
         require(settings, "shortcut editor must be discoverable");
         QTimer::singleShot(0, &window, [&] {
