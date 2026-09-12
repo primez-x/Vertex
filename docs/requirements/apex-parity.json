@@ -934,9 +934,12 @@
       "package": 4,
       "blocker": null,
       "implementation_sources": [
-        "src/desktop/main_window.cpp"
+        "docs/desktop-workflow.md",
+        "include/sketch/desktop/main_window.hpp",
+        "src/desktop/main_window.cpp",
+        "tests/desktop_smoke.cpp"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "Bounded local JSON clipboard supports copy, paste, cut, and guarded delete for supported geometry graphs; pasted walls carry hosted openings with fresh identities and remapped links, while boundary internals and annotation children are remapped. Multi-select, broader linked-object policies, and production qualification remain open."
     },
     {
       "id": "APX-EDIT-002",
@@ -1002,7 +1005,7 @@
         "tests/desktop_smoke.cpp",
         "docs/desktop-workflow.md"
       ],
-      "implementation_note": "Geometry helpers and the desktop transform editor provide immutable transform/clone primitives with explicit source preservation; reopen/redefine/delete lifecycle commands and relationship-preserving history remain open."
+      "implementation_note": "Guarded delete now removes selected walls with owned openings and closed boundaries with dimensions in one undoable command; Document validation blocks surviving references and annotation children use the typed annotation delete path. Reopen/redefine lifecycle commands, broader object policies, and production qualification remain open."
     },
     {
       "id": "APX-EDIT-005",

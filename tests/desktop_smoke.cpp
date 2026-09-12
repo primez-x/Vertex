@@ -18,6 +18,7 @@
 #include <QApplication>
 #include <QAction>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -113,6 +114,14 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
                 "modern workspace shell must expose a compact toolbar and tabs without redundant branding or status copy");
         auto* settings = window.findChild<QAction*>(QStringLiteral("keyboardShortcutSettings"));
         require(settings, "shortcut editor must be discoverable");
+        const auto* copy = window.findChild<QAction*>(QStringLiteral("copySelection"));
+        const auto* cut = window.findChild<QAction*>(QStringLiteral("cutSelection"));
+        const auto* paste = window.findChild<QAction*>(QStringLiteral("pasteSelection"));
+        const auto* remove = window.findChild<QAction*>(QStringLiteral("deleteSelection"));
+        require(copy && cut && paste && remove && copy->shortcut() == QKeySequence::Copy &&
+                    cut->shortcut() == QKeySequence::Cut && paste->shortcut() == QKeySequence::Paste &&
+                    remove->shortcut() == QKeySequence::Delete,
+                "clipboard and delete commands must expose the standard local shortcuts");
         QTimer::singleShot(0, &window, [&] {
             auto* dialog = window.findChild<QDialog*>(QStringLiteral("keyboardShortcutDialog"));
             require(dialog, "shortcut editor must open");
@@ -392,6 +401,115 @@ void test_room_boundary_from_existing_geometry() {
                 window.document().revision() == before_reject &&
                 window.lastError().contains(QStringLiteral("exactly two"), Qt::CaseInsensitive),
             "branched existing walls must fail without duplicating or mutating geometry");
+}
+
+void test_selection_clipboard_workflow() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    const auto wall_id = window.createStraightWall({0.0, 0.0}, {5.0, 0.0},
+                                                   QStringLiteral("exterior"));
+    require(!wall_id.isEmpty() && window.selectEntity(wall_id),
+            "clipboard fixture wall must be selectable");
+    const auto opening_id = window.createHostedOpening(QStringLiteral("door"),
+                                                       QStringLiteral("1 ft"),
+                                                       QStringLiteral("3 ft"),
+                                                       QStringLiteral("0 ft"),
+                                                       QStringLiteral("7 ft"));
+    require(!opening_id.isEmpty() && window.selectEntity(wall_id),
+            "clipboard fixture opening must be hosted by the selected wall");
+    const auto source = window.document().snapshot();
+    const auto source_wall = source.entities().at(wall_id.toStdString());
+    const auto source_opening = source.entities().at(opening_id.toStdString());
+    const auto copy_revision = window.document().revision();
+    require(window.copySelection() && window.document().revision() == copy_revision,
+            "copy must publish a local clipboard payload without changing the document");
+    const auto clipboard_text = QGuiApplication::clipboard()->text(QClipboard::Clipboard);
+    require(clipboard_text.contains(QStringLiteral("sketch.document.clipboard")) &&
+                clipboard_text.contains(wall_id) && clipboard_text.contains(opening_id),
+            "clipboard payload must identify its format and retain the selected wall graph");
+
+    require(window.pasteSelection(), "pasting a copied wall graph should succeed");
+    const auto pasted = window.document().snapshot();
+    QString pasted_wall_id;
+    QString pasted_opening_id;
+    for (const auto& [id, entity] : pasted.entities()) {
+        if (entity.type == "wall" && id != wall_id.toStdString() &&
+            entity.properties.at("baseline") == source_wall.properties.at("baseline")) {
+            pasted_wall_id = QString::fromStdString(id);
+        }
+    }
+    require(!pasted_wall_id.isEmpty(), "paste must create a fresh wall identity");
+    for (const auto& [id, entity] : pasted.entities()) {
+        if (entity.type == "opening" && entity.properties.value("wall_id", "") ==
+                pasted_wall_id.toStdString()) {
+            pasted_opening_id = QString::fromStdString(id);
+        }
+    }
+    require(!pasted_opening_id.isEmpty() && pasted_opening_id != opening_id &&
+                pasted.entities().at(pasted_opening_id.toStdString()).properties.at("width_m") ==
+                    source_opening.properties.at("width_m") &&
+                window.selectedEntityId() == pasted_wall_id,
+            "paste must remap hosted opening links and select the new root");
+    require(window.undoCommand() &&
+                !window.document().snapshot().entities().contains(pasted_wall_id.toStdString()) &&
+                window.redoCommand() &&
+                window.document().snapshot().entities().contains(pasted_wall_id.toStdString()),
+            "pasted graph must be one undoable command");
+
+    require(window.selectEntity(pasted_wall_id) && window.cutSelection(),
+            "cut must remove the selected wall graph");
+    require(!window.document().snapshot().entities().contains(pasted_wall_id.toStdString()) &&
+                !window.document().snapshot().entities().contains(pasted_opening_id.toStdString()),
+            "cut must remove hosted openings with their wall");
+    require(window.undoCommand() &&
+                window.document().snapshot().entities().contains(pasted_wall_id.toStdString()) &&
+                window.document().snapshot().entities().contains(pasted_opening_id.toStdString()),
+            "cut must restore the complete graph through undo");
+
+    const auto malformed_revision = window.document().revision();
+    QGuiApplication::clipboard()->setText(QStringLiteral("{\"format\":\"wrong\"}"),
+                                          QClipboard::Clipboard);
+    require(!window.pasteSelection() && window.document().revision() == malformed_revision &&
+                window.lastError().contains(QStringLiteral("clipboard"), Qt::CaseInsensitive),
+            "malformed clipboard data must fail closed without mutation");
+}
+
+void test_delete_selection_workflow() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    const auto wall_id = window.createStraightWall({0.0, 0.0}, {5.0, 0.0});
+    require(!wall_id.isEmpty() && window.selectEntity(wall_id),
+            "delete fixture wall must be selectable");
+    const auto opening_id = window.createHostedOpening(QStringLiteral("window"),
+                                                       QStringLiteral("1 ft"),
+                                                       QStringLiteral("3 ft"),
+                                                       QStringLiteral("3 ft"),
+                                                       QStringLiteral("4 ft"));
+    require(!opening_id.isEmpty() && window.selectEntity(wall_id),
+            "delete fixture opening must be hosted by the wall");
+    const auto before = window.document().revision();
+    require(window.deleteSelection() && window.document().revision() == before + 1,
+            "deleting a wall graph must commit one guarded command");
+    require(!window.document().snapshot().entities().contains(wall_id.toStdString()) &&
+                !window.document().snapshot().entities().contains(opening_id.toStdString()),
+            "deleting a wall must remove its owned hosted openings");
+    require(window.undoCommand() &&
+                window.document().snapshot().entities().contains(wall_id.toStdString()) &&
+                window.document().snapshot().entities().contains(opening_id.toStdString()) &&
+                window.redoCommand() &&
+                !window.document().snapshot().entities().contains(wall_id.toStdString()),
+            "delete must restore and remove the complete graph through undo and redo");
+
+    const auto boundary_id = window.createBoundary(
+        Boundary{{{{0.0, 0.0}, {4.0, 0.0}, 0.0},
+                  {{4.0, 0.0}, {4.0, 2.0}, 0.0},
+                  {{4.0, 2.0}, {0.0, 2.0}, 0.0},
+                  {{0.0, 2.0}, {0.0, 0.0}, 0.0}}}, QStringLiteral("measurement"));
+    require(!boundary_id.isEmpty() && window.selectEntity(boundary_id) &&
+                window.deleteSelection(),
+            "a closed measurement boundary should be deletable when unreferenced");
+    require(!window.document().snapshot().entities().contains(boundary_id.toStdString()),
+            "deleted boundary must not remain in the document");
 }
 
 void test_named_revisions() {
@@ -1157,6 +1275,8 @@ int main(int argc, char** argv) {
     test_project_subject_metadata();
     test_workspace_profiles();
     test_room_boundary_from_existing_geometry();
+    test_selection_clipboard_workflow();
+    test_delete_selection_workflow();
     test_named_revisions();
     test_boundary_transform_workflow();
     test_design_phase_workflow();

@@ -45,6 +45,7 @@
 #include <QComboBox>
 #include <QCloseEvent>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -133,6 +134,121 @@ namespace sketch::desktop {
 namespace {
 
 using json = nlohmann::json;
+
+constexpr std::size_t kMaximumClipboardBytes = 4ULL * 1024ULL * 1024ULL;
+constexpr std::size_t kMaximumClipboardEntities = 128;
+constexpr std::string_view kClipboardFormat = "sketch.document.clipboard";
+
+json clipboard_entity_json(const Entity& entity) {
+    return json{{"id", entity.id}, {"type", entity.type}, {"properties", entity.properties},
+                {"required", entity.required}, {"extensions", entity.extensions}};
+}
+
+Entity clipboard_entity_from_json(const json& value) {
+    if (!value.is_object() || !value.contains("id") || !value.contains("type") ||
+        !value.contains("properties") || !value.contains("required") ||
+        !value.contains("extensions") || value.size() != 5 || !value.at("id").is_string() ||
+        !value.at("type").is_string() || !value.at("properties").is_object() ||
+        !value.at("required").is_boolean() || !value.at("extensions").is_object()) {
+        throw std::invalid_argument("clipboard entity record is invalid");
+    }
+    const auto type = value.at("type").get<std::string>();
+    if (!is_known_entity_type(type)) {
+        throw std::invalid_argument("clipboard contains an unsupported entity type");
+    }
+    if (value.at("required").get<bool>()) {
+        throw std::invalid_argument("required project entities cannot be pasted");
+    }
+    return Entity{value.at("id").get<std::string>(), type, value.at("properties"), false,
+                  value.at("extensions")};
+}
+
+void remap_clipboard_json(json& value,
+                          const std::map<std::string, std::string, std::less<>>& remap) {
+    if (value.is_string()) {
+        const auto found = remap.find(value.get_ref<const std::string&>());
+        if (found != remap.end()) value = found->second;
+        return;
+    }
+    if (value.is_array()) {
+        for (auto& child : value) remap_clipboard_json(child, remap);
+        return;
+    }
+    if (value.is_object()) {
+        for (auto& [key, child] : value.items()) {
+            (void)key;
+            remap_clipboard_json(child, remap);
+        }
+    }
+}
+
+std::optional<std::string> annotation_parent_for_child(const DocumentSnapshot& snapshot,
+                                                        std::string_view child_id) {
+    for (const auto& [id, entity] : snapshot.entities()) {
+        if (entity.type != kAnnotationEntityType) continue;
+        try {
+            const auto state = decode_annotation_entity(entity);
+            const auto label = std::any_of(state.labels.begin(), state.labels.end(),
+                                           [&](const auto& item) { return item.id == child_id; });
+            const auto symbol = std::any_of(state.symbols.begin(), state.symbols.end(),
+                                            [&](const auto& item) { return item.id == child_id; });
+            if (label || symbol) return id;
+        } catch (const std::exception&) {
+            // A malformed annotation remains selectable for diagnostics, but
+            // cannot be copied as a semantic graph.
+        }
+    }
+    return std::nullopt;
+}
+
+std::vector<Entity> clipboard_entities_for_selection(const DocumentSnapshot& snapshot,
+                                                      std::string_view selected_id) {
+    std::string root_id(selected_id);
+    if (!snapshot.entities().contains(root_id)) {
+        const auto parent = annotation_parent_for_child(snapshot, selected_id);
+        if (!parent) return {};
+        root_id = *parent;
+    }
+    const auto root = snapshot.entities().find(root_id);
+    if (root == snapshot.entities().end()) return {};
+    static constexpr std::array<std::string_view, 12> supported{
+        "boundary", "measurement_boundary", "room_boundary", "wall", "opening", "room",
+        "slab", "roof", "stair", "column", "beam", "annotation_state"};
+    if (std::find(supported.begin(), supported.end(), root->second.type) == supported.end()) {
+        return {};
+    }
+    std::vector<Entity> result{root->second};
+    const auto add_unique = [&](const Entity& entity) {
+        if (std::none_of(result.begin(), result.end(),
+                         [&](const Entity& current) { return current.id == entity.id; })) {
+            result.push_back(entity);
+        }
+    };
+    if (root->second.type == "wall") {
+        for (const auto& [id, entity] : snapshot.entities()) {
+            (void)id;
+            if (entity.type == "opening" &&
+                entity.properties.value("wall_id", "") == root_id) {
+                add_unique(entity);
+            }
+        }
+    }
+    const bool closed_boundary = root->second.type == "boundary" ||
+                                 root->second.type == "measurement_boundary" ||
+                                 root->second.type == "room_boundary";
+    if (closed_boundary) {
+        for (const auto& [id, entity] : snapshot.entities()) {
+            (void)id;
+            if (entity.type != "dimension" || !entity.properties.is_object()) continue;
+            const auto target = entity.properties.value("target", json::object());
+            if (target.is_object() && target.value("entity_id", "") == root_id) {
+                add_unique(entity);
+            }
+        }
+    }
+    if (result.size() > kMaximumClipboardEntities) return {};
+    return result;
+}
 
 // Qt's stock Fusion icons are intentionally conservative and read as legacy
 // desktop chrome at the scale used by this workspace. These small inline SVG
@@ -6142,6 +6258,210 @@ public:
         return true;
     }
 
+    bool copySelection() {
+        try {
+            const auto snapshot = authoringSnapshot();
+            const auto entities = clipboard_entities_for_selection(
+                snapshot, m_selected_id.toStdString());
+            if (entities.empty()) {
+                throw std::invalid_argument(
+                    "Select supported geometry, an area, an architectural object, or annotations.");
+            }
+            json payload{{"format", std::string(kClipboardFormat)}, {"version", 1},
+                         {"entities", json::array()}};
+            for (const auto& entity : entities) {
+                payload["entities"].push_back(clipboard_entity_json(entity));
+            }
+            const auto encoded = payload.dump();
+            if (encoded.size() > kMaximumClipboardBytes) {
+                throw std::invalid_argument("The selected geometry graph is too large for the clipboard.");
+            }
+            auto* clipboard = QGuiApplication::clipboard();
+            if (clipboard == nullptr) {
+                throw std::runtime_error("The system clipboard is unavailable.");
+            }
+            clipboard->setText(QString::fromUtf8(encoded.data(),
+                                                  static_cast<int>(encoded.size())),
+                               QClipboard::Clipboard);
+            clearError();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Copy: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    bool cutSelection() {
+        try {
+            const auto source = authoringSnapshot();
+            const auto selected = m_selected_id.toStdString();
+            if (!source.entities().contains(selected) &&
+                annotation_parent_for_child(source, selected).has_value()) {
+                throw std::invalid_argument(
+                    "Select the annotation group before cutting its children.");
+            }
+            const auto entities = clipboard_entities_for_selection(source, selected);
+            if (entities.empty()) {
+                throw std::invalid_argument(
+                    "Select supported geometry, an area, or an architectural object to cut.");
+            }
+            if (!copySelection()) return false;
+            std::vector<EntityChange> changes;
+            changes.reserve(entities.size());
+            for (const auto& entity : entities) changes.push_back(EntityChange::erase(entity.id));
+            const ApplyEntityChanges command{
+                source.revision(), std::move(changes), {}, "Cut selection"};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            m_selected_id.clear();
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Cut: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    bool pasteSelection() {
+        try {
+            auto* clipboard = QGuiApplication::clipboard();
+            if (clipboard == nullptr) {
+                throw std::runtime_error("The system clipboard is unavailable.");
+            }
+            const auto encoded = clipboard->text(QClipboard::Clipboard).toUtf8();
+            if (encoded.isEmpty() || static_cast<std::size_t>(encoded.size()) >
+                                         kMaximumClipboardBytes) {
+                throw std::invalid_argument("Clipboard data is empty or exceeds the local size limit.");
+            }
+            const auto payload = json::parse(encoded.constData(), encoded.constData() + encoded.size());
+            if (!payload.is_object() || payload.value("format", "") != kClipboardFormat ||
+                payload.value("version", 0) != 1 || !payload.contains("entities") ||
+                !payload.at("entities").is_array() || payload.at("entities").empty() ||
+                payload.at("entities").size() > kMaximumClipboardEntities) {
+                throw std::invalid_argument("Clipboard data is not a supported sketch payload.");
+            }
+
+            std::vector<Entity> source_entities;
+            source_entities.reserve(payload.at("entities").size());
+            std::set<std::string, std::less<>> source_ids;
+            for (const auto& value : payload.at("entities")) {
+                auto entity = clipboard_entity_from_json(value);
+                if (!source_ids.insert(entity.id).second) {
+                    throw std::invalid_argument("Clipboard contains duplicate entity identities.");
+                }
+                source_entities.push_back(std::move(entity));
+            }
+
+            const auto source = authoringSnapshot();
+            std::map<std::string, std::string, std::less<>> remap;
+            const auto allocate = [&](std::string_view prefix) {
+                std::string id;
+                do {
+                    id = new_id(prefix);
+                } while (source.entities().contains(id) ||
+                         std::any_of(remap.begin(), remap.end(),
+                                     [&](const auto& entry) { return entry.second == id; }));
+                return id;
+            };
+            for (const auto& entity : source_entities) {
+                remap.emplace(entity.id, allocate(entity.type));
+                if (can_recognize_boundary_entity_type(entity.type) &&
+                    entity.properties.contains("boundary_model_version")) {
+                    const auto identified = decode_identified_boundary_entity(entity);
+                    for (const auto& edge : identified.segments) {
+                        remap.emplace(edge.segment_id, allocate("segment"));
+                        remap.emplace(edge.start_vertex_id, allocate("vertex"));
+                        remap.emplace(edge.end_vertex_id, allocate("vertex"));
+                    }
+                }
+                if (entity.type == kAnnotationEntityType) {
+                    const auto state = decode_annotation_entity(entity);
+                    for (const auto& label : state.labels) remap.emplace(label.id, allocate("label"));
+                    for (const auto& symbol : state.symbols) remap.emplace(symbol.id, allocate("symbol"));
+                }
+            }
+
+            const auto root_id = source.entities().contains(m_selected_id.toStdString())
+                ? m_selected_id.toStdString()
+                : annotation_parent_for_child(source, m_selected_id.toStdString()).value_or(
+                      source_entities.front().id);
+            const auto root_mapping = remap.find(root_id);
+            if (root_mapping == remap.end()) {
+                throw std::invalid_argument("Clipboard root identity is missing from its payload.");
+            }
+
+            std::vector<EntityChange> changes;
+            changes.reserve(source_entities.size());
+            for (const auto& original : source_entities) {
+                auto entity = original;
+                entity.id = remap.at(original.id);
+                remap_clipboard_json(entity.properties, remap);
+                remap_clipboard_json(entity.extensions, remap);
+                const auto placeable = entity.type == "boundary" ||
+                    entity.type == "measurement_boundary" || entity.type == "room_boundary" ||
+                    entity.type == "wall" || entity.type == "room" || entity.type == "slab" ||
+                    entity.type == "roof" || entity.type == "stair" || entity.type == "column" ||
+                    entity.type == "beam";
+                if (placeable) {
+                    for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"})
+                        entity.properties.erase(key);
+                    if (!assignDrawingContext(entity.properties)) return false;
+                }
+                changes.push_back(EntityChange::upsert(std::move(entity)));
+            }
+            const ApplyEntityChanges command{
+                source.revision(), std::move(changes), {}, "Paste selection"};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            m_selected_id = id_from(root_mapping->second);
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Paste: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    bool deleteSelection() {
+        try {
+            const auto source = authoringSnapshot();
+            const auto selected = m_selected_id.toStdString();
+            if (!source.entities().contains(selected)) {
+                const auto annotation_parent = annotation_parent_for_child(source, selected);
+                if (annotation_parent.has_value()) {
+                    if (!deleteAnnotation(m_selected_id)) return false;
+                    return true;
+                }
+                throw std::invalid_argument("Select an entity before deleting it.");
+            }
+            const auto root = source.entities().at(selected);
+            if (root.required) {
+                throw std::invalid_argument("Required project entities cannot be deleted.");
+            }
+            const auto entities = clipboard_entities_for_selection(source, selected);
+            if (entities.empty()) {
+                throw std::invalid_argument(
+                    "Select a boundary, wall, opening, architectural object, or annotation group.");
+            }
+            std::vector<EntityChange> changes;
+            changes.reserve(entities.size());
+            for (const auto& entity : entities) changes.push_back(EntityChange::erase(entity.id));
+            const ApplyEntityChanges command{
+                source.revision(), std::move(changes), {}, "Delete selection"};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            m_selected_id.clear();
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Delete: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     [[nodiscard]] QString selectedEntityId() const { return m_selected_id; }
 
     bool editSelectedClassification(const QString& classification) {
@@ -8178,6 +8498,10 @@ public:
             {QStringLiteral("Save project as…"), [this] { saveAsFromDialog(); }},
             {QStringLiteral("Undo"), [this] { undoCommand(); }},
             {QStringLiteral("Redo"), [this] { redoCommand(); }},
+            {QStringLiteral("Copy selection"), [this] { copySelection(); }},
+            {QStringLiteral("Cut selection"), [this] { cutSelection(); }},
+            {QStringLiteral("Paste selection"), [this] { pasteSelection(); }},
+            {QStringLiteral("Delete selection"), [this] { deleteSelection(); }},
             {QStringLiteral("Add building"), [this] { showOrganizationDialog("building"); }},
             {QStringLiteral("Add floor"), [this] { showOrganizationDialog("floor"); }},
             {QStringLiteral("Add drawing layer"), [this] { showOrganizationDialog("layer"); }},
@@ -9082,6 +9406,27 @@ private:
         // presentation commands remain one click away in an overflow menu,
         // while their QAction identities and shortcuts stay stable.
         auto* more_menu = new QMenu(owner);
+        m_copy_action = new QAction(QStringLiteral("Copy selection"), owner);
+        m_copy_action->setObjectName(QStringLiteral("copySelection"));
+        m_copy_action->setShortcut(QKeySequence::Copy);
+        m_copy_action->setShortcutContext(Qt::WindowShortcut);
+        m_cut_action = new QAction(QStringLiteral("Cut selection"), owner);
+        m_cut_action->setObjectName(QStringLiteral("cutSelection"));
+        m_cut_action->setShortcut(QKeySequence::Cut);
+        m_cut_action->setShortcutContext(Qt::WindowShortcut);
+        m_paste_action = new QAction(QStringLiteral("Paste selection"), owner);
+        m_paste_action->setObjectName(QStringLiteral("pasteSelection"));
+        m_paste_action->setShortcut(QKeySequence::Paste);
+        m_paste_action->setShortcutContext(Qt::WindowShortcut);
+        m_delete_action = new QAction(QStringLiteral("Delete selection"), owner);
+        m_delete_action->setObjectName(QStringLiteral("deleteSelection"));
+        m_delete_action->setShortcut(QKeySequence::Delete);
+        m_delete_action->setShortcutContext(Qt::WindowShortcut);
+        more_menu->addAction(m_copy_action);
+        more_menu->addAction(m_cut_action);
+        more_menu->addAction(m_paste_action);
+        more_menu->addAction(m_delete_action);
+        more_menu->addSeparator();
         m_annotation_action = new QAction(QStringLiteral("Annotations"), owner);
         m_reference_action = new QAction(QStringLiteral("Reference image"), owner);
         m_schedule_action = new QAction(QStringLiteral("Schedules"), owner);
@@ -9117,6 +9462,23 @@ private:
         more_menu->addSeparator();
         auto* more_action = more_menu->addAction(QStringLiteral("Keyboard shortcuts…"));
         QObject::connect(more_action, &QAction::triggered, owner, [this] { showShortcutSettings(); });
+        const auto text_editor_focused = [] {
+            auto* focused = QApplication::focusWidget();
+            return qobject_cast<QLineEdit*>(focused) != nullptr ||
+                   qobject_cast<QPlainTextEdit*>(focused) != nullptr;
+        };
+        QObject::connect(m_copy_action, &QAction::triggered, owner, [this, text_editor_focused] {
+            if (!text_editor_focused()) (void)copySelection();
+        });
+        QObject::connect(m_cut_action, &QAction::triggered, owner, [this, text_editor_focused] {
+            if (!text_editor_focused()) (void)cutSelection();
+        });
+        QObject::connect(m_paste_action, &QAction::triggered, owner, [this, text_editor_focused] {
+            if (!text_editor_focused()) (void)pasteSelection();
+        });
+        QObject::connect(m_delete_action, &QAction::triggered, owner, [this, text_editor_focused] {
+            if (!text_editor_focused()) (void)deleteSelection();
+        });
         auto* more_button = new QToolButton(toolbar);
         more_button->setObjectName(QStringLiteral("moreTools"));
         more_button->setIcon(modern_toolbar_icon("<path d='M5 7h14M5 12h14M5 17h14'/>"));
@@ -12083,6 +12445,10 @@ private:
     QAction* m_measurement_action{};
     QAction* m_architectural_action{};
     QAction* m_palette_action{};
+    QAction* m_copy_action{};
+    QAction* m_cut_action{};
+    QAction* m_paste_action{};
+    QAction* m_delete_action{};
     std::vector<ShortcutBinding> m_shortcuts;
     QString m_shortcut_load_error;
     QAction* m_annotation_action{};
@@ -12284,6 +12650,22 @@ bool MainWindow::selectEntity(const QString& entity_id) {
 
 QString MainWindow::selectedEntityId() const {
     return m_impl->selectedEntityId();
+}
+
+bool MainWindow::copySelection() {
+    return m_impl->copySelection();
+}
+
+bool MainWindow::cutSelection() {
+    return m_impl->cutSelection();
+}
+
+bool MainWindow::pasteSelection() {
+    return m_impl->pasteSelection();
+}
+
+bool MainWindow::deleteSelection() {
+    return m_impl->deleteSelection();
 }
 
 bool MainWindow::editSelectedClassification(const QString& classification) {

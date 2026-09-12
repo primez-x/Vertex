@@ -185,6 +185,16 @@ public:
         std::optional<Revision> expected_revision = std::nullopt);
     [[nodiscard]] bool selectEntity(const QString& entity_id);
     [[nodiscard]] QString selectedEntityId() const;
+    // Copies the selected geometry graph to the local system clipboard using
+    // a bounded, versioned JSON payload. Clipboard operations never contact a
+    // service and do not change document history until paste or cut commits.
+    [[nodiscard]] bool copySelection();
+    [[nodiscard]] bool cutSelection();
+    [[nodiscard]] bool pasteSelection();
+    // Deletes the selected semantic graph in one guarded, undoable command.
+    // Hosted openings and boundary dimensions are removed with their owner;
+    // referenced objects are rejected by the document validator.
+    [[nodiscard]] bool deleteSelection();
     [[nodiscard]] bool editSelectedClassification(const QString& classification);
     [[nodiscard]] bool editSelectedLength(const QString& expression);
     [[nodiscard]] bool editSelectedHeight(const QString& expression);

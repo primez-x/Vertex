@@ -134,6 +134,7 @@ The public methods used by the smoke test are `createBoundary`,
 `createSlabFromSelectedBoundary`, `createSlabFromBoundary`, `selectEntity`,
 `editSelectedClassification`, `editSelectedLength`, `editSelectedHeight`,
 `editSelectedThickness`, `editSelectedFactor`, `setSelectedCalculationRule`,
+`copySelection`, `cutSelection`, `pasteSelection`, `deleteSelection`,
 `undoCommand`, `redoCommand`, `saveProjectAs`, and `openProject`. Opening
 creation gathers a Door or Window kind and offset,
 width, sill, and height quantities, then previews the host wall with all of its
@@ -192,6 +193,17 @@ solids from the wall and opening entities. Command search provides `Create door
 opening`, `Create window opening`, and `Create slab from selected boundary`;
 each prompts for quantities and runs the same validated commands as the public
 workflow seam.
+
+The overflow menu and command palette also provide **Copy selection**, **Cut
+selection**, **Paste selection**, and **Delete selection**. Clipboard data is a
+bounded `sketch.document.clipboard` JSON payload held by the local system
+clipboard; it contains semantic entity records rather than rendered pixels or
+service references. Copy is side-effect free. Paste allocates fresh entity,
+boundary-edge, vertex, and annotation-child identities, places supported
+geometry on the active drawing layer, and remaps hosted openings and dimension
+owners. Cut and delete remove owned hosted children in one guarded Document
+command, so undo and redo restore the complete graph. Unsupported, malformed,
+oversized, or referenced records fail before mutation.
 
 The navigator also exposes a persisted Design phase selector. The first use can
 create a baseline registry from the current architectural objects; the manager

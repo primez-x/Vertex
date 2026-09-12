@@ -93,6 +93,14 @@ cross-view acceptance remain open. A selected closed boundary can now be copied
 into a distinct named `room_boundary` entity from the command palette; its
 segments, area, classification, and source-independent history are persisted.
 
+The selection command surface now includes bounded local JSON copy, cut, paste,
+and delete operations. Wall selections carry their hosted openings; pasted
+graphs receive fresh entity, boundary-edge, vertex, and annotation-child IDs,
+and supported ownership links are remapped before a single Document command is
+admitted. Cut/delete remove owned children atomically and preserve undo/redo.
+Multi-select, broader relationship-aware edit policies, and production
+compatibility evidence remain open.
+
 The Architectural workspace now also exposes a compact **Assembly catalog**
 that persists the typed `sketch.assemblies.v1` model in Document history. Users
 can add/remove reusable types and placed instances, rename types, maintain the
