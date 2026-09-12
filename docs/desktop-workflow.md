@@ -372,6 +372,10 @@ the complete replacement. Dimension targets, annotation overrides, room
 relationships, and phase memberships follow the replacement. Boundary names,
 label content, extension metadata, and alternative IDs/names are not treated
 as references merely because their text matches an old identity.
+Per-edge metadata stays with its continuing edge identity: the first piece of
+a split retains it, the new second piece starts without it, and unaffected
+edges keep their metadata. Unhandled directional receipts on a split edge
+reject the edit atomically rather than being discarded or duplicated.
 Legacy anonymous and receipt-bound boundaries fail
 closed until their identity and derivation policies are explicit. Wall/object
 transforms, receipt-bound derivation edits, and full linked-relationship

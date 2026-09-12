@@ -7449,9 +7449,11 @@ public:
             auto updated = found->second;
             updated.id = inserted.id;
             remap_entity_references(updated, identity_remap);
-            const auto canonical = encode_identified_boundary_entity(inserted);
-            updated.properties["boundary_model_version"] = canonical.properties.at("boundary_model_version");
-            updated.properties["segments"] = canonical.properties.at("segments");
+            // Merge by the remapped stable edge IDs. The first split piece
+            // continues the original metadata; the new second piece starts
+            // without copied ownership. The codec also refuses unhandled
+            // directional receipts on geometry that would change.
+            updated = encode_identified_boundary_entity(inserted, &updated);
             if (updated.properties.contains("boundary")) {
                 updated.properties["boundary"] = boundary_json(boundary_geometry(inserted));
             }

@@ -629,6 +629,8 @@ void test_boundary_vertex_insertion_workflow() {
     const auto identified = decode_identified_boundary_entity(original);
     original.properties["name"]=original.id;
     original.extensions={{"note",identified.segments.front().segment_id}};
+    original.properties["segments"][0]["edge_note"]={{"text",identified.segments.front().segment_id}};
+    original.properties["segments"][1]["edge_note"]={{"text","adjacent edge"}};
     auto dimension=encode_boundary_dimension_entity({"insertion-dimension",original.id,
         identified.segments.front().segment_id,{2,-1}});
     dimension.properties["target"]["description"]=original.id;
@@ -670,6 +672,12 @@ void test_boundary_vertex_insertion_workflow() {
         migrated_annotation.labels.front().content==original.id &&
         migrated_dimension.properties.at("target").at("description")==original.id,
         "boundary insertion must preserve matching text and opaque metadata");
+    require(inserted_entity.properties.at("segments").at(0).at("edge_note")==
+            original.properties.at("segments").at(0).at("edge_note") &&
+        !inserted_entity.properties.at("segments").at(1).contains("edge_note") &&
+        inserted_entity.properties.at("segments").at(2).at("edge_note")==
+            original.properties.at("segments").at(1).at("edge_note"),
+        "insertion must retain metadata on the continuing first piece and unaffected edges without duplicating it");
     const auto resolved=decode_boundary_dimension_entity(migrated_dimension).dimension;
     require(migrated_annotation.overrides.front().target_id==inserted.id && resolved &&
         resolved->boundary_id==inserted.id && std::abs(resolved->resolve(inserted_entity).segment_length()-2.0)<1e-9,
@@ -697,6 +705,15 @@ void test_boundary_vertex_insertion_workflow() {
                 !window.insertSelectedBoundaryVertex(segment_id, QStringLiteral("1.0")) &&
                 window.document().revision() == rejected_revision,
             "vertex insertion must reject an endpoint fraction without mutation");
+    auto receipt_bound=window.document().snapshot().entities().at(inserted_id.toStdString());
+    receipt_bound.properties["segments"][0]["receipt"]={{"version",99}};
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(receipt_bound)},{},"unsupported directional receipt"});
+    const auto receipt_snapshot=window.document().snapshot();
+    require(!window.insertSelectedBoundaryVertex(QString::fromStdString(inserted.segments.front().segment_id),
+                QStringLiteral("0.5")) && window.document().snapshot().entities()==receipt_snapshot.entities() &&
+        window.document().revision()==receipt_snapshot.revision(),
+        "insertion must reject an unhandled edge receipt without discarding it or changing the document");
 }
 
 void test_boundary_redefinition_workflow() {
