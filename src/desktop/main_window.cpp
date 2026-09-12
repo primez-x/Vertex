@@ -2572,11 +2572,11 @@ public:
             QWidget { font-size: 13px; }
             QDialog { background: $background; }
             QToolBar#primaryToolbar { background: $surface; border: 0; border-bottom: 1px solid $border;
-                       padding: 0 3px; spacing: 1px; min-height: 24px; max-height: 24px; }
+                       padding: 0 2px; spacing: 1px; min-height: 20px; max-height: 20px; }
             QToolBar::separator { background: $border; width: 1px; margin: 0 1px; }
             QPushButton, QToolButton { color: $foreground; background: $surface;
                 border: 1px solid $border; border-radius: 8px; padding: 8px 11px; }
-            QToolBar QToolButton { border-color: transparent; border-radius: 4px; padding: 2px 5px; min-height: 18px; max-height: 18px; }
+            QToolBar QToolButton { border-color: transparent; border-radius: 3px; padding: 1px 4px; min-height: 16px; max-height: 16px; }
             QToolBar QToolButton:hover { background: $selection; border-color: $selection; }
             QToolBar QToolButton:checked { background: $selection; color: $accent; border-color: $accent; }
             QWidget#toolPanel QToolButton { padding: 6px 4px; min-height: 52px; }
@@ -2590,8 +2590,8 @@ public:
                 border: 1px solid $border; border-radius: 8px; padding: 5px 10px; min-height: 20px; }
             QComboBox { padding-right: 24px; }
             QComboBox::drop-down { border: 0; width: 24px; }
-            QToolBar QComboBox { font-size: 12px; border-radius: 4px; padding: 1px 18px 1px 5px; min-height: 18px; max-height: 18px; }
-            QToolBar QComboBox::drop-down { width: 14px; }
+            QToolBar QComboBox { font-size: 11px; border-radius: 3px; padding: 0 14px 0 4px; min-height: 16px; max-height: 16px; }
+            QToolBar QComboBox::drop-down { width: 12px; }
             QComboBox QAbstractItemView, QMenu { background: $surface; color: $foreground;
                 border: 1px solid $border; selection-background-color: $selection;
                 selection-color: $selectedText; padding: 4px; }
@@ -11043,14 +11043,14 @@ private:
         // through the tooltip/status tip instead of spending vertical space
         // on clipped text beside every icon.
         toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        toolbar->setIconSize(QSize(16, 16));
+        toolbar->setIconSize(QSize(14, 14));
         toolbar->setContentsMargins(0, 0, 0, 0);
         if (auto* toolbar_layout = toolbar->layout()) {
             toolbar_layout->setContentsMargins(0, 0, 0, 0);
             toolbar_layout->setSpacing(1);
         }
         // One compact row with readable icons and usable mouse targets.
-        toolbar->setFixedHeight(24);
+        toolbar->setFixedHeight(20);
         const auto add_toolbar_action = [this, toolbar](const QString& label, const char* icon_paths) {
             auto* action = toolbar->addAction(modern_toolbar_icon(icon_paths), label);
             action->setToolTip(label);

@@ -38,7 +38,7 @@ existing sloped-panel schema: zero rise and zero pitch produce a thickened
 planar solid, persist through the entity codec, and project through plan,
 elevation, section, and the editor. Gable roofs continue to require a positive
 rise and pitch. The primary command strip is constrained to a single compact
-24 px logical row with 16 px icons; units, paper size, and view remain compact inline
+20 px logical row with 14 px icons; units, paper size, and view remain compact inline
 selectors, with secondary commands in the More menu. Selecting a sloped,
 flat, or gable roof also exposes contextual run (gable length), span, rise,
 overhang, thickness, and derived pitch
