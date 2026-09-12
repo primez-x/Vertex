@@ -6,6 +6,7 @@
 #include "sketch/document.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/assembly_model.hpp"
+#include "sketch/terrain_surface.hpp"
 #include <QColor>
 
 #include <AIS_InteractiveContext.hxx>
@@ -103,7 +104,7 @@ bool is_ignored_hierarchy_type(std::string_view type) {
         "sheet",             "view",            "constraint",  "annotation", "dimension",
         "annotation_state",  "sheet_view_model", "boundary", "measurement_boundary",
         "reference_asset",   "assembly_model",    "model_phases", "room_relationships",
-        "vertical_levels",   "room_boundary"};
+        "vertical_levels",   "room_boundary",     "terrain_surface"};
     return std::find(std::begin(ignored), std::end(ignored), type) != std::end(ignored);
 }
 
@@ -319,7 +320,7 @@ public:
         const bool had_solids = !solids.empty();
         bool changed = false;
         for (const auto& [id, entity] : entities) {
-            if (entity.type != "wall" && entity.type != "slab" &&
+            if (entity.type != "wall" && entity.type != "slab" && entity.type != "terrain_surface" &&
                 !can_recognize_building_entity_type(entity.type)) {
                 if (entity.type == "opening") {
                     continue;
@@ -358,7 +359,9 @@ public:
             }
             auto presentation_color = entity.type == "wall"
                 ? Quantity_Color(0.84, 0.66, 0.32, Quantity_TOC_RGB)
-                : Quantity_Color(0.46, 0.70, 0.86, Quantity_TOC_RGB);
+                : entity.type == "terrain_surface"
+                    ? Quantity_Color(0.47, 0.64, 0.44, Quantity_TOC_RGB)
+                    : Quantity_Color(0.46, 0.70, 0.86, Quantity_TOC_RGB);
             if (material_color) {
                 const QColor color(QString::fromStdString(*material_color));
                 presentation_color = Quantity_Color(color.redF(), color.greenF(), color.blueF(), Quantity_TOC_sRGB);
@@ -401,6 +404,9 @@ public:
                         continue;
                     }
                     shape = make_slab(slab);
+                } else if (geometry_entity.type == "terrain_surface") {
+                    shape = make_terrain_surface(
+                        TerrainSurface::from_json(geometry_entity.properties.at("model")));
                 } else {
                     shape = make_building_shape(decode_building_entity(geometry_entity));
                 }

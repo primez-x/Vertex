@@ -67,6 +67,16 @@ int main() {
         rejected([&] { (void)make_slab(invalid_slab); });
         slab.thickness = 0;
         rejected([&] { (void)make_slab(slab); });
+        const TerrainSurface terrain(
+            "native fixture",
+            {TerrainPoint{"p0", 0.0, 0.0, 0.0},
+             TerrainPoint{"p1", 4.0, 0.0, 1.0},
+             TerrainPoint{"p2", 4.0, 3.0, 2.0},
+             TerrainPoint{"p3", 0.0, 3.0, 0.5}},
+            {TerrainTriangle{{0, 1, 2}}, TerrainTriangle{{0, 2, 3}}});
+        if (make_terrain_surface(terrain).IsNull()) {
+            throw std::runtime_error("Terrain surface produced a null OCCT shape");
+        }
         std::cout << "Architectural solid tests passed\n";
         return 0;
     } catch (const std::exception& error) {

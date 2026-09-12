@@ -43,6 +43,7 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/vertical_levels.hpp"
 #include "sketch/reference_grid.hpp"
+#include "sketch/terrain_surface.hpp"
 #include "sketch/visualization/native_model_view.hpp"
 
 #include <QAction>
@@ -1172,14 +1173,16 @@ bool is_closed_boundary_entity(std::string_view type) {
 
 bool is_architectural_entity(std::string_view type) {
     return type == "wall" || type == "opening" || type == "room" || type == "slab" ||
-           type == "roof" || type == "stair" || type == "railing" || type == "column" || type == "beam";
+           type == "roof" || type == "stair" || type == "railing" || type == "column" ||
+           type == "beam" || type == "terrain_surface";
 }
 
 bool is_phase_model_entity(std::string_view type) {
     return type == "building" || type == "floor" || type == "wall" || type == "opening" ||
            type == "room" || type == "room_boundary" || type == "measurement_boundary" ||
            type == "boundary" || type == "slab" || type == "roof" || type == "stair" || type == "railing" ||
-           type == "column" || type == "beam" || type == "assembly_model";
+           type == "column" || type == "beam" || type == "assembly_model" ||
+           type == "terrain_surface";
 }
 
 struct PhaseModelRecord {
@@ -7420,6 +7423,145 @@ public:
         }
     }
 
+    QString createTerrainSurfaceFromSelectedBoundary(
+        const QString& elevations_expression,
+        std::optional<Revision> expected_revision = std::nullopt) {
+        const auto revision = expected_revision.value_or(m_document->revision());
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This project is read-only."));
+            return {};
+        }
+        try {
+            const auto selected = selectedEntity();
+            if (!selected.has_value() || !is_closed_boundary_entity(selected->type)) {
+                throw std::invalid_argument("Select a closed boundary before creating terrain.");
+            }
+            const auto boundary = read_boundary(selected->properties);
+            const auto diagnostics = validate_boundary(boundary);
+            if (!diagnostics.empty()) {
+                throw std::invalid_argument("Selected boundary is invalid: " +
+                                            diagnostics.front().message);
+            }
+            if (boundary.size() < 3) {
+                throw std::invalid_argument("Terrain requires at least three boundary vertices.");
+            }
+            const auto same_point = [](Vec2 left, Vec2 right) {
+                return std::hypot(left.x - right.x, left.y - right.y) <=
+                       default_geometry_tolerance_metres;
+            };
+            std::vector<Vec2> vertices;
+            vertices.reserve(boundary.size());
+            for (std::size_t index = 0; index < boundary.size(); ++index) {
+                const auto& segment = boundary[index];
+                if (std::abs(segment.sweep_radians) > default_geometry_tolerance_metres) {
+                    throw std::invalid_argument("Terrain authoring currently requires straight boundary segments.");
+                }
+                if (index > 0 && !same_point(boundary[index - 1].end, segment.start)) {
+                    throw std::invalid_argument("Selected boundary segments are not connected.");
+                }
+                vertices.push_back(segment.start);
+            }
+            if (!same_point(boundary.back().end, vertices.front())) {
+                throw std::invalid_argument("Selected boundary is not closed.");
+            }
+
+            double signed_area_twice = 0.0;
+            Vec2 center{};
+            for (const auto& vertex : vertices) {
+                center.x += vertex.x;
+                center.y += vertex.y;
+            }
+            center.x /= static_cast<double>(vertices.size());
+            center.y /= static_cast<double>(vertices.size());
+            for (std::size_t index = 0; index < vertices.size(); ++index) {
+                const auto& first = vertices[index];
+                const auto& second = vertices[(index + 1) % vertices.size()];
+                signed_area_twice += first.x * second.y - second.x * first.y;
+            }
+            if (!std::isfinite(signed_area_twice) ||
+                std::abs(signed_area_twice) <= default_geometry_tolerance_metres) {
+                throw std::invalid_argument("Selected boundary has no measurable plan area.");
+            }
+            const auto orientation = signed_area_twice > 0.0 ? 1.0 : -1.0;
+            for (std::size_t index = 0; index < vertices.size(); ++index) {
+                const auto& first = vertices[index];
+                const auto& second = vertices[(index + 1) % vertices.size()];
+                const auto cross = (first.x - center.x) * (second.y - center.y) -
+                                   (first.y - center.y) * (second.x - center.x);
+                if (!std::isfinite(cross) || cross * orientation <= default_geometry_tolerance_metres) {
+                    throw std::invalid_argument(
+                        "Terrain authoring currently requires a convex boundary.");
+                }
+            }
+
+            const auto fields = elevations_expression.split(',', Qt::KeepEmptyParts);
+            if (fields.size() != static_cast<qsizetype>(vertices.size())) {
+                throw std::invalid_argument(
+                    "Enter one elevation quantity for each boundary vertex, separated by commas.");
+            }
+            std::vector<double> elevations;
+            elevations.reserve(vertices.size());
+            for (const auto& field : fields) {
+                if (field.trimmed().isEmpty()) {
+                    throw std::invalid_argument("Terrain elevations cannot contain empty values.");
+                }
+                const auto value = parse_quantity(field.trimmed().toStdString(), Unit::metre).metres;
+                if (!std::isfinite(value)) {
+                    throw std::invalid_argument("Terrain elevations must be finite.");
+                }
+                elevations.push_back(value);
+            }
+
+            std::vector<TerrainPoint> points;
+            points.reserve(vertices.size() + 1);
+            double center_elevation = 0.0;
+            for (const auto elevation : elevations) center_elevation += elevation;
+            center_elevation /= static_cast<double>(elevations.size());
+            points.push_back({"terrain-center", center.x, center.y, center_elevation});
+            for (std::size_t index = 0; index < vertices.size(); ++index) {
+                points.push_back({"terrain-p" + std::to_string(index), vertices[index].x,
+                                  vertices[index].y, elevations[index]});
+            }
+            std::vector<TerrainTriangle> triangles;
+            triangles.reserve(vertices.size());
+            for (std::size_t index = 0; index < vertices.size(); ++index) {
+                const auto next = (index + 1) % vertices.size();
+                triangles.push_back({{0, static_cast<std::uint32_t>(index + 1),
+                                      static_cast<std::uint32_t>(next + 1)}});
+            }
+            const TerrainSurface surface("selected boundary", std::move(points),
+                                         std::move(triangles), 1.0, true);
+            (void)make_terrain_surface(surface);
+
+            const auto organization = organize_project(m_document->snapshot());
+            const auto context = organization.drawing_context(selected->id);
+            if (!context) {
+                throw std::invalid_argument("The selected boundary has no resolved drawing context.");
+            }
+            json elevation_expressions = json::array();
+            for (const auto& field : fields) elevation_expressions.push_back(field.trimmed().toStdString());
+            const auto entity_id = new_id("terrain");
+            const auto properties = json{{"property_id", context->property_id},
+                                         {"building_id", context->building_id},
+                                         {"floor_id", context->floor_id},
+                                         {"layer_id", context->layer_id},
+                                         {"source_boundary_id", selected->id},
+                                         {"elevation_expressions", elevation_expressions},
+                                         {"model", surface.to_json()}};
+            if (!applyEntity(Entity{entity_id, "terrain_surface", properties, false,
+                                    json::object()},
+                             "create terrain surface", revision)) {
+                return {};
+            }
+            m_selected_id = id_from(entity_id);
+            refresh();
+            return m_selected_id;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Terrain: %1").arg(QString::fromUtf8(error.what())));
+            return {};
+        }
+    }
+
     bool selectEntity(const QString& entity_id) {
         if (entity_id.isEmpty()) {
             m_selected_id.clear();
@@ -10665,6 +10807,8 @@ public:
              [this] { createOpeningFromDialog(QStringLiteral("window")); }},
             {QStringLiteral("Create slab from selected boundary"),
              [this] { createSlabFromDialog(); }},
+            {QStringLiteral("Create terrain surface from selected boundary"),
+             [this] { showTerrainSurfaceDialog(); }},
             {QStringLiteral("Create column, beam, stair or roof"),
              [this] { showBuildingObjectDialog(false); }},
             {QStringLiteral("Edit selected building object"),
@@ -11634,13 +11778,16 @@ private:
         m_redefine_action->setObjectName(QStringLiteral("boundaryRedefinition"));
         m_detect_areas_action = new QAction(QStringLiteral("Detect closed areas…"), owner);
         m_detect_areas_action->setObjectName(QStringLiteral("detectClosedAreas"));
+        m_terrain_action = new QAction(QStringLiteral("Create terrain surface…"), owner);
+        m_terrain_action->setObjectName(QStringLiteral("createTerrainSurface"));
         m_about_action = new QAction(QStringLiteral("About Property Studio"), owner);
-        const std::array<QAction*, 19> secondary_actions{
+        const std::array<QAction*, 20> secondary_actions{
             m_annotation_action, m_reference_action, m_schedule_action, m_sheet_action,
             m_viewport_action, m_schedule_placement_action, m_view_action, m_remodel_action,
             m_relationship_action, m_levels_action, m_reference_grid_action, m_assembly_action, m_assistance_action,
             m_workspace_profiles_action, m_revisions_action, m_transform_action, m_redefine_action,
             m_detect_areas_action,
+            m_terrain_action,
             m_about_action};
         for (auto* action : secondary_actions) {
             owner->addAction(action);
@@ -11790,6 +11937,8 @@ private:
                          [this] { showBoundaryRedefinition(); });
         QObject::connect(m_detect_areas_action, &QAction::triggered, owner,
                          [this] { showAutomaticAreaDetection(); });
+        QObject::connect(m_terrain_action, &QAction::triggered, owner,
+                         [this] { showTerrainSurfaceDialog(); });
         QObject::connect(m_about_action, &QAction::triggered, owner, [this] { showAbout(); });
         QObject::connect(m_unitsCombo, &QComboBox::currentIndexChanged, owner,
                          [this](int index) { setMetricUnits(index == 1); });
@@ -12845,6 +12994,26 @@ private:
                 }
                 continue;
             }
+            if (entity.type == "terrain_surface") {
+                try {
+                    if (!entity.properties.contains("model"))
+                        throw std::invalid_argument("model is required");
+                    const auto model = TerrainSurface::from_json(entity.properties.at("model"));
+                    if (model.visible()) {
+                        Boundary segments = model.plan_edges();
+                        for (const auto& contour : model.contours()) {
+                            segments.push_back({contour.start, contour.end, 0.0});
+                        }
+                        all_geometry.push_back(CanvasEntity{
+                            id_from(id), QStringLiteral("terrain_surface"), std::move(segments), 0.0,
+                            id_from(id) == m_selected_id});
+                    }
+                } catch (const std::exception& error) {
+                    append_geometry_error(QStringLiteral("Terrain %1: %2")
+                                              .arg(id_from(id), QString::fromUtf8(error.what())));
+                }
+                continue;
+            }
             if (entity.type != "opening") {
                 continue;
             }
@@ -13087,6 +13256,17 @@ private:
             const auto frame = architectural_view_frame(snapshot, kind);
             for (const auto& [id, entity] : snapshot.entities()) {
                 try {
+                    if (entity.type == "terrain_surface") {
+                        const auto model = TerrainSurface::from_json(
+                            entity.properties.at("model"));
+                        if (!model.visible()) continue;
+                        const auto projection = project_shape_view(
+                            make_terrain_surface(model), kind, frame);
+                        result.push_back(CanvasEntity{
+                            id_from(id), QStringLiteral("terrain_surface"), projection, 0.0,
+                            id_from(id) == m_selected_id});
+                        continue;
+                    }
                     if (can_recognize_building_entity_type(entity.type)) {
                         const auto resolved = resolve_vertical_placement(snapshot, entity);
                         const auto key = "view:" + std::to_string(static_cast<int>(kind)) +
@@ -15050,6 +15230,35 @@ private:
         (void)createSlabFromSelectedBoundary(thickness, elevation, context.revision);
     }
 
+public:
+    void showTerrainSurfaceDialog() {
+        const auto context = captureModalContext();
+        const auto boundary = selectedEntity();
+        if (!boundary.has_value() || !is_closed_boundary_entity(boundary->type)) {
+            setError(QStringLiteral("Select a closed boundary before creating terrain."));
+            return;
+        }
+        const auto segments = read_boundary(boundary->properties);
+        if (segments.size() < 3) {
+            setError(QStringLiteral("The selected boundary has no usable terrain vertices."));
+            return;
+        }
+        QStringList defaults;
+        defaults.reserve(static_cast<qsizetype>(segments.size()));
+        for (std::size_t index = 0; index < segments.size(); ++index) {
+            (void)index;
+            defaults.push_back(m_metric_units ? QStringLiteral("0 m") : QStringLiteral("0 ft"));
+        }
+        bool accepted = false;
+        const auto elevations = QInputDialog::getText(
+            owner, QStringLiteral("Create terrain surface"),
+            QStringLiteral("Vertex elevations (comma-separated):"), QLineEdit::Normal,
+            defaults.join(QStringLiteral(", ")), &accepted);
+        if (!accepted || !modalContextUnchanged(context)) return;
+        (void)createTerrainSurfaceFromSelectedBoundary(elevations, context.revision);
+    }
+
+private:
     void saveAsFromDialog() {
         const auto selected = QFileDialog::getSaveFileName(
             owner, QStringLiteral("Save project as"), {}, QStringLiteral("Property Studio project (*.bldproj)"));
@@ -15289,6 +15498,7 @@ private:
     QAction* m_insert_vertex_action{};
     QAction* m_redefine_action{};
     QAction* m_detect_areas_action{};
+    QAction* m_terrain_action{};
     std::vector<ShortcutBinding> m_shortcuts;
     QString m_shortcut_load_error;
     QAction* m_annotation_action{};
@@ -15488,6 +15698,11 @@ QString MainWindow::createSlabFromBoundary(const Boundary& boundary,
                                            std::vector<Boundary> holes,
                                            std::optional<Revision> revision) {
     return m_impl->createSlabFromBoundary(boundary, thickness, elevation, std::move(holes), revision);
+}
+
+QString MainWindow::createTerrainSurfaceFromSelectedBoundary(
+    QString elevations, std::optional<Revision> revision) {
+    return m_impl->createTerrainSurfaceFromSelectedBoundary(std::move(elevations), revision);
 }
 
 bool MainWindow::selectEntity(const QString& entity_id) {
@@ -15756,6 +15971,10 @@ void MainWindow::showBoundaryRedefinition() {
 
 void MainWindow::showAutomaticAreaDetection() {
     m_impl->showAutomaticAreaDetection();
+}
+
+void MainWindow::showTerrainSurfaceDialog() {
+    m_impl->showTerrainSurfaceDialog();
 }
 
 void MainWindow::fitView() {

@@ -82,9 +82,9 @@ void add_issues(std::vector<std::string>& destination,
 }
 
 bool is_placeable_type(std::string_view type) noexcept {
-    static constexpr std::array<std::string_view, 12> placeable{
+    static constexpr std::array<std::string_view, 13> placeable{
         "boundary", "measurement_boundary", "room_boundary", "wall", "opening", "room",
-        "slab", "roof", "stair", "railing", "column", "beam"};
+        "slab", "roof", "stair", "railing", "column", "beam", "terrain_surface"};
     return std::find(placeable.begin(), placeable.end(), type) != placeable.end();
 }
 
@@ -448,6 +448,21 @@ private:
         }
 
         if (property.present) {
+            if (entity.type == "terrain_surface") {
+                std::string property_id;
+                Resolution property_resolution;
+                if (!require_reference(entity, "property_id", "property", property_id,
+                                        property_resolution, result.issues)) {
+                    result.valid = false;
+                    return result;
+                }
+                result.context = property_resolution.context;
+                result.parent_id = property_id;
+                if (!result.issues.empty()) {
+                    result.valid = false;
+                }
+                return result;
+            }
             std::string property_id;
             Resolution property_resolution;
             if (!require_reference(entity, "property_id", "property", property_id,

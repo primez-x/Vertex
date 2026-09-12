@@ -1,4 +1,5 @@
 #include "sketch/building_view_projection.hpp"
+#include "sketch/architecture.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -189,6 +190,25 @@ void test_invalid_frame_and_missed_section_fail_closed() {
         "a section plane missing the solid must be rejected");
 }
 
+void test_terrain_shape_projects_in_all_views() {
+    const sketch::TerrainSurface terrain(
+        "projection fixture",
+        {sketch::TerrainPoint{"p0", 0.0, 0.0, 0.0},
+         sketch::TerrainPoint{"p1", 4.0, 0.0, 1.0},
+         sketch::TerrainPoint{"p2", 4.0, 3.0, 2.0},
+         sketch::TerrainPoint{"p3", 0.0, 3.0, 0.5}},
+        {sketch::TerrainTriangle{{0, 1, 2}}, sketch::TerrainTriangle{{0, 2, 3}}});
+    const auto shape = sketch::make_terrain_surface(terrain);
+    for (const auto kind : {BuildingViewKind::plan, BuildingViewKind::elevation}) {
+        require(!sketch::project_shape_view(shape, kind).empty(),
+                "terrain shape must project to plan and elevation lines");
+    }
+    const auto section = sketch::project_shape_view(
+        shape, BuildingViewKind::section,
+        BuildingViewFrame{{0.0, 0.0, 1.0}, {0.0, 0.0, -1.0}, {0.0, 1.0, 0.0}});
+    require(!section.empty(), "terrain shape must intersect a horizontal section");
+}
+
 }  // namespace
 
 void test_hip_roof_views() {
@@ -219,6 +239,7 @@ int main() {
         test_flat_roof_projects_in_all_views();
         test_hip_roof_views();
         test_invalid_frame_and_missed_section_fail_closed();
+        test_terrain_shape_projects_in_all_views();
         std::cout << "Building view projection tests passed\n";
         return 0;
     } catch (const std::exception& error) {

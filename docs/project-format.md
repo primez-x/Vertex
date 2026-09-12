@@ -127,7 +127,7 @@ The v1 known types are:
 
 `property`, `building`, `floor`, `layer`, `boundary`, `measurement_boundary`, `room_boundary`,
 `wall`, `opening`, `room`, `slab`, `roof`, `stair`, `railing`, `column`, `beam`, `label`, `sheet`, `view`,
-`constraint`, and `reference_grid`.
+`constraint`, `reference_grid`, and `terrain_surface`.
 
 All geometry properties use metres and radians. A wall and opening can be represented as:
 
@@ -196,6 +196,19 @@ Document boundary and rendered by both desktop canvases from the same line
 list. Grids are presentation aids only: they do not participate in area
 totals, wall geometry, or measurement truth. See
 [reference grids](reference-grids.md).
+
+Terrain surfaces are optional `terrain_surface` entities. Their `properties.model` is a strict
+version-1 local triangulated irregular network (TIN) with `provenance`, bounded `points`,
+`triangles`, `contour_interval_m`, and `visible` fields. Each point stores a stable `id`,
+`x_m`, `y_m`, and `elevation_m`; triangle indices refer to that point array and each edge may
+belong to at most two triangles. The model is the measurement authority for the surface:
+plan edges and contour segments are derived from it, while native 3D uses the same triangles
+as OCCT faces. A terrain entity carries the ordinary property/building/floor/layer placement
+links when it belongs to a drawing context. The source boundary and any entered elevation
+expressions are retained as authoring metadata; editing the terrain never rewrites the
+source boundary. Terrain remains a local surface tool and does not imply a survey provider,
+georeferencing service, native Apex compatibility, or production qualification. See
+[terrain surfaces](terrain-surfaces.md).
 
 For known entity types, the document validates `refs` and `references` arrays as generic entity
 references. It also validates canonical singular and plural reference fields for each known type,

@@ -166,6 +166,9 @@ QColor color_for(const CanvasEntity& entity) {
     if (entity.type == QStringLiteral("slab")) {
         return QColor(112, 183, 211);
     }
+    if (entity.type == QStringLiteral("terrain_surface")) {
+        return QColor(119, 164, 113);
+    }
     return QColor(182, 191, 205);
 }
 

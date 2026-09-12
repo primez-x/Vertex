@@ -295,6 +295,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/terrain-surfaces.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/typed-relationships.md"
     },
     {
@@ -624,6 +628,10 @@
     {
       "category": "source",
       "path": "include/sketch/survey_contract.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/terrain_surface.hpp"
     },
     {
       "category": "source",
@@ -1084,6 +1092,10 @@
     {
       "category": "source",
       "path": "src/core/survey_contract.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/terrain_surface.cpp"
     },
     {
       "category": "source",
@@ -1572,6 +1584,10 @@
     {
       "category": "source",
       "path": "tests/survey_contract_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/terrain_surface_tests.cpp"
     },
     {
       "category": "source",

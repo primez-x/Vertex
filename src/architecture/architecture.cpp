@@ -2,8 +2,10 @@
 
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRep_Builder.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
@@ -15,6 +17,7 @@
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Wire.hxx>
+#include <TopoDS_Compound.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Vec.hxx>
 
@@ -214,6 +217,40 @@ TopoDS_Shape make_slab(const Slab& slab) {
         return result;
     } catch (const Standard_Failure& error) {
         throw std::invalid_argument(std::string("Slab geometry failed: ") + error.what());
+    }
+}
+
+TopoDS_Shape make_terrain_surface(const TerrainSurface& surface) {
+    try {
+        const auto& points = surface.points();
+        const auto& triangles = surface.triangles();
+        TopoDS_Compound compound;
+        BRep_Builder builder;
+        builder.MakeCompound(compound);
+        for (const auto& triangle : triangles) {
+            const auto& first = points[triangle.point_indices[0]];
+            const auto& second = points[triangle.point_indices[1]];
+            const auto& third = points[triangle.point_indices[2]];
+            BRepBuilderAPI_MakePolygon polygon;
+            polygon.Add(gp_Pnt(first.x_m, first.y_m, first.elevation_m));
+            polygon.Add(gp_Pnt(second.x_m, second.y_m, second.elevation_m));
+            polygon.Add(gp_Pnt(third.x_m, third.y_m, third.elevation_m));
+            polygon.Close();
+            if (!polygon.IsDone()) {
+                throw std::invalid_argument("Terrain triangle wire construction failed");
+            }
+            BRepBuilderAPI_MakeFace face(polygon.Wire(), true);
+            if (!face.IsDone() || !BRepCheck_Analyzer(face.Face()).IsValid()) {
+                throw std::invalid_argument("Terrain triangle face construction failed");
+            }
+            builder.Add(compound, face.Face());
+        }
+        if (compound.IsNull() || !BRepCheck_Analyzer(compound).IsValid()) {
+            throw std::invalid_argument("Terrain surface compound is invalid");
+        }
+        return compound;
+    } catch (const Standard_Failure& error) {
+        throw std::invalid_argument(std::string("Terrain surface geometry failed: ") + error.what());
     }
 }
 } // namespace sketch

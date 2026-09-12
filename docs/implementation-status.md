@@ -47,6 +47,14 @@ save/reopen, while grids remain presentation aids and cannot affect measurement
 geometry. Site/terrain coordination and full cross-view production
 qualification remain open.
 
+The next terrain slice now supports a validated, versioned local `terrain_surface` TIN.
+Selected straight convex boundaries can be authored into a centroid-fan surface with one
+elevation quantity per vertex. Deterministic deduplicated plan edges, interpolated contours,
+elevation/section projections, native OCCT faces, visibility, save/reopen, and command-palette
+authoring use the same semantic model. This is a bounded surface primitive for residential and
+light-commercial work; site/terrain coordination, georeferencing, survey-device exchange,
+native Apex compatibility, and production qualification remain open.
+
 The architectural object slice now accepts a true flat roof through the
 existing sloped-panel schema: zero rise and zero pitch produce a thickened
 planar solid, persist through the entity codec, and project through plan,

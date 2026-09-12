@@ -1679,9 +1679,13 @@
         "tests/document_tests.cpp",
         "tests/desktop_smoke.cpp",
         "docs/vertical-levels.md",
-        "docs/reference-grids.md"
+        "docs/reference-grids.md",
+        "include/sketch/terrain_surface.hpp",
+        "src/core/terrain_surface.cpp",
+        "tests/terrain_surface_tests.cpp",
+        "docs/terrain-surfaces.md"
       ],
-      "implementation_note": "Vertical level and floor-to-floor relationship semantics are implemented as a standalone graph. Floors can bind to a validated graph entity and level through revisioned desktop controls with save/reopen coverage. Reference grids now have strict version-1 persistence, a revision-checked Windows editor, deterministic rotated line generation, shared measurement/architectural canvas rendering, and axis labels in screen and fit-to-content output. Newly created walls, slabs, and architectural objects on a bound floor resolve through an opt-in level placement record across plan, elevation, section, and native 3D without mutating source coordinates. Site/terrain objects, coordinated view propagation, and production qualification remain open."
+      "implementation_note": "Vertical level and floor-to-floor relationship semantics are implemented as a standalone graph. Floors can bind to a validated graph entity and level through revisioned desktop controls with save/reopen coverage. Reference grids now have strict version-1 persistence, a revision-checked Windows editor, deterministic rotated line generation, shared measurement/architectural canvas rendering, and axis labels in screen and fit-to-content output. Newly created walls, slabs, and architectural objects on a bound floor resolve through an opt-in level placement record across plan, elevation, section, and native 3D without mutating source coordinates. A bounded version-1 terrain_surface TIN now validates stable points, triangle topology, contours, deduplicated plan edges, native OCCT faces, and selected-boundary authoring across plan/elevation/section/3D. Full site coordination, georeferencing, survey-device exchange, Apex terrain compatibility, coordinated view propagation, and production qualification remain open."
     },
     {
       "id": "ARCH-MOD-008",

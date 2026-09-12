@@ -1231,6 +1231,52 @@ void test_organization_context() {
             "selecting a reopened object resolves its real drawing context");
 }
 
+void test_terrain_surface_workflow() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    const Boundary boundary{
+        {{0.0, 0.0}, {6.0, 0.0}, 0.0},
+        {{6.0, 0.0}, {6.0, 4.0}, 0.0},
+        {{6.0, 4.0}, {0.0, 4.0}, 0.0},
+        {{0.0, 4.0}, {0.0, 0.0}, 0.0},
+    };
+    const auto source = window.createRoomBoundary(boundary, QStringLiteral("Site pad"));
+    require(!source.isEmpty() && window.selectEntity(source),
+            "terrain fixture must create and select a source boundary");
+    const auto before = window.document().revision();
+    const auto terrain = window.createTerrainSurfaceFromSelectedBoundary(
+        QStringLiteral("100 m, 101 m, 103 m, 102 m"));
+    require(!terrain.isEmpty() && window.document().revision() == before + 1,
+            "terrain authoring must commit one undoable entity command");
+    const auto snapshot = window.document().snapshot();
+    const auto& terrain_entity = snapshot.entities().at(terrain.toStdString());
+    require(terrain_entity.type == "terrain_surface" &&
+                terrain_entity.properties.at("model").at("points").size() == 5 &&
+                terrain_entity.properties.at("model").at("triangles").size() == 4 &&
+                terrain_entity.properties.at("source_boundary_id") == source.toStdString(),
+            "terrain authoring must persist a centroid fan and source metadata");
+    auto* plan = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
+    require(plan != nullptr && std::any_of(plan->entities().begin(), plan->entities().end(),
+                                           [&](const auto& item) {
+                                               return item.id == terrain && item.segments.size() >= 5;
+                                           }),
+            "terrain surface must appear in the shared plan scene");
+    window.setWorkspace(desktop::Workspace::architectural);
+    require(window.undoCommand() &&
+                !window.document().snapshot().entities().contains(terrain.toStdString()) &&
+                window.redoCommand() &&
+                window.document().snapshot().entities().contains(terrain.toStdString()),
+            "terrain creation must participate in undo and redo");
+    QTemporaryDir directory;
+    require(directory.isValid(), "terrain fixture needs a temporary directory");
+    const auto path = directory.filePath(QStringLiteral("terrain.bldproj"));
+    require(window.saveProjectAs(path) && window.openProject(path),
+            "terrain surfaces must survive save and reopen");
+    require(window.document().snapshot().entities().at(terrain.toStdString()).properties
+                .at("model").at("contour_interval_m") == 1.0,
+            "reopened terrain must retain its model settings");
+}
+
 void test_building_form_authoring_and_quantity_history() {
     using namespace sketch;
     desktop::MainWindow window;
@@ -3008,6 +3054,7 @@ int main(int argc, char** argv) {
                 "stamp fixture permissions should be restored");
     }
     test_organization_context();
+    test_terrain_surface_workflow();
     test_building_form_authoring_and_quantity_history();
     auto document = std::make_shared<sketch::Document>(sketch::Document::create());
     sketch::desktop::MainWindow window(document);

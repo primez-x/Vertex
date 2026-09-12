@@ -5,6 +5,7 @@
 #include "sketch/room_relationships.hpp"
 #include "sketch/vertical_levels.hpp"
 #include "sketch/reference_grid.hpp"
+#include "sketch/terrain_surface.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/constraint_integrity.hpp"
@@ -230,6 +231,10 @@ void validate_entity(const Entity& entity) {
         validate_embedded_model([](const nlohmann::json& model) {
             (void)ReferenceGridModel::from_json(model);
         }, "reference grid");
+    } else if (entity.type == "terrain_surface") {
+        validate_embedded_model([](const nlohmann::json& model) {
+            (void)TerrainSurface::from_json(model);
+        }, "terrain surface");
     }
 }
 
@@ -721,14 +726,14 @@ std::string sha256_hex(std::span<const std::byte> bytes) {
 }
 
 bool is_known_entity_type(std::string_view type) noexcept {
-    static constexpr std::array<std::string_view, 29> known{
+    static constexpr std::array<std::string_view, 30> known{
         "property",             "building", "floor",  "layer", "boundary",
         "measurement_boundary", "room_boundary", "wall", "opening", "room",
         "slab",                 "roof",     "stair",  "railing", "column", "beam",
         "label",                "sheet",    "view",   "constraint", "dimension",
         "sheet_view_model",    "annotation_state", "reference_asset",
         "assembly_model",      "model_phases", "room_relationships", "vertical_levels",
-        "reference_grid"};
+        "reference_grid", "terrain_surface"};
     return std::find(known.begin(), known.end(), type) != known.end();
 }
 

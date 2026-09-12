@@ -191,6 +191,12 @@ public:
         QString elevation,
         std::vector<Boundary> holes = {},
         std::optional<Revision> expected_revision = std::nullopt);
+    // Creates a deterministic local TIN terrain surface from the selected
+    // closed boundary. Elevations are comma-separated quantities in metres
+    // (explicit units are accepted); the selected boundary remains unchanged.
+    [[nodiscard]] QString createTerrainSurfaceFromSelectedBoundary(
+        QString elevations,
+        std::optional<Revision> expected_revision = std::nullopt);
     [[nodiscard]] bool selectEntity(const QString& entity_id);
     [[nodiscard]] QString selectedEntityId() const;
     // Copies the selected geometry graph to the local system clipboard using
@@ -348,6 +354,7 @@ public:
     void showBoundaryTransformEditor();
     void showBoundaryRedefinition();
     void showAutomaticAreaDetection();
+    void showTerrainSurfaceDialog();
     // Writes an immutable copy of a named revision without changing the
     // current document or its later history.
     [[nodiscard]] bool restoreNamedRevision(const QString& name, const QString& path);

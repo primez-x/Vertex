@@ -4,6 +4,7 @@
 #include "sketch/room_relationships.hpp"
 #include "sketch/vertical_levels.hpp"
 #include "sketch/reference_grid.hpp"
+#include "sketch/terrain_surface.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <cstdlib>
@@ -548,6 +549,33 @@ void test_embedded_architectural_models_are_validated_at_document_boundary() {
         "reference grid entities must reject invalid model geometry");
     require(grid_document.revision() == grid_revision,
             "a rejected reference grid must not advance the revision");
+
+    const auto terrain_model = sketch::TerrainSurface(
+        "document fixture",
+        {sketch::TerrainPoint{"p0", 0.0, 0.0, 100.0},
+         sketch::TerrainPoint{"p1", 4.0, 0.0, 101.0},
+         sketch::TerrainPoint{"p2", 0.0, 4.0, 102.0}},
+        {sketch::TerrainTriangle{{0, 1, 2}}})
+                                      .to_json();
+    auto terrain_document = Document::create({
+        entity("terrain-1", "terrain_surface", {{"model", terrain_model}}),
+    });
+    require(terrain_document.snapshot().entities().contains("terrain-1"),
+            "terrain surfaces should be admitted by the document boundary");
+    const auto terrain_revision = terrain_document.revision();
+    auto invalid_terrain = terrain_document.snapshot().entities().at("terrain-1");
+    invalid_terrain.properties.at("model").at("contour_interval_m") = 0.0;
+    require_error(
+        [&] {
+            terrain_document.apply(ApplyEntityChanges{
+                .expected_revision = terrain_revision,
+                .entity_changes = {EntityChange::upsert(std::move(invalid_terrain))},
+            });
+        },
+        DocumentErrorCode::invalid_entity,
+        "terrain surfaces must reject invalid embedded models");
+    require(terrain_document.revision() == terrain_revision,
+            "a rejected terrain surface must not advance the revision");
 
     const auto relationships = sketch::RoomRelationshipSnapshot::create(
         {{"room-edge-1", sketch::RoomReferenceKind::room_boundary}}, {}).to_json();

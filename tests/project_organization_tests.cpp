@@ -1,5 +1,6 @@
 #include "sketch/project_organization.hpp"
 #include "sketch/vertical_levels.hpp"
+#include "sketch/terrain_surface.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <algorithm>
@@ -56,6 +57,41 @@ void test_real_hierarchy_and_host_membership() {
     require(document.snapshot().entities() == snapshot.entities(), "organization does not mutate geometry or metadata");
     require(snapshot.entities().at("wall").properties.at("elevation_m") == 3.5,
             "floor metadata must not offset absolute wall coordinates");
+}
+
+void test_terrain_surface_placement_is_explicit() {
+    const auto model = sketch::TerrainSurface(
+        "organization fixture",
+        {sketch::TerrainPoint{"p0", 0.0, 0.0, 0.0},
+         sketch::TerrainPoint{"p1", 2.0, 0.0, 1.0},
+         sketch::TerrainPoint{"p2", 0.0, 2.0, 2.0}},
+        {sketch::TerrainTriangle{{0, 1, 2}}})
+                             .to_json();
+    const auto document = sketch::Document::create({
+        make_entity("site", "property"),
+        make_entity("building", "building", {{"property_id", "site"}}),
+        make_entity("floor", "floor", {{"building_id", "building"}}),
+        make_entity("layer", "layer", {{"floor_id", "floor"}}),
+        make_entity("terrain", "terrain_surface",
+                    {{"property_id", "site"}, {"building_id", "building"},
+                     {"floor_id", "floor"}, {"layer_id", "layer"}, {"model", model}}),
+    });
+    const auto organization = sketch::organize_project(document.snapshot());
+    require(organization.nodes.at("terrain").parent_id == "layer",
+            "terrain surfaces should appear under their drawing layer");
+    require(organization.drawing_context("terrain") ==
+                sketch::DrawingContext{"site", "building", "floor", "layer"},
+            "terrain surfaces should resolve the ordinary drawing context");
+
+    const auto property_only = sketch::Document::create({
+        make_entity("site", "property"),
+        make_entity("terrain", "terrain_surface",
+                    {{"property_id", "site"}, {"model", model}}),
+    });
+    const auto property_organization = sketch::organize_project(property_only.snapshot());
+    require(property_organization.nodes.at("terrain").parent_id == "site" &&
+                property_organization.nodes.at("terrain").issues.empty(),
+            "property-level terrain surfaces should remain navigable without a fabricated layer");
 }
 
 void test_inconsistent_membership_stays_visible() {
@@ -312,6 +348,7 @@ int main() {
     sketch::testing::noninteractive_errors();
     try {
         test_real_hierarchy_and_host_membership();
+        test_terrain_surface_placement_is_explicit();
         test_inconsistent_membership_stays_visible();
         test_unknown_optional_references_are_safe_and_diagnostic();
         test_redundant_property_and_building_links_must_agree();
