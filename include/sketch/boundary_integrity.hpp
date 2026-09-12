@@ -2,6 +2,11 @@
 #include "sketch/document.hpp"
 
 namespace sketch {
+// Reconstruct an entire entity state from a qualified receipt-backed offset.
+// Preserves identities and all unrelated entities; invalid derivations throw.
+[[nodiscard]] std::map<std::string, Entity, std::less<>> translated_boundary_entities(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const BoundaryTranslation& translation);
 // Validate every supported boundary, qualified construction receipt and
 // dimension, including stable child references, even when another entity has an unknown version. Unknown
 // versions return a document-wide read-only reason.

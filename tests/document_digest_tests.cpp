@@ -1,4 +1,5 @@
 #include "sketch/document_digest.hpp"
+#include "sketch/boundary_translation.hpp"
 
 #include <functional>
 #include <iostream>
@@ -38,6 +39,7 @@ void test_full_snapshot_binding() {
         [](auto& record) { record.source_revision = 0; },
         [](auto& record) { record.undo_stack.push_back(0); },
         [](auto& record) { record.redo_stack.push_back(0); },
+        [](auto& record) { record.boundary_translation = BoundaryTranslation{"boundary-1", {8, -4}}; },
     };
     for (const auto& mutate : mutations) {
         auto changed = source;
@@ -172,6 +174,32 @@ void test_historical_authoring_bindings() {
                 document_authoring_source_digest_v1(baselines.front()),
             "changed retained baseline data must alter its binding");
 }
+
+void test_translation_proof_digest_and_codec() {
+    auto snapshot = Document::create().snapshot();
+    auto& proof = const_cast<std::vector<RevisionRecord>&>(snapshot.history()).front().boundary_translation;
+    proof = BoundaryTranslation{"boundary-1", {8, -4}};
+    const auto digest = document_authoring_source_digest_v1(snapshot);
+    proof->offset.x = 9;
+    require(document_authoring_source_digest_v1(snapshot) != digest,
+            "authoring digest must bind the translation offset");
+    proof->offset.x = 8;
+    proof->boundary_id = "boundary-2";
+    require(document_authoring_source_digest_v1(snapshot) != digest,
+            "authoring digest must bind the translation target");
+    const auto wire = encode_boundary_translation(*proof);
+    const auto decoded = decode_boundary_translation(wire);
+    require(decoded.boundary_id == proof->boundary_id && decoded.offset.x == 8 && decoded.offset.y == -4,
+            "known translation proof must round trip");
+    for (const auto invalid : {nlohmann::json{{"version", 1.0}, {"boundary_id", "boundary-1"}, {"offset", {0, 0}}},
+                              nlohmann::json{{"version", 1}, {"boundary_id", "bad id"}, {"offset", {0, 0}}},
+                              nlohmann::json{{"version", 1}, {"boundary_id", "boundary-1"}, {"offset", {true, 0}}}}) {
+        bool rejected = false;
+        try { (void)decode_boundary_translation(invalid); }
+        catch (const std::invalid_argument&) { rejected = true; }
+        require(rejected, "malformed proof must not silently coerce fields");
+    }
+}
 } // namespace
 
 int main() {
@@ -181,6 +209,7 @@ int main() {
         test_authoring_source_survives_save_bookkeeping();
         test_digest_format_vectors();
         test_historical_authoring_bindings();
+        test_translation_proof_digest_and_codec();
         std::cout << "Document digest tests passed\n";
         return 0;
     } catch (const std::exception& error) {

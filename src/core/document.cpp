@@ -884,6 +884,19 @@ Revision Document::apply(const Command& command) {
                 validate_constraint_change(current.entities, next.entities);
                 validate_boundary_change(boundary_identity_history_, current.entities, next.entities);
                 record_boundary_identity_transition(next_identity_history, current.entities, next.entities);
+            } else if constexpr (std::is_same_v<CommandType, TranslateBoundary>) {
+                next.action = "Translate boundary";
+                next.boundary_translation = typed_command.translation;
+                try {
+                    next.entities = translated_boundary_entities(current.entities, typed_command.translation);
+                    validate_boundary_identity_transition(boundary_identity_history_, current.entities, next.entities);
+                } catch (const std::exception& error) {
+                    document_error(DocumentErrorCode::invalid_entity, error.what());
+                }
+                next_unsupported_constraints = validate_state(next.entities, next.assets);
+                validate_constraint_change(current.entities, next.entities);
+                if (same_state(next, current)) return head_revision_;
+                record_boundary_identity_transition(next_identity_history, current.entities, next.entities);
             } else {
                 validate_revision_name(typed_command.name);
                 if (named_revisions_.contains(typed_command.name)) {
@@ -1017,7 +1030,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
             unsupported_constraint_history = std::move(unsupported);
 
         if (index == 0) {
-            if (record.parent_revision.has_value() || record.source_revision.has_value() ||
+            if (record.parent_revision.has_value() || record.source_revision.has_value() || record.boundary_translation.has_value() ||
                 record.name.has_value() || record.action != "create" ||
                 !record.undo_stack.empty() || !record.redo_stack.empty()) {
                 document_error(DocumentErrorCode::invalid_history,
@@ -1028,6 +1041,9 @@ Document Document::restore(DocumentSnapshot snapshot) {
         }
 
         const auto& previous = snapshot.history_[index - 1];
+        if (record.boundary_translation && (record.name || record.source_revision))
+            document_error(DocumentErrorCode::invalid_history,
+                           "Boundary translation proof is not valid on history navigation or named revisions");
         // Unknown locks retain the read-only latch, but must not suppress
         // stable-endpoint checks for known relations in the same history.
         validate_constraint_change(previous.entities, record.entities);
@@ -1101,7 +1117,23 @@ Document Document::restore(DocumentSnapshot snapshot) {
         // An exact, validated history navigation may undo an identity upgrade.
         // Ordinary Apply records must never masquerade as that downgrade.
         if (!record.source_revision.has_value()) {
-            validate_boundary_change(identity_history, previous.entities, record.entities);
+            if (record.boundary_translation) {
+                if (record.action != "Translate boundary")
+                    document_error(DocumentErrorCode::invalid_history, "Boundary translation action does not match proof");
+                auto expected = previous;
+                try {
+                    expected.entities = translated_boundary_entities(previous.entities, *record.boundary_translation);
+                    validate_boundary_identity_transition(identity_history, previous.entities, record.entities);
+                } catch (const std::exception& error) {
+                    document_error(DocumentErrorCode::invalid_history, error.what());
+                }
+                if (!same_state(expected, record))
+                    document_error(DocumentErrorCode::invalid_history,
+                                   "Boundary translation state differs from deterministic reconstruction");
+                if (same_state(expected, previous))
+                    document_error(DocumentErrorCode::invalid_history,
+                                   "Unchanged boundary translation cannot create a history record");
+            } else validate_boundary_change(identity_history, previous.entities, record.entities);
             record_boundary_identity_transition(identity_history, previous.entities, record.entities);
         } else record_boundary_identities(identity_history, record.entities);
     }

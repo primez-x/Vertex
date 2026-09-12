@@ -1,5 +1,6 @@
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/boundary_dimension.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/project_store.hpp"
 #include "support/noninteractive_errors.hpp"
@@ -505,6 +506,65 @@ void test_point_receipt_storage_and_future_replay() {
             "future replay payload must round-trip opaquely");
     capture_fixture_if_requested(capture_directory, file, "future-replay-v3.bldproj");
 }
+void test_explicit_boundary_translation() {
+    const auto original = fixture();
+    const auto dimension = encode_boundary_dimension_entity(BoundaryDimension{
+        "dimension",original.id,"edge-0",{1,-0.5},BoundaryDimensionPlacement::manual,{}});
+    const Entity note{"note","label",{{"text","Original note"}},false,Json::object()};
+    auto document = Document::create({original, dimension, note});
+    const auto before = document.snapshot();
+    document.apply(TranslateBoundary{document.revision(),{original.id,{5,-2}}});
+    const auto after = document.snapshot();
+    require(after.history().back().boundary_translation.has_value(), "translation must retain its derivation intent");
+    const auto& moved = after.entities().at(original.id);
+    require(decode_identified_boundary_entity(moved).segments.front().segment.start.x == 5 &&
+        moved.properties.at("boundary_authoring").at("boundary_id") == original.id,
+        "translation must preserve owner while rebuilding geometry");
+    const auto moved_dimension = decode_boundary_dimension_entity(after.entities().at(dimension.id));
+    require(moved_dimension.dimension->text_position.x == 6 && moved_dimension.dimension->text_position.y == -2.5,
+        "explicit translation must move dimension placement");
+    require(Document::fork(after).snapshot().entities() == after.entities(), "translation history must replay on restore");
+    auto raw = Document::fork(before);
+    rejects([&] { raw.apply(ApplyEntityChanges{raw.revision(),
+        {EntityChange::upsert(moved),EntityChange::upsert(after.entities().at(dimension.id))},{},"Translate boundary"}); },
+        "action text must not authorize raw receipt edits");
+    auto forged = after;
+    const_cast<std::vector<RevisionRecord>&>(forged.history()).back().entities.at(note.id).properties["text"] = "Hidden edit";
+    rejects([&] { (void)Document::fork(forged); }, "translation proof must not conceal unrelated edits");
+    forged = after;
+    const_cast<std::vector<RevisionRecord>&>(forged.history()).back().boundary_translation->offset.x = 6;
+    rejects([&] { (void)Document::fork(forged); }, "translation history must match its offset exactly");
+    forged = after;
+    const_cast<std::vector<RevisionRecord>&>(forged.history()).back().boundary_translation.reset();
+    rejects([&] { (void)Document::fork(forged); }, "missing derivation proof must not permit receipt changes");
+    forged = after;
+    auto& empty_translation = const_cast<std::vector<RevisionRecord>&>(forged.history()).back();
+    empty_translation.entities = before.entities();
+    empty_translation.boundary_translation->offset = {0,0};
+    rejects([&] { (void)Document::fork(forged); }, "no-op translation proof must not invent a history event");
+    document.undo(document.revision());
+    require(document.snapshot().entities() == before.entities(), "translation undo must restore all entities");
+    forged = document.snapshot();
+    const_cast<std::vector<RevisionRecord>&>(forged.history()).back().boundary_translation = BoundaryTranslation{original.id,{5,-2}};
+    rejects([&] { (void)Document::fork(forged); }, "navigation must not contain derivation intent");
+    document.redo(document.revision());
+    require(document.snapshot().entities() == after.entities(), "translation redo must restore all entities");
+    const auto no_op_revision = document.revision();
+    document.apply(TranslateBoundary{no_op_revision,{original.id,{0,0}}});
+    require(document.revision() == no_op_revision, "zero translation must not add history");
+    rejects([&] { document.apply(TranslateBoundary{0,{original.id,{1,1}}}); }, "translation must reject stale revisions");
+    auto integer_points = fixture("integer-points");
+    auto& receipt_json = integer_points.properties["boundary_authoring"];
+    receipt_json["anchor"] = {0,0};
+    for (auto& segment : receipt_json["segments"])
+        for (auto& coordinate : segment["receipt"]["start"])
+            coordinate = static_cast<int>(coordinate.get<double>());
+    auto integer_document = Document::create({integer_points});
+    const auto integer_digest = document_snapshot_digest(integer_document.snapshot());
+    integer_document.apply(TranslateBoundary{0,{integer_points.id,{0,0}}});
+    require(integer_document.revision() == 0 && document_snapshot_digest(integer_document.snapshot()) == integer_digest,
+        "zero translation must preserve valid integer JSON representations exactly");
+}
 } // namespace
 int main() {
     sketch::testing::noninteractive_errors();
@@ -515,6 +575,7 @@ int main() {
         test_unknown_and_malformed_receipts_in_abandoned_history();
         test_point_receipt_storage_and_future_replay();
         test_known_receipt_storage_lifecycle_and_v3_retention();
+        test_explicit_boundary_translation();
         std::cout << "Boundary receipt integrity tests passed\n";
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

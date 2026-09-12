@@ -1,7 +1,8 @@
 # Workspace history record, version 1
 
 This describes the internal `workspace_history` record codec, now used by the
-recovery-aware SQLite v4 save/load routes. Core workspace restoration consumes
+recovery-aware SQLite v4/v5 save/load routes (v5 when document history includes
+qualified boundary translations). Core workspace restoration consumes
 this record after aggregate revalidation, and the guarded desktop save path uses
 the acknowledgement boundary. Live desktop asynchronous saving, autosave and
 restart recovery remain separate integration work; reusable queue and scheduler

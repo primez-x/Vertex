@@ -1800,7 +1800,7 @@ public:
         }
     }
 
-    std::pair<ApplyEntityChanges, std::string> makeWallTransformCommand(const DocumentSnapshot& source, const Entity& original,
+    std::pair<Command, std::string> makeWallTransformCommand(const DocumentSnapshot& source, const Entity& original,
                                 const QString& rotation_degrees, bool flip_horizontal,
                                 bool flip_vertical, const QString& offset_x,
                                 const QString& offset_y, bool clone) {
@@ -1890,7 +1890,8 @@ public:
                     flip_vertical, offset_x, offset_y, clone) :
                 makeBoundaryTransformCommand(source, found->second, rotation_degrees, flip_horizontal,
                     flip_vertical, offset_x, offset_y, clone);
-            if (!command.entity_changes.empty()) {
+            const auto* changes = std::get_if<ApplyEntityChanges>(&command);
+            if (!changes || !changes->entity_changes.empty()) {
                 (void)Document::preview_command(source, command);
                 applyDocumentCommand(command);
                 m_selected_id = id_from(root);
@@ -1904,7 +1905,7 @@ public:
         }
     }
 
-    std::pair<ApplyEntityChanges, std::string> makeBoundaryTransformCommand(
+    std::pair<Command, std::string> makeBoundaryTransformCommand(
         const DocumentSnapshot& source, Entity original, const QString& rotation_degrees,
         bool flip_horizontal, bool flip_vertical, const QString& offset_x,
         const QString& offset_y, bool clone) {
@@ -1957,6 +1958,11 @@ public:
         const Vec2 offset{parse_offset(offset_x), parse_offset(offset_y)};
         if (!std::isfinite(offset.x) || !std::isfinite(offset.y))
             throw std::invalid_argument("Boundary offsets must be finite.");
+        if (!clone && original.properties.contains("boundary_authoring")) {
+            if (radians != 0.0 || flip_horizontal || flip_vertical)
+                throw std::invalid_argument("Construction-bound rotation and reflection require receipt migration.");
+            return {TranslateBoundary{source.revision(), {original.id, offset}}, original.id};
+        }
         for (auto& edge : transformed.segments) {
             edge.segment.start.x += offset.x;
             edge.segment.start.y += offset.y;
@@ -3052,7 +3058,7 @@ public:
         const auto original = selectedEntity();
         const bool supported_selection = original &&
             (original->type == "wall" || is_closed_boundary_entity(original->type));
-        std::optional<std::pair<ApplyEntityChanges, std::string>> candidate_command;
+        std::optional<std::pair<Command, std::string>> candidate_command;
         QDialog dialog(owner);
         styleDialog(dialog);
         dialog.setObjectName(QStringLiteral("boundaryTransformDialog"));
@@ -3119,7 +3125,8 @@ public:
                     offset_y->text(), clone->isChecked()) : makeBoundaryTransformCommand(source, *original,
                     rotation->text(), flip_horizontal->isChecked(), flip_vertical->isChecked(),
                     offset_x->text(), offset_y->text(), clone->isChecked());
-                const auto proposed = candidate.first.entity_changes.empty() ? source :
+                const auto* changes = std::get_if<ApplyEntityChanges>(&candidate.first);
+                const auto proposed = changes && changes->entity_changes.empty() ? source :
                     Document::preview_command(source, candidate.first);
                 std::vector<CanvasEntity> geometry;
                 const auto add_graph = [&](const DocumentSnapshot& snapshot, const std::string& root, bool selected) {
@@ -3185,7 +3192,8 @@ public:
             if (supported_selection) {
                 if (!candidate_command) return;
                 try {
-                    if (!candidate_command->first.entity_changes.empty()) {
+                    const auto* changes = std::get_if<ApplyEntityChanges>(&candidate_command->first);
+                    if (!changes || !changes->entity_changes.empty()) {
                         applyDocumentCommand(candidate_command->first);
                         m_selected_id = id_from(candidate_command->second);
                         refresh();

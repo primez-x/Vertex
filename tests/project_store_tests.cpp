@@ -1,5 +1,8 @@
 #include "sketch/project_store.hpp"
 #include "sketch/document_digest.hpp"
+#include "sketch/boundary_entity.hpp"
+#include "sketch/boundary_receipt.hpp"
+#include "sketch/boundary_translation.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <sqlite3.h>
@@ -223,8 +226,9 @@ void rewrite_logical_digest(const std::filesystem::path& path) {
     require(sqlite3_open_v2(path.string().c_str(), &database, SQLITE_OPEN_READWRITE, nullptr) ==
                 SQLITE_OK,
             "test should open database to recompute digest");
+    const auto format = std::stoul(metadata_value(database, "format_version"));
     nlohmann::json manifest = {
-        {"format_version", 1},
+        {"format_version", format},
         {"document_id", metadata_value(database, "document_id")},
         {"head_revision", std::stoull(metadata_value(database, "head_revision"))},
         {"saved_revision", std::stoull(metadata_value(database, "saved_revision"))},
@@ -235,8 +239,11 @@ void rewrite_logical_digest(const std::filesystem::path& path) {
     sqlite3_stmt* statement = nullptr;
     require(sqlite3_prepare_v2(
                 database,
-                "SELECT revision,parent_revision,source_revision,action,name,undo_stack_json,"
-                "redo_stack_json FROM revisions ORDER BY revision",
+                format == 5
+                    ? "SELECT revision,parent_revision,source_revision,action,name,undo_stack_json,"
+                      "redo_stack_json,boundary_translation_json FROM revisions ORDER BY revision"
+                    : "SELECT revision,parent_revision,source_revision,action,name,undo_stack_json,"
+                      "redo_stack_json FROM revisions ORDER BY revision",
                 -1, &statement, nullptr) == SQLITE_OK,
             "test should read revisions for digest");
     while (sqlite3_step(statement) == SQLITE_ROW) {
@@ -253,6 +260,9 @@ void rewrite_logical_digest(const std::filesystem::path& path) {
             {"entities", nlohmann::json::array()},
             {"assets", nlohmann::json::array()},
         });
+        if (format == 5 && sqlite3_column_type(statement, 7) != SQLITE_NULL)
+            manifest["history"].back()["boundary_translation"] =
+                nlohmann::json::parse(sqlite_text(statement, 7));
     }
     sqlite3_finalize(statement);
 
@@ -676,6 +686,88 @@ void test_impossible_history_is_rejected_after_digest_recomputation() {
         "bijection", "named revision index must exactly match named history records");
 }
 
+Entity translation_fixture() {
+    sketch::BoundaryConstructionRecord record;
+    record.schema_version = sketch::boundary_receipt_schema_version_v2;
+    record.boundary_id = "translated-boundary";
+    const sketch::Vec2 points[]{{0, 0}, {2, 0}, {2, 1}, {0, 1}};
+    sketch::IdentifiedBoundary boundary{record.boundary_id, "measurement_boundary", {}};
+    for (std::size_t index = 0; index < 4; ++index) {
+        const auto edge = "edge-" + std::to_string(index);
+        const auto start = "vertex-" + std::to_string(index);
+        const auto end = "vertex-" + std::to_string((index + 1) % 4);
+        sketch::ConstructionReceipt receipt;
+        receipt.segment_id = edge;
+        receipt.kind = sketch::BoundaryConstructionKind::line_to_point;
+        receipt.start = points[index];
+        receipt.chord_end = points[(index + 1) % 4];
+        record.edges.push_back({edge, start, end, receipt});
+        boundary.segments.push_back({edge, start, end, {points[index], points[(index + 1) % 4], 0}});
+    }
+    auto result = sketch::encode_identified_boundary_entity(boundary);
+    result.properties["boundary_authoring"] = sketch::encode_boundary_receipt_envelope(record);
+    return result;
+}
+
+void test_translation_proof_storage_and_forgery_rejection() {
+    TempDirectory temp;
+    const auto file = temp.path / "translation-v5.psketch";
+    auto document = Document::create({translation_fixture()});
+    const auto original = document.snapshot().entities();
+    document.apply(sketch::TranslateBoundary{0, {"translated-boundary", {8, -4}}});
+    const auto moved = document.snapshot().entities();
+    document.undo(document.revision());
+    require(ProjectStore::required_format_version(document.snapshot()) == 5,
+            "translation in undone history must require v5");
+    auto saved = ProjectStore::save(file, document.snapshot());
+    auto loaded = ProjectStore::load(file);
+    require(loaded.document.snapshot().entities() == original && loaded.document.can_redo(),
+            "v5 reopen must preserve undone state and redo");
+    const auto reopened_snapshot = loaded.document.snapshot();
+    const auto& proof = reopened_snapshot.history().at(1).boundary_translation;
+    require(proof && proof->boundary_id == "translated-boundary" &&
+                proof->offset.x == 8 && proof->offset.y == -4,
+            "translation proof must survive SQLite storage");
+    loaded.document.redo(loaded.document.revision());
+    require(loaded.document.snapshot().entities() == moved, "v5 redo must restore exact translated entities");
+    saved = ProjectStore::save(file, loaded.document.snapshot(),
+        SaveOptions{.expected_destination_sha256 = saved.file_sha256});
+    require(saved.backup_path.has_value(), "v5 document replacement must preserve verified backup");
+    require(ProjectStore::load(file).document.snapshot().entities() == moved,
+            "replacement v5 document must reopen");
+
+    const std::vector<std::string> malformed{
+        R"({"version":2,"boundary_id":"translated-boundary","offset":[8.0,-4.0]})",
+        R"({"version":1,"boundary_id":"translated-boundary","offset":[8.0,-4.0],"extra":true})",
+        R"({"version":1,"boundary_id":"bad id","offset":[8.0,-4.0]})",
+        R"({"version":1,"boundary_id":"translated-boundary","offset":[null,-4.0]})",
+        R"({"version":1,"boundary_id":"translated-boundary","offset":[1e999,-4.0]})",
+        R"({"version":1,"version":1,"boundary_id":"translated-boundary","offset":[8.0,-4.0]})"};
+    for (std::size_t index = 0; index < malformed.size(); ++index) {
+        const auto tampered = temp.path / ("malformed-" + std::to_string(index) + ".psketch");
+        std::filesystem::copy_file(file, tampered);
+        execute_sql(tampered, "UPDATE revisions SET boundary_translation_json='" + malformed[index] + "' WHERE revision=1");
+        require_error([&] { (void)ProjectStore::load(tampered); }, StorageErrorCode::integrity_failure,
+                      "malformed translation proof must reject before replay");
+    }
+    for (const auto replacement : {std::string("NULL"),
+             std::string("'{\"version\":1,\"boundary_id\":\"translated-boundary\",\"offset\":[9.0,-4.0]}'")}) {
+        const auto tampered = temp.path / (replacement == "NULL" ? "missing-proof.psketch" : "forged-offset.psketch");
+        std::filesystem::copy_file(file, tampered);
+        execute_sql(tampered, "UPDATE revisions SET boundary_translation_json=" + replacement + " WHERE revision=1");
+        rewrite_logical_digest(tampered);
+        require_error([&] { (void)ProjectStore::load(tampered); }, StorageErrorCode::integrity_failure,
+                      "recomputed digest must not authorize missing or forged translation proof");
+    }
+    const auto downgraded = temp.path / "downgraded-translation.psketch";
+    std::filesystem::copy_file(file, downgraded);
+    execute_sql(downgraded, "ALTER TABLE revisions DROP COLUMN boundary_translation_json; "
+        "PRAGMA user_version=3; UPDATE metadata SET value='3' WHERE key='format_version'");
+    rewrite_logical_digest(downgraded);
+    require_error([&] { (void)ProjectStore::load(downgraded); }, StorageErrorCode::integrity_failure,
+                  "downgraded history must fail the unchanged raw receipt guard");
+}
+
 void test_boundary_authoring_receipt_after_v2_entity_requires_v3() {
     auto document = document_with_opaque_authoring_receipt();
     const auto snapshot = document.snapshot();
@@ -814,8 +906,9 @@ void test_downgraded_v3_receipt_markers_reject_before_receipt_acceptance() {
 
 void test_document_only_api_refuses_future_recovery_destinations_before_overwrite() {
     const auto snapshot = populated_document().snapshot();
-    const std::array<std::pair<std::string_view, int>, 2> future_versions{
+    const std::array<std::pair<std::string_view, int>, 3> future_versions{
         std::pair<std::string_view, int>{"v4", 4},
+        std::pair<std::string_view, int>{"v5-archive", 5},
         std::pair<std::string_view, int>{"future999", 999}};
 
     for (const auto [label, version] : future_versions) {
@@ -1315,6 +1408,7 @@ int main() {
         test_competing_saves_with_one_fingerprint_publish_exactly_once();
         test_reopen_preserves_redo_navigation_and_named_abandoned_branch();
         test_impossible_history_is_rejected_after_digest_recomputation();
+        test_translation_proof_storage_and_forgery_rejection();
         test_boundary_authoring_receipt_after_v2_entity_requires_v3();
         test_unqualified_authoring_property_collisions_remain_v1_and_opaque();
         test_unknown_boundary_model_collision_requires_v2();

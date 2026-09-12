@@ -1,4 +1,7 @@
 #include "sketch/project_exchange.hpp"
+#include "sketch/boundary_entity.hpp"
+#include "sketch/boundary_receipt.hpp"
+#include "sketch/boundary_translation.hpp"
 #include "support/noninteractive_errors.hpp"
 #include <fstream>
 #include <iostream>
@@ -10,6 +13,39 @@ namespace {
 void check(bool value, const char *message) {
   if (!value)
     throw std::runtime_error(message);
+}
+void test_translation_export(const std::filesystem::path& root) {
+  sketch::BoundaryConstructionRecord record;
+  record.schema_version = sketch::boundary_receipt_schema_version_v2;
+  record.boundary_id = "boundary";
+  const sketch::Vec2 points[]{{0, 0}, {2, 0}, {2, 1}, {0, 1}};
+  sketch::IdentifiedBoundary boundary{record.boundary_id, "measurement_boundary", {}};
+  for (std::size_t i = 0; i < 4; ++i) {
+    const auto edge = "edge-" + std::to_string(i);
+    const auto start = "vertex-" + std::to_string(i);
+    const auto end = "vertex-" + std::to_string((i + 1) % 4);
+    sketch::ConstructionReceipt receipt;
+    receipt.segment_id = edge;
+    receipt.kind = sketch::BoundaryConstructionKind::line_to_point;
+    receipt.start = points[i]; receipt.chord_end = points[(i + 1) % 4];
+    record.edges.push_back({edge, start, end, receipt});
+    boundary.segments.push_back({edge, start, end, {points[i], points[(i + 1) % 4], 0}});
+  }
+  auto entity = sketch::encode_identified_boundary_entity(boundary);
+  entity.properties["boundary_authoring"] = sketch::encode_boundary_receipt_envelope(record);
+  auto document = sketch::Document::create({entity});
+  document.apply(sketch::TranslateBoundary{0, {"boundary", {8, -4}}});
+  document.undo(document.revision());
+  sketch::extract_project(document.snapshot(), root / "translation");
+  std::ifstream input(root / "translation" / "project.json");
+  const auto json = nlohmann::json::parse(input);
+  check(json.at("exchange_version") == 2, "translation export must advertise its proof schema");
+  const auto& rows = json.at("revisions");
+  check(rows.size() == 3 && !rows[0].contains("boundary_translation") &&
+        !rows[2].contains("boundary_translation"), "proof belongs only to its command revision");
+  const auto proof = sketch::decode_boundary_translation(rows[1].at("boundary_translation"));
+  check(proof.boundary_id == "boundary" && proof.offset.x == 8 && proof.offset.y == -4,
+        "export must retain proof even in undone history");
 }
 } // namespace
 int main() {
@@ -36,6 +72,8 @@ int main() {
     auto json = nlohmann::json::parse(input);
     input.close();
     auto rows = json.at("revisions");
+    check(json.at("exchange_version") == 1 && !rows[0].contains("boundary_translation"),
+          "proof-free exports must preserve the existing format");
     check(rows.size() == 2, "All revisions must be extracted");
     auto asset_path = rows[1].at("assets")[0].at("path").get<std::string>();
     check(asset_path == "assets/" + asset.sha256 + ".bin",
@@ -272,6 +310,7 @@ int main() {
           "directory");
     std::filesystem::remove_all(residual);
     // Only this test's unique, resolved temporary tree is removed.
+    test_translation_export(root);
     check(std::filesystem::equivalent(
               std::filesystem::canonical(root).parent_path(),
               std::filesystem::temp_directory_path()),

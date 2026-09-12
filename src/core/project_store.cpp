@@ -1,5 +1,6 @@
 #include "sketch/project_store.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/boundary_translation.hpp"
 
 #include <sqlite3.h>
 
@@ -41,6 +42,7 @@ bool supported_identified_boundary_model(const Entity& entity) noexcept {
 std::uint32_t ProjectStore::required_format_version(const DocumentSnapshot& snapshot) {
     std::uint32_t required = 1;
     for (const auto& revision : snapshot.history()) {
+        if (revision.boundary_translation) required = 5;
         for (const auto& [id, entity] : revision.entities) {
             (void)id;
             const bool identified_boundary =
@@ -51,7 +53,7 @@ std::uint32_t ProjectStore::required_format_version(const DocumentSnapshot& snap
             // collision that must remain in its existing storage format.
             if (identified_boundary && supported_identified_boundary_model(entity) &&
                 entity.properties.contains("boundary_authoring")) {
-                required = 3;
+                required = std::max(required, 3U);
             }
             if (identified_boundary || entity.type == "boundary_draft" ||
                 entity.type == "dimension") {
@@ -887,6 +889,10 @@ LoadCounts enforce_preallocation_budgets(sqlite3* database, bool recovery = fals
         "revision_entities),0)+"
         "COALESCE((SELECT sum(length(CAST(metadata_json AS BLOB))) FROM revision_assets),0)",
         "encoded JSON bytes");
+    const bool translations = scalar_nonnegative(database, "PRAGMA user_version", "format version") == 5;
+    const auto translation_bytes = translations ? scalar_nonnegative(database,
+        "SELECT COALESCE(sum(length(CAST(boundary_translation_json AS BLOB))),0) FROM revisions",
+        "boundary translation JSON bytes") : 0;
     const auto recovery_bytes = recovery ? scalar_nonnegative(database,
         "SELECT COALESCE(sum(length(CAST(envelope_json AS BLOB))+64+6*length(CAST(record_id AS BLOB))+"
         "6*length(CAST(record_kind AS BLOB))),0) FROM project_recovery_records", "recovery JSON bytes") : 0;
@@ -894,12 +900,13 @@ LoadCounts enforce_preallocation_budgets(sqlite3* database, bool recovery = fals
         const auto rows = scalar_nonnegative(database, "SELECT count(*) FROM project_recovery_records",
                                              "recovery row count");
         if (rows == 0)
-            storage_error(StorageErrorCode::integrity_failure, "v4 archive has no recovery records");
+            storage_error(StorageErrorCode::integrity_failure, "archive has no recovery records");
         if (rows > (ProjectStore::maximum_json_values - 1) / 7)
             storage_error(StorageErrorCode::resource_limit, "recovery row count exceeds aggregate JSON budget");
     }
     if (json_bytes > ProjectStore::maximum_encoded_json_bytes ||
-        recovery_bytes > ProjectStore::maximum_encoded_json_bytes - json_bytes) {
+        translation_bytes > ProjectStore::maximum_encoded_json_bytes - json_bytes ||
+        recovery_bytes > ProjectStore::maximum_encoded_json_bytes - json_bytes - translation_bytes) {
         storage_error(StorageErrorCode::resource_limit,
                       "project encoded JSON bytes exceed the format v1 resource limit");
     }
@@ -959,6 +966,8 @@ void enforce_snapshot_budget(const DocumentSnapshot& snapshot) {
     for (const auto& revision : snapshot.history()) {
         add_json(nlohmann::json(revision.undo_stack));
         add_json(nlohmann::json(revision.redo_stack));
+        if (revision.boundary_translation)
+            add_json(encode_boundary_translation(*revision.boundary_translation));
         for (const auto& [id, entity] : revision.entities) {
             (void)id;
             if (++entity_rows > ProjectStore::maximum_entity_rows) {
@@ -1024,6 +1033,8 @@ nlohmann::json logical_manifest(const DocumentSnapshot& snapshot, std::uint32_t 
             {"entities", nlohmann::json::array()},
             {"assets", nlohmann::json::array()},
         };
+        if (revision.boundary_translation)
+            encoded_revision["boundary_translation"] = encode_boundary_translation(*revision.boundary_translation);
         for (const auto& [id, entity] : revision.entities) {
             encoded_revision["entities"].push_back({
                 {"id", id},
@@ -1070,7 +1081,7 @@ void write_database(const std::filesystem::path& path, const DocumentSnapshot& s
     execute(database.get(), "PRAGMA synchronous=FULL");
     execute(database.get(), "PRAGMA locking_mode=EXCLUSIVE");
     execute(database.get(), "PRAGMA application_id=1347638340");
-    const auto format = recovery ? 4U : ProjectStore::required_format_version(snapshot);
+    const auto format = std::max(recovery ? 4U : 1U, ProjectStore::required_format_version(snapshot));
     const auto user_version = "PRAGMA user_version=" + std::to_string(format);
     execute(database.get(), user_version.c_str());
     execute(database.get(), "BEGIN IMMEDIATE");
@@ -1082,13 +1093,15 @@ void write_database(const std::filesystem::path& path, const DocumentSnapshot& s
             storage_error(StorageErrorCode::injected_failure,
                           "project save stopped after SQLite journal creation");
         }
-        execute(database.get(),
+        const std::string revision_schema =
                 "CREATE TABLE revisions("
                 "revision INTEGER PRIMARY KEY, parent_revision INTEGER, source_revision INTEGER, "
                 "action TEXT NOT NULL, name TEXT, undo_stack_json TEXT NOT NULL, "
-                "redo_stack_json TEXT NOT NULL, "
+                "redo_stack_json TEXT NOT NULL, " +
+                std::string(format == 5 ? "boundary_translation_json TEXT, " : "") +
                 "FOREIGN KEY(parent_revision) REFERENCES revisions(revision), "
-                "FOREIGN KEY(source_revision) REFERENCES revisions(revision)) STRICT;");
+                "FOREIGN KEY(source_revision) REFERENCES revisions(revision)) STRICT;";
+        execute(database.get(), revision_schema.c_str());
         execute(database.get(),
                 "CREATE TABLE revision_entities("
                 "revision INTEGER NOT NULL, id TEXT NOT NULL, type TEXT NOT NULL, "
@@ -1130,8 +1143,11 @@ void write_database(const std::filesystem::path& path, const DocumentSnapshot& s
 
         Statement revision_statement(
             database.get(),
-            "INSERT INTO revisions(revision,parent_revision,source_revision,action,name,"
-            "undo_stack_json,redo_stack_json) VALUES(?1,?2,?3,?4,?5,?6,?7)");
+            format == 5
+                ? "INSERT INTO revisions(revision,parent_revision,source_revision,action,name,"
+                  "undo_stack_json,redo_stack_json,boundary_translation_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)"
+                : "INSERT INTO revisions(revision,parent_revision,source_revision,action,name,"
+                  "undo_stack_json,redo_stack_json) VALUES(?1,?2,?3,?4,?5,?6,?7)");
         Statement entity_statement(
             database.get(),
             "INSERT INTO revision_entities(revision,id,type,required,properties_json,extensions_json) "
@@ -1156,6 +1172,13 @@ void write_database(const std::filesystem::path& path, const DocumentSnapshot& s
                       revisions_json(revision.undo_stack));
             bind_text(database.get(), revision_statement.get(), 7,
                       revisions_json(revision.redo_stack));
+            if (format == 5) {
+                if (revision.boundary_translation)
+                    bind_text(database.get(), revision_statement.get(), 8,
+                              encode_boundary_translation(*revision.boundary_translation).dump());
+                else if (sqlite3_bind_null(revision_statement.get(), 8) != SQLITE_OK)
+                    sqlite_error(database.get(), "cannot bind absent boundary translation");
+            }
             revision_statement.done();
             revision_statement.reset();
 
@@ -1239,7 +1262,7 @@ Revision parse_revision_text(std::string_view value, std::string_view field) {
     return result;
 }
 
-bool verify_sqlite_schema(sqlite3* database, bool allow_v4 = false) {
+bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
     Statement application(database, "PRAGMA application_id");
     if (!application.row() || sqlite3_column_type(application.get(), 0) != SQLITE_INTEGER ||
         sqlite3_column_int(application.get(), 0) != kApplicationId || application.row()) {
@@ -1251,11 +1274,19 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_v4 = false) {
         (sqlite3_column_int(user_version.get(), 0) != 1 &&
          sqlite3_column_int(user_version.get(), 0) != 2 &&
          sqlite3_column_int(user_version.get(), 0) != 3 &&
-         !(allow_v4 && sqlite3_column_int(user_version.get(), 0) == 4))) {
+         sqlite3_column_int(user_version.get(), 0) != 5 &&
+         !(allow_recovery && sqlite3_column_int(user_version.get(), 0) == 4))) {
         storage_error(StorageErrorCode::unsupported_format,
                       "unsupported SQLite project user_version");
     }
-    const bool recovery = sqlite3_column_int(user_version.get(), 0) == 4;
+    const bool translations = sqlite3_column_int(user_version.get(), 0) == 5;
+    const bool recovery = sqlite3_column_int(user_version.get(), 0) == 4 ||
+        (translations && scalar_nonnegative(database,
+            "SELECT count(*) FROM sqlite_schema WHERE name='project_recovery_records'",
+            "recovery table count") != 0);
+    if (recovery && !allow_recovery)
+        storage_error(StorageErrorCode::unsupported_format,
+                      "document-only load cannot discard an archive recovery ledger");
     if (user_version.row()) storage_error(StorageErrorCode::unsupported_format, "multiple format markers");
     Statement journal_mode(database, "PRAGMA journal_mode");
     if (!journal_mode.row() || column_text(journal_mode.get(), 0, 32, "journal_mode") != "delete" ||
@@ -1321,6 +1352,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_v4 = false) {
           {"data", "BLOB", 1, 0}}},
         {"named_revisions", {{"name", "TEXT", 1, 1}, {"revision", "INTEGER", 1, 0}}},
     };
+    if (translations) expected_columns.at("revisions").push_back({"boundary_translation_json", "TEXT", 0, 0});
     if (recovery) expected_columns.emplace("project_recovery_records", std::vector<ColumnSpec>{
         {"record_id", "TEXT", 1, 1}, {"record_kind", "TEXT", 1, 0}, {"envelope_json", "TEXT", 1, 0}});
     for (const auto& [table, columns] : expected_columns) {
@@ -1442,11 +1474,11 @@ void verify_sqlite_content_integrity(sqlite3* database) {
 
 DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nullptr) {
     const auto format = required_metadata(database, "format_version");
-    if (format != "1" && format != "2" && format != "3" && !(recovery && format == "4")) {
+    if (format != "1" && format != "2" && format != "3" && format != "5" && !(recovery && format == "4")) {
         storage_error(StorageErrorCode::unsupported_format,
                       "unsupported project format version: " + format);
     }
-    const auto format_number = format == "4" ? 4U : (format == "3" ? 3U : (format == "2" ? 2U : 1U));
+    const auto format_number = format == "5" ? 5U : (format == "4" ? 4U : (format == "3" ? 3U : (format == "2" ? 2U : 1U)));
     Statement format_marker(database, "PRAGMA user_version");
     if (!format_marker.row() ||
         sqlite3_column_int(format_marker.get(), 0) != static_cast<int>(format_number)) {
@@ -1467,11 +1499,14 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
     const auto expected_digest = required_metadata(database, "logical_digest");
     const auto counts = enforce_preallocation_budgets(database, recovery != nullptr);
     ProjectStoreAccess::reserve_history(snapshot, static_cast<std::size_t>(counts.revisions));
-    DecodeBudget decode_budget(recovery != nullptr);
+    DecodeBudget decode_budget(recovery != nullptr || format_number == 5);
 
     Statement revisions(database,
-                        "SELECT revision,parent_revision,source_revision,action,name,"
-                        "undo_stack_json,redo_stack_json FROM revisions ORDER BY revision");
+        format_number == 5
+            ? "SELECT revision,parent_revision,source_revision,action,name,"
+              "undo_stack_json,redo_stack_json,boundary_translation_json FROM revisions ORDER BY revision"
+            : "SELECT revision,parent_revision,source_revision,action,name,"
+              "undo_stack_json,redo_stack_json FROM revisions ORDER BY revision");
     while (revisions.row()) {
         auto& history = ProjectStoreAccess::history(snapshot);
         if (history.size() >= static_cast<std::size_t>(ProjectStore::maximum_revision_count)) {
@@ -1491,6 +1526,15 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
         record.redo_stack = parse_revision_stack(
             column_text(revisions.get(), 6, kMaximumJsonBytes, "redo_stack_json"),
             "redo_stack_json", decode_budget);
+        if (format_number == 5 && sqlite3_column_type(revisions.get(), 7) != SQLITE_NULL) {
+            const auto proof = parse_budgeted_json(
+                column_text(revisions.get(), 7, 1024, "boundary_translation_json"), true,
+                "boundary_translation_json", decode_budget);
+            try { record.boundary_translation = decode_boundary_translation(proof); }
+            catch (const std::exception& error) {
+                storage_error(StorageErrorCode::integrity_failure, error.what());
+            }
+        }
         history.push_back(std::move(record));
     }
     if (ProjectStoreAccess::history(snapshot).empty() ||
@@ -1585,7 +1629,7 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
 
     const auto required_format = ProjectStore::required_format_version(snapshot);
     if (required_format > format_number) {
-        const auto reason = required_format >= 3 ? "boundary_authoring" :
+        const auto reason = required_format >= 5 ? "boundary translation" : required_format >= 3 ? "boundary_authoring" :
                             "identified boundary, dimension or boundary draft";
         storage_error(StorageErrorCode::unsupported_format,
                       "retained " + std::string(reason) + " history requires project format v" +
@@ -1862,7 +1906,7 @@ std::string residual_diagnostic(const std::vector<std::filesystem::path>& residu
 }
 
 #ifdef _WIN32
-void refuse_recovery_destination_for_document_save(HANDLE source) {
+bool refuse_recovery_destination_for_document_save(HANDLE source) {
     // SQLite's fixed header stores the big-endian user_version at byte 60.
     // Read the already hash-checked object, not a separately resolved pathname.
     std::array<unsigned char, 100> header{};
@@ -1876,16 +1920,19 @@ void refuse_recovery_destination_for_document_save(HANDLE source) {
     constexpr char sqlite_header[] = "SQLite format 3";
     if (count < header.size() ||
         std::memcmp(header.data(), sqlite_header, sizeof(sqlite_header)) != 0) {
-        return;
+        return false;
     }
     const auto version = (static_cast<std::uint32_t>(header[60]) << 24) |
                          (static_cast<std::uint32_t>(header[61]) << 16) |
                          (static_cast<std::uint32_t>(header[62]) << 8) |
                          static_cast<std::uint32_t>(header[63]);
-    if (version >= 4) {
+    if (version == 4 || version > 5) {
         storage_error(StorageErrorCode::unsupported_format,
                       "document-only save cannot replace a recovery or future-format archive");
     }
+    // A v5 file can be either a document or an archive. Its hash-verified
+    // backup must be decoded before publication to distinguish them safely.
+    return version == 5;
 }
 
 std::string hash_handle_contents(HANDLE source) {
@@ -2151,9 +2198,10 @@ SaveReceipt save_project(const std::filesystem::path& destination,
                 archive ? std::optional<ArchiveRole>(archive->role()) : std::nullopt);
             if (archive && !validation.recovery.supported())
                 storage_error(StorageErrorCode::integrity_failure, "staged recovery archive is not supported");
-            if (logical_digest(validation.snapshot, archive ? 4U : 0U,
+            const auto archive_format = std::max(4U, ProjectStore::required_format_version(snapshot));
+            if (logical_digest(validation.snapshot, archive ? archive_format : 0U,
                                archive ? &validation.ledger : nullptr) !=
-                logical_digest(snapshot, archive ? 4U : 0U, archive ? &archive->recovery() : nullptr)) {
+                logical_digest(snapshot, archive ? archive_format : 0U, archive ? &archive->recovery() : nullptr)) {
                 storage_error(StorageErrorCode::integrity_failure,
                               "validated project content differs from requested snapshot");
             }
@@ -2181,7 +2229,7 @@ SaveReceipt save_project(const std::filesystem::path& destination,
                     storage_error(StorageErrorCode::external_change,
                                   "project destination changed during save validation");
                 }
-                if (!archive)
+                const bool verify_v5_document = !archive &&
                     refuse_recovery_destination_for_document_save(destination_guard->identity_handle());
                 backup = sibling_path(destination, "bak");
                 backup_cleanup = std::make_unique<TemporaryFile>(*backup, false);
@@ -2192,6 +2240,8 @@ SaveReceipt save_project(const std::filesystem::path& destination,
                     storage_error(StorageErrorCode::integrity_failure,
                                   "flushed project backup differs from expected destination");
                 }
+                if (verify_v5_document)
+                    (void)decode_project_under_lock(*backup, backup_guard->get());
                 if (archive) {
                     // Decode the hash-verified copy of the locked destination object,
                     // avoiding a pathname re-resolution race on the replaceable name.
@@ -2326,7 +2376,7 @@ ArchiveLoadResult ProjectStore::load_archive(const std::filesystem::path& source
         const LockedReadFile lock(source);
         auto decoded = decode_project_under_lock(source, lock.get(), role);
         if (decoded.ledger.empty())
-            storage_error(StorageErrorCode::unsupported_format, "archive load requires recovery format v4");
+            storage_error(StorageErrorCode::unsupported_format, "archive load requires a recovery ledger in format v4 or v5");
         if (decoded.recovery.opaque())
             return {std::nullopt, std::move(decoded.recovery), std::move(decoded.file_sha256)};
         return {ProjectArchiveSnapshot(std::move(decoded.snapshot), std::move(decoded.ledger), role),

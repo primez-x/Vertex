@@ -390,7 +390,12 @@ with fresh identities and transformed text positions in the same undoable comman
 For supported in-place transforms, dimension labels move with their boundary
 while retaining their identities, placement mode, and metadata. Rotation,
 reflection, and translation use the same label-position path as copies.
-Receipt-bound rotation/reflection and in-place moves remain unfinished. Some
+Receipt-backed in-place offsets use a typed document command. It preserves
+boundary and dimension identities, records the translation intent in history,
+and reconstructs the entire expected state during restore. Ordinary entity
+edits still cannot rewrite construction inputs. These projects use format 5
+to retain the intent through save, recovery, and exchange.
+Receipt-bound rotation/reflection remain unfinished. Some
 offsets also reject when floating-point translation cannot preserve the exact
 closure-vector relationship. Unhandled geometry-owned receipts or dependent
 semantics reject the copy without changing history. Imported anonymous legacy boundaries are promoted

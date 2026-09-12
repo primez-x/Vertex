@@ -1,4 +1,5 @@
 #include "sketch/document_digest.hpp"
+#include "sketch/boundary_translation.hpp"
 
 #include <cstddef>
 #include <span>
@@ -80,6 +81,9 @@ ordered_json snapshot_json(const DocumentSnapshot& snapshot,
         item["source_revision"] = record.source_revision.has_value()
             ? ordered_json(*record.source_revision) : ordered_json(nullptr);
         item["name"] = record.name.has_value() ? ordered_json(*record.name) : ordered_json(nullptr);
+        // Omit absent proofs to preserve the frozen v1 digest vectors.
+        if (record.boundary_translation)
+            item["boundary_translation"] = encode_boundary_translation(*record.boundary_translation);
         history.push_back(std::move(item));
     }
     auto names = ordered_json::array();

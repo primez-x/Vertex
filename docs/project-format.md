@@ -1,4 +1,4 @@
-# Property Studio project formats v1, v2 and v3
+# Property Studio project formats v1 through v5
 
 Property Studio projects are standalone SQLite files containing one immutable logical
 document snapshot and the complete command history known when that snapshot was captured.
@@ -10,8 +10,9 @@ boundary for identified geometry. Any identified boundary, boundary draft or
 dimension in retained history requires v2, including an undone or deleted
 identified boundary. Both SQLite `user_version` and `metadata.format_version`
 must agree, and the logical digest includes that version. The reader accepts
-v1 legacy history, v2 identity history and v3 construction-receipt history.
-Under-versioned semantic data and versions above 3 reject. Legacy-only history
+v1 legacy history, v2 identity history, v3 construction-receipt history and v5
+translation history, plus v4/v5 archives through recovery-aware APIs.
+Under-versioned semantic data and versions above 5 reject. Legacy-only history
 is still written as v1. Unknown boundary entity
 versions in v2 remain preserved read-only. See `boundary-entity-format.md`.
 Version 2 also recognizes `dimension` entities. Their supported segment-length
@@ -230,6 +231,33 @@ The separate recovery-aware v4 format adds a recovery-record table and preserves
 the optional captured saved revision. Its complete schema, digest and opaque
 load contract are documented in [project-archive-v4.md](project-archive-v4.md).
 Document-only APIs refuse v4 rather than discard its recovery ledger.
+
+Version 5 is required when any retained revision contains an explicit boundary
+translation proof, including an undone command or an abandoned branch. It adds
+one nullable `TEXT` column, `revisions.boundary_translation_json`, after
+`redo_stack_json`. SQL `NULL` means no proof; a JSON `null` value is invalid.
+A present proof has exactly `{"version":1,"boundary_id":"...","offset":[x,y]}`.
+The version is an integer, the boundary ID obeys the ordinary identifier rules,
+and both offsets are finite numbers in metres. Unknown versions, extra keys,
+duplicate keys and malformed values reject. Proof JSON participates in the
+aggregate byte, value and recovery string budgets.
+
+A v5 file may contain the same `project_recovery_records` table as v4. Its
+presence makes the file an archive: recovery-aware APIs preserve its ledger and
+optional saved revision, and document-only load or replacement rejects it.
+Without that table, v5 has the standalone document saved-revision rules. The
+exact expected schema is checked in both cases. Histories without proofs retain
+the existing v1-v4 schemas and digest encodings.
+
+The proof is included in logical and document/source digests. On restore the
+document recomputes the complete next entity state from the previous revision
+and the offset; it rejects unrelated edits, changed assets, forged offsets or
+missing proofs even after an attacker recomputes the logical digest. Human
+action text grants no authority. Exact undo/redo references retain the original
+proof on its command revision rather than copying it onto navigation records.
+JSON/assets extraction uses exchange version 2 when proofs occur and emits
+`boundary_translation` on the corresponding revision; proof-free extraction
+remains exchange version 1.
 
 ## Save and replacement protocol
 

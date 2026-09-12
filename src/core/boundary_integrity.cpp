@@ -127,6 +127,45 @@ void validate_boundary_identity_transition(const BoundaryIdentityHistory& histor
     }
 }
 
+std::map<std::string, Entity, std::less<>> translated_boundary_entities(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const BoundaryTranslation& translation) {
+    const auto found = source.find(translation.boundary_id);
+    if (found == source.end()) throw std::invalid_argument("Translation boundary does not exist");
+    const auto& original = found->second;
+    auto boundary = decode_identified_boundary_entity(original);
+    if (!original.properties.contains("boundary_authoring"))
+        throw std::invalid_argument("Explicit boundary translation requires construction receipts");
+    const auto decoded = decode_boundary_receipt_envelope(original.properties.at("boundary_authoring"));
+    if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+    if (const auto unsupported = validate_boundary_integrity(source))
+        throw std::invalid_argument(*unsupported);
+    if (translation.offset.x == 0.0 && translation.offset.y == 0.0) return source;
+    const auto translated = translated_boundary_construction(*decoded.record, translation.offset);
+    const auto replay = replay_boundary_construction(translated);
+    boundary.segments.clear();
+    for (const auto& edge : replay.edges)
+        boundary.segments.push_back({edge.segment_id, edge.start_vertex_id, edge.end_vertex_id, edge.segment});
+    auto metadata = original;
+    metadata.properties.erase("boundary_authoring");
+    auto encoded = encode_identified_boundary_entity(boundary, &metadata);
+    encoded.properties["boundary_authoring"] = encode_boundary_receipt_envelope(translated);
+    auto result = source;
+    result.at(translation.boundary_id) = std::move(encoded);
+    for (auto& [id, entity] : result) {
+        (void)id;
+        if (entity.type != "dimension" || !entity.properties.contains("target") ||
+            entity.properties.at("target").value("entity_id", std::string{}) != translation.boundary_id) continue;
+        const auto dimension = decode_boundary_dimension_entity(entity);
+        if (!dimension.supported()) throw std::invalid_argument(dimension.unsupported_reason);
+        auto moved = *dimension.dimension;
+        moved.text_position.x += translation.offset.x;
+        moved.text_position.y += translation.offset.y;
+        entity = encode_boundary_dimension_entity(moved, &entity);
+    }
+    return result;
+}
+
 std::optional<std::string> validate_boundary_integrity(
     const std::map<std::string, Entity, std::less<>>& entities) {
     std::optional<std::string> unsupported;

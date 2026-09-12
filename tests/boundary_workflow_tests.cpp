@@ -1048,6 +1048,19 @@ void test_receipt_boundary_offset_copy() {
     const auto path = directory.filePath("receipt-copy.bldproj");
     require(directory.isValid() && window.saveProjectAs(path) && window.openProject(path) &&
         window.document().snapshot().entities() == copied.entities(), "receipt copy must survive save/reopen exactly");
+    require(window.selectEntity(QString::fromStdString(copy_id)) &&
+        window.transformSelectedBoundary("0",false,false,"1 m","2 m",false),
+        "receipt-backed boundary must translate in place through the typed command");
+    const auto moved = window.document().snapshot();
+    require(moved.history().back().boundary_translation.has_value() &&
+        moved.history().back().boundary_translation->boundary_id == copy_id &&
+        moved.entities().at(boundary_id) == source.entities().at(boundary_id),
+        "in-place move must retain a typed history proof and preserve the other boundary");
+    require(window.saveProjectAs(path) && window.openProject(path) &&
+        window.document().snapshot().entities() == moved.entities() &&
+        window.undoCommand() && window.document().snapshot().entities() == copied.entities() &&
+        window.redoCommand() && window.document().snapshot().entities() == moved.entities(),
+        "translated receipts and dimensions must save, reopen, undo, and redo exactly");
 }
 
 void install_test_font() {

@@ -1,4 +1,5 @@
 #include "sketch/workspace_recovery_budget.hpp"
+#include "sketch/boundary_translation.hpp"
 #include "sketch/boundary_authoring_recovery_resource.hpp"
 #include <set>
 #include <stdexcept>
@@ -110,6 +111,9 @@ WorkspaceRecoveryUsage preflight_workspace_recovery(const DocumentSnapshot& docu
         add(u.encoded_bytes, multiply(record.entities.size(), 256), limits.max_encoded_bytes);
         add(u.encoded_bytes, multiply(record.assets.size(), 256), limits.max_encoded_bytes);
         text(record.action); if (record.name) text(*record.name);
+        if (record.boundary_translation)
+            wire(detail::measure_authoring_recovery_json(
+                encode_boundary_translation(*record.boundary_translation), json_policy));
         add(u.encoded_bytes, multiply(record.undo_stack.size(), 21), limits.max_encoded_bytes);
         add(u.encoded_bytes, multiply(record.redo_stack.size(), 21), limits.max_encoded_bytes);
         add(u.json_values, record.undo_stack.size(), limits.max_json_values);

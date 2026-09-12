@@ -1,5 +1,6 @@
 #pragma once
 #include "sketch/boundary_identity_history.hpp"
+#include "sketch/geometry.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -88,7 +89,17 @@ struct NameRevision {
     std::string name;
 };
 
-using Command = std::variant<ApplyEntityChanges, NameRevision>;
+struct BoundaryTranslation {
+    std::string boundary_id;
+    Vec2 offset;
+};
+
+struct TranslateBoundary {
+    Revision expected_revision = 0;
+    BoundaryTranslation translation;
+};
+
+using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary>;
 
 enum class DocumentErrorCode {
     stale_revision,
@@ -124,6 +135,7 @@ struct RevisionRecord {
     std::map<std::string, Asset, std::less<>> assets;
     std::vector<Revision> undo_stack;
     std::vector<Revision> redo_stack;
+    std::optional<BoundaryTranslation> boundary_translation;
 };
 
 class DocumentSnapshot {
