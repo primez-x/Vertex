@@ -6326,51 +6326,61 @@ public:
             return selector->currentData().toString();
         };
         const auto fill_fields = [&] {
-            const auto source = authoringSnapshot();
-            const auto record = decode_sheet_model(source);
-            if (!record) {
-                status->setText(QStringLiteral("No drawing sheets are defined."));
-                return;
+            try {
+                const auto source = authoringSnapshot();
+                const auto record = decode_sheet_model(source);
+                if (!record) {
+                    status->setText(QStringLiteral("No drawing sheets are defined."));
+                    return;
+                }
+                const auto id = selected_id().toStdString();
+                const auto found = std::find_if(record->model.sheets().begin(), record->model.sheets().end(),
+                                                [&](const auto& sheet) { return sheet.id == id; });
+                if (found == record->model.sheets().end()) {
+                    status->setText(QStringLiteral("Choose a drawing sheet."));
+                    return;
+                }
+                number->setText(QString::fromStdString(found->number));
+                project->setText(QString::fromStdString(found->title_block.project));
+                title->setText(QString::fromStdString(found->title_block.title));
+                author->setText(QString::fromStdString(found->title_block.author));
+                issue_date->setText(QString::fromStdString(found->title_block.issue_date));
+                status->setText(QStringLiteral("%1 viewports • %2 callouts • %3 schedule placements • selected for output")
+                                    .arg(static_cast<int>(found->viewports.size()))
+                                    .arg(static_cast<int>(found->callouts.size()))
+                                    .arg(static_cast<int>(found->schedules.size())));
+            } catch (const std::exception& error) {
+                status->setText(QStringLiteral("Sheet data is unavailable: %1")
+                                    .arg(QString::fromUtf8(error.what())));
             }
-            const auto id = selected_id().toStdString();
-            const auto found = std::find_if(record->model.sheets().begin(), record->model.sheets().end(),
-                                            [&](const auto& sheet) { return sheet.id == id; });
-            if (found == record->model.sheets().end()) {
-                status->setText(QStringLiteral("Choose a drawing sheet."));
-                return;
-            }
-            number->setText(QString::fromStdString(found->number));
-            project->setText(QString::fromStdString(found->title_block.project));
-            title->setText(QString::fromStdString(found->title_block.title));
-            author->setText(QString::fromStdString(found->title_block.author));
-            issue_date->setText(QString::fromStdString(found->title_block.issue_date));
-            status->setText(QStringLiteral("%1 viewports • %2 callouts • %3 schedule placements • selected for output")
-                                .arg(static_cast<int>(found->viewports.size()))
-                                .arg(static_cast<int>(found->callouts.size()))
-                                .arg(static_cast<int>(found->schedules.size())));
         };
         const auto fill_selector = [&] {
-            const auto source = authoringSnapshot();
-            const auto record = decode_sheet_model(source);
-            QSignalBlocker block(selector);
-            selector->clear();
-            if (!record) {
+            try {
+                const auto source = authoringSnapshot();
+                const auto record = decode_sheet_model(source);
+                QSignalBlocker block(selector);
+                selector->clear();
+                if (!record) {
+                    fill_fields();
+                    return;
+                }
+                auto wanted = outputSheetId();
+                int wanted_index = -1;
+                for (int index = 0; index < static_cast<int>(record->model.sheets().size()); ++index) {
+                    const auto& sheet = record->model.sheets()[static_cast<std::size_t>(index)];
+                    selector->addItem(QStringLiteral("%1  ·  %2")
+                                          .arg(QString::fromStdString(sheet.number),
+                                               QString::fromStdString(sheet.title_block.title)),
+                                      QString::fromStdString(sheet.id));
+                    if (QString::fromStdString(sheet.id) == wanted) wanted_index = index;
+                }
+                if (wanted_index < 0 && selector->count() > 0) wanted_index = 0;
+                if (wanted_index >= 0) selector->setCurrentIndex(wanted_index);
                 fill_fields();
-                return;
+            } catch (const std::exception& error) {
+                status->setText(QStringLiteral("Sheet list is unavailable: %1")
+                                    .arg(QString::fromUtf8(error.what())));
             }
-            auto wanted = outputSheetId();
-            int wanted_index = -1;
-            for (int index = 0; index < static_cast<int>(record->model.sheets().size()); ++index) {
-                const auto& sheet = record->model.sheets()[static_cast<std::size_t>(index)];
-                selector->addItem(QStringLiteral("%1  ·  %2")
-                                      .arg(QString::fromStdString(sheet.number),
-                                           QString::fromStdString(sheet.title_block.title)),
-                                  QString::fromStdString(sheet.id));
-                if (QString::fromStdString(sheet.id) == wanted) wanted_index = index;
-            }
-            if (wanted_index < 0 && selector->count() > 0) wanted_index = 0;
-            if (wanted_index >= 0) selector->setCurrentIndex(wanted_index);
-            fill_fields();
         };
         QObject::connect(selector, &QComboBox::currentIndexChanged, &dialog,
                          [&](int index) {
