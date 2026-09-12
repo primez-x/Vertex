@@ -176,6 +176,23 @@ bool read_document_slab(const Entity& entity, Slab& output, std::string& error) 
     }
     output = Slab{};
     output.id = entity.id;
+    if (const auto* kind = property(entity.properties, {"element_kind"})) {
+        if (!kind->is_string()) {
+            error = "element_kind must be one of slab, floor, ceiling, or foundation";
+            return false;
+        }
+        try {
+            const auto parsed = parse_slab_element_kind(kind->get<std::string>());
+            if (!parsed.has_value()) {
+                error = "element_kind must be one of slab, floor, ceiling, or foundation";
+                return false;
+            }
+            output.element_kind = *parsed;
+        } catch (const Json::exception&) {
+            error = "element_kind must be one of slab, floor, ceiling, or foundation";
+            return false;
+        }
+    }
     const auto* boundary = property(entity.properties, {"boundary"});
     const auto* holes = property(entity.properties, {"holes"});
     if (boundary == nullptr ||

@@ -199,6 +199,15 @@ void validate_entity(const Entity& entity) {
                            std::string("invalid vertical level binding: ") + error.what());
         }
     }
+    if (entity.type == "slab" && entity.properties.contains("element_kind")) {
+        const auto& value = entity.properties.at("element_kind");
+        const bool valid = value.is_string() &&
+            (value == "slab" || value == "floor" || value == "ceiling" || value == "foundation");
+        if (!valid) {
+            document_error(DocumentErrorCode::invalid_entity,
+                           "slab element_kind must be slab, floor, ceiling, or foundation");
+        }
+    }
     const auto validate_embedded_model = [&](auto decoder, std::string_view name) {
         if (!entity.properties.contains("model")) {
             document_error(DocumentErrorCode::invalid_entity,

@@ -4,10 +4,22 @@
 #include "sketch/terrain_surface.hpp"
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Face.hxx>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace sketch {
+
+// A slab footprint can represent the primary horizontal architectural
+// assemblies.  The geometry is shared, while the semantic kind controls
+// schedules, presentation, and future level/material rules.  `slab` keeps
+// compatibility with existing generic slab records.
+enum class SlabElementKind { slab, floor, ceiling, foundation };
+
+[[nodiscard]] std::string_view slab_element_kind_name(SlabElementKind kind) noexcept;
+[[nodiscard]] std::optional<SlabElementKind>
+parse_slab_element_kind(std::string_view value) noexcept;
 
 struct Slab {
     std::string id;
@@ -15,6 +27,7 @@ struct Slab {
     std::vector<Boundary> holes;
     double thickness{};
     double elevation{};
+    SlabElementKind element_kind{SlabElementKind::slab};
 };
 
 // Shapes are derived caches. Persist semantic parameters, never replace the

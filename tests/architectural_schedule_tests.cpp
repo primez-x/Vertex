@@ -55,7 +55,8 @@ void test_net_volumes() {
         {"offset_m",2},{"width_m",1},{"height_m",2},{"sill_m",0}});
     opening.id="door";
     auto slab=Entity::create("slab",{{"boundary",rectangle(0,0,10,8)},
-        {"holes",Json::array({rectangle(2,2,2,2)})},{"thickness_m",0.25},{"elevation_m",0}});
+        {"holes",Json::array({rectangle(2,2,2,2)})},{"thickness_m",0.25},{"elevation_m",0},
+        {"element_kind", "floor"}});
     slab.id="slab";
     auto roof=encode_building_entity(HipRoof{"roof",{0,0,4},0,10,8,2,std::atan(0.5),0,0.2,
         {{"cut",-1,-1,2,2}}});
@@ -65,6 +66,8 @@ void test_net_volumes() {
     require(projection.diagnostics.empty(),"valid assigned solids must have complete volume projection");
     volume(projection,"wall",5.6);
     volume(projection,"slab",19.0);
+    require(std::get<std::string>(row(projection, "slab").cells.at("element_kind").value) == "floor",
+        "material schedules must expose the semantic floor element kind");
     volume(projection,"roof",76*0.2/std::cos(std::atan(0.5)));
     volume(projection,"column",0.6);
     require(row(projection,"wall").cells.at("volume").sources.size()==3,

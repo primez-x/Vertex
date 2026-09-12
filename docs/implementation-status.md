@@ -55,6 +55,16 @@ authoring use the same semantic model. This is a bounded surface primitive for r
 light-commercial work; site/terrain coordination, georeferencing, survey-device exchange,
 native Apex compatibility, and production qualification remain open.
 
+Horizontal architectural assemblies now carry an explicit `element_kind` on
+the shared `slab` entity.  The Windows authoring path can create generic slabs,
+floors, ceilings, and foundations from a closed boundary; the kind is validated
+at the Document boundary, decoded by the native solid reader, preserved through
+save/reopen, shown in the Inspector, and included in material schedule rows.
+All four kinds use the same validated boundary, holes, thickness, elevation,
+level placement, material, and quantity geometry.  This closes the bounded
+semantic floor-system slice while the full production acceptance statement,
+materials/assemblies, and Apex compatibility certification remain open.
+
 The architectural object slice now accepts a true flat roof through the
 existing sloped-panel schema: zero rise and zero pitch produce a thickened
 planar solid, persist through the entity codec, and project through plan,

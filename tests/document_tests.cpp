@@ -357,7 +357,7 @@ void test_persisted_string_bounds_are_enforced_before_mutation() {
 }
 
 void test_current_architecture_types_and_boundary_links_are_structurally_validated() {
-    for (const auto type : {"measurement_boundary", "room_boundary", "column", "beam", "railing"}) {
+    for (const auto type : {"measurement_boundary", "room_boundary", "column", "beam", "railing", "slab"}) {
         require(sketch::is_known_entity_type(type),
                 "current architecture entities must be recognized semantic types");
     }
@@ -429,6 +429,31 @@ void test_current_architecture_types_and_boundary_links_are_structurally_validat
         "railing_id must reject an existing column target");
     require(document.revision() == 2,
             "architecture reference failures must not advance the revision");
+
+    auto surface_document = Document::create({
+        entity("floor-surface", "floor"),
+        entity("layer-surface", "layer"),
+        entity("surface-floor", "slab", {{"floor_id", "floor-surface"},
+                                             {"layer_id", "layer-surface"},
+                                             {"element_kind", "floor"}}),
+    });
+    require(surface_document.snapshot().entities().at("surface-floor").properties
+                    .at("element_kind") == "floor",
+            "semantic floor surfaces should retain their element kind");
+    const auto surface_revision = surface_document.revision();
+    auto invalid_surface = surface_document.snapshot().entities().at("surface-floor");
+    invalid_surface.properties.at("element_kind") = "roof";
+    require_error(
+        [&] {
+            surface_document.apply(ApplyEntityChanges{
+                .expected_revision = surface_revision,
+                .entity_changes = {EntityChange::upsert(std::move(invalid_surface))},
+            });
+        },
+        DocumentErrorCode::invalid_entity,
+        "slab element kinds must be restricted to the supported horizontal assemblies");
+    require(surface_document.revision() == surface_revision,
+            "an invalid slab element kind must not advance the revision");
 }
 
 void test_embedded_architectural_models_are_validated_at_document_boundary() {

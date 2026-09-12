@@ -191,6 +191,21 @@ public:
         QString elevation,
         std::vector<Boundary> holes = {},
         std::optional<Revision> expected_revision = std::nullopt);
+    // Creates a semantic horizontal assembly using the shared slab geometry
+    // kernel.  `element_kind` accepts slab, floor, ceiling, or foundation;
+    // the entity remains type `slab` for project and schedule compatibility.
+    [[nodiscard]] QString createSurfaceFromSelectedBoundary(
+        QString element_kind,
+        QString thickness,
+        QString elevation,
+        std::optional<Revision> expected_revision = std::nullopt);
+    [[nodiscard]] QString createSurfaceFromBoundary(
+        const Boundary& boundary,
+        QString element_kind,
+        QString thickness,
+        QString elevation,
+        std::vector<Boundary> holes = {},
+        std::optional<Revision> expected_revision = std::nullopt);
     // Creates a deterministic local TIN terrain surface from the selected
     // closed boundary. Elevations are comma-separated quantities in metres
     // (explicit units are accepted); the selected boundary remains unchanged.

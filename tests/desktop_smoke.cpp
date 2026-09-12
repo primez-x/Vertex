@@ -119,7 +119,13 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
                     window.findChild<QWidget*>(QStringLiteral("checkpointBanner")) == nullptr &&
                     window.findChild<QWidget*>(QStringLiteral("offlineBadge")) == nullptr &&
                     window.findChild<QWidget*>(QStringLiteral("appSubtitle")) == nullptr,
-                "modern workspace shell must expose a compact toolbar and tabs without redundant branding or status copy");
+                    "modern workspace shell must expose a compact toolbar and tabs without redundant branding or status copy");
+        auto* tool_panel = window.findChild<QWidget*>(QStringLiteral("toolPanel"));
+        auto* select_tool = window.findChild<QToolButton*>(QStringLiteral("selectTool"));
+        require(tool_panel && tool_panel->minimumWidth() <= 60 && tool_panel->maximumWidth() <= 60 &&
+                    select_tool && select_tool->toolButtonStyle() == Qt::ToolButtonIconOnly &&
+                    select_tool->iconSize() == QSize(18, 18),
+                "drawing tool rail must stay compact and icon-first");
         auto* settings = window.findChild<QAction*>(QStringLiteral("keyboardShortcutSettings"));
         require(settings, "shortcut editor must be discoverable");
         const auto* copy = window.findChild<QAction*>(QStringLiteral("copySelection"));
@@ -3470,6 +3476,18 @@ int main(int argc, char** argv) {
             "a zero thickness slab must be rejected before the document command");
     require(window.document().revision() == revision_before_invalid_slab,
             "rejected slab preview must not mutate the document");
+    require(window.createSurfaceFromSelectedBoundary("roof", "0.15 m", "0 m").isEmpty(),
+            "an unsupported horizontal assembly kind must be rejected before mutation");
+    const auto floor_id = window.createSurfaceFromSelectedBoundary(
+        "floor", "0.15 m", "0 m");
+    require(!floor_id.isEmpty(), "a semantic floor should be created from the selected boundary");
+    const auto floor_snapshot = window.document().snapshot();
+    const auto floor_entity = floor_snapshot.entities().find(floor_id.toStdString());
+    require(floor_entity != floor_snapshot.entities().end() &&
+                floor_entity->second.type == "slab" &&
+                floor_entity->second.properties.at("element_kind") == "floor",
+            "semantic floor creation must persist a slab-compatible floor element kind");
+    require(window.selectEntity(boundary_id), "the source boundary should remain selectable after floor creation");
     const auto slab_id = window.createSlabFromSelectedBoundary("0.15 m", "0 m");
     require(!slab_id.isEmpty(), "a slab should be created from the selected closed boundary");
     require(window.selectEntity(slab_id), "created slab should be selectable");
@@ -3767,6 +3785,9 @@ int main(int argc, char** argv) {
             "reopened project should preserve the hosted opening entity");
     require(reopened.entities().contains(slab_id.toStdString()),
             "reopened project should preserve the slab entity");
+    require(reopened.entities().contains(floor_id.toStdString()) &&
+                reopened.entities().at(floor_id.toStdString()).properties.at("element_kind") == "floor",
+            "reopened project should preserve the semantic floor element kind");
     require(reopened.entities().contains("sheet-view-1") &&
                 reopened.entities().at("sheet-view-1").type == "sheet_view_model",
             "save/reopen must preserve the coordinated sheet/view model");

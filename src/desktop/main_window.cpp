@@ -592,6 +592,21 @@ std::optional<double> read_finite_number(const json& object, std::string_view ke
     return std::isfinite(value) ? std::optional<double>(value) : std::nullopt;
 }
 
+SlabElementKind read_slab_element_kind(const json& properties) {
+    if (!properties.contains("element_kind")) return SlabElementKind::slab;
+    const auto& value = properties.at("element_kind");
+    if (!value.is_string()) {
+        throw std::invalid_argument(
+            "element_kind must be one of slab, floor, ceiling, or foundation");
+    }
+    const auto parsed = parse_slab_element_kind(value.get_ref<const std::string&>());
+    if (!parsed.has_value()) {
+        throw std::invalid_argument(
+            "element_kind must be one of slab, floor, ceiling, or foundation");
+    }
+    return *parsed;
+}
+
 std::optional<HostedOpening> read_hosted_opening(const Entity& entity,
                                                  QString* error = nullptr) {
     const auto wall_id = read_string(entity.properties, "wall_id");
@@ -2593,7 +2608,7 @@ public:
             QToolBar QToolButton { border-color: transparent; border-radius: 3px; padding: 1px 4px; min-height: 16px; max-height: 16px; }
             QToolBar QToolButton:hover { background: $selection; border-color: $selection; }
             QToolBar QToolButton:checked { background: $selection; color: $accent; border-color: $accent; }
-            QWidget#toolPanel QToolButton { padding: 6px 4px; min-height: 52px; }
+            QWidget#toolPanel QToolButton { padding: 3px; min-height: 28px; max-height: 28px; }
             QPushButton:hover, QToolButton:hover { background: $selection; border-color: $accent; }
             QPushButton:pressed, QToolButton:pressed, QToolButton:checked {
                 background: $selection; color: $selectedText; border-color: $accent; }
@@ -7331,10 +7346,20 @@ public:
     QString createSlabFromSelectedBoundary(const QString& thickness_expression,
                                             const QString& elevation_expression,
                                             std::optional<Revision> expected_revision = std::nullopt) {
+        return createSurfaceFromSelectedBoundary(QStringLiteral("slab"),
+                                                  thickness_expression,
+                                                  elevation_expression,
+                                                  expected_revision);
+    }
+
+    QString createSurfaceFromSelectedBoundary(const QString& element_kind_expression,
+                                              const QString& thickness_expression,
+                                              const QString& elevation_expression,
+                                              std::optional<Revision> expected_revision = std::nullopt) {
         const auto revision = expected_revision.value_or(m_document->revision());
         const auto entity = selectedEntity();
         if (!entity.has_value() || !is_closed_boundary_entity(entity->type)) {
-            setError(QStringLiteral("Select a closed boundary before creating a slab."));
+            setError(QStringLiteral("Select a closed boundary before creating a horizontal assembly."));
             return {};
         }
         const auto organization = organize_project(m_document->snapshot());
@@ -7349,7 +7374,8 @@ public:
             setError(QStringLiteral("The selected boundary has no valid segments."));
             return {};
         }
-        return createSlabFromBoundary(boundary, thickness_expression, elevation_expression, {}, revision);
+        return createSurfaceFromBoundary(boundary, element_kind_expression,
+                                         thickness_expression, elevation_expression, {}, revision);
     }
 
     QString createSlabFromBoundary(const Boundary& boundary,
@@ -7357,19 +7383,37 @@ public:
                                    const QString& elevation_expression,
                                    std::vector<Boundary> holes = {},
                                    std::optional<Revision> expected_revision = std::nullopt) {
+        return createSurfaceFromBoundary(boundary, QStringLiteral("slab"),
+                                         thickness_expression, elevation_expression,
+                                         std::move(holes), expected_revision);
+    }
+
+    QString createSurfaceFromBoundary(const Boundary& boundary,
+                                      const QString& element_kind_expression,
+                                      const QString& thickness_expression,
+                                      const QString& elevation_expression,
+                                      std::vector<Boundary> holes = {},
+                                      std::optional<Revision> expected_revision = std::nullopt) {
         const auto revision = expected_revision.value_or(m_document->revision());
         const auto drawing_context = requireDrawingContext();
         if (!drawing_context) return {};
+        const auto kind_text = element_kind_expression.trimmed().toStdString();
+        const auto element_kind = parse_slab_element_kind(kind_text);
+        if (!element_kind.has_value()) {
+            setError(QStringLiteral("Horizontal assembly kind must be slab, floor, ceiling, or foundation."));
+            return {};
+        }
+        const auto kind_name = slab_element_kind_name(*element_kind);
         const auto diagnostics = validate_boundary(boundary);
         if (!diagnostics.empty()) {
-            setError(QStringLiteral("Slab boundary rejected: %1").arg(
+            setError(QStringLiteral("Horizontal assembly boundary rejected: %1").arg(
                 QString::fromStdString(diagnostics.front().message)));
             return {};
         }
         for (const auto& hole : holes) {
             const auto hole_diagnostics = validate_boundary(hole);
             if (!hole_diagnostics.empty()) {
-                setError(QStringLiteral("Slab opening rejected: %1").arg(
+                setError(QStringLiteral("Horizontal assembly opening rejected: %1").arg(
                     QString::fromStdString(hole_diagnostics.front().message)));
                 return {};
             }
@@ -7381,19 +7425,19 @@ public:
             const auto elevation =
                 parse_quantity(elevation_expression.toStdString(), unit).metres;
             if (!std::isfinite(thickness) || thickness <= 1e-7) {
-                setError(QStringLiteral("Slab thickness must be greater than zero."));
+                setError(QStringLiteral("Horizontal assembly thickness must be greater than zero."));
                 return {};
             }
             if (!std::isfinite(elevation)) {
-                setError(QStringLiteral("Slab elevation must be finite."));
+                setError(QStringLiteral("Horizontal assembly elevation must be finite."));
                 return {};
             }
-            const auto entity_id = new_id("slab");
-            const auto preview = Slab{entity_id, boundary, holes, thickness, elevation};
+            const auto entity_id = new_id(kind_name);
+            const auto preview = Slab{entity_id, boundary, holes, thickness, elevation, *element_kind};
             try {
                 (void)make_slab(preview);
             } catch (const std::exception& error) {
-                setError(QStringLiteral("Slab preview rejected: %1")
+                setError(QStringLiteral("Horizontal assembly preview rejected: %1")
                              .arg(QString::fromUtf8(error.what())));
                 return {};
             }
@@ -7408,17 +7452,22 @@ public:
                                    {"holes", std::move(holes_json)},
                                    {"thickness_m", thickness},
                                    {"elevation_m", elevation},
+                                   {"element_kind", std::string(kind_name)},
                                    {"classification", "slab"}};
             add_default_level_placement(properties, *drawing_context);
+            const char* command_message = *element_kind == SlabElementKind::floor
+                ? "create floor" : *element_kind == SlabElementKind::ceiling
+                ? "create ceiling" : *element_kind == SlabElementKind::foundation
+                ? "create foundation" : "create slab";
             if (!applyEntity(Entity{entity_id, "slab", properties, false, json::object()},
-                             "create slab", revision)) {
+                             command_message, revision)) {
                 return {};
             }
             m_selected_id = id_from(entity_id);
             refresh();
             return m_selected_id;
         } catch (const std::exception& error) {
-            setError(QStringLiteral("Slab: %1").arg(QString::fromUtf8(error.what())));
+            setError(QStringLiteral("Horizontal assembly: %1").arg(QString::fromUtf8(error.what())));
             return {};
         }
     }
@@ -10805,8 +10854,14 @@ public:
              [this] { createOpeningFromDialog(QStringLiteral("door")); }},
             {QStringLiteral("Create window opening"),
              [this] { createOpeningFromDialog(QStringLiteral("window")); }},
-            {QStringLiteral("Create slab from selected boundary"),
+            {QStringLiteral("Create slab, floor, ceiling or foundation"),
              [this] { createSlabFromDialog(); }},
+            {QStringLiteral("Create floor from selected boundary"),
+             [this] { createSlabFromDialog(QStringLiteral("floor")); }},
+            {QStringLiteral("Create ceiling from selected boundary"),
+             [this] { createSlabFromDialog(QStringLiteral("ceiling")); }},
+            {QStringLiteral("Create foundation from selected boundary"),
+             [this] { createSlabFromDialog(QStringLiteral("foundation")); }},
             {QStringLiteral("Create terrain surface from selected boundary"),
              [this] { showTerrainSurfaceDialog(); }},
             {QStringLiteral("Create column, beam, stair or roof"),
@@ -11078,7 +11133,9 @@ private:
             return false;
         }
         try {
-            (void)make_slab(Slab{slab_entity.id, *boundary, *holes, *thickness, *elevation});
+            const auto element_kind = read_slab_element_kind(properties);
+            (void)make_slab(Slab{slab_entity.id, *boundary, *holes, *thickness, *elevation,
+                                 element_kind});
             return true;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Slab preview rejected: %1")
@@ -12101,10 +12158,10 @@ private:
 
         auto* tool_panel = new QWidget(splitter);
         tool_panel->setObjectName(QStringLiteral("toolPanel"));
-        tool_panel->setFixedWidth(104);
+        tool_panel->setFixedWidth(54);
         auto* tool_layout = new QVBoxLayout(tool_panel);
-        tool_layout->setContentsMargins(7, 14, 7, 14);
-        tool_layout->setSpacing(7);
+        tool_layout->setContentsMargins(4, 8, 4, 8);
+        tool_layout->setSpacing(3);
         m_select_button = addToolButton(tool_layout, QStringLiteral("Select"), CanvasTool::select, true);
         m_boundary_button = addToolButton(tool_layout, QStringLiteral("Boundary"), CanvasTool::boundary);
         m_boundary_button->setText(QStringLiteral("Draw first"));
@@ -12114,8 +12171,9 @@ private:
         m_define_boundary_button->setText(QStringLiteral("Define first"));
         m_define_boundary_button->setIcon(modern_toolbar_icon(
             "<path d='M5 6h14M5 12h14M5 18h14'/><path d='M8 4v16M16 4v16'/>"));
-        m_define_boundary_button->setIconSize(QSize(20, 20));
-        m_define_boundary_button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        m_define_boundary_button->setIconSize(QSize(18, 18));
+        m_define_boundary_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        m_define_boundary_button->setAccessibleName(QStringLiteral("Define first"));
         m_define_boundary_button->setObjectName(QStringLiteral("defineFirstBoundary"));
         m_define_boundary_button->setToolTip(QStringLiteral("Choose an area classification before drawing and place each dimension"));
         m_define_boundary_button->setCheckable(true);
@@ -12131,8 +12189,9 @@ private:
         m_object_button->setText(QStringLiteral("Object…"));
         m_object_button->setIcon(modern_toolbar_icon(
             "<path d='M4 10 12 4l8 6v10H4z'/><path d='M9 20v-6h6v6'/>"));
-        m_object_button->setIconSize(QSize(20, 20));
-        m_object_button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        m_object_button->setIconSize(QSize(18, 18));
+        m_object_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        m_object_button->setAccessibleName(QStringLiteral("Object"));
         m_object_button->setToolTip(QStringLiteral("Create a column, beam, stair or roof"));
         m_object_button->setObjectName(QStringLiteral("createBuildingObject"));
         m_object_button->setAutoRaise(true);
@@ -12145,8 +12204,9 @@ private:
         m_grid_button->setText(QStringLiteral("Grid"));
         m_grid_button->setIcon(modern_toolbar_icon(
             "<path d='M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z'/>"));
-        m_grid_button->setIconSize(QSize(20, 20));
-        m_grid_button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        m_grid_button->setIconSize(QSize(18, 18));
+        m_grid_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        m_grid_button->setAccessibleName(QStringLiteral("Grid"));
         m_grid_button->setToolTip(QStringLiteral("Toggle measurement grid"));
         m_grid_button->setObjectName(QStringLiteral("gridTool"));
         m_grid_button->setCheckable(true);
@@ -12159,8 +12219,9 @@ private:
         m_snap_button->setText(QStringLiteral("Snap"));
         m_snap_button->setIcon(modern_toolbar_icon(
             "<path d='M6 5v6a6 6 0 0 0 12 0V5'/><path d='M6 5h4M14 5h4'/>"));
-        m_snap_button->setIconSize(QSize(20, 20));
-        m_snap_button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        m_snap_button->setIconSize(QSize(18, 18));
+        m_snap_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        m_snap_button->setAccessibleName(QStringLiteral("Snap"));
         m_snap_button->setToolTip(QStringLiteral("Snap points to a 0.25 m grid"));
         m_snap_button->setObjectName(QStringLiteral("snapTool"));
         m_snap_button->setCheckable(true);
@@ -12173,8 +12234,9 @@ private:
         m_fit_button->setText(QStringLiteral("Fit"));
         m_fit_button->setIcon(modern_toolbar_icon(
             "<path d='M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5'/>"));
-        m_fit_button->setIconSize(QSize(20, 20));
-        m_fit_button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        m_fit_button->setIconSize(QSize(18, 18));
+        m_fit_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        m_fit_button->setAccessibleName(QStringLiteral("Fit"));
         m_fit_button->setToolTip(QStringLiteral("Fit geometry in both workspace views"));
         m_fit_button->setAutoRaise(true);
         m_fit_button->setMinimumWidth(0);
@@ -12184,8 +12246,9 @@ private:
         m_overview_button->setText(QStringLiteral("Map"));
         m_overview_button->setIcon(modern_toolbar_icon(
             "<rect x='4' y='5' width='16' height='14' rx='2'/><path d='m6 16 4-4 3 3 2-2 3 3'/><circle cx='9' cy='9' r='1'/>"));
-        m_overview_button->setIconSize(QSize(20, 20));
-        m_overview_button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        m_overview_button->setIconSize(QSize(18, 18));
+        m_overview_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        m_overview_button->setAccessibleName(QStringLiteral("Map"));
         m_overview_button->setToolTip(QStringLiteral("Show or hide the overview map"));
         m_overview_button->setObjectName(QStringLiteral("overviewMapTool"));
         m_overview_button->setCheckable(true);
@@ -12867,8 +12930,9 @@ private:
             button->setObjectName(QStringLiteral("wallTool"));
             break;
         }
-        button->setIconSize(QSize(20, 20));
-        button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        button->setIconSize(QSize(18, 18));
+        button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        button->setAccessibleName(label);
         button->setToolTip(tool_name(tool));
         button->setCheckable(true);
         button->setChecked(checked);
@@ -13166,7 +13230,8 @@ private:
                             validation_error = QStringLiteral("thickness and elevation are required");
                         } else {
                             try {
-                                (void)make_slab(Slab{id, segments, *holes, *thickness, *elevation});
+                                (void)make_slab(Slab{id, segments, *holes, *thickness, *elevation,
+                                                     read_slab_element_kind(geometry_entity.properties)});
                             } catch (const std::exception& error) {
                                 validation_error = QString::fromUtf8(error.what());
                             }
@@ -13312,7 +13377,8 @@ private:
                             throw std::invalid_argument("slab projection requires boundary, holes, thickness, and elevation");
                         }
                         const auto projection = project_shape_view(
-                            make_slab(Slab{id, *boundary, *holes, *thickness, *elevation}),
+                            make_slab(Slab{id, *boundary, *holes, *thickness, *elevation,
+                                            read_slab_element_kind(resolved.properties)}),
                             kind, frame);
                         result.push_back(CanvasEntity{
                             id_from(id), QStringLiteral("slab"), projection, *thickness,
@@ -14390,7 +14456,14 @@ private:
                                wall_id.has_value() ? QString::fromStdString(*wall_id)
                                                    : QStringLiteral("unknown"));
         } else if (entity->type == "slab") {
-            context = QStringLiteral("Slab\nClosed profile");
+            try {
+                const auto kind = QString::fromStdString(
+                    std::string(slab_element_kind_name(read_slab_element_kind(entity->properties))));
+                context = QStringLiteral("%1\nClosed profile")
+                              .arg(kind.left(1).toUpper() + kind.mid(1));
+            } catch (const std::exception&) {
+                context = QStringLiteral("Slab\nClosed profile");
+            }
         } else if (entity->type == "roof") {
             const auto roof_label = sloped_roof_panel
                 ? (read_number(entity->properties, "rise_m", 0.0) == 0.0
@@ -15204,16 +15277,28 @@ private:
         }
     }
 
-    void createSlabFromDialog() {
+    void createSlabFromDialog(QString requested_kind = {}) {
         const auto context = captureModalContext();
         const auto boundary = selectedEntity();
         if (!boundary.has_value() || !is_closed_boundary_entity(boundary->type)) {
-            setError(QStringLiteral("Select a closed boundary before creating a slab."));
+            setError(QStringLiteral("Select a closed boundary before creating a horizontal assembly."));
             return;
         }
         bool accepted = false;
+        QString element_kind = requested_kind.trimmed().toLower();
+        if (element_kind.isEmpty()) {
+            const auto selected = QInputDialog::getItem(
+                owner, QStringLiteral("Create horizontal assembly"),
+                QStringLiteral("Element kind:"),
+                {QStringLiteral("Slab"), QStringLiteral("Floor"),
+                 QStringLiteral("Ceiling"), QStringLiteral("Foundation")},
+                0, false, &accepted);
+            if (!accepted) return;
+            element_kind = selected.trimmed().toLower();
+        }
+        const auto kind_label = element_kind.left(1).toUpper() + element_kind.mid(1);
         const auto thickness = QInputDialog::getText(
-            owner, QStringLiteral("Create slab"), QStringLiteral("Slab thickness:"),
+            owner, QStringLiteral("Create %1").arg(kind_label), QStringLiteral("Thickness:"),
             QLineEdit::Normal, m_metric_units ? QStringLiteral("0.15 m")
                                                : QStringLiteral("6 in"),
             &accepted);
@@ -15221,13 +15306,14 @@ private:
             return;
         }
         const auto elevation = QInputDialog::getText(
-            owner, QStringLiteral("Create slab"), QStringLiteral("Elevation:"), QLineEdit::Normal,
+            owner, QStringLiteral("Create %1").arg(kind_label), QStringLiteral("Elevation:"), QLineEdit::Normal,
             m_metric_units ? QStringLiteral("0 m") : QStringLiteral("0 in"), &accepted);
         if (!accepted) {
             return;
         }
         if (!modalContextUnchanged(context)) return;
-        (void)createSlabFromSelectedBoundary(thickness, elevation, context.revision);
+        (void)createSurfaceFromSelectedBoundary(element_kind, thickness, elevation,
+                                                 context.revision);
     }
 
 public:
@@ -15698,6 +15784,26 @@ QString MainWindow::createSlabFromBoundary(const Boundary& boundary,
                                            std::vector<Boundary> holes,
                                            std::optional<Revision> revision) {
     return m_impl->createSlabFromBoundary(boundary, thickness, elevation, std::move(holes), revision);
+}
+
+QString MainWindow::createSurfaceFromSelectedBoundary(QString element_kind,
+                                                      QString thickness,
+                                                      QString elevation,
+                                                      std::optional<Revision> revision) {
+    return m_impl->createSurfaceFromSelectedBoundary(std::move(element_kind),
+                                                     std::move(thickness),
+                                                     std::move(elevation), revision);
+}
+
+QString MainWindow::createSurfaceFromBoundary(const Boundary& boundary,
+                                              QString element_kind,
+                                              QString thickness,
+                                              QString elevation,
+                                              std::vector<Boundary> holes,
+                                              std::optional<Revision> revision) {
+    return m_impl->createSurfaceFromBoundary(boundary, std::move(element_kind),
+                                             std::move(thickness), std::move(elevation),
+                                             std::move(holes), revision);
 }
 
 QString MainWindow::createTerrainSurfaceFromSelectedBoundary(

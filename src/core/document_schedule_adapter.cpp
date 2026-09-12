@@ -84,6 +84,12 @@ bool positive(double value) {
     return std::isfinite(value) && value > 0.0;
 }
 
+void add_surface_kind(const Entity& entity, ScheduleRecord& record) {
+    if (entity.type != "slab") return;
+    const auto kind = text_field(entity, "element_kind").value_or("slab");
+    record.properties.emplace("element_kind", kind);
+}
+
 void add_opening(const Entity& entity, std::vector<ScheduleRecord>& records,
                  std::vector<std::string>& diagnostics) {
     const auto opening_kind = text_field(entity, "opening_kind");
@@ -219,6 +225,7 @@ void add_material(const Entity& entity, const DocumentSnapshot& document,
         record.mark = mark_for(entity, "M-", diagnostics);
         record.properties.emplace("name", material->name);
         record.properties.emplace("count", std::int64_t{1});
+        add_surface_kind(entity, record);
         records.push_back(std::move(record));
         return;
     }
@@ -235,6 +242,7 @@ void add_material(const Entity& entity, const DocumentSnapshot& document,
     record.mark = mark_for(entity, "M-", diagnostics);
     record.properties.emplace("name", *material);
     record.properties.emplace("volume", ScheduleQuantity{*volume, ScheduleUnit::cubic_metre});
+    add_surface_kind(entity, record);
     records.push_back(std::move(record));
 }
 

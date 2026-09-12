@@ -14,6 +14,13 @@ to 1,000,000 metres, and at most 10,000 stair risers or railing posts.  These li
 the modeling kernel from accidental numeric explosions; they are not design
 or code requirements.
 
+`Slab` is the shared horizontal footprint and solid representation.  Its
+`element_kind` is one of `slab`, `floor`, `ceiling`, or `foundation`; the
+geometry, thickness, elevation, holes, material assignment, level placement,
+and quantity path remain common, while the kind is retained for schedules,
+presentation, and future material or level rules.  Existing records without
+`element_kind` decode as the compatible generic `slab` kind.
+
 `make_rectangular_column` makes a vertical oriented box centered on
 `base_center` in plan.  `width` and `depth` follow the local axes after
 `rotation_radians`, and `height` extends along global +Z.  The circular form

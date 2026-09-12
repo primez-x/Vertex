@@ -339,9 +339,19 @@
       "package": 3,
       "blocker": null,
       "implementation_sources": [
-        "src/architecture/architecture.cpp"
+        "include/sketch/architecture.hpp",
+        "src/architecture/architecture.cpp",
+        "src/architecture/document_solid.cpp",
+        "src/core/document.cpp",
+        "src/core/document_schedule_adapter.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/architecture_tests.cpp",
+        "tests/architectural_schedule_tests.cpp",
+        "tests/document_tests.cpp",
+        "tests/desktop_smoke.cpp",
+        "docs/building-objects.md"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "The bounded semantic slice is implemented: one validated slab geometry model carries an explicit slab/floor/ceiling/foundation kind; Windows authoring creates each kind from a closed boundary; Document admission, native solid decoding, plan/elevation/section/3D projection, material schedules, undo/redo, and save/reopen preserve it. Full floor-system materials, level coordination, quantity certification, Apex compatibility, and the production gate remain open."
     },
     {
       "id": "CORE-DOC-008",

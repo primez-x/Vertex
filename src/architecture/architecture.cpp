@@ -164,6 +164,24 @@ double surface_area(const TopoDS_Shape& shape) {
     return std::abs(properties.Mass());
 }
 
+std::string_view slab_element_kind_name(SlabElementKind kind) noexcept {
+    switch (kind) {
+    case SlabElementKind::slab: return "slab";
+    case SlabElementKind::floor: return "floor";
+    case SlabElementKind::ceiling: return "ceiling";
+    case SlabElementKind::foundation: return "foundation";
+    }
+    return "invalid";
+}
+
+std::optional<SlabElementKind> parse_slab_element_kind(std::string_view value) noexcept {
+    if (value == "slab") return SlabElementKind::slab;
+    if (value == "floor") return SlabElementKind::floor;
+    if (value == "ceiling") return SlabElementKind::ceiling;
+    if (value == "foundation") return SlabElementKind::foundation;
+    return std::nullopt;
+}
+
 TopoDS_Shape make_wall(const Wall& wall) {
     validate_wall_semantics(wall);
     const double length = segment_length(wall.baseline);
@@ -185,6 +203,9 @@ TopoDS_Shape make_wall(const Wall& wall) {
 }
 
 TopoDS_Shape make_slab(const Slab& slab) {
+    if (slab_element_kind_name(slab.element_kind) == "invalid") {
+        throw std::invalid_argument("Slab element kind is invalid");
+    }
     positive(slab.thickness, "Slab thickness must be positive");
     if (!std::isfinite(slab.elevation)) throw std::invalid_argument("Slab elevation must be finite");
     try {

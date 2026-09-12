@@ -46,7 +46,19 @@ int main() {
 
         Slab slab{"floor-1", {{{0, 0}, {4, 0}, 0}, {{4, 0}, {4, 3}, 0},
                              {{4, 3}, {0, 3}, 0}, {{0, 3}, {0, 0}, 0}}, {}, 0.25, -0.25};
+        if (slab_element_kind_name(SlabElementKind::floor) != "floor" ||
+            slab_element_kind_name(SlabElementKind::ceiling) != "ceiling" ||
+            slab_element_kind_name(SlabElementKind::foundation) != "foundation" ||
+            !parse_slab_element_kind("floor").has_value() ||
+            parse_slab_element_kind("unsupported").has_value()) {
+            throw std::runtime_error("Slab element kind codec is inconsistent");
+        }
         near(solid_volume(make_slab(slab)), 3.0, 1e-8, "Slab volume");
+        slab.element_kind = SlabElementKind::floor;
+        near(solid_volume(make_slab(slab)), 3.0, 1e-8, "Floor element preserves slab geometry");
+        auto invalid_kind_slab = slab;
+        invalid_kind_slab.element_kind = static_cast<SlabElementKind>(99);
+        rejected([&] { (void)make_slab(invalid_kind_slab); });
         slab.holes.push_back({{{1, 1}, {2, 1}, 0}, {{2, 1}, {2, 2}, 0},
                               {{2, 2}, {1, 2}, 0}, {{1, 2}, {1, 1}, 0}});
         near(solid_volume(make_slab(slab)), 2.75, 1e-8, "Slab opening subtracts exact area");
