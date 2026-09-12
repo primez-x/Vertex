@@ -2,6 +2,7 @@
 #include "sketch/document_digest.hpp"
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/boundary_transform.hpp"
 #include "support/noninteractive_errors.hpp"
 #include <sqlite3.h>
 #include <algorithm>
@@ -49,10 +50,11 @@ struct Database {
         sqlite3_finalize(statement); return result;
     }
 };
-ProjectArchiveSnapshot fixture(BoundaryAuthoringMode mode, ArchiveRole role, bool saved = false, bool translated = false) {
+ProjectArchiveSnapshot fixture(BoundaryAuthoringMode mode, ArchiveRole role, bool saved = false, bool translated = false,
+                              bool transformed = false) {
     auto document = Document::create({{"p", "property", {{"name", "Property"}}},
         {"b", "building", {{"property_id", "p"}}}, {"f", "floor", {{"building_id", "b"}}}, {"l", "layer", {{"floor_id", "f"}}}});
-    if (translated) {
+    if (translated || transformed) {
         BoundaryConstructionRecord record;
         record.boundary_id = "translated-boundary";
         const Vec2 points[]{{0,0},{2,0},{2,1},{0,1}};
@@ -72,7 +74,13 @@ ProjectArchiveSnapshot fixture(BoundaryAuthoringMode mode, ArchiveRole role, boo
         auto entity=encode_identified_boundary_entity(boundary);
         entity.properties["boundary_authoring"]=encode_boundary_receipt_envelope(record);
         document.apply(ApplyEntityChanges{document.revision(),{EntityChange::upsert(entity)},{},"archive receipt fixture"});
-        document.apply(TranslateBoundary{document.revision(),{entity.id,{5,-2}}});
+        if (transformed) {
+            PlanarTransform transform;
+            transform.pivot = {1, 0.5}; transform.rotation_radians = 0.4;
+            transform.flip_vertical = true;
+            document.apply(TransformBoundary{document.revision(), {entity.id, transform}});
+        }
+        if (translated) document.apply(TranslateBoundary{document.revision(),{entity.id,{5,-2}}});
     }
     if (saved) document.mark_saved(document.revision());
     ProjectWorkspace workspace(document.snapshot());
@@ -238,25 +246,40 @@ void depth_boundary() {
     rejects([&] { (void)ProjectStore::load_archive(path, source.role()); }, "nesting");
 }
 }
-void translated_round_trip(ArchiveRole role) {
+void translated_round_trip(ArchiveRole role, bool transformed = false) {
     TemporaryDirectory temporary;
     const auto path=temporary.path / "translated-workspace.bldproj";
-    const auto source=fixture(BoundaryAuthoringMode::draw_first,role,true,true);
+    const auto source=fixture(BoundaryAuthoringMode::draw_first,role,true,true,transformed);
     const auto receipt=ProjectStore::save_archive(path,source);
     const auto loaded=ProjectStore::load_archive(path,role);
     require(loaded.supported() && document_snapshot_digest(loaded.archive->document()) == document_snapshot_digest(source.document()),
-        "v5 archive must preserve translation proof and complete document history");
+        "archive must preserve command proofs and complete document history");
     require(ledger_json(loaded.archive->recovery()).dump() == ledger_json(source.recovery()).dump(),
         "v5 archive must retain workspace recovery records");
     { Database db(path);
-      require(db.scalar("PRAGMA user_version") == "5", "translation archive must use format five");
+      require(db.scalar("PRAGMA user_version") == (transformed ? "6" : "5"), "archive must use required proof format");
+      if (transformed)
+          require(db.scalar("SELECT count(*) FROM revisions WHERE boundary_transform_json IS NOT NULL") == "1",
+                  "transform proof must be stored exactly once");
       require(db.scalar("SELECT count(*) FROM revisions WHERE boundary_translation_json IS NOT NULL") == "1",
         "translation proof must be stored exactly once"); }
     rejects([&] { (void)ProjectStore::load(path); });
     rejects([&] { (void)ProjectStore::save(path,source.document()); });
+    rejects([&] { (void)ProjectStore::save(path,source.document(),
+        SaveOptions{.expected_destination_sha256=receipt.file_sha256}); });
+    require(ProjectStore::file_sha256(path) == receipt.file_sha256,
+        "document-only rejection must preserve the archive bytes");
     const auto next=ProjectStore::save_archive(path,source,SaveOptions{.expected_destination_sha256=receipt.file_sha256});
     require(next.backup_path && ProjectStore::file_sha256(*next.backup_path)==receipt.file_sha256,
         "v5 archive overwrite must preserve the prior file");
+    if (transformed) {
+        require(ProjectStore::load_archive(*next.backup_path,role).supported(), "v6 backup must reopen in its archive role");
+        auto replay = Document::fork(loaded.archive->document());
+        const auto final_entities = replay.snapshot().entities();
+        replay.undo(replay.revision()); replay.undo(replay.revision());
+        replay.redo(replay.revision()); replay.redo(replay.revision());
+        require(replay.snapshot().entities() == final_entities, "archive transform and translation must undo/redo after reopen");
+    }
 }
 
 int main(int argc, char** argv) {
@@ -274,6 +297,7 @@ int main(int argc, char** argv) {
                 for (const bool saved : {false, true}) round_trip(mode, role, saved);
         unknown_and_corruption(); roles_and_legacy(); required_entity_and_limits(); depth_boundary();
         for (const auto role : {ArchiveRole::ordinary,ArchiveRole::recovery_copy}) translated_round_trip(role);
+        for (const auto role : {ArchiveRole::ordinary,ArchiveRole::recovery_copy}) translated_round_trip(role, true);
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
     return 0;
 }

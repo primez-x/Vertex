@@ -1,5 +1,6 @@
 #include "sketch/document_digest.hpp"
 #include "sketch/boundary_translation.hpp"
+#include "sketch/boundary_transform.hpp"
 
 #include <cstddef>
 #include <span>
@@ -84,6 +85,8 @@ ordered_json snapshot_json(const DocumentSnapshot& snapshot,
         // Omit absent proofs to preserve the frozen v1 digest vectors.
         if (record.boundary_translation)
             item["boundary_translation"] = encode_boundary_translation(*record.boundary_translation);
+        if (record.boundary_transform)
+            item["boundary_transform"] = encode_boundary_transform(*record.boundary_transform);
         history.push_back(std::move(item));
     }
     auto names = ordered_json::array();

@@ -2,6 +2,7 @@
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/boundary_translation.hpp"
+#include "sketch/boundary_transform.hpp"
 #include "support/noninteractive_errors.hpp"
 #include <fstream>
 #include <iostream>
@@ -46,6 +47,24 @@ void test_translation_export(const std::filesystem::path& root) {
   const auto proof = sketch::decode_boundary_translation(rows[1].at("boundary_translation"));
   check(proof.boundary_id == "boundary" && proof.offset.x == 8 && proof.offset.y == -4,
         "export must retain proof even in undone history");
+  document.redo(document.revision());
+  sketch::PlanarTransform transform;
+  transform.pivot = {1, 0.5}; transform.rotation_radians = 0.25;
+  transform.flip_horizontal = true; transform.offset = {2, 3};
+  document.apply(sketch::TransformBoundary{document.revision(), {"boundary", transform}});
+  // A later translation must not overwrite the newer exchange version.
+  document.apply(sketch::TranslateBoundary{document.revision(), {"boundary", {1, 2}}});
+  document.undo(document.revision());
+  sketch::extract_project(document.snapshot(), root / "transform");
+  std::ifstream transformed_input(root / "transform" / "project.json");
+  const auto transformed_json = nlohmann::json::parse(transformed_input);
+  check(transformed_json.at("exchange_version") == 3, "mixed transform export must advertise version3");
+  const auto& transformed_rows = transformed_json.at("revisions");
+  check(transformed_rows[4].at("boundary_transform") ==
+        sketch::encode_boundary_transform({"boundary", transform}), "export must preserve every transform parameter");
+  check(!transformed_rows[5].contains("boundary_transform") &&
+        transformed_rows[5].contains("boundary_translation") &&
+        !transformed_rows[6].contains("boundary_transform"), "export must keep proof roles separate");
 }
 } // namespace
 int main() {

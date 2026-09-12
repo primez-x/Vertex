@@ -1,6 +1,7 @@
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_dimension.hpp"
+#include "sketch/boundary_transform.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/project_store.hpp"
 #include "support/noninteractive_errors.hpp"
@@ -12,6 +13,7 @@
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -565,6 +567,129 @@ void test_explicit_boundary_translation() {
     require(integer_document.revision() == 0 && document_snapshot_digest(integer_document.snapshot()) == integer_digest,
         "zero translation must preserve valid integer JSON representations exactly");
 }
+void test_explicit_boundary_transform() {
+    auto original = fixture();
+    auto record = *decode_boundary_receipt_envelope(original.properties.at("boundary_authoring")).record;
+    auto& arc = record.edges.front().receipt;
+    arc.kind = BoundaryConstructionKind::arc_chord_angle;
+    arc.rise.reset();
+    arc.run.reset();
+    arc.chord_end = Vec2{2,0};
+    arc.angle = parse_angle("90 deg");
+    const auto replay = replay_boundary_construction(record);
+    auto boundary = decode_identified_boundary_entity(original);
+    for (std::size_t i = 0; i < replay.edges.size(); ++i)
+        boundary.segments[i].segment = replay.edges[i].segment;
+    original = encode_identified_boundary_entity(boundary);
+    original.properties["boundary_authoring"] = encode_boundary_receipt_envelope(record);
+    original.properties["classification"] = "garage";
+    original.properties["segments"][0]["vendor"] = Json{{"number",1.0}};
+    original.extensions["vendor"] = "keep";
+    original.required = true;
+    auto dimension = encode_boundary_dimension_entity(BoundaryDimension{
+        "dimension",original.id,"edge-0",{1,-0.5},BoundaryDimensionPlacement::manual,{}});
+    dimension.extensions["vendor"] = Json{{"number",1.0}};
+    const Entity note{"note","label",{{"text","Original note"}},false,Json::object()};
+    auto document = Document::create({original,dimension,note});
+    const auto before = document.snapshot();
+    const BoundaryTransformation intent{original.id,{{0.3,0.7},0.43,true,false,{5,-2}}};
+    require(decode_boundary_transform(encode_boundary_transform(intent)).transform == intent.transform,
+        "transform intent codec must round-trip");
+    document.apply(TransformBoundary{document.revision(),intent});
+    const auto after = document.snapshot();
+    require(after.history().back().boundary_transform.has_value() &&
+        !after.history().back().boundary_translation && after.history().back().action == "Transform boundary",
+        "transform command must retain only its typed proof");
+    const auto& moved = after.entities().at(original.id);
+    const auto moved_record = *decode_boundary_receipt_envelope(moved.properties.at("boundary_authoring")).record;
+    require(moved_record.schema_version == boundary_receipt_schema_version_v3 && moved_record.edges == record.edges &&
+        moved_record.anchor.x == record.anchor.x && moved_record.anchor.y == record.anchor.y &&
+        moved_record.transforms.size() == 1 && moved_record.transforms.front() == intent.transform,
+        "transform must retain local construction inputs and ordered frame");
+    const auto moved_boundary = decode_identified_boundary_entity(moved);
+    require(moved_boundary.segments.front().segment.sweep_radians == -boundary.segments.front().segment.sweep_radians &&
+        moved_boundary.segments.front().segment_id == boundary.segments.front().segment_id &&
+        moved_boundary.segments.front().start_vertex_id == boundary.segments.front().start_vertex_id &&
+        moved.properties.at("segments")[0].at("vendor").dump() == original.properties.at("segments")[0].at("vendor").dump() &&
+        moved.extensions.dump() == original.extensions.dump() && moved.required == original.required &&
+        moved.properties.at("classification") == original.properties.at("classification"),
+        "rotation and reflection must retain IDs and opaque metadata while reversing arc sweep");
+    const auto point = transform_point({1,-0.5},intent.transform);
+    const auto moved_dimension = *decode_boundary_dimension_entity(after.entities().at(dimension.id)).dimension;
+    require(moved_dimension.text_position.x == point.x && moved_dimension.text_position.y == point.y &&
+        after.entities().at(dimension.id).extensions.dump() == dimension.extensions.dump() &&
+        after.entities().at(note.id) == note && before.entities().at(original.id) == original,
+        "transform must move dimension placement and preserve source and unrelated data");
+    require(Document::fork(after).snapshot().entities() == after.entities(), "transform must deterministically restore");
+    auto raw = Document::fork(before);
+    rejects([&] { raw.apply(ApplyEntityChanges{0,{EntityChange::upsert(moved)}, {}, "Transform boundary"}); },
+        "raw action text cannot authorize transform");
+    const auto forge = [&](const std::function<void(RevisionRecord&)>& mutate) {
+        auto forged = after;
+        mutate(const_cast<std::vector<RevisionRecord>&>(forged.history()).back());
+        rejects([&] { (void)Document::fork(forged); }, "forged transform history must reject");
+    };
+    forge([&](auto& event) { event.entities.at(note.id).properties["text"] = "hidden"; });
+    forge([](auto& event) { event.boundary_transform->transform.rotation_radians += 0.1; });
+    forge([](auto& event) { event.boundary_transform.reset(); });
+    forge([&](auto& event) { event.boundary_translation = BoundaryTranslation{original.id,{1,2}}; });
+    forge([](auto& event) { event.action = "Translate boundary"; });
+    forge([&](auto& event) { event.entities = before.entities(); event.boundary_transform->transform = {}; });
+    forge([](auto& event) { event.boundary_transform->transform.offset.x = std::numeric_limits<double>::infinity(); });
+    auto creation = before;
+    const_cast<std::vector<RevisionRecord>&>(creation.history()).front().boundary_transform = intent;
+    rejects([&] { (void)Document::fork(creation); }, "create cannot carry transform proof");
+    document.undo(document.revision());
+    require(document.snapshot().entities().at(original.id).properties.dump() == original.properties.dump() &&
+        document.snapshot().entities() == before.entities(), "transform undo must restore exact inputs and state");
+    auto navigation = document.snapshot();
+    const_cast<std::vector<RevisionRecord>&>(navigation.history()).back().boundary_transform = intent;
+    rejects([&] { (void)Document::fork(navigation); }, "undo cannot carry transform proof");
+    document.redo(document.revision());
+    require(document.snapshot().entities().at(original.id).properties.dump() == moved.properties.dump() &&
+        document.snapshot().entities() == after.entities(), "transform redo must restore exact transformed state");
+    document.apply(NameRevision{document.revision(),"named"});
+    auto named = document.snapshot();
+    const_cast<std::vector<RevisionRecord>&>(named.history()).back().boundary_transform = intent;
+    rejects([&] { (void)Document::fork(named); }, "named event cannot carry transform proof");
+    const auto stable = document_snapshot_digest(document.snapshot());
+    rejects([&] { document.apply(TransformBoundary{0,intent}); }, "transform must reject stale revisions");
+    auto invalid = intent;
+    invalid.transform.pivot.x = std::numeric_limits<double>::quiet_NaN();
+    rejects([&] { document.apply(TransformBoundary{document.revision(),invalid}); }, "nonfinite transform must reject");
+    invalid = intent;
+    invalid.boundary_id = "missing";
+    rejects([&] { document.apply(TransformBoundary{document.revision(),invalid}); }, "missing transform owner must reject");
+    document.apply(TransformBoundary{document.revision(),{original.id,{{5,6},0,false,false,{}}}});
+    require(stable == document_snapshot_digest(document.snapshot()), "rejections and identity transform must preserve exact history");
+    auto integer = fixture("integer");
+    integer.properties["boundary_authoring"]["anchor"] = {0,0};
+    for (auto& edge : integer.properties["boundary_authoring"]["segments"])
+        for (auto& coordinate : edge["receipt"]["start"])
+            coordinate = static_cast<int>(coordinate.get<double>());
+    auto integer_document = Document::create({integer});
+    const auto integer_digest = document_snapshot_digest(integer_document.snapshot());
+    integer_document.apply(TransformBoundary{0,{integer.id,{}}});
+    require(integer_document.revision() == 0 && integer_digest == document_snapshot_digest(integer_document.snapshot()),
+        "identity transform must retain integer JSON bits");
+    auto receiptless = Document::create({receiptless_fixture("plain")});
+    rejects([&] { receiptless.apply(TransformBoundary{0,{"plain",intent.transform}}); }, "receiptless transform must reject");
+    auto opaque = original;
+    opaque.properties["boundary_authoring"] = Json{{"version",999}};
+    auto readonly = Document::create({opaque});
+    rejects([&] { readonly.apply(TransformBoundary{0,intent}); }, "read-only transform must reject");
+    for (const auto* field : {"version","boundary_id","pivot","rotation_radians","flip_horizontal","flip_vertical","offset"}) {
+        auto malformed = encode_boundary_transform(intent);
+        malformed.erase(field);
+        rejects([&] { (void)decode_boundary_transform(malformed); }, "missing proof field must reject");
+    }
+    auto malformed = encode_boundary_transform(intent);
+    malformed["extra"] = 1;
+    rejects([&] { (void)decode_boundary_transform(malformed); }, "extra proof field must reject");
+    malformed = encode_boundary_transform(intent);
+    malformed["flip_horizontal"] = 1;
+    rejects([&] { (void)decode_boundary_transform(malformed); }, "numeric reflection flag must reject");
+}
 } // namespace
 int main() {
     sketch::testing::noninteractive_errors();
@@ -576,6 +701,7 @@ int main() {
         test_point_receipt_storage_and_future_replay();
         test_known_receipt_storage_lifecycle_and_v3_retention();
         test_explicit_boundary_translation();
+        test_explicit_boundary_transform();
         std::cout << "Boundary receipt integrity tests passed\n";
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

@@ -27,8 +27,12 @@ CREATE TABLE project_recovery_records(
 Both the SQLite user-version marker and `metadata.format_version` are `4`.
 The metadata key set remains `format_version`, `document_id`, `head_revision`,
 `saved_revision` and `logical_digest`. A v4 file with no recovery rows is invalid.
-The document-only routes continue accepting only versions 1–3, and cannot
-overwrite a v4 destination even with its correct current hash.
+Document-only routes cannot open or overwrite a recovery-bearing destination,
+even with its correct current hash. Formats 5 and 6 retain this recovery table
+when command history requires translation or transform proofs, respectively.
+Those formats also support document-only files without the recovery table;
+the reader validates the exact schema for the detected role. See
+[project-format.md](project-format.md) for the proof columns and replay rules.
 
 Unlike versions 1–3, v4 preserves the captured optional saved revision. Metadata
 stores it as unsigned decimal text or the literal `null`. The logical manifest

@@ -3,6 +3,7 @@
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/boundary_translation.hpp"
+#include "sketch/boundary_transform.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <sqlite3.h>
@@ -239,7 +240,10 @@ void rewrite_logical_digest(const std::filesystem::path& path) {
     sqlite3_stmt* statement = nullptr;
     require(sqlite3_prepare_v2(
                 database,
-                format == 5
+                format >= 6
+                    ? "SELECT revision,parent_revision,source_revision,action,name,undo_stack_json,"
+                      "redo_stack_json,boundary_translation_json,boundary_transform_json FROM revisions ORDER BY revision"
+                    : format == 5
                     ? "SELECT revision,parent_revision,source_revision,action,name,undo_stack_json,"
                       "redo_stack_json,boundary_translation_json FROM revisions ORDER BY revision"
                     : "SELECT revision,parent_revision,source_revision,action,name,undo_stack_json,"
@@ -260,9 +264,12 @@ void rewrite_logical_digest(const std::filesystem::path& path) {
             {"entities", nlohmann::json::array()},
             {"assets", nlohmann::json::array()},
         });
-        if (format == 5 && sqlite3_column_type(statement, 7) != SQLITE_NULL)
+        if (format >= 5 && sqlite3_column_type(statement, 7) != SQLITE_NULL)
             manifest["history"].back()["boundary_translation"] =
                 nlohmann::json::parse(sqlite_text(statement, 7));
+        if (format >= 6 && sqlite3_column_type(statement, 8) != SQLITE_NULL)
+            manifest["history"].back()["boundary_transform"] =
+                nlohmann::json::parse(sqlite_text(statement, 8));
     }
     sqlite3_finalize(statement);
 
@@ -766,6 +773,84 @@ void test_translation_proof_storage_and_forgery_rejection() {
     rewrite_logical_digest(downgraded);
     require_error([&] { (void)ProjectStore::load(downgraded); }, StorageErrorCode::integrity_failure,
                   "downgraded history must fail the unchanged raw receipt guard");
+}
+
+void test_transform_proof_storage_and_forgery_rejection() {
+    TempDirectory temp;
+    const auto file = temp.path / "transform-v6.psketch";
+    auto document = Document::create({translation_fixture()});
+    sketch::PlanarTransform transform;
+    transform.pivot = {1, 0.5};
+    transform.rotation_radians = 0.4;
+    transform.flip_horizontal = true;
+    transform.offset = {3, -2};
+    document.apply(sketch::TransformBoundary{document.revision(), {"translated-boundary", transform}});
+    const auto transformed = document.snapshot().entities();
+    // A later historical command must not reduce the required format to v5.
+    document.apply(sketch::TranslateBoundary{document.revision(), {"translated-boundary", {8, -4}}});
+    const auto moved = document.snapshot().entities();
+    document.undo(document.revision());
+    require(ProjectStore::required_format_version(document.snapshot()) == 6,
+            "mixed transform/translation history must require v6");
+    auto saved = ProjectStore::save(file, document.snapshot());
+    auto loaded = ProjectStore::load(file);
+    const auto snapshot = loaded.document.snapshot();
+    require(snapshot.entities() == transformed && loaded.document.can_redo(),
+            "v6 reopen must preserve undone state and redo");
+    require(snapshot.history().at(1).boundary_transform &&
+                !snapshot.history().at(1).boundary_translation &&
+                snapshot.history().at(2).boundary_translation &&
+                !snapshot.history().at(2).boundary_transform,
+            "mixed history must retain distinct command proofs");
+    const auto wire = sketch::encode_boundary_transform(*snapshot.history().at(1).boundary_transform);
+    require(wire == sketch::encode_boundary_transform({"translated-boundary", transform}),
+            "transform fields must survive SQLite storage");
+    loaded.document.redo(loaded.document.revision());
+    require(loaded.document.snapshot().entities() == moved, "v6 redo must restore exact entities");
+    loaded.document.undo(loaded.document.revision());
+    loaded.document.undo(loaded.document.revision());
+    require(loaded.document.snapshot().entities() == document.snapshot().history().front().entities,
+            "v6 transform must undo after reopen");
+    saved = ProjectStore::save(file, document.snapshot(),
+        SaveOptions{.expected_destination_sha256 = saved.file_sha256});
+    require(saved.backup_path && ProjectStore::load(*saved.backup_path).document.can_redo(),
+            "v6 replacement must preserve a loadable verified backup");
+
+    auto wrong_version = wire; wrong_version["version"] = 2;
+    auto wrong_type = wire; wrong_type["flip_horizontal"] = 1;
+    auto extra = wire; extra["extra"] = true;
+    auto invalid_coordinate = wire; invalid_coordinate["pivot"][0] = nullptr;
+    auto duplicate = wire.dump(); duplicate.insert(1, "\"version\":1,");
+    const std::vector<std::string> malformed{wrong_version.dump(), wrong_type.dump(), extra.dump(),
+        invalid_coordinate.dump(), duplicate};
+    for (std::size_t index = 0; index < malformed.size(); ++index) {
+        const auto tampered = temp.path / ("bad-transform-" + std::to_string(index) + ".psketch");
+        std::filesystem::copy_file(file, tampered);
+        execute_sql(tampered, "UPDATE revisions SET boundary_transform_json='" + malformed[index] + "' WHERE revision=1");
+        require_error([&] { (void)ProjectStore::load(tampered); }, StorageErrorCode::integrity_failure,
+                      "malformed or duplicate transform proof must reject");
+    }
+    auto forged = wire; forged["rotation_radians"] = 0.8;
+    for (const auto& replacement : {std::string("NULL"), "'" + forged.dump() + "'"}) {
+        const auto tampered = temp.path / (replacement == "NULL" ? "missing-transform.psketch" : "forged-transform.psketch");
+        std::filesystem::copy_file(file, tampered);
+        execute_sql(tampered, "UPDATE revisions SET boundary_transform_json=" + replacement + " WHERE revision=1");
+        rewrite_logical_digest(tampered);
+        require_error([&] { (void)ProjectStore::load(tampered); }, StorageErrorCode::integrity_failure,
+                      "a recomputed digest must not authorize a missing or forged transform");
+    }
+    const auto downgraded = temp.path / "downgraded-transform.psketch";
+    std::filesystem::copy_file(file, downgraded);
+    execute_sql(downgraded, "ALTER TABLE revisions DROP COLUMN boundary_transform_json; "
+        "PRAGMA user_version=5; UPDATE metadata SET value='5' WHERE key='format_version'");
+    rewrite_logical_digest(downgraded);
+    require_error([&] { (void)ProjectStore::load(downgraded); }, StorageErrorCode::integrity_failure,
+                  "downgraded transform history must fail replay");
+    const auto overloaded = temp.path / "oversized-transform.psketch";
+    std::filesystem::copy_file(file, overloaded);
+    execute_sql(overloaded, "UPDATE revisions SET boundary_transform_json=CAST(zeroblob(67108865) AS TEXT) WHERE revision=1");
+    require_error([&] { (void)ProjectStore::load(overloaded); }, StorageErrorCode::resource_limit,
+                  "transform proof bytes must count toward preallocation budget");
 }
 
 void test_boundary_authoring_receipt_after_v2_entity_requires_v3() {
@@ -1409,6 +1494,7 @@ int main() {
         test_reopen_preserves_redo_navigation_and_named_abandoned_branch();
         test_impossible_history_is_rejected_after_digest_recomputation();
         test_translation_proof_storage_and_forgery_rejection();
+        test_transform_proof_storage_and_forgery_rejection();
         test_boundary_authoring_receipt_after_v2_entity_requires_v3();
         test_unqualified_authoring_property_collisions_remain_v1_and_opaque();
         test_unknown_boundary_model_collision_requires_v2();

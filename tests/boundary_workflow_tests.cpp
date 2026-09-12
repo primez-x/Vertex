@@ -1090,6 +1090,44 @@ void test_receipt_boundary_offset_copy() {
         window.document().snapshot().entities() == shifted_rotated.entities() &&
         window.undoCommand() && window.document().snapshot().entities() == rotated_state.entities(),
         "composed receipt transforms must survive storage and undo exactly");
+    require(window.selectEntity(QString::fromStdString(boundary_id)) &&
+        window.transformSelectedBoundary("90",true,false,"3 m","-1 m",false),
+        "an original measured boundary must rotate and reflect in place");
+    const auto in_place = window.document().snapshot();
+    require(in_place.history().back().boundary_transform.has_value() &&
+        !in_place.history().back().boundary_translation.has_value() &&
+        in_place.history().back().boundary_transform->boundary_id == boundary_id &&
+        window.selectedEntityId().toStdString() == boundary_id,
+        "in-place rotation must preserve selection and retain its own transform proof");
+    const auto in_place_record = sketch::decode_boundary_receipt_envelope(
+        in_place.entities().at(boundary_id).properties.at("boundary_authoring"));
+    require(in_place_record.record->edges == original_record.record->edges &&
+        in_place_record.record->transforms.size() == 1,
+        "in-place rotation must preserve original receipt inputs and topology identities");
+    const auto operation = in_place.history().back().boundary_transform->transform;
+    for (const auto& [id, before] : rotated_state.entities()) {
+        if (id == boundary_id) continue;
+        const auto& after = in_place.entities().at(id);
+        if (before.type != "dimension" ||
+            before.properties.at("target").at("entity_id") != boundary_id) {
+            require(after == before, "in-place rotation must preserve unrelated objects");
+            continue;
+        }
+        const auto before_dimension = sketch::decode_boundary_dimension_entity(before);
+        const auto after_dimension = sketch::decode_boundary_dimension_entity(after);
+        const auto expected = sketch::transform_point(before_dimension.dimension->text_position, operation);
+        require(after_dimension.dimension->id == id &&
+            after_dimension.dimension->text_position.x == expected.x &&
+            after_dimension.dimension->text_position.y == expected.y &&
+            after_dimension.dimension->segment_id == before_dimension.dimension->segment_id,
+            "in-place rotation must transform dimension placement while retaining its identity and target");
+    }
+    require_both_canvas_labels(window,12);
+    require(window.saveProjectAs(path) && window.openProject(path) &&
+        window.document().snapshot().entities() == in_place.entities() &&
+        window.undoCommand() && window.document().snapshot().entities() == rotated_state.entities() &&
+        window.redoCommand() && window.document().snapshot().entities() == in_place.entities(),
+        "in-place rotation and dimensions must save, reopen, undo and redo exactly");
 }
 
 void install_test_font() {

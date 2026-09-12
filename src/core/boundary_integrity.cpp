@@ -2,6 +2,7 @@
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_receipt.hpp"
+#include "sketch/boundary_transform.hpp"
 #include <set>
 
 namespace sketch {
@@ -165,6 +166,47 @@ std::map<std::string, Entity, std::less<>> translated_boundary_entities(
         auto moved = *dimension.dimension;
         moved.text_position.x += translation.offset.x;
         moved.text_position.y += translation.offset.y;
+        entity = encode_boundary_dimension_entity(moved, &entity);
+    }
+    return result;
+}
+
+std::map<std::string, Entity, std::less<>> transformed_boundary_entities(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const BoundaryTransformation& transformation) {
+    validate_boundary_transform(transformation);
+    const auto found = source.find(transformation.boundary_id);
+    if (found == source.end()) throw std::invalid_argument("Transform boundary does not exist");
+    const auto& original = found->second;
+    auto boundary = decode_identified_boundary_entity(original);
+    if (!original.properties.contains("boundary_authoring"))
+        throw std::invalid_argument("Explicit boundary transform requires construction receipts");
+    const auto decoded = decode_boundary_receipt_envelope(original.properties.at("boundary_authoring"));
+    if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+    if (const auto unsupported = validate_boundary_integrity(source))
+        throw std::invalid_argument(*unsupported);
+    const auto& transform = transformation.transform;
+    if (transform.rotation_radians == 0 && !transform.flip_horizontal && !transform.flip_vertical &&
+        transform.offset.x == 0 && transform.offset.y == 0) return source;
+    const auto transformed = transformed_boundary_construction(*decoded.record, transform);
+    const auto replay = replay_boundary_construction(transformed);
+    boundary.segments.clear();
+    for (const auto& edge : replay.edges)
+        boundary.segments.push_back({edge.segment_id, edge.start_vertex_id, edge.end_vertex_id, edge.segment});
+    auto metadata = original;
+    metadata.properties.erase("boundary_authoring");
+    auto encoded = encode_identified_boundary_entity(boundary, &metadata);
+    encoded.properties["boundary_authoring"] = encode_boundary_receipt_envelope(transformed);
+    auto result = source;
+    result.at(transformation.boundary_id) = std::move(encoded);
+    for (auto& [id, entity] : result) {
+        (void)id;
+        if (entity.type != "dimension") continue;
+        const auto dimension = decode_boundary_dimension_entity(entity);
+        if (!dimension.supported()) throw std::invalid_argument(dimension.unsupported_reason);
+        if (dimension.dimension->boundary_id != transformation.boundary_id) continue;
+        auto moved = *dimension.dimension;
+        moved.text_position = transform_point(moved.text_position, transform);
         entity = encode_boundary_dimension_entity(moved, &entity);
     }
     return result;

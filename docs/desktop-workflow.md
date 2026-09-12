@@ -396,7 +396,11 @@ boundary and dimension identities, records the translation intent in history,
 and reconstructs the entire expected state during restore. Ordinary entity
 edits still cannot rewrite construction inputs. These projects use format 5
 to retain the intent through save, recovery, and exchange.
-Receipt-bound in-place rotation/reflection remain unfinished. Existing schema
+Receipt-backed in-place rotation and reflection use a separate typed transform
+command. It retains the original local measurements and appends a schema-3
+transform frame, moving the boundary and its dimension labels atomically.
+Format 6 retains the transform proof for deterministic restoration, recovery,
+and exchange. Existing schema
 1/2 in-place offsets retain their historical replay rules and can reject when
 translation cannot preserve the exact closure vector. Copies use schema 3 to
 avoid rewriting that vector, and subsequent offsets append another transform.

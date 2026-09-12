@@ -961,7 +961,7 @@
         "tests/desktop_smoke.cpp",
         "docs/desktop-workflow.md"
       ],
-      "implementation_note": "The desktop exposes rotation around a deterministic bounding-box pivot, independent horizontal/vertical reflection, and offsets for identified closed boundaries through one undoable Document command; clone-safe metadata is preserved. References, annotations, architectural objects, typed-link propagation, and production qualification remain open."
+      "implementation_note": "The desktop exposes rotation around a deterministic bounding-box pivot, independent horizontal/vertical reflection, and offsets for identified closed boundaries. Receipt-backed copies and in-place transforms preserve original local construction inputs, topology identities where retained, metadata, and attached dimension placement through atomic commands. Typed transform history uses format 6 for deterministic reconstruction across save, recovery, and exchange. Broader object coverage, linked-relationship propagation, and production qualification remain open."
     },
     {
       "id": "APX-EDIT-003",

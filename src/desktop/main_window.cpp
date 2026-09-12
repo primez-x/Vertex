@@ -1949,20 +1949,21 @@ public:
         const auto bounds = boundary_bounds(boundary_geometry(transformed));
         const Vec2 pivot{std::midpoint(bounds.minimum.x, bounds.maximum.x),
                          std::midpoint(bounds.minimum.y, bounds.maximum.y)};
+        const Vec2 offset{parse_offset(offset_x), parse_offset(offset_y)};
+        if (!std::isfinite(offset.x) || !std::isfinite(offset.y))
+            throw std::invalid_argument("Boundary offsets must be finite.");
+        if (!clone && original.properties.contains("boundary_authoring")) {
+            if (radians != 0.0 || flip_horizontal || flip_vertical)
+                return {TransformBoundary{source.revision(),
+                    {original.id, PlanarTransform{pivot,radians,flip_horizontal,flip_vertical,offset}}}, original.id};
+            return {TranslateBoundary{source.revision(), {original.id, offset}}, original.id};
+        }
         if (std::abs(radians) > 0.0)
             transformed = rotate_boundary(transformed, pivot, radians);
         if (flip_horizontal)
             transformed = flip_boundary(transformed, pivot, BoundaryFlipAxis::vertical);
         if (flip_vertical)
             transformed = flip_boundary(transformed, pivot, BoundaryFlipAxis::horizontal);
-        const Vec2 offset{parse_offset(offset_x), parse_offset(offset_y)};
-        if (!std::isfinite(offset.x) || !std::isfinite(offset.y))
-            throw std::invalid_argument("Boundary offsets must be finite.");
-        if (!clone && original.properties.contains("boundary_authoring")) {
-            if (radians != 0.0 || flip_horizontal || flip_vertical)
-                throw std::invalid_argument("Construction-bound rotation and reflection require receipt migration.");
-            return {TranslateBoundary{source.revision(), {original.id, offset}}, original.id};
-        }
         for (auto& edge : transformed.segments) {
             edge.segment.start.x += offset.x;
             edge.segment.start.y += offset.y;

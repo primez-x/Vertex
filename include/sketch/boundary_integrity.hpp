@@ -2,6 +2,9 @@
 #include "sketch/document.hpp"
 
 namespace sketch {
+[[nodiscard]] std::map<std::string, Entity, std::less<>> transformed_boundary_entities(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const BoundaryTransformation& transformation);
 // Reconstruct an entire entity state from a qualified receipt-backed offset.
 // Preserves identities and all unrelated entities; invalid derivations throw.
 [[nodiscard]] std::map<std::string, Entity, std::less<>> translated_boundary_entities(

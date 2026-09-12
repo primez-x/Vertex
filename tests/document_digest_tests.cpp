@@ -1,5 +1,6 @@
 #include "sketch/document_digest.hpp"
 #include "sketch/boundary_translation.hpp"
+#include "sketch/boundary_transform.hpp"
 
 #include <functional>
 #include <iostream>
@@ -200,6 +201,37 @@ void test_translation_proof_digest_and_codec() {
         require(rejected, "malformed proof must not silently coerce fields");
     }
 }
+void test_transform_proof_digest_and_codec() {
+    auto snapshot = Document::create().snapshot();
+    auto& proof = const_cast<std::vector<RevisionRecord>&>(snapshot.history()).front().boundary_transform;
+    const BoundaryTransformation original{"boundary-1", {{1, 2}, 0.4, true, false, {3, 4}}};
+    proof = original;
+    const auto digest = document_authoring_source_digest_v1(snapshot);
+    const auto snapshot_digest = document_snapshot_digest(snapshot);
+    const auto wire = encode_boundary_transform(original);
+    require(encode_boundary_transform(decode_boundary_transform(wire)) == wire, "transform codec must roundtrip");
+    const std::vector<std::function<void(BoundaryTransformation&)>> mutations{
+        [](auto& p) { p.boundary_id = "boundary-2"; },
+        [](auto& p) { p.transform.pivot.x += 1; },
+        [](auto& p) { p.transform.pivot.y += 1; },
+        [](auto& p) { p.transform.rotation_radians += 1; },
+        [](auto& p) { p.transform.flip_horizontal = false; },
+        [](auto& p) { p.transform.flip_vertical = true; },
+        [](auto& p) { p.transform.offset.x += 1; },
+        [](auto& p) { p.transform.offset.y += 1; }};
+    for (const auto& mutate : mutations) {
+        proof = original; mutate(*proof);
+        require(document_authoring_source_digest_v1(snapshot) != digest &&
+                document_snapshot_digest(snapshot) != snapshot_digest,
+                "both document digest surfaces must bind every transform field");
+    }
+    for (const auto& key : {"version", "boundary_id", "pivot", "rotation_radians", "flip_horizontal", "flip_vertical", "offset"}) {
+        auto missing = wire; missing.erase(key);
+        bool rejected = false;
+        try { (void)decode_boundary_transform(missing); } catch (const std::invalid_argument&) { rejected = true; }
+        require(rejected, "transform decoder must require every field");
+    }
+}
 } // namespace
 
 int main() {
@@ -210,6 +242,7 @@ int main() {
         test_digest_format_vectors();
         test_historical_authoring_bindings();
         test_translation_proof_digest_and_codec();
+        test_transform_proof_digest_and_codec();
         std::cout << "Document digest tests passed\n";
         return 0;
     } catch (const std::exception& error) {

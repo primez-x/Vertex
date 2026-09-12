@@ -99,7 +99,17 @@ struct TranslateBoundary {
     BoundaryTranslation translation;
 };
 
-using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary>;
+struct BoundaryTransformation {
+    std::string boundary_id;
+    PlanarTransform transform;
+};
+
+struct TransformBoundary {
+    Revision expected_revision = 0;
+    BoundaryTransformation transformation;
+};
+
+using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary, TransformBoundary>;
 
 enum class DocumentErrorCode {
     stale_revision,
@@ -136,6 +146,7 @@ struct RevisionRecord {
     std::vector<Revision> undo_stack;
     std::vector<Revision> redo_stack;
     std::optional<BoundaryTranslation> boundary_translation;
+    std::optional<BoundaryTransformation> boundary_transform;
 };
 
 class DocumentSnapshot {

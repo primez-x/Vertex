@@ -1,4 +1,4 @@
-# Property Studio project formats v1 through v5
+# Property Studio project formats v1 through v6
 
 Property Studio projects are standalone SQLite files containing one immutable logical
 document snapshot and the complete command history known when that snapshot was captured.
@@ -11,8 +11,8 @@ dimension in retained history requires v2, including an undone or deleted
 identified boundary. Both SQLite `user_version` and `metadata.format_version`
 must agree, and the logical digest includes that version. The reader accepts
 v1 legacy history, v2 identity history, v3 construction-receipt history and v5
-translation history, plus v4/v5 archives through recovery-aware APIs.
-Under-versioned semantic data and versions above 5 reject. Legacy-only history
+translation history and v6 transform history, plus v4/v5/v6 archives through
+recovery-aware APIs. Under-versioned semantic data and versions above 6 reject. Legacy-only history
 is still written as v1. Unknown boundary entity
 versions in v2 remain preserved read-only. See `boundary-entity-format.md`.
 Version 2 also recognizes `dimension` entities. Their supported segment-length
@@ -88,6 +88,7 @@ identifier-shaped user data. An empty transform array is valid. Schema v1/v2
 reject the transforms field and retain their original encodings; new drawing
 sessions still emit v2. The SQLite receipt storage minimum remains format 3;
 explicit in-place translation history independently requires format 5.
+Explicit in-place rotation/reflection history requires format 6.
 
 Point construction copies the finite endpoint directly into a straight segment
 after checking its exact start and minimum chord length. It performs no angle
@@ -278,6 +279,27 @@ proof on its command revision rather than copying it onto navigation records.
 JSON/assets extraction uses exchange version 2 when proofs occur and emits
 `boundary_translation` on the corresponding revision; proof-free extraction
 remains exchange version 1.
+
+Version 6 is required when any retained revision contains an explicit boundary
+transform proof, including undone commands and abandoned branches. It retains
+the v5 translation column and adds nullable `TEXT`
+`revisions.boundary_transform_json`. A transform proof has exactly `version`
+(integer 1), `boundary_id`, `pivot`, `rotation_radians`, `flip_horizontal`,
+`flip_vertical`, and `offset`. Points are finite two-number arrays in metres,
+the angle is finite radians, and both flip fields are Booleans. Unknown versions,
+duplicate or extra keys, and malformed values reject. SQL NULL is absence;
+JSON null is invalid. A revision cannot contain both proof types.
+
+Transform proofs participate in the same digests, resource budgets, complete
+state reconstruction, and navigation restrictions as translation proofs.
+The command preserves identities and local receipt inputs, appends an ordered
+schema-3 frame, and transforms attached dimension positions. Unrelated entities
+and assets must remain identical. A v6 archive is distinguished by its recovery
+table, as in v5; document-only APIs cannot discard that ledger. Histories without
+transform proofs keep their earlier minimum format and digest representation.
+JSON/assets extraction uses exchange version 3 when a transform proof occurs
+and emits `boundary_transform` on its command revision. Translation-only and
+proof-free histories retain exchange versions 2 and 1, respectively.
 
 ## Save and replacement protocol
 
