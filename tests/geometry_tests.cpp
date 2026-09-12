@@ -326,7 +326,55 @@ void test_validation_reports_crossings_tangencies_and_overlaps() {
 
 }  // namespace
 
+void test_analytic_bounds() {
+    using namespace sketch;
+    const auto line=segment_bounds({{4,-3},{-2,5},0});
+    require(line.minimum.x==-2 && line.minimum.y==-3 && line.maximum.x==4 && line.maximum.y==5,
+        "line bounds must include both endpoints");
+    const auto lower=boundary_bounds({{{-2,0},{2,0},std::numbers::pi},{{2,0},{-2,0},0}});
+    require_near(lower.minimum.y,-2,1e-12,"semicircle lower extremum");
+    require_near(lower.maximum.y,0,1e-12,"semicircle chord upper bound");
+    const auto shallow=segment_bounds({{-500000,0},{500000,0},4e-12});
+    require_near(shallow.minimum.y,-5e-7,1e-18,"shallow arc height must survive radius cancellation");
+    const auto shallow_vertical=segment_bounds({{100,-500000},{100,500000},-4e-12});
+    require_near(shallow_vertical.minimum.x,100-5e-7,1e-12,"vertical shallow arc must retain its small extremum");
+    for (const double direction : {-1.0,1.0}) {
+        const auto major=segment_bounds({{1,0},{0,-direction},direction*1.5*std::numbers::pi});
+        require_near(major.minimum.x,-1,1e-12,"major arc left extremum");
+        require_near(major.minimum.y,-1,1e-12,"major arc lower extremum");
+        require_near(major.maximum.x,1,1e-12,"major arc right extremum");
+        require_near(major.maximum.y,1,1e-12,"major arc upper extremum");
+    }
+    constexpr double start=0.123, sweep=4.321, radius=3;
+    const Vec2 center{5,-7};
+    const Segment arc{{center.x+radius*std::cos(start),center.y+radius*std::sin(start)},
+        {center.x+radius*std::cos(start+sweep),center.y+radius*std::sin(start+sweep)},sweep};
+    const auto partial=segment_bounds(arc);
+    require_near(partial.minimum.x,2,1e-12,"partial major arc left bound");
+    require_near(partial.maximum.y,-4,1e-12,"partial major arc upper bound");
+    require_near(partial.maximum.x,arc.start.x,1e-12,"excluded cardinal angle must not enlarge bounds");
+    require_near(partial.minimum.y,arc.end.y,1e-12,"excluded lower extremum must not enlarge bounds");
+    const auto reversed=segment_bounds({arc.end,arc.start,-sweep});
+    require_near(reversed.minimum.x,partial.minimum.x,1e-12,"reversing an arc retains lower X bound");
+    require_near(reversed.maximum.y,partial.maximum.y,1e-12,"reversing an arc retains upper Y bound");
+    for(int index=0;index<=1000;++index) {
+        const auto angle=start+sweep*index/1000.0;
+        const Vec2 point{center.x+radius*std::cos(angle),center.y+radius*std::sin(angle)};
+        require(point.x>=partial.minimum.x-1e-12 && point.x<=partial.maximum.x+1e-12 &&
+            point.y>=partial.minimum.y-1e-12 && point.y<=partial.maximum.y+1e-12,
+            "analytic bounds must contain the entire represented arc");
+    }
+    bool rejected=false;
+    try { (void)boundary_bounds({}); } catch(const std::invalid_argument&) { rejected=true; }
+    require(rejected,"empty geometry must not invent a bounding box");
+    rejected=false;
+    try { (void)segment_bounds({{0,0},{1,1},std::numeric_limits<double>::infinity()}); }
+    catch(const std::invalid_argument&) { rejected=true; }
+    require(rejected,"invalid arc values must reject bounds");
+}
+
 int main() {
+    test_analytic_bounds();
     test_linear_boundaries();
     test_arcs_have_analytic_length_and_area();
     test_area_and_length_are_transform_invariant();

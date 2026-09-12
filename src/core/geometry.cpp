@@ -5,6 +5,7 @@
 #include <cmath>
 #include <limits>
 #include <numbers>
+#include <numeric>
 #include <stdexcept>
 #include <utility>
 
@@ -551,6 +552,66 @@ Segment arc_from_start_tangent(Vec2 start, double tangent_radians, double arc_le
     auto result = arc_from_chord_angle(start, end, sweep_radians);
     if (std::abs(segment_length(result) - arc_length_metres) > std::max(1e-7, arc_length_metres * 1e-12)) {
         throw std::invalid_argument("tangent arc loses the entered length at these coordinate magnitudes");
+    }
+    return result;
+}
+
+Bounds2 segment_bounds(const Segment& segment) {
+    require_finite_segment(segment);
+    Bounds2 result{{std::min(segment.start.x, segment.end.x), std::min(segment.start.y, segment.end.y)},
+                   {std::max(segment.start.x, segment.end.x), std::max(segment.start.y, segment.end.y)}};
+    if (segment.sweep_radians == 0.0) return result;
+    const auto arc = arc_geometry(segment);
+    const auto chord = segment.end - segment.start;
+    const auto chord_length = length(chord);
+    const Vec2 normal{-chord.y / chord_length, chord.x / chord_length};
+    const Vec2 midpoint{std::midpoint(segment.start.x, segment.end.x),
+                        std::midpoint(segment.start.y, segment.end.y)};
+    const auto center_distance = chord_length / (2.0 * std::tan(segment.sweep_radians / 2.0));
+    const auto half = std::abs(segment.sweep_radians) / 2.0;
+    const auto small_sine = half <= std::numbers::pi / 2.0 ?
+        std::sin(half / 2.0) : std::cos(half / 2.0);
+    const auto extremum = [&](double middle, double component, double other, double direction) {
+        const auto offset = component * center_distance;
+        if (offset * direction < 0.0) {
+            // Avoid subtracting nearly equal radius/center terms for shallow
+            // arcs. 1-|normal| = other^2/(1+|normal|), and
+            // 1-|cos(half)| uses the smaller sine/cosine half-angle square.
+            const auto deficit = arc.radius * other * other / (1.0 + std::abs(component)) +
+                arc.radius * std::abs(component) * small_sine * (2.0 * small_sine);
+            return middle + direction * deficit;
+        }
+        return (middle + offset) + direction * arc.radius;
+    };
+    constexpr std::array<Vec2, 4> directions{{{1, 0}, {0, 1}, {-1, 0}, {0, -1}}};
+    for (std::size_t index = 0; index < directions.size(); ++index) {
+        const auto angle = static_cast<double>(index) * std::numbers::pi / 2.0;
+        const auto travel = arc.sweep > 0.0 ? positive_angle(angle - arc.start_angle) :
+                                             positive_angle(arc.start_angle - angle);
+        if (travel > std::abs(arc.sweep)) continue;
+        const auto direction = directions[index];
+        const Vec2 point{direction.x == 0.0 ? arc.center.x :
+                            extremum(midpoint.x, normal.x, normal.y, direction.x),
+                         direction.y == 0.0 ? arc.center.y :
+                            extremum(midpoint.y, normal.y, normal.x, direction.y)};
+        if (!finite(point)) throw std::invalid_argument("arc bounds exceed numeric range");
+        result.minimum.x = std::min(result.minimum.x, point.x);
+        result.minimum.y = std::min(result.minimum.y, point.y);
+        result.maximum.x = std::max(result.maximum.x, point.x);
+        result.maximum.y = std::max(result.maximum.y, point.y);
+    }
+    return result;
+}
+
+Bounds2 boundary_bounds(const Boundary& boundary) {
+    if (boundary.empty()) throw std::invalid_argument("empty boundary has no bounds");
+    auto result = segment_bounds(boundary.front());
+    for (std::size_t index = 1; index < boundary.size(); ++index) {
+        const auto bounds = segment_bounds(boundary[index]);
+        result.minimum.x = std::min(result.minimum.x, bounds.minimum.x);
+        result.minimum.y = std::min(result.minimum.y, bounds.minimum.y);
+        result.maximum.x = std::max(result.maximum.x, bounds.maximum.x);
+        result.maximum.y = std::max(result.maximum.y, bounds.maximum.y);
     }
     return result;
 }

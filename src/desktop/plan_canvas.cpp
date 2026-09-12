@@ -13,6 +13,8 @@
 #include <cmath>
 #include <limits>
 #include <numbers>
+#include <numeric>
+#include <stdexcept>
 
 namespace sketch::desktop {
 namespace {
@@ -225,9 +227,13 @@ std::optional<std::pair<Vec2, Vec2>> PlanCanvas::contentBounds() const {
         for (const auto& segment : entity.segments) {
             include(segment.start);
             include(segment.end);
-            if (const auto arc = arc_info(segment)) {
-                for (int index = 1; index < 32; ++index)
-                    include(arc_point(segment, *arc, static_cast<double>(index) / 32.0));
+            try {
+                const auto bounds = segment_bounds(segment);
+                include(bounds.minimum);
+                include(bounds.maximum);
+            } catch (const std::invalid_argument&) {
+                // Invalid retained presentation geometry still contributes its
+                // finite endpoints; semantic diagnostics belong to the model.
             }
         }
     }
@@ -276,7 +282,7 @@ void PlanCanvas::fitView() {
     const auto width = std::max(maximum.x - minimum.x, 0.1);
     const auto height = std::max(maximum.y - minimum.y, 0.1);
     const auto padding = std::max(width, height) * 0.12 + 0.25;
-    m_view_center = {(minimum.x + maximum.x) * 0.5, (minimum.y + maximum.y) * 0.5};
+    m_view_center = {std::midpoint(minimum.x, maximum.x), std::midpoint(minimum.y, maximum.y)};
     m_scale = std::clamp(std::min((width + padding * 2.0) > 0.0
                                       ? std::max(1.0, static_cast<double>(size().width())) /
                                             (width + padding * 2.0)
@@ -324,44 +330,9 @@ void PlanCanvas::renderSceneAt(QPainter& painter, const QRectF& viewport, double
 }
 
 Vec2 PlanCanvas::contentCenter() const noexcept {
-    Vec2 minimum{std::numeric_limits<double>::max(), std::numeric_limits<double>::max()};
-    Vec2 maximum{std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest()};
-    bool has_content = false;
-    const auto include = [&](Vec2 point) {
-        if (!std::isfinite(point.x) || !std::isfinite(point.y)) return;
-        minimum.x = std::min(minimum.x, point.x);
-        minimum.y = std::min(minimum.y, point.y);
-        maximum.x = std::max(maximum.x, point.x);
-        maximum.y = std::max(maximum.y, point.y);
-        has_content = true;
-    };
-    for (const auto& entity : m_entities) {
-        for (const auto& segment : entity.segments) {
-            include(segment.start);
-            include(segment.end);
-            if (const auto arc = arc_info(segment)) {
-                for (int index = 1; index < 32; ++index)
-                    include(arc_point(segment, *arc, static_cast<double>(index) / 32.0));
-            }
-        }
-    }
-    for (const auto& label : m_labels) include(label.position);
-    for (const auto& reference : m_references) {
-        if (reference.visible && !reference.image.isNull() &&
-            std::isfinite(reference.metres_per_source_unit) &&
-            reference.metres_per_source_unit > 0.0 && std::isfinite(reference.scale) &&
-            reference.scale > 0.0) {
-            const auto width = reference.image.width() * reference.metres_per_source_unit *
-                               reference.scale;
-            const auto height = reference.image.height() * reference.metres_per_source_unit *
-                                reference.scale;
-            include({reference.position.x - width * 0.5, reference.position.y - height * 0.5});
-            include({reference.position.x + width * 0.5, reference.position.y + height * 0.5});
-        }
-    }
-    return has_content ? Vec2{(minimum.x + maximum.x) * 0.5,
-                              (minimum.y + maximum.y) * 0.5}
-                       : m_view_center;
+    const auto bounds = contentBounds();
+    return bounds ? Vec2{std::midpoint(bounds->first.x, bounds->second.x),
+                         std::midpoint(bounds->first.y, bounds->second.y)} : m_view_center;
 }
 
 void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewport,
@@ -373,56 +344,14 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     }
     auto scale = explicit_scale.value_or(m_scale);
     auto view_center = explicit_center.value_or(m_view_center);
-    if (!explicit_scale.has_value() && fit_to_content &&
-        (!m_entities.empty() || !m_labels.empty() ||
-         std::any_of(m_references.begin(), m_references.end(), [](const auto& reference) {
-            return reference.visible && !reference.image.isNull();
-        }))) {
-        Vec2 minimum{std::numeric_limits<double>::max(), std::numeric_limits<double>::max()};
-        Vec2 maximum{std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest()};
-        bool has_content = false;
-        const auto include = [&](Vec2 point) {
-            if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
-                return;
-            }
-            minimum.x = std::min(minimum.x, point.x);
-            minimum.y = std::min(minimum.y, point.y);
-            maximum.x = std::max(maximum.x, point.x);
-            maximum.y = std::max(maximum.y, point.y);
-            has_content = true;
-        };
-        for (const auto& entity : m_entities) {
-            for (const auto& segment : entity.segments) {
-                include(segment.start);
-                include(segment.end);
-                if (const auto arc = arc_info(segment)) {
-                    for (int index = 1; index < 32; ++index) {
-                        include(arc_point(segment, *arc, static_cast<double>(index) / 32.0));
-                    }
-                }
-            }
-        }
-        for (const auto& label : m_labels) {
-            include(label.position);
-        }
-        for (const auto& reference : m_references) {
-            if (reference.visible && !reference.image.isNull() &&
-                std::isfinite(reference.metres_per_source_unit) &&
-                reference.metres_per_source_unit > 0.0 && std::isfinite(reference.scale) &&
-                reference.scale > 0.0) {
-                const auto width = reference.image.width() *
-                                   reference.metres_per_source_unit * reference.scale;
-                const auto height = reference.image.height() *
-                                    reference.metres_per_source_unit * reference.scale;
-                include({reference.position.x - width * 0.5, reference.position.y - height * 0.5});
-                include({reference.position.x + width * 0.5, reference.position.y + height * 0.5});
-            }
-        }
-        if (has_content) {
+    if (!explicit_scale.has_value() && fit_to_content) {
+        if (const auto bounds = contentBounds()) {
+            const auto minimum = bounds->first;
+            const auto maximum = bounds->second;
             const auto width = std::max(maximum.x - minimum.x, 0.1);
             const auto height = std::max(maximum.y - minimum.y, 0.1);
             const auto padding = std::max(width, height) * 0.12 + 0.25;
-            view_center = {(minimum.x + maximum.x) * 0.5, (minimum.y + maximum.y) * 0.5};
+            view_center = {std::midpoint(minimum.x, maximum.x), std::midpoint(minimum.y, maximum.y)};
             scale = std::min(viewport.width() / (width + padding * 2.0),
                              viewport.height() / (height + padding * 2.0));
             scale = std::clamp(scale, output_minimum_scale, maximum_scale);

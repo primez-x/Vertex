@@ -226,7 +226,7 @@ public:
     [[nodiscard]] bool setSelectedCalculationRule(bool include_in_building,
                                                    bool include_in_living);
     // Applies an analytic transform to a selected identified boundary or wall.
-    // Pivot: boundary endpoint bounds center or wall endpoint midpoint. Offsets
+    // Pivot: analytical boundary bounds center or wall endpoint midpoint. Offsets
     // use the current input unit. Wall clones include hosted openings; originals
     // remain unchanged. The name is retained for existing callers.
     [[nodiscard]] bool transformSelectedBoundary(const QString& rotation_degrees,

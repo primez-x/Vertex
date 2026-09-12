@@ -22,6 +22,17 @@ struct Segment {
 
 using Boundary = std::vector<Segment>;
 
+struct Bounds2 {
+    Vec2 minimum;
+    Vec2 maximum;
+};
+
+// Axis-aligned geometric bounds, including circular-arc extrema analytically.
+// Invalid/unrepresentable segments and empty boundaries throw. Computing bounds
+// does not establish closure or absence of intersections.
+[[nodiscard]] Bounds2 segment_bounds(const Segment& segment);
+[[nodiscard]] Bounds2 boundary_bounds(const Boundary& boundary);
+
 enum class BoundaryIssue {
     empty_boundary,
     non_finite,

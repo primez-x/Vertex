@@ -1945,25 +1945,9 @@ public:
                                   m_metric_units ? Unit::metre : Unit::foot).metres;
         };
         const auto radians = parse_degrees(rotation_degrees);
-        const Vec2 pivot = [&] {
-            double min_x = std::numeric_limits<double>::infinity();
-            double min_y = std::numeric_limits<double>::infinity();
-            double max_x = -std::numeric_limits<double>::infinity();
-            double max_y = -std::numeric_limits<double>::infinity();
-            for (const auto& edge : transformed.segments) {
-                for (const auto point : {edge.segment.start, edge.segment.end}) {
-                    min_x = std::min(min_x, point.x);
-                    min_y = std::min(min_y, point.y);
-                    max_x = std::max(max_x, point.x);
-                    max_y = std::max(max_y, point.y);
-                }
-            }
-            if (!std::isfinite(min_x) || !std::isfinite(min_y) ||
-                !std::isfinite(max_x) || !std::isfinite(max_y)) {
-                throw std::invalid_argument("Boundary has no finite geometry to transform.");
-            }
-            return Vec2{(min_x + max_x) * 0.5, (min_y + max_y) * 0.5};
-        }();
+        const auto bounds = boundary_bounds(boundary_geometry(transformed));
+        const Vec2 pivot{std::midpoint(bounds.minimum.x, bounds.maximum.x),
+                         std::midpoint(bounds.minimum.y, bounds.maximum.y)};
         if (std::abs(radians) > 0.0)
             transformed = rotate_boundary(transformed, pivot, radians);
         if (flip_horizontal)

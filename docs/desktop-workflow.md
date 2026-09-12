@@ -348,10 +348,12 @@ and the complete production constraint workflow are still required.
 
 The **Transform selection** command is available from **More** and the command
 palette when a supported identified closed boundary or wall is selected. It applies an
-analytic rotation around the boundary endpoint-bounds center, independent
+analytic rotation around the complete boundary-bounds center, independent
 horizontal/vertical reflections, and X/Y offsets in the active input units.
 The UI's horizontal flip reflects X and its vertical flip reflects Y for both
 walls and boundaries; the core geometry API names the reflection axis instead.
+Circular-arc extrema contribute to the boundary pivot and canvas fit; endpoint
+boxes and sampled strokes are not used as substitutes for curved extents.
 Newly authored boundaries receive stable segment and vertex identities before
 they enter the document. Applying a transform then updates the same typed
 boundary entity through one revision-checked Document command, preserving

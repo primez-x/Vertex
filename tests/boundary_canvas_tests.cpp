@@ -489,6 +489,20 @@ void test_arc_render_orientation() {
     }
 }
 
+void test_analytic_arc_fit_bounds() {
+    sketch::desktop::PlanCanvas canvas;
+    const auto end=std::numbers::pi+0.3;
+    canvas.setEntities({{"arc","wall",{{{std::cos(-0.1),std::sin(-0.1)},
+        {std::cos(end),std::sin(end)},std::numbers::pi+0.4}},0.1,false}});
+    const auto center=canvas.contentCenter();
+    require(std::abs(center.x)<1e-12 && std::abs(center.y-(1-std::sin(0.3))/2)<1e-12,
+        "canvas fitting must use analytical extrema instead of sampled arc points");
+    canvas.resize(800,600);
+    canvas.fitView();
+    require(std::abs(canvas.viewCenter().x-center.x)<1e-12 && std::abs(canvas.viewCenter().y-center.y)<1e-12,
+        "interactive fit and content-center queries must use identical geometry bounds");
+}
+
 int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QApplication application(argc, argv);
@@ -507,6 +521,7 @@ int main(int argc, char** argv) {
         test_overview_map_navigation();
         test_site_scale_fit();
         test_arc_render_orientation();
+        test_analytic_arc_fit_bounds();
         std::cout << "Boundary canvas tests passed\n";
         return 0;
     } catch (const std::exception& error) {

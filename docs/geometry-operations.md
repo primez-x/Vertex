@@ -12,6 +12,14 @@ codec validation, including exact endpoint joins, supported identity syntax,
 unique topology identities, finite analytical geometry, and intersection checks.
 Failures throw `std::invalid_argument`; the source remains unchanged.
 
+`segment_bounds` and `boundary_bounds` include endpoints and the cardinal
+extrema that lie on each directed circular arc. They accept open segment sets
+without certifying enclosure or topology. Empty boundaries and invalid numeric
+geometry reject instead of inventing extents. Shallow-arc extrema use stable
+half-angle differences to avoid losing the curve height through subtraction of
+nearly equal center and radius values. The desktop uses these shared bounds for
+boundary transform pivots and fitting retained canvas geometry.
+
 For nearly parallel straight segments, overlapping axis-aligned bounds alone
 do not imply an uncertain intersection. The validator can prove separation
 when both endpoints lie strictly on the same side of the other segment's line,

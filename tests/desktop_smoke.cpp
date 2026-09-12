@@ -1096,6 +1096,16 @@ void test_boundary_transform_workflow(const QString& capture_directory) {
         dialog->reject();
     });
     action->trigger();
+    desktop::MainWindow curved_window;
+    const auto curved_id=curved_window.createBoundary(
+        Boundary{{{-2,0},{2,0},std::acos(-1.0)},{{2,0},{-2,0},0}},"measurement");
+    require(!curved_id.isEmpty() && curved_window.selectEntity(curved_id) &&
+        curved_window.transformSelectedBoundary("180",false,false,"0","0",false),
+        "semicircular boundary must support rotation");
+    const auto curved=decode_identified_boundary_entity(curved_window.document().snapshot().entities().at(curved_id.toStdString()));
+    require(std::abs(curved.segments.front().segment.start.x-2.0)<1e-9 &&
+        std::abs(curved.segments.front().segment.start.y+2.0)<1e-9,
+        "curved-boundary pivot must include arc extrema rather than chord endpoints alone");
 }
 
 void test_organization_context() {
