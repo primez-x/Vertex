@@ -6208,6 +6208,11 @@ public:
                 // Geometry editors must preserve metadata they do not understand.
                 candidate = *original;
                 candidate.properties.update(canonical.properties);
+                if (candidate.type == "roof") {
+                    if (!canonical.properties.contains("roof_openings")) candidate.properties.erase("roof_openings");
+                    if (canonical.extensions.contains("roof_opening_input"))
+                        candidate.extensions["roof_opening_input"] = canonical.extensions.at("roof_opening_input");
+                }
                 if (entries) candidate.properties["quantity_entries"] = *entries;
             } else {
                 if (snapshot.entities().contains(candidate.id))
@@ -6890,6 +6895,109 @@ public:
             setError(QStringLiteral("Roof dimensions: %1").arg(QString::fromUtf8(error.what())));
             return false;
         }
+    }
+
+    void editRoofOpenings() {
+        const auto context = captureModalContext();
+        const auto original = selectedEntity();
+        if (!original || original->type != "roof") return;
+        QDialog dialog(owner);
+        dialog.setObjectName("roofOpeningsDialog");
+        dialog.setWindowTitle("Roof openings");
+        dialog.resize(600, 360);
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* help = new QLabel("Vertical through-openings. X/Y are local to the roof footprint; width/depth are horizontal distances.", &dialog);
+        help->setWordWrap(true);
+        layout->addWidget(help);
+        auto* table = new QTableWidget(0, 4, &dialog);
+        table->setObjectName("roofOpeningsTable");
+        table->setHorizontalHeaderLabels({"X", "Y", "Width", "Depth"});
+        table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+        table->setSelectionBehavior(QAbstractItemView::SelectRows);
+        layout->addWidget(table);
+        const std::array<const char*, 4> keys{"x_m", "y_m", "width_m", "depth_m"};
+        const auto append = [&](const json& entry) {
+            const auto row = table->rowCount();
+            table->insertRow(row);
+            for (int column = 0; column < 4; ++column) {
+                const auto value = entry.at(keys[column]).get<double>();
+                const auto text = QString::number(value, 'g', 17) + " m";
+                auto* item = new QTableWidgetItem(text);
+                item->setData(Qt::UserRole, QString::fromStdString(entry.at("id").get<std::string>()));
+                item->setData(Qt::UserRole + 1, text);
+                item->setData(Qt::UserRole + 2, value);
+                table->setItem(row, column, item);
+            }
+        };
+        for (const auto& entry : original->properties.value("roof_openings", json::array())) append(entry);
+        auto* error = new QLabel(&dialog);
+        error->setObjectName("roofOpeningsError");
+        error->setWordWrap(true);
+        layout->addWidget(error);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
+        auto* add = buttons->addButton("Add opening", QDialogButtonBox::ActionRole);
+        add->setObjectName("addRoofOpening");
+        auto* remove = buttons->addButton("Remove selected", QDialogButtonBox::ActionRole);
+        remove->setObjectName("removeRoofOpening");
+        layout->addWidget(buttons);
+        QObject::connect(add, &QPushButton::clicked, &dialog, [&] {
+            if (table->rowCount() >= 256) { error->setText("A roof supports at most 256 openings."); return; }
+            append({{"id", QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString()},
+                    {"x_m", 0.5}, {"y_m", 0.5}, {"width_m", 1.0}, {"depth_m", 1.0}});
+        });
+        QObject::connect(remove, &QPushButton::clicked, &dialog, [&] {
+            const auto rows = table->selectionModel()->selectedRows();
+            std::vector<int> indices;
+            for (const auto& row : rows) indices.push_back(row.row());
+            std::sort(indices.rbegin(), indices.rend());
+            for (const auto row : indices) table->removeRow(row);
+        });
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+            try {
+                if (!modalContextUnchanged(context)) throw std::invalid_argument("Roof editing context changed. Reopen the openings editor.");
+                auto candidate = *original;
+                auto entries = json::array();
+                auto receipts = json::object();
+                const auto prior_inputs = original->extensions.find("roof_opening_input");
+                if (prior_inputs != original->extensions.end() && prior_inputs->is_object() &&
+                    prior_inputs->value("version", json{}) == 1 && prior_inputs->contains("entries") &&
+                    prior_inputs->at("entries").is_object()) receipts = prior_inputs->at("entries");
+                for (int row = 0; row < table->rowCount(); ++row) {
+                    const auto id = table->item(row, 0)->data(Qt::UserRole).toString().toStdString();
+                    json entry{{"id", id}};
+                    for (int column = 0; column < 4; ++column) {
+                        const auto* item = table->item(row, column);
+                        const auto text = item->text().trimmed();
+                        if (text == item->data(Qt::UserRole + 1).toString()) {
+                            entry[keys[column]] = item->data(Qt::UserRole + 2).toDouble();
+                        } else {
+                            const auto quantity = parse_quantity(text.toStdString(), context.metric_units ? Unit::metre : Unit::foot);
+                            entry[keys[column]] = quantity.metres;
+                            receipts[id][keys[column]] = {{"original_expression", quantity.original_expression},
+                                {"default_unit", context.metric_units ? "m" : "ft"},
+                                {"exact_metres", {{"numerator", quantity.exact_metres.numerator},
+                                                  {"denominator", quantity.exact_metres.denominator}}}};
+                        }
+                    }
+                    entries.push_back(std::move(entry));
+                }
+                if (entries == original->properties.value("roof_openings", json::array())) { dialog.accept(); return; }
+                for (auto receipt = receipts.begin(); receipt != receipts.end();) {
+                    const bool retained = std::any_of(entries.begin(), entries.end(), [&](const auto& entry) {
+                        return entry.at("id") == receipt.key();
+                    });
+                    if (!retained) receipt = receipts.erase(receipt); else ++receipt;
+                }
+                if (entries.empty()) { candidate.properties.erase("roof_openings"); candidate.properties["version"] = 1; }
+                else { candidate.properties["roof_openings"] = entries; candidate.properties["version"] = 2; }
+                candidate.extensions["roof_opening_input"] = {{"version", 1}, {"entries", receipts}};
+                if (commitBuildingObject(candidate, context.revision, true).isEmpty())
+                    throw std::invalid_argument(m_last_error.toStdString());
+                dialog.accept();
+            } catch (const std::exception& failure) { error->setText(QString::fromUtf8(failure.what())); }
+        });
+        dialog.exec();
     }
 
     bool editSelectedBuildingDimensions() {
@@ -10903,6 +11011,10 @@ private:
         m_apply_roof_properties_button->setObjectName(QStringLiteral("applyRoofProperties"));
         m_apply_roof_properties_button->setAccessibleName(QStringLiteral("Apply roof dimensions"));
         roof_properties_form->addRow(m_apply_roof_properties_button);
+        auto* roof_openings = new QPushButton("Openings…", m_roof_properties_group);
+        roof_openings->setObjectName("editRoofOpenings");
+        roof_properties_form->addRow(roof_openings);
+        QObject::connect(roof_openings, &QPushButton::clicked, owner, [this] { editRoofOpenings(); });
         m_building_properties_group = new QGroupBox(QStringLiteral("Object dimensions"), inspector_body);
         m_building_properties_group->setObjectName(QStringLiteral("buildingDimensions"));
         auto* building_form_layout = new QFormLayout(m_building_properties_group);

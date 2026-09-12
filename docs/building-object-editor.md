@@ -124,6 +124,14 @@ and permit an exactly square footprint to create a pyramid. Invalid hip
 footprints are rejected without changing the document. The group is hidden
 for unsupported forms and non-roof selections.
 
+**Openings…** opens an editable table of roof-local X/Y and horizontal width/
+depth. Add and remove rows, then Save to commit the complete set through the
+normal building command. Invalid geometry and changed editing contexts leave
+the project untouched and show an inline error. Cancel discards pending edits.
+Roof dimension edits preserve existing openings and revalidate them against the
+changed footprint. See [the format contract](building-entity-format.md) for the
+coordinate convention, geometric clearance, schema version and input receipts.
+
 Pitch previews update while typing, using canonical measurements for untouched
 fields and parsed quantities for changed fields. Invalid or stale input clears
 the pitch and shows a field-specific message in `roofPreviewError`; correcting

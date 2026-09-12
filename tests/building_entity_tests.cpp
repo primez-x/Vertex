@@ -316,6 +316,21 @@ void test_empty_object_id_uses_entity_factory_id() {
 
 }  // namespace
 
+void test_roof_opening_schema() {
+    sketch::HipRoof roof{"opened", {0,0,3}, 0, 8,6,1.5,std::atan(0.5),0.2,0.15,
+        {{"skylight", -0.5,-0.5,1,1}}};
+    const auto entity = sketch::encode_building_entity(roof);
+    require(entity.properties.at("version") == 2, "openings require a schema older readers reject");
+    const auto decoded = sketch::decode_building_entity(entity);
+    require(sketch::encode_building_entity(decoded).properties == entity.properties,
+        "roof openings roundtrip exactly");
+    auto downgraded = entity;
+    downgraded.properties["version"] = 1;
+    bool rejected = false;
+    try { (void)sketch::decode_building_entity(downgraded); } catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected, "version one cannot silently accept opening geometry");
+}
+
 int main() {
     try {
         test_all_forms_roundtrip_to_canonical_entities();
@@ -323,6 +338,7 @@ int main() {
         test_unknown_versions_forms_and_metadata_are_handled_strictly();
         test_integer_stairs_optional_landing_and_geometry_validation();
         test_empty_object_id_uses_entity_factory_id();
+        test_roof_opening_schema();
         std::cout << "Building entity codec tests passed\n";
         return 0;
     } catch (const std::exception& error) {

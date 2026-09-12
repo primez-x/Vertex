@@ -336,6 +336,8 @@ public:
                 auto merged = *original_entity;
                 merged.type = canonical.type;
                 merged.properties.update(canonical.properties);
+                if (merged.type == "roof" && !canonical.properties.contains("roof_openings"))
+                    merged.properties.erase("roof_openings");
                 apply_quantity_entries(merged.properties, canonical.properties);
                 candidate_entity = std::move(merged);
             } else {
@@ -1294,7 +1296,8 @@ private:
                                    : std::atan(*rise / *run);
             return SlopedRoofPanel{
                 original_entity.has_value() ? original_entity->id : std::string{},
-                *base, *orientation, *run, *span, *rise, pitch, *overhang, *thickness};
+                *base, *orientation, *run, *span, *rise, pitch, *overhang, *thickness,
+                fallback ? fallback->openings : std::vector<RoofOpening>{}};
         }
         if (form == "gable_roof" || form == "hip_roof") {
             const auto read_roof = [&]<typename Roof>() -> std::optional<BuildingObject> {
@@ -1329,7 +1332,8 @@ private:
                                        : std::atan(*rise / (*span * 0.5));
                 return Roof{
                     original_entity.has_value() ? original_entity->id : std::string{},
-                    *base, *orientation, *length, *span, *rise, pitch, *overhang, *thickness};
+                    *base, *orientation, *length, *span, *rise, pitch, *overhang, *thickness,
+                    fallback ? fallback->openings : std::vector<RoofOpening>{}};
             };
             return form == "hip_roof" ? read_roof.template operator()<HipRoof>()
                                       : read_roof.template operator()<GableRoof>();

@@ -378,6 +378,35 @@ void test_hip_roofs() {
     }
 }
 
+void test_roof_openings() {
+    using namespace sketch;
+    HipRoof hip{"cut-hip", {2, 3, 4}, 0.4, 8, 6, 1.5, std::atan(0.5), 0.2, 0.15};
+    const auto original = make_hip_roof(hip);
+    hip.openings = {{"skylight", -0.5, -0.5, 1.0, 1.0}};
+    const auto cut = make_hip_roof(hip);
+    valid_solid(cut, "hip opening must retain valid roof solids");
+    near(solid_volume(original) - solid_volume(cut), 0.15 * std::sqrt(1.25), 1e-7,
+        "hip opening removes projected area times vertical thickness across ridge");
+    GableRoof gable{"cut-gable", {2, 3, 4}, 0.4, 8, 6, 1.5, std::atan(0.5), 0.2, 0.15};
+    const auto full_gable = make_gable_roof(gable);
+    gable.openings = hip.openings;
+    near(solid_volume(full_gable) - solid_volume(make_gable_roof(gable)),
+         0.15 * std::sqrt(1.25), 1e-7, "gable ridge opening cut volume");
+    SlopedRoofPanel panel{"cut-panel", {2, 3, 4}, 0.4, 6, 4, 1.5, std::atan(0.25), 0.2, 0.15};
+    const auto full_panel = make_sloped_roof_panel(panel);
+    panel.openings = {{"skylight", 1, 1, 1, 1}};
+    near(solid_volume(full_panel) - solid_volume(make_sloped_roof_panel(panel)),
+         0.15 * std::sqrt(1.0625), 1e-7, "sloped panel opening cut volume");
+    hip.openings.push_back({"overlapping", 0, 0, 1, 1});
+    rejected([&] { (void)make_hip_roof(hip); }, "overlapping openings rejected");
+    hip.openings = {{"outside", 20, 20, 1, 1}};
+    rejected([&] { (void)make_hip_roof(hip); }, "outside openings rejected");
+    hip.openings = {{"edge", -4, -3, 1, 1}};
+    rejected([&] { (void)make_hip_roof(hip); }, "edge notches are not through-openings");
+    hip.openings = {{"bad", 0, 0, 0, 1}};
+    rejected([&] { (void)make_hip_roof(hip); }, "zero opening width rejected");
+}
+
 int main() {
     try {
         test_vertical_columns_are_real_solids();
@@ -385,6 +414,7 @@ int main() {
         test_stairs_have_step_volume_and_optional_landing();
         test_roofs_are_planar_thickened_panels();
         test_hip_roofs();
+        test_roof_openings();
         std::cout << "Building object solid tests passed\n";
         return 0;
     } catch (const std::exception& error) {

@@ -15,9 +15,33 @@ The canonical entity types are:
 | `stair` | `straight_stair_flight` |
 | `roof` | `sloped_roof_panel`, `gable_roof`, `hip_roof` |
 
-Every encoded properties object contains integer `version: 1` and a string
+Every encoded properties object contains integer `version` and a string
 `form`.  Required lengths use an `_m` suffix, angles use `_rad`, and vectors
 are exact arrays of three finite numbers.  The remaining canonical fields are:
+
+Version 1 remains the format for objects without roof openings. Version 2 is
+reserved for roofs carrying `roof_openings`, an array of at most 256 objects
+with `id`, `x_m`, `y_m`, `width_m`, and `depth_m`. IDs must be unique and obey
+the building ID syntax. Version 1 with this reserved field is rejected;
+readers limited to version 1 reject a roof with openings instead of losing
+its cuts. Removing all openings through the editor returns the roof to
+version 1 and removes the field. A version-2 empty array can be decoded and
+normalizes to the uncut version-1 representation when edited.
+
+Opening X/Y coordinates are in the roof's horizontal local frame: the panel
+origin is its un-overhung lower-left footprint corner, while gable/hip origins
+are the footprint centre. Width and depth are horizontal projected distances;
+the cut is vertical through the entire solid, including across a ridge.
+Openings cannot overlap or touch and must stay inside the un-overhung footprint
+with clearance of the roof thickness plus geometry tolerance on every edge.
+These are geometric through-openings, not hosted skylight products, curbs,
+flashing, framing, or structural checks.
+
+The desktop **Openings** editor applies all rows atomically. Changed coordinate
+expressions, default units and exact metre rationals are retained by opening ID
+under `extensions.roof_opening_input` (version 1, `entries`). These receipts are
+historical input metadata, never authoritative geometry. Removing an opening
+removes its receipt; untouched canonical coordinates retain their precision.
 
 ```json
 {

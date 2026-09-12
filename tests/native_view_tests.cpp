@@ -306,6 +306,8 @@ int main(int argc,char** argv) {
                         std::atan(0.5),0.25,0.15},
                     sketch::HipRoof{"native-hip", {0,0,3},0.0,8,6,1.5,
                         std::atan(0.5),0.25,0.15},
+                    sketch::HipRoof{"native-hip-opening", {0,0,3},0.0,8,6,1.5,
+                        std::atan(0.5),0.25,0.15, {{"skylight", -1,-1,2,2}}},
                 };
                 for (const auto& object : building_objects) {
                     auto entity=sketch::encode_building_entity(object);

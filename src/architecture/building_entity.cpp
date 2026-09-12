@@ -118,15 +118,15 @@ std::size_t required_riser_count(const Json& properties) {
     return static_cast<std::size_t>(unsigned_value);
 }
 
-void require_schema_version(const Json& properties) {
+void require_schema_version(const Json& properties, bool roof) {
     const auto& value = required_field(properties, "version");
     if (!value.is_number_integer() && !value.is_number_unsigned()) {
         invalid("Building entity version must be an integer");
     }
     try {
         const bool supported = value.is_number_unsigned()
-            ? value.get<std::uint64_t>() == static_cast<std::uint64_t>(schema_version)
-            : value.get<std::int64_t>() == schema_version;
+            ? (value.get<std::uint64_t>() == 1 || (roof && value.get<std::uint64_t>() == 2))
+            : (value.get<std::int64_t>() == 1 || (roof && value.get<std::int64_t>() == 2));
         if (!supported) {
             invalid("Unsupported building entity schema version");
         }
@@ -221,6 +221,35 @@ Entity encode_one(const StairFlight& object, const Json& metadata) {
     return create_entity("stair", object, std::move(properties), metadata);
 }
 
+void encode_roof_openings(Json& properties, const std::vector<RoofOpening>& openings) {
+    if (openings.empty()) return;
+    properties["version"] = 2;
+    properties["roof_openings"] = Json::array();
+    for (const auto& opening : openings) {
+        validate_id(opening.id, "Roof opening ID");
+        properties["roof_openings"].push_back({{"id", opening.id}, {"x_m", opening.x},
+            {"y_m", opening.y}, {"width_m", opening.width}, {"depth_m", opening.depth}});
+    }
+}
+
+std::vector<RoofOpening> decode_roof_openings(const Json& properties) {
+    if (properties.at("version") == 1) {
+        if (properties.contains("roof_openings")) invalid("Roof openings require building schema version 2");
+        return {};
+    }
+    const auto& entries = required_field(properties, "roof_openings");
+    if (!entries.is_array() || entries.size() > 256) invalid("Roof openings must be an array of at most 256 entries");
+    std::vector<RoofOpening> result;
+    for (const auto& entry : entries) {
+        require_object(entry, "Roof opening");
+        const auto id = string_field(required_field(entry, "id"), "id");
+        validate_id(id, "Roof opening ID");
+        result.push_back({id, required_number(entry, "x_m"), required_number(entry, "y_m"),
+            required_number(entry, "width_m"), required_number(entry, "depth_m")});
+    }
+    return result;
+}
+
 Entity encode_one(const SlopedRoofPanel& object, const Json& metadata) {
     auto properties = base_properties("sloped_roof_panel");
     properties["base_position_m"] = vec3_json(object.base_position);
@@ -231,6 +260,7 @@ Entity encode_one(const SlopedRoofPanel& object, const Json& metadata) {
     properties["pitch_rad"] = object.pitch_radians;
     properties["overhang_m"] = object.overhang;
     properties["thickness_m"] = object.thickness;
+    encode_roof_openings(properties, object.openings);
     return create_entity("roof", object, std::move(properties), metadata);
 }
 
@@ -244,6 +274,7 @@ Entity encode_one(const GableRoof& object, const Json& metadata) {
     properties["pitch_rad"] = object.pitch_radians;
     properties["overhang_m"] = object.overhang;
     properties["thickness_m"] = object.thickness;
+    encode_roof_openings(properties, object.openings);
     return create_entity("roof", object, std::move(properties), metadata);
 }
 
@@ -257,6 +288,7 @@ Entity encode_one(const HipRoof& object, const Json& metadata) {
     properties["pitch_rad"] = object.pitch_radians;
     properties["overhang_m"] = object.overhang;
     properties["thickness_m"] = object.thickness;
+    encode_roof_openings(properties, object.openings);
     return create_entity("roof", object, std::move(properties), metadata);
 }
 
@@ -328,6 +360,7 @@ BuildingObject decode_roof(const Entity& entity, const Json& properties,
             .pitch_radians = required_number(properties, "pitch_rad"),
             .overhang = required_number(properties, "overhang_m"),
             .thickness = required_number(properties, "thickness_m"),
+            .openings = decode_roof_openings(properties),
         };
     }
     if (form == "gable_roof") {
@@ -341,6 +374,7 @@ BuildingObject decode_roof(const Entity& entity, const Json& properties,
             .pitch_radians = required_number(properties, "pitch_rad"),
             .overhang = required_number(properties, "overhang_m"),
             .thickness = required_number(properties, "thickness_m"),
+            .openings = decode_roof_openings(properties),
         };
     }
     if (form == "hip_roof") {
@@ -354,6 +388,7 @@ BuildingObject decode_roof(const Entity& entity, const Json& properties,
             .pitch_radians = required_number(properties, "pitch_rad"),
             .overhang = required_number(properties, "overhang_m"),
             .thickness = required_number(properties, "thickness_m"),
+            .openings = decode_roof_openings(properties),
         };
     }
     invalid("Unsupported roof building form: " + std::string(form));
@@ -385,7 +420,7 @@ BuildingObject decode_building_entity(const Entity& entity) {
         invalid("Unsupported building entity type: " + entity.type);
     }
     require_object(entity.properties, "Building entity properties");
-    require_schema_version(entity.properties);
+    require_schema_version(entity.properties, entity.type == "roof");
     const auto form = form_field(entity.properties);
 
     BuildingObject object;

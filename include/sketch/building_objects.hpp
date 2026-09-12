@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace sketch {
 
@@ -80,6 +81,16 @@ struct StairFlight {
 // to it, and rise/pitch are both explicit and must agree.  Overhang extends
 // the panel by that horizontal distance on all four footprint edges.  The
 // returned prism thickness is measured normal to the sloped panel.
+// A vertical through-opening defined in the roof's horizontal local frame.
+// X/Y locate its lower-left corner; width/depth are horizontal projections.
+struct RoofOpening {
+    std::string id;
+    double x{};
+    double y{};
+    double width{};
+    double depth{};
+};
+
 struct SlopedRoofPanel {
     std::string id;
     Vec3 base_position{};
@@ -90,6 +101,7 @@ struct SlopedRoofPanel {
     double pitch_radians{};
     double overhang{};
     double thickness{};
+    std::vector<RoofOpening> openings;
 };
 
 [[nodiscard]] TopoDS_Shape make_sloped_roof_panel(const SlopedRoofPanel& panel);
@@ -111,6 +123,7 @@ struct GableRoof {
     double pitch_radians{};
     double overhang{};
     double thickness{};
+    std::vector<RoofOpening> openings;
 };
 
 [[nodiscard]] TopoDS_Shape make_gable_roof(const GableRoof& roof);
@@ -128,6 +141,7 @@ struct HipRoof {
     double pitch_radians{};
     double overhang{};
     double thickness{};
+    std::vector<RoofOpening> openings;
 };
 
 [[nodiscard]] TopoDS_Shape make_hip_roof(const HipRoof& roof);

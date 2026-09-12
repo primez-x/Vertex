@@ -3,6 +3,9 @@
 #include "sketch/architecture.hpp"
 
 #include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepAlgoAPI_Cut.hxx>
+#include <BRepBndLib.hxx>
+#include <Bnd_Box.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
@@ -24,6 +27,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <set>
 
 namespace sketch {
 namespace {
@@ -222,6 +226,55 @@ double checked_pitch_rise(double run, double rise, double pitch, const char* wha
     return rise / run;
 }
 
+TopoDS_Shape cut_roof_openings(TopoDS_Shape shape, const std::vector<RoofOpening>& openings,
+                               const Vec3& base, double orientation, double xmin, double ymin,
+                               double xmax, double ymax, double thickness) {
+    if (openings.empty()) return shape;
+    if (openings.size() > 256) throw std::invalid_argument("A roof supports at most 256 openings");
+    const auto frame = horizontal_frame(orientation, "Roof opening orientation is invalid");
+    std::set<std::string> identities;
+    Bnd_Box box;
+    BRepBndLib::Add(shape, box);
+    double bx0, by0, z0, bx1, by1, z1;
+    box.Get(bx0, by0, z0, bx1, by1, z1);
+    // Clearance keeps a hole away from the eave and the normal-offset underside.
+    const auto clearance = thickness + tolerance;
+    for (std::size_t i = 0; i < openings.size(); ++i) {
+        const auto& opening = openings[i];
+        if (opening.id.empty() || opening.id.size() > 128 || !identities.insert(opening.id).second)
+            throw std::invalid_argument("Roof opening IDs must be nonempty and unique");
+        finite_derived(opening.x, "Roof opening X must be finite");
+        finite_derived(opening.y, "Roof opening Y must be finite");
+        positive_dimension(opening.width, "Roof opening width must be positive");
+        positive_dimension(opening.depth, "Roof opening depth must be positive");
+        const auto right = opening.x + opening.width;
+        const auto top = opening.y + opening.depth;
+        if (opening.x < xmin + clearance || opening.y < ymin + clearance ||
+            right > xmax - clearance || top > ymax - clearance)
+            throw std::invalid_argument("Roof openings must remain inside the footprint with thickness clearance");
+        for (std::size_t j = 0; j < i; ++j) {
+            const auto& prior = openings[j];
+            if (opening.x <= prior.x + prior.width + tolerance && right >= prior.x - tolerance &&
+                opening.y <= prior.y + prior.depth + tolerance && top >= prior.y - tolerance)
+                throw std::invalid_argument("Roof openings must not overlap or touch");
+        }
+        const auto corner = local_point(point(base), frame.along, opening.x, frame.across,
+                                         opening.y, z0 - base.z - 1.0);
+        const auto tool = make_box(gp_Ax2(corner, gp_Dir(0, 0, 1), gp_Dir(frame.along)),
+            opening.width, opening.depth, z1 - z0 + 2.0, "Roof opening cutter failed");
+        const auto previous_volume = solid_volume(shape);
+        shape = build_solid([&] {
+            BRepAlgoAPI_Cut operation(shape, tool);
+            operation.Build();
+            if (!operation.IsDone()) throw std::invalid_argument("Roof opening cut failed");
+            return TopoDS_Shape(operation.Shape());
+        }, "Roof opening produced invalid geometry");
+        if (solid_volume(shape) >= previous_volume)
+            throw std::invalid_argument("Roof opening does not intersect the roof");
+    }
+    return shape;
+}
+
 }  // namespace
 
 TopoDS_Shape make_rectangular_column(const RectangularColumn& column) {
@@ -386,8 +439,9 @@ TopoDS_Shape make_sloped_roof_panel(const SlopedRoofPanel& panel) {
     const double normal_scale = std::sqrt(1.0 + slope * slope);
     finite_derived(normal_scale, "Roof panel slope is outside the supported range");
     const gp_Vec normal = (gp_Vec(0.0, 0.0, 1.0) - frame.along * slope) / normal_scale;
-    return make_prism(top, normal * (-panel.thickness),
-                      "Roof panel construction failed");
+    return cut_roof_openings(make_prism(top, normal * (-panel.thickness),
+                      "Roof panel construction failed"), panel.openings, panel.base_position,
+                      panel.orientation_radians, 0, 0, panel.run, panel.span, panel.thickness);
 }
 
 TopoDS_Shape make_gable_roof(const GableRoof& roof) {
@@ -459,7 +513,9 @@ TopoDS_Shape make_gable_roof(const GableRoof& roof) {
                                        "Left gable roof panel construction failed");
     const auto right_panel = make_prism(right_profile, frame.along * ridge_length,
                                         "Right gable roof panel construction failed");
-    return make_compound(left_panel, right_panel, "Gable roof construction failed");
+    return cut_roof_openings(make_compound(left_panel, right_panel, "Gable roof construction failed"),
+        roof.openings, roof.base_position, roof.orientation_radians,
+        -roof.length * 0.5, -half_span, roof.length * 0.5, half_span, roof.thickness);
 }
 
 TopoDS_Shape make_hip_roof(const HipRoof& roof) {
@@ -508,9 +564,10 @@ TopoDS_Shape make_hip_roof(const HipRoof& roof) {
         "West hip panel construction failed");
     const auto east_panel = make_prism({southeast, northeast, east_ridge}, offset,
         "East hip panel construction failed");
-    return make_compound(make_compound(south_panel, north_panel, "Hip side construction failed"),
+    return cut_roof_openings(make_compound(make_compound(south_panel, north_panel, "Hip side construction failed"),
         make_compound(west_panel, east_panel, "Hip end construction failed"),
-        "Hip roof construction failed");
+        "Hip roof construction failed"), roof.openings, roof.base_position, roof.orientation_radians,
+        -roof.length * 0.5, -roof.span * 0.5, roof.length * 0.5, roof.span * 0.5, roof.thickness);
 }
 
 }  // namespace sketch

@@ -42,6 +42,7 @@
 #include <QGroupBox>
 #include <QToolButton>
 #include <QTemporaryDir>
+#include <QTableWidget>
 #include <QStandardPaths>
 #include <QSplitter>
 #include <QTimer>
@@ -1110,6 +1111,80 @@ void test_contextual_building_dimension_inspector(const QString& capture_directo
     require(window.selectEntity({}) && group->isHidden(), "dimension inspector hides without an object selection");
 }
 
+void test_roof_opening_authoring(const QString& capture_directory) {
+    using namespace sketch;
+    desktop::MainWindow window;
+    const auto id = window.commitBuildingObject(encode_building_entity(HipRoof{
+        "opening-ui", {0,0,3}, 0, 8,6,1.5,std::atan(0.5),0.2,0.15}), window.document().revision());
+    require(!id.isEmpty() && window.selectEntity(id), "select roof for opening authoring");
+    const auto before = window.document().snapshot().entities().at(id.toStdString());
+    const auto revision = window.document().revision();
+    auto* command = window.findChild<QPushButton*>("editRoofOpenings");
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>("roofOpeningsDialog");
+        require(dialog, "opening editor opens");
+        auto* table = dialog->findChild<QTableWidget*>("roofOpeningsTable");
+        dialog->findChild<QPushButton*>("addRoofOpening")->click();
+        table->item(0, 0)->setText("50 m");
+        auto* save = dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Save);
+        save->click();
+        require(window.document().revision() == revision && !dialog->findChild<QLabel*>("roofOpeningsError")->text().isEmpty(),
+            "outside opening rejected without history");
+        table->item(0, 0)->setText("-0.5 m");
+        table->item(0, 1)->setText("-0.5 m");
+        save->click();
+    });
+    command->click();
+    const auto opened = window.document().snapshot().entities().at(id.toStdString());
+    require(window.document().revision() == revision + 1 && opened.properties.at("version") == 2 &&
+                opened.properties.at("roof_openings").size() == 1, "opening commits as one semantic edit");
+    const auto opening_id = opened.properties.at("roof_openings").at(0).at("id").get<std::string>();
+    require(opened.extensions.at("roof_opening_input").at("entries").at(opening_id).at("x_m").at("original_expression") == "-0.5 m",
+            "opening coordinate receipt reaches the document");
+    require(window.undoCommand() && window.document().snapshot().entities().at(id.toStdString()) == before &&
+                window.redoCommand(), "opening undo restores the uncut roof");
+    desktop::BuildingObjectDialog dimensions(opened, true);
+    dimensions.findChild<QLineEdit*>("buildingObjectThickness")->setText("0.2 m");
+    require(dimensions.submit() && dimensions.candidate()->properties.at("roof_openings") == opened.properties.at("roof_openings"),
+            "dimension editing preserves roof openings");
+    QTemporaryDir directory;
+    require(window.saveProjectAs(directory.filePath("roof-openings.bldproj")) &&
+                window.openProject(directory.filePath("roof-openings.bldproj")) &&
+                window.document().snapshot().entities().at(id.toStdString()) == opened,
+            "opening geometry and input metadata save/reopen exactly");
+    require(window.selectEntity(id), "reselect opened roof");
+    if (!capture_directory.isEmpty()) {
+        window.resize(1200, 850); window.show(); QApplication::processEvents(); window.fitView();
+        require(window.grab().save(capture_directory + "/roof-opening.png"), "roof opening plan capture");
+    }
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>("roofOpeningsDialog");
+        dialog->findChild<QTableWidget*>("roofOpeningsTable")->item(0, 0)->setText("0 m");
+        auto intervening = window.document().snapshot().entities().at(id.toStdString());
+        intervening.properties["intervening_metadata"] = true;
+        window.document().apply(ApplyEntityChanges{window.document().revision(),
+            {EntityChange::upsert(intervening)}, {}, "intervening roof edit"});
+        const auto stale_revision = window.document().revision();
+        dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Save)->click();
+        require(window.document().revision() == stale_revision &&
+                    !dialog->findChild<QLabel*>("roofOpeningsError")->text().isEmpty(),
+                "stale opening editor cannot overwrite an intervening edit");
+        dialog->reject();
+    });
+    command->click();
+    require(window.selectEntity(id), "refresh after stale opening edit");
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>("roofOpeningsDialog");
+        dialog->findChild<QTableWidget*>("roofOpeningsTable")->selectRow(0);
+        dialog->findChild<QPushButton*>("removeRoofOpening")->click();
+        dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Save)->click();
+    });
+    command->click();
+    const auto closed = window.document().snapshot().entities().at(id.toStdString());
+    require(closed.properties.at("version") == 1 && !closed.properties.contains("roof_openings"),
+            "removing the final opening restores an uncut version-one roof");
+}
+
 void test_hip_roof_authoring(const QString& capture_directory) {
     using namespace sketch;
     desktop::MainWindow window;
@@ -2142,6 +2217,7 @@ int main(int argc, char** argv) {
     test_contextual_building_dimension_inspector(field_ui_capture_directory);
     test_contextual_roof_dimension_inspector();
     test_hip_roof_authoring(field_ui_capture_directory);
+    test_roof_opening_authoring(field_ui_capture_directory);
     test_contextual_gable_roof_inspector(field_ui_capture_directory);
     test_survey_calculator(field_ui_capture_directory);
     test_survey_explicit_endpoint_closure();
