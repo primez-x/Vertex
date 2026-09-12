@@ -90,8 +90,14 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
     {
         sketch::desktop::MainWindow window;
         auto* toolbar = window.findChild<QToolBar*>(QStringLiteral("primaryToolbar"));
+            auto* more_tools = window.findChild<QToolButton*>(QStringLiteral("moreTools"));
+            auto* theme_menu = window.findChild<QToolButton*>(QStringLiteral("themeMenu"));
             require(toolbar != nullptr && toolbar->minimumHeight() == 20 && toolbar->maximumHeight() == 20 &&
-                    toolbar->iconSize() == QSize(12, 12) &&
+                    toolbar->toolButtonStyle() == Qt::ToolButtonIconOnly &&
+                    toolbar->iconSize() == QSize(14, 14) && more_tools && theme_menu &&
+                    more_tools->toolButtonStyle() == Qt::ToolButtonIconOnly &&
+                    theme_menu->toolButtonStyle() == Qt::ToolButtonIconOnly &&
+                    !more_tools->accessibleName().isEmpty() && !theme_menu->accessibleName().isEmpty() &&
                     window.findChild<QWidget*>(QStringLiteral("workspaceTabs")) != nullptr &&
                     window.findChild<QWidget*>(QStringLiteral("workspaceHeader")) == nullptr &&
                     window.findChild<QLabel*>(QStringLiteral("appMark")) == nullptr &&

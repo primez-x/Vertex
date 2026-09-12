@@ -2,10 +2,13 @@
 
 Property Studio uses a Windows desktop shell designed around the canvas rather
 than a legacy menu layout. The compact top toolbar keeps file, history,
-workspace, and command actions visible; secondary authoring and presentation
-commands live in the **More** menu so the primary row remains readable at 1366
-px. Project identity is represented by the native window title and its
-unsaved marker, leaving the canvas the first visible content below the toolbar.
+workspace, and command actions one click away in a single 20 px hit row. The
+primary commands use bundled icons with tooltips and accessible names; units,
+paper size, and architectural view remain short inline selectors. Secondary
+authoring and presentation commands live in the **More** menu so the primary
+row remains readable at 1366 px. Project identity is represented by the native
+window title and its unsaved marker, leaving the canvas the first visible
+content below the toolbar.
 
 Offline operation is a product guarantee and is not repeated as a persistent
 banner or badge in the drawing workspace.

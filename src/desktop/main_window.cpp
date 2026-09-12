@@ -8357,20 +8357,26 @@ private:
         toolbar->setObjectName(QStringLiteral("primaryToolbar"));
         toolbar->setMovable(false);
         toolbar->setFloatable(false);
-        toolbar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-        toolbar->setIconSize(QSize(12, 12));
+        // Keep the command strip a single compact hit row. Labels remain on
+        // the actions for menus, keyboard navigation, and screen readers;
+        // the primary row presents the bundled glyphs and exposes the label
+        // through the tooltip/status tip instead of spending vertical space
+        // on clipped text beside every icon.
+        toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        toolbar->setIconSize(QSize(14, 14));
         toolbar->setContentsMargins(0, 0, 0, 0);
         if (auto* toolbar_layout = toolbar->layout()) {
             toolbar_layout->setContentsMargins(0, 0, 0, 0);
             toolbar_layout->setSpacing(1);
         }
         // Keep the command strip compact so the canvas starts close to the
-        // window edge. The 12 px glyph plus the 16 px tool-button content
-        // leaves enough room for the bundled 10 pt UI font without clipping.
+        // window edge. A 14 px glyph plus the 18 px button content gives a
+        // reliable pointer target without creating a second header band.
         toolbar->setFixedHeight(20);
         const auto add_toolbar_action = [this, toolbar](const QString& label, const char* icon_paths) {
             auto* action = toolbar->addAction(modern_toolbar_icon(icon_paths), label);
             action->setToolTip(label);
+            action->setStatusTip(label);
             return action;
         };
         m_new_action = add_toolbar_action(QStringLiteral("New"), "<path d='M6 3h9l3 3v15H6z'/><path d='M15 3v5h5'/><path d='M9 13h6M12 10v6'/>");
@@ -8385,9 +8391,13 @@ private:
         m_measurement_action = toolbar->addAction(
             modern_toolbar_icon("<path d='M4 5h16v14H4z'/><path d='M8 9h8M8 13h5'/><path d='M17 17l3 3'/><path d='m17 17 2-2'/>"),
             QStringLiteral("Measurement"));
+        m_measurement_action->setToolTip(QStringLiteral("Measurement workspace (Ctrl+1)"));
+        m_measurement_action->setStatusTip(QStringLiteral("Measurement workspace (Ctrl+1)"));
         m_architectural_action = toolbar->addAction(
             modern_toolbar_icon("<path d='M4 20V9l8-5 8 5v11'/><path d='M8 20v-6h8v6'/><path d='M10 10h4'/>"),
             QStringLiteral("Architectural"));
+        m_architectural_action->setToolTip(QStringLiteral("Architectural workspace (Ctrl+2)"));
+        m_architectural_action->setStatusTip(QStringLiteral("Architectural workspace (Ctrl+2)"));
         toolbar->addSeparator();
         m_palette_action = add_toolbar_action(QStringLiteral("Commands"), "<path d='M5 5h5v5H5zM14 5h5v5h-5zM5 14h5v5H5zM14 14h5v5h-5z'/>");
         auto* shortcut_settings = add_toolbar_action(QStringLiteral("Shortcuts"), "<rect x='3' y='6' width='18' height='12' rx='2'/><path d='M7 10h2M11 10h2M15 10h2M7 14h10'/>");
@@ -8430,8 +8440,13 @@ private:
         QObject::connect(more_action, &QAction::triggered, owner, [this] { showShortcutSettings(); });
         auto* more_button = new QToolButton(toolbar);
         more_button->setObjectName(QStringLiteral("moreTools"));
-        more_button->setText(QStringLiteral("More"));
+        more_button->setIcon(modern_toolbar_icon("<path d='M5 7h14M5 12h14M5 17h14'/>"));
         more_button->setToolTip(QStringLiteral("Annotations, references, phases, sheets, and view settings"));
+        more_button->setStatusTip(QStringLiteral("Annotations, references, phases, sheets, and view settings"));
+        more_button->setAccessibleName(QStringLiteral("More tools"));
+        more_button->setAccessibleDescription(QStringLiteral(
+            "Open secondary authoring and presentation commands"));
+        more_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
         more_button->setMenu(more_menu);
         more_button->setPopupMode(QToolButton::InstantPopup);
         toolbar->addWidget(more_button);
@@ -8447,8 +8462,13 @@ private:
         add_theme_action(QStringLiteral("High contrast"), WorkspaceTheme::high_contrast);
         auto* theme_button = new QToolButton(toolbar);
         theme_button->setObjectName(QStringLiteral("themeMenu"));
-        theme_button->setText(QStringLiteral("Theme"));
+        theme_button->setIcon(modern_toolbar_icon(
+            "<circle cx='12' cy='12' r='4'/><path d='M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1'/>"));
         theme_button->setToolTip(QStringLiteral("Select light, dark, or high-contrast workspace theme"));
+        theme_button->setStatusTip(QStringLiteral("Select light, dark, or high-contrast workspace theme"));
+        theme_button->setAccessibleName(QStringLiteral("Theme"));
+        theme_button->setAccessibleDescription(QStringLiteral("Select the workspace color theme"));
+        theme_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
         theme_button->setMenu(theme_menu);
         theme_button->setPopupMode(QToolButton::InstantPopup);
         toolbar->addWidget(theme_button);

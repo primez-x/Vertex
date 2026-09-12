@@ -219,9 +219,11 @@
       "package": 5,
       "blocker": null,
       "implementation_sources": [
-        "src/desktop/main_window.cpp"
+        "src/desktop/main_window.cpp",
+        "tests/desktop_smoke.cpp",
+        "docs/workspace-ui.md"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "The desktop shell exposes pan, zoom, grid, and independent output controls; the primary toolbar is a fixed 20 px icon row with no redundant header band. Overview-map behavior, asynchronous navigation evidence, and the complete acceptance statement remain open."
     },
     {
       "id": "CORE-DOC-001",
@@ -928,9 +930,11 @@
       "package": 4,
       "blocker": null,
       "implementation_sources": [
-        "src/desktop/main_window.cpp"
+        "src/desktop/main_window.cpp",
+        "tests/desktop_smoke.cpp",
+        "docs/workspace-ui.md"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "The canvas-centered shell, compact tool rail, navigator, and contextual inspector are exercised by the desktop smoke workflow; the fixed toolbar keeps the canvas close to the window edge. Cursor-adjacent measurement and the complete acceptance statement remain open."
     },
     {
       "id": "APX-EDIT-002",
@@ -1951,7 +1955,7 @@
         "src/desktop/main_window.cpp",
         "src/visualization/native_model_view.cpp"
       ],
-      "implementation_note": "Plan/3D split and view tabs are implemented; saved workspaces and complete theme/field modes remain open."
+      "implementation_note": "Plan/3D split and view tabs are implemented; local saved workspace profiles now restore workspace, theme, units, grid/snap, view, page size, and visibility filters. Complete field-mode and layout acceptance remain open."
     },
     {
       "id": "UX-ACCESS-001",
