@@ -177,10 +177,27 @@ void run() {
     require(edited.supported() && edited.recovery.decoded->active == active &&
         edited.recovery.decoded->history->extensions == history.extensions,
         "edited archive preserves recovered input and history extensions");
-    require(reopened.openProject(qt_path(destination)), "edited recovery archive reopens");
+    std::error_code copy_error;
+    const auto independent_copy = directory / "independent-recovery.bldproj";
+    std::filesystem::copy_file(destination, independent_copy,
+        std::filesystem::copy_options::none, copy_error);
+    require(!copy_error, "recovery archive copy for independent reopen");
+    require(reopened.openProject(qt_path(destination)) && !reopened.document().dirty(),
+        "edited recovery archive reopens read-only beside its owner");
+    require(!reopened.document().is_editable() && !reopened.undoCommand(),
+        "second open keeps the owned recovery archive read-only");
+    require(reopened.openProject(qt_path(independent_copy)) && reopened.document().is_editable(),
+        "independent recovery archive reopens writable");
     require(reopened.undoCommand() && !reopened.document().snapshot().entities().contains(wall.toStdString()),
         "reopened recovery archive retains command undo");
     require(reopened.redoCommand() && reopened.saveProject(), "reopened recovery archive redoes and saves");
+    require(reopened.openProject(qt_path(independent_copy)),
+        "saved independent recovery archive reopens");
+    require(reopened.undoCommand() && !reopened.document().snapshot().entities().contains(wall.toStdString()),
+        "reopened recovery archive retains command undo after reload");
+    require(reopened.redoCommand() && reopened.saveProject(),
+        "reopened recovery archive redoes and saves after reload");
+    require(reopened.createNewProject(), "release independent recovery ownership");
     desktop::MainWindow lifecycle;
     lifecycle.document().mark_saved(lifecycle.document().revision());
     require(lifecycle.openProject(qt_path(source)), "open lifecycle fixture");
@@ -218,6 +235,7 @@ void run() {
 
     const auto legacy = directory / "legacy.bldproj";
     require(seed.saveProjectAs(qt_path(legacy)), "legacy save remains supported");
+    require(seed.createNewProject(), "release legacy source ownership");
     desktop::MainWindow legacy_window;
     legacy_window.document().mark_saved(legacy_window.document().revision());
     require(legacy_window.openProject(qt_path(legacy)), "legacy load remains supported");
@@ -240,8 +258,8 @@ void run() {
     {
         desktop::MainWindow autosaved;
         autosaved.document().mark_saved(autosaved.document().revision());
-        require(autosaved.openProject(qt_path(destination)), "open automatic recovery fixture");
-        const auto source_hash = ProjectStore::file_sha256(destination);
+        require(autosaved.openProject(qt_path(independent_copy)), "open automatic recovery fixture");
+        const auto source_hash = ProjectStore::file_sha256(independent_copy);
         const auto saved_marker = autosaved.document().snapshot().saved_revision_optional();
         require(!autosaved.createStraightWall({0, 3}, {4, 3}).isEmpty(), "edit automatic recovery fixture");
         wait_until([&] {
@@ -283,7 +301,8 @@ void run() {
         require(document_authoring_source_digest_v1(recovered.archive->document()) ==
             document_authoring_source_digest_v1(autosaved.document().snapshot()),
             "automatic recovery contains the captured desktop edit");
-        require(ProjectStore::file_sha256(destination) == source_hash, "automatic recovery never overwrites source");
+        require(ProjectStore::file_sha256(independent_copy) == source_hash,
+            "automatic recovery never overwrites source");
         { std::ofstream changed(recovery_path, std::ios::binary | std::ios::app); changed << "external change"; }
         const auto changed_hash = ProjectStore::file_sha256(recovery_path);
         require(!autosaved.createStraightWall({0, 5}, {4, 5}).isEmpty(), "edit after external recovery modification");
@@ -294,10 +313,15 @@ void run() {
     }
     // Destruction joins the queue even following errors; no job keeps files open.
     require(std::filesystem::remove(recovery_path), "shutdown releases recovery destination");
+    const auto cleanup_source = directory / "cleanup-source.bldproj";
+    std::error_code cleanup_copy_error;
+    std::filesystem::copy_file(destination, cleanup_source,
+        std::filesystem::copy_options::none, cleanup_copy_error);
+    require(!cleanup_copy_error, "cleanup fixture project copy");
     {
         desktop::MainWindow cleanup_guard;
         cleanup_guard.document().mark_saved(cleanup_guard.document().revision());
-        require(cleanup_guard.openProject(qt_path(destination)), "open cleanup guard fixture");
+        require(cleanup_guard.openProject(qt_path(cleanup_source)), "open cleanup guard fixture");
         require(!cleanup_guard.createStraightWall({0, 9}, {4, 9}).isEmpty(),
             "edit cleanup guard fixture");
         wait_until([&] {
@@ -319,7 +343,7 @@ void run() {
     {
         desktop::MainWindow closing;
         closing.document().mark_saved(closing.document().revision());
-        require(closing.openProject(qt_path(destination)), "open shutdown fixture");
+        require(closing.openProject(qt_path(cleanup_source)), "open shutdown fixture");
         require(!closing.createStraightWall({0, 5}, {4, 5}).isEmpty(), "edit shutdown fixture");
         auto* poll = closing.findChild<QTimer*>("workspaceSavePoll");
         require(poll != nullptr, "owner-thread save poll exists");
