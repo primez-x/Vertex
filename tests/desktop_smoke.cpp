@@ -1140,6 +1140,12 @@ void test_material_assignment_inspector(const QString& capture_directory) {
                 window.document().snapshot().entities().at(id.toStdString()) == assigned && window.selectEntity(id),
             "material assignment persists with geometry");
     require(choices->currentText() == "Timber", "reopened inspector resolves material name");
+    const auto schedule = window.scheduleSnapshot();
+    const auto material_row = std::find_if(schedule.snapshot.rows.begin(), schedule.snapshot.rows.end(),
+        [&](const auto& row) { return row.object_id == id.toStdString() + ":material"; });
+    require(material_row != schedule.snapshot.rows.end() &&
+        std::abs(std::get<ScheduleQuantity>(material_row->cells.at("volume").value).value - 0.48) < 1e-8 &&
+        !material_row->cells.at("volume").editable, "desktop schedule measures assigned solid volume");
     if (!capture_directory.isEmpty()) {
         window.resize(1200, 850); window.show(); QApplication::processEvents(); window.fitView();
         require(window.grab().save(capture_directory + "/material-inspector.png"), "material inspector capture");

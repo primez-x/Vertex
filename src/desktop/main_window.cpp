@@ -4,6 +4,7 @@
 #include "draft_image_stamp.hpp"
 
 #include "sketch/architecture.hpp"
+#include "sketch/architectural_schedule.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/building_plan_projection.hpp"
 #include "sketch/building_view_projection.hpp"
@@ -1657,9 +1658,9 @@ public:
         DocumentScheduleProjection projection;
         try {
             const auto visible = visible_project_entities_with_phase(source, m_view_filter);
-            projection = build_document_schedules(source, visible);
+            projection = build_architectural_schedules(source, visible);
         } catch (const std::exception& error) {
-            projection = build_document_schedules(source);
+            projection = build_architectural_schedules(source);
             projection.diagnostics.push_back(std::string("Design phase: ") + error.what());
         }
         return projection;

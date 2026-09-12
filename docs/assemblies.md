@@ -61,10 +61,20 @@ the catalog material updates derived rows. Visibility filtering applies to the
 object, even if the catalog itself is outside the view. Assigned objects do not
 reuse legacy authored `volume_m3` as a computed material quantity. Unassigned
 legacy material rows retain their existing authored name/volume behavior.
-The catalog currently supplies names, not appearance or physical properties;
-assignment does not change 3D shading or calculate material volume.
+The architectural schedule additionally measures net solid volume for assigned
+walls, slabs, columns, beams, stairs, and roofs. It uses the same document decoders
+and solid builders as the native view, including wall openings, slab holes, and
+roof cuts. A hidden hosted opening still cuts its wall. The volume cell is
+read-only and identifies the source object and its hosted openings. Invalid or
+unsupported solids leave volume absent with an explicit diagnostic. Rooms and
+opening objects currently have no material solid volume.
 
-Assembly geometry bindings and placement, quantity takeoff integration, nested
+This quantity treats each assigned object as one homogeneous material. It does
+not subtract intersections with other objects, split composite layers, add waste,
+or infer quantities for assembly instances. The catalog currently supplies names,
+not appearance or physical properties; assignment does not change 3D shading.
+
+Assembly geometry bindings and placement, composite material takeoff, nested
 assemblies, material physical properties, and publication workflows remain
 open. Semantic snapshot restoration plus the desktop history checks do not
 establish full production assembly qualification.
