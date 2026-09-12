@@ -93,6 +93,10 @@ public:
     [[nodiscard]] bool setContainerVisible(const QString& entity_id, bool visible);
     void showAllContainers();
     [[nodiscard]] bool entityVisible(const QString& entity_id) const;
+    // The active design phase is a persisted semantic selection.  An empty
+    // value denotes the shared existing baseline.
+    [[nodiscard]] QString activeRemodelingAlternative() const;
+    [[nodiscard]] bool selectRemodelingAlternative(const QString& alternative_id);
     [[nodiscard]] QString createBuilding(const QString& property_id, const QString& name,
         std::optional<Revision> expected_revision = std::nullopt);
     [[nodiscard]] QString createFloor(const QString& building_id, const QString& name,
@@ -231,6 +235,7 @@ public:
     void showReferenceImport();
     void showReferenceCalibration();
     void showAssistance();
+    void showRemodelingAlternatives();
     void showConstraintEditor();
     void fitView();
 

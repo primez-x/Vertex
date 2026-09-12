@@ -46,6 +46,13 @@ public:
     [[nodiscard]] static ModelPhases from_json(const nlohmann::json& value);
     [[nodiscard]] nlohmann::json to_json() const;
     [[nodiscard]] ModelPhases with_active(std::optional<std::string> alternative) const;
+    // Returns a validated copy with one additional remodeling alternative.
+    // Existing alternatives and the active selection are preserved.  The
+    // candidate is checked against the registry before it can be persisted.
+    [[nodiscard]] ModelPhases with_alternative(RemodelingAlternative alternative) const;
+    [[nodiscard]] const std::vector<std::string>& entity_ids() const noexcept;
+    [[nodiscard]] const std::vector<std::string>& baseline_ids() const noexcept;
+    [[nodiscard]] const std::vector<RemodelingAlternative>& alternatives() const noexcept;
     [[nodiscard]] const std::optional<std::string>& active_alternative() const noexcept;
     [[nodiscard]] std::map<std::string, ModelPhase, std::less<>> active_state() const;
     [[nodiscard]] std::map<std::string, ModelPhase, std::less<>> state(

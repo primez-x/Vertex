@@ -46,8 +46,12 @@ performance-report harness that computes declared percentile thresholds without
 claiming hardware qualification. Room relationship, model phase, and assembly
 records are now admitted as typed Document entities: embedded models are decoded
 at the boundary, referenced entities are checked atomically, and role mismatches
-are rejected without advancing history. Desktop editors, view/schedule/sheet
-propagation, and production acceptance evidence remain open.
+are rejected without advancing history. The desktop now exposes the model-phase
+selector and alternative manager; active-phase filtering reaches the plan,
+architectural views, native 3D visibility, schedules, and sheet output through
+the shared visible-ID path. Room-relationship and assembly authoring, proposed
+geometry registration, Apex compatibility, and production acceptance evidence
+remain open.
 
 The current foundation also has a strict typed annotation Document entity and
 semantic annotation/style records with a 216-entry parametric symbol catalog,

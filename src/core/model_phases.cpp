@@ -86,6 +86,20 @@ ModelPhases ModelPhases::with_active(std::optional<std::string> alternative) con
     return result;
 }
 
+ModelPhases ModelPhases::with_alternative(RemodelingAlternative alternative) const {
+    auto alternatives = alternatives_;
+    alternatives.push_back(std::move(alternative));
+    return create(entity_ids_, baseline_ids_, std::move(alternatives), active_);
+}
+
+const std::vector<std::string>& ModelPhases::entity_ids() const noexcept { return entity_ids_; }
+
+const std::vector<std::string>& ModelPhases::baseline_ids() const noexcept { return baseline_ids_; }
+
+const std::vector<RemodelingAlternative>& ModelPhases::alternatives() const noexcept {
+    return alternatives_;
+}
+
 const std::optional<std::string>& ModelPhases::active_alternative() const noexcept { return active_; }
 
 std::map<std::string, ModelPhase, std::less<>> ModelPhases::state(

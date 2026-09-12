@@ -1,6 +1,7 @@
 #include "sketch/desktop/main_window.hpp"
 
 #include "sketch/document.hpp"
+#include "sketch/model_phases.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/desktop/building_object_dialog.hpp"
@@ -22,6 +23,7 @@
 #include <QKeySequenceEdit>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QPainter>
 #include <QPageSize>
 #include <QPdfWriter>
@@ -400,6 +402,75 @@ void test_six_form_authoring_and_quantity_history() {
             "draft SVG should contain vector markup and its draft stamp");
 }
 
+void test_design_phase_workflow() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    const auto wall_id = window.createStraightWall({0.0, 0.0}, {4.0, 0.0});
+    require(!wall_id.isEmpty(), "phase fixture wall should be created");
+    require(window.activeRemodelingAlternative().isEmpty(),
+            "a new project starts on the shared existing baseline");
+    auto* phase_combo = window.findChild<QComboBox*>(QStringLiteral("modelPhase"));
+    require(phase_combo && phase_combo->currentText().contains(QStringLiteral("Set up")),
+            "the navigator should expose the design phase setup action");
+
+    const auto phases = ModelPhases::create(
+        {wall_id.toStdString()}, {wall_id.toStdString()},
+        {{"remove-wall", "Remove wall", {wall_id.toStdString()}, {}}});
+    auto phase_entity = Entity::create("model_phases", {{"model", phases.to_json()}});
+    phase_entity.id = "phases-desktop";
+    window.document().apply(ApplyEntityChanges{
+        window.document().revision(), {EntityChange::upsert(phase_entity)}, {},
+        "add design phase fixture"});
+    require(window.selectEntity(wall_id), "phase fixture should refresh after adding its record");
+    require(phase_combo->count() == 2 &&
+                phase_combo->itemText(0) == QStringLiteral("Existing baseline") &&
+                phase_combo->itemData(1).toString() == QStringLiteral("remove-wall"),
+            "the navigator should list baseline and imported alternatives");
+    require(window.entityVisible(wall_id), "baseline geometry should be visible before selection");
+
+    const auto baseline_revision = window.document().revision();
+    require(window.selectRemodelingAlternative(QStringLiteral("remove-wall")),
+            "selecting an alternative should use the typed document command");
+    require(window.activeRemodelingAlternative() == QStringLiteral("remove-wall") &&
+                !window.entityVisible(wall_id),
+            "a demolished baseline object should be hidden in its active alternative");
+    auto* plan = dynamic_cast<desktop::PlanCanvas*>(
+        window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    bool wall_visible = false;
+    if (plan != nullptr) {
+        for (const auto& entity : plan->entities()) {
+            if (entity.id == wall_id) wall_visible = true;
+        }
+    }
+    require(plan && !wall_visible,
+            "phase filtering should reach the shared plan canvas");
+    require(window.undoCommand() && window.document().revision() > baseline_revision &&
+                window.activeRemodelingAlternative().isEmpty() && window.entityVisible(wall_id),
+            "phase selection should be undoable and restore the baseline view");
+    require(window.redoCommand() &&
+                window.activeRemodelingAlternative() == QStringLiteral("remove-wall"),
+            "phase selection should be redoable");
+
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("remodelingAlternativesDialog"));
+        require(dialog, "design phase manager should open from the shared workflow");
+        auto* selection = dialog->findChild<QComboBox*>(QStringLiteral("remodelingPhaseSelection"));
+        auto* demolition = dialog->findChild<QListWidget*>(QStringLiteral("remodelingDemolitionList"));
+        require(selection && demolition && selection->count() == 2 && demolition->count() == 1,
+                "design phase manager should expose typed phase and demolition controls");
+        dialog->reject();
+    });
+    window.showRemodelingAlternatives();
+
+    QTemporaryDir directory;
+    require(directory.isValid(), "phase fixture needs a temporary directory");
+    const auto path = directory.filePath(QStringLiteral("phases.bldproj"));
+    require(window.saveProjectAs(path) && window.openProject(path),
+            "active design phase should save and reopen through the project store");
+    require(window.activeRemodelingAlternative() == QStringLiteral("remove-wall"),
+            "active design phase should persist across reopen");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -418,6 +489,7 @@ int main(int argc, char** argv) {
         }
     }
     test_shortcuts_and_measurement_keypad(field_ui_capture_directory);
+    test_design_phase_workflow();
     {
         QTemporaryDir stamp_directory;
         require(stamp_directory.isValid(), "stamp test directory should be available");

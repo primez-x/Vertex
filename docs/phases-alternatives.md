@@ -1,10 +1,14 @@
 # Model phases and remodeling alternatives
 
 `ModelPhases` is a validated immutable semantic value supporting the model portion
-of ARCH-MOD-010 and ARCH-MOD-011. It does not yet implement their full acceptance
-criteria: view, calculation, schedule, sheet, undo-command, save-project and print
-integration remain adapter work. Its JSON is a standalone exchange value, not an
-automatic extension of the document persistence schema.
+of ARCH-MOD-010 and ARCH-MOD-011. The desktop now exposes a persisted design-phase
+selector and alternative manager. Selecting an alternative is a typed, revision-
+fenced, undoable Document command; the active phase filters the shared plan,
+architectural projections, native 3D visible IDs, schedules, and sheet output.
+The JSON remains a standalone exchange value nested under a normal Document entity.
+Full production certification still requires imported Apex projects and the
+remaining architectural authoring workflows to be exercised through the single
+production gate.
 
 Construction requires an explicit registry of participating model entity IDs, a
 shared baseline, and alternatives. The registry must match the caller's intended
@@ -19,7 +23,9 @@ alternative family; it does not support stacked alternatives or sequential proje
 
 The optional active selection names exactly one alternative. `nullopt` selects the
 unmodified baseline. `with_active` returns a new value and leaves its source intact;
-callers can retain those values for an undo adapter. `state` resolves an explicit
+callers can retain those values for an undo adapter. `with_alternative` appends a
+validated alternative while preserving existing alternatives and active selection.
+`state` resolves an explicit
 selection and `active_state` resolves the saved active selection. Both return
 independent maps ordered by entity ID.
 

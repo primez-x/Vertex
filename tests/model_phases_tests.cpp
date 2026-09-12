@@ -40,6 +40,12 @@ void isolation_and_comparison() {
     require(original.compare("a", "a").differences.empty(), "self comparison is empty");
     require(!original.compare(std::nullopt, "a").left_alternative, "baseline comparison is explicit");
     require(original.to_json() == saved && original.active_alternative() == "a", "operations do not mutate original");
+    const auto appended = original.with_alternative({"c", "Demolish floor", {"floor"}, {}});
+    require(appended.alternatives().size() == 3 && appended.alternatives().back().id == "c" &&
+                appended.active_alternative() == "a",
+            "adding an alternative preserves existing alternatives and active selection");
+    rejects([&] { (void)original.with_alternative({"a", "duplicate", {}, {}}); });
+    rejects([&] { (void)original.with_alternative({"c", "conflict", {}, {"new-a"}}); });
     rejects([&] { (void)original.with_active("missing"); });
     rejects([&] { (void)original.compare("a", "missing"); });
 }

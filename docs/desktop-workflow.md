@@ -163,6 +163,14 @@ opening`, `Create window opening`, and `Create slab from selected boundary`;
 each prompts for quantities and runs the same validated commands as the public
 workflow seam.
 
+The navigator also exposes a persisted Design phase selector. The first use can
+create a baseline registry from the current architectural objects; the manager
+then creates named alternatives with explicit baseline demolitions. Selecting a
+phase is a revision-checked, undoable document command. The active phase is
+applied consistently to both canvases, native 3D visibility, schedule rows, and
+sheet viewports/output. Proposed-object authoring and room/assembly relationship
+editors remain separate production work items.
+
 `Object…` opens the column, beam, stair and roof parameter editor. Selecting
 one of those objects exposes `Edit object…` in the inspector. Both operations
 validate the candidate before one revision-checked document command; stale

@@ -14,6 +14,7 @@
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/architectural_document_adapter.hpp"
+#include "sketch/model_phases.hpp"
 #include "sketch/output_fingerprint.hpp"
 #include "sketch/sheet_output_scene.hpp"
 #include "sketch/calculations.hpp"
@@ -883,6 +884,57 @@ bool is_architectural_entity(std::string_view type) {
            type == "roof" || type == "stair" || type == "column" || type == "beam";
 }
 
+bool is_phase_model_entity(std::string_view type) {
+    return type == "building" || type == "floor" || type == "wall" || type == "opening" ||
+           type == "room" || type == "room_boundary" || type == "measurement_boundary" ||
+           type == "boundary" || type == "slab" || type == "roof" || type == "stair" ||
+           type == "column" || type == "beam" || type == "assembly_model";
+}
+
+struct PhaseModelRecord {
+    std::string entity_id;
+    ModelPhases model;
+};
+
+std::optional<PhaseModelRecord> decode_phase_model(const DocumentSnapshot& snapshot) {
+    for (const auto& [id, entity] : snapshot.entities()) {
+        if (entity.type != "model_phases") continue;
+        if (!entity.properties.contains("model")) {
+            throw std::invalid_argument("The design phase record has no model payload.");
+        }
+        return PhaseModelRecord{id, ModelPhases::from_json(entity.properties.at("model"))};
+    }
+    return std::nullopt;
+}
+
+std::vector<std::string> phase_model_entity_ids(const DocumentSnapshot& snapshot) {
+    std::vector<std::string> result;
+    for (const auto& [id, entity] : snapshot.entities()) {
+        if (is_phase_model_entity(entity.type)) result.push_back(id);
+    }
+    return result;
+}
+
+QString phase_alternative_label(const RemodelingAlternative& alternative) {
+    const auto name = QString::fromStdString(alternative.name).trimmed();
+    return name.isEmpty() ? QString::fromStdString(alternative.id) : name;
+}
+
+std::set<std::string, std::less<>> visible_project_entities_with_phase(
+    const DocumentSnapshot& snapshot, const ProjectViewFilter& filter) {
+    auto visible = visible_project_entities(snapshot, filter);
+    if (const auto phases = decode_phase_model(snapshot)) {
+        const auto active_state = phases->model.active_state();
+        for (const auto& id : phases->model.entity_ids()) {
+            const auto state = active_state.find(id);
+            if (state == active_state.end() || state->second == ModelPhase::demolished) {
+                visible.erase(id);
+            }
+        }
+    }
+    return visible;
+}
+
 BuildingViewFrame architectural_view_frame(BuildingViewKind kind) {
     switch (kind) {
     case BuildingViewKind::plan:
@@ -1213,7 +1265,17 @@ public:
     [[nodiscard]] Document& document() noexcept { return *m_document; }
     [[nodiscard]] const Document& document() const noexcept { return *m_document; }
     [[nodiscard]] DocumentScheduleProjection scheduleSnapshot() const {
-        return build_document_schedules(m_document->snapshot());
+        const auto source = m_document->snapshot();
+        auto projection = build_document_schedules(source);
+        try {
+            const auto visible = visible_project_entities_with_phase(source, m_view_filter);
+            std::erase_if(projection.snapshot.rows, [&](const auto& row) {
+                return !visible.contains(row.object_id);
+            });
+        } catch (const std::exception& error) {
+            projection.diagnostics.push_back(std::string("Design phase: ") + error.what());
+        }
+        return projection;
     }
 
     [[nodiscard]] bool editScheduleCell(const QString& object_id, const QString& column,
@@ -1828,8 +1890,235 @@ public:
     }
 
     [[nodiscard]] bool entityVisible(const QString& id) const {
-        const auto visible = visible_project_entities(m_document->snapshot(), m_view_filter);
-        return visible.contains(id.toStdString());
+        try {
+            const auto visible = visible_project_entities_with_phase(m_document->snapshot(), m_view_filter);
+            return visible.contains(id.toStdString());
+        } catch (const std::exception&) {
+            // A malformed phase record is a document error; organization
+            // visibility remains fail-open for selection and diagnostics.
+            const auto visible = visible_project_entities(m_document->snapshot(), m_view_filter);
+            return visible.contains(id.toStdString());
+        }
+    }
+
+    [[nodiscard]] QString activeRemodelingAlternative() const {
+        try {
+            const auto record = decode_phase_model(m_document->snapshot());
+            if (!record || !record->model.active_alternative()) return {};
+            return id_from(*record->model.active_alternative());
+        } catch (const std::exception&) {
+            return {};
+        }
+    }
+
+    [[nodiscard]] bool selectRemodelingAlternative(const QString& alternative_id) {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        try {
+            const auto source = authoringSnapshot();
+            const auto record = decode_phase_model(source);
+            if (!record) throw std::invalid_argument("Create a design phase record before selecting an alternative.");
+            const auto trimmed = alternative_id.trimmed();
+            const std::optional<std::string> selected = trimmed.isEmpty()
+                ? std::nullopt : std::optional<std::string>(trimmed.toStdString());
+            const auto command = model_phase_selection_command(
+                source, record->entity_id, selected, source.revision());
+            (void)Document::preview_command(source, Command{command});
+            applyDocumentCommand(Command{command});
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Design phase: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    bool ensureModelPhaseRecord() {
+        try {
+            const auto source = authoringSnapshot();
+            if (decode_phase_model(source).has_value()) return true;
+            const auto model_ids = phase_model_entity_ids(source);
+            if (model_ids.empty()) {
+                throw std::invalid_argument(
+                    "Add a wall, room, boundary, slab, or architectural object before creating a design phase.");
+            }
+            const auto model = ModelPhases::create(model_ids, model_ids, {});
+            auto entity = Entity::create("model_phases", {{"model", model.to_json()}});
+            entity.id = new_id("model-phases");
+            const ApplyEntityChanges command{
+                source.revision(), {EntityChange::upsert(std::move(entity))}, {},
+                "Create design phase record"};
+            (void)Document::preview_command(source, Command{command});
+            applyDocumentCommand(Command{command});
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Design phase: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    void showRemodelingAlternatives() {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return;
+        }
+        if (!ensureModelPhaseRecord()) return;
+        try {
+            QDialog dialog(owner);
+            styleDialog(dialog);
+            dialog.setObjectName(QStringLiteral("remodelingAlternativesDialog"));
+            dialog.setWindowTitle(QStringLiteral("Design phases and alternatives"));
+            dialog.setModal(true);
+            dialog.resize(620, 540);
+            auto* layout = new QVBoxLayout(&dialog);
+
+            auto* phase = new QComboBox(&dialog);
+            phase->setObjectName(QStringLiteral("remodelingPhaseSelection"));
+            phase->setToolTip(QStringLiteral(
+                "Choose the shared existing model or one remodeling alternative to display."));
+            layout->addWidget(new QLabel(QStringLiteral("Display phase"), &dialog));
+            layout->addWidget(phase);
+
+            auto* name = new QLineEdit(&dialog);
+            name->setObjectName(QStringLiteral("remodelingAlternativeName"));
+            name->setPlaceholderText(QStringLiteral("Example: Kitchen remodel"));
+            layout->addWidget(new QLabel(QStringLiteral("New alternative name"), &dialog));
+            layout->addWidget(name);
+
+            auto* demolition = new QListWidget(&dialog);
+            demolition->setObjectName(QStringLiteral("remodelingDemolitionList"));
+            demolition->setSelectionMode(QAbstractItemView::NoSelection);
+            layout->addWidget(new QLabel(QStringLiteral("Demolish baseline objects in the new alternative"), &dialog));
+            layout->addWidget(demolition, 1);
+
+            auto* status = new QLabel(&dialog);
+            status->setObjectName(QStringLiteral("remodelingAlternativesStatus"));
+            status->setWordWrap(true);
+            status->setTextFormat(Qt::PlainText);
+            layout->addWidget(status);
+
+            auto* buttons = new QHBoxLayout();
+            auto* apply = new QPushButton(QStringLiteral("Apply phase"), &dialog);
+            apply->setObjectName(QStringLiteral("applyRemodelingPhase"));
+            auto* create = new QPushButton(QStringLiteral("Create alternative"), &dialog);
+            create->setObjectName(QStringLiteral("createRemodelingAlternative"));
+            auto* close = new QPushButton(QStringLiteral("Close"), &dialog);
+            close->setDefault(true);
+            buttons->addStretch(1);
+            buttons->addWidget(apply);
+            buttons->addWidget(create);
+            buttons->addWidget(close);
+            layout->addLayout(buttons);
+
+            std::optional<PhaseModelRecord> record;
+            const auto refresh_selection = [&] {
+                if (!record) return;
+                const auto selected = phase->currentData().toString().toStdString();
+                const auto found = selected.empty()
+                    ? record->model.alternatives().end()
+                    : std::find_if(record->model.alternatives().begin(),
+                                   record->model.alternatives().end(),
+                        [&](const auto& candidate) { return candidate.id == selected; });
+                demolition->clear();
+                name->setText(found == record->model.alternatives().end()
+                                  ? QString{} : QString::fromStdString(found->name));
+                std::set<std::string, std::less<>> selected_demolitions;
+                if (found != record->model.alternatives().end()) {
+                    selected_demolitions.insert(found->demolished_ids.begin(),
+                                                found->demolished_ids.end());
+                }
+                const auto snapshot = authoringSnapshot();
+                for (const auto& id : record->model.baseline_ids()) {
+                    const auto entity = snapshot.entities().find(id);
+                    const auto type = entity == snapshot.entities().end()
+                        ? QStringLiteral("object")
+                        : QString::fromStdString(entity->second.type);
+                    auto* item = new QListWidgetItem(
+                        QStringLiteral("%1  ·  %2").arg(type, id_from(id)), demolition);
+                    item->setData(Qt::UserRole, id_from(id));
+                    item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+                    item->setCheckState(selected_demolitions.contains(id)
+                                            ? Qt::Checked : Qt::Unchecked);
+                }
+            };
+            const auto refresh_dialog = [&] {
+                record = decode_phase_model(authoringSnapshot());
+                if (!record) return;
+                const QSignalBlocker blocker(phase);
+                phase->clear();
+                phase->addItem(QStringLiteral("Existing baseline"), QString{});
+                for (const auto& alternative : record->model.alternatives()) {
+                    phase->addItem(phase_alternative_label(alternative),
+                                   id_from(alternative.id));
+                }
+                const auto active = record->model.active_alternative()
+                    ? id_from(*record->model.active_alternative()) : QString{};
+                const auto index = phase->findData(active);
+                phase->setCurrentIndex(index >= 0 ? index : 0);
+                refresh_selection();
+                status->setText(QStringLiteral("%1 model objects · %2 alternative%3.")
+                    .arg(record->model.entity_ids().size())
+                    .arg(record->model.alternatives().size())
+                    .arg(record->model.alternatives().size() == 1 ? QString{} : QStringLiteral("s")));
+            };
+            refresh_dialog();
+
+            QObject::connect(phase, &QComboBox::currentIndexChanged, &dialog,
+                             [&](int) { refresh_selection(); });
+            QObject::connect(apply, &QPushButton::clicked, &dialog, [&] {
+                if (!phase->count()) return;
+                if (selectRemodelingAlternative(phase->currentData().toString())) {
+                    refresh_dialog();
+                    status->setText(QStringLiteral("Active phase saved through document history."));
+                } else {
+                    status->setText(lastError());
+                }
+            });
+            QObject::connect(create, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    const auto alternative_name = name->text().trimmed();
+                    if (alternative_name.isEmpty())
+                        throw std::invalid_argument("Enter a name for the new alternative.");
+                    const auto source = authoringSnapshot();
+                    const auto current = decode_phase_model(source);
+                    if (!current) throw std::invalid_argument("The design phase record is unavailable.");
+                    RemodelingAlternative candidate;
+                    candidate.id = new_id("alternative");
+                    candidate.name = alternative_name.toStdString();
+                    const auto candidate_id = candidate.id;
+                    for (int index = 0; index < demolition->count(); ++index) {
+                        const auto* item = demolition->item(index);
+                        if (item->checkState() == Qt::Checked)
+                            candidate.demolished_ids.push_back(item->data(Qt::UserRole).toString().toStdString());
+                    }
+                    const auto updated = current->model.with_alternative(std::move(candidate));
+                    const auto selected = updated.with_active(candidate_id);
+                    auto entity = source.entities().at(current->entity_id);
+                    entity.properties["model"] = selected.to_json();
+                    const ApplyEntityChanges command{
+                        source.revision(), {EntityChange::upsert(std::move(entity))}, {},
+                        "Create remodeling alternative"};
+                    (void)Document::preview_command(source, Command{command});
+                    applyDocumentCommand(Command{command});
+                    clearError();
+                    refresh();
+                    refresh_dialog();
+                    status->setText(QStringLiteral("Alternative created and selected."));
+                } catch (const std::exception& error) {
+                    setError(QStringLiteral("Design phase: %1").arg(QString::fromUtf8(error.what())));
+                    status->setText(lastError());
+                }
+            });
+            QObject::connect(close, &QPushButton::clicked, &dialog, &QDialog::reject);
+            dialog.exec();
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Design phase: %1").arg(QString::fromUtf8(error.what())));
+        }
     }
 
     QString createOrganization(const QString& parent_id, const QString& name, std::string type,
@@ -4849,6 +5138,8 @@ public:
              [this] { showSchedulePlacementSettings(); }},
             {QStringLiteral("Edit architectural view settings"),
              [this] { showArchitecturalViewSettings(); }},
+            {QStringLiteral("Design phases and remodeling alternatives"),
+             [this] { showRemodelingAlternatives(); }},
             {QStringLiteral("Offline assistance"), [this] { showAssistance(); }},
             {QStringLiteral("Select tool"), [this] { setTool(CanvasTool::select); }},
             {QStringLiteral("Draw measurement boundary"), [this] { setTool(CanvasTool::boundary); }},
@@ -5601,12 +5892,14 @@ private:
         m_viewport_action = new QAction(QStringLiteral("Viewport settings"), owner);
         m_schedule_placement_action = new QAction(QStringLiteral("Schedule placement"), owner);
         m_view_action = new QAction(QStringLiteral("Architectural view settings"), owner);
+        m_remodel_action = new QAction(QStringLiteral("Design phases and alternatives…"), owner);
+        m_remodel_action->setObjectName(QStringLiteral("designPhaseSettings"));
         m_assistance_action = new QAction(QStringLiteral("Offline assistance…"), owner);
         m_about_action = new QAction(QStringLiteral("About Property Studio"), owner);
-        const std::array<QAction*, 9> secondary_actions{
+        const std::array<QAction*, 10> secondary_actions{
             m_annotation_action, m_reference_action, m_schedule_action, m_sheet_action,
-            m_viewport_action, m_schedule_placement_action, m_view_action, m_assistance_action,
-            m_about_action};
+            m_viewport_action, m_schedule_placement_action, m_view_action, m_remodel_action,
+            m_assistance_action, m_about_action};
         for (auto* action : secondary_actions) {
             owner->addAction(action);
             more_menu->addAction(action);
@@ -5617,7 +5910,7 @@ private:
         auto* more_button = new QToolButton(toolbar);
         more_button->setObjectName(QStringLiteral("moreTools"));
         more_button->setText(QStringLiteral("More"));
-        more_button->setToolTip(QStringLiteral("Annotations, references, sheets, and view settings"));
+        more_button->setToolTip(QStringLiteral("Annotations, references, phases, sheets, and view settings"));
         more_button->setMenu(more_menu);
         more_button->setPopupMode(QToolButton::InstantPopup);
         toolbar->addWidget(more_button);
@@ -5704,6 +5997,8 @@ private:
                          [this] { showSchedulePlacementSettings(); });
         QObject::connect(m_view_action, &QAction::triggered, owner,
                          [this] { showArchitecturalViewSettings(); });
+        QObject::connect(m_remodel_action, &QAction::triggered, owner,
+                         [this] { showRemodelingAlternatives(); });
         QObject::connect(m_assistance_action, &QAction::triggered, owner,
                          [this] { showAssistance(); });
         QObject::connect(m_about_action, &QAction::triggered, owner, [this] { showAbout(); });
@@ -5768,6 +6063,17 @@ private:
         m_drawing_context_label->setWordWrap(true);
         m_drawing_context_label->setTextFormat(Qt::PlainText);
         navigator_layout->addWidget(m_drawing_context_label);
+        auto* phase_heading = new QLabel(QStringLiteral("DESIGN PHASE"), navigator_panel);
+        phase_heading->setObjectName(QStringLiteral("phaseHeading"));
+        phase_heading->setStyleSheet(QStringLiteral("font-weight:600;"));
+        navigator_layout->addWidget(phase_heading);
+        m_model_phase_combo = new QComboBox(navigator_panel);
+        m_model_phase_combo->setObjectName(QStringLiteral("modelPhase"));
+        m_model_phase_combo->setMinimumWidth(0);
+        m_model_phase_combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        m_model_phase_combo->setToolTip(QStringLiteral(
+            "Choose the existing model or a remodeling alternative. The selection is saved in the project and filters all shared views."));
+        navigator_layout->addWidget(m_model_phase_combo);
         auto* visibility_header = new QHBoxLayout();
         auto* visibility_heading = new QLabel(QStringLiteral("VISIBILITY"), navigator_panel);
         visibility_heading->setObjectName(QStringLiteral("panelHeading"));
@@ -5791,6 +6097,13 @@ private:
                          [this] { showAllContainers(); });
         QObject::connect(m_drawing_layer_combo, &QComboBox::activated, owner, [this](int index) {
             setActiveLayer(m_drawing_layer_combo->itemData(index).toString());
+        });
+        QObject::connect(m_model_phase_combo, &QComboBox::activated, owner, [this](int index) {
+            if (m_model_phase_combo->itemData(index).isValid()) {
+                (void)selectRemodelingAlternative(m_model_phase_combo->itemData(index).toString());
+            } else {
+                showRemodelingAlternatives();
+            }
         });
         m_navigator = new VisibilityTreeWidget(navigator_panel);
         navigator_layout->addWidget(m_navigator, 1);
@@ -6658,6 +6971,17 @@ private:
         // the view mask is applied. Hidden invalid geometry therefore keeps
         // the output error visible and cannot become a way around validation.
         auto visible_ids = visible_project_entities(snapshot, m_view_filter);
+        // Design-phase selection is a semantic view mask layered after
+        // organization visibility. Geometry is still parsed and validated
+        // above, so a demolished or alternate object can never hide an error
+        // in the source document. Objects outside the phase registry remain
+        // visible until an imported/project-owned phase model claims them.
+        try {
+            visible_ids = visible_project_entities_with_phase(snapshot, m_view_filter);
+        } catch (const std::exception& error) {
+            append_geometry_error(QStringLiteral("Design phase: %1")
+                                      .arg(QString::fromUtf8(error.what())));
+        }
         // Annotation children are presentation records nested under the
         // validated annotation entity rather than standalone Document
         // entities, so they inherit the parent's fail-open visibility.
@@ -6747,6 +7071,40 @@ private:
         else createOrganization(parent_id, name, type, modal_context.revision);
     }
 
+    void refreshModelPhaseControl(const DocumentSnapshot& snapshot) {
+        if (!m_model_phase_combo) return;
+        const QSignalBlocker blocker(m_model_phase_combo);
+        m_model_phase_combo->clear();
+        try {
+            const auto record = decode_phase_model(snapshot);
+            if (!record) {
+                m_model_phase_combo->addItem(QStringLiteral("Set up design phases…"));
+                m_model_phase_combo->setEnabled(true);
+                m_model_phase_combo->setToolTip(QStringLiteral(
+                    "Create a persisted baseline and remodeling alternatives from the architectural model."));
+                return;
+            }
+            m_model_phase_combo->addItem(QStringLiteral("Existing baseline"), QString{});
+            for (const auto& alternative : record->model.alternatives()) {
+                m_model_phase_combo->addItem(phase_alternative_label(alternative),
+                                             id_from(alternative.id));
+            }
+            const auto active = record->model.active_alternative()
+                ? id_from(*record->model.active_alternative()) : QString{};
+            const auto index = m_model_phase_combo->findData(active);
+            m_model_phase_combo->setCurrentIndex(index >= 0 ? index : 0);
+            m_model_phase_combo->setToolTip(QStringLiteral(
+                "Active design phase: %1. Use Design phases and alternatives to create or review options.")
+                .arg(m_model_phase_combo->currentText()));
+        } catch (const std::exception& error) {
+            m_model_phase_combo->addItem(QStringLiteral("Invalid design phase record"));
+            m_model_phase_combo->setEnabled(false);
+            m_model_phase_combo->setToolTip(QString::fromUtf8(error.what()));
+            return;
+        }
+        m_model_phase_combo->setEnabled(true);
+    }
+
     void refreshNavigator() {
         std::map<QString, bool> expansion;
         for (QTreeWidgetItemIterator item(m_navigator); *item; ++item)
@@ -6755,7 +7113,12 @@ private:
         m_navigator->clear();
         const auto snapshot = m_document->snapshot();
         const auto organization = organize_project(snapshot);
-        const auto visible_ids = visible_project_entities(snapshot, m_view_filter);
+        std::set<std::string, std::less<>> visible_ids;
+        try {
+            visible_ids = visible_project_entities_with_phase(snapshot, m_view_filter);
+        } catch (const std::exception&) {
+            visible_ids = visible_project_entities(snapshot, m_view_filter);
+        }
         std::map<std::string, QTreeWidgetItem*, std::less<>> items;
         for (const auto& [id, node] : organization.nodes) {
             const auto name = read_string(snapshot.entities().at(id).properties, "name");
@@ -6863,6 +7226,7 @@ private:
             if (id_from(id) == m_selected_id) m_navigator->setCurrentItem(item);
         }
         const QSignalBlocker combo_blocker(m_drawing_layer_combo);
+        refreshModelPhaseControl(snapshot);
         m_drawing_layer_combo->clear();
         for (const auto& [id, node] : organization.nodes) {
             if (node.type != "layer") continue;
@@ -7987,6 +8351,7 @@ private:
     ProjectViewFilter m_view_filter;
     QString m_active_layer_id;
     QComboBox* m_drawing_layer_combo{};
+    QComboBox* m_model_phase_combo{};
     QComboBox* m_pageSizeCombo{};
     QComboBox* m_architecturalViewCombo{};
     QLabel* m_drawing_context_label{};
@@ -8089,6 +8454,7 @@ private:
     QAction* m_viewport_action{};
     QAction* m_schedule_placement_action{};
     QAction* m_view_action{};
+    QAction* m_remodel_action{};
     QAction* m_assistance_action{};
     QAction* m_about_action{};
 };
@@ -8172,6 +8538,12 @@ bool MainWindow::setContainerVisible(const QString& id, bool visible) {
 }
 void MainWindow::showAllContainers() { m_impl->showAllContainers(); }
 bool MainWindow::entityVisible(const QString& id) const { return m_impl->entityVisible(id); }
+QString MainWindow::activeRemodelingAlternative() const {
+    return m_impl->activeRemodelingAlternative();
+}
+bool MainWindow::selectRemodelingAlternative(const QString& alternative_id) {
+    return m_impl->selectRemodelingAlternative(alternative_id);
+}
 QString MainWindow::createBuilding(const QString& parent, const QString& name, std::optional<Revision> revision) {
     return m_impl->createOrganization(parent, name, "building", revision);
 }
@@ -8348,6 +8720,10 @@ void MainWindow::showReferenceImport() {
 
 void MainWindow::showAssistance() {
     m_impl->showAssistance();
+}
+
+void MainWindow::showRemodelingAlternatives() {
+    m_impl->showRemodelingAlternatives();
 }
 
 bool MainWindow::createNewProject() {
