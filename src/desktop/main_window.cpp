@@ -2477,11 +2477,11 @@ public:
             QWidget { font-size: 13px; }
             QDialog { background: $background; }
             QToolBar#primaryToolbar { background: $surface; border: 0; border-bottom: 1px solid $border;
-                       padding: 0 3px; spacing: 1px; min-height: 32px; max-height: 32px; }
+                       padding: 0 3px; spacing: 1px; min-height: 28px; max-height: 28px; }
             QToolBar::separator { background: $border; width: 1px; margin: 0 1px; }
             QPushButton, QToolButton { color: $foreground; background: $surface;
                 border: 1px solid $border; border-radius: 8px; padding: 8px 11px; }
-            QToolBar QToolButton { border-color: transparent; border-radius: 4px; padding: 3px 5px; min-height: 20px; max-height: 20px; }
+            QToolBar QToolButton { border-color: transparent; border-radius: 4px; padding: 2px 5px; min-height: 18px; max-height: 18px; }
             QToolBar QToolButton:hover { background: $selection; border-color: $selection; }
             QToolBar QToolButton:checked { background: $selection; color: $accent; border-color: $accent; }
             QWidget#toolPanel QToolButton { padding: 6px 4px; min-height: 52px; }
@@ -2495,7 +2495,7 @@ public:
                 border: 1px solid $border; border-radius: 8px; padding: 5px 10px; min-height: 20px; }
             QComboBox { padding-right: 24px; }
             QComboBox::drop-down { border: 0; width: 24px; }
-            QToolBar QComboBox { font-size: 12px; border-radius: 4px; padding: 2px 18px 2px 5px; min-height: 20px; max-height: 20px; }
+            QToolBar QComboBox { font-size: 12px; border-radius: 4px; padding: 1px 18px 1px 5px; min-height: 18px; max-height: 18px; }
             QToolBar QComboBox::drop-down { width: 14px; }
             QComboBox QAbstractItemView, QMenu { background: $surface; color: $foreground;
                 border: 1px solid $border; selection-background-color: $selection;
@@ -10848,7 +10848,7 @@ private:
             toolbar_layout->setSpacing(1);
         }
         // One compact row with readable icons and usable mouse targets.
-        toolbar->setFixedHeight(32);
+        toolbar->setFixedHeight(28);
         const auto add_toolbar_action = [this, toolbar](const QString& label, const char* icon_paths) {
             auto* action = toolbar->addAction(modern_toolbar_icon(icon_paths), label);
             action->setToolTip(label);
