@@ -5,6 +5,7 @@
 #include <cmath>
 #include <set>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 namespace sketch {
@@ -89,7 +90,16 @@ std::map<std::string, AssemblyQuantityProperty> decode_quantities(const nlohmann
 AssemblyModel AssemblyModel::create(std::vector<AssemblyMaterial> materials,
     std::vector<AssemblyType> types, std::vector<AssemblyInstance> instances) {
     canonical(materials); canonical(types); canonical(instances);
-    for (const auto& material : materials) identifier(material.name);
+    for (const auto& material : materials) {
+        identifier(material.name);
+        if (material.color_srgb) {
+            const auto& color = *material.color_srgb;
+            require(color.size() == 7 && color.front() == '#' &&
+                std::all_of(color.begin() + 1, color.end(), [](char c) {
+                    return std::string_view("0123456789abcdefABCDEF").find(c) != std::string_view::npos;
+                }), "material color must be #RRGGBB in sRGB");
+        }
+    }
     for (const auto& type : types) {
         identifier(type.name);
         for (const auto& [key, value] : type.properties) { (void)value; identifier(key); }
@@ -142,7 +152,14 @@ std::vector<AssemblyTypeUpdateImpact> AssemblyModel::preview_type_update(Assembl
 nlohmann::json AssemblyModel::to_json() const {
     nlohmann::json result{{"schema", "sketch.assemblies.v1"}, {"materials", nlohmann::json::array()},
         {"types", nlohmann::json::array()}, {"instances", nlohmann::json::array()}};
-    for (const auto& material : materials_) result["materials"].push_back({{"id", material.id}, {"name", material.name}});
+    for (const auto& material : materials_) {
+        nlohmann::json value{{"id", material.id}, {"name", material.name}};
+        if (material.color_srgb) {
+            result["schema"] = "sketch.assemblies.v2";
+            value["color_srgb"] = *material.color_srgb;
+        }
+        result["materials"].push_back(std::move(value));
+    }
     for (const auto& type : types_) result["types"].push_back({{"id", type.id}, {"name", type.name},
         {"properties", type.properties}, {"materials", type.materials}, {"quantities", encode_quantities(type.quantities)}});
     for (const auto& instance : instances_) result["instances"].push_back({{"id", instance.id}, {"type_id", instance.type_id},
@@ -153,7 +170,8 @@ nlohmann::json AssemblyModel::to_json() const {
 AssemblyModel AssemblyModel::from_json(const nlohmann::json& value) {
     try {
         fields(value, {"schema", "materials", "types", "instances"});
-        require(value.at("schema") == "sketch.assemblies.v1", "unsupported assembly schema");
+        const bool appearance = value.at("schema") == "sketch.assemblies.v2";
+        require(appearance || value.at("schema") == "sketch.assemblies.v1", "unsupported assembly schema");
         for (const auto* key : {"materials", "types", "instances"})
             require(value.at(key).is_array(), "assembly collections must be arrays");
         std::vector<AssemblyMaterial> materials;
@@ -161,8 +179,10 @@ AssemblyModel AssemblyModel::from_json(const nlohmann::json& value) {
         std::vector<AssemblyInstance> instances;
         using Strings = std::map<std::string, std::string>;
         for (const auto& item : value.at("materials")) {
-            fields(item, {"id", "name"});
-            materials.push_back({item.at("id").get<std::string>(), item.at("name").get<std::string>()});
+            if (appearance && item.contains("color_srgb")) fields(item, {"id", "name", "color_srgb"});
+            else fields(item, {"id", "name"});
+            materials.push_back({item.at("id").get<std::string>(), item.at("name").get<std::string>(),
+                item.contains("color_srgb") ? std::optional{item.at("color_srgb").get<std::string>()} : std::nullopt});
         }
         for (const auto& item : value.at("types")) {
             fields(item, {"id", "name", "properties", "materials", "quantities"});

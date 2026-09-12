@@ -88,7 +88,22 @@ void validation_and_serialization() {
     require(AssemblyModel::from_json(AssemblyModel::create({}, {}, {}).to_json()).instances().empty(), "empty catalog supported");
 }
 } // namespace
+void material_appearance() {
+    using namespace sketch;
+    const auto legacy = AssemblyModel::create({{"wood", "Wood"}}, {}, {});
+    require(legacy.to_json().at("schema") == "sketch.assemblies.v1", "uncolored catalogs retain v1");
+    const auto colored = AssemblyModel::create({{"wood", "Wood", "#Ae8042"}}, {}, {});
+    require(colored.to_json().at("schema") == "sketch.assemblies.v2" &&
+        AssemblyModel::from_json(colored.to_json()).materials() == colored.materials(), "sRGB colors round-trip in v2");
+    auto json = colored.to_json(); json["schema"] = "sketch.assemblies.v1";
+    invalid([&] { (void)AssemblyModel::from_json(json); });
+    for (const auto& color : {"red", "#fff", "#12345678", "#12345g", "", " #123456"})
+        invalid([&] { (void)AssemblyModel::create({{"wood", "Wood", color}}, {}, {}); });
+    json = colored.to_json(); json["materials"][0]["color_srgb"] = nullptr;
+    invalid([&] { (void)AssemblyModel::from_json(json); });
+}
 int main() {
+    material_appearance();
     update_and_undo(); validation_and_serialization();
     std::cout << "assembly_model_tests passed\n";
 }

@@ -1,5 +1,6 @@
 #include "sketch/document.hpp"
 #include "sketch/building_entity.hpp"
+#include "sketch/assembly_model.hpp"
 #include "sketch/constraint_authoring.hpp"
 #include "sketch/visualization/native_model_view.hpp"
 #include "support/noninteractive_errors.hpp"
@@ -288,6 +289,42 @@ int main(int argc,char** argv) {
                 view.setSnapshot(document.snapshot());
                 auto redone=capture(view,temporary.filePath("redone.png"));
                 check(redone.image==changed.image,"Redo must restore the edited derived geometry");
+                auto catalog = sketch::Entity::create("assembly_model", {{"version",1},
+                    {"model", sketch::AssemblyModel::create({{"finish","Finish","#e02020"}}, {}, {}).to_json()}});
+                auto painted_wall = document.snapshot().entities().at(wall_id.toStdString());
+                painted_wall.properties["material_assignment"] = {{"version",1},
+                    {"catalog_id",catalog.id},{"material_id","finish"}};
+                document.apply(sketch::ApplyEntityChanges{document.revision(),
+                    {sketch::EntityChange::upsert(catalog),sketch::EntityChange::upsert(painted_wall)},{},"Assign red material"});
+                view.setSnapshot(document.snapshot());
+                auto red = capture(view,temporary.filePath("material-red.png"));
+                check(red.image != redone.image && red.bounds == redone.bounds,
+                    "material assignment changes appearance without changing geometry");
+                catalog.properties["model"] = sketch::AssemblyModel::create({{"finish","Finish","#2020e0"}}, {}, {}).to_json();
+                document.apply(sketch::ApplyEntityChanges{document.revision(),
+                    {sketch::EntityChange::upsert(catalog)},{},"Change catalog color"});
+                view.setSnapshot(document.snapshot());
+                auto blue = capture(view,temporary.filePath("material-blue.png"));
+                check(blue.image != red.image && blue.bounds == red.bounds,
+                    "catalog color changes must refresh cached presentations");
+                catalog.properties["model"] = sketch::AssemblyModel::create({{"finish","Finish"}}, {}, {}).to_json();
+                document.apply(sketch::ApplyEntityChanges{document.revision(),
+                    {sketch::EntityChange::upsert(catalog)},{},"Clear catalog color"});
+                view.setSnapshot(document.snapshot());
+                auto default_color = capture(view,temporary.filePath("material-default.png"));
+                check(default_color.image == redone.image,"clearing a catalog color restores default shading");
+                document.undo(document.revision());
+                view.setSnapshot(document.snapshot());
+                check(capture(view,temporary.filePath("material-clear-undo.png")).image == blue.image,
+                    "undo restores a cleared color");
+                document.undo(document.revision());
+                view.setSnapshot(document.snapshot());
+                auto restored_color = capture(view,temporary.filePath("material-undo.png"));
+                check(restored_color.image == red.image,"undo restores the prior material appearance");
+                document.undo(document.revision());
+                view.setSnapshot(document.snapshot());
+                auto unassigned = capture(view,temporary.filePath("material-unassigned.png"));
+                check(unassigned.image == redone.image,"removing assignment restores default appearance");
             }
             if (scenario != "geometry") {
                 // Keep the same portrait context as the combined sequence, even

@@ -4,6 +4,8 @@
 #include "sketch/document_solid.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/document.hpp"
+#include "sketch/assembly_model.hpp"
+#include <QColor>
 
 #include <AIS_InteractiveContext.hxx>
 #include <AIS_SelectionScheme.hxx>
@@ -149,6 +151,7 @@ public:
         std::string content;
         TopoDS_Shape shape;
         occ::handle<AIS_Shape> presentation;
+        std::optional<std::string> material_color;
     };
 
     NativeModelView* owner{};
@@ -277,6 +280,17 @@ public:
         std::vector<std::string> errors;
         std::vector<std::string> pending;
         const auto& entities = snapshot->entities();
+        std::map<std::pair<std::string, std::string>, std::string> material_colors;
+        for (const auto& [id, entity] : entities) {
+            if (entity.type != "assembly_model") continue;
+            try {
+                const auto catalog = AssemblyModel::from_json(entity.properties.at("model"));
+                for (const auto& material : catalog.materials())
+                    if (material.color_srgb) material_colors[{id, material.id}] = *material.color_srgb;
+            } catch (const std::exception& error) {
+                append_unique(errors, "material catalog '" + id + "': " + error.what());
+            }
+        }
         std::set<std::string, std::less<>> wall_ids;
         for (const auto& [id, entity] : entities) {
             if (entity.type == "wall") {
@@ -324,8 +338,28 @@ public:
                                     ? openings_by_wall[id]
                                     : std::vector<const Entity*>{};
             auto content = entity_content(entity, hosted);
+            std::optional<std::string> material_color;
+            if (entity.properties.contains("material_assignment")) {
+                const auto& assignment = entity.properties.at("material_assignment");
+                const auto found = material_colors.find({assignment.at("catalog_id").get<std::string>(),
+                    assignment.at("material_id").get<std::string>()});
+                if (found != material_colors.end()) material_color = found->second;
+            }
+            auto presentation_color = entity.type == "wall"
+                ? Quantity_Color(0.84, 0.66, 0.32, Quantity_TOC_RGB)
+                : Quantity_Color(0.46, 0.70, 0.86, Quantity_TOC_RGB);
+            if (material_color) {
+                const QColor color(QString::fromStdString(*material_color));
+                presentation_color = Quantity_Color(color.redF(), color.greenF(), color.blueF(), Quantity_TOC_sRGB);
+            }
             const auto cached = solids.find(id);
             if (cached != solids.end() && cached->second.content == content) {
+                if (cached->second.material_color != material_color) {
+                    cached->second.presentation->SetColor(presentation_color);
+                    context->Redisplay(cached->second.presentation, false);
+                    cached->second.material_color = material_color;
+                    changed = true;
+                }
                 const bool visible = !visible_ids || visible_ids->contains(id);
                 if (visible != static_cast<bool>(context->IsDisplayed(cached->second.presentation))) {
                     if (visible) context->Display(cached->second.presentation, false);
@@ -367,14 +401,12 @@ public:
                 }
 
                 auto presentation = occ::handle<AIS_Shape>(new AIS_Shape(shape));
-                presentation->SetColor(entity.type == "wall"
-                                            ? Quantity_Color(0.84, 0.66, 0.32, Quantity_TOC_RGB)
-                                            : Quantity_Color(0.46, 0.70, 0.86, Quantity_TOC_RGB));
+                presentation->SetColor(presentation_color);
                 presentation->SetDisplayMode(AIS_Shaded);
 
                 remove_solid(id);
                 if (!visible_ids || visible_ids->contains(id)) context->Display(presentation, false);
-                solids.emplace(id, CachedSolid{std::move(content), std::move(shape), presentation});
+                solids.emplace(id, CachedSolid{std::move(content), std::move(shape), presentation, material_color});
                 changed = true;
             } catch (const std::exception& error) {
                 append_unique(errors, entity.type + " '" + id + "': " + error.what());

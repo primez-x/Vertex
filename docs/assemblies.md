@@ -27,7 +27,11 @@ to restore it for undo without reverse calculations. JSON uses
 `sketch.assemblies.v1`, preserves source defaults and overrides separately, sorts
 catalogs by ID and map keys lexicographically, rejects unexpected fields and
 invalid references, and round-trips without losing override provenance. Returned
-JSON and resolved values are detached copies.
+JSON and resolved values are detached copies. Catalogs with a material color use
+`sketch.assemblies.v2`; uncolored catalogs continue to emit v1. In v2, a material
+may have `color_srgb`, a `#RRGGBB` string (case-preserving, opaque sRGB). Invalid
+colors and appearance fields in v1 are rejected. Removing every color allows v1
+encoding again. Existing v1 projects load without inventing appearance values.
 
 The Windows Architectural workspace exposes an **Assembly catalog** from the
 More menu and command palette. It creates the typed `assembly_model` record on
@@ -71,8 +75,13 @@ opening objects currently have no material solid volume.
 
 This quantity treats each assigned object as one homogeneous material. It does
 not subtract intersections with other objects, split composite layers, add waste,
-or infer quantities for assembly instances. The catalog currently supplies names,
-not appearance or physical properties; assignment does not change 3D shading.
+or infer quantities for assembly instances. The Materials tab edits names and
+colors by stable material ID; clearing the color uses the object's default
+appearance. Assigned solid objects use that color in the native 3D view. Catalog
+color changes refresh cached presentations without rebuilding unchanged solids,
+and normal undo/redo restores the appearance. Colors are converted from sRGB by
+the rendering engine. Textures, transparency, roughness, and physical properties
+remain open; a surface color alone is not a physically specified material.
 
 Assembly geometry bindings and placement, composite material takeoff, nested
 assemblies, material physical properties, and publication workflows remain

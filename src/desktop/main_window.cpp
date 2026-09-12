@@ -4,6 +4,7 @@
 #include "draft_image_stamp.hpp"
 
 #include "sketch/architecture.hpp"
+#include <QColorDialog>
 #include "sketch/architectural_schedule.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/building_plan_projection.hpp"
@@ -4342,6 +4343,28 @@ public:
             material_name->setPlaceholderText(QStringLiteral("Material name"));
             material_form->addRow(QStringLiteral("ID"), material_id);
             material_form->addRow(QStringLiteral("Name"), material_name);
+            auto* material_color = new QLineEdit(material_page);
+            material_color->setObjectName(QStringLiteral("assemblyMaterialColor"));
+            material_color->setPlaceholderText(QStringLiteral("Default"));
+            material_color->setToolTip(QStringLiteral("sRGB color (#RRGGBB). Clear to use the default appearance."));
+            auto* color_row = new QHBoxLayout;
+            color_row->addWidget(material_color, 1);
+            auto* choose_color = new QPushButton(QStringLiteral("Choose…"), material_page);
+            choose_color->setAccessibleName(QStringLiteral("Choose material color"));
+            QObject::connect(material_color, &QLineEdit::textChanged, &dialog, [choose_color](const QString& text) {
+                const QColor color(text);
+                QPixmap swatch(14, 14);
+                swatch.fill(color.isValid() ? color : Qt::transparent);
+                choose_color->setIcon(QIcon(swatch));
+            });
+            color_row->addWidget(choose_color);
+            material_form->addRow(QStringLiteral("Color"), color_row);
+            QObject::connect(choose_color, &QPushButton::clicked, &dialog, [&] {
+                const QColor initial(material_color->text());
+                const auto color = QColorDialog::getColor(initial.isValid() ? initial : QColor(Qt::gray),
+                    &dialog, QStringLiteral("Material color"));
+                if (color.isValid()) material_color->setText(color.name(QColor::HexRgb));
+            });
             material_layout->addLayout(material_form);
             auto* material_buttons = new QHBoxLayout;
             auto* add_material = new QPushButton(QStringLiteral("Save material"), material_page);
@@ -4352,10 +4375,6 @@ public:
             material_buttons->addWidget(remove_material);
             material_buttons->addStretch(1);
             material_layout->addLayout(material_buttons);
-            auto* material_note = new QLabel(QStringLiteral(
-                "Material slots on a type must reference an ID in this local catalog."), material_page);
-            material_note->setWordWrap(true);
-            material_layout->addWidget(material_note);
             data_tabs->addTab(material_page, QStringLiteral("Materials"));
 
             auto* override_page = new QWidget(data_tabs);
@@ -4444,6 +4463,7 @@ public:
                 materials->setCurrentItem(selected);
                 material_id->clear();
                 material_name->clear();
+                material_color->clear();
                 if (selected) {
                     const auto id = selected->data(Qt::UserRole).toString().toStdString();
                     const auto found = std::find_if(record->model.materials().begin(),
@@ -4452,6 +4472,7 @@ public:
                     if (found != record->model.materials().end()) {
                         material_id->setText(QString::fromStdString(found->id));
                         material_name->setText(QString::fromStdString(found->name));
+                        material_color->setText(QString::fromStdString(found->color_srgb.value_or("")));
                     }
                 }
             };
@@ -4682,6 +4703,7 @@ public:
                                  if (found == record->model.materials().end()) return;
                                  material_id->setText(QString::fromStdString(found->id));
                                  material_name->setText(QString::fromStdString(found->name));
+                                 material_color->setText(QString::fromStdString(found->color_srgb.value_or("")));
                              });
             const auto sync_type_unit = [&] {
                 type_entry_unit->setEnabled(type_entry_kind->currentData().toString() == QStringLiteral("quantity"));
@@ -4735,13 +4757,18 @@ public:
                     if (id.empty() || name.empty())
                         throw std::invalid_argument("Enter a material ID and name.");
                     auto material_copy = current->model.materials();
-                    material_copy.push_back({id, name});
+                    const auto color = material_color->text().trimmed().toStdString();
+                    AssemblyMaterial replacement{id, name, color.empty() ? std::nullopt : std::optional{color}};
+                    const auto found = std::find_if(material_copy.begin(), material_copy.end(),
+                        [&](const auto& material) { return material.id == id; });
+                    if (found == material_copy.end()) material_copy.push_back(std::move(replacement));
+                    else *found = std::move(replacement);
                     const auto updated = AssemblyModel::create(
                         std::move(material_copy), current->model.types(), current->model.instances());
                     if (applyAssemblyModel(updated, QStringLiteral("Save assembly material"))) {
                         populate();
                         data_tabs->setCurrentWidget(material_page);
-                        status->setText(QStringLiteral("Material saved through document history."));
+                        status->setText(QStringLiteral("Material saved."));
                     }
                 } catch (const std::exception& error) {
                     status->setText(QString::fromUtf8(error.what()));

@@ -2,6 +2,7 @@
 
 #include <nlohmann/json.hpp>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -17,6 +18,8 @@ struct AssemblyQuantityProperty {
 struct AssemblyMaterial {
     std::string id;
     std::string name;
+    // Optional opaque surface color, encoded as #RRGGBB in sRGB.
+    std::optional<std::string> color_srgb;
     bool operator==(const AssemblyMaterial&) const = default;
 };
 struct AssemblyType {

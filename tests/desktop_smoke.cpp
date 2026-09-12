@@ -1964,6 +1964,48 @@ void test_room_relationship_workflow() {
             "room relationship relation should survive project reopen");
 }
 
+void test_material_color_catalog(const QString& capture_directory) {
+    using namespace sketch;
+    desktop::MainWindow window;
+    const auto model = [&] {
+        const auto snapshot = window.document().snapshot();
+        for (const auto& [id, entity] : snapshot.entities())
+            if (entity.type == "assembly_model") return AssemblyModel::from_json(entity.properties.at("model"));
+        throw std::runtime_error("missing material catalog");
+    };
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>("assemblyCatalogDialog");
+        require(dialog, "material catalog dialog opens");
+        auto* id = dialog->findChild<QLineEdit*>("assemblyMaterialId");
+        auto* name = dialog->findChild<QLineEdit*>("assemblyMaterialName");
+        auto* color = dialog->findChild<QLineEdit*>("assemblyMaterialColor");
+        auto* save = dialog->findChild<QPushButton*>("saveAssemblyMaterial");
+        require(id && name && color && save, "material catalog exposes appearance authoring");
+        id->setText("paint"); name->setText("Paint"); color->setText("#d08030"); save->click();
+        require(model().materials().size() == 1 && model().materials()[0].color_srgb == "#d08030",
+            "material appearance is saved");
+        name->setText("Ochre paint"); color->setText("#c07020"); save->click();
+        require(model().materials().size() == 1 && model().materials()[0].name == "Ochre paint" &&
+            model().materials()[0].color_srgb == "#c07020", "saving an existing material updates its stable identity");
+        if (!capture_directory.isEmpty()) {
+            for (auto* tabs : dialog->findChildren<QTabWidget*>())
+                if (tabs->indexOf(color->parentWidget()) >= 0) tabs->setCurrentWidget(color->parentWidget());
+            QApplication::processEvents();
+            require(dialog->grab().save(capture_directory + "/material-color-catalog.png"), "capture material appearance editor");
+        }
+        const auto revision = window.document().revision();
+        color->setText("bad-color"); save->click();
+        require(window.document().revision() == revision, "malformed color must not mutate the catalog");
+        dialog->accept();
+    });
+    window.findChild<QAction*>("assemblyCatalog")->trigger();
+    require(window.undoCommand() && model().materials()[0].color_srgb == "#d08030" &&
+        window.redoCommand() && model().materials()[0].color_srgb == "#c07020", "material appearance undo/redo");
+    QTemporaryDir directory;
+    require(window.saveProjectAs(directory.filePath("color.bldproj")) && window.openProject(directory.filePath("color.bldproj")) &&
+        model().materials()[0].color_srgb == "#c07020", "material appearance survives project save/reopen");
+}
+
 void test_assembly_catalog_workflow() {
     using namespace sketch;
     desktop::MainWindow window;
@@ -2304,6 +2346,7 @@ int main(int argc, char** argv) {
     test_room_relationship_workflow();
     test_vertical_levels_workflow();
     test_assembly_catalog_workflow();
+    test_material_color_catalog(field_ui_capture_directory);
     test_calculation_deduction_workflow();
     test_contextual_building_dimension_inspector(field_ui_capture_directory);
     test_contextual_roof_dimension_inspector();
