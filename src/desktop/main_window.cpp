@@ -1635,11 +1635,11 @@ public:
             QWidget { font-size: 13px; }
             QDialog { background: $background; }
             QToolBar#primaryToolbar { background: $surface; border: 0; border-bottom: 1px solid $border;
-                       padding: 9px 16px; spacing: 5px; min-height: 48px; }
-            QToolBar::separator { background: $border; width: 1px; margin: 7px 8px; }
+                       padding: 2px 12px; spacing: 3px; min-height: 30px; }
+            QToolBar::separator { background: $border; width: 1px; margin: 2px 6px; }
             QPushButton, QToolButton { color: $foreground; background: $surface;
                 border: 1px solid $border; border-radius: 8px; padding: 8px 11px; }
-            QToolBar QToolButton { border-color: transparent; padding: 8px 10px; min-height: 30px; }
+            QToolBar QToolButton { border-color: transparent; padding: 2px 8px; min-height: 20px; }
             QToolBar QToolButton:hover { background: $selection; border-color: $selection; }
             QToolBar QToolButton:checked { background: $selection; color: $accent; border-color: $accent; }
             QWidget#toolPanel QToolButton { padding: 6px 4px; min-height: 52px; }
@@ -1650,19 +1650,16 @@ public:
             QAbstractSpinBox:focus { border: 2px solid $accent; }
             QPushButton:disabled, QToolButton:disabled { color: $muted; background: $background; }
             QComboBox, QLineEdit, QAbstractSpinBox { color: $foreground; background: $surface;
-                border: 1px solid $border; border-radius: 8px; padding: 7px 10px; min-height: 22px; }
+                border: 1px solid $border; border-radius: 8px; padding: 5px 10px; min-height: 20px; }
             QComboBox { padding-right: 24px; }
             QComboBox::drop-down { border: 0; width: 24px; }
+            QToolBar QComboBox { padding: 2px 8px; min-height: 16px; }
+            QToolBar QComboBox::drop-down { width: 20px; }
             QComboBox QAbstractItemView, QMenu { background: $surface; color: $foreground;
                 border: 1px solid $border; selection-background-color: $selection;
                 selection-color: $selectedText; padding: 4px; }
             QMenu::item { padding: 8px 20px; }
             QMenu::item:selected { background: $selection; color: $selectedText; }
-            QWidget#workspaceHeader { background: $surface; border-bottom: 1px solid $border; }
-            QLabel#appMark { background: $accent; color: #ffffff; border-radius: 9px;
-                padding: 7px 9px; font-size: 13px; font-weight: 700; }
-            QLabel#appTitle { color: $foreground; font-size: 18px; font-weight: 700; }
-            QLabel#projectHeader { color: $foreground; font-size: 13px; font-weight: 600; }
             QLabel#panelHeading { color: $muted; font-size: 10px; font-weight: 700;
                 letter-spacing: 1px; }
             QLabel#inspectorHeading { color: $foreground; font-size: 18px; font-weight: 700; }
@@ -5105,7 +5102,8 @@ private:
         toolbar->setMovable(false);
         toolbar->setFloatable(false);
         toolbar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-        toolbar->setIconSize(QSize(18, 18));
+        toolbar->setIconSize(QSize(16, 16));
+        toolbar->setFixedHeight(40);
         const auto add_toolbar_action = [this, toolbar](const QString& label, const char* icon_paths) {
             auto* action = toolbar->addAction(modern_toolbar_icon(icon_paths), label);
             action->setToolTip(label);
@@ -5267,30 +5265,6 @@ private:
         auto* root_layout = new QVBoxLayout(central);
         root_layout->setContentsMargins(0, 0, 0, 0);
         root_layout->setSpacing(0);
-
-        auto* header = new QWidget(central);
-        header->setObjectName(QStringLiteral("workspaceHeader"));
-        auto* header_layout = new QHBoxLayout(header);
-        header_layout->setContentsMargins(20, 14, 20, 12);
-        header_layout->setSpacing(10);
-        auto* app_mark = new QLabel(QStringLiteral("PS"), header);
-        app_mark->setObjectName(QStringLiteral("appMark"));
-        app_mark->setAlignment(Qt::AlignCenter);
-        app_mark->setFixedSize(38, 34);
-        header_layout->addWidget(app_mark);
-        auto* title_column = new QVBoxLayout;
-        title_column->setContentsMargins(0, 0, 0, 0);
-        title_column->setSpacing(0);
-        auto* app_title = new QLabel(QStringLiteral("Property Studio"), header);
-        app_title->setObjectName(QStringLiteral("appTitle"));
-        title_column->addWidget(app_title);
-        header_layout->addLayout(title_column);
-        header_layout->addSpacing(18);
-        m_project_header_label = new QLabel(QStringLiteral("Untitled project"), header);
-        m_project_header_label->setObjectName(QStringLiteral("projectHeader"));
-        header_layout->addWidget(m_project_header_label);
-        header_layout->addStretch();
-        root_layout->addWidget(header);
 
         m_plan_error_banner = new QLabel(central);
         m_plan_error_banner->setObjectName(QStringLiteral("planGeometryError"));
@@ -6952,24 +6926,13 @@ private:
     }
 
     void refreshTitle() {
-        auto title = QStringLiteral("Property Studio — Internal checkpoint");
-        if (!m_file_path.empty()) {
-            title += QStringLiteral("  •  ") +
-                     QString::fromStdWString(m_file_path.filename().wstring());
-        } else {
-            title += QStringLiteral("  •  Untitled");
-        }
+        auto title = m_file_path.empty()
+            ? QStringLiteral("Untitled project")
+            : QString::fromStdWString(m_file_path.filename().wstring());
         if (projectDirty() || hasBoundaryDraftChanges()) {
             title += QStringLiteral(" *");
         }
         owner->setWindowTitle(title);
-        if (m_project_header_label) {
-            const auto project_name = m_file_path.empty()
-                ? QStringLiteral("Untitled project")
-                : QString::fromStdWString(m_file_path.filename().wstring());
-            m_project_header_label->setText(project_name +
-                (projectDirty() || hasBoundaryDraftChanges() ? QStringLiteral("  ·  Unsaved changes") : QString{}));
-        }
         if (m_measurement_action) {
             QSignalBlocker first(m_measurement_action);
             QSignalBlocker second(m_architectural_action);
@@ -7561,7 +7524,6 @@ private:
     QComboBox* m_drawing_layer_combo{};
     QComboBox* m_pageSizeCombo{};
     QComboBox* m_architecturalViewCombo{};
-    QLabel* m_project_header_label{};
     QLabel* m_drawing_context_label{};
     QLabel* m_visibility_label{};
     QPushButton* m_show_all_button{};
