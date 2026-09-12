@@ -122,7 +122,7 @@ class RequirementAuditCliTests(unittest.TestCase):
 
     def test_release_mode_only_gate_fails_when_gaps_exist(self):
         self.write_contract(implementation_status="not_started")
-        self.assertEqual(self.run_audit(), 0)
+        self.assertEqual(self.run_audit("--contract"), 0)
         self.assertEqual(self.run_audit("--release"), 2)
 
     def test_release_mode_reports_pass_when_evidence_is_current(self):

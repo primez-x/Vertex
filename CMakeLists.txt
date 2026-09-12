@@ -435,8 +435,9 @@ if(BUILD_TESTING)
   add_test(NAME noninteractive_test_errors COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/test_error_policy.py" "$<TARGET_FILE:error_policy_probe>")
   add_test(NAME dependency_integrity COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s "${CMAKE_SOURCE_DIR}/tests" -p test_bootstrap.py)
   add_test(NAME production_gate_logic COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s "${CMAKE_SOURCE_DIR}/tests" -p test_requirement_audit.py)
-  # Keep the default test-suite pass-safe: contract checks only.
-  add_test(NAME requirement_contract COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/requirement_audit.py")
+  # Keep the default test-suite explicit: this checks the requirement/gate
+  # schema only. Release evidence is evaluated by the separate disabled gate.
+  add_test(NAME requirement_schema_contract COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/requirement_audit.py" --contract)
   # Explicit production-acceptance gate: fails closed with --release and must be
   # run explicitly via a dedicated CI/lifecycle step.
   add_test(NAME production_acceptance_gate COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/requirement_audit.py" --release)

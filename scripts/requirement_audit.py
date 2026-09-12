@@ -91,6 +91,8 @@ def release_gaps(ledger, gates, evidence, root):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--release", action="store_true", help="Fail unless every requirement has passing, unchanged acceptance evidence")
+    parser.add_argument("--contract", action="store_true",
+                        help="Validate the requirement and gate schema without evaluating release acceptance")
     parser.add_argument("--json", action="store_true", help="Print the complete machine-readable report")
     args = parser.parse_args()
     directory = ROOT / "docs/requirements"
@@ -107,6 +109,10 @@ def main():
               "production_accepted": not gaps, "release_gaps": gaps}
     if args.json:
         print(json.dumps(report, indent=2))
+    elif args.contract:
+        print(f"Requirement contract: {'PASS' if not errors else f'BLOCKED ({len(errors)} errors)'}")
+        for error in errors:
+            print(error)
     else:
         print(f"{report['requirement_count']} requirements; {report['required_gate_count']} mandatory gates; {counts}")
         print("Production acceptance: " + ("PASS" if not gaps else f"BLOCKED ({len(gaps)} gaps)"))

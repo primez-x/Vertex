@@ -80,9 +80,15 @@ From the repository root, these commands validate the contract and evaluate the
 single production gate:
 
 ```powershell
-python scripts/requirement_audit.py
+python scripts/requirement_audit.py --contract
 python scripts/requirement_audit.py --release
 ```
+
+The contract command checks only the requirement and gate schema and reports
+`Requirement contract: PASS` when that structure is valid. It does not claim
+that implementation or production evidence is complete. The `--release`
+command evaluates the single production acceptance gate and fails while any
+requirement lacks current passing evidence.
 
 The root implementation/audit tooling may add stricter checks, fixture links,
 license scans, and status evidence. Those checks must preserve the contracts
