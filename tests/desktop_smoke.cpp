@@ -15,6 +15,7 @@
 #include "sketch/building_entity.hpp"
 #include "sketch/quantity.hpp"
 #include "sketch/annotation_entity_codec.hpp"
+#include "sketch/georeferencing_entity_codec.hpp"
 #include "sketch/desktop/building_object_dialog.hpp"
 #include "support/noninteractive_errors.hpp"
 #include "../src/desktop/plan_canvas.hpp"
@@ -2057,6 +2058,87 @@ void test_contextual_gable_roof_inspector(const QString& capture_directory) {
             "gable inspector geometry and quantity provenance must survive save/reopen");
 }
 
+void test_georeferencing_workflow(const QString& capture_directory) {
+    sketch::desktop::MainWindow window;
+    QTemporaryDir directory;
+    require(directory.isValid(), "georeferencing project directory");
+    const auto revision = window.document().revision();
+    auto* action = window.findChild<QAction*>(QStringLiteral("georeferencingWorkflow"));
+    require(action, "georeferencing command must be available in the desktop workspace");
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("georeferencingDialog"));
+        require(dialog, "georeferencing editor must open");
+        auto* identifier = dialog->findChild<QLineEdit*>(QStringLiteral("georeferencingCrsIdentifier"));
+        auto* definition = dialog->findChild<QLineEdit*>(QStringLiteral("georeferencingCrsDefinition"));
+        auto* a = dialog->findChild<QLineEdit*>(QStringLiteral("georeferencingA"));
+        auto* b = dialog->findChild<QLineEdit*>(QStringLiteral("georeferencingB"));
+        auto* tx = dialog->findChild<QLineEdit*>(QStringLiteral("georeferencingTx"));
+        auto* c = dialog->findChild<QLineEdit*>(QStringLiteral("georeferencingC"));
+        auto* d = dialog->findChild<QLineEdit*>(QStringLiteral("georeferencingD"));
+        auto* ty = dialog->findChild<QLineEdit*>(QStringLiteral("georeferencingTy"));
+        auto* points = dialog->findChild<QPlainTextEdit*>(QStringLiteral("georeferencingControlPoints"));
+        auto* resources = dialog->findChild<QPlainTextEdit*>(QStringLiteral("georeferencingOfflineResources"));
+        auto* validate = dialog->findChild<QPushButton*>(QStringLiteral("georeferencingValidate"));
+        auto* save = dialog->findChild<QPushButton*>(QStringLiteral("georeferencingSave"));
+        auto* summary = dialog->findChild<QLabel*>(QStringLiteral("georeferencingSummary"));
+        auto* residuals = dialog->findChild<QPlainTextEdit*>(QStringLiteral("georeferencingResiduals"));
+        auto* sample_result = dialog->findChild<QLabel*>(QStringLiteral("georeferencingSampleResult"));
+        require(identifier && definition && a && b && tx && c && d && ty && points && resources &&
+                    validate && save && summary && residuals && sample_result && !save->isEnabled(),
+                "georeferencing controls must exist and start unsaved");
+        identifier->setText(QStringLiteral("EPSG:32613"));
+        definition->setText(QStringLiteral("fixture projected metre CRS"));
+        a->setText(QStringLiteral("2"));
+        b->setText(QStringLiteral("0"));
+        tx->setText(QStringLiteral("10"));
+        c->setText(QStringLiteral("0"));
+        d->setText(QStringLiteral("3"));
+        ty->setText(QStringLiteral("20"));
+        points->setPlainText(QStringLiteral(
+            "b,1,0,12,20\norigin,0,0,10,20\nnorth,0,1,10,26"));
+        resources->setPlainText(QStringLiteral("proj/proj.db,%1").arg(QString(64, QLatin1Char('a'))));
+        validate->click();
+        require(save->isEnabled() && summary->text().contains(QStringLiteral("Validated 3 control points")) &&
+                    residuals->toPlainText().contains(QStringLiteral("origin")) &&
+                    sample_result->text() == QStringLiteral("(10, 20) m"),
+                "georeferencing editor must validate and display residuals and transform output");
+        if (!capture_directory.isEmpty())
+            require(dialog->grab().save(capture_directory + QStringLiteral("/georeferencing.png")),
+                    "georeferencing capture");
+        save->click();
+    });
+    action->trigger();
+    require(window.document().revision() == revision + 1,
+            "saving georeferencing must be one document command");
+    std::string georeferencing_id;
+    const auto snapshot = window.document().snapshot();
+    for (const auto& [id, entity] : snapshot.entities()) {
+        if (entity.type == sketch::kGeoreferencingEntityType) {
+            require(georeferencing_id.empty(), "georeferencing workflow must keep one record");
+            georeferencing_id = id;
+            const auto contract = sketch::decode_georeferencing_entity(entity);
+            require(contract.apply(1, 1).x == 12.0 && contract.apply(1, 1).y == 23.0,
+                    "saved georeferencing must apply its affine transform");
+        }
+    }
+    require(!georeferencing_id.empty(), "georeferencing entity must be saved");
+    const auto path = directory.filePath(QStringLiteral("georeferencing.bldproj"));
+    require(window.saveProjectAs(path) && window.openProject(path),
+            "georeferencing project must save and reopen");
+    require(window.document().snapshot().entities().contains(georeferencing_id),
+            "reopened project must retain georeferencing entity");
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("georeferencingDialog"));
+        auto* identifier = dialog ? dialog->findChild<QLineEdit*>(QStringLiteral("georeferencingCrsIdentifier")) : nullptr;
+        auto* points = dialog ? dialog->findChild<QPlainTextEdit*>(QStringLiteral("georeferencingControlPoints")) : nullptr;
+        require(dialog && identifier && points && identifier->text() == QStringLiteral("EPSG:32613") &&
+                    points->toPlainText().contains(QStringLiteral("origin,0,0,10,20")),
+                "reopened georeferencing editor must restore the persisted contract");
+        dialog->reject();
+    });
+    action->trigger();
+}
+
 void test_survey_calculator(const QString& capture_directory) {
     sketch::desktop::MainWindow window;
     QString survey_id;
@@ -3172,6 +3254,7 @@ int main(int argc, char** argv) {
     test_roof_opening_authoring(field_ui_capture_directory);
     test_material_assignment_inspector(field_ui_capture_directory);
     test_contextual_gable_roof_inspector(field_ui_capture_directory);
+    test_georeferencing_workflow(field_ui_capture_directory);
     test_survey_calculator(field_ui_capture_directory);
     test_survey_explicit_endpoint_closure();
     {

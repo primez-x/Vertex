@@ -45,6 +45,7 @@
 #include "sketch/assistance_engine.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/annotation_entity_codec.hpp"
+#include "sketch/georeferencing_entity_codec.hpp"
 #include "sketch/vertical_levels.hpp"
 #include "sketch/reference_grid.hpp"
 #include "sketch/terrain_surface.hpp"
@@ -8228,6 +8229,296 @@ public:
         }
     }
 
+    void showGeoreferencing() {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This project is read-only."));
+            return;
+        }
+        const auto context = captureModalContext();
+        QDialog dialog(owner);
+        styleDialog(dialog);
+        dialog.setObjectName(QStringLiteral("georeferencingDialog"));
+        dialog.setWindowTitle(QStringLiteral("Pro georeferencing"));
+        dialog.resize(840, 720);
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* form = new QFormLayout;
+        auto* crs_identifier = new QLineEdit(&dialog);
+        crs_identifier->setObjectName(QStringLiteral("georeferencingCrsIdentifier"));
+        crs_identifier->setPlaceholderText(QStringLiteral("EPSG:32613"));
+        form->addRow(QStringLiteral("CRS identifier"), crs_identifier);
+        auto* crs_definition = new QLineEdit(&dialog);
+        crs_definition->setObjectName(QStringLiteral("georeferencingCrsDefinition"));
+        crs_definition->setPlaceholderText(QStringLiteral("Local projected metre definition"));
+        form->addRow(QStringLiteral("CRS definition"), crs_definition);
+        layout->addLayout(form);
+
+        auto* transform_group = new QGroupBox(QStringLiteral("Supplied affine transform"), &dialog);
+        auto* transform_layout = new QGridLayout(transform_group);
+        const auto add_transform_field = [&](const QString& label, const QString& object_name,
+                                              int row, int column) {
+            auto* field = new QLineEdit(transform_group);
+            field->setObjectName(object_name);
+            field->setPlaceholderText(QStringLiteral("0"));
+            transform_layout->addWidget(new QLabel(label, transform_group), row, column * 2);
+            transform_layout->addWidget(field, row, column * 2 + 1);
+            return field;
+        };
+        auto* coefficient_a = add_transform_field(QStringLiteral("a"),
+            QStringLiteral("georeferencingA"), 0, 0);
+        auto* coefficient_b = add_transform_field(QStringLiteral("b"),
+            QStringLiteral("georeferencingB"), 0, 1);
+        auto* translation_x = add_transform_field(QStringLiteral("tx (m)"),
+            QStringLiteral("georeferencingTx"), 0, 2);
+        auto* coefficient_c = add_transform_field(QStringLiteral("c"),
+            QStringLiteral("georeferencingC"), 1, 0);
+        auto* coefficient_d = add_transform_field(QStringLiteral("d"),
+            QStringLiteral("georeferencingD"), 1, 1);
+        auto* translation_y = add_transform_field(QStringLiteral("ty (m)"),
+            QStringLiteral("georeferencingTy"), 1, 2);
+        layout->addWidget(transform_group);
+
+        auto* entries_splitter = new QSplitter(Qt::Horizontal, &dialog);
+        auto* points_panel = new QWidget(entries_splitter);
+        auto* points_layout = new QVBoxLayout(points_panel);
+        points_layout->setContentsMargins(0, 0, 0, 0);
+        points_layout->addWidget(new QLabel(
+            QStringLiteral("Control points — id, local X m, local Y m, easting m, northing m"),
+            points_panel));
+        auto* control_points = new QPlainTextEdit(points_panel);
+        control_points->setObjectName(QStringLiteral("georeferencingControlPoints"));
+        control_points->setAccessibleName(QStringLiteral("Georeferencing control points"));
+        control_points->setLineWrapMode(QPlainTextEdit::NoWrap);
+        points_layout->addWidget(control_points, 1);
+        entries_splitter->addWidget(points_panel);
+        auto* resources_panel = new QWidget(entries_splitter);
+        auto* resources_layout = new QVBoxLayout(resources_panel);
+        resources_layout->setContentsMargins(0, 0, 0, 0);
+        resources_layout->addWidget(new QLabel(
+            QStringLiteral("Offline resources — relative path, lowercase SHA-256"), resources_panel));
+        auto* resources = new QPlainTextEdit(resources_panel);
+        resources->setObjectName(QStringLiteral("georeferencingOfflineResources"));
+        resources->setAccessibleName(QStringLiteral("Offline georeferencing resources"));
+        resources->setLineWrapMode(QPlainTextEdit::NoWrap);
+        resources_layout->addWidget(resources, 1);
+        entries_splitter->addWidget(resources_panel);
+        entries_splitter->setSizes({520, 320});
+        layout->addWidget(entries_splitter, 1);
+
+        auto* sample_group = new QGroupBox(QStringLiteral("Transform check"), &dialog);
+        auto* sample_layout = new QGridLayout(sample_group);
+        auto* sample_x = new QLineEdit(QStringLiteral("0"), sample_group);
+        sample_x->setObjectName(QStringLiteral("georeferencingSampleX"));
+        auto* sample_y = new QLineEdit(QStringLiteral("0"), sample_group);
+        sample_y->setObjectName(QStringLiteral("georeferencingSampleY"));
+        auto* sample_result = new QLabel(sample_group);
+        sample_result->setObjectName(QStringLiteral("georeferencingSampleResult"));
+        sample_result->setTextFormat(Qt::PlainText);
+        sample_layout->addWidget(new QLabel(QStringLiteral("Local X (m)"), sample_group), 0, 0);
+        sample_layout->addWidget(sample_x, 0, 1);
+        sample_layout->addWidget(new QLabel(QStringLiteral("Local Y (m)"), sample_group), 0, 2);
+        sample_layout->addWidget(sample_y, 0, 3);
+        sample_layout->addWidget(new QLabel(QStringLiteral("Projected result"), sample_group), 0, 4);
+        sample_layout->addWidget(sample_result, 0, 5);
+        layout->addWidget(sample_group);
+
+        auto* summary = new QLabel(&dialog);
+        summary->setObjectName(QStringLiteral("georeferencingSummary"));
+        summary->setWordWrap(true);
+        summary->setTextFormat(Qt::PlainText);
+        layout->addWidget(summary);
+        auto* residuals = new QPlainTextEdit(&dialog);
+        residuals->setObjectName(QStringLiteral("georeferencingResiduals"));
+        residuals->setAccessibleName(QStringLiteral("Georeferencing residuals"));
+        residuals->setReadOnly(true);
+        residuals->setLineWrapMode(QPlainTextEdit::NoWrap);
+        residuals->setMaximumHeight(125);
+        layout->addWidget(residuals);
+
+        auto* buttons = new QDialogButtonBox(&dialog);
+        auto* validate = buttons->addButton(QStringLiteral("Validate"), QDialogButtonBox::ActionRole);
+        validate->setObjectName(QStringLiteral("georeferencingValidate"));
+        auto* save = buttons->addButton(QStringLiteral("Save to project"), QDialogButtonBox::ActionRole);
+        save->setObjectName(QStringLiteral("georeferencingSave"));
+        save->setEnabled(false);
+        buttons->addButton(QDialogButtonBox::Close);
+        layout->addWidget(buttons);
+
+        const auto format_number = [](double value) {
+            return QString::number(value, 'g', 15);
+        };
+        const auto parse_number = [](const QString& text, const char* label) {
+            bool ok = false;
+            const auto value = text.trimmed().toDouble(&ok);
+            if (!ok || !std::isfinite(value)) throw std::invalid_argument(label);
+            return value;
+        };
+        std::optional<std::string> existing_id;
+        std::optional<GeoreferencingContract> existing_contract;
+        try {
+            const auto snapshot = m_document->snapshot();
+            for (const auto& [id, entity] : snapshot.entities()) {
+                if (entity.type != kGeoreferencingEntityType) continue;
+                if (existing_id) throw std::invalid_argument(
+                    "The project contains more than one georeferencing record.");
+                existing_id = id;
+                existing_contract = decode_georeferencing_entity(entity);
+            }
+        } catch (const std::exception& error) {
+            summary->setText(QStringLiteral("Existing record: %1")
+                .arg(QString::fromUtf8(error.what())));
+        }
+        crs_identifier->setText(existing_contract
+            ? QString::fromStdString(existing_contract->crs().identifier)
+            : QStringLiteral("EPSG:32613"));
+        crs_definition->setText(existing_contract
+            ? QString::fromStdString(existing_contract->crs().definition)
+            : QStringLiteral("Projected metre CRS"));
+        const auto set_transform = [&](QLineEdit* field, double value) {
+            field->setText(format_number(value));
+        };
+        if (existing_contract) {
+            const auto& transform = existing_contract->transform();
+            set_transform(coefficient_a, transform.a);
+            set_transform(coefficient_b, transform.b);
+            set_transform(translation_x, transform.tx);
+            set_transform(coefficient_c, transform.c);
+            set_transform(coefficient_d, transform.d);
+            set_transform(translation_y, transform.ty);
+            QStringList point_lines;
+            for (const auto& point : existing_contract->control_points()) {
+                point_lines.push_back(QStringLiteral("%1,%2,%3,%4,%5")
+                    .arg(QString::fromStdString(point.id), format_number(point.local_x),
+                         format_number(point.local_y), format_number(point.target_x),
+                         format_number(point.target_y)));
+            }
+            control_points->setPlainText(point_lines.join(QLatin1Char('\n')));
+            QStringList resource_lines;
+            for (const auto& resource : existing_contract->offline_resources().files) {
+                resource_lines.push_back(QStringLiteral("%1,%2")
+                    .arg(QString::fromStdString(resource.relative_path),
+                         QString::fromStdString(resource.sha256)));
+            }
+            resources->setPlainText(resource_lines.join(QLatin1Char('\n')));
+        } else {
+            coefficient_a->setText(QStringLiteral("1"));
+            coefficient_b->setText(QStringLiteral("0"));
+            translation_x->setText(QStringLiteral("0"));
+            coefficient_c->setText(QStringLiteral("0"));
+            coefficient_d->setText(QStringLiteral("1"));
+            translation_y->setText(QStringLiteral("0"));
+            control_points->setPlainText(QStringLiteral("origin,0,0,0,0"));
+            resources->setPlainText(QStringLiteral("proj/proj.db,%1")
+                .arg(QString(64, QLatin1Char('0'))));
+        }
+
+        const auto build_contract = [&]() {
+            const GeoCrs crs{crs_identifier->text().trimmed().toStdString(),
+                             crs_definition->text().trimmed().toStdString(),
+                             GeoCoordinateUnit::metre};
+            const AffineGeoTransform transform{
+                parse_number(coefficient_a->text(), "Transform a must be numeric"),
+                parse_number(coefficient_b->text(), "Transform b must be numeric"),
+                parse_number(translation_x->text(), "Transform tx must be numeric"),
+                parse_number(coefficient_c->text(), "Transform c must be numeric"),
+                parse_number(coefficient_d->text(), "Transform d must be numeric"),
+                parse_number(translation_y->text(), "Transform ty must be numeric")};
+            std::vector<GeoControlPoint> points;
+            const auto lines = control_points->toPlainText().split('\n', Qt::SkipEmptyParts);
+            if (lines.isEmpty()) throw std::invalid_argument("Enter at least one control point.");
+            points.reserve(static_cast<std::size_t>(lines.size()));
+            for (int index = 0; index < lines.size(); ++index) {
+                const auto fields = lines.at(index).split(',', Qt::KeepEmptyParts);
+                if (fields.size() != 5) throw std::invalid_argument(
+                    "Control point lines need id, local X, local Y, easting, northing.");
+                points.push_back({fields.at(0).trimmed().toStdString(),
+                    parse_number(fields.at(1), "Control point local X must be numeric"),
+                    parse_number(fields.at(2), "Control point local Y must be numeric"),
+                    parse_number(fields.at(3), "Control point easting must be numeric"),
+                    parse_number(fields.at(4), "Control point northing must be numeric")});
+            }
+            std::vector<OfflineGeoResource> offline_files;
+            const auto resource_lines = resources->toPlainText().split('\n', Qt::SkipEmptyParts);
+            if (resource_lines.isEmpty()) throw std::invalid_argument(
+                "Declare at least one offline PROJ resource.");
+            offline_files.reserve(static_cast<std::size_t>(resource_lines.size()));
+            for (const auto& line : resource_lines) {
+                const auto fields = line.split(',', Qt::KeepEmptyParts);
+                if (fields.size() != 2) throw std::invalid_argument(
+                    "Offline resource lines need relative path and lowercase SHA-256.");
+                offline_files.push_back({fields.at(0).trimmed().toStdString(),
+                                         fields.at(1).trimmed().toStdString()});
+            }
+            return GeoreferencingContract(crs, transform, std::move(points),
+                                          OfflineGeoResources{false, std::move(offline_files)});
+        };
+        std::optional<GeoreferencingContract> staged;
+        const auto invalidate = [&] {
+            staged.reset();
+            save->setEnabled(false);
+            residuals->clear();
+            sample_result->clear();
+        };
+        for (auto* field : {crs_identifier, crs_definition, coefficient_a, coefficient_b,
+                            translation_x, coefficient_c, coefficient_d, translation_y,
+                            sample_x, sample_y}) {
+            QObject::connect(field, &QLineEdit::textChanged, &dialog, invalidate);
+        }
+        QObject::connect(control_points, &QPlainTextEdit::textChanged, &dialog, invalidate);
+        QObject::connect(resources, &QPlainTextEdit::textChanged, &dialog, invalidate);
+        QObject::connect(validate, &QPushButton::clicked, &dialog, [&] {
+            invalidate();
+            try {
+                staged = build_contract();
+                const auto sample = staged->apply(
+                    parse_number(sample_x->text(), "Sample X must be numeric"),
+                    parse_number(sample_y->text(), "Sample Y must be numeric"));
+                sample_result->setText(QStringLiteral("(%1, %2) m")
+                    .arg(format_number(sample.x), format_number(sample.y)));
+                summary->setText(QStringLiteral(
+                    "Validated %1 control point%2 · RMS residual %3 m · maximum %4 m · networking disabled."
+                ).arg(staged->control_points().size())
+                 .arg(staged->control_points().size() == 1 ? QString{} : QStringLiteral("s"))
+                 .arg(format_number(staged->rms_residual_m()), format_number(staged->maximum_residual_m())));
+                QStringList rows;
+                for (const auto& residual : staged->residuals()) {
+                    rows.push_back(QStringLiteral("%1  ΔE %2 m  ΔN %3 m  |r| %4 m")
+                        .arg(QString::fromStdString(residual.id), format_number(residual.dx),
+                             format_number(residual.dy), format_number(residual.magnitude_m)));
+                }
+                residuals->setPlainText(rows.join(QLatin1Char('\n')));
+                save->setEnabled(true);
+            } catch (const std::exception& error) {
+                summary->setText(QStringLiteral("Validation: %1")
+                    .arg(QString::fromUtf8(error.what())));
+            }
+        });
+        QObject::connect(save, &QPushButton::clicked, &dialog, [&] {
+            if (!staged) return;
+            if (!modalContextUnchanged(context)) {
+                summary->setText(lastError());
+                return;
+            }
+            try {
+                const auto source = m_document->snapshot();
+                const auto id = existing_id.value_or(new_id("georeferencing"));
+                auto entity = make_georeferencing_entity(id, *staged);
+                const ApplyEntityChanges command{
+                    context.revision, {EntityChange::upsert(std::move(entity))}, {},
+                    existing_id ? "Edit georeferencing" : "Save georeferencing"};
+                (void)Document::preview_command(source, command);
+                applyDocumentCommand(command);
+                clearError();
+                refresh();
+                dialog.accept();
+            } catch (const std::exception& error) {
+                summary->setText(QStringLiteral("Save: %1")
+                    .arg(QString::fromUtf8(error.what())));
+            }
+        });
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        (void)dialog.exec();
+    }
+
     void showSurveyCalculator() {
         auto drawing_context = captureModalContext();
         QDialog dialog(owner);
@@ -13135,6 +13426,10 @@ private:
         auto* survey_action = more_menu->addAction(QStringLiteral("Survey traverse…"));
         survey_action->setObjectName(QStringLiteral("surveyTraverse"));
         QObject::connect(survey_action, &QAction::triggered, owner, [this] { showSurveyCalculator(); });
+        auto* georeferencing_action = more_menu->addAction(QStringLiteral("Pro georeferencing…"));
+        georeferencing_action->setObjectName(QStringLiteral("georeferencingWorkflow"));
+        QObject::connect(georeferencing_action, &QAction::triggered, owner,
+                         [this] { showGeoreferencing(); });
         m_copy_action = new QAction(QStringLiteral("Copy selection"), owner);
         m_copy_action->setObjectName(QStringLiteral("copySelection"));
         m_copy_action->setShortcut(QKeySequence::Copy);

@@ -1453,9 +1453,11 @@
         "src/core/georeferencing_entity_codec.cpp",
         "tests/georeferencing_contract_tests.cpp",
         "tests/georeferencing_entity_codec_tests.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/desktop_smoke.cpp",
         "docs/survey-georeferencing-contracts.md"
       ],
-      "implementation_note": "Explicit projected-metre CRS, affine transform, control-point residuals, and offline resource declarations are validated. Version-1 JSON is strict and derived residuals are recomputed; a typed georeferencing Document entity survives save/reopen. PROJ execution/resource verification, georeferencing UI workflow, Apex module behavior, and network-denied fixtures remain open."
+      "implementation_note": "Explicit projected-metre CRS, affine transform, control-point residuals, and offline resource declarations are validated. Version-1 JSON is strict and derived residuals are recomputed; a typed georeferencing Document entity survives save/reopen. The Windows editor supports persisted CRS/transform/control-point/resource entry, residual and sample-transform feedback, and normal Document history with desktop smoke coverage. PROJ execution/resource verification, Apex module behavior, and network-denied fixtures remain open."
     },
     {
       "id": "APX-INT-001",
