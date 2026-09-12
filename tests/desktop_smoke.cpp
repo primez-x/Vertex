@@ -1987,6 +1987,8 @@ void test_hosted_opening_editor(const QString& capture_directory) {
             require(!button->isEnabled() && !dialog->submit() && window.document().revision()==before.revision(),
                 "oversized opening preview must reject without history mutation");
             offset->setText("1/2 m"); width->setText("1 m");
+            dialog->findChild<QCheckBox*>("showDoorSwing")->setChecked(true);
+            dialog->findChild<QComboBox*>("doorHinge")->setCurrentIndex(1);
             require(button->isEnabled(), "corrected input enables creation");
             if(!capture_directory.isEmpty()) {
                 QApplication::processEvents();
@@ -2003,8 +2005,29 @@ void test_hosted_opening_editor(const QString& capture_directory) {
     require(opening!=after.entities().end() && opening->second.properties.at("offset_m")==0.5 &&
         opening->second.properties.at("width_m")==1 && after.revision()==before.revision()+1,
         "opening form must create one exact hosted object in one command");
+    require(opening->second.properties.at("door_operation").at("hinge")=="end",
+        "door creation must retain explicit handing");
     require(window.undoCommand() && window.document().snapshot().entities()==before.entities() &&
         window.redoCommand(), "single form creation participates in undo and redo");
+    require(window.selectEntity(QString::fromStdString(opening->first)),"select door for operation editing");
+    QTimer::singleShot(0,&window,[&]{
+        auto* dialog=window.findChild<QDialog*>("doorSwingDialog");
+        require(dialog,"door operation inspector opens");
+        dialog->findChild<QComboBox*>("editDoorHinge")->setCurrentIndex(1);
+        dialog->findChild<QComboBox*>("editDoorSide")->setCurrentIndex(1);
+        dialog->accept();
+    });
+    window.findChild<QPushButton*>("editDoorSwing")->click();
+    require(window.document().snapshot().entities().at(opening->first).properties.at("door_operation").at("side")=="right",
+        "door operation edits persist through inspector command");
+    QTemporaryDir project;
+    require(window.saveProjectAs(project.filePath("door.bldproj")) && window.openProject(project.filePath("door.bldproj")) &&
+        window.document().snapshot().entities().at(opening->first).properties.at("door_operation").at("side")=="right",
+        "door handing survives project reopen");
+    if(!capture_directory.isEmpty()) {
+        window.resize(1200,850); window.show(); QApplication::processEvents(); window.fitView();
+        require(window.grab().save(capture_directory+"/door-swing-plan.png"),"capture analytic door swing on plan");
+    }
     Wall curved{"curved",{{0,0},{4,0},0.5},0.2,3,0,{{"existing",1,1,0,2}}};
     desktop::HostedOpeningDialog overlap(curved,Unit::metre,false);
     overlap.findChild<QLineEdit*>("openingOffset")->setText("1.5 m");

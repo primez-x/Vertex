@@ -1,12 +1,16 @@
 #pragma once
 #include "sketch/wall_semantics.hpp"
 #include "sketch/quantity.hpp"
+#include "sketch/door_operation.hpp"
+#include <optional>
 #include <QDialog>
 #include <array>
 
 class QLineEdit;
 class QLabel;
 class QPushButton;
+class QCheckBox;
+class QComboBox;
 namespace sketch::desktop {
 class HostedOpeningDialog final : public QDialog {
 public:
@@ -16,6 +20,7 @@ public:
     [[nodiscard]] QString sillExpression() const;
     [[nodiscard]] QString heightExpression() const;
     bool submit();
+    [[nodiscard]] std::optional<DoorOperation> doorOperation() const;
 private:
     bool validate();
     Wall host_;
@@ -24,5 +29,8 @@ private:
     QWidget* preview_{};
     QLabel* error_{};
     QPushButton* create_{};
+    QCheckBox* swing_{};
+    QComboBox* hinge_{};
+    QComboBox* side_{};
 };
 } // namespace sketch::desktop

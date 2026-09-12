@@ -5,6 +5,7 @@
 
 #include "sketch/architecture.hpp"
 #include <QColorDialog>
+#include <QDoubleSpinBox>
 #include "sketch/architectural_schedule.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/desktop/hosted_opening_dialog.hpp"
@@ -6273,7 +6274,8 @@ public:
                                 const QString& width_expression,
                                 const QString& sill_expression,
                                 const QString& height_expression,
-                                std::optional<Revision> expected_revision = std::nullopt) {
+                                std::optional<Revision> expected_revision = std::nullopt,
+                                std::optional<DoorOperation> door_operation = std::nullopt) {
         const auto revision = expected_revision.value_or(m_document->revision());
         if (revision != m_document->revision()) {
             setError(QStringLiteral("The project changed while the opening was being entered. Start the opening again."));
@@ -6337,13 +6339,14 @@ public:
                 return {};
             }
 
-            const auto properties = json{{"wall_id", wall_entity->id},
+            auto properties = json{{"wall_id", wall_entity->id},
                                          {"offset_m", offset},
                                          {"width_m", width},
                                          {"sill_m", sill},
                                          {"height_m", height},
                                          {"opening_kind", normalized_kind.toStdString()},
                                          {"classification", normalized_kind.toStdString()}};
+            if(door_operation) properties["door_operation"] = encode_door_operation(*door_operation);
             if (!applyEntity(Entity{entity_id, "opening", properties, false, json::object()},
                              "create hosted opening", revision)) {
                 return {};
@@ -11047,6 +11050,10 @@ private:
         m_material_error->setWordWrap(true);
         material_layout->addWidget(m_material_error);
         inspector_layout->addWidget(m_material_group);
+        m_door_swing_button = new QPushButton("Door swing…", inspector_body);
+        m_door_swing_button->setObjectName("editDoorSwing");
+        inspector_layout->addWidget(m_door_swing_button);
+        QObject::connect(m_door_swing_button, &QPushButton::clicked, owner, [this] { showDoorSwingEditor(); });
         QObject::connect(apply_material, &QPushButton::clicked, owner, [this] {
             try {
                 if (!m_material_context || !modalContextUnchanged(*m_material_context))
@@ -11660,6 +11667,22 @@ private:
             openings_by_wall[*wall_id].push_back(*opening);
         }
         for (const auto& [id, entity] : snapshot.entities()) {
+            if (entity.type == "opening" && entity.properties.value("opening_kind", std::string{}) == "door" &&
+                entity.properties.contains("door_operation")) {
+                try {
+                    const auto host = snapshot.entities().find(entity.properties.at("wall_id").get<std::string>());
+                    if(host == snapshot.entities().end()) throw std::invalid_argument("host wall is missing");
+                    const auto baseline = read_required_segment(host->second.properties, "baseline");
+                    const auto opening = read_hosted_opening(entity);
+                    if(!baseline || !opening) throw std::invalid_argument("door geometry is incomplete");
+                    all_geometry.push_back(CanvasEntity{id_from(id),"opening",
+                        door_plan_symbol(*baseline,opening->offset,opening->width,
+                            decode_door_operation(entity.properties.at("door_operation"))),0,id_from(id)==m_selected_id});
+                } catch(const std::exception& error) {
+                    append_geometry_error(QStringLiteral("Door %1: %2").arg(id_from(id),QString::fromUtf8(error.what())));
+                }
+                continue;
+            }
             if (can_recognize_boundary_dimension_entity_type(entity.type)) {
                 try {
                     const auto decoded = decode_boundary_dimension_entity(entity);
@@ -12554,6 +12577,8 @@ private:
         m_constraint_button->setVisible(wall);
         m_constraint_button->setEnabled(wall && m_document->is_editable());
         const bool opening = entity.has_value() && entity->type == "opening";
+        m_door_swing_button->setVisible(opening && entity->properties.value("opening_kind", std::string{}) == "door");
+        m_door_swing_button->setEnabled(m_document->is_editable());
         const bool slab = entity.has_value() && entity->type == "slab";
         const bool reference_asset = entity.has_value() && entity->type == "reference_asset";
         const bool project_entity = entity.has_value() && entity->type == "property";
@@ -13630,6 +13655,46 @@ private:
         }
     }
 
+    void showDoorSwingEditor() {
+        const auto context = captureModalContext();
+        const auto source = selectedEntity();
+        if(!source || source->type != "opening") return;
+        try {
+            const auto prior = source->properties.value("door_operation",json{});
+            const auto operation = prior.is_null() ? DoorOperation{} : decode_door_operation(prior);
+            QDialog dialog(owner);
+            dialog.setObjectName("doorSwingDialog"); dialog.setWindowTitle("Door swing");
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* form = new QFormLayout;
+            auto* hinge = new QComboBox(&dialog); hinge->setObjectName("editDoorHinge");
+            hinge->addItems({"None","Start jamb","End jamb"});
+            hinge->setCurrentIndex(prior.is_null()?0:(operation.hinge_at_end?2:1));
+            hinge->setToolTip("Jamb order follows the host wall's drawing direction.");
+            auto* side = new QComboBox(&dialog); side->setObjectName("editDoorSide");
+            side->addItems({"Left of wall","Right of wall"}); side->setCurrentIndex(operation.swing_left?0:1);
+            auto* angle = new QDoubleSpinBox(&dialog); angle->setObjectName("editDoorAngle");
+            angle->setRange(0.01,180); angle->setDecimals(2); angle->setSuffix("°"); angle->setValue(operation.angle_degrees);
+            const auto displayed_angle = angle->value();
+            form->addRow("Hinge",hinge); form->addRow("Swing",side); form->addRow("Angle",angle);
+            layout->addLayout(form);
+            auto sync=[&]{side->setEnabled(hinge->currentIndex()!=0);angle->setEnabled(hinge->currentIndex()!=0);};
+            sync(); QObject::connect(hinge,&QComboBox::currentIndexChanged,&dialog,[&]{sync();});
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save|QDialogButtonBox::Cancel,&dialog);
+            layout->addWidget(buttons);
+            QObject::connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);
+            QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+            if(dialog.exec()!=QDialog::Accepted || !modalContextUnchanged(context)) return;
+            auto candidate = *source;
+            if(hinge->currentIndex()==0) candidate.properties.erase("door_operation");
+            else candidate.properties["door_operation"] = encode_door_operation(
+                DoorOperation{hinge->currentIndex()==2,side->currentIndex()==0,
+                    angle->value()==displayed_angle ? operation.angle_degrees : angle->value()});
+            if(candidate.properties==source->properties) return;
+            applyDocumentCommand(ApplyEntityChanges{context.revision,{EntityChange::upsert(candidate)},{},"edit door swing"});
+            clearError(); refresh();
+        } catch(const std::exception& error) { setError(QString::fromUtf8(error.what())); }
+    }
+
     void createOpeningFromDialog(const QString& kind) {
         const auto context = captureModalContext();
         const auto wall = selectedEntity();
@@ -13652,7 +13717,7 @@ private:
                 kind == QStringLiteral("window"), owner);
             if (dialog.exec() != QDialog::Accepted || !modalContextUnchanged(context)) return;
             (void)createHostedOpening(kind, dialog.offsetExpression(), dialog.widthExpression(),
-                dialog.sillExpression(), dialog.heightExpression(), context.revision);
+                dialog.sillExpression(), dialog.heightExpression(), context.revision, dialog.doorOperation());
         } catch (const std::exception& error) {
             setError(QStringLiteral("Opening: %1").arg(QString::fromUtf8(error.what())));
         }
@@ -13814,6 +13879,7 @@ private:
     std::vector<BuildingDimensionField> m_building_placement;
     std::optional<ModalContext> m_building_edit_context;
     QWidget* m_material_group{};
+    QPushButton* m_door_swing_button{};
     QComboBox* m_material_combo{};
     QLabel* m_material_error{};
     std::optional<ModalContext> m_material_context;

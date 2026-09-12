@@ -957,8 +957,10 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
         }
         const QRectF bounds(arc->center.x - arc->radius, arc->center.y - arc->radius,
                            arc->radius * 2.0, arc->radius * 2.0);
-        path.arcTo(bounds, arc->start_angle * 180.0 / pi,
-                   segment.sweep_radians * 180.0 / pi);
+        // QPainterPath defines arc angles with a screen-style inverted Y.
+        // Negate both angles in our Cartesian path before the view transform.
+        path.arcTo(bounds, -arc->start_angle * 180.0 / pi,
+                   -segment.sweep_radians * 180.0 / pi);
     }
     if (!entity.segments.empty()) {
         painter.drawPath(path);
@@ -973,8 +975,8 @@ void PlanCanvas::drawSegment(QPainter& painter, const Segment& segment) const {
     } else if (const auto arc = arc_info(segment)) {
         const QRectF bounds(arc->center.x - arc->radius, arc->center.y - arc->radius,
                             arc->radius * 2.0, arc->radius * 2.0);
-        path.arcTo(bounds, arc->start_angle * 180.0 / pi,
-                   segment.sweep_radians * 180.0 / pi);
+        path.arcTo(bounds, -arc->start_angle * 180.0 / pi,
+                   -segment.sweep_radians * 180.0 / pi);
     } else {
         return;
     }

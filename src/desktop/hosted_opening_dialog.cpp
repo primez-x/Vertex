@@ -1,5 +1,7 @@
 #include "sketch/desktop/hosted_opening_dialog.hpp"
 #include <QDialogButtonBox>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QFormLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -63,6 +65,24 @@ HostedOpeningDialog::HostedOpeningDialog(const Wall& host, Unit unit, bool windo
         form->addRow(labels[i],fields_[i]);
     }
     layout->addLayout(form);
+    if(!window) {
+        swing_=new QCheckBox("Show door swing",this);
+        swing_->setObjectName("showDoorSwing");
+        auto* row=new QHBoxLayout;
+        row->addWidget(swing_);
+        hinge_=new QComboBox(this);
+        hinge_->setObjectName("doorHinge");
+        hinge_->addItems({"Start jamb","End jamb"});
+        hinge_->setToolTip("Jamb order follows the host wall's drawing direction.");
+        side_=new QComboBox(this);
+        side_->setObjectName("doorSwingSide");
+        side_->addItems({"Swing left","Swing right"});
+        side_->setToolTip("Side relative to the host wall's drawing direction.");
+        row->addWidget(hinge_); row->addWidget(side_);
+        hinge_->setEnabled(false); side_->setEnabled(false);
+        connect(swing_,&QCheckBox::toggled,this,[this](bool on){hinge_->setEnabled(on);side_->setEnabled(on);});
+        layout->addLayout(row);
+    }
     if(host.baseline.sweep_radians!=0) layout->addWidget(new QLabel("Unrolled wall elevation",this));
     preview_=new OpeningPreview(host_,this);
     layout->addWidget(preview_,1);
@@ -107,4 +127,8 @@ QString HostedOpeningDialog::offsetExpression()const{return fields_[0]->text();}
 QString HostedOpeningDialog::widthExpression()const{return fields_[1]->text();}
 QString HostedOpeningDialog::sillExpression()const{return fields_[2]->text();}
 QString HostedOpeningDialog::heightExpression()const{return fields_[3]->text();}
+std::optional<DoorOperation> HostedOpeningDialog::doorOperation()const {
+    if(!swing_ || !swing_->isChecked()) return std::nullopt;
+    return DoorOperation{hinge_->currentIndex()==1,side_->currentIndex()==0,90};
+}
 } // namespace sketch::desktop

@@ -2,6 +2,7 @@
 
 #include "sketch/geometry.hpp"
 #include "sketch/assembly_model.hpp"
+#include "sketch/door_operation.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -103,6 +104,12 @@ void add_opening(const Entity& entity, std::vector<ScheduleRecord>& records,
                            diagnostics);
     record.properties.emplace("width", ScheduleQuantity{*width, ScheduleUnit::metre});
     record.properties.emplace("height", ScheduleQuantity{*height, ScheduleUnit::metre});
+    if(*opening_kind == "door" && entity.properties.contains("door_operation")) {
+        const auto operation = decode_door_operation(entity.properties.at("door_operation"));
+        record.properties.emplace("hinge", std::string(operation.hinge_at_end?"end":"start"));
+        record.properties.emplace("swing_side", std::string(operation.swing_left?"left":"right"));
+        record.properties.emplace("swing_angle_degrees", operation.angle_degrees);
+    }
     for (const auto [name, unit] : {std::pair{"sill", ScheduleUnit::metre},
                                     std::pair{"offset", ScheduleUnit::metre}}) {
         if (const auto value = finite_field(entity, std::string(name) + "_m")) {
@@ -214,6 +221,15 @@ DocumentScheduleProjection project_schedules(
         // Stored room measurements are primitive provenance for gross_area,
         // but the schedule editor only authorizes room names and marks.
         for (auto& row : result.snapshot.rows) {
+            if(row.kind == ScheduleRowKind::door) {
+                for(const auto* key : {"hinge","swing_side","swing_angle_degrees"}) {
+                    const auto cell = row.cells.find(key);
+                    if(cell == row.cells.end()) continue;
+                    cell->second.editable = false;
+                    cell->second.sources = {{row.object_id,"door_operation"}};
+                    cell->second.explanation = "Door operation relative to the host wall direction";
+                }
+            }
             if (row.kind == ScheduleRowKind::material) {
                 constexpr std::string_view suffix = ":material";
                 const auto source_id = row.object_id.substr(0, row.object_id.size() - suffix.size());

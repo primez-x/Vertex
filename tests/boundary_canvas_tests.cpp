@@ -466,6 +466,29 @@ void test_site_scale_fit() {
     }
 }
 
+void test_arc_render_orientation() {
+    PlanCanvas canvas;
+    canvas.resize(400,400);
+    canvas.setGridEnabled(false);
+    const auto output=[&] {
+        QImage image(400,400,QImage::Format_ARGB32_Premultiplied);
+        image.fill(background);
+        QPainter painter(&image);
+        canvas.renderSceneAt(painter,QRectF(image.rect()),100,{0,0},background);
+        return image;
+    };
+    const auto blank=output();
+    for(double sign:{-1.0,1.0}) {
+        canvas.setEntities({CanvasEntity{"arc","opening",{{{1,0},{0,sign},sign*std::numbers::pi/2}},0,false}});
+        const auto image=output();
+        const auto expected_y=qRound(200-sign*100/std::sqrt(2.0));
+        const auto opposite_y=qRound(200+sign*100/std::sqrt(2.0));
+        require(differing_pixels(blank,image,QRect(265,expected_y-5,12,12))>0 &&
+            differing_pixels(blank,image,QRect(265,opposite_y-5,12,12))==0,
+            "rendered analytic arcs must follow model sweep and meet the leaf endpoint");
+    }
+}
+
 int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QApplication application(argc, argv);
@@ -483,6 +506,7 @@ int main(int argc, char** argv) {
         test_effective_cursor_matches_click();
         test_overview_map_navigation();
         test_site_scale_fit();
+        test_arc_render_orientation();
         std::cout << "Boundary canvas tests passed\n";
         return 0;
     } catch (const std::exception& error) {

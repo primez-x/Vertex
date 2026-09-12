@@ -1,4 +1,5 @@
 #include "sketch/document.hpp"
+#include "sketch/door_operation.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
@@ -401,6 +402,15 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
     }
     std::map<std::string, AssemblyModel> material_catalogs;
     for (const auto& [id, entity] : entities) {
+        if (entity.properties.contains("door_operation")) {
+            try {
+                if (entity.type != "opening")
+                    document_error(DocumentErrorCode::invalid_entity, "Door operation requires an opening");
+                (void)decode_door_operation(entity.properties.at("door_operation"));
+            } catch (const std::exception& error) {
+                document_error(DocumentErrorCode::invalid_entity, std::string("Invalid door operation: ") + error.what());
+            }
+        }
         if (entity.properties.contains("material_assignment")) {
             try {
                 static constexpr std::array<std::string_view, 9> roles{
