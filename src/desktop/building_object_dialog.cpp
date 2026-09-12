@@ -809,7 +809,7 @@ private:
             return;
         }
         run_ok = std::isfinite(run) && run > geometry_tolerance;
-        rise_ok = std::isfinite(rise) && rise > geometry_tolerance;
+        rise_ok = std::isfinite(rise) && rise >= 0.0;
         double denominator = run;
         if (form == "gable_roof") {
             denominator = run * 0.5;
@@ -1261,8 +1261,8 @@ private:
                                          fallback != nullptr ? fallback->run : 4.0);
             const auto span = read_length("buildingObjectSpan", QStringLiteral("Span"), true,
                                           fallback != nullptr ? fallback->span : 3.0);
-            const auto rise = read_length("buildingObjectRise", QStringLiteral("Rise"), true,
-                                          fallback != nullptr ? fallback->rise : 1.0);
+            const auto rise = read_length("buildingObjectRise", QStringLiteral("Rise"), false,
+                                         fallback != nullptr ? fallback->rise : 1.0);
             const auto overhang = read_length("buildingObjectOverhang",
                                               QStringLiteral("Overhang"), false,
                                               fallback != nullptr ? fallback->overhang : 0.2);
@@ -1272,6 +1272,10 @@ private:
             if (!base.has_value() || !orientation.has_value() || !run.has_value() ||
                 !span.has_value() || !rise.has_value() || !overhang.has_value() ||
                 !thickness.has_value()) {
+                return std::nullopt;
+            }
+            if (*rise < 0.0) {
+                fail(QStringLiteral("Rise must be zero or greater."));
                 return std::nullopt;
             }
             const auto pitch = fallback != nullptr &&

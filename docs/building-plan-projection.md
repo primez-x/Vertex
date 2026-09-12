@@ -3,7 +3,8 @@
 `sketch::project_building_plan(const BuildingObject&)` derives the visible
 top-down drawing edges for one of the six canonical `BuildingObject` forms:
 rectangular column, circular column, straight beam, stair flight, sloped roof
-panel, and gable roof.  Coordinates remain in the document's world XY frame,
+panel (including its zero-rise flat-roof case), and gable roof.  Coordinates
+remain in the document's world XY frame,
 so translation and horizontal rotation are retained.  The result is a
 `Boundary` whose zero-sweep segments are lines and whose nonzero-sweep
 segments are exact circular arcs.

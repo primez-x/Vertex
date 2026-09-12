@@ -138,6 +138,21 @@ void test_all_forms_roundtrip_to_canonical_entities() {
         * (panel.span + 2.0 * panel.overhang) * panel.thickness;
     require_roundtrip(panel, "roof", "sloped_roof_panel", panel_volume);
 
+    const SlopedRoofPanel flat_panel{
+        .id = "roof-flat",
+        .base_position = {-2.0, 1.0, 4.5},
+        .orientation_radians = -0.2,
+        .run = 4.0,
+        .span = 3.0,
+        .rise = 0.0,
+        .pitch_radians = 0.0,
+        .overhang = 0.2,
+        .thickness = 0.1,
+    };
+    const double flat_panel_volume = (flat_panel.run + 2.0 * flat_panel.overhang)
+        * (flat_panel.span + 2.0 * flat_panel.overhang) * flat_panel.thickness;
+    require_roundtrip(flat_panel, "roof", "sloped_roof_panel", flat_panel_volume);
+
     const GableRoof gable{
         .id = "roof-gable",
         .base_position = {0.0, 0.0, 4.0},

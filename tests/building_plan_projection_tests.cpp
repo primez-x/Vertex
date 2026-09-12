@@ -313,6 +313,34 @@ void test_roof_forms_have_exact_edge_sets() {
     require_edge_set(project_building_plan(panel), panel_expected,
                      "sloped roof panel visible edges");
 
+    const SlopedRoofPanel flat_panel{
+        .id = "analytic-plan-flat-roof",
+        .base_position = {-2.0, 1.0, 4.0},
+        .orientation_radians = 0.35,
+        .run = 3.0,
+        .span = 2.0,
+        .rise = 0.0,
+        .pitch_radians = 0.0,
+        .overhang = 0.3,
+        .thickness = 0.15,
+    };
+    const double flat_x0 = -flat_panel.overhang;
+    const double flat_x1 = flat_panel.run + flat_panel.overhang;
+    const double flat_y0 = -flat_panel.overhang;
+    const double flat_y1 = flat_panel.span + flat_panel.overhang;
+    const Boundary flat_expected = quadrilateral({
+        frame_point(flat_panel.base_position, flat_panel.orientation_radians,
+                    flat_x0, flat_y0),
+        frame_point(flat_panel.base_position, flat_panel.orientation_radians,
+                    flat_x1, flat_y0),
+        frame_point(flat_panel.base_position, flat_panel.orientation_radians,
+                    flat_x1, flat_y1),
+        frame_point(flat_panel.base_position, flat_panel.orientation_radians,
+                    flat_x0, flat_y1),
+    });
+    require_edge_set(project_building_plan(flat_panel), flat_expected,
+                     "flat roof panel visible edges");
+
     const GableRoof roof{
         .id = "analytic-plan-gable",
         .base_position = {5.0, -3.0, 4.0},

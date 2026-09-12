@@ -202,8 +202,12 @@ gp_Pnt local_point(const gp_Pnt& base, const gp_Vec& along, double along_distanc
     return translated(base, offset);
 }
 
-double checked_pitch_rise(double run, double rise, double pitch, const char* what) {
+double checked_pitch_rise(double run, double rise, double pitch, const char* what,
+                          bool allow_flat = false) {
     positive_dimension(run, what);
+    if (allow_flat && rise == 0.0 && pitch == 0.0) {
+        return 0.0;
+    }
     positive_dimension(rise, what);
     if (!std::isfinite(pitch) || pitch <= tolerance
         || pitch >= (std::numbers::pi * 0.5 - tolerance)) {
@@ -366,7 +370,7 @@ TopoDS_Shape make_sloped_roof_panel(const SlopedRoofPanel& panel) {
     positive_dimension(panel.thickness, "Roof panel thickness must be positive");
     const double slope = checked_pitch_rise(panel.run, panel.rise,
                                             panel.pitch_radians,
-                                            "Roof panel pitch and rise must agree");
+                                            "Roof panel pitch and rise must agree", true);
     const auto frame = horizontal_frame(panel.orientation_radians,
                                         "Roof panel orientation is invalid");
     const gp_Pnt base = point(panel.base_position);

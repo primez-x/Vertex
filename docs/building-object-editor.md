@@ -103,8 +103,10 @@ then locate its controls without depending on a page implementation:
 | Derived roof pitch label | `buildingObjectDerivedPitch` |
 
 Roof pitch is derived from the entered rise and horizontal run.  A sloped panel
-uses `rise / run`; a gable uses `rise / (span / 2)`.  There is no editable pitch
-control, so the dialog cannot submit an inconsistent pitch/rise pair.
+uses `rise / run`; a gable uses `rise / (span / 2)`.  A sloped panel may use an
+exactly zero rise to author a flat roof; the derived pitch then displays `0°`.
+There is no editable pitch control, so the dialog cannot submit an inconsistent
+pitch/rise pair.  Gable roofs still require a positive rise and pitch.
 
 For editing, the constructor first decodes and validates the original entity.
 Malformed or unsupported originals show an inline error and disable Submit.

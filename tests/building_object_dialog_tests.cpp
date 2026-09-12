@@ -226,6 +226,19 @@ void test_all_forms_submit_to_entities() {
 
     {
         BuildingObjectDialog dialog(std::nullopt, true);
+        select_form(dialog, "sloped_roof_panel");
+        set_field(dialog, "buildingObjectRise", "0 m");
+        require(dialog.submit(), "flat roof panel should submit");
+        const auto candidate = dialog.candidate();
+        require(candidate.has_value(), "flat roof panel candidate");
+        require(candidate->properties.at("form") == "sloped_roof_panel" &&
+                    candidate->properties.at("rise_m") == 0.0 &&
+                    candidate->properties.at("pitch_rad") == 0.0,
+                "flat roof panel should preserve zero rise and pitch");
+    }
+
+    {
+        BuildingObjectDialog dialog(std::nullopt, true);
         select_form(dialog, "gable_roof");
         set_field(dialog, "buildingObjectLength", "5 m");
         set_field(dialog, "buildingObjectSpan", "4 m");

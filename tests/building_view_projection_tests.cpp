@@ -14,6 +14,7 @@ using sketch::BuildingViewFrame;
 using sketch::BuildingViewKind;
 using sketch::CircularColumn;
 using sketch::RectangularColumn;
+using sketch::SlopedRoofPanel;
 using sketch::Vec2;
 
 void require(bool value, std::string_view message) {
@@ -125,6 +126,49 @@ void test_vertical_section_intersects_rectangular_column() {
     near(actual.max_y, 3.0, 1e-5, "vertical section top");
 }
 
+void test_flat_roof_projects_in_all_views() {
+    const SlopedRoofPanel panel{
+        .id = "flat-roof-view",
+        .base_position = {1.0, 2.0, 4.0},
+        .orientation_radians = 0.0,
+        .run = 4.0,
+        .span = 3.0,
+        .rise = 0.0,
+        .pitch_radians = 0.0,
+        .overhang = 0.2,
+        .thickness = 0.1,
+    };
+    const BuildingViewFrame plan_frame{
+        {0.0, 0.0, 0.0}, {0.0, 0.0, -1.0}, {0.0, 1.0, 0.0}};
+    const auto plan = sketch::project_building_view(panel, BuildingViewKind::plan,
+                                                     plan_frame);
+    const auto plan_bounds = bounds(plan);
+    near(plan_bounds.min_x, 0.8, 1e-5, "flat roof plan minimum X");
+    near(plan_bounds.max_x, 5.2, 1e-5, "flat roof plan maximum X");
+    near(plan_bounds.min_y, 1.8, 1e-5, "flat roof plan minimum Y");
+    near(plan_bounds.max_y, 5.2, 1e-5, "flat roof plan maximum Y");
+
+    const BuildingViewFrame elevation_frame{
+        {0.0, 0.0, 0.0}, {0.0, -1.0, 0.0}, {0.0, 0.0, 1.0}};
+    const auto elevation = sketch::project_building_view(
+        panel, BuildingViewKind::elevation, elevation_frame);
+    const auto elevation_bounds = bounds(elevation);
+    near(elevation_bounds.min_x, -5.2, 1e-5, "flat roof elevation minimum X");
+    near(elevation_bounds.max_x, -0.8, 1e-5, "flat roof elevation maximum X");
+    near(elevation_bounds.min_y, 3.9, 1e-5, "flat roof elevation minimum Z");
+    near(elevation_bounds.max_y, 4.0, 1e-5, "flat roof elevation maximum Z");
+
+    const BuildingViewFrame section_frame{
+        {0.0, 3.3, 4.0}, {0.0, -1.0, 0.0}, {0.0, 0.0, 1.0}};
+    const auto section = sketch::project_building_view(
+        panel, BuildingViewKind::section, section_frame);
+    const auto section_bounds = bounds(section);
+    near(section_bounds.min_x, -5.2, 1e-5, "flat roof section minimum X");
+    near(section_bounds.max_x, -0.8, 1e-5, "flat roof section maximum X");
+    near(section_bounds.min_y, -0.1, 1e-5, "flat roof section minimum Z");
+    near(section_bounds.max_y, 0.0, 1e-5, "flat roof section maximum Z");
+}
+
 void test_invalid_frame_and_missed_section_fail_closed() {
     const RectangularColumn column{
         .id = "invalid-frame-column", .base_center = {}, .width = 1.0,
@@ -152,6 +196,7 @@ int main() {
         test_elevation_preserves_horizontal_width_and_height();
         test_horizontal_section_retains_analytic_circle();
         test_vertical_section_intersects_rectangular_column();
+        test_flat_roof_projects_in_all_views();
         test_invalid_frame_and_missed_section_fail_closed();
         std::cout << "Building view projection tests passed\n";
         return 0;
@@ -160,4 +205,3 @@ int main() {
         return 1;
     }
 }
-

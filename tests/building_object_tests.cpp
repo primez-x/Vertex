@@ -259,6 +259,22 @@ void test_roofs_are_planar_thickened_panels() {
     near(solid_volume(panel_shape), expected_panel_volume, 1e-8,
          "sloped roof panel volume");
 
+    const SlopedRoofPanel flat{
+        .id = "flat",
+        .base_position = {1.0, -2.0, 4.0},
+        .orientation_radians = std::numbers::pi / 8.0,
+        .run = 4.0,
+        .span = 3.0,
+        .rise = 0.0,
+        .pitch_radians = 0.0,
+        .overhang = 0.2,
+        .thickness = 0.1,
+    };
+    const auto flat_shape = make_sloped_roof_panel(flat);
+    valid_solid(flat_shape, "flat roof panel should be a valid solid");
+    near(solid_volume(flat_shape), (4.0 + 2.0 * 0.2) * (3.0 + 2.0 * 0.2) * 0.1,
+         1e-8, "flat roof panel volume");
+
     const GableRoof gable{
         .id = "gable",
         .base_position = {0.0, 0.0, 4.0},
@@ -298,6 +314,14 @@ void test_roofs_are_planar_thickened_panels() {
     invalid.pitch_radians += 0.01;
     rejected([&] { (void)make_sloped_roof_panel(invalid); },
              "inconsistent roof pitch should be rejected");
+    invalid = flat;
+    invalid.pitch_radians = 0.01;
+    rejected([&] { (void)make_sloped_roof_panel(invalid); },
+             "flat roof with nonzero pitch should be rejected");
+    invalid = flat;
+    invalid.rise = 0.01;
+    rejected([&] { (void)make_sloped_roof_panel(invalid); },
+             "flat roof with nonzero rise should be rejected by pitch consistency");
     invalid = panel;
     invalid.overhang = -0.01;
     rejected([&] { (void)make_sloped_roof_panel(invalid); },

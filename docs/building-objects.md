@@ -42,7 +42,11 @@ elevation.  `run` rises by `rise` in the local run direction, `span` is
 transverse, and `pitch_radians` must satisfy
 `rise = run * tan(pitch_radians)`.  `overhang` extends the plane horizontally
 on all four footprint edges, including the sloped run ends.  Thickness is
-measured normal to the panel.
+measured normal to the panel.  A flat roof is represented by this same typed
+form with exactly `rise = 0` and `pitch_radians = 0`; its footprint remains a
+real, thickened solid and is accepted by the editor, codec, plan projection,
+and building-view projections.  A nonzero rise paired with zero pitch (or a
+nonzero pitch paired with zero rise) remains invalid.
 
 `make_gable_roof` makes two symmetric planar panel solids from a rectangular
 footprint.  `base_position` is the footprint center at eave elevation,
