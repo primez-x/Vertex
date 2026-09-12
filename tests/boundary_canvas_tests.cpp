@@ -430,6 +430,12 @@ void test_overview_map_navigation() {
     require(std::abs(center_overview.x - center_panned.x) > 1e-9 ||
                 std::abs(center_overview.y - center_panned.y) > 1e-9,
             "overview map click must recenter the viewport on the selected model location");
+    canvas.setOverviewMapEnabled(false);
+    require(canvas.overviewMapRect().isEmpty(),
+            "overview map visibility must be user-controllable");
+    canvas.setOverviewMapEnabled(true);
+    require(!canvas.overviewMapRect().isEmpty(),
+            "overview map can be restored after being hidden");
 }
 
 }  // namespace

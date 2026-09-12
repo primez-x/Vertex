@@ -301,9 +301,11 @@ void test_workspace_profiles() {
         window.setMetricUnits(true);
         auto* grid = window.findChild<QToolButton*>(QStringLiteral("gridTool"));
         auto* snap = window.findChild<QToolButton*>(QStringLiteral("snapTool"));
-        require(grid && snap, "profile fixture needs grid and snap controls");
+        auto* overview = window.findChild<QToolButton*>(QStringLiteral("overviewMapTool"));
+        require(grid && snap && overview, "profile fixture needs grid, snap, and overview controls");
         grid->setChecked(false);
         snap->setChecked(false);
+        overview->setChecked(false);
         require(window.setContainerVisible(QStringLiteral("floor-1"), false),
                 "profile fixture should hide a floor");
         QTimer::singleShot(0, &window, [&] {
@@ -325,9 +327,11 @@ void test_workspace_profiles() {
             window.setMetricUnits(false);
             grid->setChecked(true);
             snap->setChecked(true);
+            overview->setChecked(true);
             apply->click();
             require(window.workspace() == sketch::desktop::Workspace::architectural &&
                         window.metricUnits() && !grid->isChecked() && !snap->isChecked() &&
+                        !overview->isChecked() &&
                         !window.entityVisible(QStringLiteral("floor-1")) &&
                         status->text().contains(QStringLiteral("applied"), Qt::CaseInsensitive),
                     "applying a profile must restore workspace presentation state");

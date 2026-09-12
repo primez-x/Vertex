@@ -64,12 +64,13 @@ profiles** in Commands. A profile is a local JSON record in
 requires an account or network access and does not alter the project archive.
 Saving captures the active Measurement or Architectural workspace, theme,
 imperial/metric units, grid and snap state, architectural view, output page
-size, and floor/layer visibility filters. Applying a profile validates every
+size, overview map visibility, and floor/layer visibility filters. Applying a profile validates every
 field first, restores only a valid active layer in the current project, and
 leaves the document revision unchanged. Invalid or unsupported profile files
 are ignored with a visible diagnostic rather than partially applied.
 
 The version-1 file uses the `sketch.workspace-profiles` schema and permits at
 most 64 named profiles. Each profile name is unique and the visibility lists
-are bounded stable entity IDs. Profiles describe presentation preferences;
+are bounded stable entity IDs. The `overview` field is optional for backward
+compatibility with older profiles and defaults to visible. Profiles describe presentation preferences;
 geometry, calculations, metadata, and assets remain in the `.bldproj` file.

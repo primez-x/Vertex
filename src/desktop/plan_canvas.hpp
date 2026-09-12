@@ -86,6 +86,8 @@ public:
     void setTool(CanvasTool tool);
     void setGridEnabled(bool enabled);
     void setSnapEnabled(bool enabled);
+    void setOverviewMapEnabled(bool enabled);
+    [[nodiscard]] bool overviewMapEnabled() const noexcept { return m_overview_map_enabled; }
     void setMetricUnits(bool metric);
     // Updates the interactive canvas surface without changing the model or
     // any explicit output background passed to renderScene(...).
@@ -171,6 +173,7 @@ private:
     CanvasTool m_tool{CanvasTool::select};
     bool m_grid_enabled{true};
     bool m_snap_enabled{true};
+    bool m_overview_map_enabled{true};
     bool m_metric_units{false};
     QColor m_canvas_background{248, 250, 252};
     QString m_selected_id;

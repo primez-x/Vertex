@@ -24,8 +24,10 @@ dimensions remain the visual focus.
 Each interactive plan canvas includes a compact overview map in its lower
 right corner. It draws the same committed geometry in model coordinates and
 shows the current viewport as a dashed frame; clicking any map location
-recenters the live canvas there. The map is an interaction aid only and is
-omitted from PDF, SVG, print, and native-image output.
+recenters the live canvas there. The **Map** control on the tool rail hides or
+restores it without changing geometry, and that preference is included in
+saved workspace profiles. The map is an interaction aid only and is omitted
+from PDF, SVG, print, and native-image output.
 
 The toolbar glyphs are bundled inline SVG paths rendered by Qt's SVG module.
 They contain no downloaded assets or runtime web dependency. Dialogs copy the

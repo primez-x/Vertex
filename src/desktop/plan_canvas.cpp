@@ -143,6 +143,12 @@ void PlanCanvas::setSnapEnabled(bool enabled) {
     update();
 }
 
+void PlanCanvas::setOverviewMapEnabled(bool enabled) {
+    if (m_overview_map_enabled == enabled) return;
+    m_overview_map_enabled = enabled;
+    update();
+}
+
 void PlanCanvas::setMetricUnits(bool metric) {
     m_metric_units = metric;
     update();
@@ -242,6 +248,7 @@ std::optional<std::pair<Vec2, Vec2>> PlanCanvas::contentBounds() const {
 }
 
 QRectF PlanCanvas::overviewMapRect() const noexcept {
+    if (!m_overview_map_enabled) return {};
     constexpr qreal width = 180.0;
     constexpr qreal height = 118.0;
     constexpr qreal margin = 12.0;

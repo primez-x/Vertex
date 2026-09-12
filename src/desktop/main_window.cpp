@@ -903,7 +903,8 @@ void validate_workspace_profile_json(const json& profile) {
     static constexpr std::array<std::string_view, 10> keys{
         "name", "workspace", "theme", "metric", "grid", "snap", "active_layer",
         "architectural_view", "page_size", "hidden_floors"};
-    if (!profile.is_object() || profile.size() != keys.size() + 1 ||
+    const bool has_overview = profile.is_object() && profile.contains("overview");
+    if (!profile.is_object() || profile.size() != keys.size() + 1 + (has_overview ? 1 : 0) ||
         !profile.contains("hidden_layers")) {
         throw std::invalid_argument("workspace profile fields are invalid");
     }
@@ -931,6 +932,8 @@ void validate_workspace_profile_json(const json& profile) {
         if (!profile.at(key).is_boolean())
             throw std::invalid_argument(std::string("workspace profile ") + key + " must be boolean");
     }
+    if (has_overview && !profile.at("overview").is_boolean())
+        throw std::invalid_argument("workspace profile overview must be boolean");
     for (const auto key : {"active_layer", "architectural_view"}) {
         if (!profile.at(key).is_string())
             throw std::invalid_argument(std::string("workspace profile ") + key + " must be a string");
@@ -2295,6 +2298,7 @@ public:
             {"metric", m_metric_units},
             {"grid", m_grid_enabled},
             {"snap", m_snap_enabled},
+            {"overview", m_overview_map_enabled},
             {"active_layer", m_active_layer_id.toStdString()},
             {"architectural_view", architectural_view_name(m_architectural_view_kind)},
             {"page_size", m_pageSizeCombo ? m_pageSizeCombo->currentData().toInt() : 0},
@@ -2319,6 +2323,7 @@ public:
             m_metric_units = profile.at("metric").get<bool>();
             m_grid_enabled = profile.at("grid").get<bool>();
             m_snap_enabled = profile.at("snap").get<bool>();
+            m_overview_map_enabled = profile.value("overview", true);
             m_architectural_view_kind = view;
             m_view_filter.hidden_floor_ids.clear();
             for (const auto& value : profile.at("hidden_floors"))
@@ -2358,12 +2363,18 @@ public:
                 QSignalBlocker blocker(m_snap_button);
                 m_snap_button->setChecked(m_snap_enabled);
             }
+            if (m_overview_button) {
+                QSignalBlocker blocker(m_overview_button);
+                m_overview_button->setChecked(m_overview_map_enabled);
+            }
             m_measurementCanvas->setMetricUnits(m_metric_units);
             m_architecturalCanvas->setMetricUnits(m_metric_units);
             m_measurementCanvas->setGridEnabled(m_grid_enabled);
             m_architecturalCanvas->setGridEnabled(m_grid_enabled);
             m_measurementCanvas->setSnapEnabled(m_snap_enabled);
             m_architecturalCanvas->setSnapEnabled(m_snap_enabled);
+            m_measurementCanvas->setOverviewMapEnabled(m_overview_map_enabled);
+            m_architecturalCanvas->setOverviewMapEnabled(m_overview_map_enabled);
             refresh();
             clearError();
             return true;
@@ -8100,6 +8111,7 @@ public:
             {QStringLiteral("Wall dimensions and constraints"), [this] { showConstraintEditor(); }},
             {QStringLiteral("Toggle grid"), [this] { toggleGrid(); }},
             {QStringLiteral("Toggle snap"), [this] { toggleSnap(); }},
+            {QStringLiteral("Toggle overview map"), [this] { toggleOverviewMap(); }},
             {QStringLiteral("Fit view"), [this] { fitView(); }},
             {QStringLiteral("Light theme"), [this] { applyTheme(WorkspaceTheme::light); }},
             {QStringLiteral("Dark theme"), [this] { applyTheme(WorkspaceTheme::dark); }},
@@ -9325,11 +9337,27 @@ private:
         m_fit_button->setMinimumWidth(0);
         m_fit_button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         tool_layout->addWidget(m_fit_button);
+        m_overview_button = new QToolButton(tool_panel);
+        m_overview_button->setText(QStringLiteral("Map"));
+        m_overview_button->setIcon(modern_toolbar_icon(
+            "<rect x='4' y='5' width='16' height='14' rx='2'/><path d='m6 16 4-4 3 3 2-2 3 3'/><circle cx='9' cy='9' r='1'/>"));
+        m_overview_button->setIconSize(QSize(20, 20));
+        m_overview_button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        m_overview_button->setToolTip(QStringLiteral("Show or hide the overview map"));
+        m_overview_button->setObjectName(QStringLiteral("overviewMapTool"));
+        m_overview_button->setCheckable(true);
+        m_overview_button->setChecked(true);
+        m_overview_button->setAutoRaise(true);
+        m_overview_button->setMinimumWidth(0);
+        m_overview_button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        tool_layout->addWidget(m_overview_button);
         QObject::connect(m_grid_button, &QToolButton::toggled, owner,
                          [this](bool enabled) { setGrid(enabled); });
         QObject::connect(m_snap_button, &QToolButton::toggled, owner,
                          [this](bool enabled) { setSnap(enabled); });
         QObject::connect(m_fit_button, &QToolButton::clicked, owner, [this] { fitView(); });
+        QObject::connect(m_overview_button, &QToolButton::toggled, owner,
+                         [this](bool enabled) { setOverviewMap(enabled); });
 
         m_workspaceTabs = new QTabWidget(splitter);
         m_workspaceTabs->setObjectName(QStringLiteral("workspaceTabs"));
@@ -11379,6 +11407,12 @@ private:
 
     void toggleGrid() { m_grid_button->setChecked(!m_grid_button->isChecked()); }
     void toggleSnap() { m_snap_button->setChecked(!m_snap_button->isChecked()); }
+    void setOverviewMap(bool enabled) {
+        m_overview_map_enabled = enabled;
+        m_measurementCanvas->setOverviewMapEnabled(enabled);
+        m_architecturalCanvas->setOverviewMapEnabled(enabled);
+    }
+    void toggleOverviewMap() { setOverviewMap(!m_overview_map_enabled); }
 
     void clearPreview() {
         m_measurementCanvas->clearPreview();
@@ -11796,6 +11830,7 @@ private:
     bool m_metric_units{false};
     bool m_grid_enabled{true};
     bool m_snap_enabled{true};
+    bool m_overview_map_enabled{true};
     bool m_refreshing{false};
     ProjectViewFilter m_view_filter;
     QString m_active_layer_id;
@@ -11896,6 +11931,7 @@ private:
     QToolButton* m_grid_button{};
     QToolButton* m_snap_button{};
     QToolButton* m_fit_button{};
+    QToolButton* m_overview_button{};
     QAction* m_new_action{};
     QAction* m_open_action{};
     QAction* m_recover_action{};
