@@ -1963,6 +1963,37 @@ public:
             edge.segment.end.x += offset.x;
             edge.segment.end.y += offset.y;
         }
+        const auto append_dimensions = [&](std::vector<EntityChange>& changes,
+            const std::map<std::string, std::string, std::less<>>& identities) {
+            for (const auto& [id, entity] : source.entities()) {
+                if (entity.type != "dimension" || !entity.properties.contains("target") ||
+                    entity.properties.at("target").value("entity_id", std::string{}) != original.id) continue;
+                const auto decoded = decode_boundary_dimension_entity(entity);
+                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                auto dimension = *decoded.dimension;
+                if (clone) {
+                    dimension.id = new_id("dimension");
+                    dimension.boundary_id = identities.at(original.id);
+                    dimension.segment_id = identities.at(dimension.segment_id);
+                }
+                const auto x = dimension.text_position.x - pivot.x;
+                const auto y = dimension.text_position.y - pivot.y;
+                Vec2 position = dimension.text_position;
+                if (radians != 0.0)
+                    position = {pivot.x + x * std::cos(radians) - y * std::sin(radians),
+                                pivot.y + x * std::sin(radians) + y * std::cos(radians)};
+                if (flip_horizontal) position.x = pivot.x - (position.x - pivot.x);
+                if (flip_vertical) position.y = pivot.y - (position.y - pivot.y);
+                dimension.text_position = {position.x + offset.x, position.y + offset.y};
+                auto dimension_metadata = entity;
+                dimension_metadata.id = dimension.id;
+                auto dimension_ids = identities;
+                if (clone) dimension_ids.emplace(id, dimension.id);
+                remap_entity_references(dimension_metadata, dimension_ids);
+                const auto encoded = encode_boundary_dimension_entity(dimension, &dimension_metadata);
+                if (clone || encoded != entity) changes.push_back(EntityChange::upsert(encoded));
+            }
+        };
         const auto revision = source.revision();
         if (clone) {
             std::optional<BoundaryConstructionRecord> construction;
@@ -2011,31 +2042,7 @@ public:
             auto encoded = encode_identified_boundary_entity(cloned, &metadata);
             if (envelope) encoded.properties["boundary_authoring"] = *envelope;
             std::vector<EntityChange> changes{EntityChange::upsert(std::move(encoded))};
-            for (const auto& [id, entity] : source.entities()) {
-                if (entity.type != "dimension" || !entity.properties.contains("target") ||
-                    entity.properties.at("target").value("entity_id", std::string{}) != original.id) continue;
-                const auto decoded = decode_boundary_dimension_entity(entity);
-                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
-                auto dimension = *decoded.dimension;
-                dimension.id = new_id("dimension");
-                dimension.boundary_id = clone_id;
-                dimension.segment_id = identities.at(dimension.segment_id);
-                const auto x = dimension.text_position.x - pivot.x;
-                const auto y = dimension.text_position.y - pivot.y;
-                Vec2 position = dimension.text_position;
-                if (radians != 0.0)
-                    position = {pivot.x + x * std::cos(radians) - y * std::sin(radians),
-                                pivot.y + x * std::sin(radians) + y * std::cos(radians)};
-                if (flip_horizontal) position.x = pivot.x - (position.x - pivot.x);
-                if (flip_vertical) position.y = pivot.y - (position.y - pivot.y);
-                dimension.text_position = {position.x + offset.x, position.y + offset.y};
-                auto dimension_metadata = entity;
-                dimension_metadata.id = dimension.id;
-                auto dimension_ids = identities;
-                dimension_ids.emplace(id, dimension.id);
-                remap_entity_references(dimension_metadata, dimension_ids);
-                changes.push_back(EntityChange::upsert(encode_boundary_dimension_entity(dimension, &dimension_metadata)));
-            }
+            append_dimensions(changes, identities);
             return {ApplyEntityChanges{
                 .expected_revision = revision,
                 .entity_changes = std::move(changes),
@@ -2045,6 +2052,7 @@ public:
             const auto encoded = encode_identified_boundary_entity(transformed, &original);
             std::vector<EntityChange> changes;
             if (encoded != original) changes.push_back(EntityChange::upsert(encoded));
+            append_dimensions(changes, {});
             return {ApplyEntityChanges{revision, std::move(changes), {}, "Transform boundary"}, original.id};
         }
     }

@@ -1127,6 +1127,39 @@ void test_boundary_transform_workflow(const QString& capture_directory) {
     require(std::abs(curved.segments.front().segment.start.x-2.0)<1e-9 &&
         std::abs(curved.segments.front().segment.start.y+2.0)<1e-9,
         "curved-boundary pivot must include arc extrema rather than chord endpoints alone");
+
+    desktop::MainWindow labeled;
+    const auto owner = labeled.createBoundary(
+        Boundary{{{0,0},{4,0},0},{{4,0},{4,2},0},{{4,2},{0,2},0},{{0,2},{0,0},0}},"measurement");
+    const auto boundary = decode_identified_boundary_entity(labeled.document().snapshot().entities().at(owner.toStdString()));
+    auto dimension = encode_boundary_dimension_entity(BoundaryDimension{
+        "transform-label",owner.toStdString(),boundary.segments.front().segment_id,{1,-0.5},
+        BoundaryDimensionPlacement::manual,{}});
+    dimension.extensions["note"] = "retain label style";
+    labeled.document().apply(ApplyEntityChanges{labeled.document().revision(),
+        {EntityChange::upsert(dimension)},{},"dimension transform fixture"});
+    const auto labeled_before = labeled.document().snapshot();
+    require(labeled.selectEntity(owner) && labeled.transformSelectedBoundary("90",true,false,"5 m","-3 m",false),
+        "labeled boundary must support compound transform");
+    const auto labeled_after = labeled.document().snapshot();
+    const auto moved_dimension = decode_boundary_dimension_entity(labeled_after.entities().at(dimension.id));
+    require(moved_dimension.supported() && std::abs(moved_dimension.dimension->text_position.x-5.5)<1e-9 &&
+        std::abs(moved_dimension.dimension->text_position.y+3)<1e-9 &&
+        moved_dimension.dimension->boundary_id == owner.toStdString() &&
+        moved_dimension.dimension->segment_id == boundary.segments.front().segment_id &&
+        labeled_after.entities().at(dimension.id).extensions == dimension.extensions,
+        "in-place boundary transform must carry dimension placement, identity and metadata");
+    require(labeled_after.revision() == labeled_before.revision()+1 && labeled.undoCommand() &&
+        labeled.document().snapshot().entities() == labeled_before.entities() && labeled.redoCommand() &&
+        labeled.document().snapshot().entities() == labeled_after.entities(),
+        "boundary and label must transform in one reversible command");
+    const auto before_noop = labeled.document().revision();
+    require(labeled.selectEntity(owner) && labeled.transformSelectedBoundary("0",false,false,"0","0",false) &&
+        labeled.document().revision() == before_noop,
+        "unchanged labeled transform must not add history");
+    require(!labeled.transformSelectedBoundary("0",false,false,"invalid offset","0",false) &&
+        labeled.document().snapshot().entities() == labeled_after.entities(),
+        "invalid transform must leave boundary and label untouched");
 }
 
 void test_organization_context() {

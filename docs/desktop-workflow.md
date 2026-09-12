@@ -387,6 +387,9 @@ relationships remain unchanged. Supported construction receipts now accompany
 offset copies, retaining original distance/angle expressions and rebuilding the
 copied geometry through receipt replay. Boundary dimension labels are copied
 with fresh identities and transformed text positions in the same undoable command.
+For supported in-place transforms, dimension labels move with their boundary
+while retaining their identities, placement mode, and metadata. Rotation,
+reflection, and translation use the same label-position path as copies.
 Receipt-bound rotation/reflection and in-place moves remain unfinished. Some
 offsets also reject when floating-point translation cannot preserve the exact
 closure-vector relationship. Unhandled geometry-owned receipts or dependent
