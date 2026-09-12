@@ -1670,7 +1670,7 @@ public:
             QWidget#navigatorPanel, QWidget#toolPanel { border: 1px solid $border; border-radius: 10px; }
             QLabel#modelViewUnavailable { background: $surface; color: $muted;
                 border: 1px solid $border; border-radius: 10px; margin: 12px; padding: 24px; }
-            QLabel#drawingContext, QLabel#elevationScope { color: $muted; font-size: 11px; }
+            QLabel#drawingContext, QLabel#visibilitySummary { color: $muted; font-size: 11px; }
             QTreeWidget, QListWidget, QTableWidget { background: $surface; color: $foreground;
                 border: 0; alternate-background-color: transparent; outline: 0;
                 selection-background-color: $selection; selection-color: $selectedText; }
@@ -5329,10 +5329,6 @@ private:
         m_drawing_context_label->setWordWrap(true);
         m_drawing_context_label->setTextFormat(Qt::PlainText);
         navigator_layout->addWidget(m_drawing_context_label);
-        auto* scope_label = new QLabel(QStringLiteral("Geometry uses world elevations"), navigator_panel);
-        scope_label->setObjectName(QStringLiteral("elevationScope"));
-        scope_label->setWordWrap(true);
-        navigator_layout->addWidget(scope_label);
         auto* visibility_header = new QHBoxLayout();
         auto* visibility_heading = new QLabel(QStringLiteral("VISIBILITY"), navigator_panel);
         visibility_heading->setObjectName(QStringLiteral("panelHeading"));
@@ -5349,6 +5345,8 @@ private:
         m_visibility_label = new QLabel(navigator_panel);
         m_visibility_label->setObjectName(QStringLiteral("visibilitySummary"));
         m_visibility_label->setWordWrap(true);
+        m_visibility_label->setToolTip(QStringLiteral(
+            "View filters hide floors and drawing layers in plan and 3D. They never change area totals."));
         navigator_layout->addWidget(m_visibility_label);
         QObject::connect(m_show_all_button, &QPushButton::clicked, owner,
                          [this] { showAllContainers(); });
@@ -6453,8 +6451,8 @@ private:
         m_drawing_context_label->setText(context_label);
         m_visibility_label->setText(
             m_view_filter.hidden_floor_ids.empty() && m_view_filter.hidden_layer_ids.empty()
-                ? QStringLiteral("View only: unchecked floors/layers hide plan and 3D; view filters do not change totals.")
-                : QStringLiteral("View filter active: hidden floors/layers affect plan and 3D; view filters do not change totals."));
+                ? QStringLiteral("All visible")
+                : QStringLiteral("Filter active"));
         m_show_all_button->setEnabled(true);
     }
 

@@ -470,8 +470,9 @@ void test_visibility_workflow() {
     require(upper_layer_item && upper_layer_item->checkState(0) == Qt::Checked,
             "hiding a floor must not cascade into its layer check state");
     auto* visibility_label = window.findChild<QLabel*>(QStringLiteral("visibilitySummary"));
-    require(visibility_label && visibility_label->text().contains(QStringLiteral("view filters do not change totals")),
-            "visibility summary must explain that filters leave totals unchanged");
+    require(visibility_label && visibility_label->text() == QStringLiteral("Filter active") &&
+                visibility_label->toolTip().contains(QStringLiteral("never change area totals")),
+            "visibility summary must expose its state and explain that filters leave totals unchanged on demand");
     require(upper_layer_item->text(0).contains(QStringLiteral("hidden by floor")) &&
                 upper_layer_item->toolTip(0).contains(QStringLiteral("Effective state: hidden by its floor filter.")),
             "a layer row must expose its effective hidden-by-floor state");
