@@ -1,0 +1,1673 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "category": "source",
+      "path": ".gitattributes"
+    },
+    {
+      "category": "source",
+      "path": ".gitignore"
+    },
+    {
+      "category": "source",
+      "path": "CMakeLists.txt"
+    },
+    {
+      "category": "source",
+      "path": "CMakePresets.json"
+    },
+    {
+      "category": "licenses",
+      "path": "LICENSE"
+    },
+    {
+      "category": "docs",
+      "path": "README.md"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/fonts/Inter.ttf"
+    },
+    {
+      "category": "licenses",
+      "path": "assets/fonts/OFL.txt"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/fonts/README.md"
+    },
+    {
+      "category": "source",
+      "path": "cmake/PlaneGCS.cmake"
+    },
+    {
+      "category": "docs",
+      "path": "docs/annotation-catalog.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/apex-compatibility-discovery.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/apex-compatibility-matrix.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/apex-fixture-evidence.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/architectural-projections.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/architectural-workflow-contract.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/assemblies.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/assistance-contract.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/boundary-authoring.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/boundary-dimensions.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/boundary-entity-format.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/boundary-recovery-performance.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/boundary-recovery.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/building-entity-format.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/building-object-editor.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/building-objects.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/building-plan-projection.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/calculations.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/constraint-authoring.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/constraint-entity-format.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/dependencies/distribution-inventory.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/dependencies/native-build.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/dependencies/offline-installer.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/dependencies/planegcs.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/dependencies/portable-package.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/dependencies/qt-provisioning.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/dependencies/runtime-inspection.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/dependencies/source-kit.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/desktop-workflow.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/field-adapter-contracts.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/geometry-operations.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/implementation-status.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/import-worker-security.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/integration-adapters.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/interchange-profiles.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/multipage-projects.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/native-3d-view.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/offline-policy.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/output-fingerprint.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/performance-benchmark.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/phases-alternatives.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/product-scope.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/production-plan.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/production-qualification.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/production-qualification.pending.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/project-archive-v4.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/project-extraction.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/project-format.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/project-organization.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/project-visibility.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/project-workspace-preview-adapters.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/recovery-discovery.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/recovery-ledger.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/reference-assets.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/README.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/apex-parity.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/production-gates.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/room-relationships.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/schedules.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/sheet-output-scene.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/sheets-views.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/survey-georeferencing-contracts.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/typed-relationships.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/vertical-levels.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/workspace-accessibility.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/workspace-autosave-scheduler.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/workspace-history-format.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/workspace-save-queue.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/workspace-ui.md"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/annotation_catalog.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/annotation_entity_codec.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/architectural_document_adapter.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/architectural_workflow_contract.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/architecture.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/assembly_model.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/assistance_contract.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/boundary_active_recovery.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/boundary_authoring_recovery.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/boundary_authoring_recovery_resource.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/boundary_authoring_resource_policy.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/boundary_authoring_session.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/boundary_commit.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/boundary_construction.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/boundary_dimension.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/boundary_entity.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/boundary_identity_history.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/boundary_integrity.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/boundary_receipt.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/boundary_recovery_source.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/building_entity.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/building_objects.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/building_plan_projection.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/building_view_projection.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/calculations.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/constraint_authoring.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/constraint_entity.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/constraint_integrity.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/constraint_tolerances.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/constraints.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/desktop/boundary_input_dialog.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/desktop/building_object_dialog.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/desktop/constraint_dialog.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/desktop/constraint_preview_canvas.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/desktop/main_window.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/detail/persistent_sequence.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/document.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/document_digest.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/document_schedule_adapter.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/field_adapter_contract.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/geometry.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/geometry_operations.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/georeferencing_contract.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/import_worker_policy.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/integration_adapter.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/interchange_profile.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/model_phases.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/multipage_document.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/offline_policy.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/output_fingerprint.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/product_scope.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/project_exchange.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/project_organization.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/project_store.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/project_visibility.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/project_workspace.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/quantity.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/recovery_copy_record.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/recovery_discovery.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/recovery_ledger.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/reference_asset.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/room_relationships.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/schedule_model.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/sheet_output_scene.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/sheet_view_entity_codec.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/sheet_view_model.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/survey_contract.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/typed_relationships.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/vertical_levels.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/visualization/native_model_view.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/wall_semantics.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/workspace_accessibility.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/workspace_autosave_scheduler.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/workspace_document_history.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/workspace_history_fence.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/workspace_history_record.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/workspace_lifecycle_validation.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/workspace_navigation.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/workspace_ownership_broker.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/workspace_recovery_budget.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/workspace_save_coordinator.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/workspace_save_queue.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/workspace_slot_validation.hpp"
+    },
+    {
+      "category": "docs",
+      "path": "packaging/README.md"
+    },
+    {
+      "category": "source",
+      "path": "packaging/portable-allowlist.json"
+    },
+    {
+      "category": "source",
+      "path": "packaging/source-kit-allowlist.json"
+    },
+    {
+      "category": "source",
+      "path": "scripts/apex_compatibility_matrix.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/apex_fixture_evidence.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/bootstrap-native.ps1"
+    },
+    {
+      "category": "source",
+      "path": "scripts/bootstrap-qt.ps1"
+    },
+    {
+      "category": "source",
+      "path": "scripts/bootstrap.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/build.ps1"
+    },
+    {
+      "category": "source",
+      "path": "scripts/distribution_inventory.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/inspect-runtime.ps1"
+    },
+    {
+      "category": "source",
+      "path": "scripts/install-offline-bundle.ps1"
+    },
+    {
+      "category": "source",
+      "path": "scripts/native-process-guard.ps1"
+    },
+    {
+      "category": "source",
+      "path": "scripts/performance_benchmark.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/production_qualification.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/requirement_audit.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/run.ps1"
+    },
+    {
+      "category": "source",
+      "path": "scripts/source_kit_manifest.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/stage_offline_bundle.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/stage_portable_package.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/test-building-editor.ps1"
+    },
+    {
+      "category": "source",
+      "path": "scripts/test-constraint-editor.ps1"
+    },
+    {
+      "category": "source",
+      "path": "scripts/test-desktop.ps1"
+    },
+    {
+      "category": "source",
+      "path": "scripts/test-native.ps1"
+    },
+    {
+      "category": "source",
+      "path": "scripts/test-visibility-workspace.ps1"
+    },
+    {
+      "category": "source",
+      "path": "scripts/verify-offline-bundle.ps1"
+    },
+    {
+      "category": "source",
+      "path": "src/architecture/architecture.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/architecture/building_entity.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/architecture/building_objects.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/architecture/building_plan_projection.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/architecture/building_view_projection.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/calculations/calculations.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/cli/main.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/annotation_catalog.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/annotation_entity_codec.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/architectural_document_adapter.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/architectural_workflow_contract.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/assembly_model.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/assistance_contract.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/boundary_active_recovery.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/boundary_authoring_recovery.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/boundary_authoring_recovery_resource.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/boundary_authoring_session.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/boundary_commit.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/boundary_construction.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/boundary_dimension.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/boundary_entity.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/boundary_integrity.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/boundary_receipt.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/boundary_recovery_source.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/constraint_authoring.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/constraint_entity.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/constraint_integrity.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/constraints.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/document.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/document_digest.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/document_schedule_adapter.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/field_adapter_contract.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/geometry.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/geometry_operations.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/georeferencing_contract.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/import_worker_policy.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/integration_adapter.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/interchange_profile.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/model_phases.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/multipage_document.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/offline_policy.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/output_fingerprint.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/product_scope.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/project_exchange.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/project_organization.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/project_store.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/project_visibility.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/project_workspace.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/project_workspace_archive_restore.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/project_workspace_preview_adapters.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/quantity.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/recovery_copy_record.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/recovery_discovery.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/recovery_ledger.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/reference_asset.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/room_relationships.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/schedule_model.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/sheet_output_scene.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/sheet_view_entity_codec.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/sheet_view_model.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/survey_contract.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/typed_relationships.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/vertical_levels.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/wall_semantics.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/workspace_accessibility.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/workspace_autosave_scheduler.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/workspace_document_history.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/workspace_history_fence.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/workspace_history_record.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/workspace_lifecycle_validation.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/workspace_navigation.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/workspace_ownership_broker.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/workspace_recovery_budget.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/workspace_save_coordinator.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/workspace_save_queue.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/workspace_slot_validation.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/boundary_input_dialog.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/building_object_dialog.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/constraint_dialog.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/constraint_preview_canvas.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/draft_image_stamp.hpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/main.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/main_window.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/plan_canvas.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/plan_canvas.hpp"
+    },
+    {
+      "category": "source",
+      "path": "src/visualization/native_model_view.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/annotation_catalog_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/annotation_entity_codec_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/architectural_document_adapter_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/architectural_workflow_contract_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/architecture_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/assembly_model_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/assistance_contract_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/boundary_active_recovery_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/boundary_authoring_admission_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/boundary_authoring_recovery_resource_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/boundary_authoring_recovery_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/boundary_authoring_return_safety_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/boundary_authoring_session_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/boundary_canvas_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/boundary_commit_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/boundary_construction_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/boundary_dimension_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/boundary_entity_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/boundary_history_structure_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/boundary_input_dialog_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/boundary_integrity_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/boundary_receipt_integrity_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/boundary_receipt_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/boundary_recovery_reference_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/boundary_recovery_scaling_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/boundary_recovery_source_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/boundary_workflow_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/building_entity_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/building_object_dialog_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/building_object_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/building_plan_projection_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/building_receipt_workflow_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/building_view_projection_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/calculation_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/constraint_authoring_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/constraint_dialog_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/constraint_entity_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/constraint_integrity_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/constraint_scaling_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/constraint_unknown_owner_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/constraints_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/curve_construction_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/desktop_smoke.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/desktop_workspace_recovery_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/document_digest_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/document_schedule_adapter_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/document_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/error_policy_probe.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/field_adapter_contract_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/fixtures/README.md"
+    },
+    {
+      "category": "source",
+      "path": "tests/fixtures/boundary-recovery-v24a.json"
+    },
+    {
+      "category": "source",
+      "path": "tests/geometry_operations_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/geometry_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/georeferencing_contract_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/import_worker_policy_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/integration_adapter_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/interchange_profile_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/modal_authoring_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/model_phases_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/multipage_document_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/native_view_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/offline_policy_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/output_fingerprint_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/persistent_sequence_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/product_scope_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/project_archive_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/project_exchange_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/project_organization_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/project_store_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/project_visibility_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/project_workspace_active_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/project_workspace_archive_restore_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/project_workspace_discard_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/project_workspace_finish_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/project_workspace_preview_adapters_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/project_workspace_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/quantity_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/recovery_copy_record_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/recovery_discovery_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/recovery_ledger_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/reference_asset_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/room_relationships_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/schedule_model_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/sheet_output_scene_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/sheet_view_entity_codec_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/sheet_view_model_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/support/boundary_recovery_oracle.hpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/support/noninteractive_errors.hpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/support/test_process_policy.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/survey_contract_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_apex_compatibility_matrix.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_apex_fixture_evidence.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_bootstrap.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_cli.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_distribution_inventory.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_error_policy.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_native_process_guard.ps1"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_performance_benchmark.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_production_qualification.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_requirement_audit.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_source_kit_manifest.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_stage_offline_bundle.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_stage_portable_package.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/typed_relationships_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/vertical_levels_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/visibility_workflow_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/wall_semantics_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/workspace_accessibility_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/workspace_autosave_scheduler_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/workspace_document_history_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/workspace_history_fence_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/workspace_history_record_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/workspace_lifecycle_validation_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/workspace_navigation_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/workspace_ownership_broker_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/workspace_ownership_process_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/workspace_recovery_budget_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/workspace_save_coordinator_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/workspace_save_queue_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/workspace_slot_validation_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "third_party/README.md"
+    },
+    {
+      "category": "source",
+      "path": "third_party/dependencies.json"
+    },
+    {
+      "category": "source",
+      "path": "third_party/distribution-components.json"
+    },
+    {
+      "category": "licenses",
+      "path": "third_party/nlohmann-json-LICENSE.MIT"
+    },
+    {
+      "category": "source",
+      "path": "third_party/planegcs/SOURCE.md"
+    },
+    {
+      "category": "licenses",
+      "path": "third_party/planegcs/upstream/LICENSE"
+    },
+    {
+      "category": "source",
+      "path": "third_party/planegcs/upstream/src/Base/Console.h"
+    },
+    {
+      "category": "source",
+      "path": "third_party/planegcs/upstream/src/Base/Tools.h"
+    },
+    {
+      "category": "source",
+      "path": "third_party/planegcs/upstream/src/FCConfig.h"
+    },
+    {
+      "category": "source",
+      "path": "third_party/planegcs/upstream/src/Mod/Sketcher/App/planegcs/Constraints.cpp"
+    },
+    {
+      "category": "source",
+      "path": "third_party/planegcs/upstream/src/Mod/Sketcher/App/planegcs/Constraints.h"
+    },
+    {
+      "category": "source",
+      "path": "third_party/planegcs/upstream/src/Mod/Sketcher/App/planegcs/GCS.cpp"
+    },
+    {
+      "category": "source",
+      "path": "third_party/planegcs/upstream/src/Mod/Sketcher/App/planegcs/GCS.h"
+    },
+    {
+      "category": "source",
+      "path": "third_party/planegcs/upstream/src/Mod/Sketcher/App/planegcs/Geo.cpp"
+    },
+    {
+      "category": "source",
+      "path": "third_party/planegcs/upstream/src/Mod/Sketcher/App/planegcs/Geo.h"
+    },
+    {
+      "category": "source",
+      "path": "third_party/planegcs/upstream/src/Mod/Sketcher/App/planegcs/SubSystem.cpp"
+    },
+    {
+      "category": "source",
+      "path": "third_party/planegcs/upstream/src/Mod/Sketcher/App/planegcs/SubSystem.h"
+    },
+    {
+      "category": "source",
+      "path": "third_party/planegcs/upstream/src/Mod/Sketcher/App/planegcs/Util.h"
+    },
+    {
+      "category": "source",
+      "path": "third_party/planegcs/upstream/src/Mod/Sketcher/App/planegcs/qp_eq.cpp"
+    },
+    {
+      "category": "source",
+      "path": "third_party/planegcs/upstream/src/Mod/Sketcher/App/planegcs/qp_eq.h"
+    },
+    {
+      "category": "source",
+      "path": "third_party/planegcs/upstream/src/Mod/Sketcher/SketcherGlobal.h"
+    },
+    {
+      "category": "source",
+      "path": "third_party/planegcs/upstream/src/boost_graph_adjacency_list.hpp"
+    },
+    {
+      "category": "source",
+      "path": "vcpkg.json"
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "kind": "asset",
+      "inventory_entry": "inter-font",
+      "path": "assets/fonts/Inter.ttf",
+      "destination": "assets/fonts/Inter.ttf"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "inter-font",
+      "path": "assets/fonts/OFL.txt",
+      "destination": "licenses/Inter-OFL.txt"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "property-studio",
+      "path": "LICENSE",
+      "destination": "licenses/Property-Studio-LICENSE"
+    }
+  ]
+}

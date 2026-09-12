@@ -31,6 +31,14 @@ are integrated through the typed Document history. Automated edge extraction,
 editable PDF geometry, native Apex compatibility, clean-machine packaging, and
 end-to-end production evidence are still open.
 
+The Windows handoff inputs now include explicit source-kit and portable-package
+allowlists under `packaging/`. The source-kit allowlist covers tracked source,
+build metadata, documentation, fixtures, and licenses; the portable allowlist
+covers the bundled font and required notices. A source-kit manifest can be
+generated from these inputs, while runtime package creation remains blocked
+until the dependency inventory is current and clean-machine qualification is
+complete.
+
 The next foundation slice adds immutable room-versus-measurement relationship
 validation, existing/demolished/proposed phase state with mutually exclusive
 remodel alternatives, deterministic geometry-operation helpers, and a
