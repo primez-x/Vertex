@@ -96,6 +96,12 @@ above, especially semantic authority, typed links, immutable save snapshots,
 output fingerprints, offline operation, AppContainer import isolation, and
 PlaneGCS rather than Ceres for planar constraints.
 
+Acceptance evidence is bound to a source-tree fingerprint that includes the
+requirements and gate contract plus tracked packaging inputs. The evidence file
+itself is excluded from that fingerprint so recording a report does not create
+a circular hash. Changing a requirement, gate, package allowlist, or source
+file therefore invalidates earlier acceptance evidence.
+
 ## Local compatibility evidence
 
 On 2026-09-09, a bounded check found no ApexSketch/Medina registration in the

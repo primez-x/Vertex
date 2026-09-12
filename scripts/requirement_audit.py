@@ -12,9 +12,12 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 def source_fingerprint(root):
     digest = hashlib.sha256()
     paths = []
-    for directory in ("include", "src", "tests", "scripts", "third_party", "assets", "cmake"):
-        paths.extend(path for path in (root / directory).rglob("*")
-                     if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc")
+    for directory in ("include", "src", "tests", "scripts", "third_party", "assets", "cmake",
+                      "docs", "packaging"):
+        for path in (root / directory).rglob("*"):
+            if (path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc" and
+                    path.relative_to(root).as_posix() != "docs/requirements/acceptance-evidence.json"):
+                paths.append(path)
     paths.extend(root / name for name in ("CMakeLists.txt", "CMakePresets.json", "vcpkg.json", ".gitattributes") if (root / name).is_file())
     for path in sorted(paths):
         digest.update(path.relative_to(root).as_posix().encode("utf-8") + b"\0")
@@ -37,6 +40,26 @@ def validate_contract(ledger, gates):
         errors.append("All production gates must be required")
     if any(gate not in declared for gate in mappings.values()):
         errors.append("A requirement references an unknown gate")
+    release_rule = gates.get("release_rule")
+    if not isinstance(release_rule, dict):
+        errors.append("A release_rule object is required")
+    else:
+        if release_rule.get("type") != "all_required_gates":
+            errors.append("release_rule must use the all_required_gates policy")
+        required_gate_ids = release_rule.get("required_gate_ids")
+        declared_gate_ids = set(declared)
+        valid_gate_id_list = (isinstance(required_gate_ids, list) and
+                              all(isinstance(item, str) and item for item in required_gate_ids))
+        if (not valid_gate_id_list or
+                len(required_gate_ids) != len(set(required_gate_ids)) or
+                set(required_gate_ids) != declared_gate_ids):
+            errors.append("release_rule required_gate_ids must list every declared gate exactly once")
+        for flag in ("alternatives_allowed", "parity_only_exit", "architecture_only_exit",
+                     "internal_checkpoint_is_production"):
+            if release_rule.get(flag) is not False:
+                errors.append(f"release_rule {flag} must be false")
+        if not isinstance(release_rule.get("pass_condition"), str) or not release_rule["pass_condition"].strip():
+            errors.append("release_rule pass_condition must be a nonempty string")
     for identity, gate in declared.items():
         if "requirement_ids" in gate:
             members = gate["requirement_ids"]

@@ -18,7 +18,11 @@ class ProductionGateTests(unittest.TestCase):
         self.ledger = {"requirements": [{"id": "REQ-1", "area": "core", "requirement": "Save exactly",
             "evidence_status": "documented", "implementation_status": "not_started", "acceptance": "Reopen same revision",
             "package": 3, "blocker": None, "source_urls": []}]}
-        self.gates = {"gates": {"storage": {"required": True}}, "requirement_to_gate": {"REQ-1": "storage"}}
+        self.gates = {"gates": {"storage": {"required": True}}, "requirement_to_gate": {"REQ-1": "storage"},
+            "release_rule": {"type": "all_required_gates", "required_gate_ids": ["storage"],
+                "alternatives_allowed": False, "parity_only_exit": False,
+                "architecture_only_exit": False, "internal_checkpoint_is_production": False,
+                "pass_condition": "All required gates pass."}}
 
     def test_unstarted_work_is_not_a_release(self):
         self.assertEqual(audit.validate_contract(self.ledger, self.gates), [])
@@ -86,6 +90,39 @@ class ProductionGateTests(unittest.TestCase):
             attributes.write_text("* text=auto eol=crlf")
             self.assertNotEqual(previous, audit.source_fingerprint(root))
 
+    def test_release_rule_must_be_one_all_required_gate_policy(self):
+        malformed = copy.deepcopy(self.gates)
+        malformed["release_rule"]["type"] = "any_gate"
+        self.assertTrue(audit.validate_contract(self.ledger, malformed))
+
+        malformed = copy.deepcopy(self.gates)
+        malformed["release_rule"]["required_gate_ids"] = []
+        self.assertTrue(audit.validate_contract(self.ledger, malformed))
+
+        malformed = copy.deepcopy(self.gates)
+        malformed["release_rule"]["alternatives_allowed"] = True
+        self.assertTrue(audit.validate_contract(self.ledger, malformed))
+
+        malformed = copy.deepcopy(self.gates)
+        del malformed["release_rule"]
+        self.assertTrue(audit.validate_contract(self.ledger, malformed))
+
+    def test_requirements_and_packaging_are_part_of_evidence_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "docs" / "requirements").mkdir(parents=True)
+            (root / "packaging").mkdir()
+            requirements = root / "docs" / "requirements" / "apex-parity.json"
+            package = root / "packaging" / "runtime-manifest.json"
+            requirements.write_text("requirements v1")
+            package.write_text("runtime v1")
+            previous = audit.source_fingerprint(root)
+            requirements.write_text("requirements v2")
+            self.assertNotEqual(previous, audit.source_fingerprint(root))
+            previous = audit.source_fingerprint(root)
+            package.write_text("runtime v2")
+            self.assertNotEqual(previous, audit.source_fingerprint(root))
+
 
 class RequirementAuditCliTests(unittest.TestCase):
     def setUp(self):
@@ -102,7 +139,11 @@ class RequirementAuditCliTests(unittest.TestCase):
         requirements = [{"id": "REQ-1", "area": "core", "requirement": "Save exactly",
             "evidence_status": evidence_status, "implementation_status": implementation_status, "acceptance": "Reopen same revision",
             "package": 3, "blocker": None, "source_urls": []}]
-        gates = {"schema_version": "1.0", "release_rule": {"required_gates": ["G1"]},
+        gates = {"schema_version": "1.0", "release_rule": {
+                    "type": "all_required_gates", "required_gate_ids": ["G1"],
+                    "alternatives_allowed": False, "parity_only_exit": False,
+                    "architecture_only_exit": False, "internal_checkpoint_is_production": False,
+                    "pass_condition": "All required gates pass."},
                  "gates": {"G1": {"required": True, "requirement_ids": ["REQ-1"]}},
                  "requirement_to_gate": {"REQ-1": "G1"}}
         self.ledger_path.write_text(json.dumps({"requirements": requirements}), encoding="utf-8")
