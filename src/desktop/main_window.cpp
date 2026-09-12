@@ -25,6 +25,7 @@
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
+#include "sketch/room_relationship_geometry_commit.hpp"
 #include "sketch/output_fingerprint.hpp"
 #include "sketch/sheet_output_scene.hpp"
 #include "sketch/calculations.hpp"
@@ -91,6 +92,7 @@
 #include <QSaveFile>
 #include "sketch/survey_contract.hpp"
 #include <QPushButton>
+#include <QStringList>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSizePolicy>
@@ -4137,6 +4139,252 @@ public:
         }
     }
 
+    void showRoomRelationshipPropagation() {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return;
+        }
+        if (!ensureRoomRelationshipRecord()) return;
+        try {
+            const auto context = captureModalContext();
+            const auto source = authoringSnapshot();
+            const auto record = decode_room_relationships(source);
+            if (!record) throw std::invalid_argument("The room relationship record is unavailable.");
+            const auto captured = snapshot_room_relationship_geometry(source, record->model);
+            if (captured.has_diagnostics()) {
+                QStringList messages;
+                for (const auto& diagnostic : captured.diagnostics)
+                    messages.push_back(QString::fromUtf8(diagnostic));
+                throw std::invalid_argument(messages.join(QStringLiteral("\n")).toStdString());
+            }
+            if (captured.records.empty())
+                throw std::invalid_argument("The relationship model has no drawable references.");
+
+            QDialog dialog(owner);
+            styleDialog(dialog);
+            dialog.setObjectName(QStringLiteral("roomRelationshipPropagationDialog"));
+            dialog.setWindowTitle(QStringLiteral("Preview relationship propagation"));
+            dialog.setModal(true);
+            dialog.resize(820, 680);
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* help = new QLabel(
+                QStringLiteral("Move one declared reference and review the exact dependent geometry before committing. "
+                               "The preview uses the same analytical model as the document and never edits the project."),
+                &dialog);
+            help->setWordWrap(true);
+            help->setObjectName(QStringLiteral("roomRelationshipPropagationHelp"));
+            layout->addWidget(help);
+
+            auto* form = new QFormLayout;
+            auto* driver = new QComboBox(&dialog);
+            driver->setObjectName(QStringLiteral("roomRelationshipPropagationDriver"));
+            driver->setAccessibleName(QStringLiteral("Reference to move"));
+            for (const auto& reference : record->model.references()) {
+                driver->addItem(QStringLiteral("%1  ·  %2")
+                                    .arg(room_reference_kind_label(reference.kind),
+                                         id_from(reference.id)),
+                                id_from(reference.id));
+            }
+            form->addRow(QStringLiteral("Move reference"), driver);
+            auto* rotation = new QLineEdit(QStringLiteral("0"), &dialog);
+            rotation->setObjectName(QStringLiteral("roomRelationshipPropagationRotation"));
+            rotation->setAccessibleName(QStringLiteral("Rotation in degrees"));
+            form->addRow(QStringLiteral("Rotation (degrees)"), rotation);
+            auto* offset_x = new QLineEdit(QStringLiteral("0"), &dialog);
+            offset_x->setObjectName(QStringLiteral("roomRelationshipPropagationOffsetX"));
+            offset_x->setAccessibleName(QStringLiteral("Horizontal offset"));
+            form->addRow(QStringLiteral("Offset X"), offset_x);
+            auto* offset_y = new QLineEdit(QStringLiteral("0"), &dialog);
+            offset_y->setObjectName(QStringLiteral("roomRelationshipPropagationOffsetY"));
+            offset_y->setAccessibleName(QStringLiteral("Vertical offset"));
+            form->addRow(QStringLiteral("Offset Y"), offset_y);
+            layout->addLayout(form);
+            auto* units = new QLabel(
+                QStringLiteral("Offsets accept the current input unit (%1); rotation is counter-clockwise.")
+                    .arg(m_metric_units ? QStringLiteral("metres") : QStringLiteral("feet/inches")),
+                &dialog);
+            units->setObjectName(QStringLiteral("roomRelationshipPropagationUnits"));
+            units->setStyleSheet(QStringLiteral("color: #64748b;"));
+            layout->addWidget(units);
+
+            auto* preview_canvas = new PlanCanvas(&dialog);
+            preview_canvas->setObjectName(QStringLiteral("roomRelationshipPropagationPreview"));
+            preview_canvas->setAccessibleName(QStringLiteral("Relationship geometry preview"));
+            preview_canvas->setMinimumHeight(360);
+            preview_canvas->setCanvasBackground(QColor(248, 250, 253));
+            preview_canvas->setOverviewMapEnabled(false);
+            preview_canvas->setGridEnabled(false);
+            layout->addWidget(preview_canvas, 1);
+            auto* legend = new QLabel(QStringLiteral("Original geometry uses semantic colors · cyan shows the proposed move and propagated dependents"), &dialog);
+            legend->setObjectName(QStringLiteral("roomRelationshipPropagationLegend"));
+            legend->setStyleSheet(QStringLiteral("color: #64748b;"));
+            layout->addWidget(legend);
+            auto* status = new QLabel(&dialog);
+            status->setObjectName(QStringLiteral("roomRelationshipPropagationStatus"));
+            status->setWordWrap(true);
+            status->setTextFormat(Qt::PlainText);
+            layout->addWidget(status);
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel,
+                                                 &dialog);
+            buttons->setObjectName(QStringLiteral("roomRelationshipPropagationButtons"));
+            layout->addWidget(buttons);
+            auto* apply = buttons->button(QDialogButtonBox::Apply);
+
+            const auto kind_type = [](RoomReferenceKind kind) {
+                switch (kind) {
+                case RoomReferenceKind::room_boundary: return QStringLiteral("room_boundary");
+                case RoomReferenceKind::appraisal_measurement_boundary:
+                    return QStringLiteral("measurement_boundary");
+                case RoomReferenceKind::architectural_wall: return QStringLiteral("wall");
+                }
+                return QStringLiteral("boundary");
+            };
+            const auto same_geometry = [](const Boundary& left, const Boundary& right) {
+                if (left.size() != right.size()) return false;
+                for (std::size_t index = 0; index < left.size(); ++index) {
+                    if (std::hypot(left[index].start.x - right[index].start.x,
+                                   left[index].start.y - right[index].start.y) >
+                            default_geometry_tolerance_metres ||
+                        std::hypot(left[index].end.x - right[index].end.x,
+                                   left[index].end.y - right[index].end.y) >
+                            default_geometry_tolerance_metres ||
+                        std::abs(left[index].sweep_radians - right[index].sweep_radians) >
+                            default_geometry_tolerance_metres) return false;
+                }
+                return true;
+            };
+            const auto unit = m_metric_units ? Unit::metre : Unit::foot;
+            const auto parse_offset = [&](const QLineEdit* field, const char* label) {
+                const auto value = parse_quantity(field->text().trimmed().toStdString(), unit).metres;
+                if (!std::isfinite(value))
+                    throw std::invalid_argument(std::string(label) + " must be finite.");
+                return value;
+            };
+            const auto parse_rotation = [&] {
+                bool ok = false;
+                const auto degrees = rotation->text().trimmed().toDouble(&ok);
+                if (!ok || !std::isfinite(degrees))
+                    throw std::invalid_argument("Rotation must be a finite number of degrees.");
+                return degrees * std::numbers::pi / 180.0;
+            };
+
+            std::optional<RoomRelationshipGeometryPreview> candidate_preview;
+            const auto draw_preview = [&](const std::vector<RelationshipGeometry>& edited,
+                                           const RoomRelationshipGeometryPreview* relationship_preview) {
+                std::vector<CanvasEntity> entities;
+                const auto add_entity = [&](const RelationshipGeometry& geometry, bool selected,
+                                            QString suffix) {
+                    entities.push_back({id_from(geometry.id) + suffix, kind_type(geometry.kind),
+                                        geometry.geometry,
+                                        geometry.kind == RoomReferenceKind::architectural_wall ? 0.12 : 0.0,
+                                        selected});
+                };
+                for (const auto& geometry : captured.records) add_entity(geometry, false, {});
+                for (const auto& geometry : edited) {
+                    const auto original = std::find_if(captured.records.begin(), captured.records.end(),
+                        [&](const auto& value) { return value.id == geometry.id; });
+                    if (original == captured.records.end() ||
+                        same_geometry(geometry.geometry, original->geometry)) continue;
+                    add_entity(geometry, true, QStringLiteral(" · proposed"));
+                }
+                if (relationship_preview) {
+                    for (const auto& change : relationship_preview->changes()) {
+                        add_entity({change.source_id, change.source_kind, change.geometry}, true,
+                                   QStringLiteral(" · follows"));
+                    }
+                }
+                preview_canvas->setEntities(std::move(entities));
+                preview_canvas->fitView();
+            };
+            draw_preview([&] {
+                std::vector<RelationshipGeometry> initial;
+                initial.reserve(captured.records.size());
+                for (const auto& geometry : captured.records) initial.push_back(geometry);
+                return initial;
+            }(), nullptr);
+
+            const auto update_preview = [&] {
+                candidate_preview.reset();
+                try {
+                    if (!modalContextUnchanged(context))
+                        throw std::invalid_argument(lastError().toStdString());
+                    const auto selected_id = driver->currentData().toString().toStdString();
+                    if (selected_id.empty()) throw std::invalid_argument("Choose a reference to move.");
+                    const auto rotation_radians = parse_rotation();
+                    const auto dx = parse_offset(offset_x, "Offset X");
+                    const auto dy = parse_offset(offset_y, "Offset Y");
+                    auto edited = captured.records;
+                    const auto target = std::find_if(edited.begin(), edited.end(),
+                        [&](const auto& value) { return value.id == selected_id; });
+                    if (target == edited.end()) throw std::invalid_argument("The selected reference is unavailable.");
+                    const auto bounds = boundary_bounds(target->geometry);
+                    const PlanarTransform transform{{(bounds.minimum.x + bounds.maximum.x) * 0.5,
+                                                      (bounds.minimum.y + bounds.maximum.y) * 0.5},
+                                                     rotation_radians, false, false, {dx, dy}};
+                    for (auto& segment : target->geometry)
+                        segment = transform_segment(segment, transform);
+                    const auto preview = preview_room_relationship_geometry(source, record->model, edited);
+                    draw_preview(edited, preview.accepted() ? &preview : nullptr);
+                    if (!preview.accepted()) {
+                        QStringList messages;
+                        for (const auto& diagnostic : preview.diagnostics())
+                            messages.push_back(QString::fromUtf8(diagnostic));
+                        status->setText(QStringLiteral("Preview blocked:\n%1")
+                                            .arg(messages.join(QStringLiteral("\n"))));
+                        apply->setEnabled(false);
+                        return;
+                    }
+                    candidate_preview = preview;
+                    if (preview.changes().empty()) {
+                        status->setText(QStringLiteral("No dependent geometry changes are declared for this move."));
+                        apply->setEnabled(false);
+                    } else {
+                        QStringList moved;
+                        for (const auto& change : preview.changes())
+                            moved.push_back(QString::fromUtf8(change.source_id));
+                        status->setText(QStringLiteral("Preview ready at revision %1. Dependents to move: %2. Apply commits one undoable operation.")
+                                            .arg(source.revision())
+                                            .arg(moved.join(QStringLiteral(", "))));
+                        apply->setEnabled(true);
+                    }
+                } catch (const std::exception& error) {
+                    draw_preview(captured.records, nullptr);
+                    status->setText(QStringLiteral("Preview: %1").arg(QString::fromUtf8(error.what())));
+                    apply->setEnabled(false);
+                }
+            };
+            QObject::connect(driver, &QComboBox::currentIndexChanged, &dialog,
+                             [&update_preview](int) { update_preview(); });
+            for (auto* field : {rotation, offset_x, offset_y})
+                QObject::connect(field, &QLineEdit::textChanged, &dialog,
+                                 [&update_preview](const QString&) { update_preview(); });
+            QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+            QObject::connect(apply, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    if (!candidate_preview) return;
+                    if (!modalContextUnchanged(context)) {
+                        update_preview();
+                        return;
+                    }
+                    const auto command = make_room_relationship_geometry_command(
+                        authoringSnapshot(), *candidate_preview);
+                    applyDocumentCommand(Command{command});
+                    clearError();
+                    refresh();
+                    dialog.accept();
+                } catch (const std::exception& error) {
+                    status->setText(QStringLiteral("Apply: %1").arg(QString::fromUtf8(error.what())));
+                    apply->setEnabled(false);
+                }
+            });
+            update_preview();
+            dialog.exec();
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Room relationship propagation: %1")
+                         .arg(QString::fromUtf8(error.what())));
+        }
+    }
+
     void showRoomRelationships() {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
@@ -4197,11 +4445,14 @@ public:
             remove->setObjectName(QStringLiteral("removeRoomRelationship"));
             auto* sync = new QPushButton(QStringLiteral("Sync references"), &dialog);
             sync->setObjectName(QStringLiteral("syncRoomRelationships"));
+            auto* propagation = new QPushButton(QStringLiteral("Preview geometry propagation…"), &dialog);
+            propagation->setObjectName(QStringLiteral("previewRoomRelationshipPropagation"));
             auto* close = new QPushButton(QStringLiteral("Close"), &dialog);
             close->setDefault(true);
             buttons->addWidget(add);
             buttons->addWidget(remove);
             buttons->addWidget(sync);
+            buttons->addWidget(propagation);
             buttons->addStretch(1);
             buttons->addWidget(close);
             layout->addLayout(buttons);
@@ -4337,6 +4588,8 @@ public:
                     status->setText(QString::fromUtf8(error.what()));
                 }
             });
+            QObject::connect(propagation, &QPushButton::clicked, &dialog,
+                             [this] { showRoomRelationshipPropagation(); });
             QObject::connect(close, &QPushButton::clicked, &dialog, &QDialog::reject);
             dialog.exec();
         } catch (const std::exception& error) {
@@ -11298,9 +11551,9 @@ public:
             } else {
                 status->setText(lastError());
             }
-        });
-        QObject::connect(close, &QPushButton::clicked, &dialog, &QDialog::reject);
-        dialog.exec();
+            });
+            QObject::connect(close, &QPushButton::clicked, &dialog, &QDialog::reject);
+            dialog.exec();
     }
 
     void showCommandPalette() {

@@ -2,12 +2,13 @@
 
 #include "sketch/geometry.hpp"
 #include "sketch/room_relationships.hpp"
-#include "sketch/document.hpp"
 
 #include <string>
 #include <vector>
 
 namespace sketch {
+
+class DocumentSnapshot;
 
 // Geometry is supplied as a detached snapshot so callers can compare an
 // edited document candidate without mutating the authoritative Document.

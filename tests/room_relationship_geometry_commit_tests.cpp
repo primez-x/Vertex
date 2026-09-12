@@ -114,6 +114,16 @@ void test_preview_and_apply() {
             "preview should retain the source semantic role");
     require(document_snapshot_digest(source) == preview.source_snapshot_digest(),
             "preview source digest should bind to the complete source");
+    auto workspace_copy = Document::fork(source);
+    const auto workspace_command = make_room_relationship_geometry_command(
+        workspace_copy.snapshot(), preview);
+    require(workspace_copy.apply(Command{workspace_command}) == 1,
+            "workspace hosts should apply the ordinary relationship command");
+    const auto workspace_room = decode_identified_boundary_entity(
+        workspace_copy.snapshot().entities().at("room"));
+    require(workspace_room.segments.front().segment.start.x == 5.0 &&
+                workspace_room.segments.front().segment.start.y == 2.0,
+            "workspace command should produce the propagated entity");
     const auto revision = apply_room_relationship_geometry(document, preview);
     require(revision == 1, "relationship geometry should commit as one revision");
     const auto committed = decode_identified_boundary_entity(

@@ -2520,6 +2520,48 @@ void test_room_relationship_workflow() {
     require(model.relations().empty(), "undo should restore the relation-free graph");
     require(window.redoCommand(), "room relationship edits should be redoable");
 
+    const auto before_propagation = window.document().revision();
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("roomRelationshipsDialog"));
+        require(dialog, "room relationship editor should reopen for geometry propagation");
+        auto* propagation = dialog->findChild<QPushButton*>(
+            QStringLiteral("previewRoomRelationshipPropagation"));
+        require(propagation, "relationship editor should expose geometry propagation preview");
+        QTimer::singleShot(0, &window, [&] {
+            auto* preview = window.findChild<QDialog*>(
+                QStringLiteral("roomRelationshipPropagationDialog"));
+            require(preview, "geometry propagation should open a visible preview dialog");
+            auto* driver = preview->findChild<QComboBox*>(
+                QStringLiteral("roomRelationshipPropagationDriver"));
+            auto* offset_x = preview->findChild<QLineEdit*>(
+                QStringLiteral("roomRelationshipPropagationOffsetX"));
+            auto* canvas_widget = preview->findChild<QWidget*>(
+                QStringLiteral("roomRelationshipPropagationPreview"));
+            auto* canvas = static_cast<desktop::PlanCanvas*>(canvas_widget);
+            auto* buttons = preview->findChild<QDialogButtonBox*>(
+                QStringLiteral("roomRelationshipPropagationButtons"));
+            require(driver && offset_x && canvas_widget && canvas && buttons,
+                    "propagation preview should expose typed controls and a canvas");
+            const auto driver_index = driver->findData(wall_id);
+            require(driver_index >= 0, "propagation preview should list the wall driver");
+            driver->setCurrentIndex(driver_index);
+            offset_x->setText(QStringLiteral("1 m"));
+            require(!canvas->entities().empty() &&
+                        buttons->button(QDialogButtonBox::Apply)->isEnabled(),
+                    "valid propagation should render proposed geometry and enable apply");
+            buttons->button(QDialogButtonBox::Apply)->click();
+            const auto moved = decode_identified_boundary_entity(
+                window.document().snapshot().entities().at(boundary_id.toStdString()));
+            require(moved.segments.front().segment.start.x > 0.9,
+                    "applied relationship propagation should move the dependent boundary");
+            require(window.document().revision() == before_propagation + 1,
+                    "relationship propagation should commit one document revision");
+            dialog->reject();
+        });
+        propagation->click();
+    });
+    window.showRoomRelationships();
+
     QTemporaryDir directory;
     require(directory.isValid(), "room relationship fixture needs a temporary directory");
     const auto path = directory.filePath(QStringLiteral("relationships.bldproj"));

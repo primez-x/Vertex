@@ -260,6 +260,12 @@ void merge_diagnostics(std::vector<std::string>& destination,
 
 } // namespace
 
+RoomRelationshipGeometrySnapshot snapshot_room_relationship_geometry(
+    const DocumentSnapshot& source, const RoomRelationshipSnapshot& relationships) {
+    auto snapshot = snapshot_geometry(source, relationships);
+    return {std::move(snapshot.records), std::move(snapshot.diagnostics)};
+}
+
 RoomRelationshipGeometryPreview preview_room_relationship_geometry(
     const DocumentSnapshot& source,
     const RoomRelationshipSnapshot& relationships,
@@ -298,29 +304,34 @@ RoomRelationshipGeometryPreview preview_room_relationship_geometry(
 
 Revision apply_room_relationship_geometry(
     Document& document, const RoomRelationshipGeometryPreview& preview) {
+    const auto command = make_room_relationship_geometry_command(document.snapshot(), preview);
+    return document.apply(Command{command});
+}
+
+ApplyEntityChanges make_room_relationship_geometry_command(
+    const DocumentSnapshot& source, const RoomRelationshipGeometryPreview& preview) {
     if (!preview.accepted_) {
         throw DocumentError(DocumentErrorCode::invalid_entity,
                             "cannot apply a rejected room relationship geometry preview");
     }
-    const auto current = document.snapshot();
-    if (current.document_id() != preview.document_id_ ||
-        current.revision() != preview.expected_revision_ ||
-        document_snapshot_digest(current) != preview.source_snapshot_digest_) {
+    if (source.document_id() != preview.document_id_ ||
+        source.revision() != preview.expected_revision_ ||
+        document_snapshot_digest(source) != preview.source_snapshot_digest_) {
         throw DocumentError(DocumentErrorCode::stale_revision,
                             "room relationship geometry preview does not match the current document");
     }
     try {
         std::map<std::string, Entity, std::less<>> candidate_entities;
-        const auto entity_changes = build_entity_changes(current, preview.changes_,
+        const auto entity_changes = build_entity_changes(source, preview.changes_,
                                                           &candidate_entities);
-        const auto command = ApplyEntityChanges{current.revision(), entity_changes, {},
+        const auto command = ApplyEntityChanges{source.revision(), entity_changes, {},
                                                 "Propagate room relationships"};
-        const auto candidate = Document::preview_command(current, Command{command});
+        const auto candidate = Document::preview_command(source, Command{command});
         if (entity_map_digest(candidate.entities()) != preview.candidate_entity_digest_) {
             throw DocumentError(DocumentErrorCode::invalid_entity,
                                 "room relationship geometry preview changed before commit");
         }
-        return document.apply(Command{command});
+        return command;
     } catch (const DocumentError&) {
         throw;
     } catch (const std::exception& error) {

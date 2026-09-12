@@ -1,11 +1,25 @@
 #pragma once
 
 #include "sketch/room_relationship_geometry.hpp"
+#include "sketch/document.hpp"
 
 #include <string>
 #include <vector>
 
 namespace sketch {
+
+struct RoomRelationshipGeometrySnapshot {
+    std::vector<RelationshipGeometry> records;
+    std::vector<std::string> diagnostics;
+
+    [[nodiscard]] bool has_diagnostics() const noexcept { return !diagnostics.empty(); }
+};
+
+// Decode the live relationship references into detached analytical geometry.
+// Missing or malformed entities are returned as sorted diagnostics so a host
+// can explain why propagation is unavailable without mutating the document.
+[[nodiscard]] RoomRelationshipGeometrySnapshot snapshot_room_relationship_geometry(
+    const DocumentSnapshot& source, const RoomRelationshipSnapshot& relationships);
 
 // A side-effect-free, revision-bound relationship edit. The preview stores
 // only validated detached changes and digest bindings; it does not retain a
@@ -49,6 +63,8 @@ private:
         const std::vector<RelationshipGeometry>&);
     friend Revision apply_room_relationship_geometry(
         Document&, const RoomRelationshipGeometryPreview&);
+    friend ApplyEntityChanges make_room_relationship_geometry_command(
+        const DocumentSnapshot&, const RoomRelationshipGeometryPreview&);
 };
 
 // Decode the model's live references into detached analytical geometry and
@@ -59,6 +75,14 @@ private:
     const DocumentSnapshot& source,
     const RoomRelationshipSnapshot& relationships,
     const std::vector<RelationshipGeometry>& edited_after);
+
+// Rebuild the validated command for a live snapshot after checking the
+// preview's document identity, revision and complete source digest. Hosts that
+// own a workspace history can pass this ordinary ApplyEntityChanges command
+// through their normal publication adapter instead of mutating Document
+// directly.
+[[nodiscard]] ApplyEntityChanges make_room_relationship_geometry_command(
+    const DocumentSnapshot& source, const RoomRelationshipGeometryPreview& preview);
 
 // Rechecks the full source snapshot digest, rebuilds the entity changes, and
 // applies them as one ordinary validated Document command. Stale, foreign,
