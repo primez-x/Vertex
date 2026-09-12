@@ -74,6 +74,10 @@ struct CanvasReferenceGrid {
     QString id;
     std::vector<ReferenceGridLine> lines;
     bool visible{true};
+    // Axis labels are retained with the rendered grid so screen, print, and
+    // export output share the same presentation metadata.
+    QString x_label;
+    QString y_label;
 };
 
 struct BoundaryDraftLabel {
@@ -176,6 +180,10 @@ private:
     void drawGrid(QPainter& painter, const QRectF& viewport, double scale,
                   Vec2 view_center) const;
     void drawReferenceGrids(QPainter& painter) const;
+    void drawReferenceGridLabels(QPainter& painter, const QRectF& viewport,
+                                 double scale, Vec2 view_center, bool output,
+                                 QColor background,
+                                 std::optional<double> paper_pixels_per_mm) const;
     void drawCursorReadout(QPainter& painter, const QRectF& viewport,
                            QColor background) const;
     void drawEntity(QPainter& painter, const CanvasEntity& entity, bool output,

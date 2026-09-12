@@ -12791,7 +12791,9 @@ private:
                     if (!entity.properties.contains("model"))
                         throw std::invalid_argument("model is required");
                     const auto model = ReferenceGridModel::from_json(entity.properties.at("model"));
-                    reference_grids.push_back({id_from(id), model.lines(), model.visible});
+                    reference_grids.push_back({id_from(id), model.lines(), model.visible,
+                                               QString::fromStdString(model.x_label),
+                                               QString::fromStdString(model.y_label)});
                 } catch (const std::exception& error) {
                     append_geometry_error(QStringLiteral("Reference grid %1: %2")
                                               .arg(id_from(id), QString::fromUtf8(error.what())));

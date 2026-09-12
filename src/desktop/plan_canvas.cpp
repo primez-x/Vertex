@@ -311,6 +311,13 @@ std::optional<std::pair<Vec2, Vec2>> PlanCanvas::contentBounds() const {
             include({reference.position.x + width * 0.5, reference.position.y + height * 0.5});
         }
     }
+    for (const auto& grid : m_reference_grids) {
+        if (!grid.visible) continue;
+        for (const auto& line : grid.lines) {
+            include(line.start);
+            include(line.end);
+        }
+    }
     if (!has_content) return std::nullopt;
     return std::make_pair(minimum, maximum);
 }
@@ -492,6 +499,10 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
         }
     }
     painter.restore();
+
+    drawReferenceGridLabels(painter, viewport, scale, view_center,
+                            fit_to_content || explicit_scale.has_value(), background,
+                            paper_pixels_per_mm);
 
     // Committed labels use the same model-to-screen mapping as the current
     // scene, including fit-to-content output. Drawing after restoring the
@@ -952,6 +963,74 @@ void PlanCanvas::drawReferenceGrids(QPainter& painter) const {
             painter.drawLine(QLineF(line.start.x, line.start.y, line.end.x, line.end.y));
         }
     }
+}
+
+void PlanCanvas::drawReferenceGridLabels(QPainter& painter, const QRectF& viewport,
+                                         double scale, Vec2 view_center, bool output,
+                                         QColor background,
+                                         std::optional<double> paper_pixels_per_mm) const {
+    if (!(scale > 0.0) || !std::isfinite(scale)) return;
+    const auto to_screen = [&](Vec2 point) {
+        return QPointF(viewport.center().x() + (point.x - view_center.x) * scale,
+                       viewport.center().y() - (point.y - view_center.y) * scale);
+    };
+
+    double dpi = output ? painter.device()->logicalDpiY() : logicalDpiY();
+    if (output && paper_pixels_per_mm.has_value() && *paper_pixels_per_mm > 0.0 &&
+        std::isfinite(*paper_pixels_per_mm * 25.4)) {
+        dpi = *paper_pixels_per_mm * 25.4;
+    }
+    const auto pixel_height = output
+        ? std::clamp(std::lround(2.5 * dpi / 25.4), 8L, 48L)
+        : 11L;
+    QFont font = painter.font();
+    font.setPixelSize(static_cast<int>(pixel_height));
+    font.setWeight(QFont::DemiBold);
+    const QFontMetricsF metrics(font, painter.device());
+    const bool light_surface = background.lightnessF() > 0.5;
+    const auto foreground = light_surface ? QColor(47, 83, 121, 235)
+                                          : QColor(202, 226, 246, 245);
+    const auto fill = light_surface ? QColor(255, 255, 255, 228)
+                                    : QColor(18, 30, 45, 232);
+    const auto border = light_surface ? QColor(134, 164, 194, 210)
+                                      : QColor(93, 132, 171, 230);
+
+    painter.save();
+    painter.setRenderHint(QPainter::TextAntialiasing, true);
+    painter.setClipRect(viewport);
+    painter.setFont(font);
+    for (const auto& grid : m_reference_grids) {
+        if (!grid.visible) continue;
+        for (const auto& line : grid.lines) {
+            const auto& prefix = line.axis == ReferenceGridAxis::x ? grid.x_label : grid.y_label;
+            if (prefix.isEmpty() || !std::isfinite(line.start.x) ||
+                !std::isfinite(line.start.y) || !std::isfinite(line.end.x) ||
+                !std::isfinite(line.end.y)) {
+                continue;
+            }
+            const auto start = to_screen(line.start);
+            const auto end = to_screen(line.end);
+            const auto outward = line.axis == ReferenceGridAxis::x
+                ? end - start
+                : start - end;
+            const auto length = std::hypot(outward.x(), outward.y());
+            if (!(length > 0.0) || !std::isfinite(length)) continue;
+            const auto unit = outward / length;
+            auto anchor = line.axis == ReferenceGridAxis::x ? end : start;
+            anchor += unit * 6.0;
+            const auto text = prefix + QString::number(line.index);
+            auto bounds = metrics.boundingRect(text);
+            bounds.moveCenter(anchor);
+            bounds.adjust(-4.0, -2.0, 4.0, 2.0);
+            painter.setPen(QPen(border, 1.0));
+            painter.setBrush(fill);
+            painter.drawRoundedRect(bounds, 3.0, 3.0);
+            painter.setPen(foreground);
+            painter.setBrush(Qt::NoBrush);
+            painter.drawText(bounds, Qt::AlignCenter, text);
+        }
+    }
+    painter.restore();
 }
 
 void PlanCanvas::drawCursorReadout(QPainter& painter, const QRectF& viewport,

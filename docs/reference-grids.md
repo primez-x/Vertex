@@ -28,8 +28,10 @@ version-1 shape below:
 `count_x` and `count_y` describe the number of lines on each side of the
 origin; the origin line is included, so a grid contains
 `(2 * count_x + 1) + (2 * count_y + 1)` lines. Major lines are deterministic
-multiples of `major_every`. Labels are retained as grid metadata for future
-axis annotations and are validated as printable UTF-8 text.
+multiples of `major_every`. `x_label` and `y_label` are axis prefixes. Each
+rendered line receives its prefix followed by its signed line index (for
+example, `A-1`, `A0`, and `A1`). The labels are validated as printable UTF-8
+text and remain presentation data; they never enter measurement calculations.
 
 The Windows **Reference grids** editor creates, edits, removes, and toggles
 these entities through the ordinary revision-checked `Document` command path.
@@ -40,6 +42,6 @@ the same validated line list; reference grids are never used as measurement
 geometry and never alter saved world coordinates.
 
 The current slice covers deterministic geometry, persistence, canvas display,
-undo/redo, and save/reopen. Grid labels, site/terrain coordination, automatic
-level-driven placement, and full cross-view production qualification remain
-separate requirements.
+axis labels in interactive and fit-to-content output, undo/redo, and
+save/reopen. Site/terrain coordination, automatic level-driven placement, and
+full cross-view production qualification remain separate requirements.

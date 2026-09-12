@@ -31,6 +31,7 @@ using sketch::desktop::CanvasLabel;
 using sketch::desktop::BoundaryDraftLabel;
 using sketch::desktop::BoundaryDraftPreview;
 using sketch::desktop::CanvasEntity;
+using sketch::desktop::CanvasReferenceGrid;
 using sketch::desktop::CanvasTool;
 using sketch::desktop::PlanCanvas;
 
@@ -683,6 +684,45 @@ void test_analytic_arc_fit_bounds() {
         "interactive fit and content-center queries must use identical geometry bounds");
 }
 
+void test_reference_grid_labels_render_in_screen_and_output() {
+    PlanCanvas canvas;
+    canvas.resize(640, 480);
+    canvas.setGridEnabled(false);
+    canvas.setOverviewMapEnabled(false);
+
+    sketch::ReferenceGridModel model;
+    model.origin_m = {0.0, 0.0};
+    model.spacing_x_m = 2.0;
+    model.spacing_y_m = 2.0;
+    model.count_x = 1;
+    model.count_y = 1;
+    model.major_every = 1;
+    model.x_label = "X";
+    model.y_label = "Y";
+    const auto lines = model.lines();
+    canvas.setReferenceGrids({CanvasReferenceGrid{QStringLiteral("grid"), lines, true,
+                                                 QString(), QString()}});
+    canvas.fitView();
+
+    const auto without_labels = render(canvas, false);
+    canvas.setReferenceGrids({CanvasReferenceGrid{QStringLiteral("grid"), lines, true,
+                                                 QStringLiteral("X"), QStringLiteral("Y")}});
+    const auto screen = render(canvas, false);
+    require(differing_pixels(without_labels, screen, canvas.rect()) > 20,
+            "reference-grid labels must be present in the interactive canvas");
+    canvas.setReferenceGrids({CanvasReferenceGrid{QStringLiteral("grid"), lines, true,
+                                                 QString(), QString()}});
+    const auto output_without_labels = render(canvas, true);
+    const auto without_labels_output = render(canvas, true);
+    require(images_equal(without_labels_output, output_without_labels),
+            "reference-grid output must remain deterministic when labels are absent");
+    canvas.setReferenceGrids({CanvasReferenceGrid{QStringLiteral("grid"), lines, true,
+                                                 QStringLiteral("X"), QStringLiteral("Y")}});
+    const auto output = render(canvas, true);
+    require(differing_pixels(output_without_labels, output, canvas.rect()) > 20,
+            "reference-grid labels must be present in fit-to-content output");
+}
+
 int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QApplication application(argc, argv);
@@ -703,6 +743,7 @@ int main(int argc, char** argv) {
         test_site_scale_fit();
         test_arc_render_orientation();
         test_analytic_arc_fit_bounds();
+        test_reference_grid_labels_render_in_screen_and_output();
         test_paper_label_style_and_hit_testing();
         std::cout << "Boundary canvas tests passed\n";
         return 0;

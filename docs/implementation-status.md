@@ -42,10 +42,10 @@ The same canvas path now supports validated persisted `reference_grid` entities.
 The Windows Reference grids editor creates, edits, removes, and toggles rotated
 model-space grids with independent spacing/extents and deterministic major-line
 classification through revision-checked Document commands. Both measurement
-and architectural canvases render the same line list after save/reopen, while
-grids remain presentation aids and cannot affect measurement geometry. Grid
-labels, site/terrain coordination, and full cross-view production qualification
-remain open.
+and architectural canvases render the same line list and axis labels after
+save/reopen, while grids remain presentation aids and cannot affect measurement
+geometry. Site/terrain coordination and full cross-view production
+qualification remain open.
 
 The architectural object slice now accepts a true flat roof through the
 existing sloped-panel schema: zero rise and zero pitch produce a thickened

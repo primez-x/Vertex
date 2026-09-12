@@ -1681,7 +1681,7 @@
         "docs/vertical-levels.md",
         "docs/reference-grids.md"
       ],
-      "implementation_note": "Vertical level and floor-to-floor relationship semantics are implemented as a standalone graph. Floors can bind to a validated graph entity and level through revisioned desktop controls with save/reopen coverage. Reference grids now have strict version-1 persistence, a revision-checked Windows editor, deterministic rotated line generation, and shared measurement/architectural canvas rendering. Newly created walls, slabs, and architectural objects on a bound floor resolve through an opt-in level placement record across plan, elevation, section, and native 3D without mutating source coordinates. Site/terrain objects, grid labels, coordinated view propagation, and production qualification remain open."
+      "implementation_note": "Vertical level and floor-to-floor relationship semantics are implemented as a standalone graph. Floors can bind to a validated graph entity and level through revisioned desktop controls with save/reopen coverage. Reference grids now have strict version-1 persistence, a revision-checked Windows editor, deterministic rotated line generation, shared measurement/architectural canvas rendering, and axis labels in screen and fit-to-content output. Newly created walls, slabs, and architectural objects on a bound floor resolve through an opt-in level placement record across plan, elevation, section, and native 3D without mutating source coordinates. Site/terrain objects, coordinated view propagation, and production qualification remain open."
     },
     {
       "id": "ARCH-MOD-008",
