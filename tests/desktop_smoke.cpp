@@ -6,6 +6,7 @@
 #include "sketch/assembly_model.hpp"
 #include "sketch/vertical_levels.hpp"
 #include "sketch/project_store.hpp"
+#include "sketch/boundary_entity.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/annotation_entity_codec.hpp"
@@ -16,6 +17,7 @@
 
 #include <QApplication>
 #include <QAction>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -390,6 +392,64 @@ void test_named_revisions() {
                 restored.document.snapshot().entities().size() < before_restore.entities().size() &&
                 window.document().snapshot().entities().size() == before_restore.entities().size(),
             "restoring a revision must leave later work in the current document untouched");
+}
+
+void test_boundary_transform_workflow() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    const auto boundary_id = window.createBoundary(
+        Boundary{{{{0.0, 0.0}, {4.0, 0.0}, 0.0},
+                  {{4.0, 0.0}, {4.0, 2.0}, 0.0},
+                  {{4.0, 2.0}, {0.0, 2.0}, 0.0},
+                  {{0.0, 2.0}, {0.0, 0.0}, 0.0}}},
+        QStringLiteral("measurement"));
+    require(!boundary_id.isEmpty() && window.selectEntity(boundary_id),
+            "transform fixture should create and select an identified boundary");
+    const auto original = window.document().snapshot().entities().at(boundary_id.toStdString());
+    const auto before_rotation = window.document().revision();
+    const auto rotated_ok = window.transformSelectedBoundary(QStringLiteral("90"), false, false,
+                                                              QStringLiteral("0"), QStringLiteral("0"), false);
+    if (!rotated_ok) std::cerr << "transform error: " << window.lastError().toStdString() << '\n';
+    require(rotated_ok && window.document().revision() == before_rotation + 1,
+            "boundary rotation should commit one undoable document command");
+    const auto rotated = window.document().snapshot().entities().at(boundary_id.toStdString());
+    const auto rotated_model = decode_identified_boundary_entity(rotated);
+    require(rotated_model.segments.front().segment.start.x == 3.0 &&
+                rotated_model.segments.front().segment.start.y == -1.0,
+            "boundary rotation should use the bounding-box center as its pivot");
+    require(window.undoCommand() &&
+                window.document().snapshot().entities().at(boundary_id.toStdString()) == original &&
+                window.redoCommand() &&
+                window.document().snapshot().entities().at(boundary_id.toStdString()) == rotated,
+            "boundary transform should restore exact geometry through undo and redo");
+    const auto source_count = window.document().snapshot().entities().size();
+    require(window.selectEntity(boundary_id) &&
+                window.transformSelectedBoundary(QStringLiteral("0"), false, true,
+                                                 QStringLiteral("4 ft"), QStringLiteral("0"), true),
+            "boundary clone should accept an explicit offset and flip");
+    const auto clone_id = window.selectedEntityId();
+    require(!clone_id.isEmpty() && clone_id != boundary_id &&
+                window.document().snapshot().entities().size() == source_count + 1 &&
+                window.document().snapshot().entities().contains(boundary_id.toStdString()),
+            "boundary clone should create a distinct selected entity and preserve its source");
+    const auto clone = window.document().snapshot().entities().at(clone_id.toStdString());
+    require(clone.properties.at("classification") == "measurement" &&
+                decode_identified_boundary_entity(clone).segments.front().segment.start.x > 1.2,
+            "boundary clone should retain safe context metadata while applying its transform");
+
+    auto* action = window.findChild<QAction*>(QStringLiteral("boundaryTransform"));
+    require(action, "boundary transform should be available from the secondary command surface");
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("boundaryTransformDialog"));
+        require(dialog, "boundary transform editor must open");
+        require(dialog->findChild<QLineEdit*>(QStringLiteral("boundaryRotationDegrees")) &&
+                    dialog->findChild<QLineEdit*>(QStringLiteral("boundaryOffsetX")) &&
+                    dialog->findChild<QCheckBox*>(QStringLiteral("boundaryClone")) &&
+                    dialog->findChild<QDialogButtonBox*>(QStringLiteral("boundaryTransformButtons")),
+                "boundary transform editor must expose pivot transform controls");
+        dialog->reject();
+    });
+    action->trigger();
 }
 
 void test_organization_context() {
@@ -1045,6 +1105,7 @@ int main(int argc, char** argv) {
     test_project_subject_metadata();
     test_workspace_profiles();
     test_named_revisions();
+    test_boundary_transform_workflow();
     test_design_phase_workflow();
     test_room_relationship_workflow();
     test_vertical_levels_workflow();

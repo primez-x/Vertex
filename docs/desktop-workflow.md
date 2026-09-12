@@ -317,6 +317,28 @@ The wall constraint integration remains under qualification. Curved-wall
 constraints, persistent boundary vertex bindings, level dependency propagation
 and the complete production constraint workflow are still required.
 
+## Boundary transforms
+
+The **Transform boundary** command is available from **More** and the command
+palette when a supported identified closed boundary is selected. It previews an
+analytic rotation around the boundary bounding-box center, independent
+horizontal/vertical reflections, and X/Y offsets in the active input units.
+Newly authored boundaries receive stable segment and vertex identities before
+they enter the document. Applying a transform then updates the same typed
+boundary entity through one revision-checked Document command, preserving
+those identities so the operation can be undone and redone exactly. A boundary
+with receipt or dependent-reference semantics is rejected until those
+relationships have an explicit transform policy.
+
+Clone mode allocates a new boundary, segment IDs, and vertex IDs, carries only
+safe drawing context and area metadata, and leaves the source entity and its
+relationships unchanged. Imported anonymous legacy boundaries are promoted
+only when a command can preserve their exact geometry and metadata; an
+in-place transform of such a boundary remains blocked until an explicit
+identity-upgrade path is provided. Unsupported boundary versions fail closed
+with a version diagnostic. Wall/object transforms, vertex insertion UI, and
+full linked-relationship qualification remain open.
+
 `scripts/test-constraint-editor.ps1` captures the dialog at normal and 150 percent
 scale with the bundled font and a 15-second process timeout. It exercises both
 workspace entry points; separate native 3D rendering tests remain necessary.

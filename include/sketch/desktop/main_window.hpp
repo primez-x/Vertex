@@ -190,6 +190,16 @@ public:
     [[nodiscard]] bool editSelectedAreaAttributes(const QString& attributes_json);
     [[nodiscard]] bool setSelectedCalculationRule(bool include_in_building,
                                                    bool include_in_living);
+    // Applies an analytic transform to the selected identified boundary. The
+    // pivot is the source boundary's bounding-box center; offsets use the
+    // current input unit. Clone mode creates a new boundary and leaves the
+    // source untouched.
+    [[nodiscard]] bool transformSelectedBoundary(const QString& rotation_degrees,
+                                                 bool flip_horizontal,
+                                                 bool flip_vertical,
+                                                 const QString& offset_x,
+                                                 const QString& offset_y,
+                                                 bool clone);
     // Presentation annotations are persisted inside the typed annotation
     // entity. These commands keep labels/symbols undoable and portable rather
     // than creating renderer-only state.
@@ -274,6 +284,7 @@ public:
     void showConstraintEditor();
     void showWorkspaceProfiles();
     void showRevisionHistory();
+    void showBoundaryTransformEditor();
     // Writes an immutable copy of a named revision without changing the
     // current document or its later history.
     [[nodiscard]] bool restoreNamedRevision(const QString& name, const QString& path);

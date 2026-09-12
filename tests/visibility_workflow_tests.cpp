@@ -345,13 +345,29 @@ void test_visibility_workflow() {
 
     const auto ground_wall = window.createStraightWall({0.0, 0.0}, {8.0, 0.0});
     require(!ground_wall.isEmpty(), "ground wall must be created");
-    const auto ground_boundary = window.createBoundary({
-        {{0.0, 1.0}, {4.0, 1.0}, 0.0},
-        {{4.0, 1.0}, {4.0, 4.0}, 0.0},
-        {{4.0, 4.0}, {0.0, 4.0}, 0.0},
-        {{0.0, 4.0}, {0.0, 1.0}, 0.0},
+    // Keep this fixture genuinely legacy so the visibility path proves that a
+    // later identity promotion does not let auxiliary geometry replace the
+    // canonical measurement geometry.
+    const auto ground_boundary = QStringLiteral("legacy-ground-boundary");
+    const nlohmann::json legacy_segments = {
+        {{"start", {0.0, 1.0}}, {"end", {4.0, 1.0}}, {"sweep_radians", 0.0}},
+        {{"start", {4.0, 1.0}}, {"end", {4.0, 4.0}}, {"sweep_radians", 0.0}},
+        {{"start", {4.0, 4.0}}, {"end", {0.0, 4.0}}, {"sweep_radians", 0.0}},
+        {{"start", {0.0, 4.0}}, {"end", {0.0, 1.0}}, {"sweep_radians", 0.0}},
+    };
+    const Entity legacy_entity{
+        ground_boundary.toStdString(), "measurement_boundary",
+        {{"floor_id", "floor-1"}, {"layer_id", "layer-1"},
+         {"segments", legacy_segments}, {"classification", "measurement"},
+         {"factor", 1.0}, {"factor_expression", "1"},
+         {"factor_numerator", 1}, {"factor_denominator", 1}},
+        false, nlohmann::json::object()};
+    window.document().apply(sketch::ApplyEntityChanges{
+        .expected_revision = window.document().revision(),
+        .entity_changes = {sketch::EntityChange::upsert(legacy_entity)},
+        .message = "legacy visibility fixture",
     });
-    require(!ground_boundary.isEmpty(), "ground boundary must be created");
+    require(window.selectEntity(ground_boundary), "ground boundary must be created");
     auto* original_total = window.findChild<QLabel*>(QStringLiteral("calculationBuildingTotal"));
     require(original_total != nullptr, "boundary total must be available");
     const auto canonical_total = original_total->text();

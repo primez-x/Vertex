@@ -934,11 +934,9 @@
       "package": 4,
       "blocker": null,
       "implementation_sources": [
-        "src/desktop/main_window.cpp",
-        "tests/desktop_smoke.cpp",
-        "docs/workspace-ui.md"
+        "src/desktop/main_window.cpp"
       ],
-      "implementation_note": "The canvas-centered shell, compact tool rail, navigator, and contextual inspector are exercised by the desktop smoke workflow; the fixed toolbar keeps the canvas close to the window edge. Cursor-adjacent measurement and the complete acceptance statement remain open."
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
     },
     {
       "id": "APX-EDIT-002",
@@ -954,9 +952,13 @@
         "include/sketch/geometry_operations.hpp",
         "src/core/geometry_operations.cpp",
         "tests/geometry_operations_tests.cpp",
-        "docs/geometry-operations.md"
+        "docs/geometry-operations.md",
+        "src/desktop/main_window.cpp",
+        "include/sketch/desktop/main_window.hpp",
+        "tests/desktop_smoke.cpp",
+        "docs/desktop-workflow.md"
       ],
-      "implementation_note": "Boundary rotation and horizontal/vertical reflection preserve analytical geometry with explicit pivots; references, annotations, architectural objects, typed-link propagation, and undo remain open."
+      "implementation_note": "The desktop exposes rotation around a deterministic bounding-box pivot, independent horizontal/vertical reflection, and offsets for identified closed boundaries through one undoable Document command; clone-safe metadata is preserved. References, annotations, architectural objects, typed-link propagation, and production qualification remain open."
     },
     {
       "id": "APX-EDIT-003",
@@ -972,9 +974,13 @@
         "include/sketch/geometry_operations.hpp",
         "src/core/geometry_operations.cpp",
         "tests/geometry_operations_tests.cpp",
-        "docs/geometry-operations.md"
+        "docs/geometry-operations.md",
+        "src/desktop/main_window.cpp",
+        "include/sketch/desktop/main_window.hpp",
+        "tests/desktop_smoke.cpp",
+        "docs/desktop-workflow.md"
       ],
-      "implementation_note": "Validated boundary vertex insertion and explicit-ID cloning are implemented; wall/object insertion, constraint degrees-of-freedom reporting, persistence, and reopen acceptance remain open."
+      "implementation_note": "Validated boundary vertex insertion and explicit-ID cloning are implemented; desktop clone mode now creates a distinct identified boundary with undoable persistence and safe context metadata. Wall/object insertion, vertex insertion UI, constraint degrees-of-freedom reporting, and reopen acceptance remain open."
     },
     {
       "id": "APX-EDIT-004",
@@ -990,9 +996,13 @@
         "include/sketch/geometry_operations.hpp",
         "src/core/geometry_operations.cpp",
         "tests/geometry_operations_tests.cpp",
-        "docs/geometry-operations.md"
+        "docs/geometry-operations.md",
+        "src/desktop/main_window.cpp",
+        "include/sketch/desktop/main_window.hpp",
+        "tests/desktop_smoke.cpp",
+        "docs/desktop-workflow.md"
       ],
-      "implementation_note": "Geometry helpers provide immutable transform/clone primitives; reopen/redefine/delete lifecycle commands and relationship-preserving history remain open."
+      "implementation_note": "Geometry helpers and the desktop transform editor provide immutable transform/clone primitives with explicit source preservation; reopen/redefine/delete lifecycle commands and relationship-preserving history remain open."
     },
     {
       "id": "APX-EDIT-005",
@@ -1275,9 +1285,11 @@
       "package": 5,
       "blocker": null,
       "implementation_sources": [
-        "src/desktop/main_window.cpp"
+        "src/desktop/main_window.cpp",
+        "tests/desktop_smoke.cpp",
+        "docs/workspace-ui.md"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "The desktop shell exposes pan, zoom, grid, and independent output controls; the primary toolbar is a fixed 20 px icon row with no redundant header band. Overview-map behavior, asynchronous navigation evidence, and the complete acceptance statement remain open."
     },
     {
       "id": "APX-UI-002",
@@ -1926,9 +1938,11 @@
       "package": 5,
       "blocker": null,
       "implementation_sources": [
-        "src/desktop/main_window.cpp"
+        "src/desktop/main_window.cpp",
+        "tests/desktop_smoke.cpp",
+        "docs/workspace-ui.md"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "The canvas-centered shell, compact tool rail, navigator, and contextual inspector are exercised by the desktop smoke workflow; the fixed toolbar keeps the canvas close to the window edge. Cursor-adjacent measurement and the complete acceptance statement remain open."
     },
     {
       "id": "UX-WORK-002",
@@ -2155,9 +2169,13 @@
       "package": 3,
       "blocker": null,
       "implementation_sources": [
-        "src/core/document.cpp"
+        "src/core/document.cpp",
+        "src/desktop/main_window.cpp",
+        "include/sketch/desktop/main_window.hpp",
+        "tests/desktop_smoke.cpp",
+        "docs/desktop-workflow.md"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "The Document NameRevision command is now surfaced in a local desktop editor with ordered listing, read-only entity/asset comparison, and guarded restore-as-new-project copies that preserve the open document. Geometric/calculation/presentation diff detail and production fixtures remain open."
     },
     {
       "id": "REC-003",

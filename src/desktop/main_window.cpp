@@ -13,6 +13,7 @@
 #include "sketch/boundary_commit.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/document_digest.hpp"
+#include "sketch/geometry_operations.hpp"
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
@@ -1587,6 +1588,142 @@ public:
         }
     }
 
+    [[nodiscard]] bool transformSelectedBoundary(const QString& rotation_degrees,
+                                                  bool flip_horizontal,
+                                                  bool flip_vertical,
+                                                  const QString& offset_x,
+                                                  const QString& offset_y,
+                                                  bool clone) {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        try {
+            if (m_boundary_session) {
+                throw std::runtime_error(
+                    "Finish or cancel the active boundary before transforming a selected boundary.");
+            }
+            const auto source = authoringSnapshot();
+            const auto found = source.entities().find(m_selected_id.toStdString());
+            if (found == source.entities().end() || !is_closed_boundary_entity(found->second.type)) {
+                throw std::invalid_argument("Select an identified closed boundary first.");
+            }
+            auto original = found->second;
+            const auto version = inspect_boundary_entity_version(original);
+            if (version.format == BoundaryEntityFormat::unsupported_version) {
+                throw std::invalid_argument(
+                    "This boundary uses an unsupported model version and cannot be transformed.");
+            }
+            if (version.format == BoundaryEntityFormat::anonymous_legacy) {
+                // An in-place transform cannot combine identity promotion with
+                // a geometry edit: the document integrity guard requires the
+                // promotion itself to preserve geometry exactly. Clone mode can
+                // still allocate fresh identities without changing the source.
+                if (!clone) {
+                    throw std::invalid_argument(
+                        "This legacy boundary needs an explicit identity upgrade before an in-place transform.");
+                }
+                const auto legacy_auxiliary_boundary = original.properties.contains("boundary")
+                    ? std::optional{original.properties.at("boundary")} : std::nullopt;
+                if (legacy_auxiliary_boundary && original.properties.contains("segments"))
+                    original.properties.erase("boundary");
+                original = upgrade_legacy_boundary_entity(original);
+                if (legacy_auxiliary_boundary)
+                    original.properties["boundary"] = *legacy_auxiliary_boundary;
+            }
+            auto transformed = decode_identified_boundary_entity(original);
+            const auto parse_degrees = [](const QString& text) {
+                if (text.trimmed().isEmpty()) return 0.0;
+                bool ok = false;
+                const auto value = text.trimmed().toDouble(&ok);
+                if (!ok || !std::isfinite(value) || std::abs(value) > 360000.0)
+                    throw std::invalid_argument("Rotation must be a finite value between -360000 and 360000 degrees.");
+                return value * std::numbers::pi / 180.0;
+            };
+            const auto parse_offset = [this](const QString& text) {
+                if (text.trimmed().isEmpty()) return 0.0;
+                return parse_quantity(text.trimmed().toStdString(),
+                                      m_metric_units ? Unit::metre : Unit::foot).metres;
+            };
+            const auto radians = parse_degrees(rotation_degrees);
+            const Vec2 pivot = [&] {
+                double min_x = std::numeric_limits<double>::infinity();
+                double min_y = std::numeric_limits<double>::infinity();
+                double max_x = -std::numeric_limits<double>::infinity();
+                double max_y = -std::numeric_limits<double>::infinity();
+                for (const auto& edge : transformed.segments) {
+                    for (const auto point : {edge.segment.start, edge.segment.end}) {
+                        min_x = std::min(min_x, point.x);
+                        min_y = std::min(min_y, point.y);
+                        max_x = std::max(max_x, point.x);
+                        max_y = std::max(max_y, point.y);
+                    }
+                }
+                if (!std::isfinite(min_x) || !std::isfinite(min_y) ||
+                    !std::isfinite(max_x) || !std::isfinite(max_y)) {
+                    throw std::invalid_argument("Boundary has no finite geometry to transform.");
+                }
+                return Vec2{(min_x + max_x) * 0.5, (min_y + max_y) * 0.5};
+            }();
+            if (std::abs(radians) > 0.0)
+                transformed = rotate_boundary(transformed, pivot, radians);
+            if (flip_horizontal)
+                transformed = flip_boundary(transformed, pivot, BoundaryFlipAxis::horizontal);
+            if (flip_vertical)
+                transformed = flip_boundary(transformed, pivot, BoundaryFlipAxis::vertical);
+            const Vec2 offset{parse_offset(offset_x), parse_offset(offset_y)};
+            if (!std::isfinite(offset.x) || !std::isfinite(offset.y))
+                throw std::invalid_argument("Boundary offsets must be finite.");
+            for (auto& edge : transformed.segments) {
+                edge.segment.start.x += offset.x;
+                edge.segment.start.y += offset.y;
+                edge.segment.end.x += offset.x;
+                edge.segment.end.y += offset.y;
+            }
+            const auto revision = source.revision();
+            if (clone) {
+                LegacyBoundaryIdentityOptions ids;
+                ids.segment_ids.reserve(transformed.segments.size());
+                ids.vertex_ids.reserve(transformed.segments.size());
+                for (std::size_t index = 0; index < transformed.segments.size(); ++index) {
+                    ids.segment_ids.push_back(new_id("segment"));
+                    ids.vertex_ids.push_back(new_id("vertex"));
+                }
+                const auto clone_id = new_id("boundary");
+                auto cloned = clone_boundary(transformed, clone_id, ids, {});
+                auto encoded = encode_identified_boundary_entity(cloned);
+                // Carry drawing context and user metadata, but never copy
+                // geometry-owned receipts or references into the new identity.
+                static constexpr std::array<const char*, 12> safe_properties{
+                    "property_id", "building_id", "floor_id", "layer_id",
+                    "classification", "factor", "factor_expression", "factor_numerator",
+                    "factor_denominator", "area_attributes", "room_id", "room_name"};
+                for (const auto* key : safe_properties) {
+                    if (original.properties.contains(key)) encoded.properties[key] = original.properties.at(key);
+                }
+                applyDocumentCommand(ApplyEntityChanges{
+                    .expected_revision = revision,
+                    .entity_changes = {EntityChange::upsert(std::move(encoded))},
+                    .message = "clone transformed boundary",
+                });
+                m_selected_id = id_from(clone_id);
+            } else {
+                const auto encoded = encode_identified_boundary_entity(transformed, &original);
+                applyDocumentCommand(ApplyEntityChanges{
+                    .expected_revision = revision,
+                    .entity_changes = {EntityChange::upsert(encoded)},
+                    .message = "transform boundary",
+                });
+            }
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Boundary transform: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     [[nodiscard]] bool editScheduleCell(const QString& object_id, const QString& column,
                                          const QString& replacement) {
         if (!m_document->is_editable()) {
@@ -2535,6 +2672,66 @@ public:
             }
         });
         QObject::connect(close, &QPushButton::clicked, &dialog, &QDialog::reject);
+        dialog.exec();
+    }
+
+    void showBoundaryTransformEditor() {
+        QDialog dialog(owner);
+        styleDialog(dialog);
+        dialog.setObjectName(QStringLiteral("boundaryTransformDialog"));
+        dialog.setWindowTitle(QStringLiteral("Transform boundary"));
+        dialog.resize(520, 330);
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* help = new QLabel(QStringLiteral(
+            "Transforms use the selected boundary's bounding-box center as the pivot. Rotation is in degrees; offsets use the current input units. Clone keeps the original boundary and its later history."),
+            &dialog);
+        help->setWordWrap(true);
+        layout->addWidget(help);
+        auto* form = new QFormLayout;
+        auto* rotation = new QLineEdit(QStringLiteral("0"), &dialog);
+        rotation->setObjectName(QStringLiteral("boundaryRotationDegrees"));
+        rotation->setAccessibleName(QStringLiteral("Rotation in degrees"));
+        form->addRow(QStringLiteral("Rotation"), rotation);
+        auto* offset_x = new QLineEdit(QStringLiteral("0"), &dialog);
+        offset_x->setObjectName(QStringLiteral("boundaryOffsetX"));
+        offset_x->setAccessibleName(QStringLiteral("Horizontal offset"));
+        form->addRow(QStringLiteral("Offset X"), offset_x);
+        auto* offset_y = new QLineEdit(QStringLiteral("0"), &dialog);
+        offset_y->setObjectName(QStringLiteral("boundaryOffsetY"));
+        offset_y->setAccessibleName(QStringLiteral("Vertical offset"));
+        form->addRow(QStringLiteral("Offset Y"), offset_y);
+        layout->addLayout(form);
+        auto* flip_horizontal = new QCheckBox(QStringLiteral("Flip horizontally"), &dialog);
+        flip_horizontal->setObjectName(QStringLiteral("boundaryFlipHorizontal"));
+        auto* flip_vertical = new QCheckBox(QStringLiteral("Flip vertically"), &dialog);
+        flip_vertical->setObjectName(QStringLiteral("boundaryFlipVertical"));
+        layout->addWidget(flip_horizontal);
+        layout->addWidget(flip_vertical);
+        auto* clone = new QCheckBox(QStringLiteral("Create a clone; keep the selected boundary"), &dialog);
+        clone->setObjectName(QStringLiteral("boundaryClone"));
+        layout->addWidget(clone);
+        auto* status = new QLabel(&dialog);
+        status->setObjectName(QStringLiteral("boundaryTransformStatus"));
+        status->setWordWrap(true);
+        layout->addWidget(status);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel, &dialog);
+        buttons->setObjectName(QStringLiteral("boundaryTransformButtons"));
+        layout->addWidget(buttons);
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, [&] {
+            if (transformSelectedBoundary(rotation->text(), flip_horizontal->isChecked(),
+                                          flip_vertical->isChecked(), offset_x->text(),
+                                          offset_y->text(), clone->isChecked())) {
+                dialog.accept();
+            } else {
+                status->setText(lastError());
+            }
+        });
+        if (!selectedEntity().has_value() ||
+            !is_closed_boundary_entity(selectedEntity()->type)) {
+            status->setText(QStringLiteral("Select an identified closed boundary first."));
+            buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+        }
         dialog.exec();
     }
 
@@ -5376,20 +5573,23 @@ public:
         }
         const auto entity_id = new_id("boundary");
         const auto id = id_from(entity_id);
-        const auto properties = json{{"floor_id", drawing_context->floor_id},
-                                     {"layer_id", drawing_context->layer_id},
-                                     {"segments", boundary_json(boundary)},
-                                     {"classification", classification.toStdString()},
-                                     {"factor", 1.0},
-                                     {"factor_expression", "1"},
-                                     {"factor_numerator", 1},
-                                     {"factor_denominator", 1}};
-        if (!applyEntity(Entity{entity_id,
-                                "measurement_boundary",
-                                properties,
-                                false,
-                                json::object()},
-                         "create measurement boundary", revision)) {
+        auto entity = Entity{entity_id,
+                             "measurement_boundary",
+                             json{{"floor_id", drawing_context->floor_id},
+                                  {"layer_id", drawing_context->layer_id},
+                                  {"segments", boundary_json(boundary)},
+                                  {"classification", classification.toStdString()},
+                                  {"factor", 1.0},
+                                  {"factor_expression", "1"},
+                                  {"factor_numerator", 1},
+                                  {"factor_denominator", 1}},
+                             false,
+                             json::object()};
+        // New authoring starts with stable segment/vertex identities so every
+        // later edit can remain a single undoable semantic command. The
+        // upgrade helper preserves the entered geometry and all metadata.
+        entity = upgrade_legacy_boundary_entity(entity);
+        if (!applyEntity(std::move(entity), "create measurement boundary", revision)) {
             return {};
         }
         m_selected_id = id;
@@ -5414,19 +5614,29 @@ public:
             return {};
         }
         const auto entity_id = new_id("room-boundary");
-        const auto properties = json{{"floor_id", drawing_context->floor_id},
-                                     {"layer_id", drawing_context->layer_id},
-                                     {"segments", boundary_json(boundary)},
-                                     {"boundary", boundary_json(boundary)},
-                                     {"name", classification.toStdString()},
-                                     {"classification", classification.toStdString()},
-                                     {"area_m2", area},
-                                     {"factor", 1.0},
-                                     {"factor_expression", "1"},
-                                     {"factor_numerator", 1},
-                                     {"factor_denominator", 1}};
-        if (!applyEntity(Entity{entity_id, "room_boundary", properties, false, json::object()},
-                         "create room boundary", revision)) {
+        auto entity = Entity{entity_id,
+                             "room_boundary",
+                             json{{"floor_id", drawing_context->floor_id},
+                                  {"layer_id", drawing_context->layer_id},
+                                  {"segments", boundary_json(boundary)},
+                                  {"boundary", boundary_json(boundary)},
+                                  {"name", classification.toStdString()},
+                                  {"classification", classification.toStdString()},
+                                  {"area_m2", area},
+                                  {"factor", 1.0},
+                                  {"factor_expression", "1"},
+                                  {"factor_numerator", 1},
+                                  {"factor_denominator", 1}},
+                             false,
+                             json::object()};
+        // Keep the legacy auxiliary boundary array for consumers that still
+        // inspect it, while promoting the canonical segments array to the
+        // identified v1 model used by editing and calculation paths.
+        const auto auxiliary_boundary = entity.properties.at("boundary");
+        entity.properties.erase("boundary");
+        entity = upgrade_legacy_boundary_entity(entity);
+        entity.properties["boundary"] = auxiliary_boundary;
+        if (!applyEntity(std::move(entity), "create room boundary", revision)) {
             return {};
         }
         m_selected_id = id_from(entity_id);
@@ -7826,6 +8036,7 @@ public:
             }},
             {QStringLiteral("Manage workspace profiles"), [this] { showWorkspaceProfiles(); }},
             {QStringLiteral("Named revisions and comparison"), [this] { showRevisionHistory(); }},
+            {QStringLiteral("Transform selected boundary"), [this] { showBoundaryTransformEditor(); }},
             {QStringLiteral("Measurement workspace"), [this] { setWorkspace(Workspace::measurement); }},
             {QStringLiteral("Architectural workspace"), [this] { setWorkspace(Workspace::architectural); }},
             {QStringLiteral("Add labels and symbols"), [this] { showAnnotationEditor(); }},
@@ -8633,12 +8844,14 @@ private:
         m_workspace_profiles_action->setObjectName(QStringLiteral("workspaceProfiles"));
         m_revisions_action = new QAction(QStringLiteral("Named revisions…"), owner);
         m_revisions_action->setObjectName(QStringLiteral("revisionHistory"));
+        m_transform_action = new QAction(QStringLiteral("Transform boundary…"), owner);
+        m_transform_action->setObjectName(QStringLiteral("boundaryTransform"));
         m_about_action = new QAction(QStringLiteral("About Property Studio"), owner);
-        const std::array<QAction*, 15> secondary_actions{
+        const std::array<QAction*, 16> secondary_actions{
             m_annotation_action, m_reference_action, m_schedule_action, m_sheet_action,
             m_viewport_action, m_schedule_placement_action, m_view_action, m_remodel_action,
             m_relationship_action, m_levels_action, m_assembly_action, m_assistance_action,
-            m_workspace_profiles_action, m_revisions_action, m_about_action};
+            m_workspace_profiles_action, m_revisions_action, m_transform_action, m_about_action};
         for (auto* action : secondary_actions) {
             owner->addAction(action);
             more_menu->addAction(action);
@@ -8760,6 +8973,8 @@ private:
                          [this] { showWorkspaceProfiles(); });
         QObject::connect(m_revisions_action, &QAction::triggered, owner,
                          [this] { showRevisionHistory(); });
+        QObject::connect(m_transform_action, &QAction::triggered, owner,
+                         [this] { showBoundaryTransformEditor(); });
         QObject::connect(m_about_action, &QAction::triggered, owner, [this] { showAbout(); });
         QObject::connect(m_unitsCombo, &QComboBox::currentIndexChanged, owner,
                          [this](int index) { setMetricUnits(index == 1); });
@@ -11570,6 +11785,7 @@ private:
     QAction* m_assistance_action{};
     QAction* m_workspace_profiles_action{};
     QAction* m_revisions_action{};
+    QAction* m_transform_action{};
     QAction* m_about_action{};
 };
 
@@ -11775,6 +11991,16 @@ bool MainWindow::setSelectedCalculationRule(bool include_in_building, bool inclu
     return m_impl->setSelectedCalculationRule(include_in_building, include_in_living);
 }
 
+bool MainWindow::transformSelectedBoundary(const QString& rotation_degrees,
+                                           bool flip_horizontal,
+                                           bool flip_vertical,
+                                           const QString& offset_x,
+                                           const QString& offset_y,
+                                           bool clone) {
+    return m_impl->transformSelectedBoundary(rotation_degrees, flip_horizontal, flip_vertical,
+                                             offset_x, offset_y, clone);
+}
+
 QString MainWindow::createAnnotationLabel(const QString& template_id, const QString& content,
                                           Vec2 position) {
     return m_impl->createAnnotationLabel(template_id, content, position);
@@ -11937,6 +12163,10 @@ void MainWindow::showRevisionHistory() {
 
 bool MainWindow::restoreNamedRevision(const QString& name, const QString& path) {
     return m_impl->restoreNamedRevision(name, path);
+}
+
+void MainWindow::showBoundaryTransformEditor() {
+    m_impl->showBoundaryTransformEditor();
 }
 
 void MainWindow::fitView() {
