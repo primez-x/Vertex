@@ -6177,7 +6177,7 @@ private:
         // Keep the command strip compact so the canvas starts close to the
         // window edge. The 14 px glyph plus the 18 px tool-button content
         // leaves enough room for the bundled 10 pt UI font without clipping.
-        toolbar->setFixedHeight(28);
+        toolbar->setFixedHeight(26);
         const auto add_toolbar_action = [this, toolbar](const QString& label, const char* icon_paths) {
             auto* action = toolbar->addAction(modern_toolbar_icon(icon_paths), label);
             action->setToolTip(label);
