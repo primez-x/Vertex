@@ -53,6 +53,11 @@ property and never rewrites world-coordinate geometry. The Windows Levels editor
 exposes assignment and clear controls for every floor, and the binding is
 preserved by undo/redo and save/reopen.
 
+The derived `ProjectOrganization` context also exposes the bound `level_id`
+for a floor and every hosted layer/object. A malformed or unresolved binding is
+kept visible as an organization diagnostic rather than silently falling back to
+an unbound context.
+
 The Windows Architectural workspace exposes **Levels and floor-to-floor links**
 from the More menu and command palette. The editor creates or edits level IDs
 and metre elevations, adds validated connected links, and can freeze or

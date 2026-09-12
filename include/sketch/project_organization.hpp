@@ -15,6 +15,8 @@ struct DrawingContext {
     std::string building_id;
     std::string floor_id;
     std::string layer_id;
+    // Empty when the floor is intentionally unbound to a vertical-level graph.
+    std::string level_id;
 
     [[nodiscard]] bool complete() const noexcept;
     bool operator==(const DrawingContext&) const = default;

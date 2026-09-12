@@ -1,4 +1,5 @@
 #include "sketch/project_organization.hpp"
+#include "sketch/vertical_levels.hpp"
 
 #include <algorithm>
 #include <array>
@@ -226,6 +227,42 @@ private:
                            " as an organizational parent");
     }
 
+    bool resolve_floor_level(const Entity& entity, Resolution& result) {
+        const auto* value = property_value(entity, "vertical_level_binding");
+        if (value == nullptr) return true;
+        try {
+            const auto binding = VerticalLevelBinding::from_json(*value);
+            const auto graph = entities_.find(binding.graph_entity_id);
+            if (graph == entities_.end()) {
+                add_issue(result.issues, entity_label(entity) +
+                                        " references missing vertical level graph '" +
+                                        binding.graph_entity_id + "'");
+                return false;
+            }
+            if (graph->second.type != "vertical_levels") {
+                add_issue(result.issues, entity_label(entity) +
+                                        " vertical level graph '" + binding.graph_entity_id +
+                                        "' has type " + graph->second.type);
+                return false;
+            }
+            const auto model = VerticalLevelGraph::from_json(graph->second.properties.at("model"));
+            const auto level = std::find_if(model.levels().begin(), model.levels().end(),
+                [&](const auto& candidate) { return candidate.id == binding.level_id; });
+            if (level == model.levels().end()) {
+                add_issue(result.issues, entity_label(entity) +
+                                        " references missing vertical level '" +
+                                        binding.level_id + "'");
+                return false;
+            }
+            result.context.level_id = binding.level_id;
+            return true;
+        } catch (const std::exception& error) {
+            add_issue(result.issues, entity_label(entity) +
+                                    " has an invalid vertical level binding: " + error.what());
+            return false;
+        }
+    }
+
     Resolution resolve_property(const Entity& entity) {
         Resolution result;
         result.valid = true;
@@ -284,6 +321,9 @@ private:
         result.parent_id = building_id;
         check_optional_matches(entity, "property_id", "property", result.context.property_id,
                                result.issues);
+        if (!resolve_floor_level(entity, result)) {
+            result.valid = false;
+        }
         if (!result.issues.empty()) {
             result.valid = false;
         }

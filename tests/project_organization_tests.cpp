@@ -1,4 +1,5 @@
 #include "sketch/project_organization.hpp"
+#include "sketch/vertical_levels.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <algorithm>
@@ -203,6 +204,29 @@ void test_roots_and_children_have_stable_id_order() {
     require(first.nodes.at("layer-z").children == std::vector<std::string>{"object-z"},
             "stable hierarchy should retain the object under its layer");
 }
+
+void test_floor_level_binding_is_exposed_in_context() {
+    const auto graph = sketch::VerticalLevelGraph({{"ground", 0}, {"upper", 3}},
+                                                  {{"storey", "ground", "upper"}});
+    const auto document = sketch::Document::create({
+        make_entity("site", "property"),
+        make_entity("building", "building", {{"property_id", "site"}}),
+        make_entity("floor", "floor", {{"building_id", "building"},
+                                         {"vertical_level_binding", {
+                                             {"version", 1}, {"graph_id", "levels"},
+                                             {"level_id", "upper"}}}}),
+        make_entity("layer", "layer", {{"floor_id", "floor"}}),
+        make_entity("levels", "vertical_levels",
+                    {{"model", nlohmann::json::parse(graph.serialize())}}),
+        make_entity("wall", "wall", {{"layer_id", "layer"}}),
+    });
+    const auto organization = sketch::organize_project(document.snapshot());
+    const auto context = organization.drawing_context("wall");
+    require(context && context->level_id == "upper",
+            "resolved drawing context should expose the floor's bound level");
+    require(*context == sketch::DrawingContext{"site", "building", "floor", "layer", "upper"},
+            "level binding should not change the existing hierarchy context");
+}
 }  // namespace
 
 int main() {
@@ -215,6 +239,7 @@ int main() {
         test_malformed_unknown_and_opening_links_stay_diagnostic();
         test_unresolved_container_descendants_are_not_promoted();
         test_roots_and_children_have_stable_id_order();
+        test_floor_level_binding_is_exposed_in_context();
         std::cout << "Project organization tests passed\n";
         return 0;
     } catch (const std::exception& error) {
