@@ -1059,6 +1059,24 @@ void test_contextual_gable_roof_inspector(const QString& capture_directory) {
     span->setText("6 m");
     rise->setText("2 m");
     overhang->setText("300 mm");
+    auto* pitch_preview = window.findChild<QLabel*>("roofPitch");
+    auto* preview_error = window.findChild<QLabel*>("roofPreviewError");
+    require(pitch_preview && preview_error && preview_error->isHidden() &&
+                pitch_preview->text() == QStringLiteral("33.690°") &&
+                window.document().revision() == revision &&
+                window.document().snapshot().entities().at(id.toStdString()) == before,
+            "gable pitch must preview pending measurements without changing the document");
+    span->setText("0 m");
+    require(!preview_error->isHidden() && preview_error->text().contains("Span") &&
+                pitch_preview->text() == QStringLiteral("—") && window.document().revision() == revision,
+            "invalid roof input must explain the field error without displaying a stale pitch");
+    if (!capture_directory.isEmpty()) {
+        require(window.grab().save(capture_directory + QStringLiteral("/gable-invalid-preview.png")),
+                "capture inline roof validation for visual review");
+    }
+    span->setText("6 m");
+    require(preview_error->isHidden() && pitch_preview->text() == QStringLiteral("33.690°"),
+            "correcting input must restore the pitch preview and clear its error");
     apply->click();
     const auto edited = window.document().snapshot().entities().at(id.toStdString());
     require(window.document().revision() == revision + 1 && edited.properties.at("span_m") == 6.0 &&

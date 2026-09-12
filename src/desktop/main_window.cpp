@@ -6506,6 +6506,57 @@ public:
         }
     }
 
+    void refreshRoofDimensionPreview() {
+        if (!m_roof_edit_context || m_roof_properties_group->isHidden()) return;
+        const auto& context = *m_roof_edit_context;
+        try {
+            if (m_document != context.document || m_document->revision() != context.revision ||
+                m_selected_id != context.selected_id || m_active_layer_id != context.layer_id ||
+                m_metric_units != context.metric_units) {
+                throw std::invalid_argument("The roof editing context changed. Reselect the roof.");
+            }
+            const auto original = selectedEntity();
+            if (!original) throw std::invalid_argument("Reselect the roof to preview dimensions.");
+            const bool gable = read_string(original->properties, "form") ==
+                               std::optional<std::string>("gable_roof");
+            const auto read = [&](QLineEdit* field, const QString& initial, const char* key,
+                                  const char* label, bool allow_zero) {
+                double value;
+                // Untouched rounded display values must not change the preview's
+                // geometry any more than they change the committed geometry.
+                if (field->text().trimmed() == initial.trimmed()) {
+                    value = original->properties.at(key).get<double>();
+                } else {
+                    try {
+                        value = parse_quantity(field->text().trimmed().toStdString(),
+                            m_metric_units ? Unit::metre : Unit::foot).metres;
+                    } catch (const std::exception&) {
+                        throw std::invalid_argument(std::string(label) + ": enter a valid measurement.");
+                    }
+                }
+                if (!std::isfinite(value) || (allow_zero ? value < 0.0 : value <= 0.0)) {
+                    throw std::invalid_argument(std::string(label) +
+                        (allow_zero ? " must be zero or greater." : " must be greater than zero."));
+                }
+                return value;
+            };
+            const auto run = read(m_roof_run_edit, m_roof_run_original_text,
+                gable ? "length_m" : "run_m", gable ? "Length" : "Run", false);
+            const auto span = read(m_roof_span_edit, m_roof_span_original_text, "span_m", "Span", false);
+            const auto rise = read(m_roof_rise_edit, m_roof_rise_original_text, "rise_m", "Rise", !gable);
+            (void)read(m_roof_overhang_edit, m_roof_overhang_original_text, "overhang_m", "Overhang", true);
+            (void)read(m_roof_thickness_edit, m_roof_thickness_original_text, "thickness_m", "Thickness", false);
+            const auto pitch = std::atan(rise / (gable ? span / 2.0 : run));
+            m_roof_pitch_value->setText(QStringLiteral("%1°").arg(pitch * 180.0 / std::numbers::pi, 0, 'f', 3));
+            m_roof_preview_error->clear();
+            m_roof_preview_error->hide();
+        } catch (const std::exception& error) {
+            m_roof_pitch_value->setText(QStringLiteral("—"));
+            m_roof_preview_error->setText(QString::fromUtf8(error.what()));
+            m_roof_preview_error->show();
+        }
+    }
+
     bool editSelectedRoofDimensions(const QString& run_text,
                                          const QString& span_text,
                                          const QString& rise_text,
@@ -10512,6 +10563,16 @@ private:
         m_roof_pitch_value = new QLabel(m_roof_properties_group);
         m_roof_pitch_value->setObjectName(QStringLiteral("roofPitch"));
         roof_properties_form->addRow(QStringLiteral("Derived pitch"), m_roof_pitch_value);
+        m_roof_preview_error = new QLabel(m_roof_properties_group);
+        m_roof_preview_error->setObjectName(QStringLiteral("roofPreviewError"));
+        m_roof_preview_error->setWordWrap(true);
+        m_roof_preview_error->hide();
+        roof_properties_form->addRow(m_roof_preview_error);
+        for (auto* field : {m_roof_run_edit, m_roof_span_edit, m_roof_rise_edit,
+                            m_roof_overhang_edit, m_roof_thickness_edit}) {
+            QObject::connect(field, &QLineEdit::textChanged, owner,
+                             [this] { refreshRoofDimensionPreview(); });
+        }
         m_apply_roof_properties_button = new QPushButton(QStringLiteral("Apply roof dimensions"),
                                                           m_roof_properties_group);
         m_apply_roof_properties_button->setObjectName(QStringLiteral("applyRoofProperties"));
@@ -12176,6 +12237,8 @@ private:
             QSignalBlocker pitch_blocker(m_roof_pitch_value);
             m_roof_pitch_value->setText(QStringLiteral("%1°")
                                             .arg(pitch * 180.0 / std::numbers::pi, 0, 'f', 3));
+            m_roof_preview_error->clear();
+            m_roof_preview_error->hide();
         }
         {
             QSignalBlocker blocker(m_length_edit);
@@ -13070,6 +13133,7 @@ private:
     QLineEdit* m_roof_rise_edit{};
     QLineEdit* m_roof_thickness_edit{};
     QLabel* m_roof_pitch_value{};
+    QLabel* m_roof_preview_error{};
     QPushButton* m_apply_roof_properties_button{};
     QString m_roof_run_original_text;
     QString m_roof_span_original_text;

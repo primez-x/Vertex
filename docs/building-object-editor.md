@@ -121,6 +121,13 @@ revisions are rejected without mutating history. Gables require positive rise
 and derive pitch from half the full span; panels allow zero rise and use the
 run. The group is hidden for unsupported forms and non-roof selections.
 
+Pitch previews update while typing, using canonical measurements for untouched
+fields and parsed quantities for changed fields. Invalid or stale input clears
+the pitch and shows a field-specific message in `roofPreviewError`; correcting
+it clears the message. This numeric preview does not rebuild solids, change
+the drawing, or create history. Apply still validates the complete candidate
+through the existing geometry builder before a command can commit.
+
 For editing, the constructor first decodes and validates the original entity.
 Malformed or unsupported originals show an inline error and disable Submit.
 Valid edits preserve the original ID, `required` flag, extension metadata, and
