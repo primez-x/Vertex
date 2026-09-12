@@ -168,8 +168,19 @@ create a baseline registry from the current architectural objects; the manager
 then creates named alternatives with explicit baseline demolitions. Selecting a
 phase is a revision-checked, undoable document command. The active phase is
 applied consistently to both canvases, native 3D visibility, schedule rows, and
-sheet viewports/output. Proposed-object authoring and room/assembly relationship
-editors remain separate production work items.
+ sheet viewports/output. Proposed-object authoring remains a separate production
+ work item.
+
+Room and boundary relationships are available from **More → Room relationships**
+and the command palette. The editor keeps room boundaries, appraisal measurement
+boundaries, and architectural walls as distinct reference kinds. Each declared
+relationship records its source, target, and independent/follows/derived-from
+kind; graph validation rejects cycles, ambiguous drivers, duplicate pairs, and
+role violations before the typed `room_relationships` entity reaches Document
+history. **Sync references** adds newly created live geometry and removes stale
+endpoints while retaining valid relations. The editor is an authoring slice;
+geometry propagation and controlled retargeting still require explicit follow-up
+operations.
 
 `Object…` opens the column, beam, stair and roof parameter editor. Selecting
 one of those objects exposes `Edit object…` in the inspector. Both operations

@@ -15,6 +15,7 @@
 #include "sketch/document_digest.hpp"
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/room_relationships.hpp"
 #include "sketch/output_fingerprint.hpp"
 #include "sketch/sheet_output_scene.hpp"
 #include "sketch/calculations.hpp"
@@ -896,6 +897,11 @@ struct PhaseModelRecord {
     ModelPhases model;
 };
 
+struct RoomRelationshipRecord {
+    std::string entity_id;
+    RoomRelationshipSnapshot model;
+};
+
 std::optional<PhaseModelRecord> decode_phase_model(const DocumentSnapshot& snapshot) {
     for (const auto& [id, entity] : snapshot.entities()) {
         if (entity.type != "model_phases") continue;
@@ -905,6 +911,56 @@ std::optional<PhaseModelRecord> decode_phase_model(const DocumentSnapshot& snaps
         return PhaseModelRecord{id, ModelPhases::from_json(entity.properties.at("model"))};
     }
     return std::nullopt;
+}
+
+std::optional<RoomRelationshipRecord> decode_room_relationships(
+    const DocumentSnapshot& snapshot) {
+    for (const auto& [id, entity] : snapshot.entities()) {
+        if (entity.type != "room_relationships") continue;
+        if (!entity.properties.contains("model")) {
+            throw std::invalid_argument("The room relationship record has no model payload.");
+        }
+        return RoomRelationshipRecord{
+            id, RoomRelationshipSnapshot::from_json(entity.properties.at("model"))};
+    }
+    return std::nullopt;
+}
+
+std::optional<RoomReferenceKind> room_reference_kind_for_entity(std::string_view type) {
+    if (type == "room_boundary") return RoomReferenceKind::room_boundary;
+    if (type == "measurement_boundary") {
+        return RoomReferenceKind::appraisal_measurement_boundary;
+    }
+    if (type == "wall") return RoomReferenceKind::architectural_wall;
+    return std::nullopt;
+}
+
+QString room_reference_kind_label(RoomReferenceKind kind) {
+    switch (kind) {
+    case RoomReferenceKind::room_boundary: return QStringLiteral("Room boundary");
+    case RoomReferenceKind::appraisal_measurement_boundary:
+        return QStringLiteral("Measurement boundary");
+    case RoomReferenceKind::architectural_wall: return QStringLiteral("Architectural wall");
+    }
+    return QStringLiteral("Reference");
+}
+
+QString room_relation_kind_label(RoomRelationKind kind) {
+    switch (kind) {
+    case RoomRelationKind::independent: return QStringLiteral("Independent");
+    case RoomRelationKind::follows: return QStringLiteral("Follows");
+    case RoomRelationKind::derived_from: return QStringLiteral("Derived from");
+    }
+    return QStringLiteral("Relation");
+}
+
+std::vector<RoomReference> document_room_references(const DocumentSnapshot& snapshot) {
+    std::vector<RoomReference> result;
+    for (const auto& [id, entity] : snapshot.entities()) {
+        const auto kind = room_reference_kind_for_entity(entity.type);
+        if (kind) result.push_back({id, *kind});
+    }
+    return result;
 }
 
 std::vector<std::string> phase_model_entity_ids(const DocumentSnapshot& snapshot) {
@@ -2118,6 +2174,267 @@ public:
             dialog.exec();
         } catch (const std::exception& error) {
             setError(QStringLiteral("Design phase: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
+    bool ensureRoomRelationshipRecord() {
+        try {
+            const auto source = authoringSnapshot();
+            if (decode_room_relationships(source).has_value()) return true;
+            const auto references = document_room_references(source);
+            if (references.empty()) {
+                throw std::invalid_argument(
+                    "Add a room boundary, measurement boundary, or wall before setting relationships.");
+            }
+            auto entity = Entity::create(
+                "room_relationships",
+                {{"model", RoomRelationshipSnapshot::create(references, {}).to_json()}});
+            entity.id = new_id("room-relationships");
+            const ApplyEntityChanges command{
+                source.revision(), {EntityChange::upsert(std::move(entity))}, {},
+                "Create room relationship record"};
+            (void)Document::preview_command(source, Command{command});
+            applyDocumentCommand(Command{command});
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Room relationships: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    bool applyRoomRelationshipModel(const RoomRelationshipSnapshot& model,
+                                    const QString& message) {
+        try {
+            if (!m_document->is_editable()) {
+                throw std::invalid_argument("This document is read-only.");
+            }
+            const auto source = authoringSnapshot();
+            const auto record = decode_room_relationships(source);
+            if (!record) {
+                throw std::invalid_argument("The room relationship record is unavailable.");
+            }
+            auto entity = source.entities().at(record->entity_id);
+            entity.properties["model"] = model.to_json();
+            const ApplyEntityChanges command{
+                source.revision(), {EntityChange::upsert(std::move(entity))}, {},
+                message.toStdString()};
+            (void)Document::preview_command(source, Command{command});
+            applyDocumentCommand(Command{command});
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Room relationships: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    void showRoomRelationships() {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return;
+        }
+        if (!ensureRoomRelationshipRecord()) return;
+        try {
+            QDialog dialog(owner);
+            styleDialog(dialog);
+            dialog.setObjectName(QStringLiteral("roomRelationshipsDialog"));
+            dialog.setWindowTitle(QStringLiteral("Room and boundary relationships"));
+            dialog.setModal(true);
+            dialog.resize(680, 520);
+            auto* layout = new QVBoxLayout(&dialog);
+
+            auto* source = new QComboBox(&dialog);
+            source->setObjectName(QStringLiteral("roomRelationshipSource"));
+            auto* target = new QComboBox(&dialog);
+            target->setObjectName(QStringLiteral("roomRelationshipTarget"));
+            auto* kind = new QComboBox(&dialog);
+            kind->setObjectName(QStringLiteral("roomRelationshipKind"));
+            kind->addItem(room_relation_kind_label(RoomRelationKind::independent),
+                          static_cast<int>(RoomRelationKind::independent));
+            kind->addItem(room_relation_kind_label(RoomRelationKind::follows),
+                          static_cast<int>(RoomRelationKind::follows));
+            kind->addItem(room_relation_kind_label(RoomRelationKind::derived_from),
+                          static_cast<int>(RoomRelationKind::derived_from));
+            auto* form = new QFormLayout;
+            form->addRow(QStringLiteral("Source"), source);
+            form->addRow(QStringLiteral("Target"), target);
+            form->addRow(QStringLiteral("Relationship"), kind);
+            layout->addLayout(form);
+
+            auto* hint = new QLabel(
+                QStringLiteral("A relationship is explicit. Source follows or derives from target; "
+                               "independent is symmetric. Geometry is never inferred."),
+                &dialog);
+            hint->setWordWrap(true);
+            hint->setObjectName(QStringLiteral("roomRelationshipHint"));
+            layout->addWidget(hint);
+
+            auto* relations = new QListWidget(&dialog);
+            relations->setObjectName(QStringLiteral("roomRelationshipList"));
+            relations->setSelectionMode(QAbstractItemView::SingleSelection);
+            layout->addWidget(new QLabel(QStringLiteral("Declared relationships"), &dialog));
+            layout->addWidget(relations, 1);
+
+            auto* status = new QLabel(&dialog);
+            status->setObjectName(QStringLiteral("roomRelationshipStatus"));
+            status->setWordWrap(true);
+            status->setTextFormat(Qt::PlainText);
+            layout->addWidget(status);
+
+            auto* buttons = new QHBoxLayout;
+            auto* add = new QPushButton(QStringLiteral("Add relationship"), &dialog);
+            add->setObjectName(QStringLiteral("addRoomRelationship"));
+            auto* remove = new QPushButton(QStringLiteral("Remove selected"), &dialog);
+            remove->setObjectName(QStringLiteral("removeRoomRelationship"));
+            auto* sync = new QPushButton(QStringLiteral("Sync references"), &dialog);
+            sync->setObjectName(QStringLiteral("syncRoomRelationships"));
+            auto* close = new QPushButton(QStringLiteral("Close"), &dialog);
+            close->setDefault(true);
+            buttons->addWidget(add);
+            buttons->addWidget(remove);
+            buttons->addWidget(sync);
+            buttons->addStretch(1);
+            buttons->addWidget(close);
+            layout->addLayout(buttons);
+
+            std::optional<RoomRelationshipRecord> record;
+            Revision record_revision{};
+            const auto populate_references = [&] {
+                const auto snapshot = authoringSnapshot();
+                const auto references = document_room_references(snapshot);
+                const QSignalBlocker source_blocker(source);
+                const QSignalBlocker target_blocker(target);
+                source->clear();
+                target->clear();
+                for (const auto& reference : references) {
+                    const auto label = QStringLiteral("%1  ·  %2")
+                        .arg(room_reference_kind_label(reference.kind),
+                             id_from(reference.id));
+                    source->addItem(label, id_from(reference.id));
+                    target->addItem(label, id_from(reference.id));
+                }
+                const auto has_two = source->count() >= 2;
+                source->setEnabled(has_two);
+                target->setEnabled(has_two);
+                add->setEnabled(has_two);
+                if (!has_two) {
+                    status->setText(QStringLiteral(
+                        "Create at least two references before adding a relationship."));
+                }
+            };
+            const auto populate = [&] {
+                const auto snapshot = authoringSnapshot();
+                record = decode_room_relationships(snapshot);
+                if (!record) return;
+                record_revision = snapshot.revision();
+                populate_references();
+                relations->clear();
+                for (std::size_t index = 0; index < record->model.relations().size(); ++index) {
+                    const auto& relation = record->model.relations()[index];
+                    auto* item = new QListWidgetItem(
+                        QStringLiteral("%1  %2  %3")
+                            .arg(id_from(relation.source_id),
+                                 room_relation_kind_label(relation.kind),
+                                 id_from(relation.target_id)),
+                        relations);
+                    item->setData(Qt::UserRole, static_cast<int>(index));
+                }
+                status->setText(QStringLiteral("%1 references · %2 relationship%3")
+                    .arg(record->model.references().size())
+                    .arg(record->model.relations().size())
+                    .arg(record->model.relations().size() == 1 ? QString{} : QStringLiteral("s")));
+            };
+            populate();
+
+            QObject::connect(add, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    if (!record) throw std::invalid_argument("The relationship record is unavailable.");
+                    if (authoringSnapshot().revision() != record_revision) {
+                        populate();
+                        throw std::invalid_argument(
+                            "The project changed while the relationship editor was open. Review the refreshed list.");
+                    }
+                    const auto source_id = source->currentData().toString().toStdString();
+                    const auto target_id = target->currentData().toString().toStdString();
+                    if (source_id.empty() || target_id.empty())
+                        throw std::invalid_argument("Choose a source and target.");
+                    const auto relation_kind = static_cast<RoomRelationKind>(
+                        kind->currentData().toInt());
+                    auto updated_relations = record->model.relations();
+                    updated_relations.push_back({source_id, target_id, relation_kind});
+                    const auto updated = RoomRelationshipSnapshot::create(
+                        record->model.references(), std::move(updated_relations));
+                    if (applyRoomRelationshipModel(updated, QStringLiteral("Add room relationship"))) {
+                        populate();
+                        status->setText(QStringLiteral("Relationship added through document history."));
+                    } else {
+                        status->setText(lastError());
+                    }
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            });
+            QObject::connect(remove, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    const auto* item = relations->currentItem();
+                    if (!item || !record) throw std::invalid_argument("Choose a relationship to remove.");
+                    if (authoringSnapshot().revision() != record_revision) {
+                        populate();
+                        throw std::invalid_argument(
+                            "The project changed while the relationship editor was open. Review the refreshed list.");
+                    }
+                    const auto index = item->data(Qt::UserRole).toInt();
+                    if (index < 0 || index >= static_cast<int>(record->model.relations().size()))
+                        throw std::invalid_argument("The relationship list is stale. Refresh it and try again.");
+                    auto updated_relations = record->model.relations();
+                    updated_relations.erase(updated_relations.begin() + index);
+                    const auto updated = RoomRelationshipSnapshot::create(
+                        record->model.references(), std::move(updated_relations));
+                    if (applyRoomRelationshipModel(updated, QStringLiteral("Remove room relationship"))) {
+                        populate();
+                        status->setText(QStringLiteral("Relationship removed through document history."));
+                    } else {
+                        status->setText(lastError());
+                    }
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            });
+            QObject::connect(sync, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    if (!record) throw std::invalid_argument("The relationship record is unavailable.");
+                    if (authoringSnapshot().revision() != record_revision) {
+                        populate();
+                        throw std::invalid_argument(
+                            "The project changed while the relationship editor was open. Review the refreshed list.");
+                    }
+                    const auto references = document_room_references(authoringSnapshot());
+                    std::set<std::string, std::less<>> ids;
+                    for (const auto& reference : references) ids.insert(reference.id);
+                    auto relations_copy = record->model.relations();
+                    relations_copy.erase(std::remove_if(relations_copy.begin(), relations_copy.end(),
+                        [&](const auto& relation) {
+                            return !ids.contains(relation.source_id) || !ids.contains(relation.target_id);
+                        }), relations_copy.end());
+                    const auto updated = RoomRelationshipSnapshot::create(
+                        references, std::move(relations_copy));
+                    if (applyRoomRelationshipModel(updated, QStringLiteral("Sync room references"))) {
+                        populate();
+                        status->setText(QStringLiteral("References synchronized; existing relations retained."));
+                    } else {
+                        status->setText(lastError());
+                    }
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            });
+            QObject::connect(close, &QPushButton::clicked, &dialog, &QDialog::reject);
+            dialog.exec();
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Room relationships: %1").arg(QString::fromUtf8(error.what())));
         }
     }
 
@@ -5140,6 +5457,8 @@ public:
              [this] { showArchitecturalViewSettings(); }},
             {QStringLiteral("Design phases and remodeling alternatives"),
              [this] { showRemodelingAlternatives(); }},
+            {QStringLiteral("Room and boundary relationships"),
+             [this] { showRoomRelationships(); }},
             {QStringLiteral("Offline assistance"), [this] { showAssistance(); }},
             {QStringLiteral("Select tool"), [this] { setTool(CanvasTool::select); }},
             {QStringLiteral("Draw measurement boundary"), [this] { setTool(CanvasTool::boundary); }},
@@ -5855,7 +6174,10 @@ private:
         toolbar->setFloatable(false);
         toolbar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
         toolbar->setIconSize(QSize(14, 14));
-        toolbar->setFixedHeight(32);
+        // Keep the command strip compact so the canvas starts close to the
+        // window edge. The 14 px glyph plus the 18 px tool-button content
+        // leaves enough room for the bundled 10 pt UI font without clipping.
+        toolbar->setFixedHeight(28);
         const auto add_toolbar_action = [this, toolbar](const QString& label, const char* icon_paths) {
             auto* action = toolbar->addAction(modern_toolbar_icon(icon_paths), label);
             action->setToolTip(label);
@@ -5894,12 +6216,14 @@ private:
         m_view_action = new QAction(QStringLiteral("Architectural view settings"), owner);
         m_remodel_action = new QAction(QStringLiteral("Design phases and alternatives…"), owner);
         m_remodel_action->setObjectName(QStringLiteral("designPhaseSettings"));
+        m_relationship_action = new QAction(QStringLiteral("Room relationships…"), owner);
+        m_relationship_action->setObjectName(QStringLiteral("roomRelationships"));
         m_assistance_action = new QAction(QStringLiteral("Offline assistance…"), owner);
         m_about_action = new QAction(QStringLiteral("About Property Studio"), owner);
-        const std::array<QAction*, 10> secondary_actions{
+        const std::array<QAction*, 11> secondary_actions{
             m_annotation_action, m_reference_action, m_schedule_action, m_sheet_action,
             m_viewport_action, m_schedule_placement_action, m_view_action, m_remodel_action,
-            m_assistance_action, m_about_action};
+            m_relationship_action, m_assistance_action, m_about_action};
         for (auto* action : secondary_actions) {
             owner->addAction(action);
             more_menu->addAction(action);
@@ -5999,6 +6323,8 @@ private:
                          [this] { showArchitecturalViewSettings(); });
         QObject::connect(m_remodel_action, &QAction::triggered, owner,
                          [this] { showRemodelingAlternatives(); });
+        QObject::connect(m_relationship_action, &QAction::triggered, owner,
+                         [this] { showRoomRelationships(); });
         QObject::connect(m_assistance_action, &QAction::triggered, owner,
                          [this] { showAssistance(); });
         QObject::connect(m_about_action, &QAction::triggered, owner, [this] { showAbout(); });
@@ -8455,6 +8781,7 @@ private:
     QAction* m_schedule_placement_action{};
     QAction* m_view_action{};
     QAction* m_remodel_action{};
+    QAction* m_relationship_action{};
     QAction* m_assistance_action{};
     QAction* m_about_action{};
 };
@@ -8724,6 +9051,10 @@ void MainWindow::showAssistance() {
 
 void MainWindow::showRemodelingAlternatives() {
     m_impl->showRemodelingAlternatives();
+}
+
+void MainWindow::showRoomRelationships() {
+    m_impl->showRoomRelationships();
 }
 
 bool MainWindow::createNewProject() {

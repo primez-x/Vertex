@@ -1655,12 +1655,15 @@
       "package": 4,
       "blocker": null,
       "implementation_sources": [
-        "include/sketch/room_relationships.hpp",
-        "src/core/room_relationships.cpp",
-        "tests/room_relationships_tests.cpp",
-        "docs/room-relationships.md"
-      ],
-      "implementation_note": "Room, appraisal-boundary, and architectural-wall references have separate kinds with independent/follows/derived-from relations and graph validation; geometry binding, Document persistence, and UI remain open."
+      "include/sketch/room_relationships.hpp",
+      "src/core/room_relationships.cpp",
+      "tests/room_relationships_tests.cpp",
+      "docs/room-relationships.md",
+      "src/desktop/main_window.cpp",
+      "tests/desktop_smoke.cpp",
+      "docs/desktop-workflow.md"
+    ],
+    "implementation_note": "Room, appraisal-boundary, and architectural-wall references have separate kinds with independent/follows/derived-from relations and graph validation. A typed room_relationships Document entity and Windows editor now persist and validate declarations through undoable history; geometry propagation, controlled retargeting, and production evidence remain open."
     },
     {
       "id": "ARCH-MOD-010",
@@ -1872,7 +1875,7 @@
         "src/core/typed_relationships.cpp",
         "docs/typed-relationships.md"
       ],
-      "implementation_note": "Typed stable references and cycle/ambiguity validation are present as a bounded core slice; cross-view semantic object persistence and controlled retargeting remain open."
+    "implementation_note": "Typed stable references and cycle/ambiguity validation are present, and the Windows editor now exposes live relationship declarations through typed Document history; cross-view semantic object persistence and controlled retargeting remain open."
     },
     {
       "id": "ARCH-OUTPUT-001",

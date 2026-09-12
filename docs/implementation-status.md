@@ -67,6 +67,14 @@ inspector edits to text, position, rotation, scale, and visibility. Font/color
 style inspectors, polished assets, OS sandbox launch, and production
 integration evidence remain open.
 
+Room/boundary relationship semantics are now surfaced in the Windows desktop:
+the More menu and command palette open a typed editor that lists live room
+boundaries, appraisal measurement boundaries, and architectural walls, applies
+validated independent/follows/derived-from declarations through Document
+history, and synchronizes newly created references without silently inventing
+relationships. Geometry propagation, controlled retargeting, and full
+cross-view acceptance remain open.
+
 The coordinated sheet/view graph now has a versioned `sheet_view_model` entity
 codec at the Document boundary. Document creation, command admission and
 ProjectStore load reuse SheetViewModel validation, and a save/reopen regression

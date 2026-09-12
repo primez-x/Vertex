@@ -2,6 +2,7 @@
 
 #include "sketch/document.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/room_relationships.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/desktop/building_object_dialog.hpp"
@@ -84,7 +85,7 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
     {
         sketch::desktop::MainWindow window;
         auto* toolbar = window.findChild<QToolBar*>(QStringLiteral("primaryToolbar"));
-        require(toolbar != nullptr && toolbar->minimumHeight() == 32 && toolbar->maximumHeight() == 32 &&
+        require(toolbar != nullptr && toolbar->minimumHeight() == 28 && toolbar->maximumHeight() == 28 &&
                     window.findChild<QWidget*>(QStringLiteral("workspaceTabs")) != nullptr &&
                     window.findChild<QWidget*>(QStringLiteral("workspaceHeader")) == nullptr &&
                     window.findChild<QLabel*>(QStringLiteral("appMark")) == nullptr &&
@@ -471,6 +472,93 @@ void test_design_phase_workflow() {
             "active design phase should persist across reopen");
 }
 
+void test_room_relationship_workflow() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    const auto wall_id = window.createStraightWall({0.0, 0.0}, {4.0, 0.0});
+    const auto boundary_id = window.createBoundary({
+        {{{0.0, 0.0}, {4.0, 0.0}, 0.0},
+         {{4.0, 0.0}, {4.0, 3.0}, 0.0},
+         {{4.0, 3.0}, {0.0, 3.0}, 0.0},
+         {{0.0, 3.0}, {0.0, 0.0}, 0.0}}});
+    require(!wall_id.isEmpty() && !boundary_id.isEmpty(),
+            "room relationship fixture should create a wall and measurement boundary");
+
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("roomRelationshipsDialog"));
+        require(dialog, "room relationship editor should open from the shared workflow");
+        auto* source = dialog->findChild<QComboBox*>(QStringLiteral("roomRelationshipSource"));
+        auto* target = dialog->findChild<QComboBox*>(QStringLiteral("roomRelationshipTarget"));
+        auto* kind = dialog->findChild<QComboBox*>(QStringLiteral("roomRelationshipKind"));
+        auto* list = dialog->findChild<QListWidget*>(QStringLiteral("roomRelationshipList"));
+        auto* add = dialog->findChild<QPushButton*>(QStringLiteral("addRoomRelationship"));
+        auto* remove = dialog->findChild<QPushButton*>(QStringLiteral("removeRoomRelationship"));
+        require(source && target && kind && list && add && remove,
+                "room relationship editor should expose typed controls");
+        const auto source_index = source->findData(boundary_id);
+        const auto target_index = target->findData(wall_id);
+        require(source_index >= 0 && target_index >= 0,
+                "room relationship editor should list live boundary and wall references");
+        source->setCurrentIndex(source_index);
+        target->setCurrentIndex(target_index);
+        kind->setCurrentIndex(kind->findData(static_cast<int>(RoomRelationKind::follows)));
+        add->click();
+        require(list->count() == 1 && list->item(0)->text().contains(QStringLiteral("Follows")),
+                "room relationship editor should add a typed relation");
+        list->setCurrentRow(0);
+        remove->click();
+        require(list->count() == 0,
+                "room relationship editor should remove the selected relation");
+        dialog->reject();
+    });
+    window.showRoomRelationships();
+
+    const auto relationship_entity = [&]() -> Entity {
+        const auto snapshot = window.document().snapshot();
+        const auto found = std::find_if(snapshot.entities().begin(), snapshot.entities().end(),
+            [](const auto& entry) { return entry.second.type == "room_relationships"; });
+        require(found != snapshot.entities().end(),
+                "room relationship editor should persist its typed record");
+        return found->second;
+    };
+    auto model = RoomRelationshipSnapshot::from_json(
+        relationship_entity().properties.at("model"));
+    require(model.references().size() == 2 && model.relations().empty(),
+            "removing the relation should leave the references intact");
+
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("roomRelationshipsDialog"));
+        auto* source = dialog->findChild<QComboBox*>(QStringLiteral("roomRelationshipSource"));
+        auto* target = dialog->findChild<QComboBox*>(QStringLiteral("roomRelationshipTarget"));
+        auto* kind = dialog->findChild<QComboBox*>(QStringLiteral("roomRelationshipKind"));
+        auto* add = dialog->findChild<QPushButton*>(QStringLiteral("addRoomRelationship"));
+        source->setCurrentIndex(source->findData(boundary_id));
+        target->setCurrentIndex(target->findData(wall_id));
+        kind->setCurrentIndex(kind->findData(static_cast<int>(RoomRelationKind::derived_from)));
+        add->click();
+        dialog->reject();
+    });
+    window.showRoomRelationships();
+    model = RoomRelationshipSnapshot::from_json(relationship_entity().properties.at("model"));
+    require(model.relations().size() == 1 &&
+                model.relations().front().kind == RoomRelationKind::derived_from,
+            "room relationship editor should preserve the selected relation kind");
+    require(window.undoCommand(), "room relationship edits should be undoable");
+    model = RoomRelationshipSnapshot::from_json(relationship_entity().properties.at("model"));
+    require(model.relations().empty(), "undo should restore the relation-free graph");
+    require(window.redoCommand(), "room relationship edits should be redoable");
+
+    QTemporaryDir directory;
+    require(directory.isValid(), "room relationship fixture needs a temporary directory");
+    const auto path = directory.filePath(QStringLiteral("relationships.bldproj"));
+    require(window.saveProjectAs(path) && window.openProject(path),
+            "room relationship record should save and reopen");
+    model = RoomRelationshipSnapshot::from_json(
+        window.document().snapshot().entities().at(relationship_entity().id).properties.at("model"));
+    require(model.relations().size() == 1,
+            "room relationship relation should survive project reopen");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -490,6 +578,7 @@ int main(int argc, char** argv) {
     }
     test_shortcuts_and_measurement_keypad(field_ui_capture_directory);
     test_design_phase_workflow();
+    test_room_relationship_workflow();
     {
         QTemporaryDir stamp_directory;
         require(stamp_directory.isValid(), "stamp test directory should be available");

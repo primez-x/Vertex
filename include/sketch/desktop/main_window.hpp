@@ -236,6 +236,7 @@ public:
     void showReferenceCalibration();
     void showAssistance();
     void showRemodelingAlternatives();
+    void showRoomRelationships();
     void showConstraintEditor();
     void fitView();
 
