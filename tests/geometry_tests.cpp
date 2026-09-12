@@ -255,6 +255,23 @@ void test_derived_numeric_overflow_is_rejected_or_diagnosed() {
 }
 
 void test_validation_reports_crossings_tangencies_and_overlaps() {
+    const auto tolerance = sketch::default_geometry_tolerance_metres;
+    const Boundary near_parallel_crossing{
+        {{0, 0}, {10, 0}, 0},
+        {{0, 1.5 * tolerance}, {10, -0.25 * tolerance}, 0},
+    };
+    require(has_issue(sketch::validate_boundary(near_parallel_crossing),
+                      BoundaryIssue::indeterminate_intersection),
+            "near-parallel crossing must retain the conservative indeterminate diagnostic");
+
+    const Boundary near_parallel_uncertain{
+        {{0, 0}, {10, 0}, 0},
+        {{0, 1.5 * tolerance}, {10, 0.25 * tolerance}, 0},
+    };
+    require(has_issue(sketch::validate_boundary(near_parallel_uncertain),
+                      BoundaryIssue::indeterminate_intersection),
+            "same-side endpoints within tolerance must not prove separation");
+
     const Boundary bow_tie{
         {{0.0, 0.0}, {2.0, 2.0}, 0.0},
         {{2.0, 2.0}, {0.0, 2.0}, 0.0},

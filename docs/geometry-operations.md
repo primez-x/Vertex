@@ -12,6 +12,14 @@ codec validation, including exact endpoint joins, supported identity syntax,
 unique topology identities, finite analytical geometry, and intersection checks.
 Failures throw `std::invalid_argument`; the source remains unchanged.
 
+For nearly parallel straight segments, overlapping axis-aligned bounds alone
+do not imply an uncertain intersection. The validator can prove separation
+when both endpoints lie strictly on the same side of the other segment's line,
+beyond the geometry tolerance and a floating-point error margin. Potential
+crossings, near-contact within tolerance, and non-finite intermediate values
+retain the conservative fallback. This admits ordinary rotated rectangles
+without weakening the crossing and uncertainty diagnostics.
+
 Rotation uses an explicit world-space pivot and radians. Horizontal reflection
 reflects y about the supplied pivot, vertical reflection reflects x. Reflections
 negate arc sweeps and signed area; rotations retain sweeps. IDs remain stable.

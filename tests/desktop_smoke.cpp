@@ -981,7 +981,7 @@ void test_named_revisions() {
             "restoring a revision must leave later work in the current document untouched");
 }
 
-void test_boundary_transform_workflow() {
+void test_boundary_transform_workflow(const QString& capture_directory) {
     using namespace sketch;
     desktop::MainWindow window;
     const auto boundary_id = window.createBoundary(
@@ -1023,9 +1023,16 @@ void test_boundary_transform_workflow() {
     require(clone.properties.at("classification") == "measurement" &&
                 decode_identified_boundary_entity(clone).segments.front().segment.start.x > 1.2,
             "boundary clone should retain safe context metadata while applying its transform");
+    const auto flipped_start=decode_identified_boundary_entity(clone).segments.front().segment.start;
+    require(std::abs(flipped_start.x-(rotated_model.segments.front().segment.start.x+1.2192))<1e-9 &&
+        std::abs(flipped_start.y-3.0)<1e-9,
+        "vertical UI flip must reflect Y consistently for walls and boundaries");
 
     auto* action = window.findChild<QAction*>(QStringLiteral("boundaryTransform"));
     require(action, "boundary transform should be available from the secondary command surface");
+    const auto before_preview=window.document().snapshot();
+    require(window.transformSelectedBoundary("0",false,false,"0","0",false) &&
+        window.document().revision()==before_preview.revision(),"unchanged boundary transform must not add history");
     QTimer::singleShot(0, &window, [&] {
         auto* dialog = window.findChild<QDialog*>(QStringLiteral("boundaryTransformDialog"));
         require(dialog, "boundary transform editor must open");
@@ -1034,6 +1041,58 @@ void test_boundary_transform_workflow() {
                     dialog->findChild<QCheckBox*>(QStringLiteral("boundaryClone")) &&
                     dialog->findChild<QDialogButtonBox*>(QStringLiteral("boundaryTransformButtons")),
                 "boundary transform editor must expose pivot transform controls");
+        auto* preview=dynamic_cast<desktop::PlanCanvas*>(dialog->findChild<QWidget*>("wallTransformPreview"));
+        auto* rotation=dialog->findChild<QLineEdit*>("boundaryRotationDegrees");
+        auto* apply=dialog->findChild<QDialogButtonBox*>("boundaryTransformButtons")->button(QDialogButtonBox::Apply);
+        require(preview && preview->entities().size()==2,"boundary editor must preview original and proposed geometry");
+        rotation->setText("invalid");
+        require(preview->entities().empty() && !apply->isEnabled(),"invalid boundary angle must invalidate the candidate");
+        rotation->setText("35");
+        dialog->findChild<QLineEdit*>("boundaryOffsetX")->setText("2 m");
+        if (!apply->isEnabled()) std::cerr << "boundary preview error: " <<
+            dialog->findChild<QLabel*>("boundaryTransformStatus")->text().toStdString() << '\n';
+        require(preview->entities().size()==2 && apply->isEnabled() &&
+            window.document().revision()==before_preview.revision() &&
+            window.document().snapshot().entities()==before_preview.entities(),
+            "boundary preview must remain detached from document history");
+        if(!capture_directory.isEmpty()) require(dialog->grab().save(capture_directory+"/boundary-transform.png"),
+            "save boundary transform preview capture");
+        dialog->reject();
+    });
+    action->trigger();
+    require(window.document().snapshot().entities()==before_preview.entities(),"cancel boundary preview without mutation");
+    QString preview_id;
+    Vec2 preview_start;
+    QTimer::singleShot(0,&window,[&] {
+        auto* dialog=window.findChild<QDialog*>("boundaryTransformDialog");
+        dialog->findChild<QCheckBox*>("boundaryClone")->setChecked(true);
+        dialog->findChild<QLineEdit*>("boundaryRotationDegrees")->setText("35");
+        auto* preview=dynamic_cast<desktop::PlanCanvas*>(dialog->findChild<QWidget*>("wallTransformPreview"));
+        for(const auto& entity:preview->entities()) if(entity.selected) {
+            preview_id=entity.id;
+            preview_start=entity.segments.front().start;
+        }
+        dialog->findChild<QDialogButtonBox*>("boundaryTransformButtons")->button(QDialogButtonBox::Apply)->click();
+    });
+    action->trigger();
+    require(!preview_id.isEmpty() && window.selectedEntityId()==preview_id &&
+        window.document().revision()==before_preview.revision()+1,"boundary Apply must commit the exact cached clone identity");
+    const auto applied=decode_identified_boundary_entity(window.document().snapshot().entities().at(preview_id.toStdString()));
+    require(applied.segments.front().segment.start.x==preview_start.x && applied.segments.front().segment.start.y==preview_start.y &&
+        window.undoCommand() && window.document().snapshot().entities()==before_preview.entities(),
+        "applied boundary geometry must equal the preview and undo exactly");
+    auto guarded=window.document().snapshot().entities().at(clone_id.toStdString());
+    guarded.extensions["receipt"]={{"version",99}};
+    window.document().apply(ApplyEntityChanges{window.document().revision(),{EntityChange::upsert(guarded)},{},"opaque boundary receipt"});
+    require(window.selectEntity(clone_id),"select guarded boundary");
+    const auto guarded_snapshot=window.document().snapshot();
+    QTimer::singleShot(0,&window,[&] {
+        auto* dialog=window.findChild<QDialog*>("boundaryTransformDialog");
+        dialog->findChild<QLineEdit*>("boundaryRotationDegrees")->setText("10");
+        require(!dialog->findChild<QDialogButtonBox*>("boundaryTransformButtons")->button(QDialogButtonBox::Apply)->isEnabled() &&
+            !dialog->findChild<QLabel*>("boundaryTransformStatus")->text().isEmpty() &&
+            window.document().snapshot().entities()==guarded_snapshot.entities(),
+            "preview must preserve opaque receipt semantics and reject unsupported geometry edits");
         dialog->reject();
     });
     action->trigger();
@@ -2698,7 +2757,7 @@ int main(int argc, char** argv) {
     test_boundary_redefinition_workflow();
     test_automatic_room_boundary_detection_workflow();
     test_named_revisions();
-    test_boundary_transform_workflow();
+    test_boundary_transform_workflow(field_ui_capture_directory);
     test_design_phase_workflow();
     test_phase_authoring_ownership();
     test_room_relationship_workflow();

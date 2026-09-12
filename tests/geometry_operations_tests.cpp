@@ -19,9 +19,46 @@ sketch::IdentifiedBoundary square() {
         {"e1","v1","v2",{{4,0},{4,3},0}}, {"e2","v2","v3",{{4,3},{0,3},0}},
         {"e3","v3","v0",{{0,3},{0,0},0}}}};
 }
+
+void test_rotated_boundary_transform_sequence() {
+    using namespace sketch;
+    auto source = square();
+    for (auto& edge : source.segments) {
+        if (edge.segment.start.y == 3.0) edge.segment.start.y = 2.0;
+        if (edge.segment.end.y == 3.0) edge.segment.end.y = 2.0;
+    }
+    const auto rotated = rotate_boundary(source, {2, 1}, std::numbers::pi / 2);
+    const auto flipped = flip_boundary(rotated, {2, 1}, BoundaryFlipAxis::vertical);
+    const LegacyBoundaryIdentityOptions ids{{"a", "b", "c", "d"}, {"w", "x", "y", "z"}};
+    const auto cloned = clone_boundary(flipped, "copy", ids, {1.2192, 0});
+    auto minimum = cloned.segments.front().segment.start;
+    auto maximum = minimum;
+    for (const auto& edge : cloned.segments) {
+        for (const auto point : {edge.segment.start, edge.segment.end}) {
+            minimum.x = std::min(minimum.x, point.x);
+            minimum.y = std::min(minimum.y, point.y);
+            maximum.x = std::max(maximum.x, point.x);
+            maximum.y = std::max(maximum.y, point.y);
+        }
+    }
+    const Vec2 pivot{(minimum.x + maximum.x) / 2, (minimum.y + maximum.y) / 2};
+    auto candidate = rotate_boundary(cloned, pivot, 35 * std::numbers::pi / 180);
+    for (auto& edge : candidate.segments) {
+        edge.segment.start.x += 2;
+        edge.segment.end.x += 2;
+    }
+    require(validate_boundary(boundary_geometry(candidate)).empty(),
+            "rotated and translated rectangle with overlapping opposite-edge bounds must validate");
+    require(near(signed_area(boundary_geometry(candidate)), -8) &&
+                near(perimeter(boundary_geometry(candidate)), 12),
+            "composed rigid transforms must retain rectangle area and perimeter");
+    require(decode_identified_boundary_entity(encode_identified_boundary_entity(candidate)) == candidate,
+            "transformed rectangle must remain admissible as an identified boundary");
+}
 }
 int main() {
     try {
+        test_rotated_boundary_transform_sequence();
         using namespace sketch;
         const auto source = square();
         const auto rotated = rotate_boundary(source, {1,1}, std::numbers::pi/2);

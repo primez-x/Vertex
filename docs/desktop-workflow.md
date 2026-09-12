@@ -348,8 +348,10 @@ and the complete production constraint workflow are still required.
 
 The **Transform selection** command is available from **More** and the command
 palette when a supported identified closed boundary or wall is selected. It applies an
-analytic rotation around the boundary bounding-box center, independent
+analytic rotation around the boundary endpoint-bounds center, independent
 horizontal/vertical reflections, and X/Y offsets in the active input units.
+The UI's horizontal flip reflects X and its vertical flip reflects Y for both
+walls and boundaries; the core geometry API names the reflection axis instead.
 Newly authored boundaries receive stable segment and vertex identities before
 they enter the document. Applying a transform then updates the same typed
 boundary entity through one revision-checked Document command, preserving
@@ -366,13 +368,14 @@ and incompatible transforms reject atomically. Valid wall length-entry receipts
 retain their exact expression while their recorded baseline follows the move.
 Wall copy mode creates fresh wall/opening identities together and retains their
 material assignments. It does not copy external constraints or room links.
-The wall editor previews the original and proposed wall/opening geometry as
+The editor previews the original and proposed wall/opening or boundary geometry as
 inputs change, using a detached validated document candidate. Invalid values
 or constraint conflicts clear the preview and disable Apply. Apply commits the
 exact cached command, including copy identities; Cancel creates no history.
-Intervening document or selection changes invalidate the candidate. Room-boundary
-propagation, connected-wall group transforms, and boundary transform previews
-remain open production work.
+Intervening document or selection changes invalidate the candidate. Boundary
+previews use the same identity, geometry, and receipt checks as committed edits;
+unchanged transforms do not create history. Room-boundary propagation and
+connected-wall group transforms remain open production work.
 
 Boundary clone mode allocates a new boundary, segment IDs, and vertex IDs, carries only
 safe drawing context and area metadata, and leaves the source entity and its

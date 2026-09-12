@@ -189,6 +189,29 @@ IntersectionResult intersect_lines(const Segment& left, const Segment& right, do
 
     if (std::abs(denominator) <= parallel_threshold) {
         if (std::abs(cross(q_minus_p, r)) > tolerance * r_length) {
+            // Overlapping axis-aligned boxes do not imply uncertainty for rotated
+            // parallel edges. Both endpoints strictly on one side of the line
+            // prove separation, even when the directions are only near parallel.
+            // Keep the conservative fallback when roundoff or tolerance could
+            // change either endpoint's side.
+            const auto side = [&](Vec2 point) {
+                const auto offset = point - p;
+                const auto first_product = offset.x * r.y;
+                const auto second_product = offset.y * r.x;
+                const auto determinant = first_product - second_product;
+                const auto rounding_margin = 16.0 * std::numeric_limits<double>::epsilon() *
+                    (std::abs(first_product) + std::abs(second_product)) +
+                    16.0 * std::numeric_limits<double>::denorm_min();
+                const auto margin = tolerance * r_length + rounding_margin;
+                if (!std::isfinite(determinant) || !std::isfinite(margin)) return 0;
+                if (determinant > margin) return 1;
+                if (determinant < -margin) return -1;
+                return 0;
+            };
+            const auto start_side = side(right.start);
+            if (start_side != 0 && start_side == side(right.end)) {
+                return result;
+            }
             if (bounding_boxes_overlap(left, right, tolerance)) {
                 result.kind = IntersectionKind::indeterminate;
             }
