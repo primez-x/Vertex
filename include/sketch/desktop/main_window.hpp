@@ -237,6 +237,7 @@ public:
     void showAssistance();
     void showRemodelingAlternatives();
     void showRoomRelationships();
+    void showAssemblies();
     void showConstraintEditor();
     void fitView();
 

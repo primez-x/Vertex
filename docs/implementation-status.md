@@ -76,6 +76,13 @@ history, and synchronizes newly created references without silently inventing
 relationships. Geometry propagation, controlled retargeting, and full
 cross-view acceptance remain open.
 
+The Architectural workspace now also exposes a compact **Assembly catalog**
+that persists the typed `sketch.assemblies.v1` model in Document history. Users
+can add/remove reusable types and placed instances, rename types, and save or
+reopen the catalog without dangling type references. Property/material/
+quantity overrides, geometric placement, quantity takeoff integration, and
+publication qualification remain open.
+
 The coordinated sheet/view graph now has a versioned `sheet_view_model` entity
 codec at the Document boundary. Document creation, command admission and
 ProjectStore load reuse SheetViewModel validation, and a save/reopen regression

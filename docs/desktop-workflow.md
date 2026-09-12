@@ -90,6 +90,15 @@ references target the declared `room_boundary`, `measurement_boundary`, or
 `wall` role. A failed decode or reference check rejects the whole command and
 leaves the prior revision unchanged.
 
+The Architectural workspace's **Assemblies** command opens the reusable catalog
+editor. It creates an empty typed assembly model when a project has none, then
+adds/removes reusable type and instance records and renames types through
+revision-fenced Document commands. The editor lists type and instance IDs,
+blocks removal of a type that still has placements, and preserves the full
+`sketch.assemblies.v1` payload on save/reopen. Material slots, quantities,
+overrides, and geometric placement remain explicit model data for the next
+authoring slice.
+
 Coordinates and arcs remain metres and radians in the model. QPainter receives
 a calibrated view transform only; pixels and rounded labels never enter the
 document. The inspector edits wall length, classification, height, and

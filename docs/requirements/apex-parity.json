@@ -1640,9 +1640,12 @@
         "include/sketch/assembly_model.hpp",
         "src/core/assembly_model.cpp",
         "tests/assembly_model_tests.cpp",
+        "include/sketch/desktop/main_window.hpp",
+        "src/desktop/main_window.cpp",
+        "tests/desktop_smoke.cpp",
         "docs/assemblies.md"
       ],
-      "implementation_note": "Reusable assembly types, instance overrides, materials, quantities, immutable snapshots, and update previews are implemented; Document/geometry/quantity/schedule/UI integration remains open."
+      "implementation_note": "Reusable assembly types, instance overrides, materials, quantities, immutable snapshots, and update previews are implemented. The Windows Assembly catalog now creates and persists typed type/instance records, supports rename/add/remove through Document history, and blocks dangling type deletion; property/material/quantity override editing, geometric placement, quantity/schedule integration, and production qualification remain open."
     },
     {
       "id": "ARCH-MOD-009",

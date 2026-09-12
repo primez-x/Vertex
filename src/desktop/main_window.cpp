@@ -902,6 +902,11 @@ struct RoomRelationshipRecord {
     RoomRelationshipSnapshot model;
 };
 
+struct AssemblyModelRecord {
+    std::string entity_id;
+    AssemblyModel model;
+};
+
 std::optional<PhaseModelRecord> decode_phase_model(const DocumentSnapshot& snapshot) {
     for (const auto& [id, entity] : snapshot.entities()) {
         if (entity.type != "model_phases") continue;
@@ -922,6 +927,19 @@ std::optional<RoomRelationshipRecord> decode_room_relationships(
         }
         return RoomRelationshipRecord{
             id, RoomRelationshipSnapshot::from_json(entity.properties.at("model"))};
+    }
+    return std::nullopt;
+}
+
+std::optional<AssemblyModelRecord> decode_assembly_model(
+    const DocumentSnapshot& snapshot) {
+    for (const auto& [id, entity] : snapshot.entities()) {
+        if (entity.type != "assembly_model") continue;
+        if (!entity.properties.contains("model")) {
+            throw std::invalid_argument("The assembly catalog has no model payload.");
+        }
+        return AssemblyModelRecord{
+            id, AssemblyModel::from_json(entity.properties.at("model"))};
     }
     return std::nullopt;
 }
@@ -2435,6 +2453,342 @@ public:
             dialog.exec();
         } catch (const std::exception& error) {
             setError(QStringLiteral("Room relationships: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
+    bool ensureAssemblyModelRecord() {
+        try {
+            const auto source = authoringSnapshot();
+            if (decode_assembly_model(source).has_value()) return true;
+            const auto model = AssemblyModel::create({}, {}, {});
+            auto entity = Entity::create("assembly_model", {{"model", model.to_json()}});
+            entity.id = new_id("assemblies");
+            const ApplyEntityChanges command{
+                source.revision(), {EntityChange::upsert(std::move(entity))}, {},
+                "Create assembly catalog"};
+            (void)Document::preview_command(source, Command{command});
+            applyDocumentCommand(Command{command});
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Assemblies: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    bool applyAssemblyModel(const AssemblyModel& model, const QString& message) {
+        try {
+            if (!m_document->is_editable()) {
+                throw std::invalid_argument("This document is read-only.");
+            }
+            const auto source = authoringSnapshot();
+            const auto record = decode_assembly_model(source);
+            if (!record) {
+                throw std::invalid_argument("The assembly catalog is unavailable.");
+            }
+            auto entity = source.entities().at(record->entity_id);
+            entity.properties["model"] = model.to_json();
+            const ApplyEntityChanges command{
+                source.revision(), {EntityChange::upsert(std::move(entity))}, {},
+                message.toStdString()};
+            (void)Document::preview_command(source, Command{command});
+            applyDocumentCommand(Command{command});
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Assemblies: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    void showAssemblies() {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return;
+        }
+        if (!ensureAssemblyModelRecord()) return;
+        try {
+            QDialog dialog(owner);
+            styleDialog(dialog);
+            dialog.setObjectName(QStringLiteral("assemblyCatalogDialog"));
+            dialog.setWindowTitle(QStringLiteral("Assembly catalog"));
+            dialog.setModal(true);
+            dialog.resize(760, 500);
+
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* columns = new QHBoxLayout;
+
+            auto* type_panel = new QVBoxLayout;
+            type_panel->addWidget(new QLabel(QStringLiteral("Reusable types"), &dialog));
+            auto* types = new QListWidget(&dialog);
+            types->setObjectName(QStringLiteral("assemblyTypeList"));
+            types->setSelectionMode(QAbstractItemView::SingleSelection);
+            type_panel->addWidget(types, 1);
+            auto* type_id = new QLineEdit(&dialog);
+            type_id->setObjectName(QStringLiteral("assemblyTypeId"));
+            type_id->setPlaceholderText(QStringLiteral("Type ID"));
+            auto* type_name = new QLineEdit(&dialog);
+            type_name->setObjectName(QStringLiteral("assemblyTypeName"));
+            type_name->setPlaceholderText(QStringLiteral("Type name"));
+            type_panel->addWidget(type_id);
+            type_panel->addWidget(type_name);
+            auto* type_buttons = new QHBoxLayout;
+            auto* add_type = new QPushButton(QStringLiteral("Add type"), &dialog);
+            add_type->setObjectName(QStringLiteral("addAssemblyType"));
+            auto* rename_type = new QPushButton(QStringLiteral("Rename"), &dialog);
+            rename_type->setObjectName(QStringLiteral("renameAssemblyType"));
+            auto* remove_type = new QPushButton(QStringLiteral("Remove"), &dialog);
+            remove_type->setObjectName(QStringLiteral("removeAssemblyType"));
+            type_buttons->addWidget(add_type);
+            type_buttons->addWidget(rename_type);
+            type_buttons->addWidget(remove_type);
+            type_panel->addLayout(type_buttons);
+
+            auto* instance_panel = new QVBoxLayout;
+            instance_panel->addWidget(new QLabel(QStringLiteral("Placed instances"), &dialog));
+            auto* instances = new QListWidget(&dialog);
+            instances->setObjectName(QStringLiteral("assemblyInstanceList"));
+            instances->setSelectionMode(QAbstractItemView::SingleSelection);
+            instance_panel->addWidget(instances, 1);
+            auto* instance_id = new QLineEdit(&dialog);
+            instance_id->setObjectName(QStringLiteral("assemblyInstanceId"));
+            instance_id->setPlaceholderText(QStringLiteral("Instance ID (optional)"));
+            instance_panel->addWidget(instance_id);
+            auto* instance_type = new QComboBox(&dialog);
+            instance_type->setObjectName(QStringLiteral("assemblyInstanceType"));
+            instance_panel->addWidget(instance_type);
+            auto* instance_buttons = new QHBoxLayout;
+            auto* add_instance = new QPushButton(QStringLiteral("Add instance"), &dialog);
+            add_instance->setObjectName(QStringLiteral("addAssemblyInstance"));
+            auto* remove_instance = new QPushButton(QStringLiteral("Remove"), &dialog);
+            remove_instance->setObjectName(QStringLiteral("removeAssemblyInstance"));
+            instance_buttons->addWidget(add_instance);
+            instance_buttons->addWidget(remove_instance);
+            instance_panel->addLayout(instance_buttons);
+
+            columns->addLayout(type_panel, 1);
+            columns->addLayout(instance_panel, 1);
+            layout->addLayout(columns, 1);
+
+            auto* status = new QLabel(&dialog);
+            status->setObjectName(QStringLiteral("assemblyCatalogStatus"));
+            status->setWordWrap(true);
+            status->setTextFormat(Qt::PlainText);
+            layout->addWidget(status);
+            auto* close = new QPushButton(QStringLiteral("Close"), &dialog);
+            close->setObjectName(QStringLiteral("closeAssemblyCatalog"));
+            close->setDefault(true);
+            auto* footer = new QHBoxLayout;
+            footer->addStretch(1);
+            footer->addWidget(close);
+            layout->addLayout(footer);
+
+            std::optional<AssemblyModelRecord> record;
+            Revision record_revision{};
+            const auto populate = [&] {
+                const auto snapshot = authoringSnapshot();
+                record = decode_assembly_model(snapshot);
+                if (!record) return;
+                record_revision = snapshot.revision();
+                const QSignalBlocker type_blocker(types);
+                const QSignalBlocker instance_blocker(instances);
+                const QSignalBlocker combo_blocker(instance_type);
+                types->clear();
+                type_id->clear();
+                type_name->clear();
+                instance_type->clear();
+                for (const auto& type : record->model.types()) {
+                    auto* item = new QListWidgetItem(
+                        QStringLiteral("%1  ·  %2")
+                            .arg(QString::fromStdString(type.name),
+                                 QString::fromStdString(type.id)),
+                        types);
+                    item->setData(Qt::UserRole, QString::fromStdString(type.id));
+                    instance_type->addItem(QString::fromStdString(type.name),
+                                           QString::fromStdString(type.id));
+                }
+                for (const auto& instance : record->model.instances()) {
+                    const auto type = std::find_if(record->model.types().begin(),
+                                                   record->model.types().end(),
+                        [&](const auto& candidate) { return candidate.id == instance.type_id; });
+                    const auto type_name_text = type == record->model.types().end()
+                        ? instance.type_id : type->name;
+                    auto* item = new QListWidgetItem(
+                        QStringLiteral("%1  ·  %2")
+                            .arg(QString::fromStdString(type_name_text),
+                                 QString::fromStdString(instance.id)),
+                        instances);
+                    item->setData(Qt::UserRole, QString::fromStdString(instance.id));
+                }
+                const auto selected_type = types->currentItem();
+                if (selected_type) {
+                    const auto id = selected_type->data(Qt::UserRole).toString().toStdString();
+                    const auto found = std::find_if(record->model.types().begin(),
+                                                    record->model.types().end(),
+                        [&](const auto& candidate) { return candidate.id == id; });
+                    if (found != record->model.types().end()) {
+                        type_id->setText(QString::fromStdString(found->id));
+                        type_name->setText(QString::fromStdString(found->name));
+                    }
+                }
+                status->setText(QStringLiteral("%1 reusable type%2 · %3 placed instance%4")
+                    .arg(record->model.types().size())
+                    .arg(record->model.types().size() == 1 ? QString{} : QStringLiteral("s"))
+                    .arg(record->model.instances().size())
+                    .arg(record->model.instances().size() == 1 ? QString{} : QStringLiteral("s")));
+                const bool has_type = !record->model.types().empty();
+                rename_type->setEnabled(has_type);
+                remove_type->setEnabled(has_type);
+                add_instance->setEnabled(has_type);
+            };
+            populate();
+
+            QObject::connect(types, &QListWidget::currentItemChanged, &dialog,
+                             [&](QListWidgetItem* current, QListWidgetItem*) {
+                                 if (!current || !record) return;
+                                 const auto id = current->data(Qt::UserRole).toString().toStdString();
+                                 const auto found = std::find_if(record->model.types().begin(),
+                                                                 record->model.types().end(),
+                                     [&](const auto& candidate) { return candidate.id == id; });
+                                 if (found == record->model.types().end()) return;
+                                 type_id->setText(QString::fromStdString(found->id));
+                                 type_name->setText(QString::fromStdString(found->name));
+                             });
+
+            const auto current_record = [&]() -> std::optional<AssemblyModelRecord> {
+                if (!record) return std::nullopt;
+                if (authoringSnapshot().revision() != record_revision) {
+                    populate();
+                    status->setText(QStringLiteral(
+                        "The project changed while the assembly catalog was open. Review the refreshed list."));
+                    return std::nullopt;
+                }
+                return record;
+            };
+
+            QObject::connect(add_type, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    const auto current = current_record();
+                    if (!current) return;
+                    const auto id = type_id->text().trimmed().toStdString();
+                    const auto name = type_name->text().trimmed().toStdString();
+                    if (id.empty() || name.empty())
+                        throw std::invalid_argument("Enter a type ID and name.");
+                    auto types_copy = current->model.types();
+                    types_copy.push_back({id, name, {}, {}, {}});
+                    const auto updated = AssemblyModel::create(
+                        current->model.materials(), std::move(types_copy),
+                        current->model.instances());
+                    if (applyAssemblyModel(updated, QStringLiteral("Add assembly type"))) {
+                        populate();
+                        status->setText(QStringLiteral("Reusable type added through document history."));
+                    }
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            });
+
+            QObject::connect(rename_type, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    const auto current = current_record();
+                    if (!current) return;
+                    const auto* item = types->currentItem();
+                    if (!item) throw std::invalid_argument("Choose a reusable type first.");
+                    const auto id = item->data(Qt::UserRole).toString().toStdString();
+                    const auto name = type_name->text().trimmed().toStdString();
+                    if (name.empty()) throw std::invalid_argument("Enter a type name.");
+                    auto replacement = *std::find_if(current->model.types().begin(),
+                                                     current->model.types().end(),
+                        [&](const auto& candidate) { return candidate.id == id; });
+                    replacement.name = name;
+                    const auto updated = current->model.with_type(std::move(replacement));
+                    if (applyAssemblyModel(updated, QStringLiteral("Rename assembly type"))) {
+                        populate();
+                        status->setText(QStringLiteral("Type name updated through document history."));
+                    }
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            });
+
+            QObject::connect(remove_type, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    const auto current = current_record();
+                    if (!current) return;
+                    const auto* item = types->currentItem();
+                    if (!item) throw std::invalid_argument("Choose a reusable type first.");
+                    const auto id = item->data(Qt::UserRole).toString().toStdString();
+                    if (std::any_of(current->model.instances().begin(),
+                                    current->model.instances().end(),
+                        [&](const auto& instance) { return instance.type_id == id; })) {
+                        throw std::invalid_argument(
+                            "Remove the type's placed instances before removing the type.");
+                    }
+                    auto types_copy = current->model.types();
+                    types_copy.erase(std::remove_if(types_copy.begin(), types_copy.end(),
+                        [&](const auto& candidate) { return candidate.id == id; }), types_copy.end());
+                    const auto updated = AssemblyModel::create(
+                        current->model.materials(), std::move(types_copy),
+                        current->model.instances());
+                    if (applyAssemblyModel(updated, QStringLiteral("Remove assembly type"))) {
+                        populate();
+                        status->setText(QStringLiteral("Type removed through document history."));
+                    }
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            });
+
+            QObject::connect(add_instance, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    const auto current = current_record();
+                    if (!current) return;
+                    const auto type_id_value = instance_type->currentData().toString().toStdString();
+                    if (type_id_value.empty()) throw std::invalid_argument("Choose a type first.");
+                    auto id = instance_id->text().trimmed().toStdString();
+                    if (id.empty()) id = new_id("assembly-instance");
+                    auto instances_copy = current->model.instances();
+                    instances_copy.push_back({id, type_id_value, {}, {}, {}});
+                    const auto updated = AssemblyModel::create(
+                        current->model.materials(), current->model.types(),
+                        std::move(instances_copy));
+                    if (applyAssemblyModel(updated, QStringLiteral("Add assembly instance"))) {
+                        instance_id->clear();
+                        populate();
+                        status->setText(QStringLiteral("Instance added through document history."));
+                    }
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            });
+
+            QObject::connect(remove_instance, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    const auto current = current_record();
+                    if (!current) return;
+                    const auto* item = instances->currentItem();
+                    if (!item) throw std::invalid_argument("Choose a placed instance first.");
+                    const auto id = item->data(Qt::UserRole).toString().toStdString();
+                    auto instances_copy = current->model.instances();
+                    instances_copy.erase(std::remove_if(instances_copy.begin(), instances_copy.end(),
+                        [&](const auto& candidate) { return candidate.id == id; }), instances_copy.end());
+                    const auto updated = AssemblyModel::create(
+                        current->model.materials(), current->model.types(),
+                        std::move(instances_copy));
+                    if (applyAssemblyModel(updated, QStringLiteral("Remove assembly instance"))) {
+                        populate();
+                        status->setText(QStringLiteral("Instance removed through document history."));
+                    }
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            });
+            QObject::connect(close, &QPushButton::clicked, &dialog, &QDialog::reject);
+            dialog.exec();
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Assemblies: %1").arg(QString::fromUtf8(error.what())));
         }
     }
 
@@ -5459,6 +5813,8 @@ public:
              [this] { showRemodelingAlternatives(); }},
             {QStringLiteral("Room and boundary relationships"),
              [this] { showRoomRelationships(); }},
+            {QStringLiteral("Edit reusable assemblies"),
+             [this] { showAssemblies(); }},
             {QStringLiteral("Offline assistance"), [this] { showAssistance(); }},
             {QStringLiteral("Select tool"), [this] { setTool(CanvasTool::select); }},
             {QStringLiteral("Draw measurement boundary"), [this] { setTool(CanvasTool::boundary); }},
@@ -6218,12 +6574,14 @@ private:
         m_remodel_action->setObjectName(QStringLiteral("designPhaseSettings"));
         m_relationship_action = new QAction(QStringLiteral("Room relationships…"), owner);
         m_relationship_action->setObjectName(QStringLiteral("roomRelationships"));
+        m_assembly_action = new QAction(QStringLiteral("Assemblies…"), owner);
+        m_assembly_action->setObjectName(QStringLiteral("assemblyCatalog"));
         m_assistance_action = new QAction(QStringLiteral("Offline assistance…"), owner);
         m_about_action = new QAction(QStringLiteral("About Property Studio"), owner);
-        const std::array<QAction*, 11> secondary_actions{
+        const std::array<QAction*, 12> secondary_actions{
             m_annotation_action, m_reference_action, m_schedule_action, m_sheet_action,
             m_viewport_action, m_schedule_placement_action, m_view_action, m_remodel_action,
-            m_relationship_action, m_assistance_action, m_about_action};
+            m_relationship_action, m_assembly_action, m_assistance_action, m_about_action};
         for (auto* action : secondary_actions) {
             owner->addAction(action);
             more_menu->addAction(action);
@@ -6325,6 +6683,8 @@ private:
                          [this] { showRemodelingAlternatives(); });
         QObject::connect(m_relationship_action, &QAction::triggered, owner,
                          [this] { showRoomRelationships(); });
+        QObject::connect(m_assembly_action, &QAction::triggered, owner,
+                         [this] { showAssemblies(); });
         QObject::connect(m_assistance_action, &QAction::triggered, owner,
                          [this] { showAssistance(); });
         QObject::connect(m_about_action, &QAction::triggered, owner, [this] { showAbout(); });
@@ -8782,6 +9142,7 @@ private:
     QAction* m_view_action{};
     QAction* m_remodel_action{};
     QAction* m_relationship_action{};
+    QAction* m_assembly_action{};
     QAction* m_assistance_action{};
     QAction* m_about_action{};
 };
@@ -9055,6 +9416,10 @@ void MainWindow::showRemodelingAlternatives() {
 
 void MainWindow::showRoomRelationships() {
     m_impl->showRoomRelationships();
+}
+
+void MainWindow::showAssemblies() {
+    m_impl->showAssemblies();
 }
 
 bool MainWindow::createNewProject() {

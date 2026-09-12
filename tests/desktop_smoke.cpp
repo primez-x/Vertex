@@ -3,6 +3,7 @@
 #include "sketch/document.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
+#include "sketch/assembly_model.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/desktop/building_object_dialog.hpp"
@@ -559,6 +560,69 @@ void test_room_relationship_workflow() {
             "room relationship relation should survive project reopen");
 }
 
+void test_assembly_catalog_workflow() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    auto* action = window.findChild<QAction*>(QStringLiteral("assemblyCatalog"));
+    require(action, "assembly catalog should be discoverable from the workspace actions");
+
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("assemblyCatalogDialog"));
+        require(dialog, "assembly catalog editor should open from the workspace action");
+        auto* types = dialog->findChild<QListWidget*>(QStringLiteral("assemblyTypeList"));
+        auto* instances = dialog->findChild<QListWidget*>(QStringLiteral("assemblyInstanceList"));
+        auto* type_id = dialog->findChild<QLineEdit*>(QStringLiteral("assemblyTypeId"));
+        auto* type_name = dialog->findChild<QLineEdit*>(QStringLiteral("assemblyTypeName"));
+        auto* add_type = dialog->findChild<QPushButton*>(QStringLiteral("addAssemblyType"));
+        auto* instance_type = dialog->findChild<QComboBox*>(QStringLiteral("assemblyInstanceType"));
+        auto* add_instance = dialog->findChild<QPushButton*>(QStringLiteral("addAssemblyInstance"));
+        require(types && instances && type_id && type_name && add_type && instance_type && add_instance,
+                "assembly editor should expose catalog and instance controls");
+        type_id->setText(QStringLiteral("wall-basic"));
+        type_name->setText(QStringLiteral("Basic wall assembly"));
+        add_type->click();
+        require(types->count() == 1 && types->item(0)->text().contains(QStringLiteral("Basic wall assembly")),
+                "assembly editor should add a reusable type through document history");
+        require(instance_type->findData(QStringLiteral("wall-basic")) >= 0,
+                "assembly editor should offer the new type for instance placement");
+        instance_type->setCurrentIndex(instance_type->findData(QStringLiteral("wall-basic")));
+        add_instance->click();
+        require(instances->count() == 1, "assembly editor should add a typed instance");
+        dialog->reject();
+    });
+    action->trigger();
+
+    const auto find_model = [&] {
+        const auto snapshot = window.document().snapshot();
+        const auto found = std::find_if(snapshot.entities().begin(), snapshot.entities().end(),
+            [](const auto& entry) { return entry.second.type == "assembly_model"; });
+        require(found != snapshot.entities().end(), "assembly editor should persist its typed model");
+        return AssemblyModel::from_json(found->second.properties.at("model"));
+    };
+    auto model = find_model();
+    require(model.types().size() == 1 && model.instances().size() == 1,
+            "assembly catalog edits should retain type and instance records");
+    require(window.undoCommand() && window.undoCommand(),
+            "assembly catalog edits should participate in normal undo history");
+    model = find_model();
+    require(model.types().empty() && model.instances().empty(),
+            "undo should remove the instance and type without leaving a partial model");
+    require(window.redoCommand() && window.redoCommand(),
+            "assembly catalog edits should be redoable");
+    model = find_model();
+    require(model.types().size() == 1 && model.instances().size() == 1,
+            "redo should restore the complete assembly catalog");
+
+    QTemporaryDir directory;
+    require(directory.isValid(), "assembly fixture needs a temporary directory");
+    const auto path = directory.filePath(QStringLiteral("assemblies.bldproj"));
+    require(window.saveProjectAs(path) && window.openProject(path),
+            "assembly model should save and reopen through the project store");
+    model = find_model();
+    require(model.instances().front().type_id == "wall-basic",
+            "assembly instance type should survive project reopen");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -579,6 +643,7 @@ int main(int argc, char** argv) {
     test_shortcuts_and_measurement_keypad(field_ui_capture_directory);
     test_design_phase_workflow();
     test_room_relationship_workflow();
+    test_assembly_catalog_workflow();
     {
         QTemporaryDir stamp_directory;
         require(stamp_directory.isValid(), "stamp test directory should be available");
