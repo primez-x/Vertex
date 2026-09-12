@@ -42,6 +42,13 @@ subsequent boundary edits do not recalculate it or claim to update the original
 survey. Geometry and metadata save/reopen and undo/redo together; the boundary
 uses the common canvas and vector-output path.
 
+Selecting a boundary carrying version-1 `survey_source` and opening **Survey
+traverse** restores its original input directly from the project. The dialog
+identifies this as the original source and recomputes it using the same input
+validation as report reopening. It does not infer revised calls from subsequent
+drawing edits or overwrite the selected boundary. Unsupported source versions
+show an error; viewing the source leaves project history unchanged.
+
 New survey boundaries persist `properties.calculation_scope = "site"`.
 Earlier survey-classified boundaries without that field are interpreted as
 site scope; other older boundaries default to building scope. Unknown scope

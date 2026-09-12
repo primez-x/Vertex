@@ -1237,6 +1237,21 @@ void test_survey_calculator(const QString& capture_directory) {
     require(building_total && living_total && building_total->text().contains("100.00 m²") &&
                 living_total->text().contains("100.00 m²"),
             "parcel enclosing a building must not block calculations or inflate building/living totals");
+    const auto source_revision = window.document().revision();
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>("surveyCalculator");
+        require(dialog && dialog->windowTitle().contains("original source"), "selected survey must reopen its original calls");
+        auto* input = dialog->findChild<QPlainTextEdit*>("surveyLegs");
+        auto* source = dialog->findChild<QLineEdit*>("surveyProvenance");
+        auto* result = dialog->findChild<QLabel*>("surveyResult");
+        require(input && input->toPlainText().startsWith("NE, 90, 100") && source->text() == "Deed fixture" &&
+                    result->text().contains("10000.0000 m²"),
+                "project-backed survey source must restore calls and recompute acreage after save/reopen");
+        dialog->reject();
+    });
+    action->trigger();
+    require(window.document().revision() == source_revision,
+            "inspecting original survey calls must not change the project or insert another boundary");
 }
 
 void test_design_phase_workflow() {

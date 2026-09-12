@@ -6659,17 +6659,7 @@ public:
                 result->setText(QStringLiteral("Survey boundary added. Original measurements are preserved in its source metadata."));
             } catch (const std::exception& error) { result->setText(QString::fromUtf8(error.what())); }
         });
-        QObject::connect(open_report, &QPushButton::clicked, &dialog, [&] {
-            const auto path = QFileDialog::getOpenFileName(&dialog, QStringLiteral("Open survey report"),
-                QString(), QStringLiteral("Survey report (*.json)"));
-            if (path.isEmpty()) return;
-            try {
-                QFile file(path);
-                if (!file.open(QIODevice::ReadOnly)) throw std::invalid_argument("Could not read the survey report.");
-                constexpr qint64 limit = 4 * 1024 * 1024;
-                const auto bytes = file.read(limit + 1);
-                if (bytes.size() > limit) throw std::invalid_argument("Survey report exceeds 4 MiB.");
-                const auto loaded = json::parse(bytes.toStdString());
+        const auto restore_input = [&](const json& loaded) {
                 if (!loaded.contains("version") || !loaded.at("version").is_number_integer() ||
                     loaded.at("version") != 1 || !loaded.contains("input_provenance"))
                     throw std::invalid_argument("This report has no supported editable survey input.");
@@ -6690,6 +6680,18 @@ public:
                 tolerance->setText(QString::fromStdString(tolerance_text));
                 input_units->setCurrentIndex(default_unit == "m" ? 1 : 0);
                 calculate->click();
+        };
+        QObject::connect(open_report, &QPushButton::clicked, &dialog, [&] {
+            const auto path = QFileDialog::getOpenFileName(&dialog, QStringLiteral("Open survey report"),
+                QString(), QStringLiteral("Survey report (*.json)"));
+            if (path.isEmpty()) return;
+            try {
+                QFile file(path);
+                if (!file.open(QIODevice::ReadOnly)) throw std::invalid_argument("Could not read the survey report.");
+                constexpr qint64 limit = 4 * 1024 * 1024;
+                const auto bytes = file.read(limit + 1);
+                if (bytes.size() > limit) throw std::invalid_argument("Survey report exceeds 4 MiB.");
+                restore_input(json::parse(bytes.toStdString()));
             } catch (const std::exception& error) {
                 result->setText(QStringLiteral("Open report: %1").arg(QString::fromUtf8(error.what())));
             }
@@ -6710,6 +6712,19 @@ public:
                 result->setText(QStringLiteral("Could not save the survey report: %1").arg(file.errorString()));
         });
         QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        if (const auto selected = selectedEntity(); selected && selected->extensions.contains("survey_source")) {
+            try {
+                const auto& source = selected->extensions.at("survey_source");
+                if (!source.contains("version") || !source.at("version").is_number_integer() || source.at("version") != 1)
+                    throw std::invalid_argument("Unsupported stored survey source version.");
+                restore_input(source.at("report"));
+                dialog.setWindowTitle(QStringLiteral("Survey traverse — original source"));
+                help->setText(help->text() + QStringLiteral(
+                    "\nLoaded original calls from the selected boundary. Later drawing edits are not part of these calls."));
+            } catch (const std::exception& error) {
+                result->setText(QStringLiteral("Stored survey source: %1").arg(QString::fromUtf8(error.what())));
+            }
+        }
         (void)dialog.exec();
     }
 
