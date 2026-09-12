@@ -1139,7 +1139,7 @@
         "tests/boundary_dimension_tests.cpp",
         "tests/boundary_workflow_tests.cpp"
       ],
-      "implementation_note": "Semantic dimensions, stable references, placement, and typed desktop label/symbol authoring with inspector position/rotation/scale/visibility edits are implemented; dimension style/visibility editing, output scale, and complete edit lifecycle evidence remain open."
+      "implementation_note": "Segment-length dimensions have stable references and an inspector for position, paper text height, color, bold/italic, rotation, and visibility. Version 2 presentation survives save/reopen, undo/redo, and boundary transforms. Shared canvas/sheet rendering preserves paper text size across model output scales and fitted previews, with pixel/DPI and rotated-hit tests. Dimension and extension lines, additional dimension kinds, and complete Apex workflow/output qualification remain open."
     },
     {
       "id": "APX-ANNO-003",

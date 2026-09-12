@@ -7,6 +7,7 @@
 #include <QEventLoop>
 #include <QFontDatabase>
 #include <QFontMetrics>
+#include <QFontMetricsF>
 #include <QImage>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -15,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <numbers>
 #include <stdexcept>
 #include <string_view>
@@ -489,6 +491,140 @@ void test_arc_render_orientation() {
     }
 }
 
+QRect red_text_bounds(const QImage& image) {
+    QRect result;
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            const auto color = image.pixelColor(x, y);
+            if (color.red() > 150 && color.green() < 100 && color.blue() < 100)
+                result = result.united(QRect(x, y, 1, 1));
+        }
+    }
+    return result;
+}
+
+void test_paper_label_style_and_hit_testing() {
+    PlanCanvas canvas;
+    canvas.resize(800, 600);
+    canvas.setGridEnabled(false);
+    canvas.setOverviewMapEnabled(false);
+    CanvasLabel label{QStringLiteral("paper-label"), {0, 0}, QStringLiteral("Dimension 123.45")};
+    label.paper_height_mm = 4.0;
+    label.color = QColor(220, 20, 20);
+    canvas.setLabels({label});
+    const auto output = [&](double scale, int dpi,
+                            std::optional<double> paper_pixels_per_mm = std::nullopt) {
+        QImage image(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+        image.setDotsPerMeterX(qRound(dpi / 0.0254));
+        image.setDotsPerMeterY(qRound(dpi / 0.0254));
+        image.fill(Qt::white);
+        QPainter painter(&image);
+        canvas.renderSceneAt(painter, QRectF(image.rect()), scale, {0, 0}, Qt::white,
+                             paper_pixels_per_mm);
+        return image;
+    };
+    const auto at_50 = output(50, 96);
+    require(images_equal(at_50, output(200, 96)),
+        "paper label pixels must be independent of model-to-output scale");
+    const auto normal_bounds = red_text_bounds(at_50);
+    const auto high_dpi_bounds = red_text_bounds(output(50, 192));
+    require(!normal_bounds.isEmpty() && !high_dpi_bounds.isEmpty(),
+        "explicit label color must reach output glyph pixels");
+    require(std::abs(high_dpi_bounds.height() - 2 * normal_bounds.height()) <= 3 &&
+            std::abs(high_dpi_bounds.width() - 2 * normal_bounds.width()) <= 5,
+        "paper text must preserve physical size across output-device DPI");
+    const auto fitted_paper = output(50, 96, 4.0);
+    const auto fitted_bounds = red_text_bounds(fitted_paper);
+    const auto double_paper_bounds = red_text_bounds(output(50, 96, 8.0));
+    require(!fitted_bounds.isEmpty() &&
+            std::abs(double_paper_bounds.height() - 2 * fitted_bounds.height()) <= 3 &&
+            std::abs(double_paper_bounds.width() - 2 * fitted_bounds.width()) <= 5,
+        "doubling fitted sheet paper scale must double label pixels at the same device DPI");
+    require(images_equal(fitted_paper, output(200, 96, 4.0)),
+        "fitted paper label size must remain independent of viewport model scale");
+    require(images_equal(fitted_paper, output(50, 192, 4.0)),
+        "explicit fitted sheet paper scale must override output-device DPI");
+    for (double invalid : {0.0, -1.0, std::numeric_limits<double>::infinity(),
+                           std::numeric_limits<double>::quiet_NaN()}) {
+        require(images_equal(at_50, output(50, 96, invalid)),
+            "invalid paper scale must preserve the device-DPI fallback");
+    }
+    const auto screen_output = [&](int dpi) {
+        QImage image(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+        image.setDotsPerMeterX(qRound(dpi / 0.0254));
+        image.setDotsPerMeterY(qRound(dpi / 0.0254));
+        image.fill(Qt::white);
+        QPainter painter(&image);
+        canvas.renderScene(painter, QRectF(image.rect()), false, Qt::white);
+        return image;
+    };
+    const auto screen_before_zoom = red_text_bounds(screen_output(96));
+    canvas.zoomBy(2.0, QRectF(canvas.rect()).center());
+    require(screen_before_zoom == red_text_bounds(screen_output(192)),
+        "interactive paper text must use fixed widget DPI and ignore model zoom");
+    const auto unselected_screen = screen_output(96);
+    label.selected = true;
+    canvas.setLabels({label});
+    const auto selected_screen = screen_output(96);
+    require(!images_equal(unselected_screen, selected_screen) &&
+            red_text_bounds(unselected_screen) == red_text_bounds(selected_screen),
+        "styled screen selection must add an outline while retaining authored text color");
+    require(images_equal(at_50, output(50, 96)),
+        "paper label output must suppress the screen selection outline");
+    label.selected = false;
+    canvas.setLabels({label});
+    label.bold = true;
+    canvas.setLabels({label});
+    const auto bold = output(50, 96);
+    require(!images_equal(at_50, bold), "bold label style must affect rendered glyphs");
+    label.italic = true;
+    canvas.setLabels({label});
+    require(!images_equal(bold, output(50, 96)), "italic label style must affect rendered glyphs");
+    label.rotation_radians = std::numbers::pi / 2;
+    canvas.setLabels({label});
+    const auto rotated_bounds = red_text_bounds(output(50, 96));
+    require(rotated_bounds.height() > rotated_bounds.width() * 2,
+        "paper style must retain model-to-screen label rotation");
+
+    // A point near the rotated text's far end is well outside the old
+    // nine-pixel anchor hit radius, but inside the actual styled text bounds.
+    QFont styled_font = canvas.font();
+    styled_font.setPixelSize(qRound(label.paper_height_mm * canvas.logicalDpiY() / 25.4));
+    styled_font.setBold(true);
+    styled_font.setItalic(true);
+    const QFontMetricsF metrics(styled_font, &canvas);
+    const auto far_offset = metrics.boundingRect(label.text).width() * 0.35;
+    require(far_offset > 9, "styled hit-test fixture must exceed anchor radius");
+    const auto center = QRectF(canvas.rect()).center();
+    QString selected;
+    canvas.setEntityClicked([&](QString id) { selected = std::move(id); });
+    const auto click = [&](QPointF point) {
+        selected.clear();
+        QMouseEvent press(QEvent::MouseButtonPress, point, point, Qt::LeftButton,
+                          Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &press);
+    };
+    click(center + QPointF(0, -far_offset));
+    require(selected == label.id, "rotated styled label must be selectable across its painted extent");
+    click(center + QPointF(far_offset, 0));
+    require(selected.isEmpty(), "rotated hit-test must not select the unrotated text extent");
+    canvas.zoomBy(2.0, center);
+    click(center + QPointF(0, -far_offset));
+    require(selected == label.id, "paper-space label hit extent must remain fixed during zoom");
+    canvas.setEntities({{"under-label", "wall", {{{-2,0},{2,0},0}}, 0.08, false}});
+    click(center);
+    require(selected == label.id, "a label painted over geometry must win an overlapping hit");
+    canvas.setEntities({});
+
+    label.rotation_radians = 0;
+    label.paper_height_mm = 0;
+    label.bold = false;
+    label.italic = false;
+    canvas.setLabels({label});
+    require(!images_equal(output(50, 96), output(200, 96)),
+        "legacy model-height labels must continue scaling with model-to-output scale");
+}
+
 void test_analytic_arc_fit_bounds() {
     sketch::desktop::PlanCanvas canvas;
     const auto end=std::numbers::pi+0.3;
@@ -522,6 +658,7 @@ int main(int argc, char** argv) {
         test_site_scale_fit();
         test_arc_render_orientation();
         test_analytic_arc_fit_bounds();
+        test_paper_label_style_and_hit_testing();
         std::cout << "Boundary canvas tests passed\n";
         return 0;
     } catch (const std::exception& error) {

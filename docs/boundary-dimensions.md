@@ -48,6 +48,31 @@ dimension cannot hide malformed supported dimensions elsewhere in that state.
 Format v2 protects dimension semantics even after all dimensions and boundaries
 have been deleted from the current head but remain in undo history.
 
-Dimension-line rendering, styles, unit formatting, other dimension kinds and
-authoring UI remain separate integration work. These codecs and reference
-checks do not constitute a finished dimensioning workflow.
+Version 2 retains those fields and requires a `presentation` object containing
+exactly `text_height_mm`, `color`, `bold`, `italic`, `visible`, and
+`rotation_radians`. Text height is a finite paper-space value from 0.5 to 20 mm;
+color is a six-digit `#RRGGBB` string; the three switches are Booleans; rotation
+is finite radians. Extra or missing presentation keys reject. V1 dimensions
+keep their original encoding and rendering. A same-named vendor property in
+v1 stays opaque and blocks promotion rather than being overwritten. Encoding
+a v2 dimension without presentation also rejects rather than dropping style.
+
+The dimension inspector edits position, paper text height, color, bold/italic,
+visibility, and rotation. Style-only changes preserve the existing placement
+origin and exact position. Moving the label sets manual placement and clears
+the automatic-placement version. Edits retain the entity and target IDs, are
+atomic, and participate in normal save/reopen and undo/redo. Boundary transforms
+carry the presentation unchanged while moving the label with its source edge.
+
+Both workspace canvases and the shared sheet-output renderer honor presentation.
+Hidden dimensions retain their semantic references and remain editable through
+selection in the project navigator. Paper text height uses the rendering
+device's logical DPI, or the explicit fitted sheet paper scale in previews,
+and remains independent of drawing/output scale; v1 labels
+retain their existing model-space behavior. Global visibility filters still
+apply. The shown value is derived from the referenced geometry in the selected
+workspace units, not user-entered replacement measurement text.
+
+Dimension-line/extension-line tools, additional dimension kinds, and full Apex
+workflow/output qualification remain open. These capabilities do not certify
+the complete dimensioning requirement.

@@ -34,6 +34,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <numbers>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -1130,6 +1131,92 @@ void test_receipt_boundary_offset_copy() {
         "in-place rotation and dimensions must save, reopen, undo and redo exactly");
 }
 
+void test_dimension_presentation_editing() {
+    MainWindow window;
+    prepare_window(window);
+    auto* target = canvas(window, QStringLiteral("measurementPlanCanvas"));
+    require(window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, "living"), "start dimension fixture");
+    for (const auto point : {Vec2{0,0}, Vec2{2,0}, Vec2{2,2}, Vec2{0,2}}) send_click(*target, point);
+    send_key(*target, Qt::Key_Return);
+    const auto source = window.document().snapshot();
+    std::string id;
+    for (const auto& [candidate, entity] : source.entities()) if (entity.type == "dimension") { id = candidate; break; }
+    require(!id.empty(), "drawing must create semantic dimensions");
+    const auto original = *sketch::decode_boundary_dimension_entity(source.entities().at(id)).dimension;
+    const auto dimension_id = QString::fromStdString(id);
+    const auto x = QString::number(original.text_position.x, 'g', 17) + " m";
+    const auto y = QString::number(original.text_position.y, 'g', 17) + " m";
+    require(window.selectEntity(dimension_id) &&
+        window.editBoundaryDimension(dimension_id,x,y,"4","#bb2244",true,true,true,"30"),
+        "dimension presentation must be editable without changing its measured geometry");
+    const auto styled = window.document().snapshot();
+    const auto styled_dimension = *sketch::decode_boundary_dimension_entity(styled.entities().at(id)).dimension;
+    require(styled_dimension.presentation && styled_dimension.presentation->text_height_mm == 4 &&
+        styled_dimension.presentation->bold && styled_dimension.presentation->italic &&
+        styled_dimension.placement == original.placement &&
+        styled_dimension.automatic_placement_version == original.automatic_placement_version &&
+        styled_dimension.boundary_id == original.boundary_id && styled_dimension.segment_id == original.segment_id &&
+        same_point(styled_dimension.text_position, original.text_position),
+        "style-only edits must retain placement origin, exact position and stable references");
+    for (const auto& [other_id, entity] : source.entities())
+        if (other_id != id) require(styled.entities().at(other_id) == entity, "dimension style must not change other entities");
+    for (const auto name : {"measurementPlanCanvas", "architecturalPlanCanvas"}) {
+        const auto& labels = canvas(window, QString::fromLatin1(name))->labels();
+        const auto label = std::find_if(labels.begin(), labels.end(), [&](const auto& item) { return item.id == dimension_id; });
+        require(label != labels.end() && label->paper_height_mm == 4 && label->bold && label->italic &&
+            label->color == QColor("#bb2244") && std::abs(label->rotation_radians - std::numbers::pi/6) < 1e-12,
+            "both canvases must receive paper-space style and rotation");
+    }
+    auto* position_x = window.findChild<QLineEdit*>("dimensionPositionX");
+    auto* position_y = window.findChild<QLineEdit*>("dimensionPositionY");
+    auto* apply = window.findChild<QAbstractButton*>("applyBoundaryDimension");
+    require(position_x && position_y && apply && apply->isEnabled(), "dimension inspector controls must be available");
+    position_x->setText("2 m"); position_y->setText("-1 m");
+    apply->click(); process_events();
+    const auto shown = window.document().snapshot();
+    const auto placed = *sketch::decode_boundary_dimension_entity(shown.entities().at(id)).dimension;
+    require(same_point(placed.text_position,{2,-1}) && placed.placement == BoundaryDimensionPlacement::manual &&
+        !placed.automatic_placement_version && placed.presentation == styled_dimension.presentation,
+        "inspector placement edit must retain style and mark the position manual");
+    const auto unchanged = sketch::document_snapshot_digest(shown);
+    require(!window.editBoundaryDimension(dimension_id,"2 m","-1 m","0","#bb2244",true,true,true,"30") &&
+        !window.editBoundaryDimension(dimension_id,"2 m","-1 m","4","bad",true,true,true,"30") &&
+        sketch::document_snapshot_digest(window.document().snapshot()) == unchanged,
+        "invalid dimension styles must reject atomically");
+    require(window.editBoundaryDimension(dimension_id,"2 m","-1 m","4","#bb2244",true,true,false,"30"),
+        "individual dimensions must be hideable");
+    const auto hidden = window.document().snapshot();
+    const auto hidden_dimension = *sketch::decode_boundary_dimension_entity(hidden.entities().at(id)).dimension;
+    require_both_canvas_labels(window,3);
+    QTemporaryDir directory;
+    const auto path = directory.filePath("styled-dimensions.bldproj");
+    require(directory.isValid() && window.saveProjectAs(path) && window.openProject(path) &&
+        window.document().snapshot().entities() == hidden.entities(), "dimension style and visibility must survive save/reopen");
+    require_both_canvas_labels(window,3);
+    require(window.undoCommand() && window.document().snapshot().entities() == shown.entities(),
+        "visibility change must undo after reopening");
+    require_both_canvas_labels(window,4);
+    require(window.redoCommand() && window.document().snapshot().entities() == hidden.entities(),
+        "visibility change must redo exactly");
+    require(window.selectEntity(QString::fromStdString(original.boundary_id)) &&
+        window.transformSelectedBoundary("90",false,true,"0","0",false),
+        "styled dimensions must remain attached during a boundary transform");
+    const auto transformed = window.document().snapshot();
+    const auto after_transform = *sketch::decode_boundary_dimension_entity(transformed.entities().at(id)).dimension;
+    require(after_transform.presentation == hidden_dimension.presentation,
+        "boundary transforms must retain the complete dimension presentation");
+    require(!after_transform.presentation->visible && after_transform.boundary_id == original.boundary_id &&
+        after_transform.segment_id == original.segment_id && after_transform.presentation->text_height_mm == 4,
+        "transforms must preserve hidden style and stable dimension targets");
+    require(window.selectEntity(dimension_id), "hidden dimensions must remain selectable for editing");
+    process_events();
+    const auto capture = qEnvironmentVariable("SKETCH_DIMENSION_CAPTURE");
+    if (!capture.isEmpty()) {
+        auto* group = window.findChild<QWidget*>("dimensionProperties");
+        require(group && group->grab().save(capture), "dimension inspector screenshot must save");
+    }
+}
+
 void install_test_font() {
     const auto font_id = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"));
     require(font_id >= 0, "boundary workflow test must load the bundled Inter font");
@@ -1156,6 +1243,7 @@ int main(int argc, char** argv) {
         test_off_grid_define_first_pending_dimension_preview_and_placement();
         test_off_grid_snapped_commit_in_each_workspace();
         test_receipt_boundary_offset_copy();
+        test_dimension_presentation_editing();
         std::cout << "Boundary workflow event tests passed\n";
         return 0;
     } catch (const std::exception& error) {

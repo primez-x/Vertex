@@ -219,6 +219,11 @@ public:
     [[nodiscard]] bool editSelectedHeight(const QString& expression);
     [[nodiscard]] bool editSelectedThickness(const QString& expression);
     [[nodiscard]] bool editSelectedFactor(const QString& expression);
+    // Edits only the dimension's placement and presentation, preserving its
+    // stable source target. X/Y use the current input units unless suffixed.
+    [[nodiscard]] bool editBoundaryDimension(const QString& id, const QString& x,
+        const QString& y, const QString& height_mm, const QString& color,
+        bool bold, bool italic, bool visible, const QString& rotation_degrees);
     // Stores bounded string attributes on the selected closed boundary. The
     // JSON object remains inspectable in the native project format and the
     // update uses the normal undoable Document history.

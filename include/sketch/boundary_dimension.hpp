@@ -9,7 +9,7 @@
 
 namespace sketch {
 
-enum class BoundaryDimensionFormat { supported_v1, unsupported_version };
+enum class BoundaryDimensionFormat { supported_v1, supported_v2, unsupported_version };
 
 struct BoundaryDimensionVersion {
     BoundaryDimensionFormat format{};
@@ -29,6 +29,17 @@ struct BoundaryDimensionResolution {
     [[nodiscard]] double segment_length() const noexcept { return segment_length_metres; }
 };
 
+struct BoundaryDimensionPresentation {
+    double text_height_mm{2.5};
+    std::string color{"#263241"};
+    bool bold{};
+    bool italic{};
+    bool visible{true};
+    double rotation_radians{};
+
+    bool operator==(const BoundaryDimensionPresentation&) const = default;
+};
+
 struct BoundaryDimension {
     std::string id;
     std::string boundary_id;
@@ -36,12 +47,14 @@ struct BoundaryDimension {
     Vec2 text_position;
     BoundaryDimensionPlacement placement{BoundaryDimensionPlacement::manual};
     std::optional<std::uint32_t> automatic_placement_version;
+    std::optional<BoundaryDimensionPresentation> presentation;
 
     bool operator==(const BoundaryDimension& other) const noexcept {
         return id == other.id && boundary_id == other.boundary_id &&
                segment_id == other.segment_id && text_position.x == other.text_position.x &&
                text_position.y == other.text_position.y && placement == other.placement &&
-               automatic_placement_version == other.automatic_placement_version;
+               automatic_placement_version == other.automatic_placement_version &&
+               presentation == other.presentation;
     }
 
     // Resolves the exact stable source segment and derives its current
@@ -50,7 +63,7 @@ struct BoundaryDimension {
 };
 
 // Unsupported future versions or dimension kinds remain opaque and retain
-// their complete source entity. Malformed known v1 data throws
+// their complete source entity. Malformed known v1/v2 data throws
 // std::invalid_argument rather than being partially decoded.
 struct BoundaryDimensionDecodeResult {
     std::optional<BoundaryDimension> dimension;

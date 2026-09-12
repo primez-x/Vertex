@@ -7366,6 +7366,89 @@ public:
         dialog.exec();
     }
 
+    QString dimensionCoordinateText(double metres) const {
+        return format_length(metres, m_metric_units);
+    }
+
+    bool editBoundaryDimension(const QString& id, const QString& x, const QString& y,
+        const QString& height_mm, const QString& color, bool bold, bool italic,
+        bool visible, const QString& rotation_degrees) {
+        try {
+            if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
+            if (m_boundary_session || m_pending_wall_start)
+                throw std::invalid_argument("Finish or cancel active drawing input before editing a dimension.");
+            const auto source = authoringSnapshot();
+            const auto found = source.entities().find(id.toStdString());
+            if (found == source.entities().end()) throw std::invalid_argument("The dimension was not found.");
+            const auto decoded = decode_boundary_dimension_entity(found->second);
+            if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+            auto dimension = *decoded.dimension;
+            const auto boundary = source.entities().find(dimension.boundary_id);
+            if (boundary == source.entities().end()) throw std::invalid_argument("The source boundary is missing.");
+            (void)dimension.resolve(boundary->second);
+            const auto coordinate = [&](const QString& expression, double original) {
+                // Displaying a double in feet must not round-trip an untouched
+                // coordinate through a rational parser or change automatic origin.
+                const auto text = expression.trimmed();
+                const auto raw_metres = QString::number(original, 'g', 17);
+                if (text == dimensionCoordinateText(original) || text == raw_metres + QStringLiteral(" m") ||
+                    text == raw_metres + QStringLiteral("m")) return original;
+                const auto value = parse_quantity(expression.toStdString(),
+                    m_metric_units ? Unit::metre : Unit::foot).metres;
+                if (!std::isfinite(value)) throw std::invalid_argument("Position must be finite.");
+                return value;
+            };
+            const Vec2 position{coordinate(x, dimension.text_position.x), coordinate(y, dimension.text_position.y)};
+            const auto finite = [](const QString& expression, const char* diagnostic) {
+                bool ok = false;
+                const auto value = expression.trimmed().toDouble(&ok);
+                if (!ok || !std::isfinite(value)) throw std::invalid_argument(diagnostic);
+                return value;
+            };
+            auto presentation = dimension.presentation.value_or(BoundaryDimensionPresentation{});
+            const auto original_presentation = presentation;
+            presentation.text_height_mm = finite(height_mm, "Text height must be finite millimetres.");
+            if (presentation.text_height_mm < 0.5 || presentation.text_height_mm > 20.0)
+                throw std::invalid_argument("Text height must be between 0.5 and 20 mm.");
+            const auto color_text = color.trimmed();
+            if (color_text.size() != 7 || !color_text.startsWith('#') ||
+                !std::all_of(color_text.cbegin() + 1, color_text.cend(), [](QChar character) {
+                    const auto value = character.unicode();
+                    return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f') ||
+                           (value >= 'A' && value <= 'F');
+                })) throw std::invalid_argument("Color must use #RRGGBB hexadecimal notation.");
+            presentation.color = color_text.toStdString();
+            presentation.bold = bold;
+            presentation.italic = italic;
+            presentation.visible = visible;
+            const auto degrees = finite(rotation_degrees, "Rotation must be finite degrees.");
+            if (rotation_degrees.trimmed() != QString::number(
+                    original_presentation.rotation_radians * 180.0 / std::numbers::pi, 'g', 12))
+                presentation.rotation_radians = degrees * (std::numbers::pi / 180.0);
+            if (!std::isfinite(presentation.rotation_radians))
+                throw std::invalid_argument("Rotation must be finite.");
+            if (position.x != dimension.text_position.x || position.y != dimension.text_position.y) {
+                dimension.text_position = position;
+                dimension.placement = BoundaryDimensionPlacement::manual;
+                dimension.automatic_placement_version.reset();
+            }
+            if (dimension.presentation || presentation != original_presentation) dimension.presentation = presentation;
+            const auto replacement = encode_boundary_dimension_entity(dimension, &found->second);
+            if (replacement != found->second) {
+                const auto command = ApplyEntityChanges{source.revision(),
+                    {EntityChange::upsert(replacement)}, {}, "Edit boundary dimension"};
+                (void)Document::preview_command(source, command);
+                applyDocumentCommand(command);
+                refresh();
+            }
+            clearError();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Dimension: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     bool editSelectedBuildingDimensions() {
         const auto fail = [this](const QString& message) {
             setError(message);
@@ -8277,7 +8360,7 @@ public:
                 }
                 const auto viewport_center = viewport_canvas->contentCenter();
                 viewport_canvas->renderSceneAt(painter, viewport_rect, model_scale,
-                                               viewport_center, Qt::white);
+                                               viewport_center, Qt::white, paper_scale);
                 painter.restore();
                 painter.setPen(QPen(QColor(115, 125, 138), std::max(1.0, paper_scale * 0.6)));
                 painter.drawRect(viewport_rect);
@@ -11660,6 +11743,61 @@ private:
         form->addRow(QStringLiteral("Thickness"), m_thickness_edit);
         inspector_layout->addLayout(form);
 
+        m_dimension_properties_group = new QGroupBox(QStringLiteral("Dimension"), inspector_body);
+        m_dimension_properties_group->setObjectName(QStringLiteral("dimensionProperties"));
+        auto* dimension_form = new QFormLayout(m_dimension_properties_group);
+        dimension_form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+        dimension_form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        const auto add_dimension_field = [&](const char* name, const QString& label) {
+            auto* field = new QLineEdit(m_dimension_properties_group);
+            field->setObjectName(QString::fromLatin1(name));
+            field->setAccessibleName(label);
+            field->setMinimumWidth(0);
+            dimension_form->addRow(label, field);
+            return field;
+        };
+        m_dimension_x_edit = add_dimension_field("dimensionPositionX", QStringLiteral("Position X"));
+        m_dimension_y_edit = add_dimension_field("dimensionPositionY", QStringLiteral("Position Y"));
+        m_dimension_height_edit = add_dimension_field("dimensionTextHeightMm", QStringLiteral("Text height (mm)"));
+        m_dimension_color_edit = add_dimension_field("dimensionColor", QStringLiteral("Color (#RRGGBB)"));
+        m_dimension_rotation_edit = add_dimension_field("dimensionRotationDegrees", QStringLiteral("Rotation (degrees)"));
+        auto* dimension_flags = new QWidget(m_dimension_properties_group);
+        auto* dimension_flag_layout = new QHBoxLayout(dimension_flags);
+        dimension_flag_layout->setContentsMargins(0, 0, 0, 0);
+        m_dimension_bold_check = new QCheckBox(QStringLiteral("Bold"), dimension_flags);
+        m_dimension_bold_check->setObjectName(QStringLiteral("dimensionBold"));
+        m_dimension_italic_check = new QCheckBox(QStringLiteral("Italic"), dimension_flags);
+        m_dimension_italic_check->setObjectName(QStringLiteral("dimensionItalic"));
+        m_dimension_visible_check = new QCheckBox(QStringLiteral("Visible"), dimension_flags);
+        m_dimension_visible_check->setObjectName(QStringLiteral("dimensionVisible"));
+        dimension_flag_layout->addWidget(m_dimension_bold_check);
+        dimension_flag_layout->addWidget(m_dimension_italic_check);
+        dimension_flag_layout->addWidget(m_dimension_visible_check);
+        dimension_form->addRow(dimension_flags);
+        auto* apply_dimension = new QPushButton(QStringLiteral("Apply dimension"), m_dimension_properties_group);
+        apply_dimension->setObjectName(QStringLiteral("applyBoundaryDimension"));
+        dimension_form->addRow(apply_dimension);
+        m_dimension_error = new QLabel(m_dimension_properties_group);
+        m_dimension_error->setObjectName(QStringLiteral("dimensionPropertiesError"));
+        m_dimension_error->setWordWrap(true);
+        dimension_form->addRow(m_dimension_error);
+        inspector_layout->addWidget(m_dimension_properties_group);
+        QObject::connect(apply_dimension, &QPushButton::clicked, owner, [this] {
+            if (!m_dimension_edit_context || !modalContextUnchanged(*m_dimension_edit_context)) {
+                m_dimension_error->setText(QStringLiteral("The dimension editing context changed. Reselect the dimension before applying changes."));
+                m_dimension_error->show();
+                return;
+            }
+            if (!editBoundaryDimension(m_dimension_edit_context->selected_id,
+                    m_dimension_x_edit->text(), m_dimension_y_edit->text(), m_dimension_height_edit->text(),
+                    m_dimension_color_edit->text(), m_dimension_bold_check->isChecked(),
+                    m_dimension_italic_check->isChecked(), m_dimension_visible_check->isChecked(),
+                    m_dimension_rotation_edit->text())) {
+                m_dimension_error->setText(lastError());
+                m_dimension_error->show();
+            }
+        });
+
         auto* keypad = new QPushButton(QStringLiteral("Measurement keypad…"), inspector_body);
         keypad->setObjectName(QStringLiteral("measurementKeypad"));
         keypad->setAccessibleName(QStringLiteral("Open measurement keypad"));
@@ -12006,9 +12144,19 @@ private:
                     if (source == snapshot.entities().end())
                         throw std::invalid_argument("source boundary is missing");
                     const auto resolved = dimension.resolve(source->second);
-                    all_labels.push_back({id_from(id), dimension.text_position,
+                    if (dimension.presentation && !dimension.presentation->visible) continue;
+                    CanvasLabel label{id_from(id), dimension.text_position,
                         format_length(resolved.segment_length_metres, m_metric_units),
-                        id_from(id) == m_selected_id});
+                        id_from(id) == m_selected_id};
+                    if (dimension.presentation) {
+                        const auto& presentation = *dimension.presentation;
+                        label.paper_height_mm = presentation.text_height_mm;
+                        label.color = QColor(QString::fromStdString(presentation.color));
+                        label.bold = presentation.bold;
+                        label.italic = presentation.italic;
+                        label.rotation_radians = presentation.rotation_radians;
+                    }
+                    all_labels.push_back(std::move(label));
                 } catch (const std::exception& error) {
                     append_geometry_error(QStringLiteral("Dimension %1: %2")
                         .arg(id_from(id), QString::fromUtf8(error.what())));
@@ -12853,6 +13001,36 @@ private:
         const auto entity = selectedEntity();
         const auto editable = m_document->is_editable();
         const auto inspector_snapshot = m_document->snapshot();
+        m_dimension_edit_context.reset();
+        m_dimension_properties_group->hide();
+        m_dimension_error->hide();
+        if (entity && can_recognize_boundary_dimension_entity_type(entity->type)) {
+            try {
+                const auto decoded = decode_boundary_dimension_entity(*entity);
+                if (decoded.supported()) {
+                    const auto& dimension = *decoded.dimension;
+                    const auto presentation = dimension.presentation.value_or(BoundaryDimensionPresentation{});
+                    m_dimension_x_edit->setText(dimensionCoordinateText(dimension.text_position.x));
+                    m_dimension_y_edit->setText(dimensionCoordinateText(dimension.text_position.y));
+                    const auto unit_hint = m_metric_units ? QStringLiteral("Metres unless a unit suffix is entered") :
+                                                           QStringLiteral("Feet unless a unit suffix is entered");
+                    m_dimension_x_edit->setToolTip(unit_hint);
+                    m_dimension_y_edit->setToolTip(unit_hint);
+                    m_dimension_height_edit->setText(QString::number(presentation.text_height_mm, 'g', 17));
+                    m_dimension_color_edit->setText(QString::fromStdString(presentation.color));
+                    m_dimension_rotation_edit->setText(QString::number(
+                        presentation.rotation_radians * 180.0 / std::numbers::pi, 'g', 12));
+                    m_dimension_bold_check->setChecked(presentation.bold);
+                    m_dimension_italic_check->setChecked(presentation.italic);
+                    m_dimension_visible_check->setChecked(presentation.visible);
+                    m_dimension_edit_context = captureModalContext();
+                    m_dimension_properties_group->setEnabled(editable && !m_boundary_session && !m_pending_wall_start);
+                    m_dimension_properties_group->show();
+                }
+            } catch (const std::exception&) {
+                // Malformed dimensions are diagnosed by the plan projection.
+            }
+        }
         std::optional<QString> annotation_context;
         std::optional<LabelInstance> selected_annotation_label;
         std::optional<SymbolInstance> selected_annotation_symbol;
@@ -14170,6 +14348,17 @@ private:
     visualization::NativeModelView* m_nativeModelView{};
     QScrollArea* m_inspector{};
     QFormLayout* m_geometry_form{};
+    QGroupBox* m_dimension_properties_group{};
+    QLineEdit* m_dimension_x_edit{};
+    QLineEdit* m_dimension_y_edit{};
+    QLineEdit* m_dimension_height_edit{};
+    QLineEdit* m_dimension_color_edit{};
+    QLineEdit* m_dimension_rotation_edit{};
+    QCheckBox* m_dimension_bold_check{};
+    QCheckBox* m_dimension_italic_check{};
+    QCheckBox* m_dimension_visible_check{};
+    QLabel* m_dimension_error{};
+    std::optional<ModalContext> m_dimension_edit_context;
     QGroupBox* m_calculation_group{};
     QGroupBox* m_profile_group{};
     QLabel* m_inspector_context{};
@@ -14537,6 +14726,13 @@ bool MainWindow::editSelectedThickness(const QString& expression) {
 
 bool MainWindow::editSelectedFactor(const QString& expression) {
     return m_impl->editSelectedFactor(expression);
+}
+
+bool MainWindow::editBoundaryDimension(const QString& id, const QString& x,
+    const QString& y, const QString& height_mm, const QString& color,
+    bool bold, bool italic, bool visible, const QString& rotation_degrees) {
+    return m_impl->editBoundaryDimension(id, x, y, height_mm, color,
+        bold, italic, visible, rotation_degrees);
 }
 
 bool MainWindow::setSelectedCalculationRule(bool include_in_building, bool include_in_living) {

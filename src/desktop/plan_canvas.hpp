@@ -42,6 +42,14 @@ struct CanvasLabel {
     double rotation_radians{};
     double scale{1.0};
     double text_height_metres{0.15};
+    // Positive finite values specify a fixed paper font size in millimetres;
+    // zero retains legacy model-height sizing. Paper size ignores model zoom
+    // and instance scale, using the fitted sheet scale when supplied,
+    // otherwise output-device DPI or interactive widget DPI.
+    double paper_height_mm{};
+    QColor color{}; // Invalid retains the canvas/output theme color.
+    bool bold{};
+    bool italic{};
 };
 
 // A raster underlay is a retained presentation value sourced from a
@@ -119,9 +127,12 @@ public:
                      QColor background) const;
     // Renders a committed scene at an explicit model-to-device scale and
     // center. This is used by persisted sheet viewports so paper scale is
-    // independent from the interactive canvas zoom.
+    // independent from the interactive canvas zoom. A finite positive paper
+    // pixels/mm override sizes paper labels to the fitted sheet; absent or
+    // invalid overrides retain output-device DPI sizing.
     void renderSceneAt(QPainter& painter, const QRectF& viewport, double scale,
-                       Vec2 view_center, QColor background) const;
+                       Vec2 view_center, QColor background,
+                       std::optional<double> paper_pixels_per_mm = std::nullopt) const;
     [[nodiscard]] Vec2 contentCenter() const noexcept;
 
     void setPointClicked(std::function<void(Vec2)> callback);
@@ -157,12 +168,14 @@ private:
                     QColor background) const;
     void drawSegment(QPainter& painter, const Segment& segment) const;
     void drawLabels(QPainter& painter, const QRectF& viewport, double scale,
-                    Vec2 view_center, bool output, QColor background) const;
+                    Vec2 view_center, bool output, QColor background,
+                    std::optional<double> paper_pixels_per_mm) const;
     void drawReference(QPainter& painter, const CanvasReference& reference) const;
     void renderSceneWithTransform(QPainter& painter, const QRectF& viewport,
                                   bool fit_to_content, QColor background,
                                   std::optional<double> explicit_scale,
-                                  std::optional<Vec2> explicit_center) const;
+                                  std::optional<Vec2> explicit_center,
+                                  std::optional<double> paper_pixels_per_mm = std::nullopt) const;
 
     std::vector<CanvasEntity> m_entities;
     std::vector<CanvasLabel> m_labels;

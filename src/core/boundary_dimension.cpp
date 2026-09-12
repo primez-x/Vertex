@@ -162,7 +162,36 @@ std::optional<BoundaryDimensionPlacement> placement_from_name(std::string_view n
     return std::nullopt;
 }
 
+void validate_presentation(const BoundaryDimensionPresentation& value) {
+    if (!std::isfinite(value.text_height_mm) || value.text_height_mm < 0.5 || value.text_height_mm > 20.0)
+        invalid("dimension text height must be between 0.5 and 20 millimetres");
+    if (value.color.size() != 7 || value.color.front() != '#' ||
+        !std::all_of(value.color.begin() + 1, value.color.end(), [](unsigned char c) {
+            return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+        }))
+        invalid("dimension color must be a #RRGGBB hexadecimal color");
+    if (!std::isfinite(value.rotation_radians)) invalid("dimension text rotation must be finite");
+}
+
+BoundaryDimensionPresentation decode_presentation(const Json& value) {
+    if (!value.is_object() || value.size() != 6)
+        invalid("dimension presentation must contain exactly six fields");
+    const auto boolean = [&](std::string_view key) {
+        const auto& field = required_property(value, key);
+        if (!field.is_boolean()) invalid("dimension presentation " + std::string(key) + " must be boolean");
+        return field.get<bool>();
+    };
+    BoundaryDimensionPresentation result{
+        json_finite_double(required_property(value, "text_height_mm"), "dimension text height must be finite"),
+        json_string(required_property(value, "color"), "dimension color must be a string"),
+        boolean("bold"), boolean("italic"), boolean("visible"),
+        json_finite_double(required_property(value, "rotation_radians"), "dimension text rotation must be finite")};
+    validate_presentation(result);
+    return result;
+}
+
 void validate_model(const BoundaryDimension& dimension) {
+    if (dimension.presentation) validate_presentation(*dimension.presentation);
     if (!valid_identifier(dimension.id)) {
         invalid("dimension id is empty or invalid");
     }
@@ -228,6 +257,9 @@ BoundaryDimensionVersion inspect_boundary_dimension_version(const Entity& entity
     }
     if (version == 1) {
         return {BoundaryDimensionFormat::supported_v1, version, {}};
+    }
+    if (version == 2) {
+        return {BoundaryDimensionFormat::supported_v2, version, {}};
     }
     return {BoundaryDimensionFormat::unsupported_version, version,
             "unsupported boundary dimension version " + std::to_string(version)};
@@ -296,6 +328,8 @@ BoundaryDimensionDecodeResult decode_boundary_dimension_entity(const Entity& ent
         .placement = *placement,
         .automatic_placement_version = automatic_version,
     };
+    if (version == 2)
+        result.presentation = decode_presentation(required_property(entity.properties, "presentation"));
     validate_model(result);
     return BoundaryDimensionDecodeResult{
         .dimension = std::move(result),
@@ -319,11 +353,21 @@ Entity encode_boundary_dimension_entity(const BoundaryDimension& dimension,
         if (!previous.supported()) {
             invalid("cannot encode over unsupported dimension semantics");
         }
+        if (previous.version == 2 && !dimension.presentation)
+            invalid("cannot remove version two dimension presentation");
+        if (previous.version == 1 && dimension.presentation && original->properties.contains("presentation"))
+            invalid("dimension presentation upgrade would overwrite opaque version one metadata");
         result = *original;
     }
 
     auto& properties = result.properties;
-    properties["dimension_version"] = 1;
+    properties["dimension_version"] = dimension.presentation ? 2 : 1;
+    if (dimension.presentation) {
+        const auto& value = *dimension.presentation;
+        properties["presentation"] = {{"text_height_mm", value.text_height_mm}, {"color", value.color},
+            {"bold", value.bold}, {"italic", value.italic}, {"visible", value.visible},
+            {"rotation_radians", value.rotation_radians}};
+    }
     properties["dimension_kind"] = "segment_length";
     Json target = Json::object();
     const auto previous_target = properties.find("target");

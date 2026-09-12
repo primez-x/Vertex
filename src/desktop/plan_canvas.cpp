@@ -7,6 +7,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPaintEvent>
+#include <QTransform>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -25,6 +26,53 @@ constexpr double minimum_scale = 0.0001;
 constexpr double maximum_scale = 4000.0;
 constexpr double output_minimum_scale = minimum_scale;
 constexpr double pi = std::numbers::pi;
+
+bool drawable_label(const CanvasLabel& label) {
+    return !label.text.isEmpty() && std::isfinite(label.position.x) &&
+           std::isfinite(label.position.y);
+}
+
+struct LabelLayout {
+    QFont font;
+    QRectF bounds;
+};
+
+LabelLayout label_layout(const CanvasLabel& label, QFont base_font,
+                         const QPaintDevice* device, double scale, double dpi) {
+    const auto paper_pixels = label.paper_height_mm * dpi / 25.4;
+    const bool paper = std::isfinite(paper_pixels) && paper_pixels > 0.0 &&
+                       paper_pixels <= std::numeric_limits<int>::max();
+    if (paper) {
+        // Do not apply the legacy screen-readability clamp to physical text:
+        // a 600-DPI printer needs more pixels than the screen for the same mm.
+        base_font.setPixelSize(static_cast<int>(std::lround(std::max(1.0, paper_pixels))));
+        base_font.setBold(label.bold);
+        base_font.setItalic(label.italic);
+    } else {
+        const auto text_height = std::isfinite(label.text_height_metres) &&
+                                 label.text_height_metres > 0.0 ? label.text_height_metres : 0.15;
+        const auto instance_scale = std::isfinite(label.scale) && label.scale > 0.0 ? label.scale : 1.0;
+        base_font.setPixelSize(static_cast<int>(std::lround(
+            std::clamp(text_height * scale * instance_scale, 8.0, 96.0))));
+        if (label.bold) base_font.setBold(true);
+        if (label.italic) base_font.setItalic(true);
+    }
+    const QFontMetricsF metrics(base_font, device);
+    auto bounds = metrics.boundingRect(label.text);
+    bounds.moveCenter(QPointF(0.0, 0.0));
+    bounds.adjust(-5.0, -3.0, 5.0, 3.0);
+    return {base_font, bounds};
+}
+
+QTransform label_transform(const CanvasLabel& label, QPointF center) {
+    QTransform transform;
+    transform.translate(center.x(), center.y());
+    if (std::isfinite(label.rotation_radians)) {
+        // Model coordinates are y-up while Qt device coordinates are y-down.
+        transform.rotate(-label.rotation_radians * 180.0 / pi);
+    }
+    return transform;
+}
 
 double distance(Vec2 left, Vec2 right) {
     return std::hypot(left.x - right.x, left.y - right.y);
@@ -321,12 +369,14 @@ void PlanCanvas::renderScene(QPainter& painter, const QRectF& viewport, bool fit
 }
 
 void PlanCanvas::renderSceneAt(QPainter& painter, const QRectF& viewport, double scale,
-                               Vec2 view_center, QColor background) const {
+                               Vec2 view_center, QColor background,
+                               std::optional<double> paper_pixels_per_mm) const {
     if (!(std::isfinite(scale) && scale > 0.0) || !std::isfinite(view_center.x) ||
         !std::isfinite(view_center.y)) {
         return;
     }
-    renderSceneWithTransform(painter, viewport, false, background, scale, view_center);
+    renderSceneWithTransform(painter, viewport, false, background, scale, view_center,
+                             paper_pixels_per_mm);
 }
 
 Vec2 PlanCanvas::contentCenter() const noexcept {
@@ -338,7 +388,8 @@ Vec2 PlanCanvas::contentCenter() const noexcept {
 void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewport,
                                           bool fit_to_content, QColor background,
                                           std::optional<double> explicit_scale,
-                                          std::optional<Vec2> explicit_center) const {
+                                          std::optional<Vec2> explicit_center,
+                                          std::optional<double> paper_pixels_per_mm) const {
     if (viewport.width() <= 0.0 || viewport.height() <= 0.0) {
         return;
     }
@@ -432,7 +483,8 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     // Committed labels use the same model-to-screen mapping as the current
     // scene, including fit-to-content output. Drawing after restoring the
     // world transform keeps text upright and readable at its device scale.
-    drawLabels(painter, viewport, scale, view_center, fit_to_content, background);
+    drawLabels(painter, viewport, scale, view_center,
+               fit_to_content || explicit_scale.has_value(), background, paper_pixels_per_mm);
 
     if (!fit_to_content) {
         QString instruction;
@@ -780,13 +832,21 @@ QString PlanCanvas::hitTest(QPointF point) const {
             }
         }
     }
-    // Labels are retained presentation entities and use the same spatial
-    // selection path as geometry. Keep the hit radius in device pixels so
-    // selection remains stable across zoom and DPI changes.
+    // Measure the same font and padded rotated rectangle as interactive paint.
+    // Retain the geometry selection tolerance outside that painted rectangle.
     for (const auto& label : m_labels) {
+        if (!drawable_label(label)) continue;
         const auto screen = toScreen(label.position, rect());
-        const auto candidate = std::hypot(point.x() - screen.x(), point.y() - screen.y());
-        if (candidate < best) {
+        const auto layout = label_layout(label, font(), this, m_scale, logicalDpiY());
+        const auto local = label_transform(label, screen).inverted().map(point);
+        const auto dx = std::max({layout.bounds.left() - local.x(), 0.0,
+                                  local.x() - layout.bounds.right()});
+        const auto dy = std::max({layout.bounds.top() - local.y(), 0.0,
+                                  local.y() - layout.bounds.bottom()});
+        const auto candidate = std::hypot(dx, dy);
+        // Labels paint after geometry; a hit inside their painted rectangle
+        // wins a zero-distance tie, including later overlapping labels.
+        if (candidate < best || candidate == 0.0) {
             best = candidate;
             result = label.id;
         }
@@ -913,7 +973,8 @@ void PlanCanvas::drawSegment(QPainter& painter, const Segment& segment) const {
 }
 
 void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double scale,
-                            Vec2 view_center, bool output, QColor background) const {
+                            Vec2 view_center, bool output, QColor background,
+                            std::optional<double> paper_pixels_per_mm) const {
     if (m_labels.empty() || !(scale > 0.0) || !std::isfinite(scale)) {
         return;
     }
@@ -924,34 +985,30 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
 
     painter.save();
     painter.setRenderHint(QPainter::TextAntialiasing, true);
+    const auto legacy_font = painter.font();
+    const auto* metrics_device = output ? painter.device() : static_cast<const QPaintDevice*>(this);
+    double dpi = output ? painter.device()->logicalDpiY() : logicalDpiY();
+    if (output && paper_pixels_per_mm.has_value() && *paper_pixels_per_mm > 0.0 &&
+        std::isfinite(*paper_pixels_per_mm * 25.4)) {
+        // Fitted sheet previews need their page's paper transform, which can
+        // differ from device DPI. Model scale remains independent of this.
+        dpi = *paper_pixels_per_mm * 25.4;
+    }
     for (const auto& label : m_labels) {
-        if (label.text.isEmpty() || !std::isfinite(label.position.x) ||
-            !std::isfinite(label.position.y)) {
-            continue;
-        }
-        QFont font = painter.font();
-        const auto text_height = std::isfinite(label.text_height_metres) &&
-                                         label.text_height_metres > 0.0
-                                     ? label.text_height_metres
-                                     : 0.15;
-        const auto instance_scale = std::isfinite(label.scale) && label.scale > 0.0
-                                        ? label.scale
-                                        : 1.0;
-        const auto pixel_height = std::clamp(text_height * scale * instance_scale, 8.0, 96.0);
-        font.setPixelSize(static_cast<int>(std::lround(pixel_height)));
-        painter.setFont(font);
-        const QFontMetricsF metrics(font);
-        auto bounds = metrics.boundingRect(label.text);
-        bounds.moveCenter(QPointF(0.0, 0.0));
-        bounds.adjust(-5.0, -3.0, 5.0, 3.0);
+        if (!drawable_label(label)) continue;
+        const auto paper = std::isfinite(label.paper_height_mm) && label.paper_height_mm > 0.0;
+        const auto layout = label_layout(label, paper ? font() : legacy_font,
+                                          metrics_device, scale, dpi);
+        painter.setFont(layout.font);
+        const auto& bounds = layout.bounds;
         const auto center = to_screen(label.position);
         painter.save();
-        painter.translate(center);
-        if (std::isfinite(label.rotation_radians)) {
-            // Model coordinates are y-up while the Qt viewport is y-down.
-            painter.rotate(-label.rotation_radians * 180.0 / 3.14159265358979323846);
+        painter.setTransform(label_transform(label, center), true);
+        if (!output && label.selected) {
+            painter.setPen(QPen(QColor(37, 99, 235), 1.0));
+        } else {
+            painter.setPen(Qt::NoPen);
         }
-        painter.setPen(Qt::NoPen);
         const auto label_background = output
             ? background
             : background.lightnessF() > 0.5
@@ -959,7 +1016,8 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
                 : QColor(20, 25, 34, 225);
         painter.setBrush(label_background);
         painter.drawRoundedRect(bounds, 3.0, 3.0);
-        painter.setPen(output ? (background.lightnessF() > 0.5 ? QColor(25, 25, 25)
+        painter.setPen(label.color.isValid() ? label.color
+                       : output ? (background.lightnessF() > 0.5 ? QColor(25, 25, 25)
                                                                 : QColor(255, 239, 172))
                               : label.selected ? QColor(37, 99, 235)
                                                 : background.lightnessF() > 0.5

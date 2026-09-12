@@ -315,6 +315,123 @@ void test_encoder_rejects_invalid_models_and_preserves_identity() {
     }, "encoder must reject an original entity with another stable id");
 }
 
+void test_presentation_versioning_round_trip_and_metadata() {
+    auto model = manual_dimension();
+    auto original = sketch::encode_boundary_dimension_entity(model);
+    require(original.properties.at("dimension_version") == 1 && !original.properties.contains("presentation"),
+            "absent presentation must preserve version one encoding");
+    original.required = true;
+    original.properties["vendor"] = json{{"number",1.0}};
+    original.properties["target"]["vendor"] = "keep";
+    original.extensions["vendor"] = json{{"number",1.0}};
+    model.presentation = sketch::BoundaryDimensionPresentation{4.5,"#Ab09fF",true,true,false,-0.37};
+    const auto upgraded = sketch::encode_boundary_dimension_entity(model, &original);
+    require(upgraded.properties.at("dimension_version") == 2 &&
+            sketch::inspect_boundary_dimension_version(upgraded).format == BoundaryDimensionFormat::supported_v2,
+            "presentation must explicitly upgrade model version");
+    const auto decoded = sketch::decode_boundary_dimension_entity(upgraded);
+    require(decoded.supported() && decoded.version == 2 && decoded.dimension == model,
+            "presentation must round-trip exactly with case-preserved color");
+    require(upgraded.required && upgraded.properties.at("vendor").dump() == original.properties.at("vendor").dump() &&
+            upgraded.properties.at("target").at("vendor") == "keep" &&
+            upgraded.extensions.dump() == original.extensions.dump(), "presentation upgrade must preserve metadata");
+    auto moved = *decoded.dimension;
+    moved.text_position = sketch::transform_point(moved.text_position, {{1,2},0.7,true,false,{3,4}});
+    const auto moved_entity = sketch::encode_boundary_dimension_entity(moved, &upgraded);
+    require(sketch::decode_boundary_dimension_entity(moved_entity).dimension == moved &&
+            moved_entity.properties.at("presentation").dump() == upgraded.properties.at("presentation").dump(),
+            "dimension geometry transformations must preserve presentation");
+    require(model.resolve(sketch::encode_identified_boundary_entity(rectangle_model())).segment_length() == 4,
+            "presentation must not affect canonical length resolution");
+    auto document = sketch::Document::create({sketch::encode_identified_boundary_entity(rectangle_model()), original});
+    document.apply(sketch::ApplyEntityChanges{0,{sketch::EntityChange::upsert(upgraded)},{},"Style dimension"});
+    const auto snapshot = document.snapshot();
+    require(sketch::Document::fork(snapshot).snapshot().entities().at(model.id).properties.dump() == upgraded.properties.dump(),
+            "document restoration must retain version two presentation");
+    document.undo(document.revision());
+    require(document.snapshot().entities().at(model.id).properties.dump() == original.properties.dump(),
+            "style undo must restore exact version one properties");
+    document.redo(document.revision());
+    require(document.snapshot().entities().at(model.id).properties.dump() == upgraded.properties.dump(),
+            "style redo must restore exact version two properties");
+    auto downgraded = model;
+    downgraded.presentation.reset();
+    require(!(downgraded == model), "presentation must participate in model equality");
+    rejected([&] { (void)sketch::encode_boundary_dimension_entity(downgraded, &upgraded); },
+             "encoder cannot silently downgrade version two");
+    for (const auto& opaque : {json("vendor style"),json::object(),upgraded.properties.at("presentation")}) {
+        auto collision = original;
+        collision.properties["presentation"] = opaque;
+        const auto legacy = sketch::decode_boundary_dimension_entity(collision);
+        require(legacy.supported() && !legacy.dimension->presentation,
+                "version one presentation-looking vendor property must remain opaque");
+        const auto retained = sketch::encode_boundary_dimension_entity(*legacy.dimension, &collision);
+        require(retained.properties.at("presentation").dump() == opaque.dump(),
+                "version one encoding must retain colliding vendor property exactly");
+        rejected([&] { (void)sketch::encode_boundary_dimension_entity(model, &collision); },
+                 "upgrading may not reinterpret or overwrite even a matching vendor property");
+    }
+    auto future = upgraded;
+    future.properties["dimension_version"] = 3;
+    future.properties["presentation"] = "opaque future semantics";
+    require(!sketch::decode_boundary_dimension_entity(future).supported() &&
+            sketch::decode_boundary_dimension_entity(future).original_entity == future,
+            "future presentation must remain fully opaque");
+    future = upgraded;
+    future.properties["dimension_kind"] = "future_kind";
+    future.properties["presentation"] = "opaque future kind";
+    require(!sketch::decode_boundary_dimension_entity(future).supported(),
+            "future kinds must not acquire version two presentation semantics");
+}
+
+void test_presentation_validation_is_strict() {
+    auto model = manual_dimension();
+    model.presentation = sketch::BoundaryDimensionPresentation{};
+    const auto base = sketch::encode_boundary_dimension_entity(model);
+    require(base.properties.at("presentation").size() == 6,
+            "version two presentation must contain exactly the documented fields");
+    auto missing = base;
+    missing.properties.erase("presentation");
+    rejected([&] { (void)sketch::decode_boundary_dimension_entity(missing); }, "version two must require presentation");
+    for (const auto* key : {"text_height_mm","color","bold","italic","visible","rotation_radians"}) {
+        auto bad = base;
+        bad.properties["presentation"].erase(key);
+        rejected([&] { (void)sketch::decode_boundary_dimension_entity(bad); }, "missing presentation field must reject");
+        bad = base;
+        bad.properties["presentation"][key] = nullptr;
+        rejected([&] { (void)sketch::decode_boundary_dimension_entity(bad); }, "null presentation field must reject");
+    }
+    const std::vector<std::pair<std::string,json>> invalid_fields{
+        {"text_height_mm",0.49},{"text_height_mm",20.01},{"text_height_mm","2.5"},
+        {"text_height_mm",std::numeric_limits<double>::infinity()},
+        {"rotation_radians",std::numeric_limits<double>::quiet_NaN()}, {"rotation_radians","0"},
+        {"color","#123"},{"color","#12345678"},{"color","123456"},{"color","#12gg34"},
+        {"color",4},{"bold",1},{"italic","false"},{"visible",0}};
+    for (const auto& [key,value] : invalid_fields) {
+        auto bad = base;
+        bad.properties["presentation"][key] = value;
+        rejected([&] { (void)sketch::decode_boundary_dimension_entity(bad); }, "invalid presentation field must reject");
+    }
+    auto extra = base;
+    extra.properties["presentation"]["vendor"] = true;
+    rejected([&] { (void)sketch::decode_boundary_dimension_entity(extra); }, "unknown presentation fields must reject");
+    for (double height : {0.5,20.0}) {
+        model.presentation->text_height_mm = height;
+        require(sketch::decode_boundary_dimension_entity(sketch::encode_boundary_dimension_entity(model)).dimension == model,
+                "inclusive text height endpoints must be valid");
+    }
+    for (double height : {0.0,20.01,std::numeric_limits<double>::infinity()}) {
+        model.presentation->text_height_mm = height;
+        rejected([&] { (void)sketch::encode_boundary_dimension_entity(model); }, "invalid typed text height must reject");
+    }
+    model.presentation = sketch::BoundaryDimensionPresentation{};
+    model.presentation->color = "red";
+    rejected([&] { (void)sketch::encode_boundary_dimension_entity(model); }, "invalid typed color must reject");
+    model.presentation = sketch::BoundaryDimensionPresentation{};
+    model.presentation->rotation_radians = std::numeric_limits<double>::infinity();
+    rejected([&] { (void)sketch::encode_boundary_dimension_entity(model); }, "nonfinite typed rotation must reject");
+}
+
 }  // namespace
 
 int main() {
@@ -327,5 +444,7 @@ int main() {
     test_unknown_versions_and_kinds_are_explicitly_opaque();
     test_source_boundary_binding_errors_reject();
     test_encoder_rejects_invalid_models_and_preserves_identity();
+    test_presentation_versioning_round_trip_and_metadata();
+    test_presentation_validation_is_strict();
     return 0;
 }
