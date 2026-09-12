@@ -6509,7 +6509,11 @@ public:
     bool editSelectedRoofPanelDimensions(const QString& run_text,
                                          const QString& rise_text,
                                          const QString& thickness_text) {
-        const auto context = captureModalContext();
+        if (!m_roof_edit_context || !modalContextUnchanged(*m_roof_edit_context)) {
+            setError(QStringLiteral("The roof editing context changed. Reselect the roof before applying dimensions."));
+            return false;
+        }
+        const auto context = *m_roof_edit_context;
         const auto original = selectedEntity();
         if (!original || original->type != "roof" ||
             read_string(original->properties, "form") !=
@@ -11875,6 +11879,7 @@ private:
         m_edit_object_button->setEnabled(editable && building_object);
         m_roof_properties_group->setVisible(false);
         m_roof_properties_group->setEnabled(false);
+        m_roof_edit_context.reset();
         m_delete_annotation_button->setVisible(annotation_context.has_value());
         m_delete_annotation_button->setEnabled(editable && annotation_context.has_value());
         m_annotation_group->setVisible(annotation_context.has_value());
@@ -12121,6 +12126,7 @@ private:
         }
         m_inspector_context->setText(context);
         if (sloped_roof_panel) {
+            m_roof_edit_context = captureModalContext();
             m_roof_properties_group->setVisible(true);
             m_roof_properties_group->setEnabled(editable);
             const auto set_roof_value = [&](QLineEdit* field, QString& original_text,
@@ -13035,6 +13041,7 @@ private:
     QString m_roof_run_original_text;
     QString m_roof_rise_original_text;
     QString m_roof_thickness_original_text;
+    std::optional<ModalContext> m_roof_edit_context;
     QGroupBox* m_area_attributes_group{};
     QPlainTextEdit* m_area_attributes_edit{};
     QPushButton* m_apply_area_attributes_button{};

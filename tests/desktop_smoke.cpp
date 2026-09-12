@@ -994,6 +994,41 @@ void test_contextual_roof_dimension_inspector() {
             "contextual roof dimensions should hide for non-roof selections");
     require(window.selectEntity(id) && !group->isHidden(),
             "contextual roof dimensions should return when the roof is reselected");
+    rise->setText(QStringLiteral("2 m"));
+    auto intervening = window.document().snapshot().entities().at(id.toStdString());
+    intervening.properties["span_m"] = 5.0;
+    window.document().apply(ApplyEntityChanges{
+        .expected_revision = window.document().revision(),
+        .entity_changes = {EntityChange::upsert(intervening)},
+        .message = "intervening roof edit before inspector apply",
+    });
+    const auto stale_revision = window.document().revision();
+    apply->click();
+    require(window.document().revision() == stale_revision &&
+                window.document().snapshot().entities().at(id.toStdString()) == intervening,
+            "roof inspector must reject fields populated before an intervening document edit");
+    require(window.selectEntity(id), "refresh roof inspector after stale edit rejection");
+    rise->setText(QStringLiteral("0 m"));
+    apply->click();
+    const auto flattened = window.document().snapshot().entities().at(id.toStdString());
+    require(flattened.properties.at("rise_m") == 0.0 && flattened.properties.at("pitch_rad") == 0.0,
+            "inspector must convert a sloped panel back into a flat roof");
+    for (const auto& invalid : std::vector<std::pair<QLineEdit*, QString>>{
+             {run, QStringLiteral("0 m")}, {thickness, QStringLiteral("0 m")},
+             {rise, QStringLiteral("not a measurement")}}) {
+        require(window.selectEntity(id), "refresh fields for an independent invalid-input case");
+        const auto revision = window.document().revision();
+        invalid.first->setText(invalid.second);
+        apply->click();
+        require(window.document().revision() == revision && !window.lastError().isEmpty() &&
+                    window.document().snapshot().entities().at(id.toStdString()) == flattened,
+                "invalid roof measurements must leave geometry and history unchanged");
+    }
+    QTemporaryDir directory;
+    require(directory.isValid() && window.saveProjectAs(directory.filePath("roof.bldproj")) &&
+                window.openProject(directory.filePath("roof.bldproj")) &&
+                window.document().snapshot().entities().at(id.toStdString()) == flattened,
+            "contextual roof edits and metadata must survive save and reopen exactly");
 }
 
 void test_design_phase_workflow() {

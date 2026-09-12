@@ -111,8 +111,9 @@ pitch/rise pair.  Gable roofs still require a positive rise and pitch.
 The main-window Inspector reuses this same editor path for a selected
 `sloped_roof_panel`. Its `roofProperties` group exposes `roofRun`, `roofRise`,
 `roofThickness`, `roofPitch`, and `applyRoofProperties` without opening a
-second dialog. Applying the group captures the current document revision,
-parses only changed fields, and commits one replacement command. Negative rise,
+second dialog. Populating the group captures the document, revision, selection,
+drawing layer, and units. Applying rejects a changed context before parsing
+changed fields and committing one replacement command. Negative rise,
 zero run, zero thickness, malformed quantities, read-only documents, and stale
 revisions are rejected without mutating history. The group is hidden for gable
 roofs and non-roof selections.
