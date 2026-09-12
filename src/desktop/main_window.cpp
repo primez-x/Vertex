@@ -188,9 +188,9 @@ void remap_clipboard_json(json& value,
     }
 }
 
-// Clipboard identities are schema fields, not arbitrary strings. Unknown
+// Document identities are schema fields, not arbitrary strings. Unknown
 // properties and extensions are opaque user data and must survive unchanged.
-void remap_clipboard_entity(Entity& entity,
+void remap_entity_references(Entity& entity,
                             const std::map<std::string, std::string, std::less<>>& remap) {
     const auto reference = [&](json& object, const char* key) {
         const auto found = object.find(key);
@@ -228,6 +228,23 @@ void remap_clipboard_entity(Entity& entity,
         for (const auto* collection : {"labels", "symbols"})
             for (auto& item : state.at(collection)) reference(item, "id");
         for (auto& item : state.at("overrides")) reference(item, "target_id");
+    }
+    if (entity.type == "room_relationships") {
+        auto& model = properties.at("model");
+        for (auto& item : model.at("references")) reference(item, "id");
+        for (auto& item : model.at("relations")) {
+            reference(item, "source_id");
+            reference(item, "target_id");
+        }
+    }
+    if (entity.type == "model_phases") {
+        auto& model = properties.at("model");
+        reference(model, "entity_ids");
+        reference(model, "baseline_ids");
+        for (auto& item : model.at("alternatives")) {
+            reference(item, "demolished_ids");
+            reference(item, "proposed_ids");
+        }
     }
 }
 
@@ -7294,7 +7311,7 @@ public:
                 auto entity = original;
                 entity.id = remap.at(original.id);
                 if(entity.type!="assembly_model") {
-                    remap_clipboard_entity(entity, remap);
+                    remap_entity_references(entity, remap);
                 }
                 const auto placeable = entity.type == "boundary" ||
                     entity.type == "measurement_boundary" || entity.type == "room_boundary" ||
@@ -7431,8 +7448,7 @@ public:
                 inserted_edge.start_vertex_id;
             auto updated = found->second;
             updated.id = inserted.id;
-            remap_clipboard_json(updated.properties, identity_remap);
-            remap_clipboard_json(updated.extensions, identity_remap);
+            remap_entity_references(updated, identity_remap);
             const auto canonical = encode_identified_boundary_entity(inserted);
             updated.properties["boundary_model_version"] = canonical.properties.at("boundary_model_version");
             updated.properties["segments"] = canonical.properties.at("segments");
@@ -7444,8 +7460,7 @@ public:
             for (const auto& [id, entity] : source.entities()) {
                 if (id == found->second.id) continue;
                 auto migrated = entity;
-                remap_clipboard_json(migrated.properties, identity_remap);
-                remap_clipboard_json(migrated.extensions, identity_remap);
+                remap_entity_references(migrated, identity_remap);
                 if (migrated != entity) changes.push_back(EntityChange::upsert(std::move(migrated)));
             }
             changes.push_back(EntityChange::upsert(std::move(updated)));

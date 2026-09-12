@@ -368,7 +368,11 @@ with a version diagnostic. **Insert boundary vertex…** is available from
 interior fraction, then replaces the boundary atomically with fresh boundary,
 edge, and vertex identities. Existing typed links are migrated to the fresh
 identities, no overlapping source geometry is left behind, and undo/redo restores
-the complete replacement. Legacy anonymous and receipt-bound boundaries fail
+the complete replacement. Dimension targets, annotation overrides, room
+relationships, and phase memberships follow the replacement. Boundary names,
+label content, extension metadata, and alternative IDs/names are not treated
+as references merely because their text matches an old identity.
+Legacy anonymous and receipt-bound boundaries fail
 closed until their identity and derivation policies are explicit. Wall/object
 transforms, receipt-bound derivation edits, and full linked-relationship
 qualification remain open. The **Create room boundary

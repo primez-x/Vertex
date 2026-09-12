@@ -625,8 +625,27 @@ void test_boundary_vertex_insertion_workflow() {
                   {{0.0, 2.0}, {0.0, 0.0}, 0.0}}}, QStringLiteral("measurement"));
     require(!boundary_id.isEmpty() && window.selectEntity(boundary_id),
             "vertex insertion fixture must create a selectable boundary");
-    const auto original = window.document().snapshot().entities().at(boundary_id.toStdString());
+    auto original = window.document().snapshot().entities().at(boundary_id.toStdString());
     const auto identified = decode_identified_boundary_entity(original);
+    original.properties["name"]=original.id;
+    original.extensions={{"note",identified.segments.front().segment_id}};
+    auto dimension=encode_boundary_dimension_entity({"insertion-dimension",original.id,
+        identified.segments.front().segment_id,{2,-1}});
+    dimension.properties["target"]["description"]=original.id;
+    AnnotationState annotations;
+    auto label=instantiate_label(default_label_templates().front(),"insertion-label");
+    label.content=original.id;
+    annotations.labels.push_back(label);
+    annotations.overrides.push_back({"area",original.id,{},true});
+    auto annotation=make_annotation_entity("insertion-annotations",annotations);
+    auto phases=Entity::create("model_phases",{{"version",1},{"model",
+        ModelPhases::create({original.id},{original.id},{{original.id,original.id,{original.id},{}}}).to_json()}});
+    auto relationships=Entity::create("room_relationships",{{"version",1},{"model",
+        RoomRelationshipSnapshot::create({{original.id,RoomReferenceKind::appraisal_measurement_boundary}},{}).to_json()}});
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(original),EntityChange::upsert(dimension),EntityChange::upsert(annotation),
+         EntityChange::upsert(phases),EntityChange::upsert(relationships)},
+        {},"insertion references"});
     const auto segment_id = QString::fromStdString(identified.segments.front().segment_id);
     const auto before = window.document().revision();
     const auto insertion_ok = window.insertSelectedBoundaryVertex(segment_id, QStringLiteral("0.5"));
@@ -643,6 +662,28 @@ void test_boundary_vertex_insertion_workflow() {
                 inserted.segments.front().segment.end.x == 2.0 &&
                 validate_boundary(boundary_geometry(inserted)).empty(),
             "vertex insertion must split the analytical edge and preserve valid topology");
+    const auto after_insertion=window.document().snapshot();
+    const auto& inserted_entity=after_insertion.entities().at(inserted.id);
+    const auto migrated_annotation=decode_annotation_entity(after_insertion.entities().at(annotation.id));
+    const auto& migrated_dimension=after_insertion.entities().at(dimension.id);
+    require(inserted_entity.properties.at("name")==original.id && inserted_entity.extensions==original.extensions &&
+        migrated_annotation.labels.front().content==original.id &&
+        migrated_dimension.properties.at("target").at("description")==original.id,
+        "boundary insertion must preserve matching text and opaque metadata");
+    const auto resolved=decode_boundary_dimension_entity(migrated_dimension).dimension;
+    require(migrated_annotation.overrides.front().target_id==inserted.id && resolved &&
+        resolved->boundary_id==inserted.id && std::abs(resolved->resolve(inserted_entity).segment_length()-2.0)<1e-9,
+        "boundary insertion must retain semantic annotation and dimension links");
+    const auto migrated_phases=ModelPhases::from_json(after_insertion.entities().at(phases.id).properties.at("model"));
+    const auto migrated_relationships=RoomRelationshipSnapshot::from_json(
+        after_insertion.entities().at(relationships.id).properties.at("model"));
+    require(migrated_phases.entity_ids()==std::vector<std::string>{inserted.id} &&
+        migrated_phases.baseline_ids()==std::vector<std::string>{inserted.id} &&
+        migrated_phases.alternatives().front().demolished_ids==std::vector<std::string>{inserted.id} &&
+        migrated_phases.alternatives().front().id==original.id &&
+        migrated_phases.alternatives().front().name==original.id &&
+        migrated_relationships.references().front().id==inserted.id,
+        "boundary insertion must migrate nested model memberships without changing alternative IDs or names");
     require(window.undoCommand() &&
                 window.document().snapshot().entities().contains(boundary_id.toStdString()) &&
                 decode_identified_boundary_entity(window.document().snapshot().entities().at(
