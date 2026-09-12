@@ -272,6 +272,7 @@ public:
     void showVerticalLevels();
     void showAssemblies();
     void showConstraintEditor();
+    void showWorkspaceProfiles();
     void fitView();
 
     [[nodiscard]] QString lastError() const;

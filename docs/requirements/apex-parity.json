@@ -1283,9 +1283,12 @@
       "blocker": null,
       "implementation_sources": [
         "src/core/project_visibility.cpp",
-        "src/visualization/native_model_view.cpp"
+        "src/visualization/native_model_view.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/desktop_smoke.cpp",
+        "docs/workspace-accessibility.md"
       ],
-      "implementation_note": "Derived floor/layer masks and native presentation/picking filtering pass focused Debug/Release tests. Navigator and plan integration are in progress; overview, themes, saved workspace profiles and complete acceptance remain open."
+      "implementation_note": "Derived floor/layer masks and native presentation/picking filtering pass focused Debug/Release tests. The desktop now applies light, dark, and high-contrast themes and saves/restores bounded local workspace profiles for workspace, units, grid/snap, view, page size, and visibility filters; overview-map state and complete acceptance remain open."
     },
     {
       "id": "APX-UI-003",

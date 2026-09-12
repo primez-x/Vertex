@@ -55,3 +55,21 @@ This panel does not claim DISTO connectivity or physical touch-device qualificat
 `desktop_workflow` exercises preset application, persistence, cancellation,
 duplicate/reserved binding rejection, malformed settings fallback, on-screen
 measurement entry, invalid quantities, and undo.
+
+## Saved workspace profiles
+
+Use **Workspace profiles…** from the More menu or search for **Manage workspace
+profiles** in Commands. A profile is a local JSON record in
+`workspace-profiles.json` under Qt's per-user `AppConfigLocation`; it never
+requires an account or network access and does not alter the project archive.
+Saving captures the active Measurement or Architectural workspace, theme,
+imperial/metric units, grid and snap state, architectural view, output page
+size, and floor/layer visibility filters. Applying a profile validates every
+field first, restores only a valid active layer in the current project, and
+leaves the document revision unchanged. Invalid or unsupported profile files
+are ignored with a visible diagnostic rather than partially applied.
+
+The version-1 file uses the `sketch.workspace-profiles` schema and permits at
+most 64 named profiles. Each profile name is unique and the visibility lists
+are bounded stable entity IDs. Profiles describe presentation preferences;
+geometry, calculations, metadata, and assets remain in the `.bldproj` file.

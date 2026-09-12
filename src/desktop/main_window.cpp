@@ -898,6 +898,61 @@ QString workspace_name(Workspace workspace) {
                                                 : QStringLiteral("Architectural");
 }
 
+void validate_workspace_profile_json(const json& profile) {
+    static constexpr std::array<std::string_view, 10> keys{
+        "name", "workspace", "theme", "metric", "grid", "snap", "active_layer",
+        "architectural_view", "page_size", "hidden_floors"};
+    if (!profile.is_object() || profile.size() != keys.size() + 1 ||
+        !profile.contains("hidden_layers")) {
+        throw std::invalid_argument("workspace profile fields are invalid");
+    }
+    for (const auto key : keys) {
+        if (!profile.contains(std::string(key))) {
+            throw std::invalid_argument("workspace profile is missing " + std::string(key));
+        }
+    }
+    const auto name = profile.at("name");
+    if (!name.is_string() || name.get_ref<const std::string&>().empty() ||
+        name.get_ref<const std::string&>().size() > 128) {
+        throw std::invalid_argument("workspace profile name is invalid");
+    }
+    const auto workspace = profile.at("workspace");
+    if (!workspace.is_string() ||
+        (workspace != "measurement" && workspace != "architectural")) {
+        throw std::invalid_argument("workspace profile workspace is invalid");
+    }
+    const auto theme = profile.at("theme");
+    if (!theme.is_string() || (theme != "light" && theme != "dark" &&
+                               theme != "high_contrast")) {
+        throw std::invalid_argument("workspace profile theme is invalid");
+    }
+    for (const auto key : {"metric", "grid", "snap"}) {
+        if (!profile.at(key).is_boolean())
+            throw std::invalid_argument(std::string("workspace profile ") + key + " must be boolean");
+    }
+    for (const auto key : {"active_layer", "architectural_view"}) {
+        if (!profile.at(key).is_string())
+            throw std::invalid_argument(std::string("workspace profile ") + key + " must be a string");
+    }
+    const auto view = profile.at("architectural_view").get<std::string>();
+    if (view != "plan" && view != "elevation" && view != "section")
+        throw std::invalid_argument("workspace profile architectural view is invalid");
+    if (!profile.at("page_size").is_number_integer())
+        throw std::invalid_argument("workspace profile page size is invalid");
+    if (!profile.at("hidden_floors").is_array() || !profile.at("hidden_layers").is_array() ||
+        profile.at("hidden_floors").size() > 1000 || profile.at("hidden_layers").size() > 1000) {
+        throw std::invalid_argument("workspace profile visibility filters are invalid");
+    }
+    for (const auto key : {"hidden_floors", "hidden_layers"}) {
+        for (const auto& value : profile.at(key)) {
+            if (!value.is_string() || value.get_ref<const std::string&>().empty() ||
+                value.get_ref<const std::string&>().size() > 128) {
+                throw std::invalid_argument("workspace profile visibility IDs are invalid");
+            }
+        }
+    }
+}
+
 bool is_closed_boundary_entity(std::string_view type) {
     return type == "boundary" || type == "measurement_boundary" || type == "room_boundary";
 }
@@ -2025,6 +2080,257 @@ public:
         m_theme = theme;
         if (m_measurementCanvas) m_measurementCanvas->setCanvasBackground(QColor(dark ? "#141b27" : "#f8fafc"));
         if (m_architecturalCanvas) m_architecturalCanvas->setCanvasBackground(QColor(dark ? "#141b27" : "#f8fafc"));
+    }
+
+    QString workspaceProfilesPath() const {
+        return QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) +
+               QStringLiteral("/workspace-profiles.json");
+    }
+
+    json loadWorkspaceProfiles() const {
+        json result{{"schema", "sketch.workspace-profiles"}, {"version", 1},
+                    {"profiles", json::array()}};
+        QFile file(workspaceProfilesPath());
+        if (!file.exists()) return result;
+        if (!file.open(QIODevice::ReadOnly) || file.size() > 256 * 1024) {
+            throw std::runtime_error("Workspace profiles cannot be read.");
+        }
+        const auto document = json::parse(file.readAll().toStdString());
+        if (!document.is_object() || document.size() != 3 ||
+            document.at("schema") != "sketch.workspace-profiles" ||
+            !document.at("version").is_number_integer() || document.at("version") != 1 ||
+            !document.at("profiles").is_array() || document.at("profiles").size() > 64) {
+            throw std::runtime_error("Unsupported workspace profiles format.");
+        }
+        std::set<std::string> names;
+        for (const auto& profile : document.at("profiles")) {
+            validate_workspace_profile_json(profile);
+            if (!names.insert(profile.at("name").get<std::string>()).second)
+                throw std::runtime_error("Workspace profile names must be unique.");
+        }
+        return document;
+    }
+
+    void saveWorkspaceProfiles(const json& document) const {
+        if (!document.is_object() || document.value("schema", "") != "sketch.workspace-profiles" ||
+            document.value("version", 0) != 1 || !document.contains("profiles") ||
+            !document.at("profiles").is_array() || document.at("profiles").size() > 64) {
+            throw std::invalid_argument("Workspace profiles document is invalid.");
+        }
+        std::set<std::string> names;
+        for (const auto& profile : document.at("profiles")) {
+            validate_workspace_profile_json(profile);
+            if (!names.insert(profile.at("name").get<std::string>()).second)
+                throw std::invalid_argument("Workspace profile names must be unique.");
+        }
+        const auto bytes = QByteArray::fromStdString(document.dump(2));
+        QSaveFile file(workspaceProfilesPath());
+        if (!QDir().mkpath(QFileInfo(file.fileName()).absolutePath()) ||
+            !file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
+            throw std::runtime_error("Workspace profiles could not be saved.");
+        }
+    }
+
+    json captureWorkspaceProfile(const QString& profile_name) const {
+        const auto name = profile_name.trimmed().toStdString();
+        if (name.empty() || name.size() > 128)
+            throw std::invalid_argument("Workspace profile name must be 1-128 characters.");
+        json hidden_floors = json::array();
+        for (const auto& id : m_view_filter.hidden_floor_ids) hidden_floors.push_back(id);
+        json hidden_layers = json::array();
+        for (const auto& id : m_view_filter.hidden_layer_ids) hidden_layers.push_back(id);
+        auto profile = json{
+            {"name", name},
+            {"workspace", m_workspace == Workspace::measurement ? "measurement" : "architectural"},
+            {"theme", workspace_theme_name(m_theme)},
+            {"metric", m_metric_units},
+            {"grid", m_grid_enabled},
+            {"snap", m_snap_enabled},
+            {"active_layer", m_active_layer_id.toStdString()},
+            {"architectural_view", architectural_view_name(m_architectural_view_kind)},
+            {"page_size", m_pageSizeCombo ? m_pageSizeCombo->currentData().toInt() : 0},
+            {"hidden_floors", std::move(hidden_floors)},
+            {"hidden_layers", std::move(hidden_layers)}};
+        validate_workspace_profile_json(profile);
+        return profile;
+    }
+
+    bool applyWorkspaceProfile(const json& profile) {
+        try {
+            validate_workspace_profile_json(profile);
+            const auto workspace = profile.at("workspace").get<std::string>() == "measurement"
+                ? Workspace::measurement : Workspace::architectural;
+            const auto theme_name = profile.at("theme").get<std::string>();
+            const auto theme = theme_name == "dark" ? WorkspaceTheme::dark
+                : theme_name == "high_contrast" ? WorkspaceTheme::high_contrast : WorkspaceTheme::light;
+            const auto view_name = profile.at("architectural_view").get<std::string>();
+            const auto view = view_name == "elevation" ? BuildingViewKind::elevation
+                : view_name == "section" ? BuildingViewKind::section : BuildingViewKind::plan;
+            m_workspace = workspace;
+            m_metric_units = profile.at("metric").get<bool>();
+            m_grid_enabled = profile.at("grid").get<bool>();
+            m_snap_enabled = profile.at("snap").get<bool>();
+            m_architectural_view_kind = view;
+            m_view_filter.hidden_floor_ids.clear();
+            for (const auto& value : profile.at("hidden_floors"))
+                m_view_filter.hidden_floor_ids.insert(value.get<std::string>());
+            m_view_filter.hidden_layer_ids.clear();
+            for (const auto& value : profile.at("hidden_layers"))
+                m_view_filter.hidden_layer_ids.insert(value.get<std::string>());
+            const auto active_layer = profile.at("active_layer").get<std::string>();
+            const auto organization = organize_project(m_document->snapshot());
+            const auto active = organization.nodes.find(active_layer);
+            m_active_layer_id = active != organization.nodes.end() && active->second.type == "layer" &&
+                                        organization.drawing_context(active_layer)
+                                    ? QString::fromStdString(active_layer) : QString{};
+            applyTheme(theme);
+            if (m_workspaceTabs)
+                m_workspaceTabs->setCurrentIndex(m_workspace == Workspace::measurement ? 0 : 1);
+            if (m_unitsCombo) {
+                QSignalBlocker blocker(m_unitsCombo);
+                m_unitsCombo->setCurrentIndex(m_metric_units ? 1 : 0);
+            }
+            if (m_pageSizeCombo) {
+                const auto index = m_pageSizeCombo->findData(profile.at("page_size").get<int>());
+                if (index < 0) throw std::invalid_argument("Workspace profile page size is unavailable.");
+                QSignalBlocker blocker(m_pageSizeCombo);
+                m_pageSizeCombo->setCurrentIndex(index);
+            }
+            if (m_architecturalViewCombo) {
+                const auto index = m_architecturalViewCombo->findData(static_cast<int>(view));
+                QSignalBlocker blocker(m_architecturalViewCombo);
+                m_architecturalViewCombo->setCurrentIndex(index);
+            }
+            if (m_grid_button) {
+                QSignalBlocker blocker(m_grid_button);
+                m_grid_button->setChecked(m_grid_enabled);
+            }
+            if (m_snap_button) {
+                QSignalBlocker blocker(m_snap_button);
+                m_snap_button->setChecked(m_snap_enabled);
+            }
+            m_measurementCanvas->setMetricUnits(m_metric_units);
+            m_architecturalCanvas->setMetricUnits(m_metric_units);
+            m_measurementCanvas->setGridEnabled(m_grid_enabled);
+            m_architecturalCanvas->setGridEnabled(m_grid_enabled);
+            m_measurementCanvas->setSnapEnabled(m_snap_enabled);
+            m_architecturalCanvas->setSnapEnabled(m_snap_enabled);
+            refresh();
+            clearError();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Workspace profile: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    void showWorkspaceProfiles() {
+        QDialog dialog(owner);
+        styleDialog(dialog);
+        dialog.setObjectName(QStringLiteral("workspaceProfilesDialog"));
+        dialog.setWindowTitle(QStringLiteral("Workspace profiles"));
+        dialog.resize(520, 300);
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* selector = new QComboBox(&dialog);
+        selector->setObjectName(QStringLiteral("workspaceProfileSelector"));
+        layout->addWidget(selector);
+        auto* name = new QLineEdit(&dialog);
+        name->setObjectName(QStringLiteral("workspaceProfileName"));
+        name->setPlaceholderText(QStringLiteral("Field layout, permit set, or client review"));
+        layout->addWidget(name);
+        auto* help = new QLabel(QStringLiteral(
+            "Profiles are stored locally and restore workspace, theme, units, grid, snap, view, page size, and visibility filters."),
+            &dialog);
+        help->setWordWrap(true);
+        layout->addWidget(help);
+        auto* status = new QLabel(&dialog);
+        status->setObjectName(QStringLiteral("workspaceProfileStatus"));
+        status->setWordWrap(true);
+        layout->addWidget(status);
+        auto* actions = new QHBoxLayout;
+        auto* save = new QPushButton(QStringLiteral("Save current"), &dialog);
+        save->setObjectName(QStringLiteral("saveWorkspaceProfile"));
+        auto* apply = new QPushButton(QStringLiteral("Apply"), &dialog);
+        apply->setObjectName(QStringLiteral("applyWorkspaceProfile"));
+        auto* remove = new QPushButton(QStringLiteral("Delete"), &dialog);
+        remove->setObjectName(QStringLiteral("deleteWorkspaceProfile"));
+        auto* close = new QPushButton(QStringLiteral("Close"), &dialog);
+        actions->addWidget(save);
+        actions->addWidget(apply);
+        actions->addWidget(remove);
+        actions->addStretch(1);
+        actions->addWidget(close);
+        layout->addLayout(actions);
+
+        json profiles;
+        const auto populate = [&] {
+            const QSignalBlocker blocker(selector);
+            selector->clear();
+            for (const auto& profile : profiles.at("profiles"))
+                selector->addItem(QString::fromStdString(profile.at("name").get<std::string>()));
+            if (selector->count() > 0) selector->setCurrentIndex(0);
+            name->setText(selector->currentText());
+        };
+        try {
+            profiles = loadWorkspaceProfiles();
+            populate();
+            if (selector->count() == 0) status->setText(QStringLiteral("No saved profiles yet."));
+        } catch (const std::exception& error) {
+            profiles = json{{"schema", "sketch.workspace-profiles"}, {"version", 1},
+                            {"profiles", json::array()}};
+            status->setText(QStringLiteral("Saved profiles were ignored: %1")
+                                .arg(QString::fromUtf8(error.what())));
+        }
+        QObject::connect(selector, &QComboBox::currentIndexChanged, &dialog, [&](int index) {
+            if (index >= 0 && index < static_cast<int>(profiles.at("profiles").size()))
+                name->setText(QString::fromStdString(
+                    profiles.at("profiles").at(index).at("name").get<std::string>()));
+        });
+        QObject::connect(save, &QPushButton::clicked, &dialog, [&] {
+            try {
+                const auto profile = captureWorkspaceProfile(name->text());
+                const auto profile_name = profile.at("name").get<std::string>();
+                auto existing = std::find_if(profiles["profiles"].begin(), profiles["profiles"].end(),
+                    [&](const auto& value) { return value.at("name").get<std::string>() == profile_name; });
+                if (existing == profiles["profiles"].end()) profiles["profiles"].push_back(profile);
+                else *existing = profile;
+                saveWorkspaceProfiles(profiles);
+                populate();
+                selector->setCurrentText(QString::fromStdString(profile_name));
+                status->setText(QStringLiteral("Profile saved locally."));
+            } catch (const std::exception& error) {
+                status->setText(QString::fromUtf8(error.what()));
+            }
+        });
+        QObject::connect(apply, &QPushButton::clicked, &dialog, [&] {
+            const auto index = selector->currentIndex();
+            if (index < 0 || index >= static_cast<int>(profiles.at("profiles").size())) {
+                status->setText(QStringLiteral("Choose a saved profile first."));
+                return;
+            }
+            if (applyWorkspaceProfile(profiles.at("profiles").at(index))) {
+                status->setText(QStringLiteral("Profile applied."));
+            } else {
+                status->setText(lastError());
+            }
+        });
+        QObject::connect(remove, &QPushButton::clicked, &dialog, [&] {
+            const auto index = selector->currentIndex();
+            if (index < 0 || index >= static_cast<int>(profiles.at("profiles").size())) {
+                status->setText(QStringLiteral("Choose a saved profile first."));
+                return;
+            }
+            profiles["profiles"].erase(profiles["profiles"].begin() + index);
+            try {
+                saveWorkspaceProfiles(profiles);
+                populate();
+                status->setText(QStringLiteral("Profile deleted."));
+            } catch (const std::exception& error) {
+                status->setText(QString::fromUtf8(error.what()));
+            }
+        });
+        QObject::connect(close, &QPushButton::clicked, &dialog, &QDialog::reject);
+        dialog.exec();
     }
 
     void styleDialog(QDialog& dialog) const {
@@ -7313,6 +7619,7 @@ public:
                  m_area_attributes_group->setVisible(true);
                  m_area_attributes_edit->setFocus();
              }},
+            {QStringLiteral("Manage workspace profiles"), [this] { showWorkspaceProfiles(); }},
             {QStringLiteral("Measurement workspace"), [this] { setWorkspace(Workspace::measurement); }},
             {QStringLiteral("Architectural workspace"), [this] { setWorkspace(Workspace::architectural); }},
             {QStringLiteral("Add labels and symbols"), [this] { showAnnotationEditor(); }},
@@ -8106,11 +8413,14 @@ private:
         m_assembly_action = new QAction(QStringLiteral("Assemblies…"), owner);
         m_assembly_action->setObjectName(QStringLiteral("assemblyCatalog"));
         m_assistance_action = new QAction(QStringLiteral("Offline assistance…"), owner);
+        m_workspace_profiles_action = new QAction(QStringLiteral("Workspace profiles…"), owner);
+        m_workspace_profiles_action->setObjectName(QStringLiteral("workspaceProfiles"));
         m_about_action = new QAction(QStringLiteral("About Property Studio"), owner);
-        const std::array<QAction*, 13> secondary_actions{
+        const std::array<QAction*, 14> secondary_actions{
             m_annotation_action, m_reference_action, m_schedule_action, m_sheet_action,
             m_viewport_action, m_schedule_placement_action, m_view_action, m_remodel_action,
-            m_relationship_action, m_levels_action, m_assembly_action, m_assistance_action, m_about_action};
+            m_relationship_action, m_levels_action, m_assembly_action, m_assistance_action,
+            m_workspace_profiles_action, m_about_action};
         for (auto* action : secondary_actions) {
             owner->addAction(action);
             more_menu->addAction(action);
@@ -8218,6 +8528,8 @@ private:
                          [this] { showAssemblies(); });
         QObject::connect(m_assistance_action, &QAction::triggered, owner,
                          [this] { showAssistance(); });
+        QObject::connect(m_workspace_profiles_action, &QAction::triggered, owner,
+                         [this] { showWorkspaceProfiles(); });
         QObject::connect(m_about_action, &QAction::triggered, owner, [this] { showAbout(); });
         QObject::connect(m_unitsCombo, &QComboBox::currentIndexChanged, owner,
                          [this](int index) { setMetricUnits(index == 1); });
@@ -8426,6 +8738,7 @@ private:
         m_grid_button->setIconSize(QSize(20, 20));
         m_grid_button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         m_grid_button->setToolTip(QStringLiteral("Toggle measurement grid"));
+        m_grid_button->setObjectName(QStringLiteral("gridTool"));
         m_grid_button->setCheckable(true);
         m_grid_button->setChecked(true);
         m_grid_button->setAutoRaise(true);
@@ -8439,6 +8752,7 @@ private:
         m_snap_button->setIconSize(QSize(20, 20));
         m_snap_button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         m_snap_button->setToolTip(QStringLiteral("Snap points to a 0.25 m grid"));
+        m_snap_button->setObjectName(QStringLiteral("snapTool"));
         m_snap_button->setCheckable(true);
         m_snap_button->setChecked(true);
         m_snap_button->setAutoRaise(true);
@@ -11024,6 +11338,7 @@ private:
     QAction* m_levels_action{};
     QAction* m_assembly_action{};
     QAction* m_assistance_action{};
+    QAction* m_workspace_profiles_action{};
     QAction* m_about_action{};
 };
 
@@ -11379,6 +11694,10 @@ void MainWindow::showCommandPalette() {
 
 void MainWindow::showConstraintEditor() {
     m_impl->showConstraintEditor();
+}
+
+void MainWindow::showWorkspaceProfiles() {
+    m_impl->showWorkspaceProfiles();
 }
 
 void MainWindow::fitView() {

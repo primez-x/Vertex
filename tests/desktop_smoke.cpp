@@ -275,6 +275,64 @@ void test_project_subject_metadata() {
             "reopened subject metadata must repopulate the editor");
 }
 
+void test_workspace_profiles() {
+    const auto original_name = QCoreApplication::applicationName();
+    const auto original_test_mode = QStandardPaths::isTestModeEnabled();
+    QStandardPaths::setTestModeEnabled(true);
+    QCoreApplication::setApplicationName(QStringLiteral("PropertyStudio-profile-test-") +
+        QUuid::createUuid().toString(QUuid::WithoutBraces));
+    const auto settings_directory = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+    const auto settings_path = settings_directory + QStringLiteral("/workspace-profiles.json");
+    QFile::remove(settings_path);
+    {
+        sketch::desktop::MainWindow window;
+        require(window.findChild<QAction*>(QStringLiteral("workspaceProfiles")) != nullptr,
+                "workspace profiles must be available from the secondary command surface");
+        window.setWorkspace(sketch::desktop::Workspace::architectural);
+        window.setMetricUnits(true);
+        auto* grid = window.findChild<QToolButton*>(QStringLiteral("gridTool"));
+        auto* snap = window.findChild<QToolButton*>(QStringLiteral("snapTool"));
+        require(grid && snap, "profile fixture needs grid and snap controls");
+        grid->setChecked(false);
+        snap->setChecked(false);
+        require(window.setContainerVisible(QStringLiteral("floor-1"), false),
+                "profile fixture should hide a floor");
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = window.findChild<QDialog*>(QStringLiteral("workspaceProfilesDialog"));
+            require(dialog, "workspace profile editor must open");
+            auto* name = dialog->findChild<QLineEdit*>(QStringLiteral("workspaceProfileName"));
+            auto* save = dialog->findChild<QPushButton*>(QStringLiteral("saveWorkspaceProfile"));
+            auto* apply = dialog->findChild<QPushButton*>(QStringLiteral("applyWorkspaceProfile"));
+            auto* selector = dialog->findChild<QComboBox*>(QStringLiteral("workspaceProfileSelector"));
+            auto* status = dialog->findChild<QLabel*>(QStringLiteral("workspaceProfileStatus"));
+            require(name && save && apply && selector && status,
+                    "workspace profile editor must expose save, apply, selection, and status");
+            name->setText(QStringLiteral("Field review"));
+            save->click();
+            require(selector->count() == 1 && QFile::exists(settings_path),
+                    "saved workspace profiles must be written locally");
+            window.showAllContainers();
+            window.setWorkspace(sketch::desktop::Workspace::measurement);
+            window.setMetricUnits(false);
+            grid->setChecked(true);
+            snap->setChecked(true);
+            apply->click();
+            require(window.workspace() == sketch::desktop::Workspace::architectural &&
+                        window.metricUnits() && !grid->isChecked() && !snap->isChecked() &&
+                        !window.entityVisible(QStringLiteral("floor-1")) &&
+                        status->text().contains(QStringLiteral("applied"), Qt::CaseInsensitive),
+                    "applying a profile must restore workspace presentation state");
+            dialog->reject();
+        });
+        window.showWorkspaceProfiles();
+        require(QFile::exists(settings_path), "workspace profile file must remain after closing editor");
+    }
+    require(QFile::remove(settings_path), "workspace profile test file must be removed");
+    QDir().rmdir(settings_directory);
+    QCoreApplication::setApplicationName(original_name);
+    QStandardPaths::setTestModeEnabled(original_test_mode);
+}
+
 void test_organization_context() {
     sketch::desktop::MainWindow window;
     const auto second_building = window.createBuilding("property-1", "Workshop");
@@ -926,6 +984,7 @@ int main(int argc, char** argv) {
     }
     test_shortcuts_and_measurement_keypad(field_ui_capture_directory);
     test_project_subject_metadata();
+    test_workspace_profiles();
     test_design_phase_workflow();
     test_room_relationship_workflow();
     test_vertical_levels_workflow();
