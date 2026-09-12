@@ -5815,7 +5815,7 @@ private:
         splitter->setStretchFactor(2, 1);
         splitter->setStretchFactor(3, 0);
         owner->setCentralWidget(central);
-        owner->statusBar()->showMessage(QStringLiteral("Ready  •  select a tool to begin"));
+        owner->statusBar()->clearMessage();
     }
 
     QToolButton* addToolButton(QVBoxLayout* layout, const QString& label, CanvasTool tool,
