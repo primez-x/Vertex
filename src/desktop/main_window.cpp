@@ -3503,6 +3503,29 @@ public:
         dialog.exec();
     }
 
+    void showBoundaryVertexJump() {
+        const auto selected = selectedEntity();
+        if (!selected.has_value() || !is_closed_boundary_entity(selected->type)) {
+            setError(QStringLiteral("Select an identified closed boundary first."));
+            return;
+        }
+        try {
+            const auto identified = decode_identified_boundary_entity(*selected);
+            QStringList vertices;
+            vertices.reserve(static_cast<qsizetype>(identified.segments.size()));
+            for (const auto& edge : identified.segments) {
+                vertices.push_back(QString::fromStdString(edge.start_vertex_id));
+            }
+            bool accepted = false;
+            const auto vertex = QInputDialog::getItem(
+                owner, QStringLiteral("Jump to boundary vertex"),
+                QStringLiteral("Vertex:"), vertices, 0, false, &accepted);
+            if (accepted && !vertex.isEmpty()) (void)jumpSelectedBoundaryVertex(vertex);
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Point jump: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
     void showBoundaryRedefinition() {
         const auto selected = selectedEntity();
         if (!selected.has_value() || !is_closed_boundary_entity(selected->type)) {
@@ -6875,9 +6898,10 @@ public:
         }
     }
 
-    QString createBoundary(const Boundary& boundary, const QString& classification,
-                           std::optional<Revision> expected_revision = std::nullopt,
-                           json extensions = json::object()) {
+    QString createMeasurementBoundary(const Boundary& boundary, const QString& classification,
+                                      std::optional<Revision> expected_revision,
+                                      std::string_view action_message,
+                                      json extensions = json::object()) {
         const auto revision = expected_revision.value_or(m_document->revision());
         const auto drawing_context = requireDrawingContext();
         if (!drawing_context) return {};
@@ -6906,12 +6930,52 @@ public:
         // upgrade helper preserves the entered geometry and all metadata.
         entity = upgrade_legacy_boundary_entity(entity);
         if (classification == QStringLiteral("survey")) entity.properties["calculation_scope"] = "site";
-        if (!applyEntity(std::move(entity), "create measurement boundary", revision)) {
+        const std::string action(action_message);
+        if (!applyEntity(std::move(entity), action.c_str(), revision)) {
             return {};
         }
         m_selected_id = id;
         refresh();
         return id;
+    }
+
+    QString createBoundary(const Boundary& boundary, const QString& classification,
+                           std::optional<Revision> expected_revision = std::nullopt,
+                           json extensions = json::object()) {
+        return createMeasurementBoundary(boundary, classification, expected_revision,
+                                          "create measurement boundary", std::move(extensions));
+    }
+
+    QString createClosedBoundaryFromOpenChain(const Boundary& open_chain,
+                                               const QString& classification,
+                                               std::optional<Revision> expected_revision = std::nullopt) {
+        try {
+            const auto closed = automatically_close_boundary(open_chain);
+            if (closed.size() == open_chain.size()) {
+                throw std::invalid_argument("The supplied boundary is already closed.");
+            }
+            return createMeasurementBoundary(closed, classification, expected_revision,
+                                             "Auto close boundary");
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Auto close boundary: %1")
+                         .arg(QString::fromUtf8(error.what())));
+            return {};
+        }
+    }
+
+    QString createBayWindowBoundary(Vec2 start, Vec2 shoulder1, Vec2 shoulder2, Vec2 end,
+                                    const QString& classification,
+                                    std::optional<Revision> expected_revision = std::nullopt) {
+        try {
+            const auto bay = complete_bay_window(start, shoulder1, shoulder2, end);
+            const auto closed = automatically_close_boundary(bay);
+            return createMeasurementBoundary(closed, classification, expected_revision,
+                                             "Complete bay window");
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Complete bay window: %1")
+                         .arg(QString::fromUtf8(error.what())));
+            return {};
+        }
     }
 
     QString createRoomBoundary(const Boundary& boundary, const QString& classification,
@@ -8672,6 +8736,114 @@ public:
             return true;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Insert vertex: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    bool jumpSelectedBoundaryVertex(const QString& vertex_id) {
+        try {
+            const auto selected = selectedEntity();
+            if (!selected.has_value() || !is_closed_boundary_entity(selected->type)) {
+                throw std::invalid_argument("Select an identified closed boundary first.");
+            }
+            const auto identified = decode_identified_boundary_entity(*selected);
+            const auto point = jump_to_boundary_vertex(
+                identified, vertex_id.trimmed().toStdString());
+            m_last_cursor = point;
+            if (m_boundary_session) {
+                m_boundary_session->set_pointer(point);
+                refreshBoundaryPreview();
+            }
+            refreshCursorLabel(point);
+            clearError();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Point jump: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    bool autoCloseBoundaryDraft() {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        try {
+            if (m_tool != CanvasTool::boundary || !m_boundary_session) {
+                throw std::invalid_argument("Start a boundary draft before invoking automatic closure.");
+            }
+            auto candidate = *m_boundary_session;
+            const auto chain = candidate.active_chain();
+            if (!chain.has_value() || chain->segments.empty()) {
+                throw std::invalid_argument("Draw at least one edge before invoking automatic closure.");
+            }
+            Boundary open;
+            open.reserve(chain->segments.size());
+            for (const auto& edge : chain->segments) open.push_back(edge.segment);
+            const auto closed = automatically_close_boundary(open);
+            if (closed.size() == open.size()) {
+                throw std::invalid_argument("The active boundary is already closed.");
+            }
+            while (candidate.pending_dimension().has_value()) {
+                (void)candidate.place_automatic_dimension();
+            }
+            (void)candidate.add_closing_segment();
+            while (candidate.pending_dimension().has_value()) {
+                (void)candidate.place_automatic_dimension();
+            }
+            m_boundary_session = std::move(candidate);
+            boundaryDraftChanged();
+            finishTool(QStringLiteral("Auto close boundary"));
+            return m_boundary_session == std::nullopt && m_last_error.isEmpty();
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Auto close boundary: %1")
+                         .arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    bool completeBayWindowDraft(Vec2 shoulder1, Vec2 shoulder2, Vec2 end) {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        try {
+            if (m_tool != CanvasTool::boundary || !m_boundary_session) {
+                throw std::invalid_argument("Start a boundary draft before completing a bay window.");
+            }
+            auto candidate = *m_boundary_session;
+            const auto chain = candidate.active_chain();
+            if (!chain.has_value() || !chain->segments.empty()) {
+                throw std::invalid_argument("Bay-window completion requires a freshly anchored draft.");
+            }
+            const auto bay = complete_bay_window(chain->anchor, shoulder1, shoulder2, end);
+            for (const auto& segment : bay) {
+                while (candidate.pending_dimension().has_value()) {
+                    (void)candidate.place_automatic_dimension();
+                }
+                (void)candidate.add_line_to(segment.end);
+                while (candidate.pending_dimension().has_value()) {
+                    (void)candidate.place_automatic_dimension();
+                }
+            }
+            Boundary path;
+            path.reserve(bay.size());
+            for (const auto& segment : bay) path.push_back(segment);
+            const auto closed = automatically_close_boundary(path);
+            if (closed.size() == path.size()) {
+                throw std::invalid_argument("Bay-window profile must end away from its anchor.");
+            }
+            (void)candidate.add_closing_segment();
+            while (candidate.pending_dimension().has_value()) {
+                (void)candidate.place_automatic_dimension();
+            }
+            m_boundary_session = std::move(candidate);
+            boundaryDraftChanged();
+            finishTool(QStringLiteral("Complete bay window"));
+            return m_boundary_session == std::nullopt && m_last_error.isEmpty();
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Complete bay window: %1")
+                         .arg(QString::fromUtf8(error.what())));
             return false;
         }
     }
@@ -11162,6 +11334,8 @@ public:
             {QStringLiteral("Paste selection"), [this] { pasteSelection(); }},
             {QStringLiteral("Delete selection"), [this] { deleteSelection(); }},
             {QStringLiteral("Insert boundary vertex"), [this] { showBoundaryVertexInsertion(); }},
+            {QStringLiteral("Jump to boundary vertex"), [this] { showBoundaryVertexJump(); }},
+            {QStringLiteral("Auto close active boundary"), [this] { autoCloseBoundaryDraft(); }},
             {QStringLiteral("Redefine boundary"), [this] { showBoundaryRedefinition(); }},
             {QStringLiteral("Detect closed areas from walls"), [this] { showAutomaticAreaDetection(); }},
             {QStringLiteral("Add building"), [this] { showOrganizationDialog("building"); }},
@@ -12233,11 +12407,17 @@ private:
         m_delete_action->setShortcutContext(Qt::WindowShortcut);
         m_insert_vertex_action = new QAction(QStringLiteral("Insert boundary vertex…"), owner);
         m_insert_vertex_action->setObjectName(QStringLiteral("insertBoundaryVertex"));
+        auto* jump_vertex_action = new QAction(QStringLiteral("Jump to boundary vertex…"), owner);
+        jump_vertex_action->setObjectName(QStringLiteral("jumpBoundaryVertex"));
+        auto* auto_close_action = new QAction(QStringLiteral("Auto close active boundary"), owner);
+        auto_close_action->setObjectName(QStringLiteral("autoCloseBoundary"));
         more_menu->addAction(m_copy_action);
         more_menu->addAction(m_cut_action);
         more_menu->addAction(m_paste_action);
         more_menu->addAction(m_delete_action);
         more_menu->addAction(m_insert_vertex_action);
+        more_menu->addAction(jump_vertex_action);
+        more_menu->addAction(auto_close_action);
         more_menu->addSeparator();
         m_annotation_action = new QAction(QStringLiteral("Annotations"), owner);
         m_reference_action = new QAction(QStringLiteral("Reference image"), owner);
@@ -12304,6 +12484,10 @@ private:
         });
         QObject::connect(m_insert_vertex_action, &QAction::triggered, owner,
                          [this] { showBoundaryVertexInsertion(); });
+        QObject::connect(jump_vertex_action, &QAction::triggered, owner,
+                         [this] { showBoundaryVertexJump(); });
+        QObject::connect(auto_close_action, &QAction::triggered, owner,
+                         [this] { (void)autoCloseBoundaryDraft(); });
         auto* more_button = new QToolButton(toolbar);
         more_button->setObjectName(QStringLiteral("moreTools"));
         more_button->setIcon(modern_toolbar_icon("<path d='M5 7h14M5 12h14M5 17h14'/>"));
@@ -15187,7 +15371,7 @@ private:
         }
     }
 
-    void finishTool() {
+    void finishTool(QString commit_message = {}) {
         if (m_tool != CanvasTool::boundary || !m_boundary_session) return;
         try {
             if (m_boundary_document != m_document || !m_boundary_source || !m_boundary_context)
@@ -15195,11 +15379,13 @@ private:
             auto candidate = *m_boundary_session;
             if (candidate.phase() == BoundaryAuthoringPhase::awaiting_dimension)
                 throw std::invalid_argument("place the pending edge dimension before closing the area");
+            bool exact_auto_close = false;
             if (const auto chain = candidate.active_chain()) {
                 if (chain->segments.empty()) throw std::invalid_argument("draw an edge before closing the area");
                 const auto end = chain->segments.back().segment.end;
                 if (end.x != chain->anchor.x || end.y != chain->anchor.y) {
                     (void)candidate.add_closing_segment();
+                    exact_auto_close = true;
                     Boundary geometry;
                     const auto closed_draft = candidate.active_chain();
                     for (const auto& edge : closed_draft->segments) geometry.push_back(edge.segment);
@@ -15227,8 +15413,12 @@ private:
                 m_last_boundary_classification = *classification;
                 boundaryDraftChanged();
             }
+            if (commit_message.trimmed().isEmpty()) {
+                commit_message = exact_auto_close ? QStringLiteral("Auto close boundary")
+                                                  : QStringLiteral("Draw and define measured area");
+            }
             BoundaryCommitIntent intent{m_boundary_session->options(), m_boundary_session->accepted_chains(),
-                *m_boundary_context, "Draw and define measured area"};
+                *m_boundary_context, commit_message.toStdString()};
             if (document_snapshot_digest(*m_boundary_source) != document_snapshot_digest(m_document->snapshot()))
                 throw std::invalid_argument("the document changed after boundary drawing started");
             const auto preview = preview_boundary_commit(authoringSnapshot(), intent);
@@ -16173,6 +16363,18 @@ QString MainWindow::createBoundary(const Boundary& boundary, QString classificat
     return m_impl->createBoundary(boundary, classification, revision);
 }
 
+QString MainWindow::createClosedBoundaryFromOpenChain(
+    const Boundary& open_chain, QString classification, std::optional<Revision> revision) {
+    return m_impl->createClosedBoundaryFromOpenChain(open_chain, std::move(classification), revision);
+}
+
+QString MainWindow::createBayWindowBoundary(
+    Vec2 start, Vec2 shoulder1, Vec2 shoulder2, Vec2 end,
+    QString classification, std::optional<Revision> revision) {
+    return m_impl->createBayWindowBoundary(start, shoulder1, shoulder2, end,
+                                            std::move(classification), revision);
+}
+
 QString MainWindow::createRoomBoundary(const Boundary& boundary, QString classification,
                                        std::optional<Revision> revision) {
     return m_impl->createRoomBoundary(boundary, classification, revision);
@@ -16271,6 +16473,18 @@ bool MainWindow::deleteSelection() {
 bool MainWindow::insertSelectedBoundaryVertex(const QString& segment_id,
                                               const QString& fraction) {
     return m_impl->insertSelectedBoundaryVertex(segment_id, fraction);
+}
+
+bool MainWindow::jumpSelectedBoundaryVertex(const QString& vertex_id) {
+    return m_impl->jumpSelectedBoundaryVertex(vertex_id);
+}
+
+bool MainWindow::autoCloseBoundaryDraft() {
+    return m_impl->autoCloseBoundaryDraft();
+}
+
+bool MainWindow::completeBayWindowDraft(Vec2 shoulder1, Vec2 shoulder2, Vec2 end) {
+    return m_impl->completeBayWindowDraft(shoulder1, shoulder2, end);
 }
 
 bool MainWindow::redefineSelectedBoundary(const Boundary& boundary,

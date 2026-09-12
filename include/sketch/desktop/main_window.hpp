@@ -138,6 +138,23 @@ public:
         const Boundary& boundary,
         QString classification = QStringLiteral("measurement"),
         std::optional<Revision> expected_revision = std::nullopt);
+    // Applies the exact automatic-closure helper to an open analytical chain
+    // and commits the resulting identified measurement boundary as one
+    // undoable command. The source chain is never modified.
+    [[nodiscard]] QString createClosedBoundaryFromOpenChain(
+        const Boundary& open_chain,
+        QString classification = QStringLiteral("measurement"),
+        std::optional<Revision> expected_revision = std::nullopt);
+    // Builds the documented three-edge bay-window profile, closes it with the
+    // same exact closure rule, and commits one identified measurement
+    // boundary. Coordinates are model metres.
+    [[nodiscard]] QString createBayWindowBoundary(
+        Vec2 start,
+        Vec2 shoulder1,
+        Vec2 shoulder2,
+        Vec2 end,
+        QString classification = QStringLiteral("measurement"),
+        std::optional<Revision> expected_revision = std::nullopt);
     // Creates a room boundary as a distinct architectural semantic object.
     // Its geometry remains analytical and independent from appraisal
     // measurement boundaries, while explicit relationships can connect them.
@@ -229,6 +246,17 @@ public:
     // fresh identities for the inserted vertex and second piece.
     [[nodiscard]] bool insertSelectedBoundaryVertex(const QString& segment_id,
                                                     const QString& fraction);
+    // Moves the precision pointer to a selected boundary vertex without
+    // changing document history. When a boundary draft is active, the same
+    // pointer is handed to its authoring session for the next anchor/edge.
+    [[nodiscard]] bool jumpSelectedBoundaryVertex(const QString& vertex_id);
+    // Explicitly invokes the exact automatic-closure operation on the active
+    // boundary draft and publishes one named document command.
+    [[nodiscard]] bool autoCloseBoundaryDraft();
+    // Adds the three validated bay-window edges to an active draft, closes the
+    // profile, and publishes one named document command.
+    [[nodiscard]] bool completeBayWindowDraft(Vec2 shoulder1, Vec2 shoulder2,
+                                               Vec2 end);
     // Replaces the selected identified boundary's analytical geometry while
     // retaining its entity, segment, and vertex identities. The replacement
     // must have the same edge count so existing typed references remain valid.

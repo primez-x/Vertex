@@ -929,9 +929,12 @@
         "include/sketch/geometry_operations.hpp",
         "src/core/geometry_operations.cpp",
         "tests/geometry_operations_tests.cpp",
-        "docs/geometry-operations.md"
+        "docs/geometry-operations.md",
+        "include/sketch/desktop/main_window.hpp",
+        "src/desktop/main_window.cpp",
+        "tests/desktop_smoke.cpp"
       ],
-      "implementation_note": "Point jumping, exact automatic closure, and validated bay-window topology helpers are implemented; Document command history and undo integration remain open."
+      "implementation_note": "Point jumping is dispatched from the desktop without dirtying the project; automatic closure and bay-window completion now publish named identified-boundary commands with exact topology and undo/redo coverage. Physical Apex key mapping, native Apex project fixtures, and production qualification remain open."
     },
     {
       "id": "APX-CURVE-001",

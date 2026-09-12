@@ -88,13 +88,18 @@ an application vocabulary, not a verified mapping of Apex physical keys.
 the repeated command is identical, and rejects empty shortcuts/commands.
 The caller must normalize platform key chords before conflict detection.
 
-## Integration still required
+## Integration status and remaining work
 
-No UI dispatch, physical key preset verification, editable shortcut persistence,
-workspace command history, undo/redo, file reopen, or semantic dependency update
-is implemented here. In particular, callers must not replace a document entity
-with the geometry result while silently dropping its owned semantics. Existing
-document commands and integrity checks remain authoritative.
+The Windows desktop now dispatches point jumping from the More menu and command
+palette, and routes automatic closure and bay-window completion through the
+identified measurement-boundary command path. Those two creation operations
+retain their named history action and undo/redo as one document revision; point
+jumping updates the precision pointer without dirtying the project. The direct
+`MainWindow` APIs are also used by the deterministic desktop smoke fixture.
+Physical key preset verification, editable shortcut persistence, and broader
+semantic dependency migration remain open. Callers must not replace a document
+entity with a geometry result while silently dropping its owned semantics;
+existing document commands and integrity checks remain authoritative.
 
 APX-EDIT-004 reopen/redefine/delete/cancel/restore lifecycle support is outside
 these helpers and remains open. Other areas, architectural objects, annotations,
@@ -107,5 +112,6 @@ still required.
 
 `geometry_operations_tests.cpp` checks pivot rotation, handedness and arc sweep,
 line/arc subdivision area and perimeter, clone identity/translation, exact
-closure, bay validation, command mapping/conflicts, and invalid inputs. These
-are core tests, not evidence of end-user workflow or persistence parity.
+closure, bay validation, command mapping/conflicts, and invalid inputs. The
+desktop fixture supplies the current end-user history and undo evidence. Native
+Apex output comparison and production qualification remain open.

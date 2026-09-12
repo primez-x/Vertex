@@ -980,6 +980,64 @@ void test_automatic_room_boundary_detection_workflow() {
     }
 }
 
+void test_explicit_boundary_geometry_operations() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    const auto same_point = [](Vec2 left, Vec2 right) {
+        return std::abs(left.x - right.x) < 1e-9 && std::abs(left.y - right.y) < 1e-9;
+    };
+    const Boundary open{{{0.0, 0.0}, {4.0, 0.0}, 0.0},
+                        {{4.0, 0.0}, {4.0, 3.0}, 0.0},
+                        {{4.0, 3.0}, {0.0, 3.0}, 0.0}};
+    const auto before_close = window.document().revision();
+    const auto closed_id = window.createClosedBoundaryFromOpenChain(
+        open, QStringLiteral("living"));
+    require(!closed_id.isEmpty() && window.document().revision() == before_close + 1,
+            "automatic closure must publish one document command");
+    const auto closed_snapshot = window.document().snapshot();
+    require(closed_snapshot.history().back().action == "Auto close boundary",
+            "automatic closure must remain visible in document history");
+    const auto closed = decode_identified_boundary_entity(
+        closed_snapshot.entities().at(closed_id.toStdString()));
+    require(closed.segments.size() == 4 &&
+                same_point(closed.segments.back().segment.end,
+                           closed.segments.front().segment.start) &&
+                std::abs(signed_area(boundary_geometry(closed)) - 12.0) < 1e-9,
+            "automatic closure must add exactly the missing edge and preserve topology");
+    require(window.undoCommand() &&
+                !window.document().snapshot().entities().contains(closed_id.toStdString()) &&
+                window.redoCommand() &&
+                window.document().snapshot().entities().at(closed_id.toStdString()) ==
+                    closed_snapshot.entities().at(closed_id.toStdString()),
+            "automatic closure must undo and redo as one exact command");
+
+    const auto bay_id = window.createBayWindowBoundary(
+        {0.0, 0.0}, {1.0, -1.0}, {3.0, -1.0}, {4.0, 0.0},
+        QStringLiteral("bay"));
+    require(!bay_id.isEmpty() &&
+                window.document().snapshot().history().back().action == "Complete bay window",
+            "bay-window completion must publish a named document command");
+    const auto bay = decode_identified_boundary_entity(
+        window.document().snapshot().entities().at(bay_id.toStdString()));
+    require(bay.segments.size() == 4 &&
+                same_point(bay.segments[0].segment.end, {1.0, -1.0}) &&
+                same_point(bay.segments[1].segment.end, {3.0, -1.0}) &&
+                same_point(bay.segments[2].segment.end, {4.0, 0.0}) &&
+                same_point(bay.segments[3].segment.end, {0.0, 0.0}),
+            "bay-window completion must retain the three shoulders and exact closure edge");
+    const auto before_jump = window.document().revision();
+    require(window.selectEntity(bay_id) &&
+                window.jumpSelectedBoundaryVertex(
+                    QString::fromStdString(bay.segments[1].start_vertex_id)) &&
+                window.document().revision() == before_jump && window.lastError().isEmpty(),
+            "point jumping must target an identified vertex without dirtying the document");
+    require(window.undoCommand() &&
+                !window.document().snapshot().entities().contains(bay_id.toStdString()) &&
+                window.redoCommand() &&
+                window.document().snapshot().entities().contains(bay_id.toStdString()),
+            "bay-window completion must be undoable and redoable");
+}
+
 void test_named_revisions() {
     using namespace sketch;
     desktop::MainWindow window;
@@ -3054,6 +3112,7 @@ int main(int argc, char** argv) {
     test_boundary_vertex_insertion_workflow();
     test_boundary_redefinition_workflow();
     test_automatic_room_boundary_detection_workflow();
+    test_explicit_boundary_geometry_operations();
     test_named_revisions();
     test_boundary_transform_workflow(field_ui_capture_directory);
     test_design_phase_workflow();

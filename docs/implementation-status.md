@@ -176,6 +176,15 @@ geometry. Legacy anonymous and receipt-bound boundaries are rejected until an
 explicit identity or derivation policy is available; wall/object insertion,
 constraint reporting, and production qualification remain open.
 
+The explicit geometry-operation path now connects point jumping, exact automatic
+closure, and bay-window completion to the Windows desktop. Automatic closure
+and bay completion publish named, identified measurement-boundary commands that
+undo and redo as one document revision; point jumping moves the precision
+pointer without dirtying the project and is available from the More menu and
+command palette. The operation fixtures cover expected topology and exact
+history behavior. Physical Apex key mapping, native Apex project fixtures, and
+production qualification remain open.
+
 The same desktop path now supports **Redefine boundary…** for identified
 receipt-free boundaries. A redraw with the original edge count replaces the
 analytical segments in place, preserves stable segment and vertex references,

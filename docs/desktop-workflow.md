@@ -464,6 +464,14 @@ the change is one guarded, undoable Document command. Invalid topology, legacy
 anonymous data, receipt-bound authoring, and edge-count changes fail before
 mutation. The command remains available from **More** and the command palette.
 
+The geometry operation commands also expose **Jump to boundary vertex…** and
+**Auto close active boundary** from **More** and the command palette. Point
+jumping updates the precision pointer only. Automatic closure uses the exact
+endpoint helper and publishes a named boundary command; the direct API can
+also create a closed boundary from an open chain. Bay-window completion builds
+the three validated shoulder edges, adds the exact closing edge, and publishes
+one undoable command with the **Complete bay window** history action.
+
 `scripts/test-constraint-editor.ps1` captures the dialog at normal and 150 percent
 scale with the bundled font and a 15-second process timeout. It exercises both
 workspace entry points; separate native 3D rendering tests remain necessary.
