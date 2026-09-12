@@ -39,6 +39,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMenu>
 #include <QPainter>
 #include <QPageSize>
 #include <QPdfWriter>
@@ -101,6 +102,7 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
         QUuid::createUuid().toString(QUuid::WithoutBraces));
     const auto settings_directory = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
     const auto settings_path = settings_directory + QStringLiteral("/keyboard-shortcuts.json");
+    const auto quick_access_path = settings_directory + QStringLiteral("/quick-access.json");
     {
         sketch::desktop::MainWindow window;
         auto* toolbar = window.findChild<QToolBar*>(QStringLiteral("primaryToolbar"));
@@ -130,7 +132,11 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
                 "drawing tool rail must stay compact and icon-first");
         auto* settings = window.findChild<QAction*>(QStringLiteral("keyboardShortcutSettings"));
         auto* user_guide = window.findChild<QAction*>(QStringLiteral("userGuide"));
-        require(settings && user_guide, "shortcut editor and local user guide must be discoverable");
+        auto* quick_access = window.findChild<QToolButton*>(QStringLiteral("quickAccess"));
+        auto* quick_access_settings = window.findChild<QAction*>(QStringLiteral("quickAccessSettings"));
+        require(settings && user_guide && quick_access && quick_access->menu() &&
+                    quick_access_settings && !quick_access->accessibleName().isEmpty(),
+                "shortcut editor, quick-access menu, and local user guide must be discoverable");
         const auto* copy = window.findChild<QAction*>(QStringLiteral("copySelection"));
         const auto* cut = window.findChild<QAction*>(QStringLiteral("cutSelection"));
         const auto* paste = window.findChild<QAction*>(QStringLiteral("pasteSelection"));
@@ -180,6 +186,46 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
         });
         settings->trigger();
         require(define->shortcut() == QKeySequence("F4"), "cancel must preserve active bindings");
+
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = window.findChild<QDialog*>(QStringLiteral("quickAccessDialog"));
+            require(dialog, "quick-access editor must open");
+            auto* list = dialog->findChild<QListWidget*>(QStringLiteral("quickAccessList"));
+            auto* buttons = dialog->findChild<QDialogButtonBox*>(QStringLiteral("quickAccessButtons"));
+            auto* status = dialog->findChild<QLabel*>(QStringLiteral("quickAccessStatus"));
+            require(list && buttons && status, "quick-access controls must exist");
+            bool found_annotations = false;
+            for (int row = 0; row < list->count(); ++row) {
+                auto* item = list->item(row);
+                if (item->text() == QStringLiteral("Annotations")) {
+                    item->setCheckState(Qt::Checked);
+                    found_annotations = true;
+                    break;
+                }
+            }
+            require(found_annotations, "quick-access editor must expose annotations");
+            if (!capture_directory.isEmpty())
+                require(dialog->grab().save(capture_directory + QStringLiteral("/quick-access.png")),
+                        "quick-access capture");
+            buttons->button(QDialogButtonBox::Save)->click();
+            require(dialog->result() == QDialog::Accepted && status->text().isEmpty(),
+                    "quick-access selection must save cleanly");
+        });
+        quick_access_settings->trigger();
+        require(QFile::exists(quick_access_path), "quick-access commands must be saved locally");
+        bool annotations_pinned = false;
+        for (auto* action : quick_access->menu()->actions()) {
+            if (action->text() == QStringLiteral("Annotations")) annotations_pinned = true;
+        }
+        require(annotations_pinned, "saved quick-access commands must be available from the menu");
+        sketch::desktop::MainWindow quick_access_reopened;
+        bool reopened_annotations_pinned = false;
+        if (auto* reopened_button = quick_access_reopened.findChild<QToolButton*>(QStringLiteral("quickAccess"))) {
+            for (auto* action : reopened_button->menu()->actions()) {
+                if (action->text() == QStringLiteral("Annotations")) reopened_annotations_pinned = true;
+            }
+        }
+        require(reopened_annotations_pinned, "quick-access commands must survive a new workspace window");
 
         const auto wall = window.createStraightWall({0, 0}, {4, 0});
         require(!wall.isEmpty() && window.selectEntity(wall), "keypad fixture wall must be selectable");
@@ -256,6 +302,7 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
         require(fallback.findChild<QAction*>(QStringLiteral("defineAreaShortcut"))->shortcut() == QKeySequence("Ctrl+Shift+D"),
                 "corrupt settings must fail closed to the complete default preset");
     }
+    require(QFile::remove(quick_access_path), "test quick-access settings must be removed");
     require(QFile::remove(settings_path), "test shortcut settings must be removed");
     QDir().rmdir(settings_directory);
     QCoreApplication::setApplicationName(original_name);

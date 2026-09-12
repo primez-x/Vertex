@@ -420,6 +420,7 @@ public:
     [[nodiscard]] bool showPrintPreview();
 
     void showCommandPalette();
+    void showQuickAccessSettings();
     void showAnnotationEditor();
     void showReferenceImport();
     void showReferenceCalibration();

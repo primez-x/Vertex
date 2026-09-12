@@ -56,6 +56,18 @@ This panel does not claim DISTO connectivity or physical touch-device qualificat
 duplicate/reserved binding rejection, malformed settings fallback, on-screen
 measurement entry, invalid quantities, and undo.
 
+## Quick-access commands
+
+The star button on the compact workspace toolbar opens the locally pinned
+command list. **Customize quick access…** is also searchable from Commands and
+opens a checklist of the supported commands, including workspace switching,
+editing, annotations, references, schedules, and architectural tools. Saving
+writes `quick-access.json` under Qt's per-user `AppConfigLocation`; the project
+file and geometry are unaffected. Pins are ordered by the checklist and are
+available from every workspace window opened afterward. A malformed or
+unsupported file is ignored and the bounded default set is restored with a
+diagnostic in the editor.
+
 ## Saved workspace profiles
 
 Use **Workspace profiles…** from the More menu or search for **Manage workspace

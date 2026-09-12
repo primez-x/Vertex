@@ -1386,7 +1386,7 @@
       "implementation_sources": [
         "src/desktop/main_window.cpp"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "The desktop exposes a searchable command palette, a compact Quick access menu, and a locally persisted checklist editor for supported commands. Invalid settings fail closed to bounded defaults; full command coverage, physical shortcut verification, and production acceptance remain open."
     },
     {
       "id": "APX-INPUT-001",

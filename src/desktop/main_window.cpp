@@ -12134,6 +12134,185 @@ public:
         dialog.exec();
     }
 
+    struct QuickAccessBinding {
+        QString id;
+        QAction* action{};
+    };
+
+    QString quickAccessSettingsPath() const {
+        return QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) +
+               QStringLiteral("/quick-access.json");
+    }
+
+    QString validateQuickAccess(const std::vector<QString>& ids) const {
+        if (ids.size() > 12) return QStringLiteral("Pin at most 12 commands.");
+        std::vector<QString> seen;
+        seen.reserve(ids.size());
+        for (const auto& id : ids) {
+            const auto binding = std::find_if(
+                m_quick_access_bindings.begin(), m_quick_access_bindings.end(),
+                [&](const QuickAccessBinding& candidate) { return candidate.id == id; });
+            if (binding == m_quick_access_bindings.end() || binding->action == nullptr)
+                return QStringLiteral("Quick-access command '%1' is unavailable.").arg(id);
+            if (std::find(seen.begin(), seen.end(), id) != seen.end())
+                return QStringLiteral("A quick-access command is pinned more than once.");
+            seen.push_back(id);
+        }
+        return {};
+    }
+
+    void rebuildQuickAccessMenu() {
+        if (m_quick_access_menu == nullptr) return;
+        m_quick_access_menu->clear();
+        std::size_t added = 0;
+        for (const auto& id : m_quick_access_ids) {
+            const auto binding = std::find_if(
+                m_quick_access_bindings.begin(), m_quick_access_bindings.end(),
+                [&](const QuickAccessBinding& candidate) { return candidate.id == id; });
+            if (binding == m_quick_access_bindings.end() || binding->action == nullptr) continue;
+            m_quick_access_menu->addAction(binding->action);
+            ++added;
+        }
+        if (added == 0) {
+            auto* empty = m_quick_access_menu->addAction(QStringLiteral("No pinned commands"));
+            empty->setEnabled(false);
+        }
+        m_quick_access_menu->addSeparator();
+        m_quick_access_menu->addAction(m_quick_access_settings_action);
+    }
+
+    void initializeQuickAccess() {
+        m_quick_access_bindings.clear();
+        const auto add = [this](QString id, QAction* action) {
+            if (action != nullptr) m_quick_access_bindings.push_back({std::move(id), action});
+        };
+        add(QStringLiteral("new"), m_new_action);
+        add(QStringLiteral("open"), m_open_action);
+        add(QStringLiteral("recover"), m_recover_action);
+        add(QStringLiteral("save"), m_save_action);
+        add(QStringLiteral("save-as"), m_save_as_action);
+        add(QStringLiteral("undo"), m_undo_action);
+        add(QStringLiteral("redo"), m_redo_action);
+        add(QStringLiteral("measurement"), m_measurement_action);
+        add(QStringLiteral("architectural"), m_architectural_action);
+        add(QStringLiteral("commands"), m_palette_action);
+        add(QStringLiteral("annotations"), m_annotation_action);
+        add(QStringLiteral("reference"), m_reference_action);
+        add(QStringLiteral("schedules"), m_schedule_action);
+        add(QStringLiteral("sheet-settings"), m_sheet_action);
+        add(QStringLiteral("architectural-view"), m_view_action);
+        add(QStringLiteral("design-phases"), m_remodel_action);
+        add(QStringLiteral("room-relationships"), m_relationship_action);
+        add(QStringLiteral("levels"), m_levels_action);
+        add(QStringLiteral("reference-grids"), m_reference_grid_action);
+        add(QStringLiteral("assemblies"), m_assembly_action);
+        add(QStringLiteral("assistance"), m_assistance_action);
+        add(QStringLiteral("workspace-profiles"), m_workspace_profiles_action);
+        add(QStringLiteral("revisions"), m_revisions_action);
+        add(QStringLiteral("transform"), m_transform_action);
+        add(QStringLiteral("redefine"), m_redefine_action);
+        add(QStringLiteral("detect-areas"), m_detect_areas_action);
+        add(QStringLiteral("terrain"), m_terrain_action);
+
+        const std::vector<QString> defaults{
+            QStringLiteral("new"), QStringLiteral("open"), QStringLiteral("save"),
+            QStringLiteral("undo"), QStringLiteral("redo"), QStringLiteral("commands")};
+        m_quick_access_ids = defaults;
+        QFile file(quickAccessSettingsPath());
+        if (file.exists()) {
+            try {
+                if (!file.open(QIODevice::ReadOnly) || file.size() > 64 * 1024)
+                    throw std::runtime_error("Quick-access settings cannot be read.");
+                const auto document = json::parse(file.readAll().toStdString());
+                if (!document.is_object() || document.size() != 3 ||
+                    document.at("schema") != "sketch.quick-access" ||
+                    document.at("version") != 1 || !document.at("pinned").is_array() ||
+                    document.at("pinned").size() > 12) {
+                    throw std::runtime_error("Unsupported quick-access settings.");
+                }
+                std::vector<QString> ids;
+                ids.reserve(document.at("pinned").size());
+                for (const auto& value : document.at("pinned")) {
+                    if (!value.is_string()) throw std::runtime_error("Invalid quick-access command.");
+                    ids.push_back(QString::fromStdString(value.get<std::string>()));
+                }
+                const auto error = validateQuickAccess(ids);
+                if (!error.isEmpty()) throw std::runtime_error(error.toStdString());
+                m_quick_access_ids = std::move(ids);
+            } catch (const std::exception& error) {
+                m_quick_access_load_error = QStringLiteral(
+                    "Saved quick-access commands were ignored: %1. Defaults are active.")
+                    .arg(QString::fromUtf8(error.what()));
+            }
+        }
+        rebuildQuickAccessMenu();
+    }
+
+    void showQuickAccessSettings() {
+        QDialog dialog(owner);
+        styleDialog(dialog);
+        dialog.setObjectName(QStringLiteral("quickAccessDialog"));
+        dialog.setWindowTitle(QStringLiteral("Quick access"));
+        dialog.resize(500, 520);
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* help = new QLabel(QStringLiteral(
+            "Pin the commands you use most. The selection and order are stored locally on this PC."),
+            &dialog);
+        help->setWordWrap(true);
+        layout->addWidget(help);
+        auto* list = new QListWidget(&dialog);
+        list->setObjectName(QStringLiteral("quickAccessList"));
+        list->setSelectionMode(QAbstractItemView::NoSelection);
+        for (const auto& binding : m_quick_access_bindings) {
+            auto* item = new QListWidgetItem(binding.action->text(), list);
+            item->setData(Qt::UserRole, binding.id);
+            item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+            item->setCheckState(std::find(m_quick_access_ids.begin(), m_quick_access_ids.end(),
+                                          binding.id) != m_quick_access_ids.end()
+                                    ? Qt::Checked : Qt::Unchecked);
+        }
+        layout->addWidget(list, 1);
+        auto* status = new QLabel(m_quick_access_load_error, &dialog);
+        status->setObjectName(QStringLiteral("quickAccessStatus"));
+        status->setWordWrap(true);
+        layout->addWidget(status);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel,
+                                             &dialog);
+        buttons->setObjectName(QStringLiteral("quickAccessButtons"));
+        layout->addWidget(buttons);
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+            std::vector<QString> ids;
+            for (int row = 0; row < list->count(); ++row) {
+                auto* item = list->item(row);
+                if (item->checkState() == Qt::Checked)
+                    ids.push_back(item->data(Qt::UserRole).toString());
+            }
+            const auto error = validateQuickAccess(ids);
+            if (!error.isEmpty()) {
+                status->setText(error);
+                return;
+            }
+            json document{{"schema", "sketch.quick-access"}, {"version", 1},
+                          {"pinned", json::array()}};
+            for (const auto& id : ids) document["pinned"].push_back(id.toStdString());
+            const auto bytes = QByteArray::fromStdString(document.dump(2));
+            QSaveFile file(quickAccessSettingsPath());
+            if (!QDir().mkpath(QFileInfo(file.fileName()).absolutePath()) ||
+                !file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() ||
+                !file.commit()) {
+                status->setText(QStringLiteral(
+                    "Could not save quick-access commands. Existing pins remain active."));
+                return;
+            }
+            m_quick_access_ids = std::move(ids);
+            m_quick_access_load_error.clear();
+            rebuildQuickAccessMenu();
+            dialog.accept();
+        });
+        dialog.exec();
+    }
+
     void showMeasurementKeypad() {
         QDialog dialog(owner);
         styleDialog(dialog);
@@ -12391,6 +12570,7 @@ public:
         std::vector<Command> commands{
             {QStringLiteral("Open user guide"), [this] { showUserGuide(); }},
             {QStringLiteral("Customize keyboard shortcuts"), [this] { showShortcutSettings(); }},
+            {QStringLiteral("Customize quick access"), [this] { showQuickAccessSettings(); }},
             {QStringLiteral("Measurement keypad"), [this] { showMeasurementKeypad(); }},
             {QStringLiteral("New project"), [this] { createNewProject(); }},
             {QStringLiteral("Open project"), [this] { openFromDialog(); }},
@@ -13472,6 +13652,27 @@ private:
         auto* shortcut_settings = add_toolbar_action(QStringLiteral("Shortcuts"), "<rect x='3' y='6' width='18' height='12' rx='2'/><path d='M7 10h2M11 10h2M15 10h2M7 14h10'/>");
         shortcut_settings->setObjectName(QStringLiteral("keyboardShortcutSettings"));
 
+        m_quick_access_menu = new QMenu(owner);
+        m_quick_access_menu->setObjectName(QStringLiteral("quickAccessMenu"));
+        m_quick_access_settings_action = new QAction(QStringLiteral("Customize quick access…"), owner);
+        m_quick_access_settings_action->setObjectName(QStringLiteral("quickAccessSettings"));
+        owner->addAction(m_quick_access_settings_action);
+        QObject::connect(m_quick_access_settings_action, &QAction::triggered, owner,
+                         [this] { showQuickAccessSettings(); });
+        m_quick_access_button = new QToolButton(toolbar);
+        m_quick_access_button->setObjectName(QStringLiteral("quickAccess"));
+        m_quick_access_button->setIcon(modern_toolbar_icon(
+            "<path d='m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-2.8-5.6 2.8 1.1-6.2L3 9.6l6.2-.9z'/><path d='M12 7v6'/>"));
+        m_quick_access_button->setToolTip(QStringLiteral("Quick access commands"));
+        m_quick_access_button->setStatusTip(QStringLiteral("Quick access commands"));
+        m_quick_access_button->setAccessibleName(QStringLiteral("Quick access"));
+        m_quick_access_button->setAccessibleDescription(QStringLiteral(
+            "Open locally pinned commands or customize the quick-access list"));
+        m_quick_access_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        m_quick_access_button->setMenu(m_quick_access_menu);
+        m_quick_access_button->setPopupMode(QToolButton::InstantPopup);
+        toolbar->addWidget(m_quick_access_button);
+
         // Keep the canvas-facing toolbar focused. Secondary authoring and
         // presentation commands remain one click away in an overflow menu,
         // while their QAction identities and shortcuts stay stable.
@@ -13727,6 +13928,7 @@ private:
                              }
                          });
         initializeShortcuts();
+        initializeQuickAccess();
         applyTheme(WorkspaceTheme::light);
 
         auto* central = new QWidget(owner);
@@ -17308,6 +17510,12 @@ private:
     QAction* m_terrain_action{};
     std::vector<ShortcutBinding> m_shortcuts;
     QString m_shortcut_load_error;
+    std::vector<QuickAccessBinding> m_quick_access_bindings;
+    std::vector<QString> m_quick_access_ids;
+    QString m_quick_access_load_error;
+    QMenu* m_quick_access_menu{};
+    QAction* m_quick_access_settings_action{};
+    QToolButton* m_quick_access_button{};
     QAction* m_annotation_action{};
     QAction* m_reference_action{};
     QAction* m_schedule_action{};
@@ -17844,6 +18052,10 @@ bool MainWindow::showPrintPreview() {
 
 void MainWindow::showCommandPalette() {
     m_impl->showCommandPalette();
+}
+
+void MainWindow::showQuickAccessSettings() {
+    m_impl->showQuickAccessSettings();
 }
 
 void MainWindow::showConstraintEditor() {
