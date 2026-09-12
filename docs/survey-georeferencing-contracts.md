@@ -23,6 +23,21 @@ recalculation. Export writes the versioned JSON contract atomically, retaining
 source reference, legs, local vertices, tolerance, and diagnostics. Invalid
 legs identify their input line. Calculation/export does not alter the project.
 
+**Add boundary** inserts a closed, area-bearing traverse into the active
+drawing layer as one undoable measurement boundary with classification
+`survey`. Measured legs are preserved. A nonzero endpoint residual requires an
+explicit extra segment back to the origin, described in the dialog; geometry
+validation may reject a residual too small to form a valid segment. No bearing
+or distance is silently adjusted. Open traverses cannot be added as areas.
+The dialog's document, revision, selection, layer, and units must still match
+the captured drawing context before insertion.
+
+The boundary's `extensions.survey_source` contains version 1, the original
+report, and `added_closing_segment`. This is historical source metadata:
+subsequent boundary edits do not recalculate it or claim to update the original
+survey. Geometry and metadata save/reopen and undo/redo together; the boundary
+uses the common canvas and vector-output path.
+
 Desktop exports add an optional `input_provenance` object, version 1, to the
 version-1 core report. It records `legs_text` and `source_text` verbatim,
 `default_unit` (`m` or `ft`) for suffixless input,
@@ -41,6 +56,5 @@ shown for correction with report export disabled. The default-unit selector
 is explicit and independent of project display units. This is native report
 reopening, not Apex interchange or a signed survey attestation.
 
-This is a calculator and report workflow; persisted survey geometry in the
-project, Apex survey exchange, DMS entry, and production survey qualification
-remain incomplete.
+Updating existing traverses from survey calls, Apex survey exchange, DMS entry,
+and production survey qualification remain incomplete.

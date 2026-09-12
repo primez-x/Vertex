@@ -1106,6 +1106,7 @@ void test_contextual_gable_roof_inspector(const QString& capture_directory) {
 
 void test_survey_calculator(const QString& capture_directory) {
     sketch::desktop::MainWindow window;
+    QString survey_id;
     QTemporaryDir directory;
     require(directory.isValid(), "survey export fixture directory");
     const auto revision = window.document().revision();
@@ -1181,6 +1182,21 @@ void test_survey_calculator(const QString& capture_directory) {
         require(input_units->currentData().toString() == "m" && output->isEnabled() &&
                     result->text().contains("10000.0000 m²"),
                 "reopened survey must restore default units and recompute rather than trust stored area");
+        auto* add = dialog->findChild<QPushButton*>("surveyAddBoundary");
+        require(add && add->isEnabled(), "closed survey must offer project boundary creation");
+        add->click();
+        survey_id = window.selectedEntityId();
+        require(!survey_id.isEmpty() && window.document().revision() == revision + 1,
+                "adding survey geometry must be one document command");
+        const auto entity = window.document().snapshot().entities().at(survey_id.toStdString());
+        require(entity.properties.at("classification") == "survey" &&
+                    entity.extensions.at("survey_source").at("report").at("diagnostics").at("area_m2") == 10000.0 &&
+                    sketch::boundary_geometry(sketch::decode_identified_boundary_entity(entity)).size() == 4,
+                "project survey boundary must retain its measured geometry and report provenance");
+        require(window.selectEntity({}), "change selection while survey calculator remains open");
+        add->click();
+        require(window.document().revision() == revision + 1 && result->text().contains("context changed"),
+                "survey insertion must reject a stale drawing context without duplicate geometry");
         const auto restored_input = input->toPlainText();
         tampered["input_provenance"]["version"] = 99;
         require(saved.open(QIODevice::WriteOnly | QIODevice::Truncate), "prepare unsupported report fixture");
@@ -1193,14 +1209,24 @@ void test_survey_calculator(const QString& capture_directory) {
         require(!output->isEnabled() && result->text().isEmpty(), "edits must invalidate stale survey results");
         calculate->click();
         require(output->isEnabled() && result->text().contains("Open traverse") &&
-                    result->text().contains("Area unavailable"), "open traverses must not display acreage");
+                    result->text().contains("Area unavailable") && !add->isEnabled(),
+                "open traverses must not display acreage or allow area creation");
         input->setPlainText("NE, 91, 100 ft");
         calculate->click();
         require(!output->isEnabled() && result->text().contains("Line 1"), "invalid survey leg must identify its line");
         dialog->reject();
     });
     action->trigger();
-    require(window.document().revision() == revision, "survey reports must not silently alter the project");
+    require(window.document().revision() == revision + 1, "only explicit boundary creation may alter the project");
+    const auto added = window.document().snapshot().entities().at(survey_id.toStdString());
+    require(window.undoCommand() && !window.document().snapshot().entities().contains(survey_id.toStdString()) &&
+                window.redoCommand() && window.document().snapshot().entities().at(survey_id.toStdString()) == added,
+            "survey geometry and provenance must undo and redo together");
+    const auto project_path = directory.filePath("survey.bldproj");
+    require(window.saveProjectAs(project_path) && window.openProject(project_path) &&
+                window.document().snapshot().entities().at(survey_id.toStdString()) == added,
+            "survey boundary source and geometry must survive project save/reopen");
+    require(window.exportDraftSvg(directory.filePath("survey.svg")), "survey boundary must export through shared vector output");
 }
 
 void test_design_phase_workflow() {

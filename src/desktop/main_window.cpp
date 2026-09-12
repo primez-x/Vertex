@@ -5863,7 +5863,8 @@ public:
     }
 
     QString createBoundary(const Boundary& boundary, const QString& classification,
-                           std::optional<Revision> expected_revision = std::nullopt) {
+                           std::optional<Revision> expected_revision = std::nullopt,
+                           json extensions = json::object()) {
         const auto revision = expected_revision.value_or(m_document->revision());
         const auto drawing_context = requireDrawingContext();
         if (!drawing_context) return {};
@@ -5886,7 +5887,7 @@ public:
                                   {"factor_numerator", 1},
                                   {"factor_denominator", 1}},
                              false,
-                             json::object()};
+                             std::move(extensions)};
         // New authoring starts with stable segment/vertex identities so every
         // later edit can remain a single undoable semantic command. The
         // upgrade helper preserves the entered geometry and all metadata.
@@ -6508,6 +6509,7 @@ public:
     }
 
     void showSurveyCalculator() {
+        auto drawing_context = captureModalContext();
         QDialog dialog(owner);
         dialog.setObjectName(QStringLiteral("surveyCalculator"));
         dialog.setWindowTitle(QStringLiteral("Survey traverse"));
@@ -6530,7 +6532,8 @@ public:
         auto* help = new QLabel(QStringLiteral(
             "One leg per line: quadrant, angle in decimal degrees, distance with units.\n"
             "Example: NE, 45, 100 ft. Quadrants: NE, SE, SW, NW; angles: 0–90°.\n"
-            "Coordinates start at a local origin. No closure adjustment is applied."), &dialog);
+            "Coordinates start at a local origin. No closure adjustment is applied.\n"
+            "Add boundary retains measured legs and adds a closing segment to the origin if needed."), &dialog);
         help->setWordWrap(true);
         layout->addWidget(help);
         auto* input = new QPlainTextEdit(&dialog);
@@ -6551,10 +6554,15 @@ public:
         auto* export_report = buttons->addButton(QStringLiteral("Export report…"), QDialogButtonBox::ActionRole);
         export_report->setObjectName(QStringLiteral("surveyExport"));
         export_report->setEnabled(false);
+        auto* add_boundary = buttons->addButton(QStringLiteral("Add boundary"), QDialogButtonBox::ActionRole);
+        add_boundary->setObjectName(QStringLiteral("surveyAddBoundary"));
+        add_boundary->setEnabled(false);
         buttons->addButton(QDialogButtonBox::Close);
         layout->addWidget(buttons);
         std::optional<QString> report;
-        const auto invalidate = [&] { report.reset(); result->clear(); export_report->setEnabled(false); };
+        const auto invalidate = [&] {
+            report.reset(); result->clear(); export_report->setEnabled(false); add_boundary->setEnabled(false);
+        };
         QObject::connect(input, &QPlainTextEdit::textChanged, &dialog, invalidate);
         QObject::connect(provenance, &QLineEdit::textChanged, &dialog, invalidate);
         QObject::connect(tolerance, &QLineEdit::textChanged, &dialog, invalidate);
@@ -6618,6 +6626,37 @@ public:
                 report = QString::fromStdString(report_json.dump(2));
                 result->setText(summary);
                 export_report->setEnabled(true);
+                add_boundary->setEnabled(d.area_m2.has_value() && m_document->is_editable());
+            } catch (const std::exception& error) { result->setText(QString::fromUtf8(error.what())); }
+        });
+        QObject::connect(add_boundary, &QPushButton::clicked, &dialog, [&] {
+            if (!report) return;
+            if (!modalContextUnchanged(drawing_context)) {
+                result->setText(QStringLiteral("The project context changed. Reopen Survey traverse before adding geometry."));
+                return;
+            }
+            try {
+                const auto source = json::parse(report->toStdString());
+                if (source.at("diagnostics").at("area_m2").is_null())
+                    throw std::invalid_argument("An open traverse cannot become an area boundary.");
+                Boundary boundary;
+                const auto& vertices = source.at("vertices");
+                const auto point = [](const json& v) {
+                    return Vec2{v.at("east_m").get<double>(), v.at("north_m").get<double>()};
+                };
+                for (std::size_t index = 1; index < vertices.size(); ++index)
+                    boundary.push_back({point(vertices[index - 1]), point(vertices[index]), 0.0});
+                const auto start = point(vertices.front());
+                const auto end = point(vertices.back());
+                const bool closing_segment = start.x != end.x || start.y != end.y;
+                if (closing_segment) boundary.push_back({end, start, 0.0});
+                const auto id = createBoundary(boundary, QStringLiteral("survey"), drawing_context.revision,
+                    {{"survey_source", {{"version", 1}, {"report", source},
+                                        {"added_closing_segment", closing_segment}}}});
+                if (id.isEmpty()) { result->setText(lastError()); return; }
+                drawing_context = captureModalContext();
+                fitView();
+                result->setText(QStringLiteral("Survey boundary added. Original measurements are preserved in its source metadata."));
             } catch (const std::exception& error) { result->setText(QString::fromUtf8(error.what())); }
         });
         QObject::connect(open_report, &QPushButton::clicked, &dialog, [&] {
