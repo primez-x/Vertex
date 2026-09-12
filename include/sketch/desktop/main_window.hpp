@@ -273,6 +273,10 @@ public:
     void showAssemblies();
     void showConstraintEditor();
     void showWorkspaceProfiles();
+    void showRevisionHistory();
+    // Writes an immutable copy of a named revision without changing the
+    // current document or its later history.
+    [[nodiscard]] bool restoreNamedRevision(const QString& name, const QString& path);
     void fitView();
 
     [[nodiscard]] QString lastError() const;

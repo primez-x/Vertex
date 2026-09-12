@@ -236,9 +236,13 @@
       "package": 3,
       "blocker": null,
       "implementation_sources": [
-        "src/core/document.cpp"
+        "src/core/document.cpp",
+        "src/desktop/main_window.cpp",
+        "include/sketch/desktop/main_window.hpp",
+        "tests/desktop_smoke.cpp",
+        "docs/desktop-workflow.md"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "The Document NameRevision command is now surfaced in a local desktop editor with ordered listing, read-only entity/asset comparison, and guarded restore-as-new-project copies that preserve the open document. Geometric/calculation/presentation diff detail and production fixtures remain open."
     },
     {
       "id": "CORE-DOC-002",

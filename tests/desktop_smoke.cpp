@@ -5,6 +5,7 @@
 #include "sketch/room_relationships.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/vertical_levels.hpp"
+#include "sketch/project_store.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/annotation_entity_codec.hpp"
@@ -337,6 +338,58 @@ void test_workspace_profiles() {
     QDir().rmdir(settings_directory);
     QCoreApplication::setApplicationName(original_name);
     QStandardPaths::setTestModeEnabled(original_test_mode);
+}
+
+void test_named_revisions() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    auto* action = window.findChild<QAction*>(QStringLiteral("revisionHistory"));
+    require(action, "named revisions should be available from the secondary command surface");
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("revisionHistoryDialog"));
+        require(dialog, "named revision editor must open");
+        auto* list = dialog->findChild<QListWidget*>(QStringLiteral("revisionList"));
+        auto* name = dialog->findChild<QLineEdit*>(QStringLiteral("revisionName"));
+        auto* name_current = dialog->findChild<QPushButton*>(QStringLiteral("nameCurrentRevision"));
+        auto* compare = dialog->findChild<QPushButton*>(QStringLiteral("compareRevisions"));
+        auto* comparison = dialog->findChild<QPlainTextEdit*>(QStringLiteral("revisionComparison"));
+        auto* status = dialog->findChild<QLabel*>(QStringLiteral("revisionStatus"));
+        require(list && name && name_current && compare && comparison && status,
+                "named revision editor must expose history, naming, compare, and status controls");
+        name->setText(QStringLiteral("Existing conditions"));
+        name_current->click();
+        require(list->count() == 1 && window.document().snapshot().named_revisions().contains(
+                    "Existing conditions"),
+                "naming the current revision must create one persisted history marker");
+        const auto named_revision = window.document().snapshot().named_revisions().at(
+            "Existing conditions");
+        const auto wall = window.createStraightWall({0.0, 0.0}, {4.0, 0.0});
+        require(!wall.isEmpty() && window.document().revision() > named_revision,
+                "later edits must remain available after naming a revision");
+        compare->click();
+        require(comparison->toPlainText().contains(QStringLiteral("Entities added: 1")) &&
+                    status->text().contains(QStringLiteral("without changing"), Qt::CaseInsensitive),
+                "comparison must report later semantic changes without mutating the document");
+        dialog->reject();
+    });
+    action->trigger();
+    const auto current_revision = window.document().revision();
+    require(window.document().snapshot().named_revisions().contains("Existing conditions") &&
+                window.document().revision() == current_revision,
+            "closing revision history must retain the named marker and current head");
+
+    QTemporaryDir directory;
+    require(directory.isValid(), "revision restore fixture needs a temporary directory");
+    const auto path = directory.filePath(QStringLiteral("existing-conditions.bldproj"));
+    const auto before_restore = window.document().snapshot();
+    require(window.restoreNamedRevision(QStringLiteral("Existing conditions"), path),
+            "restoring a named revision must write a portable project copy");
+    const auto restored = ProjectStore::load(std::filesystem::path(path.toStdWString()));
+    require(!restored.document.dirty() && restored.document.revision() ==
+                before_restore.named_revisions().at("Existing conditions") &&
+                restored.document.snapshot().entities().size() < before_restore.entities().size() &&
+                window.document().snapshot().entities().size() == before_restore.entities().size(),
+            "restoring a revision must leave later work in the current document untouched");
 }
 
 void test_organization_context() {
@@ -991,6 +1044,7 @@ int main(int argc, char** argv) {
     test_shortcuts_and_measurement_keypad(field_ui_capture_directory);
     test_project_subject_metadata();
     test_workspace_profiles();
+    test_named_revisions();
     test_design_phase_workflow();
     test_room_relationship_workflow();
     test_vertical_levels_workflow();

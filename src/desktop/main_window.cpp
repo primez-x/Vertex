@@ -2333,6 +2333,211 @@ public:
         dialog.exec();
     }
 
+    struct RevisionDiffSummary {
+        std::size_t added_entities = 0;
+        std::size_t removed_entities = 0;
+        std::size_t changed_entities = 0;
+        std::size_t added_assets = 0;
+        std::size_t removed_assets = 0;
+        std::size_t changed_assets = 0;
+    };
+
+    static RevisionDiffSummary compareRevisions(const DocumentSnapshot& older,
+                                                const DocumentSnapshot& newer) {
+        RevisionDiffSummary result;
+        const auto count_entities = [](const auto& before, const auto& after,
+                                       std::size_t& added, std::size_t& removed,
+                                       std::size_t& changed) {
+            for (const auto& [id, value] : after) {
+                const auto found = before.find(id);
+                if (found == before.end()) ++added;
+                else if (!(found->second == value)) ++changed;
+            }
+            for (const auto& [id, value] : before) {
+                (void)value;
+                if (!after.contains(id)) ++removed;
+            }
+        };
+        count_entities(older.entities(), newer.entities(), result.added_entities,
+                       result.removed_entities, result.changed_entities);
+        count_entities(older.assets(), newer.assets(), result.added_assets,
+                       result.removed_assets, result.changed_assets);
+        return result;
+    }
+
+    bool restoreNamedRevision(const QString& name, const QString& path) {
+        try {
+            if (m_boundary_session) {
+                throw std::runtime_error("Finish or cancel the active boundary before restoring a revision copy.");
+            }
+            const auto destination = path.trimmed();
+            if (destination.isEmpty()) {
+                throw std::invalid_argument("Choose a destination project file.");
+            }
+            const auto requested_name = name.trimmed().toStdString();
+            const auto source = authoringSnapshot();
+            const auto found = source.named_revisions().find(requested_name);
+            if (found == source.named_revisions().end()) {
+                throw std::invalid_argument("The selected named revision is no longer available.");
+            }
+            auto restored = Document::fork_at_revision(source, found->second);
+            restored.mark_saved(restored.revision());
+            (void)ProjectStore::save(filesystem_path(destination), restored.snapshot());
+            clearError();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Restore revision: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    void showRevisionHistory() {
+        QDialog dialog(owner);
+        styleDialog(dialog);
+        dialog.setObjectName(QStringLiteral("revisionHistoryDialog"));
+        dialog.setWindowTitle(QStringLiteral("Named revisions"));
+        dialog.resize(760, 470);
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* help = new QLabel(QStringLiteral(
+            "Name stable project states as you work. Comparisons are read-only; restoring writes a new project copy and leaves this document unchanged."),
+            &dialog);
+        help->setWordWrap(true);
+        layout->addWidget(help);
+
+        auto* body = new QHBoxLayout;
+        auto* revisions = new QListWidget(&dialog);
+        revisions->setObjectName(QStringLiteral("revisionList"));
+        revisions->setSelectionMode(QAbstractItemView::SingleSelection);
+        body->addWidget(revisions, 1);
+        auto* comparison = new QPlainTextEdit(&dialog);
+        comparison->setObjectName(QStringLiteral("revisionComparison"));
+        comparison->setReadOnly(true);
+        comparison->setPlaceholderText(QStringLiteral("Select a named revision and choose Compare."));
+        body->addWidget(comparison, 2);
+        layout->addLayout(body, 1);
+
+        auto* name = new QLineEdit(&dialog);
+        name->setObjectName(QStringLiteral("revisionName"));
+        name->setPlaceholderText(QStringLiteral("Existing conditions, permit issue, client review"));
+        name->setAccessibleName(QStringLiteral("Revision name"));
+        layout->addWidget(name);
+
+        auto* status = new QLabel(&dialog);
+        status->setObjectName(QStringLiteral("revisionStatus"));
+        status->setWordWrap(true);
+        layout->addWidget(status);
+        auto* actions = new QHBoxLayout;
+        auto* name_current = new QPushButton(QStringLiteral("Name current revision"), &dialog);
+        name_current->setObjectName(QStringLiteral("nameCurrentRevision"));
+        auto* compare = new QPushButton(QStringLiteral("Compare to current"), &dialog);
+        compare->setObjectName(QStringLiteral("compareRevisions"));
+        auto* restore = new QPushButton(QStringLiteral("Restore as new project…"), &dialog);
+        restore->setObjectName(QStringLiteral("restoreRevision"));
+        auto* close = new QPushButton(QStringLiteral("Close"), &dialog);
+        actions->addWidget(name_current);
+        actions->addWidget(compare);
+        actions->addWidget(restore);
+        actions->addStretch(1);
+        actions->addWidget(close);
+        layout->addLayout(actions);
+
+        const auto populate = [&] {
+            revisions->clear();
+            try {
+                const auto snapshot = authoringSnapshot();
+                std::vector<std::pair<std::string, Revision>> entries;
+                entries.reserve(snapshot.named_revisions().size());
+                for (const auto& entry : snapshot.named_revisions()) entries.push_back(entry);
+                std::sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) {
+                    return left.second == right.second ? left.first < right.first : left.second < right.second;
+                });
+                for (const auto& [revision_name, revision] : entries) {
+                    auto* item = new QListWidgetItem(
+                        QStringLiteral("%1  •  revision %2")
+                            .arg(QString::fromStdString(revision_name))
+                            .arg(revision), revisions);
+                    item->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(revision));
+                    item->setData(Qt::UserRole + 1, QString::fromStdString(revision_name));
+                    item->setToolTip(QStringLiteral("Document revision %1").arg(revision));
+                }
+                if (revisions->count() > 0) revisions->setCurrentRow(0);
+                else status->setText(QStringLiteral("No named revisions yet."));
+            } catch (const std::exception& error) {
+                status->setText(QStringLiteral("Revision history is unavailable: %1")
+                                    .arg(QString::fromUtf8(error.what())));
+            }
+        };
+        populate();
+        QObject::connect(revisions, &QListWidget::currentItemChanged, &dialog,
+                         [name](QListWidgetItem* current, QListWidgetItem*) {
+            if (current) name->setText(current->data(Qt::UserRole + 1).toString());
+        });
+        QObject::connect(name_current, &QPushButton::clicked, &dialog, [&] {
+            try {
+                if (m_boundary_session) throw std::runtime_error(
+                    "Finish or cancel the active boundary before naming a revision.");
+                const auto revision_name = name->text().trimmed().toStdString();
+                const auto source = authoringSnapshot();
+                applyDocumentCommand(NameRevision{source.revision(), revision_name});
+                refresh();
+                populate();
+                status->setText(QStringLiteral("Named revision saved in project history."));
+            } catch (const std::exception& error) {
+                status->setText(QStringLiteral("Name revision: %1").arg(QString::fromUtf8(error.what())));
+            }
+        });
+        QObject::connect(compare, &QPushButton::clicked, &dialog, [&] {
+            const auto* item = revisions->currentItem();
+            if (!item) {
+                status->setText(QStringLiteral("Choose a named revision first."));
+                return;
+            }
+            try {
+                const auto source = authoringSnapshot();
+                const auto revision = item->data(Qt::UserRole).toULongLong();
+                const auto name_text = item->data(Qt::UserRole + 1).toString();
+                auto historical = Document::fork_at_revision(source, revision);
+                const auto older = historical.snapshot();
+                const auto diff = compareRevisions(older, source);
+                comparison->setPlainText(
+                    QStringLiteral("%1\n\nNamed revision: %2\nCurrent revision: %3\n\n"
+                                   "Entities added: %4\nEntities removed: %5\nEntities changed: %6\n"
+                                   "Assets added: %7\nAssets removed: %8\nAssets changed: %9\n\n"
+                                   "The original revision remains immutable.\n")
+                        .arg(name_text)
+                        .arg(revision)
+                        .arg(source.revision())
+                        .arg(diff.added_entities)
+                        .arg(diff.removed_entities)
+                        .arg(diff.changed_entities)
+                        .arg(diff.added_assets)
+                        .arg(diff.removed_assets)
+                        .arg(diff.changed_assets));
+                status->setText(QStringLiteral("Comparison generated without changing the document."));
+            } catch (const std::exception& error) {
+                status->setText(QStringLiteral("Compare revisions: %1").arg(QString::fromUtf8(error.what())));
+            }
+        });
+        QObject::connect(restore, &QPushButton::clicked, &dialog, [&] {
+            const auto* item = revisions->currentItem();
+            if (!item) {
+                status->setText(QStringLiteral("Choose a named revision first."));
+                return;
+            }
+            const auto path = QFileDialog::getSaveFileName(
+                owner, QStringLiteral("Restore named revision as"), {},
+                QStringLiteral("Property Studio project (*.bldproj)"));
+            if (path.isEmpty()) return;
+            if (restoreNamedRevision(item->data(Qt::UserRole + 1).toString(), path)) {
+                status->setText(QStringLiteral("Revision copy written. The current document is unchanged."));
+            } else {
+                status->setText(lastError());
+            }
+        });
+        QObject::connect(close, &QPushButton::clicked, &dialog, &QDialog::reject);
+        dialog.exec();
+    }
+
     void styleDialog(QDialog& dialog) const {
         // Top-level Qt dialogs do not always inherit a parent window's style
         // sheet. Copy the already-resolved palette and stylesheet so modal
@@ -7618,8 +7823,9 @@ public:
                  }
                  m_area_attributes_group->setVisible(true);
                  m_area_attributes_edit->setFocus();
-             }},
+            }},
             {QStringLiteral("Manage workspace profiles"), [this] { showWorkspaceProfiles(); }},
+            {QStringLiteral("Named revisions and comparison"), [this] { showRevisionHistory(); }},
             {QStringLiteral("Measurement workspace"), [this] { setWorkspace(Workspace::measurement); }},
             {QStringLiteral("Architectural workspace"), [this] { setWorkspace(Workspace::architectural); }},
             {QStringLiteral("Add labels and symbols"), [this] { showAnnotationEditor(); }},
@@ -8425,12 +8631,14 @@ private:
         m_assistance_action = new QAction(QStringLiteral("Offline assistance…"), owner);
         m_workspace_profiles_action = new QAction(QStringLiteral("Workspace profiles…"), owner);
         m_workspace_profiles_action->setObjectName(QStringLiteral("workspaceProfiles"));
+        m_revisions_action = new QAction(QStringLiteral("Named revisions…"), owner);
+        m_revisions_action->setObjectName(QStringLiteral("revisionHistory"));
         m_about_action = new QAction(QStringLiteral("About Property Studio"), owner);
-        const std::array<QAction*, 14> secondary_actions{
+        const std::array<QAction*, 15> secondary_actions{
             m_annotation_action, m_reference_action, m_schedule_action, m_sheet_action,
             m_viewport_action, m_schedule_placement_action, m_view_action, m_remodel_action,
             m_relationship_action, m_levels_action, m_assembly_action, m_assistance_action,
-            m_workspace_profiles_action, m_about_action};
+            m_workspace_profiles_action, m_revisions_action, m_about_action};
         for (auto* action : secondary_actions) {
             owner->addAction(action);
             more_menu->addAction(action);
@@ -8550,6 +8758,8 @@ private:
                          [this] { showAssistance(); });
         QObject::connect(m_workspace_profiles_action, &QAction::triggered, owner,
                          [this] { showWorkspaceProfiles(); });
+        QObject::connect(m_revisions_action, &QAction::triggered, owner,
+                         [this] { showRevisionHistory(); });
         QObject::connect(m_about_action, &QAction::triggered, owner, [this] { showAbout(); });
         QObject::connect(m_unitsCombo, &QComboBox::currentIndexChanged, owner,
                          [this](int index) { setMetricUnits(index == 1); });
@@ -11359,6 +11569,7 @@ private:
     QAction* m_assembly_action{};
     QAction* m_assistance_action{};
     QAction* m_workspace_profiles_action{};
+    QAction* m_revisions_action{};
     QAction* m_about_action{};
 };
 
@@ -11718,6 +11929,14 @@ void MainWindow::showConstraintEditor() {
 
 void MainWindow::showWorkspaceProfiles() {
     m_impl->showWorkspaceProfiles();
+}
+
+void MainWindow::showRevisionHistory() {
+    m_impl->showRevisionHistory();
+}
+
+bool MainWindow::restoreNamedRevision(const QString& name, const QString& path) {
+    return m_impl->restoreNamedRevision(name, path);
 }
 
 void MainWindow::fitView() {
