@@ -29,6 +29,7 @@
 #include "sketch/project_organization.hpp"
 #include "sketch/project_visibility.hpp"
 #include "sketch/quantity.hpp"
+#include "sketch/assistance_engine.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/visualization/native_model_view.hpp"
@@ -53,6 +54,7 @@
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QIcon>
+#include <QImage>
 #include <QInputDialog>
 #include <QMouseEvent>
 #include <QLabel>
@@ -1635,11 +1637,11 @@ public:
             QWidget { font-size: 13px; }
             QDialog { background: $background; }
             QToolBar#primaryToolbar { background: $surface; border: 0; border-bottom: 1px solid $border;
-                       padding: 2px 12px; spacing: 3px; min-height: 30px; }
-            QToolBar::separator { background: $border; width: 1px; margin: 2px 6px; }
+                       padding: 0 8px; spacing: 2px; min-height: 24px; }
+            QToolBar::separator { background: $border; width: 1px; margin: 1px 4px; }
             QPushButton, QToolButton { color: $foreground; background: $surface;
                 border: 1px solid $border; border-radius: 8px; padding: 8px 11px; }
-            QToolBar QToolButton { border-color: transparent; padding: 2px 8px; min-height: 20px; }
+            QToolBar QToolButton { border-color: transparent; padding: 1px 6px; min-height: 18px; }
             QToolBar QToolButton:hover { background: $selection; border-color: $selection; }
             QToolBar QToolButton:checked { background: $selection; color: $accent; border-color: $accent; }
             QWidget#toolPanel QToolButton { padding: 6px 4px; min-height: 52px; }
@@ -1653,8 +1655,8 @@ public:
                 border: 1px solid $border; border-radius: 8px; padding: 5px 10px; min-height: 20px; }
             QComboBox { padding-right: 24px; }
             QComboBox::drop-down { border: 0; width: 24px; }
-            QToolBar QComboBox { padding: 2px 8px; min-height: 16px; }
-            QToolBar QComboBox::drop-down { width: 20px; }
+            QToolBar QComboBox { padding: 1px 6px; min-height: 14px; }
+            QToolBar QComboBox::drop-down { width: 18px; }
             QComboBox QAbstractItemView, QMenu { background: $surface; color: $foreground;
                 border: 1px solid $border; selection-background-color: $selection;
                 selection-color: $selectedText; padding: 4px; }
@@ -2319,6 +2321,318 @@ public:
             return true;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Trace reference: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    [[nodiscard]] bool assistanceEnabled() const noexcept {
+        return m_assistance_session.enabled();
+    }
+
+    void setAssistanceEnabled(bool enabled) {
+        m_assistance_session.set_enabled(enabled);
+        if (!enabled) clearError();
+    }
+
+    [[nodiscard]] AssistanceRaster decodeAssistanceReference(
+        const QString& reference_id) const {
+        const auto snapshot = authoringSnapshot();
+        const auto found = snapshot.entities().find(reference_id.trimmed().toStdString());
+        if (found == snapshot.entities().end() || found->second.type != "reference_asset") {
+            throw std::invalid_argument("Select a reference image before generating assistance.");
+        }
+        const auto render_id = found->second.properties.value(
+            "render_asset_id", found->second.properties.value("asset_id", json{}));
+        if (!render_id.is_string()) throw std::invalid_argument("Reference render asset is missing.");
+        const auto asset = snapshot.assets().find(render_id.get<std::string>());
+        if (asset == snapshot.assets().end()) throw std::invalid_argument("Reference render asset is missing.");
+        const QByteArray raw(reinterpret_cast<const char*>(asset->second.bytes.data()),
+                             static_cast<qsizetype>(asset->second.bytes.size()));
+        const auto image = QImage::fromData(raw).convertToFormat(QImage::Format_Grayscale8);
+        if (image.isNull() || image.width() <= 0 || image.height() <= 0) {
+            throw std::invalid_argument("Reference render asset is not a decodable raster.");
+        }
+        AssistanceRaster raster;
+        raster.reference_id = found->second.id;
+        if (const auto source = found->second.properties.find("source_text");
+            source != found->second.properties.end() && source->is_string()) {
+            raster.source_text = source->get<std::string>();
+        }
+        raster.width = static_cast<std::size_t>(image.width());
+        raster.height = static_cast<std::size_t>(image.height());
+        raster.luminance.resize(raster.width * raster.height);
+        for (int y = 0; y < image.height(); ++y) {
+            const auto* scanline = image.constScanLine(y);
+            std::copy(scanline, scanline + image.width(),
+                      raster.luminance.begin() + static_cast<std::size_t>(y) * raster.width);
+        }
+        return raster;
+    }
+
+    [[nodiscard]] std::vector<AssistanceProposal> suggestReferenceAssistance(
+        const QString& reference_id, AssistanceKind kind) {
+        try {
+            if (!m_assistance_session.enabled()) {
+                throw std::invalid_argument("Enable assistance in the assistance dialog first.");
+            }
+            const auto raster = decodeAssistanceReference(reference_id);
+            const auto snapshot = authoringSnapshot();
+            const auto reference = snapshot.entities().find(reference_id.trimmed().toStdString());
+            const auto calibration = reference == snapshot.entities().end()
+                ? 0.01 : read_number(reference->second.properties, "metres_per_source_unit", 0.01);
+            const auto origin = reference == snapshot.entities().end()
+                ? Vec2{} : read_point(reference->second.properties.value("position_m", json{})).value_or(Vec2{});
+            const auto rotation = reference == snapshot.entities().end()
+                ? 0.0 : read_number(reference->second.properties, "rotation_degrees", 0.0) *
+                    std::numbers::pi / 180.0;
+            const auto scale = reference == snapshot.entities().end()
+                ? 1.0 : read_number(reference->second.properties, "scale", 1.0);
+            const AssistanceEngineOptions options{calibration, origin, rotation, scale};
+            switch (kind) {
+            case AssistanceKind::tracing:
+                return suggest_tracing(raster, options);
+            case AssistanceKind::dimension_extraction:
+                return extract_dimensions(raster, options);
+            case AssistanceKind::label_placement:
+            case AssistanceKind::natural_language:
+                throw std::invalid_argument("This assistance kind does not use a reference raster.");
+            }
+            throw std::invalid_argument("Unknown assistance kind.");
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Assistance: %1").arg(QString::fromUtf8(error.what())));
+            return {};
+        }
+    }
+
+    [[nodiscard]] std::vector<AssistanceProposal> suggestLabelAssistance() {
+        try {
+            if (!m_assistance_session.enabled()) {
+                throw std::invalid_argument("Enable assistance in the assistance dialog first.");
+            }
+            const auto snapshot = authoringSnapshot();
+            std::vector<AssistanceAnchor> anchors;
+            for (const auto& [id, entity] : snapshot.entities()) {
+                if (entity.type == "property" || entity.type == "building" ||
+                    entity.type == "floor" || entity.type == "layer" ||
+                    entity.type == kAnnotationEntityType || entity.type == "sheet_view_model" ||
+                    !entity.properties.contains("name") || !entity.properties.at("name").is_string()) {
+                    continue;
+                }
+                Vec2 position{};
+                for (const auto* key : {"position_m", "base_position_m", "start_m"}) {
+                    if (entity.properties.contains(key)) {
+                        if (const auto point = read_point(entity.properties.at(key))) {
+                            position = *point;
+                            break;
+                        }
+                    }
+                }
+                anchors.push_back({id, entity.properties.at("name").get<std::string>(), position});
+            }
+            return sketch::suggest_label_placements(anchors);
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Assistance labels: %1").arg(QString::fromUtf8(error.what())));
+            return {};
+        }
+    }
+
+    [[nodiscard]] std::vector<AssistanceProposal> parseAssistanceCommand(
+        const QString& command) {
+        try {
+            if (!m_assistance_session.enabled()) {
+                throw std::invalid_argument("Enable assistance in the assistance dialog first.");
+            }
+            return parse_natural_language(command.toStdString());
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Assistance command: %1").arg(QString::fromUtf8(error.what())));
+            return {};
+        }
+    }
+
+    [[nodiscard]] Boundary assistanceBoundary(const json& points) const {
+        if (!points.is_array() || points.size() < 3 || points.size() > 256) {
+            throw std::invalid_argument("Assisted boundary preview requires three to 256 points.");
+        }
+        std::vector<Vec2> vertices;
+        vertices.reserve(points.size());
+        for (const auto& value : points) {
+            const auto point = read_point(value);
+            if (!point) throw std::invalid_argument("Assisted boundary preview contains an invalid point.");
+            vertices.push_back(*point);
+        }
+        Boundary boundary;
+        boundary.reserve(vertices.size());
+        for (std::size_t index = 0; index < vertices.size(); ++index) {
+            boundary.push_back({vertices[index], vertices[(index + 1) % vertices.size()], 0.0});
+        }
+        const auto diagnostics = validate_boundary(boundary);
+        if (!diagnostics.empty()) throw std::invalid_argument(diagnostics.front().message);
+        return boundary;
+    }
+
+    [[nodiscard]] bool applyAssistedLabel(const AssistanceProposal& proposal) {
+        const auto& args = proposal.preview.arguments;
+        if (!args.contains("template_id") || !args.at("template_id").is_string() ||
+            !args.contains("content") || !args.at("content").is_string() ||
+            !args.contains("position")) {
+            throw std::invalid_argument("Assisted label preview is incomplete.");
+        }
+        const auto position = read_point(args.at("position"));
+        if (!position) throw std::invalid_argument("Assisted label position is invalid.");
+        const auto id = args.value("annotation_id", proposal.id);
+        if (id.empty()) {
+            throw std::invalid_argument("Assisted label ID is invalid.");
+        }
+        const auto source = authoringSnapshot();
+        if (source.entities().contains(id)) {
+            throw std::invalid_argument("Assisted label ID already exists.");
+        }
+        const auto annotation = std::find_if(source.entities().begin(), source.entities().end(),
+                                              [](const auto& entry) {
+                                                  return entry.second.type == kAnnotationEntityType;
+                                              });
+        if (annotation == source.entities().end()) throw std::invalid_argument("Annotation state is missing.");
+        const auto templates = default_label_templates();
+        const auto template_id = args.at("template_id").get<std::string>();
+        const auto definition = std::find_if(templates.begin(), templates.end(),
+            [&](const auto& candidate) { return candidate.id == template_id; });
+        if (definition == templates.end()) throw std::invalid_argument("Assisted label template is unknown.");
+        auto state = decode_annotation_entity(annotation->second);
+        auto label = instantiate_label(*definition, id);
+        label.content = args.at("content").get<std::string>();
+        label.placement.position = *position;
+        state.labels.push_back(std::move(label));
+        const ApplyEntityChanges command{
+            source.revision(), {EntityChange::upsert(make_annotation_entity(annotation->second.id, state))},
+            {}, "Accept assisted label"};
+        (void)Document::preview_command(source, command);
+        applyDocumentCommand(command);
+        m_selected_id = id_from(id);
+        refresh();
+        return true;
+    }
+
+    [[nodiscard]] bool applyAssistedBoundary(const AssistanceProposal& proposal) {
+        const auto& args = proposal.preview.arguments;
+        const auto boundary = assistanceBoundary(args.value("points", json{}));
+        const auto id = args.value("boundary_id", proposal.id);
+        if (id.empty()) {
+            throw std::invalid_argument("Assisted boundary ID is invalid.");
+        }
+        const auto source = authoringSnapshot();
+        if (source.entities().contains(id)) {
+            throw std::invalid_argument("Assisted boundary ID already exists.");
+        }
+        const auto context = requireDrawingContext();
+        if (!context) return false;
+        IdentifiedBoundary identified{id, "measurement_boundary", {}};
+        identified.segments.reserve(boundary.size());
+        for (std::size_t index = 0; index < boundary.size(); ++index) {
+            const auto segment_id = id + "-segment-" + std::to_string(index);
+            const auto start_id = id + "-vertex-" + std::to_string(index);
+            const auto end_id = id + "-vertex-" +
+                                std::to_string((index + 1) % boundary.size());
+            identified.segments.push_back({segment_id, start_id, end_id, boundary[index]});
+        }
+        auto entity = encode_identified_boundary_entity(identified);
+        entity.properties["property_id"] = context->property_id;
+        entity.properties["building_id"] = context->building_id;
+        entity.properties["floor_id"] = context->floor_id;
+        entity.properties["layer_id"] = context->layer_id;
+        entity.properties["classification"] = args.value("classification", "measurement");
+        entity.properties["factor"] = 1.0;
+        entity.properties["factor_expression"] = "1";
+        entity.properties["factor_numerator"] = 1;
+        entity.properties["factor_denominator"] = 1;
+        const ApplyEntityChanges command{
+            source.revision(), {EntityChange::upsert(std::move(entity))}, {},
+            "Accept assisted boundary"};
+        (void)Document::preview_command(source, command);
+        applyDocumentCommand(command);
+        m_selected_id = id_from(id);
+        refresh();
+        return true;
+    }
+
+    [[nodiscard]] bool applyAssistedDimension(const AssistanceProposal& proposal) {
+        const auto& args = proposal.preview.arguments;
+        const auto target_value = args.value("target_boundary_id", json{});
+        if (!target_value.is_string() || target_value.get<std::string>().empty()) {
+            throw std::invalid_argument("Choose a target boundary before accepting a dimension suggestion.");
+        }
+        const auto source = authoringSnapshot();
+        const auto target_found = source.entities().find(target_value.get<std::string>());
+        if (target_found == source.entities().end() ||
+            !can_recognize_boundary_entity_type(target_found->second.type)) {
+            throw std::invalid_argument("Assisted dimension target boundary was not found.");
+        }
+        auto target = target_found->second;
+        const auto original_target = target;
+        const auto version = inspect_boundary_entity_version(target);
+        if (version.format == BoundaryEntityFormat::anonymous_legacy) {
+            target = upgrade_legacy_boundary_entity(target);
+        }
+        const auto identified = decode_identified_boundary_entity(target);
+        if (identified.segments.empty()) throw std::invalid_argument("Target boundary has no segments.");
+        auto segment_id = args.value("target_segment_id", std::string{});
+        if (segment_id.empty()) {
+            segment_id = identified.segments.front().segment_id;
+        }
+        const auto segment = std::find_if(identified.segments.begin(), identified.segments.end(),
+            [&](const auto& candidate) { return candidate.segment_id == segment_id; });
+        if (segment == identified.segments.end()) throw std::invalid_argument("Target boundary segment was not found.");
+        const auto midpoint = Vec2{(segment->segment.start.x + segment->segment.end.x) * 0.5,
+                                   (segment->segment.start.y + segment->segment.end.y) * 0.5};
+        const auto dx = segment->segment.end.x - segment->segment.start.x;
+        const auto dy = segment->segment.end.y - segment->segment.start.y;
+        const auto length = std::hypot(dx, dy);
+        const auto text_position = length > 1e-12
+            ? Vec2{midpoint.x - dy / length * 0.25, midpoint.y + dx / length * 0.25}
+            : midpoint;
+        auto dimension = encode_boundary_dimension_entity(
+            BoundaryDimension{proposal.id, target.id, segment->segment_id, text_position,
+                              BoundaryDimensionPlacement::manual, std::nullopt});
+        for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"}) {
+            if (target.properties.contains(key)) dimension.properties[key] = target.properties.at(key);
+        }
+        std::vector<EntityChange> changes;
+        if (target.properties != original_target.properties || target.extensions != original_target.extensions) {
+            changes.push_back(EntityChange::upsert(std::move(target)));
+        }
+        changes.push_back(EntityChange::upsert(std::move(dimension)));
+        const ApplyEntityChanges command{source.revision(), std::move(changes), {},
+                                         "Accept assisted dimension"};
+        (void)Document::preview_command(source, command);
+        applyDocumentCommand(command);
+        m_selected_id = id_from(proposal.id);
+        refresh();
+        return true;
+    }
+
+    [[nodiscard]] bool acceptAssistanceProposal(const AssistanceProposal& proposal) {
+        try {
+            const auto request = m_assistance_session.request_acceptance(
+                proposal, true, default_assistance_resource_ids());
+            if (request.proposal.preview.command_type == "add_label") {
+                return applyAssistedLabel(request.proposal);
+            }
+            if (request.proposal.preview.command_type == "add_boundary") {
+                return applyAssistedBoundary(request.proposal);
+            }
+            if (request.proposal.preview.command_type == "add_dimension_suggestion") {
+                return applyAssistedDimension(request.proposal);
+            }
+            if (request.proposal.preview.command_type == "set_workspace") {
+                const auto workspace = request.proposal.preview.arguments.value("workspace", "");
+                if (workspace == "measurement") setWorkspace(Workspace::measurement);
+                else if (workspace == "architectural") setWorkspace(Workspace::architectural);
+                else throw std::invalid_argument("Assisted workspace value is unknown.");
+                clearError();
+                return true;
+            }
+            throw std::invalid_argument("Assisted command type is unsupported.");
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Accept assistance: %1").arg(QString::fromUtf8(error.what())));
             return false;
         }
     }
@@ -4344,6 +4658,152 @@ public:
         if (dialog.exec() == QDialog::Accepted && wall_length) showConstraintEditor(input->text());
     }
 
+    void showAssistance() {
+        QDialog dialog(owner);
+        styleDialog(dialog);
+        dialog.setObjectName(QStringLiteral("assistanceDialog"));
+        dialog.setWindowTitle(QStringLiteral("Offline assistance"));
+        dialog.setModal(true);
+        dialog.resize(680, 500);
+
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* enabled = new QCheckBox(QStringLiteral("Enable suggestions for this session"), &dialog);
+        enabled->setChecked(m_assistance_session.enabled());
+        enabled->setToolTip(QStringLiteral(
+            "Assistance is optional and session-scoped. Every suggestion remains unverified until accepted."));
+        layout->addWidget(enabled);
+
+        auto* controls = new QHBoxLayout();
+        auto* kind = new QComboBox(&dialog);
+        kind->addItem(QStringLiteral("Trace selected reference"),
+                      static_cast<int>(AssistanceKind::tracing));
+        kind->addItem(QStringLiteral("Extract explicit dimensions"),
+                      static_cast<int>(AssistanceKind::dimension_extraction));
+        kind->addItem(QStringLiteral("Place labels on named objects"),
+                      static_cast<int>(AssistanceKind::label_placement));
+        kind->addItem(QStringLiteral("Parse a command"),
+                      static_cast<int>(AssistanceKind::natural_language));
+        controls->addWidget(kind);
+        auto* command = new QLineEdit(&dialog);
+        command->setPlaceholderText(QStringLiteral("label Entry at 1.25, 2.5"));
+        command->setVisible(false);
+        controls->addWidget(command, 1);
+        auto* generate = new QPushButton(QStringLiteral("Generate suggestions"), &dialog);
+        controls->addWidget(generate);
+        layout->addLayout(controls);
+
+        auto* list = new QListWidget(&dialog);
+        list->setObjectName(QStringLiteral("assistanceProposalList"));
+        list->setSelectionMode(QAbstractItemView::SingleSelection);
+        layout->addWidget(list, 1);
+        auto* status = new QLabel(&dialog);
+        status->setWordWrap(true);
+        status->setTextFormat(Qt::PlainText);
+        status->setObjectName(QStringLiteral("assistanceStatus"));
+        layout->addWidget(status);
+
+        auto* buttons = new QHBoxLayout();
+        auto* accept = new QPushButton(QStringLiteral("Accept selected"), &dialog);
+        auto* close = new QPushButton(QStringLiteral("Close"), &dialog);
+        close->setDefault(true);
+        buttons->addStretch(1);
+        buttons->addWidget(accept);
+        buttons->addWidget(close);
+        layout->addLayout(buttons);
+
+        std::vector<AssistanceProposal> proposals;
+        const auto kind_name = [](AssistanceKind value) {
+            switch (value) {
+            case AssistanceKind::tracing: return QStringLiteral("tracing");
+            case AssistanceKind::dimension_extraction: return QStringLiteral("dimensions");
+            case AssistanceKind::label_placement: return QStringLiteral("labels");
+            case AssistanceKind::natural_language: return QStringLiteral("command");
+            }
+            return QStringLiteral("unknown");
+        };
+        const auto repopulate = [&] {
+            list->clear();
+            for (std::size_t index = 0; index < proposals.size(); ++index) {
+                const auto& item = proposals[index];
+                auto* row = new QListWidgetItem(
+                    QStringLiteral("Unverified • %1 • %2 • confidence %3%")
+                        .arg(kind_name(item.kind), QString::fromStdString(item.preview.command_type))
+                        .arg(item.source.confidence * 100.0, 0, 'f', 0), list);
+                row->setData(Qt::UserRole, static_cast<int>(index));
+                row->setToolTip(QStringLiteral("Source: %1\nAffected: %2")
+                    .arg(QString::fromStdString(item.source.original_text.empty()
+                                                    ? item.source.reference_id
+                                                    : item.source.original_text),
+                         QString::fromStdString(item.preview.affected_entity_ids.empty()
+                                                     ? std::string{} : item.preview.affected_entity_ids.front())));
+            }
+            if (list->count() > 0) list->setCurrentRow(0);
+        };
+        const auto selected_reference = [&]() -> QString {
+            const auto snapshot = authoringSnapshot();
+            const auto selected = snapshot.entities().find(m_selected_id.toStdString());
+            if (selected != snapshot.entities().end() && selected->second.type == "reference_asset") {
+                return m_selected_id;
+            }
+            for (const auto& [id, entity] : snapshot.entities()) {
+                if (entity.type == "reference_asset") return id_from(id);
+            }
+            return {};
+        };
+        QObject::connect(enabled, &QCheckBox::toggled, &dialog,
+                         [this](bool checked) { setAssistanceEnabled(checked); });
+        QObject::connect(kind, &QComboBox::currentIndexChanged, &dialog, [kind, command](int index) {
+            const auto value = static_cast<AssistanceKind>(kind->itemData(index).toInt());
+            command->setVisible(value == AssistanceKind::natural_language);
+        });
+        QObject::connect(generate, &QPushButton::clicked, &dialog, [&] {
+            proposals.clear();
+            const auto value = static_cast<AssistanceKind>(kind->currentData().toInt());
+            if (value == AssistanceKind::natural_language) {
+                proposals = parseAssistanceCommand(command->text());
+            } else if (value == AssistanceKind::label_placement) {
+                proposals = suggestLabelAssistance();
+            } else {
+                const auto reference = selected_reference();
+                if (reference.isEmpty()) {
+                    status->setText(QStringLiteral("Select or import a reference image first."));
+                    repopulate();
+                    return;
+                }
+                proposals = suggestReferenceAssistance(reference, value);
+            }
+            repopulate();
+            if (proposals.empty()) {
+                const auto error = lastError();
+                status->setText(error.isEmpty() ? QStringLiteral("No suggestions were produced.") : error);
+            } else {
+                status->setText(QStringLiteral(
+                    "Suggestions are provisional. Review the source and preview before accepting."));
+            }
+        });
+        QObject::connect(accept, &QPushButton::clicked, &dialog, [&] {
+            const auto row = list->currentItem();
+            if (!row) {
+                status->setText(QStringLiteral("Choose a suggestion first."));
+                return;
+            }
+            const auto index = row->data(Qt::UserRole).toInt();
+            if (index < 0 || index >= static_cast<int>(proposals.size())) {
+                status->setText(QStringLiteral("The suggestion list is stale. Generate it again."));
+                return;
+            }
+            if (acceptAssistanceProposal(proposals[static_cast<std::size_t>(index)])) {
+                proposals.erase(proposals.begin() + index);
+                repopulate();
+                status->setText(QStringLiteral("Accepted through the normal command history."));
+            } else {
+                status->setText(lastError());
+            }
+        });
+        QObject::connect(close, &QPushButton::clicked, &dialog, &QDialog::reject);
+        dialog.exec();
+    }
+
     void showCommandPalette() {
         QDialog dialog(owner);
         styleDialog(dialog);
@@ -4389,6 +4849,7 @@ public:
              [this] { showSchedulePlacementSettings(); }},
             {QStringLiteral("Edit architectural view settings"),
              [this] { showArchitecturalViewSettings(); }},
+            {QStringLiteral("Offline assistance"), [this] { showAssistance(); }},
             {QStringLiteral("Select tool"), [this] { setTool(CanvasTool::select); }},
             {QStringLiteral("Draw measurement boundary"), [this] { setTool(CanvasTool::boundary); }},
             {QStringLiteral("Define area before drawing"),
@@ -5102,8 +5563,8 @@ private:
         toolbar->setMovable(false);
         toolbar->setFloatable(false);
         toolbar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-        toolbar->setIconSize(QSize(16, 16));
-        toolbar->setFixedHeight(40);
+        toolbar->setIconSize(QSize(14, 14));
+        toolbar->setFixedHeight(32);
         const auto add_toolbar_action = [this, toolbar](const QString& label, const char* icon_paths) {
             auto* action = toolbar->addAction(modern_toolbar_icon(icon_paths), label);
             action->setToolTip(label);
@@ -5140,10 +5601,12 @@ private:
         m_viewport_action = new QAction(QStringLiteral("Viewport settings"), owner);
         m_schedule_placement_action = new QAction(QStringLiteral("Schedule placement"), owner);
         m_view_action = new QAction(QStringLiteral("Architectural view settings"), owner);
+        m_assistance_action = new QAction(QStringLiteral("Offline assistance…"), owner);
         m_about_action = new QAction(QStringLiteral("About Property Studio"), owner);
-        const std::array<QAction*, 8> secondary_actions{
+        const std::array<QAction*, 9> secondary_actions{
             m_annotation_action, m_reference_action, m_schedule_action, m_sheet_action,
-            m_viewport_action, m_schedule_placement_action, m_view_action, m_about_action};
+            m_viewport_action, m_schedule_placement_action, m_view_action, m_assistance_action,
+            m_about_action};
         for (auto* action : secondary_actions) {
             owner->addAction(action);
             more_menu->addAction(action);
@@ -5241,6 +5704,8 @@ private:
                          [this] { showSchedulePlacementSettings(); });
         QObject::connect(m_view_action, &QAction::triggered, owner,
                          [this] { showArchitecturalViewSettings(); });
+        QObject::connect(m_assistance_action, &QAction::triggered, owner,
+                         [this] { showAssistance(); });
         QObject::connect(m_about_action, &QAction::triggered, owner, [this] { showAbout(); });
         QObject::connect(m_unitsCombo, &QComboBox::currentIndexChanged, owner,
                          [this](int index) { setMetricUnits(index == 1); });
@@ -7539,6 +8004,7 @@ private:
     std::optional<DocumentSnapshot> m_boundary_source;
     std::optional<DrawingContext> m_boundary_context;
     std::shared_ptr<Document> m_boundary_document;
+    AssistanceSession m_assistance_session;
     QString m_last_boundary_classification{QStringLiteral("measurement")};
     QToolButton* m_define_boundary_button{};
     std::optional<Vec2> m_pending_wall_start;
@@ -7623,6 +8089,7 @@ private:
     QAction* m_viewport_action{};
     QAction* m_schedule_placement_action{};
     QAction* m_view_action{};
+    QAction* m_assistance_action{};
     QAction* m_about_action{};
 };
 
@@ -7838,6 +8305,31 @@ bool MainWindow::beginReferenceTrace() {
     return m_impl->beginReferenceTrace();
 }
 
+bool MainWindow::assistanceEnabled() const noexcept {
+    return m_impl->assistanceEnabled();
+}
+
+void MainWindow::setAssistanceEnabled(bool enabled) {
+    m_impl->setAssistanceEnabled(enabled);
+}
+
+std::vector<AssistanceProposal> MainWindow::suggestReferenceAssistance(
+    const QString& reference_id, AssistanceKind kind) {
+    return m_impl->suggestReferenceAssistance(reference_id, kind);
+}
+
+std::vector<AssistanceProposal> MainWindow::suggestLabelAssistance() {
+    return m_impl->suggestLabelAssistance();
+}
+
+std::vector<AssistanceProposal> MainWindow::parseAssistanceCommand(const QString& command) {
+    return m_impl->parseAssistanceCommand(command);
+}
+
+bool MainWindow::acceptAssistanceProposal(const AssistanceProposal& proposal) {
+    return m_impl->acceptAssistanceProposal(proposal);
+}
+
 bool MainWindow::undoCommand() {
     return m_impl->undoCommand();
 }
@@ -7852,6 +8344,10 @@ void MainWindow::showAnnotationEditor() {
 
 void MainWindow::showReferenceImport() {
     m_impl->showReferenceImport();
+}
+
+void MainWindow::showAssistance() {
+    m_impl->showAssistance();
 }
 
 bool MainWindow::createNewProject() {

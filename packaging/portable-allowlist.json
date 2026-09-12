@@ -18,6 +18,12 @@
       "inventory_entry": "property-studio",
       "path": "LICENSE",
       "destination": "licenses/Property-Studio-LICENSE"
+    },
+    {
+      "kind": "asset",
+      "inventory_entry": "assistance-engine",
+      "path": "assets/assistance/deterministic-engine-v1.json",
+      "destination": "assets/assistance/deterministic-engine-v1.json"
     }
   ]
 }

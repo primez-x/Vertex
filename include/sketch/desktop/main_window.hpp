@@ -4,6 +4,7 @@
 #include "sketch/document_schedule_adapter.hpp"
 #include "sketch/geometry.hpp"
 #include "sketch/boundary_authoring_session.hpp"
+#include "sketch/assistance_engine.hpp"
 
 #include <QMainWindow>
 #include <QString>
@@ -199,6 +200,17 @@ public:
     // selected reference retained as the tracing context. Geometry remains
     // authored model data; the reference image is never a measurement source.
     [[nodiscard]] bool beginReferenceTrace();
+    // Optional deterministic assistance is session-scoped and starts disabled.
+    // Suggestions are unverified values until this API accepts one through the
+    // normal typed command/history path.
+    [[nodiscard]] bool assistanceEnabled() const noexcept;
+    void setAssistanceEnabled(bool enabled);
+    [[nodiscard]] std::vector<AssistanceProposal> suggestReferenceAssistance(
+        const QString& reference_id, AssistanceKind kind);
+    [[nodiscard]] std::vector<AssistanceProposal> suggestLabelAssistance();
+    [[nodiscard]] std::vector<AssistanceProposal> parseAssistanceCommand(
+        const QString& command);
+    [[nodiscard]] bool acceptAssistanceProposal(const AssistanceProposal& proposal);
     [[nodiscard]] bool undoCommand();
     [[nodiscard]] bool redoCommand();
 
@@ -218,6 +230,7 @@ public:
     void showAnnotationEditor();
     void showReferenceImport();
     void showReferenceCalibration();
+    void showAssistance();
     void showConstraintEditor();
     void fitView();
 

@@ -454,14 +454,20 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   binaries, device/application exchanges, runtime isolation, and representative
   fidelity fixtures remain open production work.
 - Multipage project semantics, reusable assemblies, and optional offline
-  assistance contracts are implemented as standalone typed models. A
+  assistance are implemented as standalone typed models plus a deterministic
+  local engine. The engine produces unverified tracing, explicit-unit
+  dimension, label-placement, and bounded natural-language proposals; the
+  desktop dialog previews and accepts them through normal typed Document
+  history, including identified-boundary creation and legacy-boundary upgrade.
+  The proposal contract, engine tests, desktop workflow tests, and portable
+  resource declaration are in place. Accuracy on arbitrary plans, physical
+  input and production qualification remain open. A
   Document-derived schedule adapter now generates revision-bound door/window,
   room, and material rows with calculated-cell provenance and explicit
   diagnostics. Editable source cells dispatch through revision-checked
   Document commands, persist with the project, participate in undo/redo, and
-  are exposed through the desktop Schedules dialog; grouped material quantities,
-  actual local suggestion generation, and full sheet/save/print/export
-  integration remain open.
+  are exposed through the desktop Schedules dialog; grouped material quantities
+  and full sheet/save/print/export qualification remain open.
 - The product scope and interaction qualification contracts now enumerate the
   Windows 11 x64 target, both markets, both workspaces, both unit systems,
   themes, DPI layouts, keyboard/focus/property access, pen/touch controls, and

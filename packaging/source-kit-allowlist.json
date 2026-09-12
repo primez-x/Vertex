@@ -1668,6 +1668,26 @@
     {
       "category": "source",
       "path": "vcpkg.json"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/assistance_engine.hpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/assistance_engine.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/assistance_engine_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/assistance_workflow_tests.cpp"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/assistance/deterministic-engine-v1.json"
     }
   ]
 }

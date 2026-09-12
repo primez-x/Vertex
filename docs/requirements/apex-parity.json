@@ -1990,11 +1990,16 @@
       "blocker": null,
       "implementation_sources": [
         "include/sketch/assistance_contract.hpp",
+        "include/sketch/assistance_engine.hpp",
         "src/core/assistance_contract.cpp",
+        "src/core/assistance_engine.cpp",
         "tests/assistance_contract_tests.cpp",
-        "docs/assistance-contract.md"
+        "tests/assistance_engine_tests.cpp",
+        "tests/assistance_workflow_tests.cpp",
+        "docs/assistance-contract.md",
+        "assets/assistance/deterministic-engine-v1.json"
       ],
-      "implementation_note": "Offline tracing suggestion and acceptance contracts are implemented; local model/deterministic generator, visible preview, and document command integration remain open."
+      "implementation_note": "Offline tracing now has a deterministic local raster engine, source bounds, explicit calibration and identified-boundary desktop dispatch; arbitrary-plan accuracy and production qualification remain open."
     },
     {
       "id": "ASSIST-002",
@@ -2008,11 +2013,16 @@
       "blocker": null,
       "implementation_sources": [
         "include/sketch/assistance_contract.hpp",
+        "include/sketch/assistance_engine.hpp",
         "src/core/assistance_contract.cpp",
+        "src/core/assistance_engine.cpp",
         "tests/assistance_contract_tests.cpp",
-        "docs/assistance-contract.md"
+        "tests/assistance_engine_tests.cpp",
+        "tests/assistance_workflow_tests.cpp",
+        "docs/assistance-contract.md",
+        "assets/assistance/deterministic-engine-v1.json"
       ],
-      "implementation_note": "Offline dimension-extraction proposal provenance and acceptance gates are implemented; extraction runtime, source confidence evidence, and command integration remain open."
+      "implementation_note": "Offline explicit-unit extraction now retains source text/offset/confidence and can atomically upgrade a legacy target boundary and create a typed dimension; plan-accuracy and production qualification remain open."
     },
     {
       "id": "ASSIST-003",
@@ -2026,11 +2036,16 @@
       "blocker": null,
       "implementation_sources": [
         "include/sketch/assistance_contract.hpp",
+        "include/sketch/assistance_engine.hpp",
         "src/core/assistance_contract.cpp",
+        "src/core/assistance_engine.cpp",
         "tests/assistance_contract_tests.cpp",
-        "docs/assistance-contract.md"
+        "tests/assistance_engine_tests.cpp",
+        "tests/assistance_workflow_tests.cpp",
+        "docs/assistance-contract.md",
+        "assets/assistance/deterministic-engine-v1.json"
       ],
-      "implementation_note": "Assisted label placement and natural-language command envelopes require explicit acceptance and normal command validation; producers, dispatcher, and UI remain open."
+      "implementation_note": "Offline label placement and bounded natural-language commands now produce typed proposals and dispatch through annotation/boundary/workspace command paths; broader language coverage and production qualification remain open."
     },
     {
       "id": "ASSIST-004",
@@ -2044,11 +2059,16 @@
       "blocker": null,
       "implementation_sources": [
         "include/sketch/assistance_contract.hpp",
+        "include/sketch/assistance_engine.hpp",
         "src/core/assistance_contract.cpp",
+        "src/core/assistance_engine.cpp",
         "tests/assistance_contract_tests.cpp",
-        "docs/assistance-contract.md"
+        "tests/assistance_engine_tests.cpp",
+        "tests/assistance_workflow_tests.cpp",
+        "docs/assistance-contract.md",
+        "assets/assistance/deterministic-engine-v1.json"
       ],
-      "implementation_note": "Assistance-off and unaccepted-proposal safety semantics are implemented in the contract; full draw/edit/calculate/save/print/export integration evidence remains open."
+      "implementation_note": "The deterministic engine and desktop workflow tests prove disabled/unaccepted safety, normal undo/history and fail-closed malformed inputs; full draw/edit/calculate/save/print/export qualification remains open."
     },
     {
       "id": "ASSIST-005",
@@ -2062,11 +2082,16 @@
       "blocker": null,
       "implementation_sources": [
         "include/sketch/assistance_contract.hpp",
+        "include/sketch/assistance_engine.hpp",
         "src/core/assistance_contract.cpp",
+        "src/core/assistance_engine.cpp",
         "tests/assistance_contract_tests.cpp",
-        "docs/assistance-contract.md"
+        "tests/assistance_engine_tests.cpp",
+        "tests/assistance_workflow_tests.cpp",
+        "docs/assistance-contract.md",
+        "assets/assistance/deterministic-engine-v1.json"
       ],
-      "implementation_note": "Offline resource/provenance/license declarations and missing-resource gates are implemented; package file/hash containment and complete license audit remain open."
+      "implementation_note": "The deterministic engine declares portable resource paths and private-source provenance, and its fixture is allowlisted; package hash/license audit and clean-machine qualification remain open."
     },
   {
       "id": "REC-001",

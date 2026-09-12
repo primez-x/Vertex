@@ -372,6 +372,20 @@
       "notice_paths": ["assets/fonts/OFL.txt"]
     },
     {
+      "id": "assistance-engine",
+      "kind": "asset",
+      "package": {
+        "name": "Property Studio deterministic assistance engine",
+        "version": "1",
+        "license": "Proprietary"
+      },
+      "source": {
+        "kind": "workspace",
+        "paths": ["assets/assistance/deterministic-engine-v1.json"]
+      },
+      "notice_paths": ["LICENSE"]
+    },
+    {
       "id": "qtpdf",
       "kind": "runtime",
       "package": {

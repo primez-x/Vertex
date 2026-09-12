@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "engine_id": "property-studio-assisted-v1",
+  "kind": "deterministic-offline-assistance",
+  "algorithms": [
+    {
+      "id": "raster-bounding-box-trace",
+      "input": "bounded grayscale pixel buffer",
+      "output": "unverified closed rectangular proposal",
+      "network": false
+    },
+    {
+      "id": "explicit-unit-dimension-extraction",
+      "input": "local text with explicit units",
+      "output": "unverified dimension proposal retaining source text",
+      "network": false
+    },
+    {
+      "id": "anchor-label-placement",
+      "input": "document entity anchors",
+      "output": "unverified note-label proposal",
+      "network": false
+    },
+    {
+      "id": "bounded-natural-language-grammar",
+      "input": "local command text",
+      "output": "unverified typed command proposal",
+      "network": false
+    }
+  ],
+  "provenance": "Property Studio source",
+  "license": "Private Property Studio source; no third-party model weights"
+}
