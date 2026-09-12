@@ -77,8 +77,11 @@ have disjoint footprint interiors and shared joining faces, with no
 positive-volume overlap. Analytic volume is the overhung footprint area
 times the vertical depth. Tests cover both rectangular and square roofs,
 orientation, elevation, bounds, pairwise intersection volume, and invalid
-parameters. This primitive is not yet part of the document codec or desktop
-authoring workflow; those integrations remain required.
+parameters. The document codec persists this form as `roof` / `hip_roof`, using
+the same named parameters as a gable roof. Desktop creation, contextual
+dimensions, quantity receipts, undo/redo and save/reopen use the shared building
+command path. Plan, elevation and section projections derive from the same
+solids; the native viewport renders the persisted hip form.
 
 These functions construct deterministic geometric primitives and do not claim
 production-complete roof or stair authoring, regulatory compliance, detailing,

@@ -247,6 +247,19 @@ Entity encode_one(const GableRoof& object, const Json& metadata) {
     return create_entity("roof", object, std::move(properties), metadata);
 }
 
+Entity encode_one(const HipRoof& object, const Json& metadata) {
+    auto properties = base_properties("hip_roof");
+    properties["base_position_m"] = vec3_json(object.base_position);
+    properties["orientation_rad"] = object.orientation_radians;
+    properties["length_m"] = object.length;
+    properties["span_m"] = object.span;
+    properties["rise_m"] = object.rise;
+    properties["pitch_rad"] = object.pitch_radians;
+    properties["overhang_m"] = object.overhang;
+    properties["thickness_m"] = object.thickness;
+    return create_entity("roof", object, std::move(properties), metadata);
+}
+
 BuildingObject decode_column(const Entity& entity, const Json& properties,
                              std::string_view form) {
     if (form == "rectangular_column") {
@@ -330,6 +343,19 @@ BuildingObject decode_roof(const Entity& entity, const Json& properties,
             .thickness = required_number(properties, "thickness_m"),
         };
     }
+    if (form == "hip_roof") {
+        return HipRoof{
+            .id = entity.id,
+            .base_position = required_vec3(properties, "base_position_m"),
+            .orientation_radians = required_number(properties, "orientation_rad"),
+            .length = required_number(properties, "length_m"),
+            .span = required_number(properties, "span_m"),
+            .rise = required_number(properties, "rise_m"),
+            .pitch_radians = required_number(properties, "pitch_rad"),
+            .overhang = required_number(properties, "overhang_m"),
+            .thickness = required_number(properties, "thickness_m"),
+        };
+    }
     invalid("Unsupported roof building form: " + std::string(form));
 }
 
@@ -390,8 +416,10 @@ TopoDS_Shape make_building_shape(const BuildingObject& object) {
                 return make_stair_flight(value);
             } else if constexpr (std::is_same_v<Object, SlopedRoofPanel>) {
                 return make_sloped_roof_panel(value);
-            } else {
+            } else if constexpr (std::is_same_v<Object, GableRoof>) {
                 return make_gable_roof(value);
+            } else {
+                return make_hip_roof(value);
             }
         },
         object);

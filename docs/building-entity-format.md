@@ -1,6 +1,6 @@
 # Building entity codec
 
-`sketch/building_entity.hpp` is the semantic bridge between the six
+`sketch/building_entity.hpp` is the semantic bridge between the supported
 architectural parameter structs and the document layer's `Entity`.  It is the
 single contract used by authoring, derived-shape creation, and future save or
 viewer adapters.  The codec is deterministic and offline; the geometry in an
@@ -13,7 +13,7 @@ The canonical entity types are:
 | `column` | `rectangular_column`, `circular_column` |
 | `beam` | `straight_beam` |
 | `stair` | `straight_stair_flight` |
-| `roof` | `sloped_roof_panel`, `gable_roof` |
+| `roof` | `sloped_roof_panel`, `gable_roof`, `hip_roof` |
 
 Every encoded properties object contains integer `version: 1` and a string
 `form`.  Required lengths use an `_m` suffix, angles use `_rad`, and vectors
@@ -44,6 +44,12 @@ same orientation, rise, pitch, overhang, and thickness fields with
 `length_m` and full `span_m` in place of `run_m`.  Pitch/rise consistency and
 all solid-builder constraints are checked during decoding, before a caller can
 create an authoring command.
+
+The equal-pitch `hip_roof` uses the same property names as `gable_roof`, with
+`length_m >= span_m`; equality denotes a square pyramidal roof. Rise and pitch
+describe half the span. Its thickness is normal to each slope with vertical
+trims at eaves and joins. Older readers that do not support `hip_roof` must
+reject it as an unsupported form rather than reinterpret it as a gable.
 
 `encode_building_entity(object, metadata)` calls `Entity::create` for a fresh
 entity.  A nonempty semantic object ID replaces the generated factory ID;

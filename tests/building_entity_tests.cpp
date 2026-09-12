@@ -173,6 +173,8 @@ void test_all_forms_roundtrip_to_canonical_entities() {
     const double gable_volume = 2.0 * (gable.length + 2.0 * gable.overhang)
         * sloped_half_length * gable.thickness - ridge_trim;
     require_roundtrip(gable, "roof", "gable_roof", gable_volume);
+    const sketch::HipRoof hip{"hip-codec", {1, 2, 3}, 0.3, 6, 4, 1, std::atan(0.5), 0.2, 0.1};
+    require_roundtrip(hip, "roof", "hip_roof", 6.4 * 4.4 * 0.1 * std::sqrt(1.25));
 }
 
 void test_recognized_type_is_distinct_from_decode_success() {

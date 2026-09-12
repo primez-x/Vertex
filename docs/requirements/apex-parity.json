@@ -1623,7 +1623,7 @@
         "tests/building_plan_projection_tests.cpp",
         "tests/desktop_smoke.cpp"
       ],
-      "implementation_note": "Sloped panels (including zero-rise flat roofs) and gable roofs have semantic solids, parameter editors, exact top-down plan projections, and contextual inspector dimensions with derived pitch preview. Hip roof authoring, joins, openings, materials and coordinated production qualification remain open."
+      "implementation_note": "Sloped panels (including zero-rise flat roofs), gable roofs, and equal-pitch rectangular hip roofs have semantic solids, parameter editors, plan projections, and contextual inspector dimensions with derived pitch preview. Hip roofs include the square pyramidal case, exact persistence and native 3D rendering, with analytic plan/elevation/section bounds tests. Roof joins, openings, materials and coordinated production qualification remain open."
     },
     {
       "id": "ARCH-MOD-006",

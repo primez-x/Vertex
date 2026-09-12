@@ -49,13 +49,14 @@ struct FormInfo {
     std::string_view label;
 };
 
-constexpr std::array<FormInfo, 6> form_infos{{
+constexpr std::array<FormInfo, 7> form_infos{{
     {"column", "rectangular_column", "Rectangular column"},
     {"column", "circular_column", "Circular column"},
     {"beam", "straight_beam", "Straight beam"},
     {"stair", "straight_stair_flight", "Straight stair flight"},
     {"roof", "sloped_roof_panel", "Sloped roof panel"},
     {"roof", "gable_roof", "Gable roof"},
+    {"roof", "hip_roof", "Hip roof"},
 }};
 
 QString qt_string(std::string_view value) {
@@ -473,8 +474,10 @@ private:
                         return "straight_stair_flight";
                     } else if constexpr (std::is_same_v<Object, SlopedRoofPanel>) {
                         return "sloped_roof_panel";
-                    } else {
+                    } else if constexpr (std::is_same_v<Object, GableRoof>) {
                         return "gable_roof";
+                    } else {
+                        return "hip_roof";
                     }
                 },
                 *original_object);
@@ -639,7 +642,7 @@ private:
                                false);
             add_quantity_field(layout, "Thickness", "buildingObjectThickness", 0.1);
             connect_pitch_updates();
-        } else if (form == "gable_roof") {
+        } else if (form == "gable_roof" || form == "hip_roof") {
             add_coordinate_fields(layout, "Base", "buildingObjectBaseX",
                                   "buildingObjectBaseY", "buildingObjectBaseZ", {
                                       0.0, 0.0, 3.0});
@@ -676,7 +679,7 @@ private:
         if (form == "rectangular_column" || form == "circular_column") {
             vector_property = "base_center_m";
         } else if (form == "straight_stair_flight" || form == "sloped_roof_panel" ||
-                   form == "gable_roof") {
+                   (form == "gable_roof" || form == "hip_roof")) {
             vector_property = "base_position_m";
         }
         if (!vector_property.empty()) {
@@ -778,7 +781,13 @@ private:
                     derived_pitch->setText(display_pitch(original->pitch_radians));
                     return;
                 }
-            } else if (form == "gable_roof") {
+            } else if (form == "gable_roof" || form == "hip_roof") {
+                if (const auto* original = original_as<HipRoof>();
+                    original != nullptr && !dirty.contains("buildingObjectSpan") &&
+                    !dirty.contains("buildingObjectRise")) {
+                    derived_pitch->setText(display_pitch(original->pitch_radians));
+                    return;
+                }
                 if (const auto* original = original_as<GableRoof>();
                     original != nullptr && !dirty.contains("buildingObjectSpan") &&
                     !dirty.contains("buildingObjectRise")) {
@@ -811,7 +820,7 @@ private:
         run_ok = std::isfinite(run) && run > geometry_tolerance;
         rise_ok = std::isfinite(rise) && rise >= 0.0;
         double denominator = run;
-        if (form == "gable_roof") {
+        if (form == "gable_roof" || form == "hip_roof") {
             denominator = run * 0.5;
             run_ok = run_ok && denominator > geometry_tolerance;
         }
@@ -876,7 +885,7 @@ private:
                     set_length("buildingObjectRise", value.rise);
                     set_length("buildingObjectOverhang", value.overhang);
                     set_length("buildingObjectThickness", value.thickness);
-                } else if constexpr (std::is_same_v<Object, GableRoof>) {
+                } else if constexpr ((std::is_same_v<Object, GableRoof> || std::is_same_v<Object, HipRoof>)) {
                     set_coordinate("buildingObjectBaseX", "buildingObjectBaseY",
                                    "buildingObjectBaseZ", value.base_position);
                     set_angle("buildingObjectOrientationDegrees", value.orientation_radians);
@@ -1287,39 +1296,43 @@ private:
                 original_entity.has_value() ? original_entity->id : std::string{},
                 *base, *orientation, *run, *span, *rise, pitch, *overhang, *thickness};
         }
-        if (form == "gable_roof") {
-            const auto* fallback = original_as<GableRoof>();
-            const auto base = read_coordinate(
-                "buildingObjectBaseX", "buildingObjectBaseY", "buildingObjectBaseZ",
-                QStringLiteral("Base"), fallback != nullptr ? fallback->base_position : Vec3{0, 0, 3});
-            const auto orientation = read_angle(
-                "buildingObjectOrientationDegrees", QStringLiteral("Orientation"),
-                fallback != nullptr ? fallback->orientation_radians : 0.0);
-            const auto length = read_length("buildingObjectLength", QStringLiteral("Length"), true,
-                                            fallback != nullptr ? fallback->length : 5.0);
-            const auto span = read_length("buildingObjectSpan", QStringLiteral("Span"), true,
-                                          fallback != nullptr ? fallback->span : 4.0);
-            const auto rise = read_length("buildingObjectRise", QStringLiteral("Rise"), true,
-                                          fallback != nullptr ? fallback->rise : 1.0);
-            const auto overhang = read_length("buildingObjectOverhang",
-                                              QStringLiteral("Overhang"), false,
-                                              fallback != nullptr ? fallback->overhang : 0.2);
-            const auto thickness = read_length("buildingObjectThickness",
-                                               QStringLiteral("Thickness"), true,
-                                               fallback != nullptr ? fallback->thickness : 0.1);
-            if (!base.has_value() || !orientation.has_value() || !length.has_value() ||
-                !span.has_value() || !rise.has_value() || !overhang.has_value() ||
-                !thickness.has_value()) {
-                return std::nullopt;
-            }
-            const auto pitch = fallback != nullptr &&
-                                       !dirty.contains("buildingObjectSpan") &&
-                                       !dirty.contains("buildingObjectRise")
-                                   ? fallback->pitch_radians
-                                   : std::atan(*rise / (*span * 0.5));
-            return GableRoof{
-                original_entity.has_value() ? original_entity->id : std::string{},
-                *base, *orientation, *length, *span, *rise, pitch, *overhang, *thickness};
+        if (form == "gable_roof" || form == "hip_roof") {
+            const auto read_roof = [&]<typename Roof>() -> std::optional<BuildingObject> {
+                const auto* fallback = original_as<Roof>();
+                const auto base = read_coordinate(
+                    "buildingObjectBaseX", "buildingObjectBaseY", "buildingObjectBaseZ",
+                    QStringLiteral("Base"), fallback != nullptr ? fallback->base_position : Vec3{0, 0, 3});
+                const auto orientation = read_angle(
+                    "buildingObjectOrientationDegrees", QStringLiteral("Orientation"),
+                    fallback != nullptr ? fallback->orientation_radians : 0.0);
+                const auto length = read_length("buildingObjectLength", QStringLiteral("Length"), true,
+                                                fallback != nullptr ? fallback->length : 5.0);
+                const auto span = read_length("buildingObjectSpan", QStringLiteral("Span"), true,
+                                              fallback != nullptr ? fallback->span : 4.0);
+                const auto rise = read_length("buildingObjectRise", QStringLiteral("Rise"), true,
+                                              fallback != nullptr ? fallback->rise : 1.0);
+                const auto overhang = read_length("buildingObjectOverhang",
+                                                  QStringLiteral("Overhang"), false,
+                                                  fallback != nullptr ? fallback->overhang : 0.2);
+                const auto thickness = read_length("buildingObjectThickness",
+                                                   QStringLiteral("Thickness"), true,
+                                                   fallback != nullptr ? fallback->thickness : 0.1);
+                if (!base.has_value() || !orientation.has_value() || !length.has_value() ||
+                    !span.has_value() || !rise.has_value() || !overhang.has_value() ||
+                    !thickness.has_value()) {
+                    return std::nullopt;
+                }
+                const auto pitch = fallback != nullptr &&
+                                           !dirty.contains("buildingObjectSpan") &&
+                                           !dirty.contains("buildingObjectRise")
+                                       ? fallback->pitch_radians
+                                       : std::atan(*rise / (*span * 0.5));
+                return Roof{
+                    original_entity.has_value() ? original_entity->id : std::string{},
+                    *base, *orientation, *length, *span, *rise, pitch, *overhang, *thickness};
+            };
+            return form == "hip_roof" ? read_roof.template operator()<HipRoof>()
+                                      : read_roof.template operator()<GableRoof>();
         }
         fail(QStringLiteral("Choose a supported building form."));
         return std::nullopt;

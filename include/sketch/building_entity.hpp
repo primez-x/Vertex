@@ -10,12 +10,12 @@
 
 namespace sketch {
 
-// The entity codec is the single semantic boundary for the six bounded
+// The entity codec is the single semantic boundary for the supported
 // architectural object forms.  BRep geometry remains a derived value created
 // by make_building_shape; the variant and its Entity properties are the
 // persisted authoring data.
 using BuildingObject = std::variant<RectangularColumn, CircularColumn, Beam,
-                                    StairFlight, SlopedRoofPanel, GableRoof>;
+                                    StairFlight, SlopedRoofPanel, GableRoof, HipRoof>;
 
 // This predicate only recognizes the canonical entity type vocabulary.  A
 // true result does not imply that an Entity has a supported version, form, or

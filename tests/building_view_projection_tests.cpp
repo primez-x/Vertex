@@ -191,12 +191,33 @@ void test_invalid_frame_and_missed_section_fail_closed() {
 
 }  // namespace
 
+void test_hip_roof_views() {
+    const sketch::HipRoof roof{"hip-views", {0, 0, 3}, 0, 6, 4, 1, std::atan(0.5), 0.2, 0.1};
+    const BuildingViewFrame plan_frame{{0, 0, 0}, {0, 0, -1}, {0, 1, 0}};
+    const auto plan = sketch::project_building_view(roof, BuildingViewKind::plan, plan_frame);
+    const auto plan_bounds = bounds(plan);
+    near(plan_bounds.min_x, -3.2, 1e-5, "hip plan left eave");
+    near(plan_bounds.max_x, 3.2, 1e-5, "hip plan right eave");
+    near(plan_bounds.min_y, -2.2, 1e-5, "hip plan lower eave");
+    near(plan_bounds.max_y, 2.2, 1e-5, "hip plan upper eave");
+    const BuildingViewFrame vertical_frame{{0, 0, 0}, {0, -1, 0}, {0, 0, 1}};
+    for (const auto kind : {BuildingViewKind::elevation, BuildingViewKind::section}) {
+        const auto projected = sketch::project_building_view(roof, kind, vertical_frame);
+        const auto extent = bounds(projected);
+        near(extent.min_x, -3.2, 1e-5, "hip vertical view left extent");
+        near(extent.max_x, 3.2, 1e-5, "hip vertical view right extent");
+        near(extent.max_y, 4.0, 1e-5, "hip vertical view ridge");
+        near(extent.min_y, 2.9 - 0.1 * std::sqrt(1.25), 1e-5, "hip lower eave underside");
+    }
+}
+
 int main() {
     try {
         test_elevation_preserves_horizontal_width_and_height();
         test_horizontal_section_retains_analytic_circle();
         test_vertical_section_intersects_rectangular_column();
         test_flat_roof_projects_in_all_views();
+        test_hip_roof_views();
         test_invalid_frame_and_missed_section_fail_closed();
         std::cout << "Building view projection tests passed\n";
         return 0;

@@ -821,7 +821,7 @@ void test_organization_context() {
             "selecting a reopened object resolves its real drawing context");
 }
 
-void test_six_form_authoring_and_quantity_history() {
+void test_building_form_authoring_and_quantity_history() {
     using namespace sketch;
     desktop::MainWindow window;
     const std::vector<BuildingObject> objects{
@@ -831,6 +831,7 @@ void test_six_form_authoring_and_quantity_history() {
         StairFlight{"workflow-stair", {5.0, 0.0, 0.0}, 0.0, 4, 0.8, 0.25, 1.0, StairLanding{0.6, 0.15}},
         SlopedRoofPanel{"workflow-shed", {0.0, 0.0, 4.0}, 0.0, 4.0, 3.0, 1.0, std::atan(0.25), 0.2, 0.1},
         GableRoof{"workflow-gable", {8.0, 0.0, 4.0}, 0.2, 5.0, 4.0, 1.0, std::atan(0.5), 0.2, 0.1},
+        HipRoof{"workflow-hip", {16.0, 0.0, 4.0}, 0.2, 6.0, 4.0, 1.0, std::atan(0.5), 0.2, 0.1},
     };
     std::vector<QString> identities;
     for (const auto& object : objects) {
@@ -1107,6 +1108,53 @@ void test_contextual_building_dimension_inspector(const QString& capture_directo
                 }), "edited objects remain in the shared plan and export projection");
     }
     require(window.selectEntity({}) && group->isHidden(), "dimension inspector hides without an object selection");
+}
+
+void test_hip_roof_authoring(const QString& capture_directory) {
+    using namespace sketch;
+    desktop::MainWindow window;
+    desktop::BuildingObjectDialog dialog(std::nullopt, true);
+    auto* type = dialog.findChild<QComboBox*>("buildingObjectType");
+    type->setCurrentIndex(type->findData("roof"));
+    auto* form = dialog.findChild<QComboBox*>("buildingObjectForm");
+    form->setCurrentIndex(form->findData("hip_roof"));
+    require(dialog.submit() && dialog.candidate() &&
+                dialog.candidate()->properties.at("form") == "hip_roof", "hip roof authoring form submits");
+    const auto id = window.commitBuildingObject(*dialog.candidate(), window.document().revision());
+    require(!id.isEmpty() && window.selectEntity(id), "hip roof creates a document object");
+    auto* length = window.findChild<QLineEdit*>("roofRun");
+    auto* span = window.findChild<QLineEdit*>("roofSpan");
+    auto* apply = window.findChild<QPushButton*>("applyRoofProperties");
+    require(!window.findChild<QGroupBox*>("roofProperties")->isHidden(), "hip dimensions visible");
+    const auto before = window.document().snapshot().entities().at(id.toStdString());
+    const auto revision = window.document().revision();
+    length->setText("3 m");
+    apply->click();
+    require(window.document().revision() == revision &&
+                window.document().snapshot().entities().at(id.toStdString()) == before,
+            "hip length smaller than span is rejected atomically");
+    length->setText("6 m");
+    span->setText("6 m");
+    apply->click();
+    const auto edited = window.document().snapshot().entities().at(id.toStdString());
+    require(window.document().revision() == revision + 1 && edited.properties.at("length_m") == 6.0 &&
+                edited.properties.at("span_m") == 6.0 && edited.properties.at("form") == "hip_roof",
+            "hip inspector can create the square pyramid case");
+    require(window.undoCommand() && window.document().snapshot().entities().at(id.toStdString()) == before &&
+                window.redoCommand(), "hip dimensions undo and redo");
+    QTemporaryDir directory;
+    require(window.saveProjectAs(directory.filePath("hip.bldproj")) &&
+                window.openProject(directory.filePath("hip.bldproj")) &&
+                window.document().snapshot().entities().at(id.toStdString()) == edited,
+            "hip geometry and receipts persist exactly");
+    require(window.selectEntity(id), "reselect reopened hip");
+    if (!capture_directory.isEmpty()) {
+        window.resize(1200, 850);
+        window.show();
+        QApplication::processEvents();
+        window.fitView();
+        require(window.grab().save(capture_directory + "/hip-inspector.png"), "hip inspector capture");
+    }
 }
 
 void test_contextual_roof_dimension_inspector() {
@@ -2093,6 +2141,7 @@ int main(int argc, char** argv) {
     test_calculation_deduction_workflow();
     test_contextual_building_dimension_inspector(field_ui_capture_directory);
     test_contextual_roof_dimension_inspector();
+    test_hip_roof_authoring(field_ui_capture_directory);
     test_contextual_gable_roof_inspector(field_ui_capture_directory);
     test_survey_calculator(field_ui_capture_directory);
     test_survey_explicit_endpoint_closure();
@@ -2129,7 +2178,7 @@ int main(int argc, char** argv) {
                 "stamp fixture permissions should be restored");
     }
     test_organization_context();
-    test_six_form_authoring_and_quantity_history();
+    test_building_form_authoring_and_quantity_history();
     auto document = std::make_shared<sketch::Document>(sketch::Document::create());
     sketch::desktop::MainWindow window(document);
 

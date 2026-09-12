@@ -1,7 +1,7 @@
 # Building object editor
 
 `sketch::desktop::BuildingObjectDialog` is the Qt Widgets authoring seam for
-the six bounded architectural solids.  It owns no `Document`: construction
+the supported architectural solids. It owns no `Document`: construction
 and editing collect controls, validate the complete semantic object through
 the building entity codec, and return one candidate `Entity` only after a
 successful `submit()`.
@@ -109,7 +109,7 @@ There is no editable pitch control, so the dialog cannot submit an inconsistent
 pitch/rise pair.  Gable roofs still require a positive rise and pitch.
 
 The main-window Inspector reuses this same editor path for a selected
-`sloped_roof_panel` or `gable_roof`. Its `roofProperties` group exposes run
+`sloped_roof_panel`, `gable_roof`, or `hip_roof`. Its `roofProperties` group exposes run
 (labelled Length for a gable), span, rise, overhang, thickness, and derived
 pitch through `roofRun`, `roofSpan`, `roofRise`, `roofOverhang`,
 `roofThickness`, `roofPitch`, and `applyRoofProperties` without opening a
@@ -119,7 +119,10 @@ changed fields and committing one replacement command. Negative rise,
 zero run, zero thickness, malformed quantities, read-only documents, and stale
 revisions are rejected without mutating history. Gables require positive rise
 and derive pitch from half the full span; panels allow zero rise and use the
-run. The group is hidden for unsupported forms and non-roof selections.
+run. Hip roofs also use the half-span pitch, require length at least span,
+and permit an exactly square footprint to create a pyramid. Invalid hip
+footprints are rejected without changing the document. The group is hidden
+for unsupported forms and non-roof selections.
 
 Pitch previews update while typing, using canonical measurements for untouched
 fields and parsed quantities for changed fields. Invalid or stale input clears

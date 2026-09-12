@@ -6789,8 +6789,9 @@ public:
             }
             const auto original = selectedEntity();
             if (!original) throw std::invalid_argument("Reselect the roof to preview dimensions.");
-            const bool gable = read_string(original->properties, "form") ==
-                               std::optional<std::string>("gable_roof");
+            const auto roof_form = read_string(original->properties, "form");
+            const bool symmetric_roof = roof_form == std::optional<std::string>("gable_roof") ||
+                               roof_form == std::optional<std::string>("hip_roof");
             const auto read = [&](QLineEdit* field, const QString& initial, const char* key,
                                   const char* label, bool allow_zero) {
                 double value;
@@ -6813,12 +6814,14 @@ public:
                 return value;
             };
             const auto run = read(m_roof_run_edit, m_roof_run_original_text,
-                gable ? "length_m" : "run_m", gable ? "Length" : "Run", false);
+                symmetric_roof ? "length_m" : "run_m", symmetric_roof ? "Length" : "Run", false);
             const auto span = read(m_roof_span_edit, m_roof_span_original_text, "span_m", "Span", false);
-            const auto rise = read(m_roof_rise_edit, m_roof_rise_original_text, "rise_m", "Rise", !gable);
+            if (roof_form == std::optional<std::string>("hip_roof") && run < span)
+                throw std::invalid_argument("Hip roof length must be at least its span.");
+            const auto rise = read(m_roof_rise_edit, m_roof_rise_original_text, "rise_m", "Rise", !symmetric_roof);
             (void)read(m_roof_overhang_edit, m_roof_overhang_original_text, "overhang_m", "Overhang", true);
             (void)read(m_roof_thickness_edit, m_roof_thickness_original_text, "thickness_m", "Thickness", false);
-            const auto pitch = std::atan(rise / (gable ? span / 2.0 : run));
+            const auto pitch = std::atan(rise / (symmetric_roof ? span / 2.0 : run));
             m_roof_pitch_value->setText(QStringLiteral("%1°").arg(pitch * 180.0 / std::numbers::pi, 0, 'f', 3));
             m_roof_preview_error->clear();
             m_roof_preview_error->hide();
@@ -6841,9 +6844,10 @@ public:
         const auto context = *m_roof_edit_context;
         const auto original = selectedEntity();
         const auto form = original ? read_string(original->properties, "form") : std::nullopt;
-        const bool gable = form == std::optional<std::string>("gable_roof");
+        const bool symmetric_roof = form == std::optional<std::string>("gable_roof") ||
+                           form == std::optional<std::string>("hip_roof");
         if (!original || original->type != "roof" ||
-            (!gable && form != std::optional<std::string>("sloped_roof_panel"))) {
+            (!symmetric_roof && form != std::optional<std::string>("sloped_roof_panel"))) {
             setError(QStringLiteral("Select a supported roof before applying dimensions."));
             return false;
         }
@@ -6864,7 +6868,7 @@ public:
             };
             // Leave untouched dialog fields at their decoded values so the
             // existing quantity-receipt merge preserves exact expressions.
-            set_if_changed(gable ? "buildingObjectLength" : "buildingObjectRun",
+            set_if_changed(symmetric_roof ? "buildingObjectLength" : "buildingObjectRun",
                            run_text, m_roof_run_original_text);
             set_if_changed("buildingObjectSpan", span_text, m_roof_span_original_text);
             set_if_changed("buildingObjectRise", rise_text, m_roof_rise_original_text);
@@ -12343,8 +12347,8 @@ private:
             ? read_string(entity->properties, "form") : std::optional<std::string>{};
         const bool sloped_roof_panel = building_object && entity->type == "roof" &&
             building_form.has_value() && *building_form == "sloped_roof_panel";
-        const bool gable_roof = building_object && entity->type == "roof" &&
-            building_form.has_value() && *building_form == "gable_roof";
+        const bool symmetric_roof_form = building_object && entity->type == "roof" &&
+            building_form.has_value() && (*building_form == "gable_roof" || *building_form == "hip_roof");
         const bool editable_geometry = wall || opening || slab ||
             (entity && is_closed_boundary_entity(entity->type));
         m_edit_object_button->setVisible(building_object);
@@ -12641,19 +12645,20 @@ private:
             const auto roof_label = sloped_roof_panel
                 ? (read_number(entity->properties, "rise_m", 0.0) == 0.0
                        ? QStringLiteral("Flat panel") : QStringLiteral("Sloped panel"))
-                : QStringLiteral("Gable roof");
+                : building_form == std::optional<std::string>("hip_roof")
+                    ? QStringLiteral("Hip roof") : QStringLiteral("Gable roof");
             context = QStringLiteral("Roof\n%1").arg(roof_label);
         }
         m_inspector_context->setText(context);
-        if (sloped_roof_panel || gable_roof) {
+        if (sloped_roof_panel || symmetric_roof_form) {
             m_roof_edit_context = captureModalContext();
             m_roof_properties_group->setVisible(true);
             m_roof_properties_group->setEnabled(editable);
-            m_roof_run_label->setText(gable_roof ? QStringLiteral("Length") : QStringLiteral("Run"));
+            m_roof_run_label->setText(symmetric_roof_form ? QStringLiteral("Length") : QStringLiteral("Run"));
             m_roof_run_edit->setAccessibleName(m_roof_run_label->text());
-            m_roof_run_edit->setToolTip(gable_roof ? QStringLiteral("Length along the ridge")
+            m_roof_run_edit->setToolTip(symmetric_roof_form ? QStringLiteral("Length along the ridge")
                                                  : QStringLiteral("Horizontal run along the slope"));
-            m_roof_rise_edit->setToolTip(gable_roof ? QStringLiteral("Positive ridge height above the eaves")
+            m_roof_rise_edit->setToolTip(symmetric_roof_form ? QStringLiteral("Positive ridge height above the eaves")
                                                   : QStringLiteral("Rise; enter zero for a flat roof"));
             const auto set_roof_value = [&](QLineEdit* field, QString& original_text,
                                             double value) {
@@ -12663,7 +12668,7 @@ private:
                 original_text = field->text();
             };
             set_roof_value(m_roof_run_edit, m_roof_run_original_text,
-                           read_number(entity->properties, gable_roof ? "length_m" : "run_m", 0.0));
+                           read_number(entity->properties, symmetric_roof_form ? "length_m" : "run_m", 0.0));
             set_roof_value(m_roof_span_edit, m_roof_span_original_text,
                            read_number(entity->properties, "span_m", 0.0));
             set_roof_value(m_roof_rise_edit, m_roof_rise_original_text,

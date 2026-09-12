@@ -332,7 +332,10 @@ void test_edit_preserves_untouched_high_precision_fields() {
         .overhang = 0.222345678901234,
         .thickness = 0.123456789012345,
     };
-    const auto original = encode_building_entity(object);
+    const HipRoof hip{object.id, object.base_position, object.orientation_radians,
+        object.length, object.span, object.rise, object.pitch_radians, object.overhang, object.thickness};
+    for (const BuildingObject& candidate_object : {BuildingObject{object}, BuildingObject{hip}}) {
+    const auto original = encode_building_entity(candidate_object);
     BuildingObjectDialog dialog(original, false);
     set_field(dialog, "buildingObjectThickness", "6 in");
     require(dialog.submit(), "high precision object edit should submit");
@@ -345,6 +348,7 @@ void test_edit_preserves_untouched_high_precision_fields() {
     }
     require(candidate->properties.at("thickness_m") != original.properties.at("thickness_m"),
             "edited field should change");
+    }
 }
 
 void test_imperial_defaults_use_shared_quantity_input() {
@@ -438,9 +442,9 @@ void test_changed_quantity_replaces_only_its_receipt() {
 }
 
 void test_untouched_defaults_submit_identically_in_both_units() {
-    const std::array<std::string_view, 6> forms{
+    const std::array<std::string_view, 7> forms{
         "rectangular_column", "circular_column", "straight_beam",
-        "straight_stair_flight", "sloped_roof_panel", "gable_roof"};
+        "straight_stair_flight", "sloped_roof_panel", "gable_roof", "hip_roof"};
 
     for (const auto form : forms) {
         std::optional<nlohmann::json> canonical;
