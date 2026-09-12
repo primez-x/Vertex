@@ -16,6 +16,7 @@
 #include <string>
 #include <stdexcept>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -338,12 +339,52 @@ void test_roofs_are_planar_thickened_panels() {
 
 }  // namespace
 
+void test_hip_roofs() {
+    using namespace sketch;
+    for (const double length : {8.0, 4.0}) {
+      for (const double slope : {0.25, 1.0}) {
+        const HipRoof roof{"hip", {10, -5, 3}, std::numbers::pi / 2.0,
+            length, 4.0, 2.0 * slope, std::atan(slope), 0.3, 0.2};
+        const auto shape = make_hip_roof(roof);
+        valid_solid(shape, "hip roof must contain valid closed solids");
+        require(solid_count(shape) == 4, "hip roof must have four slopes including square pyramids");
+        const auto drop = 0.2 * std::sqrt(1.0 + slope * slope);
+        near(solid_volume(shape), (length + 0.6) * 4.6 * drop, 1e-7,
+            "hip volume equals projected area times vertical thickness");
+        const auto box = bounds(shape);
+        near(box.xmin, 7.7, 1e-6, "rotated hip minimum X");
+        near(box.xmax, 12.3, 1e-6, "rotated hip maximum X");
+        near(box.ymin, -5.0 - length * 0.5 - 0.3, 1e-6, "rotated hip minimum Y");
+        near(box.ymax, -5.0 + length * 0.5 + 0.3, 1e-6, "rotated hip maximum Y");
+        near(box.zmin, 3.0 - 0.3 * slope - drop, 1e-6, "overhung hip lower eave");
+        near(box.zmax, 3.0 + 2.0 * slope, 1e-6, "hip ridge elevation");
+        std::vector<TopoDS_Shape> panels;
+        for (TopExp_Explorer explorer(shape, TopAbs_SOLID); explorer.More(); explorer.Next())
+            panels.push_back(explorer.Current());
+        for (std::size_t i = 0; i < panels.size(); ++i)
+            for (std::size_t j = i + 1; j < panels.size(); ++j)
+                near(common_volume(panels[i], panels[j]), 0.0, 1e-8,
+                    "hip panels must not overlap in positive volume");
+        auto invalid = roof;
+        invalid.length = 3.0;
+        rejected([&] { (void)make_hip_roof(invalid); }, "shorter length than span rejected");
+        invalid = roof; invalid.pitch_radians = 0.2;
+        rejected([&] { (void)make_hip_roof(invalid); }, "inconsistent hip pitch rejected");
+        invalid = roof; invalid.base_position.x = std::numeric_limits<double>::infinity();
+        rejected([&] { (void)make_hip_roof(invalid); }, "nonfinite hip location rejected");
+        invalid = roof; invalid.thickness = 0.0;
+        rejected([&] { (void)make_hip_roof(invalid); }, "zero hip thickness rejected");
+      }
+    }
+}
+
 int main() {
     try {
         test_vertical_columns_are_real_solids();
         test_beam_uses_arbitrary_axis_and_local_up();
         test_stairs_have_step_volume_and_optional_landing();
         test_roofs_are_planar_thickened_panels();
+        test_hip_roofs();
         std::cout << "Building object solid tests passed\n";
         return 0;
     } catch (const std::exception& error) {

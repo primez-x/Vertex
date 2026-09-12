@@ -62,6 +62,24 @@ half-span domain.  A ridge cap, fascia, framing, sheathing joints, flashing,
 drainage, structural analysis, code checks, and material assemblies are
 outside this bounded geometry package.
 
+`make_hip_roof` adds an equal-pitch rectangular hip primitive. Length must be
+at least span; a square footprint produces a four-sided pyramid. The base is
+the footprint centre at eave elevation, length follows the ridge, and rise
+and pitch must agree over half the span. Horizontal overhang extends every
+eave and extrapolates the same slopes; it does not extend the ridge. A nonzero
+ridge shorter than the geometry tolerance is rejected instead of being
+silently converted to a pyramid.
+
+Each slope is a closed prism with vertical trims at the eaves, hips, and
+ridge. Its vertical depth is `thickness / cos(pitch)`, so thickness remains
+the perpendicular distance between its parallel surfaces. The four prisms
+have disjoint footprint interiors and shared joining faces, with no
+positive-volume overlap. Analytic volume is the overhung footprint area
+times the vertical depth. Tests cover both rectangular and square roofs,
+orientation, elevation, bounds, pairwise intersection volume, and invalid
+parameters. This primitive is not yet part of the document codec or desktop
+authoring workflow; those integrations remain required.
+
 These functions construct deterministic geometric primitives and do not claim
 production-complete roof or stair authoring, regulatory compliance, detailing,
 or structural suitability.  Higher-level document commands, stable IDs,

@@ -115,4 +115,21 @@ struct GableRoof {
 
 [[nodiscard]] TopoDS_Shape make_gable_roof(const GableRoof& roof);
 
+// Equal-pitch hip roof, centred at eave elevation. Length follows the ridge
+// and must be at least span; equal values produce a pyramid. Thickness is
+// measured normal to each slope, with vertical trims at eaves, hips and ridge.
+struct HipRoof {
+    std::string id;
+    Vec3 base_position{};
+    double orientation_radians{};
+    double length{};
+    double span{};
+    double rise{};
+    double pitch_radians{};
+    double overhang{};
+    double thickness{};
+};
+
+[[nodiscard]] TopoDS_Shape make_hip_roof(const HipRoof& roof);
+
 }  // namespace sketch

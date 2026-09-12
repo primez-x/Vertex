@@ -462,4 +462,55 @@ TopoDS_Shape make_gable_roof(const GableRoof& roof) {
     return make_compound(left_panel, right_panel, "Gable roof construction failed");
 }
 
+TopoDS_Shape make_hip_roof(const HipRoof& roof) {
+    finite_coordinate(roof.base_position, "Hip roof base must be finite");
+    positive_dimension(roof.length, "Hip roof length must be positive");
+    positive_dimension(roof.span, "Hip roof span must be positive");
+    positive_dimension(roof.thickness, "Hip roof thickness must be positive");
+    nonnegative_dimension(roof.overhang, "Hip roof overhang must be nonnegative");
+    if (roof.length < roof.span)
+        throw std::invalid_argument("Hip roof length must be at least its span");
+    const auto slope = checked_pitch_rise(roof.span * 0.5, roof.rise,
+        roof.pitch_radians, "Hip roof pitch and rise must agree");
+    const auto frame = horizontal_frame(roof.orientation_radians,
+        "Hip roof orientation is invalid");
+    const auto a = roof.length * 0.5 + roof.overhang;
+    const auto b = roof.span * 0.5 + roof.overhang;
+    positive_dimension(2.0 * a, "Hip roof overhung length is outside the supported range");
+    positive_dimension(2.0 * b, "Hip roof overhung span is outside the supported range");
+    const auto ridge_half = (roof.length - roof.span) * 0.5;
+    if (ridge_half != 0.0 && ridge_half <= tolerance)
+        throw std::invalid_argument("Hip roof ridge is too short; use an exactly square footprint");
+    const auto eave = -roof.overhang * slope;
+    const auto drop = roof.thickness * std::sqrt(1.0 + slope * slope);
+    positive_dimension(drop, "Hip roof thickness offset is outside the supported range");
+    const auto p = [&](double x, double y, double z) {
+        return local_point(point(roof.base_position), frame.along, x, frame.across, y, z);
+    };
+    const auto southwest = p(-a, -b, eave);
+    const auto southeast = p(a, -b, eave);
+    const auto northeast = p(a, b, eave);
+    const auto northwest = p(-a, b, eave);
+    const auto west_ridge = p(-ridge_half, 0.0, roof.rise);
+    const auto east_ridge = p(ridge_half, 0.0, roof.rise);
+    std::vector<gp_Pnt> south{southwest, southeast, east_ridge};
+    std::vector<gp_Pnt> north{northeast, northwest, west_ridge};
+    if (ridge_half > 0.0) {
+        south.push_back(west_ridge);
+        north.push_back(east_ridge);
+    }
+    // Disjoint horizontal panel domains ensure that vertical thickening
+    // creates shared hip/ridge faces without positive-volume intersections.
+    const gp_Vec offset(0.0, 0.0, -drop);
+    const auto south_panel = make_prism(south, offset, "South hip panel construction failed");
+    const auto north_panel = make_prism(north, offset, "North hip panel construction failed");
+    const auto west_panel = make_prism({northwest, southwest, west_ridge}, offset,
+        "West hip panel construction failed");
+    const auto east_panel = make_prism({southeast, northeast, east_ridge}, offset,
+        "East hip panel construction failed");
+    return make_compound(make_compound(south_panel, north_panel, "Hip side construction failed"),
+        make_compound(west_panel, east_panel, "Hip end construction failed"),
+        "Hip roof construction failed");
+}
+
 }  // namespace sketch
