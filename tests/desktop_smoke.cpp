@@ -60,6 +60,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -328,6 +329,29 @@ void test_second_open_is_read_only() {
     require(second.createStraightWall({0.0, 1.0}, {4.0, 1.0}, QStringLiteral("interior")).isEmpty() &&
                 second.lastError().contains(QStringLiteral("read-only")),
             "read-only ownership conflicts must reject edits before mutation");
+}
+
+void test_external_project_change_blocks_save() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "external-change fixture needs a temporary directory");
+    const auto path = directory.filePath(QStringLiteral("external-change.bldproj"));
+    sketch::desktop::MainWindow window;
+    require(!window.createStraightWall({0.0, 0.0}, {4.0, 0.0}, QStringLiteral("exterior")).isEmpty() &&
+                window.saveProjectAs(path),
+            "external-change fixture should save its source project");
+
+    QFile external(path);
+    require(external.open(QIODevice::WriteOnly | QIODevice::Truncate),
+            "external-change fixture should open the project for mutation");
+    require(external.write("external edit") == 13, "external-change fixture should write replacement bytes");
+    external.close();
+
+    require(!window.saveProject() && !window.document().is_editable() &&
+                window.lastError().contains(QStringLiteral("outside this session")),
+            "an external project edit must block save and latch the document read-only");
+    QFile verify(path);
+    require(verify.open(QIODevice::ReadOnly) && verify.readAll() == QByteArray("external edit"),
+            "a blocked save must leave externally changed bytes untouched");
 }
 
 void test_workspace_profiles() {
@@ -3020,6 +3044,7 @@ int main(int argc, char** argv) {
     test_shortcuts_and_measurement_keypad(field_ui_capture_directory);
     test_project_subject_metadata();
     test_second_open_is_read_only();
+    test_external_project_change_blocks_save();
     test_workspace_profiles();
     test_room_boundary_from_existing_geometry();
     test_selection_clipboard_workflow();
