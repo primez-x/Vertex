@@ -144,6 +144,12 @@ public:
         const Boundary& boundary,
         QString classification = QStringLiteral("room"),
         std::optional<Revision> expected_revision = std::nullopt);
+    // Builds a room boundary from the connected component of the selected
+    // architectural wall geometry. Source walls remain unchanged; the new
+    // room boundary is a distinct semantic object and normal undoable command.
+    [[nodiscard]] QString createRoomBoundaryFromExistingGeometry(
+        QString classification = QStringLiteral("room"),
+        std::optional<Revision> expected_revision = std::nullopt);
     [[nodiscard]] QString createStraightWall(
         Vec2 start,
         Vec2 end,

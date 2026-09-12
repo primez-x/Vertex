@@ -1,4 +1,5 @@
 #include "sketch/geometry_operations.hpp"
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -7,6 +8,7 @@
 
 namespace {
 void require(bool ok) { if (!ok) throw std::runtime_error("geometry operation assertion failed"); }
+void require(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
 template<class F> void rejects(F f) {
     try { f(); } catch (const std::invalid_argument&) { return; }
     throw std::runtime_error("invalid operation accepted");
@@ -62,6 +64,45 @@ int main() {
         rejects([&]{ (void)automatically_close_boundary({{{0,0},{1,0},0}}); });
         require(complete_bay_window({0,0},{1,-1},{3,-1},{4,0}).size()==3);
         rejects([&]{ (void)complete_bay_window({0,0},{3,-1},{1,-1},{4,0}); });
+        const std::vector<Segment> unordered{
+            {{4, 3}, {0, 3}, 0},
+            {{0, 0}, {4, 0}, 0},
+            {{0, 3}, {0, 0}, 0},
+            {{4, 0}, {4, 3}, 0},
+        };
+        const auto assembled = assemble_boundary_from_segments(unordered, 1);
+        require(assembled.size() == 4 && assembled.front().start.x == 0.0 &&
+                    assembled.front().start.y == 0.0 && assembled.front().end.x == 4.0 &&
+                    assembled.front().end.y == 0.0 && near(signed_area(assembled), 12.0),
+                "unordered existing segments must assemble into one analytical cycle");
+        const auto curved_segments = std::vector<Segment>{
+            {{0, 0}, {2, 0}, 0},
+            {{2, 0}, {2, 2}, 0},
+            {{2, 2}, {0, 2}, 0},
+            {{0, 2}, {0, 0}, std::numbers::pi / 2},
+        };
+        const auto curved_assembled = assemble_boundary_from_segments(curved_segments, 3);
+        const auto retained_arc = std::any_of(curved_assembled.begin(), curved_assembled.end(),
+                                               [](const Segment& segment) {
+                                                   return segment.sweep_radians > 0.0;
+                                               });
+        require(curved_assembled.size() == 4 &&
+                    near(perimeter(curved_assembled), perimeter(curved_segments)) &&
+                    retained_arc,
+                "existing curved segments must retain analytical sweep and length");
+        auto open_segments = unordered;
+        open_segments.pop_back();
+        rejects([&]{ (void)assemble_boundary_from_segments(open_segments); });
+        auto branched_segments = unordered;
+        branched_segments.push_back({{4, 0}, {8, 0}, 0});
+        rejects([&]{ (void)assemble_boundary_from_segments(branched_segments); });
+        auto disconnected_segments = unordered;
+        disconnected_segments.push_back({{10, 10}, {11, 10}, 0});
+        rejects([&]{ (void)assemble_boundary_from_segments(disconnected_segments); });
+        auto gapped_segments = unordered;
+        gapped_segments[3].start.x += 0.001;
+        rejects([&]{ (void)assemble_boundary_from_segments(gapped_segments); });
+        rejects([&]{ (void)assemble_boundary_from_segments(unordered, unordered.size()); });
         require(apex_command_id("Auto Close")=="boundary.auto_close");
         require(apex_command_id("unknown").empty());
         require(shortcut_conflicts(apex_operation_preset()).empty());

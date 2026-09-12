@@ -5711,18 +5711,110 @@ public:
         return m_selected_id;
     }
 
+    QString createRoomBoundaryFromExistingGeometry(const QString& classification,
+                                                   std::optional<Revision> expected_revision = std::nullopt) {
+        const auto revision = expected_revision.value_or(m_document->revision());
+        if (revision != m_document->revision()) {
+            setError(QStringLiteral(
+                "The project changed while existing geometry was being inspected. Start the command again."));
+            return {};
+        }
+        try {
+            const auto selected = selectedEntity();
+            if (!selected.has_value()) {
+                throw std::invalid_argument("Select existing walls or a closed boundary first.");
+            }
+            Boundary boundary;
+            if (is_closed_boundary_entity(selected->type)) {
+                boundary = read_boundary(selected->properties);
+            } else if (selected->type == "wall") {
+                const auto floor_id = read_string(selected->properties, "floor_id");
+                const auto layer_id = read_string(selected->properties, "layer_id");
+                if (!floor_id.has_value() || !layer_id.has_value()) {
+                    throw std::invalid_argument("The selected wall has no floor or layer context.");
+                }
+                const auto selected_segment = read_required_segment(selected->properties, "baseline");
+                if (!selected_segment.has_value()) {
+                    throw std::invalid_argument("The selected wall has no valid analytical baseline.");
+                }
+                struct Candidate {
+                    std::string id;
+                    Segment segment;
+                };
+                std::vector<Candidate> candidates;
+                std::size_t selected_index = 0;
+                const auto snapshot = m_document->snapshot();
+                for (const auto& [id, entity] : snapshot.entities()) {
+                    if (entity.type != "wall" ||
+                        read_string(entity.properties, "floor_id") != floor_id ||
+                        read_string(entity.properties, "layer_id") != layer_id) {
+                        continue;
+                    }
+                    const auto baseline = read_required_segment(entity.properties, "baseline");
+                    if (!baseline.has_value()) continue;
+                    if (entity.id == selected->id) selected_index = candidates.size();
+                    candidates.push_back({id, *baseline});
+                }
+                if (candidates.empty() || selected_index >= candidates.size() ||
+                    candidates[selected_index].id != selected->id) {
+                    throw std::invalid_argument("The selected wall is not part of the current drawing context.");
+                }
+                const auto touches = [](const Segment& left, const Segment& right) {
+                    const auto same_point = [](Vec2 a, Vec2 b) {
+                        return a.x == b.x && a.y == b.y;
+                    };
+                    return same_point(left.start, right.start) ||
+                           same_point(left.start, right.end) ||
+                           same_point(left.end, right.start) ||
+                           same_point(left.end, right.end);
+                };
+                std::vector<bool> included(candidates.size(), false);
+                std::vector<std::size_t> component;
+                component.reserve(candidates.size());
+                included[selected_index] = true;
+                component.push_back(selected_index);
+                for (std::size_t cursor = 0; cursor < component.size(); ++cursor) {
+                    const auto source_index = component[cursor];
+                    for (std::size_t index = 0; index < candidates.size(); ++index) {
+                        if (!included[index] && touches(candidates[source_index].segment,
+                                                        candidates[index].segment)) {
+                            included[index] = true;
+                            component.push_back(index);
+                        }
+                    }
+                }
+                std::vector<Segment> segments;
+                segments.reserve(component.size());
+                std::size_t component_seed = 0;
+                for (std::size_t index = 0; index < component.size(); ++index) {
+                    segments.push_back(candidates[component[index]].segment);
+                    if (component[index] == selected_index) component_seed = index;
+                }
+                boundary = assemble_boundary_from_segments(segments, component_seed);
+            } else {
+                throw std::invalid_argument(
+                    "Select existing walls or a closed boundary before creating a room.");
+            }
+            const auto diagnostics = validate_boundary(boundary);
+            if (!diagnostics.empty()) {
+                throw std::invalid_argument("Existing geometry is invalid: " +
+                                            diagnostics.front().message);
+            }
+            const auto name = classification.trimmed();
+            if (name.isEmpty()) throw std::invalid_argument("Room name or classification cannot be empty.");
+            return createRoomBoundary(boundary, name, revision);
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Create room from existing geometry: %1")
+                         .arg(QString::fromUtf8(error.what())));
+            return {};
+        }
+    }
+
     void createRoomBoundaryFromSelection() {
         const auto context = captureModalContext();
         const auto selected = selectedEntity();
-        if (!selected || !is_closed_boundary_entity(selected->type)) {
-            setError(QStringLiteral("Select a closed measurement or room boundary first."));
-            return;
-        }
-        const auto boundary = read_boundary(selected->properties);
-        const auto diagnostics = validate_boundary(boundary);
-        if (!diagnostics.empty()) {
-            setError(QStringLiteral("Selected boundary is invalid: %1")
-                         .arg(QString::fromStdString(diagnostics.front().message)));
+        if (!selected || (!is_closed_boundary_entity(selected->type) && selected->type != "wall")) {
+            setError(QStringLiteral("Select existing walls or a closed boundary first."));
             return;
         }
         const auto initial = QString::fromStdString(
@@ -5734,7 +5826,7 @@ public:
             initial, &accepted);
         if (!accepted || classification.trimmed().isEmpty()) return;
         if (!modalContextUnchanged(context)) return;
-        (void)createRoomBoundary(boundary, classification.trimmed(), context.revision);
+        (void)createRoomBoundaryFromExistingGeometry(classification.trimmed(), context.revision);
     }
 
     QString createStraightWall(Vec2 start, Vec2 end, const QString& classification,
@@ -12148,6 +12240,11 @@ QString MainWindow::createBoundary(const Boundary& boundary, QString classificat
 QString MainWindow::createRoomBoundary(const Boundary& boundary, QString classification,
                                        std::optional<Revision> revision) {
     return m_impl->createRoomBoundary(boundary, classification, revision);
+}
+
+QString MainWindow::createRoomBoundaryFromExistingGeometry(QString classification,
+                                                           std::optional<Revision> revision) {
+    return m_impl->createRoomBoundaryFromExistingGeometry(classification, revision);
 }
 
 QString MainWindow::createStraightWall(Vec2 start, Vec2 end, QString classification,

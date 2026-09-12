@@ -835,7 +835,7 @@
         "tests/boundary_authoring_recovery_tests.cpp",
         "tests/desktop_workspace_recovery_tests.cpp"
       ],
-      "implementation_note": "Unfinished authoring persistence and recovery are implemented and tested; building areas from existing walls or segments without duplication remains open."
+      "implementation_note": "Unfinished authoring persistence and recovery are implemented and tested. The desktop can now assemble one strict closed room boundary from the connected component of selected analytical walls or from an existing closed boundary, preserving source geometry and issuing one undoable room entity command; branched, open, disconnected, duplicate, and invalid topology fails closed. Broader Apex edit/calculate/output parity remains open."
     },
     {
       "id": "APX-KEY-001",

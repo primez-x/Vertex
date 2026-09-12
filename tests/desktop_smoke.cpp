@@ -362,6 +362,38 @@ void test_workspace_profiles() {
     QStandardPaths::setTestModeEnabled(original_test_mode);
 }
 
+void test_room_boundary_from_existing_geometry() {
+    sketch::desktop::MainWindow window;
+    const auto first = window.createStraightWall({0.0, 0.0}, {4.0, 0.0}, QStringLiteral("exterior"));
+    const auto second = window.createStraightWall({4.0, 0.0}, {4.0, 3.0}, QStringLiteral("exterior"));
+    const auto third = window.createStraightWall({0.0, 3.0}, {0.0, 0.0}, QStringLiteral("exterior"));
+    const auto fourth = window.createStraightWall({4.0, 3.0}, {0.0, 3.0}, QStringLiteral("exterior"));
+    require(!first.isEmpty() && !second.isEmpty() && !third.isEmpty() && !fourth.isEmpty(),
+            "existing-geometry fixture must create four walls");
+    require(window.selectEntity(first), "existing-geometry fixture must select a source wall");
+    const auto before = window.document().revision();
+    const auto room = window.createRoomBoundaryFromExistingGeometry(QStringLiteral("Living room"));
+    require(!room.isEmpty() && window.document().revision() == before + 1,
+            "connected existing walls must create one room boundary command");
+    const auto snapshot = window.document().snapshot();
+    require(snapshot.entities().at(room.toStdString()).type == "room_boundary" &&
+                snapshot.entities().size() == 11 &&
+                snapshot.entities().at(room.toStdString()).properties.at("name") == "Living room",
+            "room creation must preserve source walls and persist its classification");
+    require(window.undoCommand() && !window.document().snapshot().entities().contains(room.toStdString()) &&
+                window.redoCommand() && window.document().snapshot().entities().contains(room.toStdString()),
+            "room creation from existing geometry must participate in undo and redo");
+
+    const auto branch = window.createStraightWall({4.0, 0.0}, {6.0, 0.0}, QStringLiteral("partition"));
+    require(!branch.isEmpty() && window.selectEntity(first),
+            "branched existing-geometry fixture must be selectable");
+    const auto before_reject = window.document().revision();
+    require(window.createRoomBoundaryFromExistingGeometry(QStringLiteral("Invalid" )).isEmpty() &&
+                window.document().revision() == before_reject &&
+                window.lastError().contains(QStringLiteral("exactly two"), Qt::CaseInsensitive),
+            "branched existing walls must fail without duplicating or mutating geometry");
+}
+
 void test_named_revisions() {
     using namespace sketch;
     desktop::MainWindow window;
@@ -1124,6 +1156,7 @@ int main(int argc, char** argv) {
     test_shortcuts_and_measurement_keypad(field_ui_capture_directory);
     test_project_subject_metadata();
     test_workspace_profiles();
+    test_room_boundary_from_existing_geometry();
     test_named_revisions();
     test_boundary_transform_workflow();
     test_design_phase_workflow();

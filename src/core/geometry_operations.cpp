@@ -141,4 +141,118 @@ Boundary complete_bay_window(Vec2 start,Vec2 shoulder1,Vec2 shoulder2,Vec2 end) 
         !((h1>0 && h2>0)||(h1<0 && h2<0))) throw std::invalid_argument("Invalid bay shoulders");
     return result;
 }
+
+Boundary assemble_boundary_from_segments(const std::vector<Segment>& segments,
+                                          std::size_t seed_index) {
+    if (segments.size() < 3) {
+        throw std::invalid_argument("At least three existing segments are required");
+    }
+    if (seed_index >= segments.size()) {
+        throw std::invalid_argument("Existing-segment seed index is out of range");
+    }
+
+    struct IndexedSegment {
+        Segment segment;
+        std::size_t start_node{};
+        std::size_t end_node{};
+    };
+    std::vector<Vec2> nodes;
+    nodes.reserve(segments.size());
+    const auto node_for = [&nodes](Vec2 point) {
+        finite(point);
+        const auto found = std::find_if(nodes.begin(), nodes.end(), [&](Vec2 candidate) {
+            return same(candidate, point);
+        });
+        if (found != nodes.end()) {
+            return static_cast<std::size_t>(found - nodes.begin());
+        }
+        nodes.push_back(point);
+        return nodes.size() - 1;
+    };
+
+    std::vector<IndexedSegment> indexed;
+    indexed.reserve(segments.size());
+    for (const auto& segment : segments) {
+        if (!std::isfinite(segment.sweep_radians)) {
+            throw std::invalid_argument("Existing segment sweep must be finite");
+        }
+        const auto start_node = node_for(segment.start);
+        const auto end_node = node_for(segment.end);
+        if (start_node == end_node) {
+            throw std::invalid_argument("Existing segment endpoints must be distinct");
+        }
+        try {
+            if (!(segment_length(segment) > default_geometry_tolerance_metres)) {
+                throw std::invalid_argument("Existing segment length is too small");
+            }
+        } catch (const std::invalid_argument& error) {
+            throw std::invalid_argument(std::string("Existing segment is invalid: ") + error.what());
+        }
+        indexed.push_back({segment, start_node, end_node});
+    }
+
+    std::vector<std::vector<std::size_t>> adjacency(nodes.size());
+    for (std::size_t index = 0; index < indexed.size(); ++index) {
+        const auto& edge = indexed[index];
+        adjacency[edge.start_node].push_back(index);
+        adjacency[edge.end_node].push_back(index);
+    }
+    for (const auto& incident : adjacency) {
+        if (incident.size() != 2) {
+            throw std::invalid_argument(
+                "Existing segments must form one closed cycle with exactly two edges at each vertex");
+        }
+    }
+
+    const auto reverse_segment = [](Segment segment) {
+        std::swap(segment.start, segment.end);
+        segment.sweep_radians = -segment.sweep_radians;
+        return segment;
+    };
+    Boundary result;
+    result.reserve(indexed.size());
+    std::vector<bool> visited(indexed.size(), false);
+    const auto append = [&](std::size_t edge_index, std::size_t from_node,
+                            std::size_t& next_node) {
+        if (edge_index >= indexed.size() || visited[edge_index]) {
+            throw std::invalid_argument("Existing segments do not form one ordered cycle");
+        }
+        const auto& edge = indexed[edge_index];
+        if (edge.start_node == from_node) {
+            result.push_back(edge.segment);
+            next_node = edge.end_node;
+        } else if (edge.end_node == from_node) {
+            result.push_back(reverse_segment(edge.segment));
+            next_node = edge.start_node;
+        } else {
+            throw std::invalid_argument("Existing segment adjacency is inconsistent");
+        }
+        visited[edge_index] = true;
+    };
+
+    const auto start_node = indexed[seed_index].start_node;
+    std::size_t current_node = start_node;
+    append(seed_index, current_node, current_node);
+    while (current_node != start_node) {
+        const auto& incident = adjacency[current_node];
+        const auto next = std::find_if(incident.begin(), incident.end(),
+                                       [&](std::size_t edge) { return !visited[edge]; });
+        if (next == incident.end()) {
+            throw std::invalid_argument("Existing segments leave an open boundary");
+        }
+        append(*next, current_node, current_node);
+        if (result.size() > indexed.size()) {
+            throw std::invalid_argument("Existing segments do not form one ordered cycle");
+        }
+    }
+    if (std::any_of(visited.begin(), visited.end(), [](bool value) { return !value; })) {
+        throw std::invalid_argument("Existing segments contain a disconnected cycle");
+    }
+    const auto diagnostics = validate_boundary(result);
+    if (!diagnostics.empty()) {
+        throw std::invalid_argument("Existing geometry cannot form a valid boundary: " +
+                                    diagnostics.front().message);
+    }
+    return result;
+}
 } // namespace sketch

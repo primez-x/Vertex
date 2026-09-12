@@ -28,5 +28,12 @@ enum class BoundaryFlipAxis { horizontal, vertical };
 [[nodiscard]] Boundary automatically_close_boundary(const Boundary& open_chain);
 // Completes start -> shoulder1 -> shoulder2 -> end with three straight segments.
 [[nodiscard]] Boundary complete_bay_window(Vec2 start, Vec2 shoulder1, Vec2 shoulder2, Vec2 end);
+// Orders an unordered set of existing analytical segments into one closed
+// boundary without changing their coordinates or curve sweeps. Every endpoint
+// must join exactly, every vertex must have degree two, and all supplied
+// segments must belong to the same simple cycle; disconnected, branched, open,
+// or duplicate topology is rejected.
+[[nodiscard]] Boundary assemble_boundary_from_segments(
+    const std::vector<Segment>& segments, std::size_t seed_index = 0);
 
 } // namespace sketch

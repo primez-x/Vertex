@@ -337,7 +337,11 @@ only when a command can preserve their exact geometry and metadata; an
 in-place transform of such a boundary remains blocked until an explicit
 identity-upgrade path is provided. Unsupported boundary versions fail closed
 with a version diagnostic. Wall/object transforms, vertex insertion UI, and
-full linked-relationship qualification remain open.
+ full linked-relationship qualification remain open. The **Create room boundary
+ from selected geometry** command can also assemble the selected wall's
+ connected analytical component into one room boundary. It preserves the
+ source walls, rejects open/branched/disconnected topology, and commits the
+ room through normal document history.
 
 `scripts/test-constraint-editor.ps1` captures the dialog at normal and 150 percent
 scale with the bundled font and a 15-second process timeout. It exercises both
