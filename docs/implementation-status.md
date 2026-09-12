@@ -32,6 +32,14 @@ calibration UI, and the explicit **Trace selected reference** boundary workflow
 are integrated through the typed Document history. Automated edge extraction,
 editable PDF geometry, native Apex compatibility, clean-machine packaging, and
 end-to-end production evidence are still open.
+
+The architectural object slice now accepts a true flat roof through the
+existing sloped-panel schema: zero rise and zero pitch produce a thickened
+planar solid, persist through the entity codec, and project through plan,
+elevation, section, and the editor. Gable roofs continue to require a positive
+rise and pitch. The primary command strip is constrained to a single
+icon-first 16 px row; units, paper size, and view remain compact inline
+selectors, with secondary commands in the More menu.
 Interactive plan canvases now include a model-space overview map with viewport
 framing and click-to-recenter navigation. Workspace profiles persist map
 visibility and the proportions of the navigator, tool rail, canvas, inspector,
