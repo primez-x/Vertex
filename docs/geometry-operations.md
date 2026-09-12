@@ -2,7 +2,8 @@
 
 `geometry_operations.hpp` supplies immutable, validated boundary operations.
 It is a lower-layer contribution to APX-KEY-003, APX-KEY-004, APX-EDIT-002,
-and APX-EDIT-003. None of those production acceptance gates is complete.
+APX-EDIT-003, and APX-AREA-001. None of those production acceptance gates is
+complete.
 
 ## Identity and geometry contracts
 
@@ -38,6 +39,15 @@ same side, and enclose a valid simple shape with the opening chord. This is an
 explicit four-point helper, not inference of missing dimensions or arbitrary
 bay forms. Integration into surrounding boundary geometry needs final validation.
 
+`detect_closed_boundaries` walks the endpoint graph as a planar half-edge
+embedding and returns each simple counter-clockwise bounded face. It preserves
+line and arc geometry, rotates each result to a stable lexical start point, and
+orders faces by their source edge and area. Open wall stubs are ignored, while
+duplicate geometry, malformed endpoints, non-finite values, and zero-length
+segments fail closed. Nested loops remain separate simple faces; callers that
+need a hole relationship must model that relationship explicitly in the area
+contract.
+
 ## Logical shortcuts
 
 `apex_operation_preset` maps case-sensitive logical operation names such as
@@ -60,7 +70,10 @@ APX-EDIT-004 reopen/redefine/delete/cancel/restore lifecycle support is outside
 these helpers and remains open. Other areas, architectural objects, annotations,
 and references are also outside the supported transform types. A future command
 adapter must retain exact original snapshots for undo; inverse floating-point
-transforms are not an exact restoration mechanism.
+transforms are not an exact restoration mechanism. The desktop's automatic area
+command uses `detect_closed_boundaries` to create independent room entities in
+one Document transaction; production face, hole, and Apex-output fixtures are
+still required.
 
 `geometry_operations_tests.cpp` checks pivot rotation, handedness and arc sweep,
 line/arc subdivision area and perimeter, clone identity/translation, exact

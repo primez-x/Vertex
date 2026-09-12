@@ -2290,11 +2290,11 @@ public:
             QWidget { font-size: 13px; }
             QDialog { background: $background; }
             QToolBar#primaryToolbar { background: $surface; border: 0; border-bottom: 1px solid $border;
-                       padding: 0 6px; spacing: 1px; min-height: 18px; max-height: 18px; }
-            QToolBar::separator { background: $border; width: 1px; margin: 1px 4px; }
+                       padding: 0 4px; spacing: 1px; min-height: 16px; max-height: 16px; }
+            QToolBar::separator { background: $border; width: 1px; margin: 0 3px; }
             QPushButton, QToolButton { color: $foreground; background: $surface;
                 border: 1px solid $border; border-radius: 8px; padding: 8px 11px; }
-            QToolBar QToolButton { border-color: transparent; padding: 0 5px; min-height: 16px; max-height: 18px; }
+            QToolBar QToolButton { border-color: transparent; padding: 0 4px; min-height: 14px; max-height: 16px; }
             QToolBar QToolButton:hover { background: $selection; border-color: $selection; }
             QToolBar QToolButton:checked { background: $selection; color: $accent; border-color: $accent; }
             QWidget#toolPanel QToolButton { padding: 6px 4px; min-height: 52px; }
@@ -2308,8 +2308,8 @@ public:
                 border: 1px solid $border; border-radius: 8px; padding: 5px 10px; min-height: 20px; }
             QComboBox { padding-right: 24px; }
             QComboBox::drop-down { border: 0; width: 24px; }
-            QToolBar QComboBox { padding: 0 5px; min-height: 16px; max-height: 18px; }
-            QToolBar QComboBox::drop-down { width: 18px; }
+            QToolBar QComboBox { padding: 0 4px; min-height: 14px; max-height: 16px; }
+            QToolBar QComboBox::drop-down { width: 16px; }
             QComboBox QAbstractItemView, QMenu { background: $surface; color: $foreground;
                 border: 1px solid $border; selection-background-color: $selection;
                 selection-color: $selectedText; padding: 4px; }
@@ -3005,6 +3005,31 @@ public:
                 6000);
         } catch (const std::exception& error) {
             setError(QStringLiteral("Redefine boundary: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
+    void showAutomaticAreaDetection() {
+        const auto selected = selectedEntity();
+        if (!selected.has_value() || selected->type != "wall") {
+            setError(QStringLiteral("Select a wall in the floor and layer to inspect."));
+            return;
+        }
+        const auto context = captureModalContext();
+        bool accepted = false;
+        const auto initial = QStringLiteral("room");
+        const auto classification = QInputDialog::getText(
+            owner, QStringLiteral("Detect closed areas"),
+            QStringLiteral("Classification for each detected room:"), QLineEdit::Normal,
+            initial, &accepted);
+        if (!accepted || classification.trimmed().isEmpty()) return;
+        if (!modalContextUnchanged(context)) return;
+        const auto created = detectRoomBoundariesFromExistingWalls(
+            classification.trimmed(), context.revision);
+        if (!created.isEmpty()) {
+            owner->statusBar()->showMessage(
+                QStringLiteral("Detected %1 closed area%2.")
+                    .arg(created.size()).arg(created.size() == 1 ? QString{} : QStringLiteral("s")),
+                6000);
         }
     }
 
@@ -6020,6 +6045,103 @@ public:
         }
     }
 
+    QStringList detectRoomBoundariesFromExistingWalls(
+        const QString& classification, std::optional<Revision> expected_revision = std::nullopt) {
+        const auto revision = expected_revision.value_or(m_document->revision());
+        if (revision != m_document->revision()) {
+            setError(QStringLiteral(
+                "The project changed while existing geometry was being inspected. Start the command again."));
+            return {};
+        }
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This project is read-only."));
+            return {};
+        }
+        try {
+            const auto selected = selectedEntity();
+            if (!selected.has_value() || selected->type != "wall") {
+                throw std::invalid_argument("Select a wall in the floor and layer to inspect.");
+            }
+            const auto floor_id = read_string(selected->properties, "floor_id");
+            const auto layer_id = read_string(selected->properties, "layer_id");
+            if (!floor_id.has_value() || !layer_id.has_value() || floor_id->empty() || layer_id->empty()) {
+                throw std::invalid_argument("The selected wall has no floor or layer context.");
+            }
+            const auto name = classification.trimmed();
+            if (name.isEmpty()) throw std::invalid_argument("Room classification cannot be empty.");
+
+            const auto source = authoringSnapshot();
+            const auto organization = organize_project(source);
+            const auto context = organization.drawing_context(*layer_id);
+            if (!context.has_value() || context->floor_id != *floor_id) {
+                throw std::invalid_argument("The selected wall has no resolved drawing context.");
+            }
+            std::vector<Segment> segments;
+            for (const auto& [id, entity] : source.entities()) {
+                (void)id;
+                if (entity.type != "wall" ||
+                    read_string(entity.properties, "floor_id") != floor_id ||
+                    read_string(entity.properties, "layer_id") != layer_id) {
+                    continue;
+                }
+                const auto baseline = read_required_segment(entity.properties, "baseline");
+                if (!baseline.has_value()) {
+                    throw std::invalid_argument("A wall in the selected drawing context has no valid baseline.");
+                }
+                segments.push_back(*baseline);
+            }
+            const auto faces = detect_closed_boundaries(segments);
+            if (faces.empty()) {
+                throw std::invalid_argument("No closed area was found in the selected wall graph.");
+            }
+
+            QStringList created_ids;
+            std::vector<EntityChange> changes;
+            changes.reserve(faces.size());
+            for (const auto& face : faces) {
+                const auto area = std::abs(signed_area(face));
+                if (!std::isfinite(area) || area <= default_geometry_tolerance_metres) {
+                    throw std::invalid_argument("Detected area is not measurable.");
+                }
+                const auto entity_id = new_id("room-boundary");
+                auto entity = Entity{entity_id,
+                                     "room_boundary",
+                                     json{{"property_id", context->property_id},
+                                          {"building_id", context->building_id},
+                                          {"floor_id", context->floor_id},
+                                          {"layer_id", context->layer_id},
+                                          {"segments", boundary_json(face)},
+                                          {"boundary", boundary_json(face)},
+                                          {"name", name.toStdString()},
+                                          {"classification", name.toStdString()},
+                                          {"area_m2", area},
+                                          {"factor", 1.0},
+                                          {"factor_expression", "1"},
+                                          {"factor_numerator", 1},
+                                          {"factor_denominator", 1}},
+                                     false,
+                                     json::object()};
+                const auto auxiliary = entity.properties.at("boundary");
+                entity.properties.erase("boundary");
+                entity = upgrade_legacy_boundary_entity(entity);
+                entity.properties["boundary"] = auxiliary;
+                created_ids.push_back(id_from(entity_id));
+                changes.push_back(EntityChange::upsert(std::move(entity)));
+            }
+            const ApplyEntityChanges command{source.revision(), std::move(changes), {},
+                                             "Detect room boundaries"};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            m_selected_id = created_ids.front();
+            clearError();
+            refresh();
+            return created_ids;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Detect areas: %1").arg(QString::fromUtf8(error.what())));
+            return {};
+        }
+    }
+
     void createRoomBoundaryFromSelection() {
         const auto context = captureModalContext();
         const auto selected = selectedEntity();
@@ -8761,6 +8883,7 @@ public:
             {QStringLiteral("Delete selection"), [this] { deleteSelection(); }},
             {QStringLiteral("Insert boundary vertex"), [this] { showBoundaryVertexInsertion(); }},
             {QStringLiteral("Redefine boundary"), [this] { showBoundaryRedefinition(); }},
+            {QStringLiteral("Detect closed areas from walls"), [this] { showAutomaticAreaDetection(); }},
             {QStringLiteral("Add building"), [this] { showOrganizationDialog("building"); }},
             {QStringLiteral("Add floor"), [this] { showOrganizationDialog("floor"); }},
             {QStringLiteral("Add drawing layer"), [this] { showOrganizationDialog("layer"); }},
@@ -9628,9 +9751,9 @@ private:
             toolbar_layout->setSpacing(1);
         }
         // Keep the command strip compact so the canvas starts close to the
-        // window edge. A 12 px glyph plus the 16 px button content keeps the
+        // window edge. A 12 px glyph plus the 14 px button content keeps the
         // row practical for mouse input without creating a second header band.
-        toolbar->setFixedHeight(18);
+        toolbar->setFixedHeight(16);
         const auto add_toolbar_action = [this, toolbar](const QString& label, const char* icon_paths) {
             auto* action = toolbar->addAction(modern_toolbar_icon(icon_paths), label);
             action->setToolTip(label);
@@ -9713,12 +9836,15 @@ private:
         m_transform_action->setObjectName(QStringLiteral("boundaryTransform"));
         m_redefine_action = new QAction(QStringLiteral("Redefine boundary…"), owner);
         m_redefine_action->setObjectName(QStringLiteral("boundaryRedefinition"));
+        m_detect_areas_action = new QAction(QStringLiteral("Detect closed areas…"), owner);
+        m_detect_areas_action->setObjectName(QStringLiteral("detectClosedAreas"));
         m_about_action = new QAction(QStringLiteral("About Property Studio"), owner);
-        const std::array<QAction*, 17> secondary_actions{
+        const std::array<QAction*, 18> secondary_actions{
             m_annotation_action, m_reference_action, m_schedule_action, m_sheet_action,
             m_viewport_action, m_schedule_placement_action, m_view_action, m_remodel_action,
             m_relationship_action, m_levels_action, m_assembly_action, m_assistance_action,
             m_workspace_profiles_action, m_revisions_action, m_transform_action, m_redefine_action,
+            m_detect_areas_action,
             m_about_action};
         for (auto* action : secondary_actions) {
             owner->addAction(action);
@@ -9864,6 +9990,8 @@ private:
                          [this] { showBoundaryTransformEditor(); });
         QObject::connect(m_redefine_action, &QAction::triggered, owner,
                          [this] { showBoundaryRedefinition(); });
+        QObject::connect(m_detect_areas_action, &QAction::triggered, owner,
+                         [this] { showAutomaticAreaDetection(); });
         QObject::connect(m_about_action, &QAction::triggered, owner, [this] { showAbout(); });
         QObject::connect(m_unitsCombo, &QComboBox::currentIndexChanged, owner,
                          [this](int index) { setMetricUnits(index == 1); });
@@ -12738,6 +12866,7 @@ private:
     QAction* m_delete_action{};
     QAction* m_insert_vertex_action{};
     QAction* m_redefine_action{};
+    QAction* m_detect_areas_action{};
     std::vector<ShortcutBinding> m_shortcuts;
     QString m_shortcut_load_error;
     QAction* m_annotation_action{};
@@ -12900,6 +13029,11 @@ QString MainWindow::createRoomBoundary(const Boundary& boundary, QString classif
 QString MainWindow::createRoomBoundaryFromExistingGeometry(QString classification,
                                                            std::optional<Revision> revision) {
     return m_impl->createRoomBoundaryFromExistingGeometry(classification, revision);
+}
+
+QStringList MainWindow::detectRoomBoundariesFromExistingWalls(
+    QString classification, std::optional<Revision> revision) {
+    return m_impl->detectRoomBoundariesFromExistingWalls(std::move(classification), revision);
 }
 
 QString MainWindow::createStraightWall(Vec2 start, Vec2 end, QString classification,
@@ -13175,6 +13309,10 @@ void MainWindow::showBoundaryTransformEditor() {
 
 void MainWindow::showBoundaryRedefinition() {
     m_impl->showBoundaryRedefinition();
+}
+
+void MainWindow::showAutomaticAreaDetection() {
+    m_impl->showAutomaticAreaDetection();
 }
 
 void MainWindow::fitView() {

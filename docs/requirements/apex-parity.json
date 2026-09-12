@@ -223,7 +223,7 @@
         "tests/desktop_smoke.cpp",
         "docs/workspace-ui.md"
       ],
-      "implementation_note": "The desktop shell exposes pan, zoom, grid, and independent output controls; the primary toolbar is a fixed 18 px icon row with no redundant header band. Interactive plan canvases now render a model-space overview map with viewport framing and click-to-recenter navigation; asynchronous navigation evidence and the complete acceptance statement remain open."
+      "implementation_note": "The desktop shell exposes pan, zoom, grid, and independent output controls; the primary toolbar is a fixed 16 px icon row with no redundant header band. Interactive plan canvases now render a model-space overview map with viewport framing and click-to-recenter navigation; asynchronous navigation evidence and the complete acceptance statement remain open."
     },
     {
       "id": "CORE-DOC-001",
@@ -1033,10 +1033,18 @@
       "package": 4,
       "blocker": null,
       "implementation_sources": [
+        "include/sketch/geometry_operations.hpp",
+        "src/core/geometry_operations.cpp",
+        "tests/geometry_operations_tests.cpp",
+        "docs/geometry-operations.md",
         "src/calculations/calculations.cpp",
-        "tests/calculation_tests.cpp"
+        "tests/calculation_tests.cpp",
+        "src/desktop/main_window.cpp",
+        "include/sketch/desktop/main_window.hpp",
+        "tests/desktop_smoke.cpp",
+        "docs/desktop-workflow.md"
       ],
-      "implementation_note": "Analytical calculation and union subtraction are implemented; automatic area detection and complete Apex workflows remain open."
+      "implementation_note": "Analytical calculation, union subtraction, and deterministic endpoint-graph face detection are implemented. The desktop command creates independent room boundaries for all simple bounded faces in one guarded Document transaction; nested-hole semantics, same-floor production fixtures, and complete Apex workflows remain open."
     },
     {
       "id": "APX-AREA-002",
@@ -1292,7 +1300,7 @@
         "tests/desktop_smoke.cpp",
         "docs/workspace-ui.md"
       ],
-      "implementation_note": "The desktop shell exposes pan, zoom, grid, and independent output controls; the primary toolbar is a fixed 18 px icon row with no redundant header band. Interactive plan canvases now render a model-space overview map with viewport framing and click-to-recenter navigation; asynchronous navigation evidence and the complete acceptance statement remain open."
+      "implementation_note": "The desktop shell exposes pan, zoom, grid, and independent output controls; the primary toolbar is a fixed 16 px icon row with no redundant header band. Interactive plan canvases now render a model-space overview map with viewport framing and click-to-recenter navigation; asynchronous navigation evidence and the complete acceptance statement remain open."
     },
     {
       "id": "APX-UI-002",

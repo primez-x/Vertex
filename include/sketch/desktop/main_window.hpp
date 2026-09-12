@@ -8,6 +8,7 @@
 
 #include <QMainWindow>
 #include <QString>
+#include <QStringList>
 
 #include <memory>
 #include <vector>
@@ -148,6 +149,13 @@ public:
     // architectural wall geometry. Source walls remain unchanged; the new
     // room boundary is a distinct semantic object and normal undoable command.
     [[nodiscard]] QString createRoomBoundaryFromExistingGeometry(
+        QString classification = QStringLiteral("room"),
+        std::optional<Revision> expected_revision = std::nullopt);
+    // Detects all simple bounded faces in the selected wall's floor/layer
+    // graph and creates one independent room boundary per face in one atomic
+    // Document command. Open wall stubs are ignored; invalid segment graphs
+    // fail before mutation.
+    [[nodiscard]] QStringList detectRoomBoundariesFromExistingWalls(
         QString classification = QStringLiteral("room"),
         std::optional<Revision> expected_revision = std::nullopt);
     [[nodiscard]] QString createStraightWall(
@@ -316,6 +324,7 @@ public:
     void showRevisionHistory();
     void showBoundaryTransformEditor();
     void showBoundaryRedefinition();
+    void showAutomaticAreaDetection();
     // Writes an immutable copy of a named revision without changing the
     // current document or its later history.
     [[nodiscard]] bool restoreNamedRevision(const QString& name, const QString& path);

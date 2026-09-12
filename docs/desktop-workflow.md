@@ -231,6 +231,15 @@ analytical segments; the source remains unchanged and the new entity is fully
 undoable. This gives architectural rooms a deliberate creation path while
 keeping appraisal measurement geometry separate.
 
+**Detect closed areas…** scans the selected wall's floor and drawing layer as an
+endpoint-connected analytical graph. Every simple bounded face becomes its own
+room boundary in one atomic command; unfinished wall stubs are ignored, source
+walls remain unchanged, and the selected classification is applied to each
+result. The command is available from **More** and the command palette, and its
+generated room entities can be reviewed, edited, undone, and redone through the
+ordinary document history. Nested-loop hole semantics and Apex parity fixtures
+remain explicit qualification work.
+
 `Object…` opens the column, beam, stair and roof parameter editor. Selecting
 one of those objects exposes `Edit object…` in the inspector. Both operations
 validate the candidate before one revision-checked document command; stale

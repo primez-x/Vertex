@@ -97,7 +97,7 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
         auto* toolbar = window.findChild<QToolBar*>(QStringLiteral("primaryToolbar"));
             auto* more_tools = window.findChild<QToolButton*>(QStringLiteral("moreTools"));
             auto* theme_menu = window.findChild<QToolButton*>(QStringLiteral("themeMenu"));
-            require(toolbar != nullptr && toolbar->minimumHeight() == 18 && toolbar->maximumHeight() == 18 &&
+            require(toolbar != nullptr && toolbar->minimumHeight() == 16 && toolbar->maximumHeight() == 16 &&
                     toolbar->toolButtonStyle() == Qt::ToolButtonIconOnly &&
                     toolbar->iconSize() == QSize(12, 12) && more_tools && theme_menu &&
                     more_tools->toolButtonStyle() == Qt::ToolButtonIconOnly &&
@@ -598,6 +598,46 @@ void test_boundary_redefinition_workflow() {
     require(window.selectEntity(boundary_id) && !window.redefineSelectedBoundary(open) &&
                 window.document().revision() == rejected_revision,
             "redefinition must reject invalid topology without mutation");
+}
+
+void test_automatic_room_boundary_detection_workflow() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    const auto wall_ids = QStringList{
+        window.createStraightWall({0.0, 0.0}, {2.0, 0.0}),
+        window.createStraightWall({2.0, 0.0}, {4.0, 0.0}),
+        window.createStraightWall({4.0, 0.0}, {4.0, 2.0}),
+        window.createStraightWall({4.0, 2.0}, {2.0, 2.0}),
+        window.createStraightWall({2.0, 2.0}, {0.0, 2.0}),
+        window.createStraightWall({0.0, 2.0}, {0.0, 0.0}),
+        window.createStraightWall({2.0, 0.0}, {2.0, 2.0}),
+        window.createStraightWall({12.0, 12.0}, {13.0, 12.0})};
+    require(std::all_of(wall_ids.begin(), wall_ids.end(), [](const auto& id) { return !id.isEmpty(); }),
+            "automatic detection fixture must create wall graph");
+    require(window.selectEntity(wall_ids.front()), "automatic detection must select a seed wall");
+    const auto before = window.document().revision();
+    const auto room_ids = window.detectRoomBoundariesFromExistingWalls(QStringLiteral("detected room"));
+    require(room_ids.size() == 2 && window.document().revision() == before + 1,
+            "automatic detection must create all bounded rooms in one command");
+    for (const auto& room_id : room_ids) {
+        const auto entity = window.document().snapshot().entities().at(room_id.toStdString());
+        require(entity.type == "room_boundary" && entity.properties.at("classification") == "detected room",
+                "detected faces must become independent classified room boundaries");
+        const auto model = decode_identified_boundary_entity(entity);
+        require(model.segments.size() == 4 &&
+                    std::abs(signed_area(boundary_geometry(model))) == 4.0,
+                "detected room must retain one valid analytical face");
+    }
+    require(window.undoCommand(), "automatic room detection must be undoable");
+    for (const auto& room_id : room_ids) {
+        require(!window.document().snapshot().entities().contains(room_id.toStdString()),
+                "undo must remove every detected room from the compound command");
+    }
+    require(window.redoCommand(), "automatic room detection must be redoable");
+    for (const auto& room_id : room_ids) {
+        require(window.document().snapshot().entities().contains(room_id.toStdString()),
+                "redo must restore every detected room");
+    }
 }
 
 void test_named_revisions() {
@@ -1367,6 +1407,7 @@ int main(int argc, char** argv) {
     test_delete_selection_workflow();
     test_boundary_vertex_insertion_workflow();
     test_boundary_redefinition_workflow();
+    test_automatic_room_boundary_detection_workflow();
     test_named_revisions();
     test_boundary_transform_workflow();
     test_design_phase_workflow();

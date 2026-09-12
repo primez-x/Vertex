@@ -103,6 +103,30 @@ int main() {
         gapped_segments[3].start.x += 0.001;
         rejects([&]{ (void)assemble_boundary_from_segments(gapped_segments); });
         rejects([&]{ (void)assemble_boundary_from_segments(unordered, unordered.size()); });
+        const std::vector<Segment> adjacent_faces{
+            {{0, 0}, {2, 0}, 0}, {{2, 0}, {4, 0}, 0}, {{4, 0}, {4, 2}, 0},
+            {{4, 2}, {2, 2}, 0}, {{2, 2}, {0, 2}, 0}, {{0, 2}, {0, 0}, 0},
+            {{2, 0}, {2, 2}, 0}, {{12, 12}, {13, 12}, 0}};
+        const auto detected = detect_closed_boundaries(adjacent_faces);
+        require(detected.size() == 2 && near(std::abs(signed_area(detected[0])), 4.0) &&
+                    near(std::abs(signed_area(detected[1])), 4.0) &&
+                    signed_area(detected[0]) > 0.0 && signed_area(detected[1]) > 0.0,
+                "automatic face detection must find adjacent bounded areas deterministically");
+        const auto reversed_faces = std::vector<Segment>{
+            {{2, 2}, {2, 0}, 0}, {{2, 0}, {0, 0}, 0}, {{0, 0}, {0, 2}, 0},
+            {{0, 2}, {2, 2}, 0}, {{2, 2}, {4, 2}, 0}, {{4, 2}, {4, 0}, 0},
+            {{4, 0}, {2, 0}, 0}};
+        const auto detected_reversed = detect_closed_boundaries(reversed_faces);
+        require(detected_reversed.size() == detected.size() &&
+                    near(std::abs(signed_area(detected_reversed[0])),
+                         std::abs(signed_area(detected[0]))) &&
+                    near(std::abs(signed_area(detected_reversed[1])),
+                         std::abs(signed_area(detected[1]))) &&
+                    signed_area(detected_reversed[0]) > 0.0 &&
+                    signed_area(detected_reversed[1]) > 0.0,
+                "automatic face detection must be independent of input segment order and winding");
+        require(detect_closed_boundaries({{{0, 0}, {1, 0}, 0}}).empty(),
+                "open geometry without a bounded face must produce no areas");
         require(apex_command_id("Auto Close")=="boundary.auto_close");
         require(apex_command_id("unknown").empty());
         require(shortcut_conflicts(apex_operation_preset()).empty());

@@ -116,6 +116,13 @@ updates optional classification metadata, and records one exact undoable
 Document command. Invalid topology and edge-count changes fail closed; broad
 reopen/restore fixtures and receipt-bound derivation policy remain open.
 
+Automatic area detection now walks analytical wall endpoint graphs as planar
+half-edges, returns deterministic simple bounded faces, and creates all detected
+room boundaries in one undoable Document command. Open stubs are ignored and
+duplicate or malformed geometry fails closed. Explicit nested-hole semantics,
+face-level calculation fixtures, and production Apex output comparison remain
+open.
+
 The Architectural workspace now also exposes a compact **Assembly catalog**
 that persists the typed `sketch.assemblies.v1` model in Document history. Users
 can add/remove reusable types and placed instances, rename types, maintain the
