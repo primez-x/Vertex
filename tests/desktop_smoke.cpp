@@ -97,9 +97,9 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
         auto* toolbar = window.findChild<QToolBar*>(QStringLiteral("primaryToolbar"));
             auto* more_tools = window.findChild<QToolButton*>(QStringLiteral("moreTools"));
             auto* theme_menu = window.findChild<QToolButton*>(QStringLiteral("themeMenu"));
-            require(toolbar != nullptr && toolbar->minimumHeight() == 16 && toolbar->maximumHeight() == 16 &&
+            require(toolbar != nullptr && toolbar->minimumHeight() == 14 && toolbar->maximumHeight() == 14 &&
                     toolbar->toolButtonStyle() == Qt::ToolButtonIconOnly &&
-                    toolbar->iconSize() == QSize(12, 12) && more_tools && theme_menu &&
+                    toolbar->iconSize() == QSize(10, 10) && more_tools && theme_menu &&
                     more_tools->toolButtonStyle() == Qt::ToolButtonIconOnly &&
                     theme_menu->toolButtonStyle() == Qt::ToolButtonIconOnly &&
                     !more_tools->accessibleName().isEmpty() && !theme_menu->accessibleName().isEmpty() &&

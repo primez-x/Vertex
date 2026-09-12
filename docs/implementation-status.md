@@ -38,7 +38,7 @@ existing sloped-panel schema: zero rise and zero pitch produce a thickened
 planar solid, persist through the entity codec, and project through plan,
 elevation, section, and the editor. Gable roofs continue to require a positive
 rise and pitch. The primary command strip is constrained to a single
-icon-first 16 px row; units, paper size, and view remain compact inline
+icon-first 14 px row; units, paper size, and view remain compact inline
 selectors, with secondary commands in the More menu.
 Interactive plan canvases now include a model-space overview map with viewport
 framing and click-to-recenter navigation. Workspace profiles persist map
