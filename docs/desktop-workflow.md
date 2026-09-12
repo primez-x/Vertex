@@ -143,6 +143,14 @@ validates the selected closed boundary and previews the complete profile with
 `saveProject`, `exportDraftPdf`, `exportNativeViewImage`, and
 `showPrintPreview` for the normal workflow.
 
+Selecting the top-level property exposes the compact **Project details**
+inspector. It edits the subject name, address, reference, and a bounded JSON
+object of string attributes through `MainWindow::editProjectSubject`; the
+complete update is one revision-fenced Document command and therefore supports
+undo, redo, save, and reopen without a hosted service. Older projects without a
+`subject` object fall back to their existing property name until the details are
+saved.
+
 The `Reference` command imports a local PNG, JPEG, BMP, TIFF, or a selected page
 of a PDF into the portable Document Asset store and creates a `reference_asset`
 record. Raster source bytes are rendered directly. PDF source bytes remain in

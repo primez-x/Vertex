@@ -35,12 +35,16 @@ Tests cover a two-page text serialization/parse roundtrip, subject and area
 metadata, linked models, reordered stable IDs, independent presentation edits,
 invalid references, duplicate IDs/links, numeric validation, and malformed JSON.
 
-The richer `MultipageProject` contract remains a standalone interchange model.
-The application-level `sheet_view_model` entity now supplies the corresponding
+The richer `MultipageProject` contract remains the interchange model. The
+application-level `sheet_view_model` entity now supplies the corresponding
 desktop page lifecycle: pages can be added or removed through Document history,
 cross-sheet references are validated, and a selected page drives the shared
-PDF/SVG/print renderer and its output fingerprint. Subject/area metadata from
-this standalone contract is still not projected into the desktop scaffold, and
-the complete multipage acceptance fixture, rendering fidelity, and production
-qualification remain open. The standalone JSON roundtrip is therefore not by
-itself evidence of the full APX-DOC-001 requirement.
+PDF/SVG/print renderer and its output fingerprint. The property entity now
+stores a `subject` object with `name`, `address`, `reference`, and bounded
+string `attributes`; the Project details inspector edits that record through
+the same undoable command path and save/reopen preserves it. Closed-boundary
+area attributes remain part of each boundary's typed properties and are still
+awaiting a dedicated presentation editor. The complete multipage acceptance
+fixture, rendering fidelity, and production qualification remain open. The
+standalone JSON roundtrip is therefore not by itself evidence of the full
+APX-DOC-001 requirement.

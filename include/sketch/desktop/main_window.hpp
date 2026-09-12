@@ -35,6 +35,13 @@ public:
     // Read-only schedule projection bound to the current shared document
     // revision. Malformed rows are returned as explicit diagnostics.
     [[nodiscard]] DocumentScheduleProjection scheduleSnapshot() const;
+    // Updates the persisted property subject record used by multipage output.
+    // Attributes must be a JSON object whose values are strings; the complete
+    // edit is one normal, undoable Document command.
+    [[nodiscard]] bool editProjectSubject(const QString& name,
+                                          const QString& address,
+                                          const QString& reference,
+                                          const QString& attributes_json);
     // Applies an editable schedule source-cell change through the ordinary
     // Document history. Calculated cells, malformed values, and stale edits
     // are rejected and reported through lastError().

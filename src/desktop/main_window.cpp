@@ -74,6 +74,7 @@
 #include <QPdfWriter>
 #include <QPrintPreviewDialog>
 #include <QPrinter>
+#include <QPlainTextEdit>
 #include <QSaveFile>
 #include <QPushButton>
 #include <QScrollArea>
@@ -1266,6 +1267,10 @@ void ensure_project_scaffold(Document& document) {
             EntityChange::upsert(Entity{"property-1",
                                         "property",
                                         json{{"name", "Untitled property"},
+                                             {"subject", json{{"name", "Untitled property"},
+                                                               {"address", ""},
+                                                               {"reference", ""},
+                                                               {"attributes", json::object()}}},
                                              {"calculation_profile",
                                               calculation_profile_json(default_calculation_profile())}},
                                         false,
@@ -1437,6 +1442,63 @@ public:
             projection.diagnostics.push_back(std::string("Design phase: ") + error.what());
         }
         return projection;
+    }
+
+    [[nodiscard]] bool editProjectSubject(const QString& name,
+                                           const QString& address,
+                                           const QString& reference,
+                                           const QString& attributes_json) {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        try {
+            const auto property = propertyEntity();
+            if (!property.has_value()) {
+                throw std::invalid_argument("Project subject requires a property entity.");
+            }
+            const auto subject_name = name.trimmed().toStdString();
+            const auto subject_address = address.trimmed().toStdString();
+            const auto subject_reference = reference.trimmed().toStdString();
+            if (subject_name.empty()) {
+                throw std::invalid_argument("Project name cannot be empty.");
+            }
+            if (subject_name.size() > 16384 || subject_address.size() > 16384 ||
+                subject_reference.size() > 16384 || subject_name.find('\0') != std::string::npos ||
+                subject_address.find('\0') != std::string::npos ||
+                subject_reference.find('\0') != std::string::npos) {
+                throw std::invalid_argument("Project subject text is too long or contains a NUL byte.");
+            }
+            auto encoded_attributes = attributes_json.trimmed().toStdString();
+            if (encoded_attributes.empty()) encoded_attributes = "{}";
+            const auto attributes = json::parse(encoded_attributes);
+            if (!attributes.is_object() || attributes.size() > 256) {
+                throw std::invalid_argument("Project attributes must be a JSON object with at most 256 entries.");
+            }
+            for (const auto& [key, value] : attributes.items()) {
+                if (key.empty() || key.size() > 256 || value.is_discarded() ||
+                    !value.is_string() || value.get_ref<const std::string&>().size() > 16384 ||
+                    value.get_ref<const std::string&>().find('\0') != std::string::npos) {
+                    throw std::invalid_argument("Project attributes must contain short string key/value pairs.");
+                }
+            }
+            auto updated = *property;
+            updated.properties["name"] = subject_name;
+            auto subject = updated.properties.value("subject", json::object());
+            if (!subject.is_object()) subject = json::object();
+            subject["name"] = subject_name;
+            subject["address"] = subject_address;
+            subject["reference"] = subject_reference;
+            subject["attributes"] = attributes;
+            updated.properties["subject"] = std::move(subject);
+            if (!applyEntity(std::move(updated), "edit project subject")) return false;
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Project details: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
     }
 
     [[nodiscard]] bool editScheduleCell(const QString& object_id, const QString& column,
@@ -7202,6 +7264,15 @@ public:
             {QStringLiteral("Add drawing layer"), [this] { showOrganizationDialog("layer"); }},
             {QStringLiteral("Rename selected property, building, floor or layer"),
              [this] { showOrganizationDialog("rename"); }},
+            {QStringLiteral("Edit project details"), [this] {
+                 if (m_selected_id.isEmpty() || !selectedEntity().has_value() ||
+                     selectedEntity()->type != "property") {
+                     setError(QStringLiteral("Select the project property in the navigator first."));
+                     return;
+                 }
+                 m_project_details_group->setVisible(true);
+                 m_project_subject_name_edit->setFocus();
+             }},
             {QStringLiteral("Measurement workspace"), [this] { setWorkspace(Workspace::measurement); }},
             {QStringLiteral("Architectural workspace"), [this] { setWorkspace(Workspace::architectural); }},
             {QStringLiteral("Add labels and symbols"), [this] { showAnnotationEditor(); }},
@@ -8433,6 +8504,36 @@ private:
         inspector_layout->addWidget(m_delete_annotation_button);
         QObject::connect(m_delete_annotation_button, &QPushButton::clicked, owner,
                          [this] { (void)deleteAnnotation(m_selected_id); });
+        m_project_details_group = new QGroupBox(QStringLiteral("Project details"), inspector_body);
+        m_project_details_group->setObjectName(QStringLiteral("projectDetails"));
+        auto* project_details_form = new QFormLayout(m_project_details_group);
+        m_project_subject_name_edit = new QLineEdit(m_project_details_group);
+        m_project_subject_name_edit->setObjectName(QStringLiteral("projectSubjectName"));
+        project_details_form->addRow(QStringLiteral("Name"), m_project_subject_name_edit);
+        m_project_subject_address_edit = new QLineEdit(m_project_details_group);
+        m_project_subject_address_edit->setObjectName(QStringLiteral("projectSubjectAddress"));
+        project_details_form->addRow(QStringLiteral("Address"), m_project_subject_address_edit);
+        m_project_subject_reference_edit = new QLineEdit(m_project_details_group);
+        m_project_subject_reference_edit->setObjectName(QStringLiteral("projectSubjectReference"));
+        project_details_form->addRow(QStringLiteral("Reference"), m_project_subject_reference_edit);
+        m_project_subject_attributes_edit = new QPlainTextEdit(m_project_details_group);
+        m_project_subject_attributes_edit->setObjectName(QStringLiteral("projectSubjectAttributes"));
+        m_project_subject_attributes_edit->setPlaceholderText(QStringLiteral("{\"key\": \"value\"}"));
+        m_project_subject_attributes_edit->setMaximumHeight(82);
+        m_project_subject_attributes_edit->setTabChangesFocus(true);
+        project_details_form->addRow(QStringLiteral("Attributes (JSON)"), m_project_subject_attributes_edit);
+        m_apply_project_details_button = new QPushButton(QStringLiteral("Apply project details"),
+                                                          m_project_details_group);
+        m_apply_project_details_button->setObjectName(QStringLiteral("applyProjectDetails"));
+        project_details_form->addRow(m_apply_project_details_button);
+        m_project_details_group->setVisible(false);
+        inspector_layout->addWidget(m_project_details_group);
+        QObject::connect(m_apply_project_details_button, &QPushButton::clicked, owner, [this] {
+            (void)editProjectSubject(m_project_subject_name_edit->text(),
+                                     m_project_subject_address_edit->text(),
+                                     m_project_subject_reference_edit->text(),
+                                     m_project_subject_attributes_edit->toPlainText());
+        });
         m_annotation_group = new QGroupBox(QStringLiteral("Annotation properties"), inspector_body);
         m_annotation_group->setObjectName(QStringLiteral("annotationProperties"));
         auto* annotation_layout = new QFormLayout(m_annotation_group);
@@ -9717,6 +9818,7 @@ private:
         const bool opening = entity.has_value() && entity->type == "opening";
         const bool slab = entity.has_value() && entity->type == "slab";
         const bool reference_asset = entity.has_value() && entity->type == "reference_asset";
+        const bool project_entity = entity.has_value() && entity->type == "property";
         const bool building_object = entity && can_recognize_building_entity_type(entity->type);
         const bool editable_geometry = wall || opening || slab ||
             (entity && is_closed_boundary_entity(entity->type));
@@ -9726,9 +9828,12 @@ private:
         m_delete_annotation_button->setEnabled(editable && annotation_context.has_value());
         m_annotation_group->setVisible(annotation_context.has_value());
         m_annotation_group->setEnabled(editable && annotation_context.has_value());
+        m_project_details_group->setVisible(project_entity);
+        m_project_details_group->setEnabled(editable && project_entity);
         m_reference_group->setVisible(reference_asset);
         m_reference_group->setEnabled(editable && reference_asset);
         if (reference_asset) {
+            m_project_details_group->setVisible(false);
             m_inspector_context->setText(
                 QStringLiteral("Reference image\n%1")
                     .arg(QString::fromStdString(read_string(entity->properties, "source_path")
@@ -9780,6 +9885,7 @@ private:
             return;
         }
         if (annotation_context.has_value()) {
+            m_project_details_group->setVisible(false);
             m_inspector_context->setText(*annotation_context);
             {
                 QSignalBlocker blocker(m_annotation_content_edit);
@@ -9837,6 +9943,47 @@ private:
             return;
         }
         m_reference_group->setVisible(false);
+        if (project_entity) {
+            const auto subject = entity->properties.value("subject", json::object());
+            const auto read_subject_string = [&](std::string_view key, std::string fallback = {}) {
+                if (subject.is_object()) {
+                    if (const auto value = read_string(subject, key)) return *value;
+                }
+                return read_string(entity->properties, key).value_or(std::move(fallback));
+            };
+            {
+                QSignalBlocker blocker(m_project_subject_name_edit);
+                m_project_subject_name_edit->setText(QString::fromStdString(
+                    read_subject_string("name", read_string(entity->properties, "name").value_or("Untitled property"))));
+            }
+            {
+                QSignalBlocker blocker(m_project_subject_address_edit);
+                m_project_subject_address_edit->setText(QString::fromStdString(
+                    read_subject_string("address")));
+            }
+            {
+                QSignalBlocker blocker(m_project_subject_reference_edit);
+                m_project_subject_reference_edit->setText(QString::fromStdString(
+                    read_subject_string("reference")));
+            }
+            {
+                QSignalBlocker blocker(m_project_subject_attributes_edit);
+                const auto attributes = subject.is_object()
+                    ? subject.value("attributes", json::object()) : json::object();
+                m_project_subject_attributes_edit->setPlainText(
+                    attributes.is_object() ? QString::fromStdString(attributes.dump(2))
+                                           : QStringLiteral("{}"));
+            }
+        } else {
+            QSignalBlocker name_blocker(m_project_subject_name_edit);
+            QSignalBlocker address_blocker(m_project_subject_address_edit);
+            QSignalBlocker reference_blocker(m_project_subject_reference_edit);
+            QSignalBlocker attributes_blocker(m_project_subject_attributes_edit);
+            m_project_subject_name_edit->clear();
+            m_project_subject_address_edit->clear();
+            m_project_subject_reference_edit->clear();
+            m_project_subject_attributes_edit->clear();
+        }
         m_geometry_form->setRowVisible(m_length_edit, editable_geometry);
         m_geometry_form->setRowVisible(m_classification_combo, editable_geometry);
         m_geometry_form->setRowVisible(m_height_edit, wall || opening);
@@ -10720,6 +10867,12 @@ private:
     QGroupBox* m_profile_group{};
     QLabel* m_inspector_context{};
     QLabel* m_plan_error_banner{};
+    QGroupBox* m_project_details_group{};
+    QLineEdit* m_project_subject_name_edit{};
+    QLineEdit* m_project_subject_address_edit{};
+    QLineEdit* m_project_subject_reference_edit{};
+    QPlainTextEdit* m_project_subject_attributes_edit{};
+    QPushButton* m_apply_project_details_button{};
     QLabel* m_calculation_status{};
     QLabel* m_calculation_base_value{};
     QLabel* m_calculation_net_value{};
@@ -10813,6 +10966,11 @@ const Document& MainWindow::document() const noexcept {
 
 DocumentScheduleProjection MainWindow::scheduleSnapshot() const {
     return m_impl->scheduleSnapshot();
+}
+
+bool MainWindow::editProjectSubject(const QString& name, const QString& address,
+                                    const QString& reference, const QString& attributes_json) {
+    return m_impl->editProjectSubject(name, address, reference, attributes_json);
 }
 
 bool MainWindow::editScheduleCell(const QString& object_id, const QString& column,

@@ -31,7 +31,9 @@
 #include <QPainter>
 #include <QPageSize>
 #include <QPdfWriter>
+#include <QPlainTextEdit>
 #include <QPushButton>
+#include <QGroupBox>
 #include <QToolButton>
 #include <QTemporaryDir>
 #include <QStandardPaths>
@@ -220,6 +222,57 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
     QDir().rmdir(settings_directory);
     QCoreApplication::setApplicationName(original_name);
     QStandardPaths::setTestModeEnabled(original_test_mode);
+}
+
+void test_project_subject_metadata() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    require(window.selectEntity(QStringLiteral("property-1")),
+            "project property must be selectable for subject editing");
+    require(window.findChild<QGroupBox*>(QStringLiteral("projectDetails")) != nullptr &&
+                window.findChild<QLineEdit*>(QStringLiteral("projectSubjectName")) != nullptr &&
+                window.findChild<QLineEdit*>(QStringLiteral("projectSubjectAddress")) != nullptr &&
+                window.findChild<QLineEdit*>(QStringLiteral("projectSubjectReference")) != nullptr &&
+                window.findChild<QPlainTextEdit*>(QStringLiteral("projectSubjectAttributes")) != nullptr &&
+                window.findChild<QPushButton*>(QStringLiteral("applyProjectDetails")) != nullptr,
+            "project subject editor must expose bounded fields");
+    const auto before = window.document().revision();
+    require(window.editProjectSubject(QStringLiteral("Maple Residence"),
+                                      QStringLiteral("123 Main Street"),
+                                      QStringLiteral("MLS-2048"),
+                                      QStringLiteral("{\"parcel\":\"A-17\",\"zone\":\"R-2\"}")),
+            "project subject edit must commit");
+    const auto edited = window.document().snapshot().entities().at("property-1");
+    require(window.document().revision() == before + 1 &&
+                edited.properties.at("name") == "Maple Residence" &&
+                edited.properties.at("subject").at("address") == "123 Main Street" &&
+                edited.properties.at("subject").at("reference") == "MLS-2048" &&
+                edited.properties.at("subject").at("attributes").at("parcel") == "A-17",
+            "subject and attributes must be persisted in the property entity");
+    const auto invalid_revision = window.document().revision();
+    require(!window.editProjectSubject(QStringLiteral("Maple Residence"), {}, {},
+                                       QStringLiteral("[\"not an object\"]")) &&
+                window.document().revision() == invalid_revision &&
+                window.lastError().contains("JSON object"),
+            "invalid subject attributes must fail closed without mutation");
+    require(window.undoCommand() &&
+                window.document().snapshot().entities().at("property-1").properties.at("name") ==
+                    "Untitled property" &&
+                window.redoCommand() &&
+                window.document().snapshot().entities().at("property-1").properties.at("name") ==
+                    "Maple Residence",
+            "subject edit must participate in undo and redo");
+    QTemporaryDir directory;
+    require(directory.isValid(), "subject fixture needs a temporary directory");
+    const auto path = directory.filePath(QStringLiteral("subject.bldproj"));
+    require(window.saveProjectAs(path) && window.openProject(path),
+            "subject metadata must survive save and reopen");
+    const auto reopened = window.document().snapshot().entities().at("property-1");
+    require(reopened.properties.at("subject").at("attributes").at("zone") == "R-2" &&
+                window.selectEntity(QStringLiteral("property-1")) &&
+                window.findChild<QLineEdit*>(QStringLiteral("projectSubjectAddress"))->text() ==
+                    QStringLiteral("123 Main Street"),
+            "reopened subject metadata must repopulate the editor");
 }
 
 void test_organization_context() {
@@ -849,6 +902,7 @@ int main(int argc, char** argv) {
         }
     }
     test_shortcuts_and_measurement_keypad(field_ui_capture_directory);
+    test_project_subject_metadata();
     test_design_phase_workflow();
     test_room_relationship_workflow();
     test_vertical_levels_workflow();
