@@ -693,8 +693,10 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
 - Survey/metes-and-bounds and Pro georeferencing now have deterministic local
   contracts for quadrant-bearing traverses, closure/acreage diagnostics,
   projected-metre affine transforms, residuals, and offline resource
-  declarations. They do not execute PROJ, verify resources, import Apex files,
-  or replace the required specialist-module fixtures.
+  declarations. Georeferencing contracts strictly round-trip through version-1
+  JSON and a typed Document entity with save/reopen coverage. They do not
+  execute PROJ, verify resources, import Apex files, provide the georeferencing
+  UI workflow, or replace the required specialist-module fixtures.
 - The architectural transaction adapter now applies type-aware transforms to
   canonical building entities and carries hosted wall openings through
   duplicate and delete commands, preserving unrelated metadata and ordinary

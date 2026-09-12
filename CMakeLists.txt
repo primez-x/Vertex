@@ -148,11 +148,12 @@ target_link_libraries(sketch_architectural_document_adapter PUBLIC sketch_archit
 add_library(sketch_document src/core/document.cpp src/core/document_digest.cpp src/core/constraint_entity.cpp
   src/core/constraint_integrity.cpp src/core/boundary_entity.cpp src/core/boundary_integrity.cpp
   src/core/boundary_dimension.cpp src/core/sheet_view_entity_codec.cpp
-  src/core/annotation_entity_codec.cpp)
+  src/core/annotation_entity_codec.cpp src/core/georeferencing_entity_codec.cpp)
 target_include_directories(sketch_document PUBLIC include)
 target_link_libraries(sketch_document PUBLIC sketch_json PRIVATE sketch_wall_semantics sketch_boundary_receipts
   sketch_sheet_view_model sketch_annotation_catalog sketch_assembly_model sketch_model_phases
-  sketch_room_relationships sketch_vertical_levels sketch_reference_grid sketch_terrain_surface bcrypt)
+  sketch_room_relationships sketch_vertical_levels sketch_reference_grid sketch_terrain_surface
+  sketch_georeferencing_contract bcrypt)
 add_library(sketch_project_organization src/core/project_organization.cpp)
 target_link_libraries(sketch_project_organization PUBLIC sketch_document)
 add_library(sketch_project_visibility src/core/project_visibility.cpp)
@@ -869,6 +870,12 @@ if(BUILD_TESTING)
     target_compile_options(sheet_view_entity_codec_tests PRIVATE /W4 /permissive- /utf-8)
   endif()
   add_test(NAME sheet_view_entity_codec COMMAND sheet_view_entity_codec_tests)
+  add_executable(georeferencing_entity_codec_tests tests/georeferencing_entity_codec_tests.cpp)
+  target_link_libraries(georeferencing_entity_codec_tests PRIVATE sketch_storage)
+  if(MSVC)
+    target_compile_options(georeferencing_entity_codec_tests PRIVATE /W4 /permissive- /utf-8)
+  endif()
+  add_test(NAME georeferencing_entity_codec COMMAND georeferencing_entity_codec_tests)
   add_executable(interchange_profile_tests tests/interchange_profile_tests.cpp)
   add_executable(dxf_exchange_tests tests/dxf_exchange_tests.cpp)
   target_link_libraries(dxf_exchange_tests PRIVATE sketch_dxf_exchange)

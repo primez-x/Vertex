@@ -2,11 +2,13 @@
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cmath>
+#include <initializer_list>
 #include <set>
 #include <stdexcept>
 
 namespace sketch {
 namespace {
+using Json = nlohmann::json;
 void check(bool ok, const char* message) { if (!ok) throw std::invalid_argument(message); }
 double finite(double value) { check(std::isfinite(value), "Nonfinite georeferencing value"); return value == 0 ? 0 : value; }
 void text(const std::string& value, std::size_t limit=4096) {
@@ -28,6 +30,24 @@ void path(const std::string& value) {
         if (end==std::string::npos) break;
         start=end+1; check(start<value.size(), "Trailing resource separator");
     }
+}
+
+void exact_object(const Json& value, std::initializer_list<const char*> keys,
+                  const char* label) {
+    check(value.is_object(), label);
+    check(value.size() == keys.size(), label);
+    for (const auto* key : keys) check(value.contains(key), label);
+}
+
+double number(const Json& value, const char* label) {
+    check(value.is_number(), label);
+    const auto result = value.get<double>();
+    return finite(result);
+}
+
+std::string string_value(const Json& value, const char* label) {
+    check(value.is_string(), label);
+    return value.get<std::string>();
 }
 }
 GeoreferencingContract::GeoreferencingContract(GeoCrs crs, AffineGeoTransform transform, std::vector<GeoControlPoint> points, OfflineGeoResources resources)
@@ -70,7 +90,7 @@ GeoCoordinate GeoreferencingContract::apply(double x,double y) const {
     x=finite(x); y=finite(y); const auto& t=transform_;
     return {finite(finite(finite(t.a*x)+finite(t.b*y))+t.tx), finite(finite(finite(t.c*x)+finite(t.d*y))+t.ty)};
 }
-std::string GeoreferencingContract::serialize() const {
+Json GeoreferencingContract::to_json() const {
     nlohmann::json points=nlohmann::json::array(), residuals=nlohmann::json::array(), resources=nlohmann::json::array();
     for (const auto& p: points_) points.push_back({{"id",p.id},{"local_x_m",p.local_x},{"local_y_m",p.local_y},{"target_easting_m",p.target_x},{"target_northing_m",p.target_y}});
     for (const auto& r: residuals_) residuals.push_back({{"id",r.id},{"dx_m",r.dx},{"dy_m",r.dy},{"magnitude_m",r.magnitude_m}});
@@ -79,6 +99,84 @@ std::string GeoreferencingContract::serialize() const {
     return nlohmann::json{{"version",1},{"crs",{{"identifier",crs_.identifier},{"definition",crs_.definition},{"unit","metre"},{"axis_order","easting_northing"}}},
         {"transform",{{"kind","supplied_affine_2d"},{"a",t.a},{"b",t.b},{"tx",t.tx},{"c",t.c},{"d",t.d},{"ty",t.ty}}},
         {"control_points",points},{"residuals",residuals},{"rms_residual_m",rms_},{"maximum_residual_m",maximum_},
-        {"network_enabled",false},{"offline_resources",resources},{"resource_verification","declaration_only"}}.dump();
+        {"network_enabled",false},{"offline_resources",resources},{"resource_verification","declaration_only"}};
+}
+
+std::string GeoreferencingContract::serialize() const {
+    return to_json().dump();
+}
+
+GeoreferencingContract GeoreferencingContract::from_json(const nlohmann::json& value) {
+    try {
+        exact_object(value, {"version", "crs", "transform", "control_points", "residuals",
+                             "rms_residual_m", "maximum_residual_m", "network_enabled",
+                             "offline_resources", "resource_verification"},
+                     "Malformed georeferencing envelope");
+        check(value.at("version").is_number_integer() && value.at("version") == 1,
+              "Unsupported georeferencing version");
+        const auto& crs = value.at("crs");
+        exact_object(crs, {"identifier", "definition", "unit", "axis_order"},
+                     "Malformed georeferencing CRS");
+        check(crs.at("unit") == "metre" && crs.at("axis_order") == "easting_northing",
+              "Unsupported georeferencing CRS axes");
+        GeoCrs decoded_crs{string_value(crs.at("identifier"), "CRS identifier must be text"),
+                           string_value(crs.at("definition"), "CRS definition must be text"),
+                           GeoCoordinateUnit::metre};
+
+        const auto& transform = value.at("transform");
+        exact_object(transform, {"kind", "a", "b", "tx", "c", "d", "ty"},
+                     "Malformed georeferencing transform");
+        check(transform.at("kind") == "supplied_affine_2d",
+              "Unsupported georeferencing transform");
+        const AffineGeoTransform decoded_transform{
+            number(transform.at("a"), "Transform coefficient must be numeric"),
+            number(transform.at("b"), "Transform coefficient must be numeric"),
+            number(transform.at("tx"), "Transform coefficient must be numeric"),
+            number(transform.at("c"), "Transform coefficient must be numeric"),
+            number(transform.at("d"), "Transform coefficient must be numeric"),
+            number(transform.at("ty"), "Transform coefficient must be numeric")};
+
+        const auto& points_json = value.at("control_points");
+        check(points_json.is_array(), "Control points must be an array");
+        std::vector<GeoControlPoint> points;
+        points.reserve(points_json.size());
+        for (const auto& point : points_json) {
+            exact_object(point, {"id", "local_x_m", "local_y_m", "target_easting_m",
+                                 "target_northing_m"}, "Malformed georeferencing control point");
+            points.push_back({string_value(point.at("id"), "Control point ID must be text"),
+                              number(point.at("local_x_m"), "Control point coordinate must be numeric"),
+                              number(point.at("local_y_m"), "Control point coordinate must be numeric"),
+                              number(point.at("target_easting_m"), "Control point coordinate must be numeric"),
+                              number(point.at("target_northing_m"), "Control point coordinate must be numeric")});
+        }
+
+        const auto& resources_json = value.at("offline_resources");
+        check(resources_json.is_array(), "Offline resources must be an array");
+        std::vector<OfflineGeoResource> resources;
+        resources.reserve(resources_json.size());
+        for (const auto& resource : resources_json) {
+            exact_object(resource, {"relative_path", "sha256"},
+                         "Malformed offline georeferencing resource");
+            resources.push_back({string_value(resource.at("relative_path"),
+                                              "Resource path must be text"),
+                                 string_value(resource.at("sha256"),
+                                              "Resource digest must be text")});
+        }
+        check(value.at("network_enabled").is_boolean() && !value.at("network_enabled").get<bool>(),
+              "Georeferencing networking is forbidden");
+        check(value.at("resource_verification") == "declaration_only",
+              "Unsupported georeferencing resource verification");
+        const auto result = GeoreferencingContract(
+            std::move(decoded_crs), decoded_transform, std::move(points),
+            OfflineGeoResources{false, std::move(resources)});
+        check(value.at("residuals") == result.to_json().at("residuals"),
+              "Georeferencing residuals do not match the supplied transform");
+        check(value.at("rms_residual_m") == result.to_json().at("rms_residual_m") &&
+                  value.at("maximum_residual_m") == result.to_json().at("maximum_residual_m"),
+              "Georeferencing residual summary does not match the supplied transform");
+        return result;
+    } catch (const nlohmann::json::exception& error) {
+        throw std::invalid_argument(std::string("Malformed georeferencing JSON: ") + error.what());
+    }
 }
 }

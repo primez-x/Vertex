@@ -1,4 +1,5 @@
 #pragma once
+#include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
 
@@ -18,10 +19,20 @@ public:
     static constexpr std::size_t maximum_control_points = 4096;
     GeoreferencingContract(GeoCrs crs, AffineGeoTransform transform,
                            std::vector<GeoControlPoint> points, OfflineGeoResources resources);
+    [[nodiscard]] static GeoreferencingContract from_json(const nlohmann::json& value);
     [[nodiscard]] GeoCoordinate apply(double local_x, double local_y) const;
     [[nodiscard]] const std::vector<GeoResidual>& residuals() const noexcept { return residuals_; }
     [[nodiscard]] double rms_residual_m() const noexcept { return rms_; }
     [[nodiscard]] double maximum_residual_m() const noexcept { return maximum_; }
+    [[nodiscard]] const GeoCrs& crs() const noexcept { return crs_; }
+    [[nodiscard]] const AffineGeoTransform& transform() const noexcept { return transform_; }
+    [[nodiscard]] const std::vector<GeoControlPoint>& control_points() const noexcept {
+        return points_;
+    }
+    [[nodiscard]] const OfflineGeoResources& offline_resources() const noexcept {
+        return resources_;
+    }
+    [[nodiscard]] nlohmann::json to_json() const;
     [[nodiscard]] std::string serialize() const;
 private:
     GeoCrs crs_;

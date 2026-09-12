@@ -21,6 +21,17 @@ int main() {
         auto reversed = points; std::reverse(reversed.begin(), reversed.end());
         require(value.serialize() == GeoreferencingContract(crs, transform, reversed, offline).serialize());
         require(nlohmann::json::parse(value.serialize())["network_enabled"] == false);
+        const auto roundtrip = GeoreferencingContract::from_json(nlohmann::json::parse(value.serialize()));
+        require(roundtrip.serialize() == value.serialize());
+        auto tampered = nlohmann::json::parse(value.serialize());
+        tampered["rms_residual_m"] = 0.0;
+        rejects([&] { (void)GeoreferencingContract::from_json(tampered); });
+        tampered = nlohmann::json::parse(value.serialize());
+        tampered["crs"]["extra"] = true;
+        rejects([&] { (void)GeoreferencingContract::from_json(tampered); });
+        tampered = nlohmann::json::parse(value.serialize());
+        tampered["control_points"][0]["target_easting_m"] = 999.0;
+        rejects([&] { (void)GeoreferencingContract::from_json(tampered); });
         rejects([&] { auto t = transform; t.a = 0; (void)GeoreferencingContract(crs, t, points, offline); });
         rejects([&] { auto p = points; p[1].id = "b"; (void)GeoreferencingContract(crs, transform, p, offline); });
         rejects([&] { auto r = offline; r.network_enabled = true; (void)GeoreferencingContract(crs, transform, points, r); });

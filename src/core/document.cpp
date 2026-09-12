@@ -8,6 +8,7 @@
 #include "sketch/terrain_surface.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/annotation_entity_codec.hpp"
+#include "sketch/georeferencing_entity_codec.hpp"
 #include "sketch/constraint_integrity.hpp"
 #include "sketch/boundary_integrity.hpp"
 
@@ -185,6 +186,14 @@ void validate_entity(const Entity& entity) {
         } catch (const std::exception& error) {
             document_error(DocumentErrorCode::invalid_entity,
                            std::string("invalid annotation entity: ") + error.what());
+        }
+    }
+    if (entity.type == kGeoreferencingEntityType) {
+        try {
+            validate_georeferencing_entity(entity);
+        } catch (const std::exception& error) {
+            document_error(DocumentErrorCode::invalid_entity,
+                           std::string("invalid georeferencing entity: ") + error.what());
         }
     }
     if (entity.properties.contains("vertical_level_binding")) {
@@ -737,14 +746,15 @@ std::string sha256_hex(std::span<const std::byte> bytes) {
 }
 
 bool is_known_entity_type(std::string_view type) noexcept {
-    static constexpr std::array<std::string_view, 32> known{
+    static constexpr std::array<std::string_view, 33> known{
         "property",             "building", "floor",  "layer", "boundary",
         "measurement_boundary", "room_boundary", "wall", "opening", "room",
         "slab",                 "roof",     "stair",  "railing", "column", "beam",
         "label",                "sheet",    "view",   "constraint", "dimension",
         "sheet_view_model",    "annotation_state", "reference_asset",
         "assembly_model",      "model_phases", "room_relationships", "vertical_levels",
-        "reference_grid", "terrain_surface", "dxf_source", "ifc_source"};
+        "reference_grid", "terrain_surface", "dxf_source", "ifc_source",
+        "georeferencing"};
     return std::find(known.begin(), known.end(), type) != known.end();
 }
 
