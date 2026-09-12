@@ -40,6 +40,7 @@
 #include <QToolButton>
 #include <QTemporaryDir>
 #include <QStandardPaths>
+#include <QSplitter>
 #include <QTimer>
 #include <QToolBar>
 #include <QUuid>
@@ -302,7 +303,18 @@ void test_workspace_profiles() {
         auto* grid = window.findChild<QToolButton*>(QStringLiteral("gridTool"));
         auto* snap = window.findChild<QToolButton*>(QStringLiteral("snapTool"));
         auto* overview = window.findChild<QToolButton*>(QStringLiteral("overviewMapTool"));
-        require(grid && snap && overview, "profile fixture needs grid, snap, and overview controls");
+        auto* workspace_splitter = window.findChild<QSplitter*>(QStringLiteral("workspaceSplitter"));
+        auto* architectural_splitter = window.findChild<QSplitter*>(QStringLiteral("architecturalSplitter"));
+        require(grid && snap && overview && workspace_splitter && architectural_splitter,
+                "profile fixture needs controls and splitter state");
+        window.resize(1400, 900);
+        window.show();
+        QApplication::processEvents();
+        workspace_splitter->setSizes({260, 104, 690, 320});
+        architectural_splitter->setSizes({520, 300});
+        QApplication::processEvents();
+        const auto saved_workspace_sizes = workspace_splitter->sizes();
+        const auto saved_architectural_sizes = architectural_splitter->sizes();
         grid->setChecked(false);
         snap->setChecked(false);
         overview->setChecked(false);
@@ -328,11 +340,15 @@ void test_workspace_profiles() {
             grid->setChecked(true);
             snap->setChecked(true);
             overview->setChecked(true);
+            workspace_splitter->setSizes({220, 104, 520, 220});
+            architectural_splitter->setSizes({340, 480});
             apply->click();
             require(window.workspace() == sketch::desktop::Workspace::architectural &&
                         window.metricUnits() && !grid->isChecked() && !snap->isChecked() &&
                         !overview->isChecked() &&
                         !window.entityVisible(QStringLiteral("floor-1")) &&
+                        workspace_splitter->sizes() == saved_workspace_sizes &&
+                        architectural_splitter->sizes() == saved_architectural_sizes &&
                         status->text().contains(QStringLiteral("applied"), Qt::CaseInsensitive),
                     "applying a profile must restore workspace presentation state");
             dialog->reject();

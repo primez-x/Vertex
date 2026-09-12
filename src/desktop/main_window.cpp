@@ -904,7 +904,11 @@ void validate_workspace_profile_json(const json& profile) {
         "name", "workspace", "theme", "metric", "grid", "snap", "active_layer",
         "architectural_view", "page_size", "hidden_floors"};
     const bool has_overview = profile.is_object() && profile.contains("overview");
-    if (!profile.is_object() || profile.size() != keys.size() + 1 + (has_overview ? 1 : 0) ||
+    const bool has_workspace_splitter = profile.is_object() && profile.contains("workspace_splitter");
+    const bool has_architectural_splitter = profile.is_object() && profile.contains("architectural_splitter");
+    if (!profile.is_object() || profile.size() != keys.size() + 1 +
+            (has_overview ? 1 : 0) + (has_workspace_splitter ? 1 : 0) +
+            (has_architectural_splitter ? 1 : 0) ||
         !profile.contains("hidden_layers")) {
         throw std::invalid_argument("workspace profile fields are invalid");
     }
@@ -934,6 +938,16 @@ void validate_workspace_profile_json(const json& profile) {
     }
     if (has_overview && !profile.at("overview").is_boolean())
         throw std::invalid_argument("workspace profile overview must be boolean");
+    for (const auto key : {"workspace_splitter", "architectural_splitter"}) {
+        if (!profile.contains(key)) continue;
+        const auto& sizes = profile.at(key);
+        if (!sizes.is_array() || sizes.empty() || sizes.size() > 8)
+            throw std::invalid_argument(std::string("workspace profile ") + key + " must be a bounded size array");
+        for (const auto& size : sizes) {
+            if (!size.is_number_integer() || size.get<long long>() < 0 || size.get<long long>() > 100000)
+                throw std::invalid_argument(std::string("workspace profile ") + key + " contains an invalid size");
+        }
+    }
     for (const auto key : {"active_layer", "architectural_view"}) {
         if (!profile.at(key).is_string())
             throw std::invalid_argument(std::string("workspace profile ") + key + " must be a string");
@@ -2287,6 +2301,12 @@ public:
         const auto name = profile_name.trimmed().toStdString();
         if (name.empty() || name.size() > 128)
             throw std::invalid_argument("Workspace profile name must be 1-128 characters.");
+        const auto splitter_sizes = [](const QSplitter* splitter) {
+            json result = json::array();
+            if (splitter == nullptr) return result;
+            for (const auto size : splitter->sizes()) result.push_back(size);
+            return result;
+        };
         json hidden_floors = json::array();
         for (const auto& id : m_view_filter.hidden_floor_ids) hidden_floors.push_back(id);
         json hidden_layers = json::array();
@@ -2302,6 +2322,8 @@ public:
             {"active_layer", m_active_layer_id.toStdString()},
             {"architectural_view", architectural_view_name(m_architectural_view_kind)},
             {"page_size", m_pageSizeCombo ? m_pageSizeCombo->currentData().toInt() : 0},
+            {"workspace_splitter", splitter_sizes(m_workspace_splitter)},
+            {"architectural_splitter", splitter_sizes(m_architectural_splitter)},
             {"hidden_floors", std::move(hidden_floors)},
             {"hidden_layers", std::move(hidden_layers)}};
         validate_workspace_profile_json(profile);
@@ -2311,6 +2333,25 @@ public:
     bool applyWorkspaceProfile(const json& profile) {
         try {
             validate_workspace_profile_json(profile);
+            const auto decode_splitter_sizes = [](QSplitter* splitter, const json& encoded,
+                                                  const char* key) {
+                if (splitter == nullptr || !encoded.is_array()) return QList<int>{};
+                if (encoded.size() != static_cast<std::size_t>(splitter->count()))
+                    throw std::invalid_argument(std::string("Workspace profile ") + key +
+                                                " does not match the current layout.");
+                QList<int> sizes;
+                sizes.reserve(static_cast<int>(encoded.size()));
+                for (const auto& value : encoded) sizes.push_back(value.get<int>());
+                return sizes;
+            };
+            const auto workspace_splitter_sizes = profile.contains("workspace_splitter")
+                ? decode_splitter_sizes(m_workspace_splitter, profile.at("workspace_splitter"),
+                                        "workspace_splitter")
+                : QList<int>{};
+            const auto architectural_splitter_sizes = profile.contains("architectural_splitter")
+                ? decode_splitter_sizes(m_architectural_splitter, profile.at("architectural_splitter"),
+                                        "architectural_splitter")
+                : QList<int>{};
             const auto workspace = profile.at("workspace").get<std::string>() == "measurement"
                 ? Workspace::measurement : Workspace::architectural;
             const auto theme_name = profile.at("theme").get<std::string>();
@@ -2375,6 +2416,9 @@ public:
             m_architecturalCanvas->setSnapEnabled(m_snap_enabled);
             m_measurementCanvas->setOverviewMapEnabled(m_overview_map_enabled);
             m_architecturalCanvas->setOverviewMapEnabled(m_overview_map_enabled);
+            if (profile.contains("workspace_splitter")) m_workspace_splitter->setSizes(workspace_splitter_sizes);
+            if (profile.contains("architectural_splitter"))
+                m_architectural_splitter->setSizes(architectural_splitter_sizes);
             refresh();
             clearError();
             return true;
@@ -2399,7 +2443,7 @@ public:
         name->setPlaceholderText(QStringLiteral("Field layout, permit set, or client review"));
         layout->addWidget(name);
         auto* help = new QLabel(QStringLiteral(
-            "Profiles are stored locally and restore workspace, theme, units, grid, snap, view, page size, and visibility filters."),
+            "Profiles are stored locally and restore workspace, theme, units, grid, snap, view, page size, map visibility, panel proportions, and visibility filters."),
             &dialog);
         help->setWordWrap(true);
         layout->addWidget(help);
@@ -9131,6 +9175,7 @@ private:
 
         auto* splitter = new QSplitter(Qt::Horizontal, central);
         splitter->setObjectName(QStringLiteral("workspaceSplitter"));
+        m_workspace_splitter = splitter;
         // Keep the canvas close to the compact command strip while retaining
         // a small breathing room around the side panels.
         splitter->setContentsMargins(16, 4, 16, 14);
@@ -9373,7 +9418,9 @@ private:
         auto* architectural_layout = new QHBoxLayout(architectural_body);
         architectural_layout->setContentsMargins(0, 0, 0, 0);
         auto* architectural_splitter = new QSplitter(Qt::Horizontal, architectural_body);
+        architectural_splitter->setObjectName(QStringLiteral("architecturalSplitter"));
         architectural_splitter->setChildrenCollapsible(true);
+        m_architectural_splitter = architectural_splitter;
         m_architecturalCanvas = new PlanCanvas(architectural_splitter);
         m_architecturalCanvas->setObjectName(QStringLiteral("architecturalPlanCanvas"));
         architectural_splitter->addWidget(m_architecturalCanvas);
@@ -11861,6 +11908,8 @@ private:
     BuildingViewKind m_architectural_view_kind{BuildingViewKind::plan};
 
     VisibilityTreeWidget* m_navigator{};
+    QSplitter* m_workspace_splitter{};
+    QSplitter* m_architectural_splitter{};
     QTabWidget* m_workspaceTabs{};
     PlanCanvas* m_measurementCanvas{};
     PlanCanvas* m_architecturalCanvas{};

@@ -26,7 +26,9 @@ right corner. It draws the same committed geometry in model coordinates and
 shows the current viewport as a dashed frame; clicking any map location
 recenters the live canvas there. The **Map** control on the tool rail hides or
 restores it without changing geometry, and that preference is included in
-saved workspace profiles. The map is an interaction aid only and is omitted
+saved workspace profiles. Saved profiles also retain the proportions of the
+workspace navigator, tool rail, canvas, inspector, and architectural canvas/3D
+split. The map is an interaction aid only and is omitted
 from PDF, SVG, print, and native-image output.
 
 The toolbar glyphs are bundled inline SVG paths rendered by Qt's SVG module.

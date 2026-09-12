@@ -33,8 +33,10 @@ are integrated through the typed Document history. Automated edge extraction,
 editable PDF geometry, native Apex compatibility, clean-machine packaging, and
 end-to-end production evidence are still open.
 Interactive plan canvases now include a model-space overview map with viewport
-framing and click-to-recenter navigation; map persistence and asynchronous
-navigation qualification remain open.
+framing and click-to-recenter navigation. Workspace profiles persist map
+visibility and the proportions of the navigator, tool rail, canvas, inspector,
+and architectural canvas/3D split; asynchronous navigation qualification and
+the complete acceptance statement remain open.
 
 Drawing-sheet lifecycle is now integrated at the desktop boundary: the sheet
 settings workflow can add a validated page with coordinated viewports, remove a
@@ -425,7 +427,9 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   checkboxes, keyboard selection/Space, both plan canvases, project-switch rules
   and filtered draft PDF are integrated. A hidden floor containing a nonzero
   area leaves full-document totals unchanged. Normal/150-percent captures and
-  a rendered PDF were inspected at v16d. Saved-workspace profiles remain open.
+  a rendered PDF were inspected at v16d. Saved-workspace profiles now restore
+  presentation preferences and panel proportions; broader acceptance remains
+  open.
 - Modal authoring retains document identity, revision, selection, drawing layer
   and units. Timer-based tests prove opening/slab/building/organization commands
   reject edits, selection changes, layer changes, unit changes and same-revision

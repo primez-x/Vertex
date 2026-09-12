@@ -1308,7 +1308,7 @@
         "tests/desktop_smoke.cpp",
         "docs/workspace-accessibility.md"
       ],
-      "implementation_note": "Derived floor/layer masks and native presentation/picking filtering pass focused Debug/Release tests. The desktop now applies light, dark, and high-contrast themes and saves/restores bounded local workspace profiles for workspace, units, grid/snap, view, page size, visibility filters, and overview-map visibility; asynchronous navigation, panel-state persistence, and complete acceptance remain open."
+      "implementation_note": "Derived floor/layer masks and native presentation/picking filtering pass focused Debug/Release tests. The desktop now applies light, dark, and high-contrast themes and saves/restores bounded local workspace profiles for workspace, units, grid/snap, view, page size, visibility filters, overview-map visibility, and workspace/architectural panel proportions; asynchronous navigation and complete acceptance remain open."
     },
     {
       "id": "APX-UI-003",
