@@ -481,6 +481,51 @@ void test_selection_clipboard_workflow() {
             "malformed clipboard data must fail closed without mutation");
 }
 
+void test_material_clipboard_transfer() {
+    using namespace sketch;
+    desktop::MainWindow source;
+    const auto wall_id=source.createStraightWall({0,0},{5,0});
+    auto catalog=Entity::create("assembly_model",{{"version",1},{"model",
+        AssemblyModel::create({{wall_id.toStdString(),wall_id.toStdString(),"#abcdef"},{"unused","Unused"}}, {}, {}).to_json()}});
+    catalog.id="transfer-catalog";
+    auto wall=source.document().snapshot().entities().at(wall_id.toStdString());
+    wall.properties["material_assignment"]={{"version",1},{"catalog_id",catalog.id},{"material_id",wall_id.toStdString()}};
+    source.document().apply(ApplyEntityChanges{source.document().revision(),
+        {EntityChange::upsert(catalog),EntityChange::upsert(wall)},{},"assign transfer material"});
+    require(source.selectEntity(wall_id) && source.copySelection(),"copy assigned wall");
+    catalog.properties["model"]=AssemblyModel::create({{wall_id.toStdString(),"Changed","#112233"},{"unused","Unused"}}, {}, {}).to_json();
+    source.document().apply(ApplyEntityChanges{source.document().revision(),{EntityChange::upsert(catalog)},{},"change after copy"});
+    desktop::MainWindow target;
+    target.document().apply(ApplyEntityChanges{target.document().revision(),{EntityChange::upsert(catalog)},{},"conflicting destination catalog"});
+    const auto existing=target.createStraightWall({0,2},{3,2});
+    require(target.selectEntity(existing),"destination selection fixture");
+    const auto before=target.document().snapshot();
+    require(target.pasteSelection(),"cross-project paste must carry materials and use clipboard root despite destination selection");
+    const auto pasted_id=target.selectedEntityId().toStdString();
+    const auto pasted=target.document().snapshot();
+    const auto& assignment=pasted.entities().at(pasted_id).properties.at("material_assignment");
+    const auto imported_catalog=assignment.at("catalog_id").get<std::string>();
+    require(imported_catalog!=catalog.id,"conflicting catalog identity must not overwrite destination materials");
+    const auto imported=AssemblyModel::from_json(pasted.entities().at(imported_catalog).properties.at("model"));
+    require(imported.materials().size()==1 && imported.materials()[0].id==wall_id.toStdString() &&
+        imported.materials()[0].name==wall_id.toStdString() && imported.materials()[0].color_srgb=="#abcdef" &&
+        assignment.at("material_id")==wall_id.toStdString(),
+        "material subset must preserve captured color and internal IDs/names even when matching an entity ID");
+    require(target.undoCommand() && target.document().snapshot().entities()==before.entities() && target.redoCommand(),
+        "material dependency transfer must be one undoable paste");
+    require(target.selectEntity(QString::fromStdString(pasted_id)) && target.copySelection(),"copy pasted object");
+    auto legacy=nlohmann::json::parse(QGuiApplication::clipboard()->text().toStdString());
+    legacy.erase("root_id");
+    QGuiApplication::clipboard()->setText(QString::fromStdString(legacy.dump()));
+    require(target.pasteSelection(),"legacy-root same-project material paste must remain available");
+    const auto second=target.document().snapshot().entities().at(target.selectedEntityId().toStdString());
+    require(second.properties.at("material_assignment").at("catalog_id")==imported_catalog,
+        "same-project paste should reuse an unchanged referenced catalog");
+    require(source.selectEntity(wall_id) && source.cutSelection() &&
+        source.document().snapshot().entities().contains(catalog.id),
+        "cutting assigned geometry must preserve its shared material catalog");
+}
+
 void test_delete_selection_workflow() {
     using namespace sketch;
     desktop::MainWindow window;
@@ -2407,6 +2452,7 @@ int main(int argc, char** argv) {
     test_workspace_profiles();
     test_room_boundary_from_existing_geometry();
     test_selection_clipboard_workflow();
+    test_material_clipboard_transfer();
     test_delete_selection_workflow();
     test_boundary_vertex_insertion_workflow();
     test_boundary_redefinition_workflow();

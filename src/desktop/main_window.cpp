@@ -6518,13 +6518,30 @@ public:
     bool copySelection() {
         try {
             const auto snapshot = authoringSnapshot();
-            const auto entities = clipboard_entities_for_selection(
+            auto entities = clipboard_entities_for_selection(
                 snapshot, m_selected_id.toStdString());
             if (entities.empty()) {
                 throw std::invalid_argument(
                     "Select supported geometry, an area, an architectural object, or annotations.");
             }
-            json payload{{"format", std::string(kClipboardFormat)}, {"version", 1},
+            std::map<std::string, std::set<std::string>> material_dependencies;
+            for(const auto& entity : entities) {
+                if(!entity.properties.contains("material_assignment")) continue;
+                const auto& assignment = entity.properties.at("material_assignment");
+                material_dependencies[assignment.at("catalog_id").get<std::string>()].insert(
+                    assignment.at("material_id").get<std::string>());
+            }
+            for(const auto& [catalog_id, material_ids] : material_dependencies) {
+                const auto catalog = AssemblyModel::from_json(snapshot.entities().at(catalog_id).properties.at("model"));
+                std::vector<AssemblyMaterial> used;
+                for(const auto& material : catalog.materials())
+                    if(material_ids.contains(material.id)) used.push_back(material);
+                entities.push_back(Entity{catalog_id,"assembly_model",{{"version",1},
+                    {"model",AssemblyModel::create(std::move(used),{},{}).to_json()}},false,json::object()});
+            }
+            if(entities.size()>kMaximumClipboardEntities)
+                throw std::invalid_argument("Clipboard material dependencies exceed the entity limit.");
+            json payload{{"format", std::string(kClipboardFormat)}, {"version", 1}, {"root_id",entities.front().id},
                          {"entities", json::array()}};
             for (const auto& entity : entities) {
                 payload["entities"].push_back(clipboard_entity_json(entity));
@@ -7179,6 +7196,7 @@ public:
 
             const auto source = authoringSnapshot();
             std::map<std::string, std::string, std::less<>> remap;
+            std::set<std::string> reused_catalogs;
             const auto allocate = [&](std::string_view prefix) {
                 std::string id;
                 do {
@@ -7189,6 +7207,20 @@ public:
                 return id;
             };
             for (const auto& entity : source_entities) {
+                const auto existing = source.entities().find(entity.id);
+                if(entity.type=="assembly_model" && existing!=source.entities().end() &&
+                    existing->second.type=="assembly_model" && entity.properties.size()==2 && entity.extensions.empty()) {
+                    const auto copied = AssemblyModel::from_json(entity.properties.at("model"));
+                    const auto local = AssemblyModel::from_json(existing->second.properties.at("model"));
+                    if(copied.types().empty() && copied.instances().empty() &&
+                        std::all_of(copied.materials().begin(),copied.materials().end(),[&](const auto& material) {
+                            return std::find(local.materials().begin(),local.materials().end(),material)!=local.materials().end();
+                        })) {
+                        remap.emplace(entity.id,entity.id);
+                        reused_catalogs.insert(entity.id);
+                        continue;
+                    }
+                }
                 remap.emplace(entity.id, allocate(entity.type));
                 if (can_recognize_boundary_entity_type(entity.type) &&
                     entity.properties.contains("boundary_model_version")) {
@@ -7206,10 +7238,7 @@ public:
                 }
             }
 
-            const auto root_id = source.entities().contains(m_selected_id.toStdString())
-                ? m_selected_id.toStdString()
-                : annotation_parent_for_child(source, m_selected_id.toStdString()).value_or(
-                      source_entities.front().id);
+            const auto root_id = payload.value("root_id",source_entities.front().id);
             const auto root_mapping = remap.find(root_id);
             if (root_mapping == remap.end()) {
                 throw std::invalid_argument("Clipboard root identity is missing from its payload.");
@@ -7218,10 +7247,23 @@ public:
             std::vector<EntityChange> changes;
             changes.reserve(source_entities.size());
             for (const auto& original : source_entities) {
+                if(reused_catalogs.contains(original.id)) continue;
                 auto entity = original;
                 entity.id = remap.at(original.id);
-                remap_clipboard_json(entity.properties, remap);
-                remap_clipboard_json(entity.extensions, remap);
+                if(entity.type!="assembly_model") {
+                    remap_clipboard_json(entity.properties, remap);
+                    remap_clipboard_json(entity.extensions, remap);
+                    // These values have their own identity/enum namespaces. Only
+                    // the catalog ID is a Document entity reference.
+                    for(const auto* key : {"material_assignment","door_operation"}) {
+                        if(original.properties.contains(key)) entity.properties[key]=original.properties.at(key);
+                    }
+                    if(entity.properties.contains("material_assignment")) {
+                        auto& assignment=entity.properties.at("material_assignment");
+                        const auto catalog=remap.find(assignment.at("catalog_id").get<std::string>());
+                        if(catalog!=remap.end()) assignment["catalog_id"]=catalog->second;
+                    }
+                }
                 const auto placeable = entity.type == "boundary" ||
                     entity.type == "measurement_boundary" || entity.type == "room_boundary" ||
                     entity.type == "wall" || entity.type == "room" || entity.type == "slab" ||

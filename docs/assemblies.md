@@ -59,6 +59,16 @@ Removing a referenced material or catalog requires detaching its users in the
 same atomic command. Assignment and removal use normal revision-checked history
 and survive project save/reopen. This does not bind objects to assembly instances.
 
+Copy captures the referenced material subset with its names and colors, omitting
+unrelated catalog entries, types, and instances. Paste uses the payload's root
+identity independently of the destination selection. It maps catalog entity IDs
+while preserving material IDs and names in their separate catalog namespace.
+An existing catalog with the same identity is reused only when all copied
+materials still match; otherwise a new local catalog preserves the captured
+values. Catalog dependencies and geometry enter the document in one undoable
+command. Cut/delete act on geometry and do not remove shared catalogs. Older
+clipboard v1 payloads without `root_id` use their first entity as the root.
+
 Material schedules resolve the current catalog name and report one assigned
 object per row. Names and counts are read-only with source provenance; renaming
 the catalog material updates derived rows. Visibility filtering applies to the
