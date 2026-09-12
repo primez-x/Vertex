@@ -1155,6 +1155,40 @@ void test_survey_calculator(const QString& capture_directory) {
                     entered.at("distances").at(0).at("exact_metres").at("numerator") == 100 &&
                     entered.at("distances").at(0).at("exact_metres").at("denominator") == 1,
                 "survey export must preserve entered units, expressions, and exact rational metres");
+        saved.close();
+        auto tampered = report;
+        tampered["diagnostics"]["area_m2"] = 1.0;
+        tampered["input_provenance"]["default_unit"] = "m";
+        tampered["input_provenance"]["legs_text"] = "NE, 90, 100\nSE, 0, 100\nSW, 90, 100\nNW, 0, 100";
+        require(saved.open(QIODevice::WriteOnly | QIODevice::Truncate), "prepare report reopen fixture");
+        saved.write(QByteArray::fromStdString(tampered.dump()));
+        saved.close();
+        auto* open_report = dialog->findChild<QPushButton*>("surveyOpen");
+        auto* input_units = dialog->findChild<QComboBox*>("surveyInputUnits");
+        require(open_report && input_units, "survey reopen controls");
+        const auto open_fixture = [&] {
+            QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs, true);
+            QTimer::singleShot(0, dialog, [&] {
+                auto* picker = dialog->findChild<QFileDialog*>();
+                require(picker, "survey report open picker");
+                picker->selectFile(path);
+                QMetaObject::invokeMethod(picker, "accept", Qt::DirectConnection);
+            });
+            open_report->click();
+            QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs, native_dialogs_disabled);
+        };
+        open_fixture();
+        require(input_units->currentData().toString() == "m" && output->isEnabled() &&
+                    result->text().contains("10000.0000 m²"),
+                "reopened survey must restore default units and recompute rather than trust stored area");
+        const auto restored_input = input->toPlainText();
+        tampered["input_provenance"]["version"] = 99;
+        require(saved.open(QIODevice::WriteOnly | QIODevice::Truncate), "prepare unsupported report fixture");
+        saved.write(QByteArray::fromStdString(tampered.dump()));
+        saved.close();
+        open_fixture();
+        require(input->toPlainText() == restored_input && result->text().contains("Unsupported"),
+                "unsupported report version must not replace current entries");
         input->setPlainText("NE, 45, 100 ft");
         require(!output->isEnabled() && result->text().isEmpty(), "edits must invalidate stale survey results");
         calculate->click();

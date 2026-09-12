@@ -30,8 +30,16 @@ version-1 core report. It records `legs_text` and `source_text` verbatim,
 its `leg_id`, one-based `line_number`, `original_expression`, and normalized
 `exact_metres` numerator/denominator. These fields preserve the entered source
 without replacing the calculated metre values. Consumers must validate and
-recompute input before using it as geometry; the report is not an import
-format or a signed survey attestation.
+recompute input before using it as geometry.
+
+**Open report** accepts desktop reports with version-1 input provenance, up to
+4 MiB. It restores the source, original leg text, tolerance, and default units
+and recalculates through the survey engine. Stored vertices, totals, and exact
+receipts are ignored when recalculating. Unsupported versions and malformed
+input metadata leave current entries intact; invalid entered measurements are
+shown for correction with report export disabled. The default-unit selector
+is explicit and independent of project display units. This is native report
+reopening, not Apex interchange or a signed survey attestation.
 
 This is a calculator and report workflow; persisted survey geometry in the
 project, Apex survey exchange, DMS entry, and production survey qualification

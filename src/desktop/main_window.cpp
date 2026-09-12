@@ -6520,6 +6520,12 @@ public:
         auto* tolerance = new QLineEdit(QStringLiteral("0.001 m"), &dialog);
         tolerance->setObjectName(QStringLiteral("surveyTolerance"));
         form->addRow(QStringLiteral("Closure tolerance"), tolerance);
+        auto* input_units = new QComboBox(&dialog);
+        input_units->setObjectName(QStringLiteral("surveyInputUnits"));
+        input_units->addItem(QStringLiteral("Feet"), QStringLiteral("ft"));
+        input_units->addItem(QStringLiteral("Metres"), QStringLiteral("m"));
+        input_units->setCurrentIndex(m_metric_units ? 1 : 0);
+        form->addRow(QStringLiteral("Unsuffixed distances"), input_units);
         layout->addLayout(form);
         auto* help = new QLabel(QStringLiteral(
             "One leg per line: quadrant, angle in decimal degrees, distance with units.\n"
@@ -6538,6 +6544,8 @@ public:
         result->setTextInteractionFlags(Qt::TextSelectableByMouse);
         layout->addWidget(result);
         auto* buttons = new QDialogButtonBox(&dialog);
+        auto* open_report = buttons->addButton(QStringLiteral("Open report…"), QDialogButtonBox::ActionRole);
+        open_report->setObjectName(QStringLiteral("surveyOpen"));
         auto* calculate = buttons->addButton(QStringLiteral("Calculate"), QDialogButtonBox::ActionRole);
         calculate->setObjectName(QStringLiteral("surveyCalculate"));
         auto* export_report = buttons->addButton(QStringLiteral("Export report…"), QDialogButtonBox::ActionRole);
@@ -6550,10 +6558,11 @@ public:
         QObject::connect(input, &QPlainTextEdit::textChanged, &dialog, invalidate);
         QObject::connect(provenance, &QLineEdit::textChanged, &dialog, invalidate);
         QObject::connect(tolerance, &QLineEdit::textChanged, &dialog, invalidate);
-        const auto unit = m_metric_units ? Unit::metre : Unit::foot;
+        QObject::connect(input_units, &QComboBox::currentIndexChanged, &dialog, invalidate);
         QObject::connect(calculate, &QPushButton::clicked, &dialog, [&] {
             invalidate();
             try {
+                const auto unit = input_units->currentData().toString() == QStringLiteral("m") ? Unit::metre : Unit::foot;
                 if (input->toPlainText().size() > 1024 * 1024)
                     throw std::invalid_argument("Survey input exceeds 1 MiB.");
                 std::vector<SurveyLeg> legs;
@@ -6610,6 +6619,41 @@ public:
                 result->setText(summary);
                 export_report->setEnabled(true);
             } catch (const std::exception& error) { result->setText(QString::fromUtf8(error.what())); }
+        });
+        QObject::connect(open_report, &QPushButton::clicked, &dialog, [&] {
+            const auto path = QFileDialog::getOpenFileName(&dialog, QStringLiteral("Open survey report"),
+                QString(), QStringLiteral("Survey report (*.json)"));
+            if (path.isEmpty()) return;
+            try {
+                QFile file(path);
+                if (!file.open(QIODevice::ReadOnly)) throw std::invalid_argument("Could not read the survey report.");
+                constexpr qint64 limit = 4 * 1024 * 1024;
+                const auto bytes = file.read(limit + 1);
+                if (bytes.size() > limit) throw std::invalid_argument("Survey report exceeds 4 MiB.");
+                const auto loaded = json::parse(bytes.toStdString());
+                if (!loaded.contains("version") || !loaded.at("version").is_number_integer() ||
+                    loaded.at("version") != 1 || !loaded.contains("input_provenance"))
+                    throw std::invalid_argument("This report has no supported editable survey input.");
+                const auto& entry = loaded.at("input_provenance");
+                if (!entry.contains("version") || !entry.at("version").is_number_integer() || entry.at("version") != 1)
+                    throw std::invalid_argument("Unsupported survey input version.");
+                const auto legs_text = entry.at("legs_text").get<std::string>();
+                const auto source_text = entry.at("source_text").get<std::string>();
+                const auto tolerance_text = entry.at("closure_tolerance_expression").get<std::string>();
+                const auto default_unit = entry.at("default_unit").get<std::string>();
+                if (legs_text.size() > 1024 * 1024 || source_text.size() > 4096 || tolerance_text.size() > 4096 ||
+                    (default_unit != "m" && default_unit != "ft"))
+                    throw std::invalid_argument("Invalid survey input size or units.");
+                // Stored vertices, diagnostics, and receipts are never trusted as
+                // calculation inputs. Rebuild everything from the entered text.
+                input->setPlainText(QString::fromStdString(legs_text));
+                provenance->setText(QString::fromStdString(source_text));
+                tolerance->setText(QString::fromStdString(tolerance_text));
+                input_units->setCurrentIndex(default_unit == "m" ? 1 : 0);
+                calculate->click();
+            } catch (const std::exception& error) {
+                result->setText(QStringLiteral("Open report: %1").arg(QString::fromUtf8(error.what())));
+            }
         });
         QObject::connect(export_report, &QPushButton::clicked, &dialog, [&] {
             if (!report) return;
