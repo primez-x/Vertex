@@ -619,6 +619,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/room_relationship_geometry.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/room_relationships.hpp"
     },
     {
@@ -1096,6 +1100,10 @@
     {
       "category": "source",
       "path": "src/core/reference_grid.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/room_relationship_geometry.cpp"
     },
     {
       "category": "source",
@@ -1604,6 +1612,10 @@
     {
       "category": "source",
       "path": "tests/reference_grid_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/room_relationship_geometry_tests.cpp"
     },
     {
       "category": "source",

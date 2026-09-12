@@ -114,6 +114,15 @@ manifest, and a 469-file offline bundle whose generated verifier passes. These
 artifacts remain qualification inputs: clean-machine installation, offline
 launch/use, complete notices, and production acceptance are still open.
 
+The relationship foundation now has a detached, deterministic geometry proposal
+engine. It resolves explicit `follows` and `derived_from` links target-first,
+supports rigid rotation/translation propagation through dependency chains,
+requires agreement among multi-wall drivers, and reports missing, invalid,
+deformed, reflected, or manually conflicting geometry without mutating either
+snapshot. Stable segment and vertex identity migration, revision-checked
+Document commit wiring, visible previews, and production cross-view
+qualification remain open.
+
 The next foundation slice adds immutable room-versus-measurement relationship
 validation, existing/demolished/proposed phase state with mutually exclusive
 remodel alternatives, deterministic geometry-operation helpers, and a

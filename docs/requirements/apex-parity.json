@@ -267,9 +267,13 @@
         "include/sketch/typed_relationships.hpp",
         "src/core/typed_relationships.cpp",
         "tests/typed_relationships_tests.cpp",
-        "docs/typed-relationships.md"
+        "docs/typed-relationships.md",
+        "include/sketch/room_relationship_geometry.hpp",
+        "src/core/room_relationship_geometry.cpp",
+        "tests/room_relationship_geometry_tests.cpp",
+        "docs/room-relationships.md"
       ],
-      "implementation_note": "Immutable typed relationship validation and deterministic serialization are implemented; Document persistence, geometry propagation, and integrated undo wiring remain open."
+      "implementation_note": "Immutable typed relationship validation and deterministic serialization are implemented. A detached proposal engine now validates rigid rotation/translation propagation, target-first dependency chains, and multi-driver agreement without mutating snapshots; Document persistence of declarations is present, while stable identity migration, revision-checked geometry commit, visible previews, integrated undo wiring, and production qualification remain open."
     },
     {
       "id": "CORE-DOC-003",
@@ -1761,15 +1765,18 @@
       "package": 4,
       "blocker": null,
       "implementation_sources": [
-      "include/sketch/room_relationships.hpp",
-      "src/core/room_relationships.cpp",
-      "tests/room_relationships_tests.cpp",
-      "docs/room-relationships.md",
+        "include/sketch/room_relationships.hpp",
+        "src/core/room_relationships.cpp",
+        "include/sketch/room_relationship_geometry.hpp",
+        "src/core/room_relationship_geometry.cpp",
+        "tests/room_relationships_tests.cpp",
+        "tests/room_relationship_geometry_tests.cpp",
+        "docs/room-relationships.md",
       "src/desktop/main_window.cpp",
       "tests/desktop_smoke.cpp",
       "docs/desktop-workflow.md"
     ],
-    "implementation_note": "Room, appraisal-boundary, and architectural-wall references have separate kinds with independent/follows/derived-from relations and graph validation. A typed room_relationships Document entity and Windows editor now persist and validate declarations through undoable history; selected closed geometry can be copied into a distinct named room_boundary entity; geometry propagation, controlled retargeting, and production evidence remain open."
+    "implementation_note": "Room, appraisal-boundary, and architectural-wall references have separate kinds with independent/follows/derived-from relations and graph validation. A typed room_relationships Document entity and Windows editor now persist and validate declarations through undoable history; selected closed geometry can be copied into a distinct named room_boundary entity; a detached proposal engine validates rigid target-first propagation and multi-driver agreement without mutation. Stable identity migration, revision-checked desktop commit/preview wiring, controlled retargeting, and production evidence remain open."
     },
     {
       "id": "ARCH-MOD-010",
