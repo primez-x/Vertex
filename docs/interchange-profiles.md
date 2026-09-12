@@ -114,3 +114,32 @@ input/output resource limits. This is synthetic codec evidence; external CAD
 application interoperability, desktop import/export, transactional project
 mapping, provenance, and retained-source handling remain separate integration
 work.
+
+## Native project mapping
+
+`sketch/dxf_project_exchange.hpp` adds the first transactional-project mapping
+layer on top of the transport codec. `export_project_dxf` reads one immutable
+`DocumentSnapshot` and maps identified or legacy boundaries, wall baselines,
+slab footprints/holes, native labels, symbols, and resolvable boundary
+dimensions into the shared `DxfDrawing` model. SI metres are declared with
+`$INSUNITS = 6`; layer names are resolved through the native layer graph when
+available. Curved boundary edges stay analytical bulges, while positive
+single arcs on wall baselines stay ARC records. The function never mutates the
+source document or opens a path.
+
+`import_project_dxf` parses the bounded drawing and returns unparented editable
+boundary candidates plus one typed annotation entity for labels. Lines, arcs,
+polylines, solid hatch loops, and block INSERT geometry are reconstructed with
+stable import-local IDs and an inspectable `extensions.dxf_source` record.
+Dimensions retain their extension geometry and displayed text as annotation
+content, but are explicitly diagnosed as `dimension_associativity_unbound`
+until a user selects a native boundary segment. Nonuniform block scaling of
+curved geometry is diagnosed rather than flattened. The result sets
+`source_retention_required` whenever either the transport parser or project
+mapper reports a limitation, so a desktop adapter can retain the original DXF
+bytes alongside the editable candidates.
+
+This mapping is a deterministic native-project slice, not Apex native-file
+compatibility or full CAD fidelity. The desktop transaction adapter, active
+floor/layer assignment, original-source asset retention, and clean-machine
+interoperability evidence remain production-gate work.

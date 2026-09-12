@@ -515,6 +515,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/dxf_project_exchange.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/field_adapter_contract.hpp"
     },
     {
@@ -971,6 +975,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/dxf_project_exchange.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/field_adapter_contract.cpp"
     },
     {
@@ -1407,7 +1415,15 @@
     },
     {
       "category": "source",
+      "path": "tests/dxf_desktop_workflow_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/dxf_exchange_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/dxf_project_exchange_tests.cpp"
     },
     {
       "category": "source",

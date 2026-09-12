@@ -19,6 +19,7 @@
 #include "sketch/boundary_commit.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/document_digest.hpp"
+#include "sketch/dxf_project_exchange.hpp"
 #include "sketch/geometry_operations.hpp"
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/model_phases.hpp"
@@ -9709,6 +9710,172 @@ public:
         return true;
     }
 
+    bool exportDxf(const QString& path) {
+        if (path.trimmed().isEmpty()) {
+            setError(QStringLiteral("Choose a DXF destination."));
+            return false;
+        }
+        try {
+            const auto source = m_document->snapshot();
+            const auto mapped = export_project_dxf(source);
+            const auto ascii = export_dxf_ascii(mapped.drawing);
+            QSaveFile destination(path);
+            const QByteArray bytes(ascii.data(), static_cast<qsizetype>(ascii.size()));
+            if (!destination.open(QIODevice::WriteOnly) || destination.write(bytes) != bytes.size() ||
+                !destination.commit()) {
+                setError(QStringLiteral("DXF export could not save the destination."));
+                return false;
+            }
+            json report{{"format", "DXF R2013"}, {"source_revision", source.revision()},
+                        {"complete", mapped.diagnostics.empty()}, {"diagnostics", json::array()}};
+            for (const auto& item : mapped.diagnostics) {
+                report["diagnostics"].push_back({{"source_id", item.source_id},
+                    {"source_kind", item.source_kind}, {"code", item.code}});
+            }
+            const auto report_path = path + QStringLiteral(".fidelity.json");
+            QSaveFile report_file(report_path);
+            const auto report_bytes = QByteArray::fromStdString(report.dump(2));
+            if (!report_file.open(QIODevice::WriteOnly) ||
+                report_file.write(report_bytes) != report_bytes.size() || !report_file.commit()) {
+                setError(QStringLiteral("DXF export report could not be saved."));
+                return false;
+            }
+            if (!writeOutputFingerprint(path, source, QStringLiteral("dxf"))) return false;
+            clearError();
+            owner->statusBar()->showMessage(
+                mapped.diagnostics.empty() ? QStringLiteral("DXF exported locally.")
+                                            : QStringLiteral("DXF exported with fidelity diagnostics."),
+                5000);
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("DXF export failed: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    bool importDxf(const QString& path) {
+        if (path.trimmed().isEmpty()) {
+            setError(QStringLiteral("Choose a DXF file to import."));
+            return false;
+        }
+        try {
+            const QFileInfo info(path);
+            if (!info.exists() || !info.isFile())
+                throw std::invalid_argument("The DXF file does not exist.");
+            constexpr qint64 max_bytes = static_cast<qint64>(DxfExchangeLimits{}.max_bytes);
+            if (info.size() <= 0 || info.size() > max_bytes)
+                throw std::invalid_argument("The DXF file exceeds the local import limit.");
+            QFile input(path);
+            if (!input.open(QIODevice::ReadOnly))
+                throw std::invalid_argument("The DXF file could not be opened.");
+            const auto raw = input.readAll();
+            if (raw.size() != info.size()) throw std::invalid_argument("The DXF file could not be read completely.");
+            const auto mapped = import_project_dxf(
+                std::string_view(raw.constData(), static_cast<std::size_t>(raw.size())));
+            const auto source = authoringSnapshot();
+            if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
+
+            std::string layer_id = m_active_layer_id.toStdString();
+            auto layer = source.entities().find(layer_id);
+            if (layer == source.entities().end() || layer->second.type != "layer") {
+                layer = std::find_if(source.entities().begin(), source.entities().end(),
+                    [](const auto& item) { return item.second.type == "layer"; });
+            }
+            if (layer == source.entities().end())
+                throw std::invalid_argument("Create a drawing layer before importing DXF geometry.");
+            layer_id = layer->first;
+            const auto floor_id = layer->second.properties.value("floor_id", std::string{});
+            if (floor_id.empty()) throw std::invalid_argument("The target drawing layer has no floor.");
+
+            std::vector<EntityChange> changes;
+            std::vector<std::string> imported_boundary_ids;
+            const auto existing_annotation = std::find_if(source.entities().begin(), source.entities().end(),
+                [](const auto& item) { return item.second.type == kAnnotationEntityType; });
+            std::optional<AnnotationState> merged_annotations;
+            if (existing_annotation != source.entities().end()) {
+                merged_annotations = decode_annotation_entity(existing_annotation->second);
+            }
+            for (const auto& candidate : mapped.entities) {
+                if (candidate.type == "annotation_state") {
+                    const auto imported_state = decode_annotation_entity(candidate);
+                    if (!merged_annotations) merged_annotations = imported_state;
+                    else {
+                        std::set<std::string, std::less<>> ids;
+                        for (const auto& item : merged_annotations->labels) ids.insert(item.id);
+                        for (const auto& item : merged_annotations->symbols) ids.insert(item.id);
+                        for (auto item : imported_state.labels) {
+                            while (!ids.insert(item.id).second) item.id = new_id("label");
+                            merged_annotations->labels.push_back(std::move(item));
+                        }
+                        for (auto item : imported_state.symbols) {
+                            while (!ids.insert(item.id).second) item.id = new_id("symbol");
+                            merged_annotations->symbols.push_back(std::move(item));
+                        }
+                    }
+                    continue;
+                }
+                if (candidate.type != "boundary") continue;
+                auto imported = candidate;
+                imported.id = new_id("boundary");
+                imported.properties["floor_id"] = floor_id;
+                imported.properties["layer_id"] = layer_id;
+                imported_boundary_ids.push_back(imported.id);
+                changes.push_back(EntityChange::upsert(std::move(imported)));
+            }
+            if (merged_annotations) {
+                const auto annotation_id = existing_annotation != source.entities().end()
+                    ? existing_annotation->second.id : "annotations-" + new_id("dxf");
+                changes.push_back(EntityChange::upsert(
+                    make_annotation_entity(annotation_id, *merged_annotations)));
+            }
+
+            std::vector<std::byte> source_bytes;
+            source_bytes.reserve(static_cast<std::size_t>(raw.size()));
+            for (const auto value : raw) source_bytes.push_back(static_cast<std::byte>(value));
+            const auto asset_id = new_id("dxf-source");
+            auto asset = Asset::create(asset_id, "application/dxf", std::move(source_bytes),
+                {{"format", "DXF R2013"}, {"source_path", info.fileName().toStdString()},
+                 {"mapped_entity_count", mapped.entities.size()},
+                 {"source_retention_required", mapped.source_retention_required}});
+            auto source_entity = Entity::create("dxf_source",
+                {{"asset_id", asset_id}, {"format", "DXF R2013"},
+                 {"source_path", info.fileName().toStdString()},
+                 {"mapped_entity_count", mapped.entities.size()}, {"diagnostics", json::array()}});
+            for (const auto& item : mapped.diagnostics)
+                source_entity.properties["diagnostics"].push_back({{"source_id", item.source_id},
+                    {"source_kind", item.source_kind}, {"code", item.code}});
+            changes.push_back(EntityChange::upsert(std::move(source_entity)));
+            const auto command = ApplyEntityChanges{source.revision(), std::move(changes),
+                {AssetChange::upsert(std::move(asset))}, "Import DXF"};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            if (!imported_boundary_ids.empty()) m_selected_id = id_from(imported_boundary_ids.front());
+            m_active_layer_id = id_from(layer_id);
+            clearError();
+            refresh();
+            const auto report_path = path + QStringLiteral(".fidelity.json");
+            QSaveFile report_file(report_path);
+            json report{{"format", "DXF R2013"}, {"mapped_entity_count", mapped.entities.size()},
+                        {"source_retention_required", mapped.source_retention_required},
+                        {"diagnostics", json::array()}};
+            for (const auto& item : mapped.diagnostics)
+                report["diagnostics"].push_back({{"source_id", item.source_id},
+                    {"source_kind", item.source_kind}, {"code", item.code}});
+            const auto report_bytes = QByteArray::fromStdString(report.dump(2));
+            if (report_file.open(QIODevice::WriteOnly) && report_file.write(report_bytes) == report_bytes.size())
+                report_file.commit();
+            owner->statusBar()->showMessage(
+                mapped.diagnostics.empty() ? QStringLiteral("DXF imported locally.")
+                                            : QStringLiteral("DXF imported with fidelity diagnostics."),
+                5000);
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("DXF import failed; the current document is unchanged: %1")
+                         .arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     bool showPrintPreview() {
         refreshOutput();
         if (!m_plan_geometry_error.isEmpty()) {
@@ -10883,6 +11050,16 @@ public:
                 const auto selected = QFileDialog::getSaveFileName(
                     owner, QStringLiteral("Export draft SVG"), {}, QStringLiteral("SVG document (*.svg)"));
                 if (!selected.isEmpty()) exportDraftSvg(selected);
+            }},
+            {QStringLiteral("Import DXF"), [this] {
+                const auto selected = QFileDialog::getOpenFileName(
+                    owner, QStringLiteral("Import DXF"), {}, QStringLiteral("DXF drawing (*.dxf *.DXF)"));
+                if (!selected.isEmpty()) importDxf(selected);
+            }},
+            {QStringLiteral("Export DXF"), [this] {
+                const auto selected = QFileDialog::getSaveFileName(
+                    owner, QStringLiteral("Export DXF"), {}, QStringLiteral("DXF drawing (*.dxf)"));
+                if (!selected.isEmpty()) exportDxf(selected);
             }},
             {QStringLiteral("Print preview (draft)"), [this] { showPrintPreview(); }},
             {QStringLiteral("About internal checkpoint"), [this] { showAbout(); }},
@@ -16043,6 +16220,14 @@ bool MainWindow::exportDraftSvg(const QString& path) {
 
 bool MainWindow::exportNativeViewImage(const QString& path) {
     return m_impl->exportNativeViewImage(path);
+}
+
+bool MainWindow::exportDxf(const QString& path) {
+    return m_impl->exportDxf(path);
+}
+
+bool MainWindow::importDxf(const QString& path) {
+    return m_impl->importDxf(path);
 }
 
 bool MainWindow::showPrintPreview() {

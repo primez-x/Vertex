@@ -736,14 +736,14 @@ std::string sha256_hex(std::span<const std::byte> bytes) {
 }
 
 bool is_known_entity_type(std::string_view type) noexcept {
-    static constexpr std::array<std::string_view, 30> known{
+    static constexpr std::array<std::string_view, 31> known{
         "property",             "building", "floor",  "layer", "boundary",
         "measurement_boundary", "room_boundary", "wall", "opening", "room",
         "slab",                 "roof",     "stair",  "railing", "column", "beam",
         "label",                "sheet",    "view",   "constraint", "dimension",
         "sheet_view_model",    "annotation_state", "reference_asset",
         "assembly_model",      "model_phases", "room_relationships", "vertical_levels",
-        "reference_grid", "terrain_surface"};
+        "reference_grid", "terrain_surface", "dxf_source"};
     return std::find(known.begin(), known.end(), type) != known.end();
 }
 

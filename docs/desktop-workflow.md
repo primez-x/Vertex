@@ -194,6 +194,14 @@ opening`, `Create window opening`, and `Create slab from selected boundary`;
 each prompts for quantities and runs the same validated commands as the public
 workflow seam.
 
+The same command surface exposes local **Import DXF** and **Export DXF**.
+Export writes the bounded R2013 ASCII subset plus a `.fidelity.json` report.
+Import maps lines, arcs, polylines, solid hatch loops, block inserts, labels,
+and dimension extension geometry into one undoable command on the active
+floor/layer. The original DXF bytes are retained as a `dxf_source` asset and
+all unsupported or unbound semantics remain visible in the adjacent report and
+source entity diagnostics.
+
 The overflow menu and command palette also provide **Copy selection**, **Cut
 selection**, **Paste selection**, and **Delete selection**. Clipboard data is a
 bounded `sketch.document.clipboard` JSON payload held by the local system

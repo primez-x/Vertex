@@ -352,6 +352,11 @@ public:
     [[nodiscard]] bool exportDraftPdf(const QString& path);
     [[nodiscard]] bool exportDraftSvg(const QString& path);
     [[nodiscard]] bool exportNativeViewImage(const QString& path);
+    // Local DXF R2013 interchange. Export writes an adjacent fidelity report;
+    // import commits mapped geometry in one undoable command and retains the
+    // original source bytes as a project asset for any reported gaps.
+    [[nodiscard]] bool exportDxf(const QString& path);
+    [[nodiscard]] bool importDxf(const QString& path);
     [[nodiscard]] bool showPrintPreview();
 
     void showCommandPalette();

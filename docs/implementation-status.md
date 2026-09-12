@@ -601,7 +601,15 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   plain text, block definitions, and INSERT references. Unsupported dimension
   styles, patterned or multi-loop hatches, nested blocks, and external CAD
   fidelity still produce diagnostics or remain open; native project mapping and
-  production interchange evidence are not implied by this codec.
+  production interchange evidence are not implied by this codec. A separate
+  native project-mapping layer now translates immutable snapshots to that
+  drawing model and reconstructs bounded DXF geometry into editable boundary
+  candidates plus a typed annotation entity. It preserves analytical bulges,
+  records source layer/primitive metadata, expands block INSERT geometry when
+  representable, and marks unbound dimensions and unsupported transport data
+  for original-byte retention. Desktop floor/layer assignment, source-asset
+  retention, Apex native compatibility, external CAD fidelity, and production
+  interchange qualification remain open.
 - Multipage project semantics, reusable assemblies, and optional offline
   assistance are implemented as standalone typed models plus a deterministic
   local engine. The engine produces unverified tracing, explicit-unit

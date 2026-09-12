@@ -529,9 +529,13 @@
         "include/sketch/interchange_profile.hpp",
         "src/core/interchange_profile.cpp",
         "tests/interchange_profile_tests.cpp",
+        "include/sketch/dxf_project_exchange.hpp",
+        "src/core/dxf_project_exchange.cpp",
+        "tests/dxf_project_exchange_tests.cpp",
+        "tests/dxf_desktop_workflow_tests.cpp",
         "docs/interchange-profiles.md"
       ],
-      "implementation_note": "Fail-closed IFC/DXF/PDF/PROJ worker declarations and attestations are implemented; real worker binaries, broker/runtime enforcement, and representative fixtures remain open."
+      "implementation_note": "Fail-closed IFC/DXF/PDF/PROJ worker declarations and attestations are implemented; a deterministic native DXF project-mapping slice is now tested separately, while real worker binaries, broker/runtime enforcement, active floor/layer transaction integration, original-source retention, and representative cross-application fixtures remain open."
     },
     {
       "id": "COMP-IO-002",
@@ -1028,9 +1032,14 @@
       "package": 4,
       "blocker": null,
       "implementation_sources": [
-        "src/desktop/main_window.cpp"
+        "src/desktop/main_window.cpp",
+        "include/sketch/dxf_project_exchange.hpp",
+        "src/core/dxf_project_exchange.cpp",
+        "tests/dxf_project_exchange_tests.cpp",
+        "tests/dxf_desktop_workflow_tests.cpp",
+        "docs/interchange-profiles.md"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "Local save/open and deterministic native DXF project mapping are implemented as bounded slices; desktop floor/layer assignment, source-byte retention, additional interchange formats, Apex native compatibility, and the complete fidelity-report acceptance statement remain open."
     },
     {
       "id": "APX-AREA-001",
@@ -1276,9 +1285,14 @@
       "package": 6,
       "blocker": null,
       "implementation_sources": [
-        "src/desktop/main_window.cpp"
+        "src/desktop/main_window.cpp",
+        "include/sketch/dxf_project_exchange.hpp",
+        "src/core/dxf_project_exchange.cpp",
+        "tests/dxf_project_exchange_tests.cpp",
+        "tests/dxf_desktop_workflow_tests.cpp",
+        "docs/interchange-profiles.md"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "Local save/open and deterministic native DXF project mapping are implemented as bounded slices; desktop floor/layer assignment, source-byte retention, additional interchange formats, Apex native compatibility, and the complete fidelity-report acceptance statement remain open."
     },
     {
       "id": "APX-DOC-003",
@@ -2313,9 +2327,13 @@
         "include/sketch/dxf_exchange.hpp",
         "src/core/dxf_exchange.cpp",
         "tests/dxf_exchange_tests.cpp",
+        "include/sketch/dxf_project_exchange.hpp",
+        "src/core/dxf_project_exchange.cpp",
+        "tests/dxf_project_exchange_tests.cpp",
+        "tests/dxf_desktop_workflow_tests.cpp",
         "docs/interchange-profiles.md"
       ],
-      "implementation_note": "A bounded in-memory ASCII DXF R2013 codec now round-trips LINE, ARC, LWPOLYLINE (including bulges), plain TEXT, linear DIMENSION records, one-loop solid polygon HATCH records, BLOCK definitions, and INSERT references with deterministic serialization, hard limits, and explicit unsupported-feature diagnostics. It does not claim nested blocks, patterned or multi-loop hatches, native Apex compatibility, reference preservation, worker isolation, or external CAD fidelity; those fixtures and integrations remain open."
+      "implementation_note": "A bounded in-memory ASCII DXF R2013 codec now round-trips LINE, ARC, LWPOLYLINE (including bulges), plain TEXT, linear DIMENSION records, one-loop solid polygon HATCH records, BLOCK definitions, and INSERT references with deterministic serialization, hard limits, and explicit unsupported-feature diagnostics. A separate native project-mapping layer now translates immutable snapshots to that drawing model and reconstructs bounded geometry into editable boundary candidates plus typed annotation state, with explicit source-retention diagnostics. It does not claim nested blocks, patterned or multi-loop hatches, native Apex compatibility, active floor/layer assignment, original-source asset retention, worker isolation, or external CAD fidelity; those fixtures and integrations remain open."
     },
     {
       "id": "IO-PDF-001",

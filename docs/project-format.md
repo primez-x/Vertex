@@ -127,7 +127,7 @@ The v1 known types are:
 
 `property`, `building`, `floor`, `layer`, `boundary`, `measurement_boundary`, `room_boundary`,
 `wall`, `opening`, `room`, `slab`, `roof`, `stair`, `railing`, `column`, `beam`, `label`, `sheet`, `view`,
-`constraint`, `reference_grid`, and `terrain_surface`.
+`constraint`, `reference_grid`, `terrain_surface`, and `dxf_source`.
 
 All geometry properties use metres and radians. A wall and opening can be represented as:
 
@@ -209,6 +209,13 @@ expressions are retained as authoring metadata; editing the terrain never rewrit
 source boundary. Terrain remains a local surface tool and does not imply a survey provider,
 georeferencing service, native Apex compatibility, or production qualification. See
 [terrain surfaces](terrain-surfaces.md).
+
+An imported DXF may retain its original bytes as an asset referenced by a
+`dxf_source` entity. The entity records the source filename, declared DXF
+version, mapped candidate count, and stable fidelity diagnostics; it is a
+provenance record and is not drawing geometry. Editable candidates keep their
+source layer and primitive in `extensions.dxf_source`. Removing or replacing
+the source record never changes the mapped geometry.
 
 For known entity types, the document validates `refs` and `references` arrays as generic entity
 references. It also validates canonical singular and plural reference fields for each known type,
