@@ -379,9 +379,13 @@ previews use the same identity, geometry, and receipt checks as committed edits;
 unchanged transforms do not create history. Room-boundary propagation and
 connected-wall group transforms remain open production work.
 
-Boundary clone mode allocates a new boundary, segment IDs, and vertex IDs, carries only
-safe drawing context and area metadata, and leaves the source entity and its
-relationships unchanged. Imported anonymous legacy boundaries are promoted
+Boundary clone mode allocates a new boundary, segment IDs, and vertex IDs. It
+preserves drawing context, area metadata, names, custom properties, extensions,
+and per-edge metadata, while remapping recognized self-references. User text and
+opaque metadata are not rewritten as identifiers. The source entity and its
+relationships remain unchanged. Unhandled geometry-owned receipts or dependent
+semantics reject the copy without changing history; qualified migration for those
+records remains unfinished. Imported anonymous legacy boundaries are promoted
 only when a command can preserve their exact geometry and metadata; an
 in-place transform of such a boundary remains blocked until an explicit
 identity-upgrade path is provided. Unsupported boundary versions fail closed

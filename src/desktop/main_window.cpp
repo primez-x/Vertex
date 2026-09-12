@@ -1974,16 +1974,21 @@ public:
             }
             const auto clone_id = new_id("boundary");
             auto cloned = clone_boundary(transformed, clone_id, ids, {});
-            auto encoded = encode_identified_boundary_entity(cloned);
-            // Carry drawing context and user metadata, but never copy
-            // geometry-owned receipts or references into the new identity.
-            static constexpr std::array<const char*, 12> safe_properties{
-                "property_id", "building_id", "floor_id", "layer_id",
-                "classification", "factor", "factor_expression", "factor_numerator",
-                "factor_denominator", "area_attributes", "room_id", "room_name"};
-            for (const auto* key : safe_properties) {
-                if (original.properties.contains(key)) encoded.properties[key] = original.properties.at(key);
+            // Validate identity retirement as well as geometry changes before
+            // remapping. Unknown receipts must not be silently discarded or
+            // carried into a new identity without qualified migration.
+            auto identity_check = cloned;
+            identity_check.id = original.id;
+            (void)encode_identified_boundary_entity(identity_check, &original);
+            std::map<std::string, std::string, std::less<>> identities{{original.id, clone_id}};
+            for (std::size_t index = 0; index < transformed.segments.size(); ++index) {
+                identities.emplace(transformed.segments[index].segment_id, ids.segment_ids[index]);
+                identities.emplace(transformed.segments[index].start_vertex_id, ids.vertex_ids[index]);
             }
+            auto metadata = original;
+            metadata.id = clone_id;
+            remap_entity_references(metadata, identities);
+            auto encoded = encode_identified_boundary_entity(cloned, &metadata);
             return {ApplyEntityChanges{
                 .expected_revision = revision,
                 .entity_changes = {EntityChange::upsert(std::move(encoded))},

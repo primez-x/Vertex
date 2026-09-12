@@ -1009,6 +1009,13 @@ void test_boundary_transform_workflow(const QString& capture_directory) {
                 window.redoCommand() &&
                 window.document().snapshot().entities().at(boundary_id.toStdString()) == rotated,
             "boundary transform should restore exact geometry through undo and redo");
+    auto decorated = rotated;
+    decorated.properties["name"] = boundary_id.toStdString();
+    decorated.properties["custom_metadata"] = {{"entity_id", boundary_id.toStdString()}};
+    decorated.extensions["vendor_note"] = "Retain this boundary finish";
+    decorated.properties["segments"][0]["finish"] = "paint";
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(decorated)},{},"clone metadata fixture"});
     const auto source_count = window.document().snapshot().entities().size();
     require(window.selectEntity(boundary_id) &&
                 window.transformSelectedBoundary(QStringLiteral("0"), false, true,
@@ -1020,6 +1027,16 @@ void test_boundary_transform_workflow(const QString& capture_directory) {
                 window.document().snapshot().entities().contains(boundary_id.toStdString()),
             "boundary clone should create a distinct selected entity and preserve its source");
     const auto clone = window.document().snapshot().entities().at(clone_id.toStdString());
+    require(clone.properties.value("name",std::string{}) == decorated.properties.at("name").get<std::string>() &&
+        clone.properties.value("custom_metadata",nlohmann::json{}) == decorated.properties.at("custom_metadata") &&
+        clone.extensions == decorated.extensions &&
+        clone.properties.at("segments")[0].value("finish",std::string{}) == "paint",
+        "boundary copy must retain names, opaque metadata and per-edge finishes");
+    require(window.document().snapshot().entities().at(boundary_id.toStdString()) == decorated &&
+        window.undoCommand() && !window.document().snapshot().entities().contains(clone_id.toStdString()) &&
+        window.redoCommand() && window.document().snapshot().entities().at(clone_id.toStdString()) == clone,
+        "boundary copy must preserve its source and restore metadata exactly through undo/redo");
+    require(window.selectEntity(clone_id), "reselect restored boundary copy");
     require(clone.properties.at("classification") == "measurement" &&
                 decode_identified_boundary_entity(clone).segments.front().segment.start.x > 1.2,
             "boundary clone should retain safe context metadata while applying its transform");
@@ -1086,6 +1103,10 @@ void test_boundary_transform_workflow(const QString& capture_directory) {
     window.document().apply(ApplyEntityChanges{window.document().revision(),{EntityChange::upsert(guarded)},{},"opaque boundary receipt"});
     require(window.selectEntity(clone_id),"select guarded boundary");
     const auto guarded_snapshot=window.document().snapshot();
+    require(!window.transformSelectedBoundary("0",false,false,"0","0",true) &&
+        window.document().snapshot().entities()==guarded_snapshot.entities() &&
+        window.document().revision()==guarded_snapshot.revision(),
+        "copy must reject unhandled receipt identity migration without dropping data or adding history");
     QTimer::singleShot(0,&window,[&] {
         auto* dialog=window.findChild<QDialog*>("boundaryTransformDialog");
         dialog->findChild<QLineEdit*>("boundaryRotationDegrees")->setText("10");
