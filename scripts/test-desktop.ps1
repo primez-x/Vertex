@@ -6,6 +6,20 @@ $configName = $Configuration.ToLowerInvariant()
 $executable = Join-Path $projectRoot "build\windows-$configName\property-studio.exe"
 $qtPrefix = Join-Path $projectRoot '.deps\qt\6.8.3\msvc2022_64'
 $nativeSuffix = if ($Configuration -eq 'Debug') { 'debug\bin' } else { 'bin' }
+$addProcessArguments = {
+    param([System.Diagnostics.ProcessStartInfo]$StartInfo, [string[]]$Arguments)
+    $argumentListProperty = $StartInfo.PSObject.Properties['ArgumentList']
+    if ($null -ne $argumentListProperty) {
+        foreach ($argument in $Arguments) { $StartInfo.ArgumentList.Add($argument) }
+        return
+    }
+    # Windows PowerShell 5.1 does not expose ArgumentList. The smoke
+    # arguments contain no embedded quotes, so quoting whitespace-bearing
+    # values produces the same argv for the native process.
+    $StartInfo.Arguments = (($Arguments | ForEach-Object {
+        if ($_ -match '[\s"]') { '"' + $_.Replace('"', '\"') + '"' } else { $_ }
+    }) -join ' ')
+}
 if (!(Test-Path -LiteralPath $executable)) { throw 'Build the desktop application first.' }
 $outputDirectory = Join-Path $projectRoot "artifacts\desktop-smoke\$configName"
 New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
@@ -34,9 +48,7 @@ foreach ($workspace in @('measurement', 'architectural')) {
                        '--smoke-size', $case.Size, '--smoke-output', $imagePath,
                        '--smoke-3d-output', $modelPath)
         if ($IncludeReference) { $arguments += '--smoke-reference' }
-        foreach ($argument in $arguments) {
-            $startInfo.ArgumentList.Add($argument)
-        }
+        & $addProcessArguments $startInfo $arguments
         $testProcess = [System.Diagnostics.Process]::new()
         $testProcess.StartInfo = $startInfo
         try {

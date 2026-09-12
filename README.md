@@ -49,6 +49,7 @@ paths; it does not install runtimes globally. Source builds produce
 
 Explicit native checks use `scripts/test-native.ps1` and
 `scripts/test-desktop.ps1`; their windows stay hidden and failures have timeouts.
+The visual harnesses run under both Windows PowerShell 5.1 and PowerShell 7.
 The latter saves visual captures for inspection in `artifacts/desktop-smoke`.
 See [runtime inspection](docs/dependencies/runtime-inspection.md) for the
 current binary/plugin inventory and its packaging limitations.

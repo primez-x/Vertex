@@ -5,6 +5,20 @@ $configName = $Configuration.ToLowerInvariant()
 $executable = Join-Path $projectRoot "build/windows-$configName/building_object_dialog_tests.exe"
 $qtPrefix = Join-Path $projectRoot '.deps/qt/6.8.3/msvc2022_64'
 $nativeSuffix = if ($Configuration -eq 'Debug') { 'debug/bin' } else { 'bin' }
+$addProcessArguments = {
+    param([System.Diagnostics.ProcessStartInfo]$StartInfo, [string[]]$Arguments)
+    $argumentListProperty = $StartInfo.PSObject.Properties['ArgumentList']
+    if ($null -ne $argumentListProperty) {
+        foreach ($argument in $Arguments) { $StartInfo.ArgumentList.Add($argument) }
+        return
+    }
+    # Windows PowerShell 5.1 does not expose ArgumentList. The smoke
+    # arguments contain no embedded quotes, so quoting whitespace-bearing
+    # values produces the same argv for the native process.
+    $StartInfo.Arguments = (($Arguments | ForEach-Object {
+        if ($_ -match '[\s"]') { '"' + $_.Replace('"', '\"') + '"' } else { $_ }
+    }) -join ' ')
+}
 $evidence = @()
 foreach ($scale in @('1', '1.5')) {
     $outputDirectory = Join-Path $projectRoot "artifacts/building-editor/$configName/$scale"
@@ -20,8 +34,7 @@ foreach ($scale in @('1', '1.5')) {
     $startInfo.Environment['QT_QPA_PLATFORM'] = 'windows'
     $startInfo.Environment['QT_SCREEN_SCALE_FACTORS'] = '1'
     $startInfo.Environment['QT_SCALE_FACTOR'] = $scale
-    $startInfo.ArgumentList.Add('--capture-directory')
-    $startInfo.ArgumentList.Add($outputDirectory)
+    & $addProcessArguments $startInfo @('--capture-directory', $outputDirectory)
     $testProcess = [System.Diagnostics.Process]::new()
     $testProcess.StartInfo = $startInfo
     try {
