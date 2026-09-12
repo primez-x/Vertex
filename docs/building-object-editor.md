@@ -128,7 +128,18 @@ it clears the message. This numeric preview does not rebuild solids, change
 the drawing, or create history. Apply still validates the complete candidate
 through the existing geometry builder before a command can commit.
 
-For editing, the constructor first decodes and validates the original entity.
+The main-window `buildingDimensions` inspector also exposes rectangular column
+width/depth/height, circular column radius/height, beam width/depth, and straight
+stair width/total rise/going/riser count. Only dimensions applicable to the
+selected form are shown. `applyBuildingDimensions` sends changed fields through
+the same quantity parser, complete-object validation, and normal replacement
+command as the dialog. Unchanged fields retain their canonical precision and
+metadata. An unchanged form creates no history; invalid input and stale editing
+contexts show `buildingDimensionsError` without changing the document. Placement,
+orientation, beam endpoints, and landing details remain available in **Edit
+object**.
+
+For dialog editing, the constructor first decodes and validates the original entity.
 Malformed or unsupported originals show an inline error and disable Submit.
 Valid edits preserve the original ID, `required` flag, extension metadata, and
 unknown properties.  Canonical fields are merged into a copy of the original

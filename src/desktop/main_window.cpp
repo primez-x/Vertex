@@ -6536,7 +6536,8 @@ public:
             "Example: NE, 45:30:15, 100 ft. Angles accept decimal degrees or degrees:minutes:seconds.\n"
             "Quadrants: NE, SE, SW, NW; angles: 0–90°.\n"
             "Coordinates start at a local origin. No closure adjustment is applied.\n"
-            "Add boundary retains measured legs and adds a closing segment to the origin if needed."), &dialog);
+            "Add boundary retains measured legs and adds a closing segment to the origin if needed. "
+            "Cyan previews the proposed closing leg."), &dialog);
         help->setWordWrap(true);
         layout->addWidget(help);
         auto* input = new QPlainTextEdit(&dialog);
@@ -6884,6 +6885,46 @@ public:
         } catch (const std::exception& error) {
             setError(QStringLiteral("Roof dimensions: %1").arg(QString::fromUtf8(error.what())));
             return false;
+        }
+    }
+
+    bool editSelectedBuildingDimensions() {
+        const auto fail = [this](const QString& message) {
+            setError(message);
+            m_building_dimensions_error->setText(message);
+            m_building_dimensions_error->show();
+            return false;
+        };
+        if (!m_building_edit_context || !modalContextUnchanged(*m_building_edit_context))
+            return fail(QStringLiteral("The object editing context changed. Reselect the object before applying dimensions."));
+        const auto context = *m_building_edit_context;
+        const auto original = selectedEntity();
+        if (!original || (original->type != "column" && original->type != "beam" && original->type != "stair"))
+            return fail(QStringLiteral("Select a column, beam or stair before applying dimensions."));
+        try {
+            BuildingObjectDialog dialog(*original, m_metric_units, owner);
+            bool changed = false;
+            for (const auto& dimension : m_building_dimensions) {
+                if (dimension.edit->isHidden() ||
+                    dimension.edit->text().trimmed() == dimension.original_text.trimmed()) continue;
+                auto* field = dialog.findChild<QLineEdit*>(QStringLiteral("buildingObject") + dimension.suffix);
+                if (!field) throw std::runtime_error("The object editor is missing a dimension field.");
+                field->setText(dimension.edit->text());
+                changed = true;
+            }
+            if (!changed) {
+                clearError();
+                m_building_dimensions_error->hide();
+                return true;
+            }
+            if (!dialog.submit()) return fail(QStringLiteral("Object dimensions: %1").arg(dialog.lastError()));
+            const auto candidate = dialog.candidate();
+            if (!candidate) return fail(QStringLiteral("Object dimensions did not produce an editable candidate."));
+            if (!modalContextUnchanged(context)) return fail(m_last_error);
+            if (commitBuildingObject(*candidate, context.revision, true).isEmpty()) return fail(m_last_error);
+            return true;
+        } catch (const std::exception& error) {
+            return fail(QStringLiteral("Object dimensions: %1").arg(QString::fromUtf8(error.what())));
         }
     }
 
@@ -10850,6 +10891,35 @@ private:
         m_apply_roof_properties_button->setObjectName(QStringLiteral("applyRoofProperties"));
         m_apply_roof_properties_button->setAccessibleName(QStringLiteral("Apply roof dimensions"));
         roof_properties_form->addRow(m_apply_roof_properties_button);
+        m_building_properties_group = new QGroupBox(QStringLiteral("Object dimensions"), inspector_body);
+        m_building_properties_group->setObjectName(QStringLiteral("buildingDimensions"));
+        auto* building_form_layout = new QFormLayout(m_building_properties_group);
+        for (const auto& spec : std::vector<std::pair<QString, const char*>>{
+                 {QStringLiteral("Width"), "width_m"}, {QStringLiteral("Depth"), "depth_m"},
+                 {QStringLiteral("Radius"), "radius_m"}, {QStringLiteral("Height"), "height_m"},
+                 {QStringLiteral("TotalRise"), "total_rise_m"}, {QStringLiteral("Going"), "going_m"},
+                 {QStringLiteral("RiserCount"), "riser_count"}}) {
+            const auto label_text = spec.first == QStringLiteral("TotalRise") ? QStringLiteral("Total rise") :
+                spec.first == QStringLiteral("RiserCount") ? QStringLiteral("Risers") : spec.first;
+            auto* label = new QLabel(label_text, m_building_properties_group);
+            auto* edit = new QLineEdit(m_building_properties_group);
+            edit->setObjectName(QStringLiteral("contextBuilding") + spec.first);
+            edit->setAccessibleName(label_text);
+            label->setBuddy(edit);
+            building_form_layout->addRow(label, edit);
+            m_building_dimensions.push_back({spec.first, spec.second, label, edit, {}});
+        }
+        m_building_dimensions_error = new QLabel(m_building_properties_group);
+        m_building_dimensions_error->setObjectName(QStringLiteral("buildingDimensionsError"));
+        m_building_dimensions_error->setWordWrap(true);
+        m_building_dimensions_error->hide();
+        building_form_layout->addRow(m_building_dimensions_error);
+        auto* apply_building = new QPushButton(QStringLiteral("Apply object dimensions"), m_building_properties_group);
+        apply_building->setObjectName(QStringLiteral("applyBuildingDimensions"));
+        building_form_layout->addRow(apply_building);
+        QObject::connect(apply_building, &QPushButton::clicked, owner, [this] { (void)editSelectedBuildingDimensions(); });
+        m_building_properties_group->hide();
+        inspector_layout->addWidget(m_building_properties_group);
         m_roof_properties_group->setVisible(false);
         inspector_layout->addWidget(m_roof_properties_group);
         QObject::connect(m_apply_roof_properties_button, &QPushButton::clicked, owner, [this] {
@@ -12240,6 +12310,36 @@ private:
         m_roof_properties_group->setVisible(false);
         m_roof_properties_group->setEnabled(false);
         m_roof_edit_context.reset();
+        m_building_edit_context.reset();
+        const bool dimension_object = building_object &&
+            (entity->type == "column" || entity->type == "beam" || entity->type == "stair");
+        m_building_properties_group->setVisible(dimension_object);
+        m_building_properties_group->setEnabled(dimension_object && editable);
+        m_building_dimensions_error->hide();
+        if (dimension_object) {
+            m_building_edit_context = captureModalContext();
+            m_building_properties_group->setTitle(QStringLiteral("%1 dimensions")
+                .arg(entity->type == "column" ? QStringLiteral("Column") :
+                     entity->type == "beam" ? QStringLiteral("Beam") : QStringLiteral("Stair")));
+            for (auto& dimension : m_building_dimensions) {
+                const bool relevant = entity->type == "beam"
+                    ? (dimension.suffix == "Width" || dimension.suffix == "Depth")
+                    : entity->type == "stair"
+                    ? (dimension.suffix == "Width" || dimension.suffix == "TotalRise" ||
+                       dimension.suffix == "Going" || dimension.suffix == "RiserCount")
+                    : building_form == std::optional<std::string>("circular_column")
+                    ? (dimension.suffix == "Radius" || dimension.suffix == "Height")
+                    : (dimension.suffix == "Width" || dimension.suffix == "Depth" || dimension.suffix == "Height");
+                dimension.label->setVisible(relevant);
+                dimension.edit->setVisible(relevant);
+                if (!relevant) continue;
+                QSignalBlocker blocker(dimension.edit);
+                const auto value = read_number(entity->properties, dimension.property, 0.0);
+                dimension.original_text = dimension.suffix == QStringLiteral("RiserCount")
+                    ? QString::number(value, 'f', 0) : format_length(value, m_metric_units);
+                dimension.edit->setText(dimension.original_text);
+            }
+        }
         m_delete_annotation_button->setVisible(annotation_context.has_value());
         m_delete_annotation_button->setEnabled(editable && annotation_context.has_value());
         m_annotation_group->setVisible(annotation_context.has_value());
@@ -13404,6 +13504,17 @@ private:
     QLineEdit* m_project_subject_reference_edit{};
     QPlainTextEdit* m_project_subject_attributes_edit{};
     QPushButton* m_apply_project_details_button{};
+    struct BuildingDimensionField {
+        QString suffix;
+        const char* property;
+        QLabel* label{};
+        QLineEdit* edit{};
+        QString original_text;
+    };
+    QGroupBox* m_building_properties_group{};
+    QLabel* m_building_dimensions_error{};
+    std::vector<BuildingDimensionField> m_building_dimensions;
+    std::optional<ModalContext> m_building_edit_context;
     QGroupBox* m_roof_properties_group{};
     QLineEdit* m_roof_run_edit{};
     QLabel* m_roof_run_label{};

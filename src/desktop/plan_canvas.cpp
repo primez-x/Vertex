@@ -21,7 +21,7 @@ namespace {
 // at a building-sized zoom floor; the adaptive grid already scales with zoom.
 constexpr double minimum_scale = 0.0001;
 constexpr double maximum_scale = 4000.0;
-constexpr double output_minimum_scale = 0.05;
+constexpr double output_minimum_scale = minimum_scale;
 constexpr double pi = std::numbers::pi;
 
 double distance(Vec2 left, Vec2 right) {

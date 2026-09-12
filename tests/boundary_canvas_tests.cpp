@@ -458,6 +458,11 @@ void test_site_scale_fit() {
         require(differing_pixels(blank, fitted, QRect(0, 0, 480, 10)) == 0 &&
                     differing_pixels(blank, fitted, QRect(0, 350, 480, 10)) == 0,
                 "fit must leave margin around site boundaries");
+        const auto output = render(canvas, true);
+        require(differing_pixels(blank, output, canvas.rect()) > 200 &&
+                    differing_pixels(blank, output, QRect(0, 0, 480, 10)) == 0 &&
+                    differing_pixels(blank, output, QRect(0, 350, 480, 10)) == 0,
+                "fit-to-page output must retain the complete site boundary with margins");
     }
 }
 

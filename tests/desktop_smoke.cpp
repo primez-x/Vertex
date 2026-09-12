@@ -9,6 +9,7 @@
 #include "sketch/boundary_entity.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/building_entity.hpp"
+#include "sketch/quantity.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/desktop/building_object_dialog.hpp"
 #include "support/noninteractive_errors.hpp"
@@ -935,6 +936,111 @@ void test_six_form_authoring_and_quantity_history() {
     const auto svg_text = QString::fromUtf8(svg_file.readAll());
     require(svg_text.contains("<svg") && svg_text.contains("DRAFT"),
             "draft SVG should contain vector markup and its draft stamp");
+}
+
+void test_contextual_building_dimension_inspector(const QString& capture_directory) {
+    using namespace sketch;
+    desktop::MainWindow window;
+    window.setMetricUnits(true);
+    const std::vector<BuildingObject> objects{
+        RectangularColumn{"inspector-column", {1, 2, 0}, 0.4, 0.6, 3.0, 0.2},
+        CircularColumn{"inspector-round", {3, 2, 0}, 0.25, 3.0},
+        Beam{"inspector-beam", {1, 2, 3}, {4, 2, 3}, {0, 0, 1}, 0.2, 0.3},
+        StairFlight{"inspector-stair", {5, 0, 0}, 0.0, 4, 0.8, 0.25, 1.0, StairLanding{0.6, 0.15}},
+    };
+    auto* group = window.findChild<QGroupBox*>("buildingDimensions");
+    auto* apply = window.findChild<QPushButton*>("applyBuildingDimensions");
+    auto* error = window.findChild<QLabel*>("buildingDimensionsError");
+    require(group && apply && error, "building dimension inspector controls exist");
+    for (const auto& object : objects) {
+        const auto id = window.commitBuildingObject(encode_building_entity(object,
+            {{"future_metadata", "retained"}}), window.document().revision());
+        require(!id.isEmpty() && window.selectEntity(id) && !group->isHidden(),
+                "each column, beam and stair exposes contextual dimensions");
+        const auto before = window.document().snapshot().entities().at(id.toStdString());
+        const auto suffix = before.type == "column" ? "Height" : "Width";
+        const auto key = before.type == "column" ? "height_m" : "width_m";
+        auto* edit = window.findChild<QLineEdit*>(QStringLiteral("contextBuilding") + suffix);
+        require(edit && !edit->isHidden() &&
+                    std::abs(parse_quantity(edit->text().toStdString(), Unit::metre).metres -
+                             before.properties.at(key).get<double>()) < 1e-6,
+                "family dimensions populate editable fields");
+        const auto revision = window.document().revision();
+        apply->click();
+        require(window.document().revision() == revision, "unchanged dimensions must not add history");
+        edit->setText("1.5 m");
+        apply->click();
+        const auto edited = window.document().snapshot().entities().at(id.toStdString());
+        require(window.document().revision() == revision + 1 && edited.properties.at(key) == 1.5 &&
+                    edited.extensions == before.extensions,
+                "dimension edit validates and commits exactly one edit to selected object");
+        require(window.undoCommand() && window.document().snapshot().entities().at(id.toStdString()) == before &&
+                    window.redoCommand() && window.document().snapshot().entities().at(id.toStdString()) == edited,
+                "building dimension edits undo and redo exactly");
+        edit->setText("-1 m");
+        const auto invalid_revision = window.document().revision();
+        apply->click();
+        require(window.document().revision() == invalid_revision &&
+                    window.document().snapshot().entities().at(id.toStdString()) == edited &&
+                    !error->isHidden() && !error->text().isEmpty(),
+                "invalid dimension leaves document unchanged and shows inline validation");
+        require(window.selectEntity(id), "refresh contextual building fields");
+        edit->setText("2 m");
+        auto intervening = edited;
+        intervening.properties["external_metadata"] = "intervening";
+        window.document().apply(ApplyEntityChanges{
+            .expected_revision = window.document().revision(),
+            .entity_changes = {EntityChange::upsert(intervening)},
+            .message = "intervening building edit",
+        });
+        const auto stale_revision = window.document().revision();
+        apply->click();
+        require(window.document().revision() == stale_revision &&
+                    window.document().snapshot().entities().at(id.toStdString()) == intervening && !error->isHidden(),
+                "stale building dimension context cannot overwrite intervening edits");
+    }
+    require(window.selectEntity("inspector-round") &&
+                !window.findChild<QLineEdit*>("contextBuildingRadius")->isHidden() &&
+                window.findChild<QLineEdit*>("contextBuildingWidth")->isHidden(),
+            "round columns show radius instead of rectangular section dimensions");
+    require(window.selectEntity("inspector-stair") &&
+                !window.findChild<QLineEdit*>("contextBuildingRiserCount")->isHidden() &&
+                window.findChild<QLineEdit*>("contextBuildingRadius")->isHidden(),
+            "stairs expose risers and hide column radius");
+    auto* risers = window.findChild<QLineEdit*>("contextBuildingRiserCount");
+    require(risers->text() == "4", "stair riser count reflects the selected stair");
+    const auto stair_revision = window.document().revision();
+    risers->setText("2.5");
+    apply->click();
+    require(window.document().revision() == stair_revision && !error->isHidden(),
+            "fractional riser count is rejected without a document mutation");
+    risers->setText("6");
+    apply->click();
+    require(window.document().revision() == stair_revision + 1 &&
+                window.document().snapshot().entities().at("inspector-stair").properties.at("riser_count") == 6,
+            "contextual stair risers use normal integer validation");
+    if (!capture_directory.isEmpty()) {
+        window.resize(1200, 850);
+        window.show();
+        window.fitView();
+        QApplication::processEvents();
+        require(window.grab().save(capture_directory + "/stair-inspector.png"),
+                "capture contextual stair inspector for visual review");
+    }
+    const auto final_entities = window.document().snapshot().entities();
+    QTemporaryDir directory;
+    require(directory.isValid() && window.saveProjectAs(directory.filePath("building-inspector.bldproj")) &&
+                window.openProject(directory.filePath("building-inspector.bldproj")),
+            "contextual building dimensions save and reopen");
+    auto* plan = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
+    for (const auto& id : {"inspector-column", "inspector-round", "inspector-beam", "inspector-stair"}) {
+        require(window.document().snapshot().entities().at(id) == final_entities.at(id),
+                "edited building geometry and metadata persist exactly");
+        require(plan && std::any_of(plan->entities().begin(), plan->entities().end(), [&](const auto& entry) {
+                    return entry.id == id && !entry.segments.empty();
+                }), "edited objects remain in the shared plan and export projection");
+    }
+    require(window.selectEntity({}) && group->isHidden(), "dimension inspector hides without an object selection");
 }
 
 void test_contextual_roof_dimension_inspector() {
@@ -1919,6 +2025,7 @@ int main(int argc, char** argv) {
     test_vertical_levels_workflow();
     test_assembly_catalog_workflow();
     test_calculation_deduction_workflow();
+    test_contextual_building_dimension_inspector(field_ui_capture_directory);
     test_contextual_roof_dimension_inspector();
     test_contextual_gable_roof_inspector(field_ui_capture_directory);
     test_survey_calculator(field_ui_capture_directory);
