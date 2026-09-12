@@ -27,7 +27,10 @@ Discovery does not create, save, rename, delete, promote, or overwrite any file.
 The source hash and candidate metadata are point-in-time observations: filesystem
 checks do not protect against a hostile concurrent path replacement, and no
 identity handle is retained after loading. Consumers must revalidate file hashes
-and obtain normal ownership before any later open or restore action. Hard links
+and obtain normal ownership before any later open or restore action. The native
+desktop's `ProjectOwnershipSession` performs that follow-up by reserving the
+normalized project path and existing file identity, rechecking the content digest
+before publication, and making a cooperating second open read-only. Hard links
 are ordinary regular files and are not rejected; no write authority follows from
 a match. Archive validation uses existing ProjectStore resource limits; the entry
 cap is not an aggregate byte or execution-time budget.

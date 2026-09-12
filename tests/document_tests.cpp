@@ -738,6 +738,33 @@ void test_validated_document_fork_preserves_authority_and_isolation() {
                   DocumentErrorCode::read_only, "fork must not bypass read-only edit rejection");
 }
 
+void test_session_read_only_latch_survives_navigation_and_fork() {
+    auto document = Document::create({entity("site", "property")});
+    document.apply(NameRevision{.expected_revision = 0, .name = "first"});
+    document.apply(NameRevision{.expected_revision = 1, .name = "second"});
+    const auto undo_revision = document.undo(document.revision());
+    require(document.can_undo() && document.can_redo(),
+            "navigation stacks should exist before applying the session read-only latch");
+
+    document.mark_read_only("external project change");
+    require(!document.is_editable() && document.read_only_reason() == "external project change",
+            "session read-only state should expose its durable reason");
+    const auto snapshot = document.snapshot();
+    require(!snapshot.is_editable() && snapshot.read_only_reason() == "external project change",
+            "session read-only state should be captured in snapshots");
+    require_error([&] { (void)document.undo(undo_revision); }, DocumentErrorCode::read_only,
+                  "undo must not bypass a session read-only latch");
+    require_error([&] { (void)document.redo(undo_revision); }, DocumentErrorCode::read_only,
+                  "redo must not bypass a session read-only latch");
+
+    auto fork = Document::fork(snapshot);
+    require(!fork.is_editable() && fork.read_only_reason() == "external project change",
+            "validated forks must preserve the session read-only latch");
+    require_error([&] { fork.apply(NameRevision{.expected_revision = undo_revision, .name = "blocked"}); },
+                  DocumentErrorCode::read_only,
+                  "a fork must not clear the session read-only latch");
+}
+
 }  // namespace
 
 int main() {
@@ -759,6 +786,7 @@ int main() {
         test_command_preview_replays_history_without_mutating_source();
         test_command_preview_rejects_invalid_stale_and_read_only_sources();
         test_validated_document_fork_preserves_authority_and_isolation();
+        test_session_read_only_latch_survives_navigation_and_fork();
     } catch (const std::exception& error) {
         std::cerr << "document_tests: unexpected exception: " << error.what() << '\n';
         return 1;

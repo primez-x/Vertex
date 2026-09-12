@@ -29,6 +29,7 @@
 #include "sketch/sheet_output_scene.hpp"
 #include "sketch/calculations.hpp"
 #include "sketch/project_store.hpp"
+#include "sketch/project_ownership.hpp"
 #include "sketch/project_workspace.hpp"
 #include "sketch/recovery_copy_record.hpp"
 #include "sketch/recovery_discovery.hpp"
@@ -1726,6 +1727,7 @@ public:
         if (!m_document) {
             m_document = std::make_shared<Document>(Document::create());
         }
+        m_project_ownership = std::make_unique<ProjectOwnershipSession>();
         ensure_project_scaffold(*m_document);
         m_project_workspace = std::make_unique<ProjectWorkspace>(m_document->snapshot());
         initializeDrawingContext();
@@ -1743,6 +1745,9 @@ public:
         // Jobs own detached values only. Join before destroying any owner state.
         m_save_queue.shutdown(true);
         drainSaveCompletions();
+        if (m_project_ownership) {
+            (void)m_project_ownership->release();
+        }
     }
 
     QString recoveryCopyPath() const { return QString::fromStdWString(m_autosave_path.wstring()); }
@@ -8972,6 +8977,10 @@ public:
     }
 
     bool undoCommand() {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
         if (m_boundary_session) {
             const bool changed = m_boundary_session->undo();
             if (changed) { clearError(); boundaryDraftChanged(); }
@@ -9008,6 +9017,10 @@ public:
     }
 
     bool redoCommand() {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
         if (m_boundary_session) {
             const bool changed = m_boundary_session->redo();
             if (changed) { clearError(); boundaryDraftChanged(); }
@@ -9045,6 +9058,12 @@ public:
             return false;
         }
         try {
+            if (m_project_ownership) {
+                const auto released = m_project_ownership->release();
+                if (!released.ok()) {
+                    throw std::runtime_error("the current project ownership could not be released");
+                }
+            }
             auto candidate = std::make_shared<Document>(Document::create());
             ensure_project_scaffold(*candidate);
             auto candidate_workspace = std::make_unique<ProjectWorkspace>(candidate->snapshot());
@@ -9082,6 +9101,27 @@ public:
         }
         try {
             const auto candidate_path = filesystem_path(path);
+            const bool reuse_current_ownership =
+                m_project_ownership && m_project_ownership->path_matches(candidate_path);
+            std::unique_ptr<ProjectOwnershipSession> candidate_ownership;
+            bool candidate_read_only = false;
+            if (!reuse_current_ownership) {
+                candidate_ownership = std::make_unique<ProjectOwnershipSession>();
+                const auto ownership = candidate_ownership->acquire(candidate_path);
+                if (!ownership.ok()) {
+                    if (ownership.status == ProjectOwnershipStatus::conflict) {
+                        // A second open is explicit and safe: load the same bytes
+                        // read-only, without claiming the owner's lease. Save As
+                        // remains the host's independent-copy boundary.
+                        candidate_read_only = true;
+                        candidate_ownership.reset();
+                    } else {
+                        throw std::runtime_error(ownership.message.empty()
+                                                     ? "project ownership could not be acquired"
+                                                     : ownership.message);
+                    }
+                }
+            }
             std::shared_ptr<Document> candidate;
             std::unique_ptr<ProjectWorkspace> candidate_workspace;
             RecoveryLedger candidate_ledger;
@@ -9089,6 +9129,10 @@ public:
             try {
                 auto loaded = ProjectStore::load(candidate_path);
                 candidate = std::make_shared<Document>(std::move(loaded.document));
+                if (candidate_read_only) {
+                    candidate->mark_read_only(
+                        "Another application instance owns this project; it was opened read-only.");
+                }
                 candidate_workspace = std::make_unique<ProjectWorkspace>(candidate->snapshot());
                 candidate_sha256 = std::move(loaded.file_sha256);
             } catch (const StorageError& error) {
@@ -9107,11 +9151,26 @@ public:
                 candidate_workspace = ProjectWorkspace::restore_archive(
                     *loaded.archive, *loaded.recovery.decoded);
                 candidate = std::make_shared<Document>(Document::fork(candidate_workspace->snapshot()));
+                if (candidate_read_only) {
+                    candidate->mark_read_only(
+                        "Another application instance owns this project; it was opened read-only.");
+                }
                 candidate_ledger = loaded.archive->recovery();
                 candidate_sha256 = std::move(loaded.file_sha256);
             }
+            if (m_project_ownership && !reuse_current_ownership) {
+                const auto released = m_project_ownership->release();
+                if (!released.ok()) {
+                    throw std::runtime_error("the current project ownership could not be released");
+                }
+            }
             m_document = std::move(candidate);
             m_project_workspace = std::move(candidate_workspace);
+            if (candidate_ownership) {
+                m_project_ownership = std::move(candidate_ownership);
+            } else if (!reuse_current_ownership) {
+                m_project_ownership = std::make_unique<ProjectOwnershipSession>();
+            }
             m_recovery_ledger = std::move(candidate_ledger);
             m_saved_workspace_epoch = m_project_workspace->epoch();
             m_saved_edited_generation = m_document->dirty() ? 0 : m_project_workspace->edited_generation();
@@ -9120,6 +9179,13 @@ public:
             m_file_path = candidate_path;
             initializeDrawingContext();
             m_file_sha256 = std::move(candidate_sha256);
+            if (reuse_current_ownership && m_project_ownership) {
+                const auto refreshed = m_project_ownership->note_published(m_file_sha256);
+                if (!refreshed.ok()) {
+                    m_document->mark_read_only(
+                        "The reopened project identity could not be verified; save it as a new copy.");
+                }
+            }
             m_selected_id.clear();
             m_output_sheet_id.clear();
             clearPreview();
@@ -11904,6 +11970,30 @@ private:
             return false;
         }
         try {
+            if (current_destination && m_project_ownership && m_project_ownership->active()) {
+                const auto ownership = m_project_ownership->verify_current();
+                if (!ownership.ok()) {
+                    m_document->mark_read_only(
+                        "The project changed outside this session; save it as a new copy to continue.");
+                    throw std::runtime_error(ownership.message.empty()
+                                                 ? "the project changed outside this session"
+                                                 : ownership.message);
+                }
+            }
+            std::unique_ptr<ProjectOwnershipSession> destination_ownership;
+            if (!m_project_ownership || !m_project_ownership->path_matches(path)) {
+                destination_ownership = std::make_unique<ProjectOwnershipSession>();
+                const auto ownership = destination_ownership->acquire(path);
+                if (!ownership.ok()) {
+                    if (ownership.status == ProjectOwnershipStatus::conflict) {
+                        throw std::runtime_error(
+                            "the destination is already open by another application instance");
+                    }
+                    throw std::runtime_error(ownership.message.empty()
+                                                 ? "destination ownership could not be acquired"
+                                                 : ownership.message);
+                }
+            }
             const auto previous_autosave_path = m_autosave_path;
             const auto previous_autosave_archive_id = m_autosave_archive_id;
             const auto previous_autosave_document_id = m_autosave_document_id;
@@ -11946,11 +12036,11 @@ private:
             }
             const bool legacy = m_recovery_ledger.empty();
             const auto sequence = m_save_queue.enqueue(std::move(ticket),
-                [path, persisted_snapshot, recovery_ledger, options, legacy] {
+                    [path, persisted_snapshot, recovery_ledger, options, legacy] {
                     return legacy ? ProjectStore::save(path, persisted_snapshot, options)
                         : ProjectStore::save_archive(path,
                             ProjectArchiveSnapshot(persisted_snapshot, recovery_ledger, ArchiveRole::ordinary), options);
-                });
+                    });
             // Synchronous API compatibility: storage runs on the worker, while
             // this explicit barrier deliberately does not pump reentrant UI events.
             waitForSaveBarrier();
@@ -11968,6 +12058,22 @@ private:
                 document_snapshot_digest(snapshot) != document_snapshot_digest(m_document->snapshot())) {
                 setError(QStringLiteral("The file was saved, but the current workspace changed and was not marked saved."));
                 return false;
+            }
+            auto* published_ownership = destination_ownership
+                ? destination_ownership.get() : m_project_ownership.get();
+            if (published_ownership == nullptr) {
+                throw std::runtime_error("saved project has no ownership session");
+            }
+            const auto published = published_ownership->note_published(receipt.file_sha256);
+            if (!published.ok()) {
+                m_document->mark_read_only(
+                    "The saved project identity could not be revalidated; save it as a new copy.");
+                throw std::runtime_error(published.message.empty()
+                                             ? "saved project identity could not be revalidated"
+                                             : published.message);
+            }
+            if (destination_ownership) {
+                m_project_ownership = std::move(destination_ownership);
             }
             const bool refresh_draft_source = m_boundary_source && m_boundary_document == m_document &&
                 document_snapshot_digest(*m_boundary_source) == document_snapshot_digest(snapshot);
@@ -15732,6 +15838,7 @@ private:
     QTimer* m_save_timer{};
     std::filesystem::path m_file_path;
     std::string m_file_sha256;
+    std::unique_ptr<ProjectOwnershipSession> m_project_ownership;
     Workspace m_workspace{Workspace::measurement};
     WorkspaceTheme m_theme{WorkspaceTheme::light};
     CanvasTool m_tool{CanvasTool::select};

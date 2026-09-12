@@ -425,10 +425,13 @@ which case the original stays in place and the save reports an error.
 
 The in-memory `Document` is a serialized single writer but does not yet have a durable live working
 journal. A WAL/FULL edit journal, recovery after process termination during editing, and compaction
-remain future work. There is no long-lived edit-session lease: two sessions may open the same file,
-but mandatory expected fingerprints and the save mutex prevent a cooperating stale session from
-silently overwriting a newer save. A user-facing second-open read-only policy remains UI/session
-work.
+remain future work. The desktop now has a broker-backed edit-session lease that reserves the
+normalized project path and, for an existing file, its volume/file identity. A cooperating second
+open receives an explicit read-only document. The owner rechecks path identity and content digest
+before save and records the new identity after an atomic publication, so an external edit or
+replacement becomes a visible read-only/save-as boundary instead of a silent overwrite. This
+lease is a cooperating-session guard; hostile writers, restart recovery, and clean-machine
+qualification remain production work.
 
 The atomic replacement path has deterministic injected-failure coverage, but it has not been
 qualified against real machine power loss, filesystem filter drivers, or disk-full conditions at

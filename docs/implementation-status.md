@@ -368,6 +368,17 @@ focused passing regressions; the shutdown test failed against the previous
 implementation. Restart recovery, recovery discovery, and production
 qualification remain required; see [durable recovery](boundary-recovery.md).
 
+The desktop now consumes the broker through `ProjectOwnershipSession`. Open and
+Save As reserve a normalized project path; existing files also reserve their
+volume/file identity. A cooperating second open is loaded read-only, while the
+current owner rechecks identity and SHA-256 content before publication and
+refreshes the identity after atomic replacement. External edits become an
+explicit read-only/save-as boundary. Focused ownership and document regressions
+pass in Debug, and the Windows cross-process fixture verifies mutex contention,
+case-insensitive paths, and retry after owner exit. Clean-machine process
+lifetime, restart recovery, hostile writer races, and production qualification
+remain open.
+
 The earlier v23f desktop checkpoint adds
 native Draw First and Define First sessions,
 a precision line/arc input form, transient draft previews and committed dimension
@@ -541,6 +552,10 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   handling and timeouts. Every CMake test executable receives the same error
   policy automatically; forced failures test that automatic linkage.
   CRT assertions are also routed to stderr and tested in Debug and Release.
+  The comprehensive `desktop_workflow` test has a six-minute CTest guard
+  because its single hidden process covers the full workspace, output,
+  recovery, and architectural-form matrix; focused tests retain the
+  60-second guard.
   The temporary probe that raised repeated CRT dialogs
   had invalid fixture metadata and an uncaught exception; its corrected run
   exits successfully, and forced exception/abort tests exit without dialogs.

@@ -310,6 +310,26 @@ void test_project_subject_metadata() {
             "reopened subject metadata must repopulate the editor");
 }
 
+void test_second_open_is_read_only() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "ownership fixture needs a temporary directory");
+    const auto path = directory.filePath(QStringLiteral("owned-project.bldproj"));
+    sketch::desktop::MainWindow owner;
+    require(!owner.createStraightWall({0.0, 0.0}, {4.0, 0.0}, QStringLiteral("exterior")).isEmpty(),
+            "ownership fixture needs source geometry");
+    require(owner.saveProjectAs(path), "ownership fixture should save its source project");
+
+    sketch::desktop::MainWindow second;
+    require(second.openProject(path), "a cooperating second session should open the project");
+    require(!second.document().is_editable() &&
+                second.document().read_only_reason() ==
+                    "Another application instance owns this project; it was opened read-only.",
+            "a cooperating second session must be explicit read-only");
+    require(second.createStraightWall({0.0, 1.0}, {4.0, 1.0}, QStringLiteral("interior")).isEmpty() &&
+                second.lastError().contains(QStringLiteral("read-only")),
+            "read-only ownership conflicts must reject edits before mutation");
+}
+
 void test_workspace_profiles() {
     const auto original_name = QCoreApplication::applicationName();
     const auto original_test_mode = QStandardPaths::isTestModeEnabled();
@@ -2999,6 +3019,7 @@ int main(int argc, char** argv) {
     }
     test_shortcuts_and_measurement_keypad(field_ui_capture_directory);
     test_project_subject_metadata();
+    test_second_open_is_read_only();
     test_workspace_profiles();
     test_room_boundary_from_existing_geometry();
     test_selection_clipboard_workflow();

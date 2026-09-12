@@ -65,8 +65,13 @@ The recovery work is staged as three dependency packages:
    unexpected owner-exit cases. The subsequent review found a shutdown-drain
    race and lost abandonment observations on registry allocation failure.
    Both are repaired with focused regressions; the shutdown regression failed
-   before the fix and passes afterward. Path/FILE_ID resolution and publication
-   integration remain required.
+   before the fix and passes afterward. `ProjectOwnershipSession` now binds
+   that broker to normalized project paths and Windows volume/file identities,
+   with explicit external-digest revalidation and read-only second-open
+   behavior in the desktop. The cross-process project-ownership fixture also
+   verifies native mutex contention, case-insensitive Windows paths, and clean
+   retry after the owner exits. Restart recovery, hostile replacement races,
+   and production qualification remain required.
 3. **B, in integration:** guarded desktop save/open and Save As paths now use
    the v4 archive and acknowledgement boundaries. Full workspace-command
    mutation routing, autosave, restart recovery, shutdown and recovery UI

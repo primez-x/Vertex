@@ -1071,9 +1071,21 @@ void Document::mark_saved(Revision revision) {
     saved_revision_ = revision;
 }
 
+void Document::mark_read_only(std::string reason) {
+    if (reason.empty()) reason = "Document is read-only.";
+    session_read_only_reason_ = reason;
+    editable_ = false;
+    read_only_reason_ = std::move(reason);
+}
+
 void Document::update_editability() {
     editable_ = true;
     read_only_reason_.clear();
+    if (session_read_only_reason_) {
+        editable_ = false;
+        read_only_reason_ = *session_read_only_reason_;
+        return;
+    }
     if (unsupported_constraint_history_reason_) {
         editable_ = false;
         read_only_reason_ = *unsupported_constraint_history_reason_;
@@ -1251,6 +1263,9 @@ Document Document::restore(DocumentSnapshot snapshot) {
     document.history_ = std::move(snapshot.history_);
     document.named_revisions_ = std::move(snapshot.named_revisions_);
     document.unsupported_constraint_history_reason_ = std::move(unsupported_constraint_history);
+    if (!snapshot.editable_ && !snapshot.read_only_reason_.empty()) {
+        document.session_read_only_reason_ = snapshot.read_only_reason_;
+    }
     document.boundary_identity_history_ = std::move(identity_history);
     document.update_editability();
     return document;

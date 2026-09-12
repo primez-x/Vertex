@@ -186,9 +186,18 @@
       "package": 3,
       "blocker": null,
       "implementation_sources": [
-        "src/core/project_store.cpp"
+        "include/sketch/project_ownership.hpp",
+        "src/core/project_ownership.cpp",
+        "src/core/project_store.cpp",
+        "include/sketch/document.hpp",
+        "src/core/document.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/project_ownership_tests.cpp",
+        "tests/project_ownership_process_tests.cpp",
+        "tests/document_tests.cpp",
+        "tests/desktop_smoke.cpp"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "A broker-backed ProjectOwnershipSession reserves normalized paths and existing file identities, detects external content changes, and is integrated into desktop open/save/Save As. Unit, cross-process, and desktop workflow fixtures cover contention, Windows path casing, external edits, read-only second opens, and a durable Document latch through navigation and validated forks. Clean-machine lifetime, restart recovery, hostile writer races, and full production acceptance remain open."
     },
     {
       "id": "CORE-SCOPE-001",

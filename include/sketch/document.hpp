@@ -227,6 +227,11 @@ public:
     Revision undo(Revision expected_revision);
     Revision redo(Revision expected_revision);
     void mark_saved(Revision revision);
+    // Latches a session-level read-only reason without changing document
+    // history.  Used when an external ownership or integrity condition makes
+    // further in-place edits unsafe; Save As can still be offered by a host
+    // that creates an explicit independent copy.
+    void mark_read_only(std::string reason);
 
 private:
     friend class ProjectStore;
@@ -245,6 +250,7 @@ private:
     std::vector<RevisionRecord> history_;
     std::map<std::string, Revision, std::less<>> named_revisions_;
     std::optional<std::string> unsupported_constraint_history_reason_;
+    std::optional<std::string> session_read_only_reason_;
     BoundaryIdentityHistory boundary_identity_history_;
 };
 

@@ -579,6 +579,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/project_ownership.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/project_store.hpp"
     },
     {
@@ -1044,6 +1048,10 @@
     {
       "category": "source",
       "path": "src/core/project_organization.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/project_ownership.cpp"
     },
     {
       "category": "source",
@@ -1532,6 +1540,14 @@
     {
       "category": "source",
       "path": "tests/project_organization_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/project_ownership_process_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/project_ownership_tests.cpp"
     },
     {
       "category": "source",
