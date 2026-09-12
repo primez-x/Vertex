@@ -3,6 +3,7 @@
 #include "sketch/document.hpp"
 #include "sketch/schedule_model.hpp"
 
+#include <set>
 #include <string>
 #include <vector>
 
@@ -20,6 +21,13 @@ struct DocumentScheduleProjection {
 
 [[nodiscard]] DocumentScheduleProjection build_document_schedules(
     const DocumentSnapshot& document);
+
+// Projects only visible source entities, including their derived material rows.
+// Hidden entities contribute neither rows nor diagnostics; the source revision
+// remains unchanged. The caller supplies organization and design-phase visibility.
+[[nodiscard]] DocumentScheduleProjection build_document_schedules(
+    const DocumentSnapshot& document,
+    const std::set<std::string, std::less<>>& visible_entity_ids);
 
 // Converts a validated schedule edit into the ordinary revision-checked
 // Document command.  The command updates the source entity rather than a

@@ -24,7 +24,12 @@ validated closed boundary, and material rows can be supplied through the
 source document revision and reports malformed or incomplete rows as sorted
 diagnostics; invalid rows never become partial schedule output. The desktop
 `MainWindow::scheduleSnapshot()` API exposes this same projection without a
-second document model.
+second document model. Its organization and active design-phase visibility is
+applied to source entities before projection, so visible material quantities
+remain present and hidden sources contribute neither rows nor diagnostics.
+The unfiltered adapter overload continues to project the whole document.
+Rooms with a stored area expose that measurement as read-only source provenance
+for their calculated gross area.
 
 `make_schedule_edit` returns a deterministic command description containing the
 source target, expected document revision, prior value and replacement. It

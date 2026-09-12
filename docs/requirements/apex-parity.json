@@ -1724,7 +1724,7 @@
         "tests/model_phases_tests.cpp",
         "docs/phases-alternatives.md"
       ],
-      "implementation_note": "Immutable existing/demolished/proposed phase state and validation are implemented; view, calculation, schedule, sheet, Document command, and persistence integration remain open."
+      "implementation_note": "Immutable existing/demolished/proposed phase state and validation are implemented. Canvas visibility and the revision-bound schedule projection now honor the active phase on canonical source entities, including derived material rows; calculation-inspector, sheet, and broader persistence qualification remain open."
     },
     {
       "id": "ARCH-MOD-011",
@@ -1836,7 +1836,7 @@
         "tests/schedule_model_tests.cpp",
         "docs/schedules.md"
       ],
-      "implementation_note": "Standalone typed records and a revision-bound Document-derived adapter now generate door/window, room, and material rows with stable marks, source-backed calculated cells and explicit diagnostics; schedule persistence and complete sheet/output integration remain open."
+      "implementation_note": "Standalone typed records and a revision-bound Document-derived adapter now generate door/window, room, and material rows with stable marks, source-backed calculated cells and explicit diagnostics. Active organization/design-phase masks filter source entities before projection, preserving derived material rows and suppressing hidden-source diagnostics; schedule persistence and complete sheet/output integration remain open."
     },
     {
       "id": "ARCH-SCH-002",

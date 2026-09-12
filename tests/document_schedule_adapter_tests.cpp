@@ -102,6 +102,46 @@ void test_edit_is_a_document_command_with_revision_and_undo_semantics() {
     require(!area.editable, "opening area must remain a calculated cell");
 }
 
+void test_visibility_uses_source_entities_for_material_rows() {
+    using namespace sketch;
+    auto document = Document::create({
+        entity("existing", "room", {{"mark", "R1"}, {"area_m2", 12.0},
+            {"material_name", "Timber"}, {"volume_m3", 2.0}}),
+        entity("proposed", "opening", {{"mark", "D2"}, {"opening_kind", "door"},
+            {"width_m", 1.2}, {"height_m", 2.1},
+            {"material_name", "Concrete"}, {"volume_m3", 3.0}}),
+        entity("hidden-invalid", "opening", {{"opening_kind", "door"}}),
+    });
+    const auto source = document.snapshot();
+    const auto baseline = build_document_schedules(source, {"existing"});
+    require(baseline.snapshot.revision == source.revision() && baseline.diagnostics.empty(),
+            "filtered schedules must retain the source revision and omit hidden diagnostics");
+    require(baseline.snapshot.rows.size() == 2 &&
+                baseline.snapshot.rows[0].object_id == "existing" &&
+                baseline.snapshot.rows[1].object_id == "existing:material",
+            "a visible entity must retain both its room and derived material rows");
+    const auto& room = baseline.snapshot.rows.front();
+    require(std::get<ScheduleQuantity>(room.cells.at("gross_area").value).value == 12.0 &&
+                room.cells.at("gross_area").sources.front().property == "area_m2" &&
+                !room.cells.at("area_m2").editable,
+            "stored room areas must resolve gross-area provenance without exposing unsupported edits");
+    const auto alternative = build_document_schedules(source, {"proposed"});
+    require(alternative.snapshot.rows.size() == 2 &&
+                alternative.snapshot.rows[0].object_id == "proposed" &&
+                alternative.snapshot.rows[1].object_id == "proposed:material",
+            "an alternative visibility mask must exclude demolished sources and include proposed materials");
+    const auto edit = make_schedule_edit(alternative.snapshot, "proposed:material", "volume",
+                                         ScheduleQuantity{4.0, ScheduleUnit::cubic_metre});
+    document.apply(make_document_schedule_edit(source, edit));
+    require(document.snapshot().entities().at("proposed").properties.at("volume_m3") == 4.0,
+            "a visible material row must remain editable through its canonical source entity");
+    const auto complete = build_document_schedules(source);
+    require(complete.snapshot.rows.size() == 4 && !complete.diagnostics.empty(),
+            "the unfiltered overload must preserve whole-document projection semantics");
+    require(build_document_schedules(source, {}).snapshot.rows.empty(),
+            "an empty visibility mask must produce no schedule rows");
+}
+
 }  // namespace
 
 int main() {
@@ -109,6 +149,7 @@ int main() {
         test_revision_and_opening_schedule();
         test_room_area_and_invalid_rows_are_explicit();
         test_edit_is_a_document_command_with_revision_and_undo_semantics();
+        test_visibility_uses_source_entities_for_material_rows();
         std::cout << "document_schedule_adapter_tests passed\n";
         return 0;
     } catch (const std::exception& error) {

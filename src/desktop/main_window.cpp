@@ -1652,13 +1652,12 @@ public:
     [[nodiscard]] const Document& document() const noexcept { return *m_document; }
     [[nodiscard]] DocumentScheduleProjection scheduleSnapshot() const {
         const auto source = m_document->snapshot();
-        auto projection = build_document_schedules(source);
+        DocumentScheduleProjection projection;
         try {
             const auto visible = visible_project_entities_with_phase(source, m_view_filter);
-            std::erase_if(projection.snapshot.rows, [&](const auto& row) {
-                return !visible.contains(row.object_id);
-            });
+            projection = build_document_schedules(source, visible);
         } catch (const std::exception& error) {
+            projection = build_document_schedules(source);
             projection.diagnostics.push_back(std::string("Design phase: ") + error.what());
         }
         return projection;

@@ -951,8 +951,12 @@ void test_design_phase_workflow() {
         {{"remove-wall", "Remove wall", {wall_id.toStdString()}, {}}});
     auto phase_entity = Entity::create("model_phases", {{"model", phases.to_json()}});
     phase_entity.id = "phases-desktop";
+    auto material_wall = window.document().snapshot().entities().at(wall_id.toStdString());
+    material_wall.properties["material_name"] = "Timber";
+    material_wall.properties["volume_m3"] = 2.0;
     window.document().apply(ApplyEntityChanges{
-        window.document().revision(), {EntityChange::upsert(phase_entity)}, {},
+        window.document().revision(),
+        {EntityChange::upsert(phase_entity), EntityChange::upsert(material_wall)}, {},
         "add design phase fixture"});
     require(window.selectEntity(wall_id), "phase fixture should refresh after adding its record");
     require(phase_combo->count() == 2 &&
@@ -960,6 +964,12 @@ void test_design_phase_workflow() {
                 phase_combo->itemData(1).toString() == QStringLiteral("remove-wall"),
             "the navigator should list baseline and imported alternatives");
     require(window.entityVisible(wall_id), "baseline geometry should be visible before selection");
+    const auto has_wall_material = [&] {
+        const auto projection = window.scheduleSnapshot();
+        return std::any_of(projection.snapshot.rows.begin(), projection.snapshot.rows.end(),
+            [&](const auto& row) { return row.object_id == wall_id.toStdString() + ":material"; });
+    };
+    require(has_wall_material(), "baseline schedule must include the visible wall material");
 
     const auto baseline_revision = window.document().revision();
     require(window.selectRemodelingAlternative(QStringLiteral("remove-wall")),
@@ -967,6 +977,7 @@ void test_design_phase_workflow() {
     require(window.activeRemodelingAlternative() == QStringLiteral("remove-wall") &&
                 !window.entityVisible(wall_id),
             "a demolished baseline object should be hidden in its active alternative");
+    require(!has_wall_material(), "demolished wall material must be absent from the active schedule");
     auto* plan = dynamic_cast<desktop::PlanCanvas*>(
         window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
     bool wall_visible = false;
@@ -980,6 +991,7 @@ void test_design_phase_workflow() {
     require(window.undoCommand() && window.document().revision() > baseline_revision &&
                 window.activeRemodelingAlternative().isEmpty() && window.entityVisible(wall_id),
             "phase selection should be undoable and restore the baseline view");
+    require(has_wall_material(), "undoing phase selection must restore baseline material quantities");
     require(window.redoCommand() &&
                 window.activeRemodelingAlternative() == QStringLiteral("remove-wall"),
             "phase selection should be redoable");

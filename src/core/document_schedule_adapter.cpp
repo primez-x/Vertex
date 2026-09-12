@@ -144,6 +144,7 @@ void add_room(const Entity& entity, std::vector<ScheduleRecord>& records,
     record.object_id = entity.id;
     record.kind = ScheduleRowKind::room;
     record.mark = mark_for(entity, "R-", diagnostics);
+    if (area) record.properties.emplace("area_m2", ScheduleQuantity{*area, ScheduleUnit::square_metre});
     if (const auto name = text_field(entity, "name")) record.properties.emplace("name", *name);
     if (const auto boundary_id = text_field(entity, "boundary_id"))
         record.properties.emplace("boundary_id", *boundary_id);
@@ -173,14 +174,14 @@ void add_material(const Entity& entity, std::vector<ScheduleRecord>& records,
     records.push_back(std::move(record));
 }
 
-}  // namespace
-
-DocumentScheduleProjection build_document_schedules(const DocumentSnapshot& document) {
+DocumentScheduleProjection project_schedules(
+    const DocumentSnapshot& document,
+    const std::set<std::string, std::less<>>* visible_entity_ids) {
     DocumentScheduleProjection result;
     result.snapshot.revision = document.revision();
     std::vector<ScheduleRecord> records;
     for (const auto& [id, entity] : document.entities()) {
-        (void)id;
+        if (visible_entity_ids && !visible_entity_ids->contains(id)) continue;
         if (entity.type == "opening") add_opening(entity, records, result.diagnostics);
         else if (entity.type == "room" || entity.type == "room_boundary")
             add_room(entity, records, result.diagnostics);
@@ -188,6 +189,15 @@ DocumentScheduleProjection build_document_schedules(const DocumentSnapshot& docu
     }
     try {
         result.snapshot = build_schedule(records, document.revision());
+        // Stored room measurements are primitive provenance for gross_area,
+        // but the schedule editor only authorizes room names and marks.
+        for (auto& row : result.snapshot.rows) {
+            if (row.kind != ScheduleRowKind::room) continue;
+            const auto source_area = row.cells.find("area_m2");
+            if (source_area == row.cells.end()) continue;
+            source_area->second.editable = false;
+            source_area->second.explanation = "Stored room area from the document";
+        }
     } catch (const std::exception& error) {
         result.diagnostics.push_back(std::string("schedule projection rejected: ") + error.what());
         result.snapshot = ScheduleSnapshot{document.revision(), {}};
@@ -196,6 +206,18 @@ DocumentScheduleProjection build_document_schedules(const DocumentSnapshot& docu
     result.diagnostics.erase(std::unique(result.diagnostics.begin(), result.diagnostics.end()),
                              result.diagnostics.end());
     return result;
+}
+
+}  // namespace
+
+DocumentScheduleProjection build_document_schedules(const DocumentSnapshot& document) {
+    return project_schedules(document, nullptr);
+}
+
+DocumentScheduleProjection build_document_schedules(
+    const DocumentSnapshot& document,
+    const std::set<std::string, std::less<>>& visible_entity_ids) {
+    return project_schedules(document, &visible_entity_ids);
 }
 
 ApplyEntityChanges make_document_schedule_edit(const DocumentSnapshot& document,
