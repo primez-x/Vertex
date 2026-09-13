@@ -347,8 +347,11 @@ semantic annotation/style records with a 468-entry parametric symbol catalog:
 52 stable families across plumbing, furniture, storage, fixtures, appliances,
 accessibility, lighting, doors/windows, structural/site, and light-commercial
 equipment, each with nine physical width/depth variants and validated scale
-limits. Representative symbol resize/placement now has a desktop regression
-fixture, and resized symbols are covered by vector DXF output. Polished artwork,
+limits. Family-specific appliance, storage, plumbing, furniture, and commercial
+motifs now remain distinguishable instead of relying on count-only generic
+geometry. Representative symbol resize/placement now has a desktop regression
+fixture and a multi-family scale/rotation geometry matrix, and resized symbols
+are covered by vector DXF output. Polished artwork,
 physical-footprint bounds, family-specific motifs, and case-insensitive
 catalog search/filtering are now covered. Authoring also accepts a
 case-insensitive family alias and stores the resolved `-w2-d2` nominal variant
@@ -356,7 +359,10 @@ explicitly. The offline `property-cli symbols` command emits a deterministic
 catalog manifest with category/family counts, physical dimensions, scale
 limits, anchors, and vector previews for review without opening the UI. Final
 print/export visual qualification and artwork review remain production-gate
-work.
+work. The release artifact can also be checked offline with
+`scripts/validate_symbol_catalog.py`, which rejects filtered manifests, missing
+required categories or representative families, duplicate/unsorted entries,
+invalid dimensions, and preview strokes outside their declared footprints.
 Stored label and symbol stroke/fill colors, fill patterns, paper text height,
 bold/italic emphasis, and symbol stroke width now flow through the shared
 interactive and fitted/output canvas renderer. Coordinated view/sheet records with

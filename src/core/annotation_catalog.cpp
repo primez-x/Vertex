@@ -166,7 +166,78 @@ std::vector<SymbolDefinition> default_symbol_catalog() {
         if (f.shape == 17) { line(-0.8,-0.7,0.8,-0.7); line(-0.8,-0.35,0.8,-0.35); line(-0.8,0,0.8,0); line(-0.8,0.35,0.8,0.35); line(-0.8,0.7,0.8,0.7); }
         if (f.shape == 18) { line(-0.8,-0.55,-0.8,0.55); line(-0.8,0.55,0.8,0.55); line(0.8,0.55,0.8,-0.55); line(-0.8,0,0.8,0); }
         const std::string_view family_id = f.id;
-        if (family_id == "toilet") {
+        if (family_id == "range") {
+            // Four burner rings and a front control rail make the appliance
+            // recognizable at plan scale while staying inside the footprint.
+            circle(-0.42, 0.34, 0.16);
+            circle(0.42, 0.34, 0.16);
+            circle(-0.42, -0.34, 0.16);
+            circle(0.42, -0.34, 0.16);
+            line(-0.82, -0.78, 0.82, -0.78);
+            line(-0.55, -0.82, -0.55, -0.68);
+            line(0.0, -0.82, 0.0, -0.68);
+            line(0.55, -0.82, 0.55, -0.68);
+        } else if (family_id == "refrigerator") {
+            line(-0.92, 0.08, 0.92, 0.08);
+            line(-0.78, 0.58, 0.78, 0.58);
+            line(0.62, 0.22, 0.62, 0.48);
+            line(0.62, -0.42, 0.62, -0.16);
+            line(-0.78, -0.58, 0.78, -0.58);
+        } else if (family_id == "dishwasher") {
+            line(-0.82, 0.62, 0.82, 0.62);
+            line(-0.68, 0.62, -0.68, 0.42);
+            line(-0.34, 0.62, -0.34, 0.42);
+            line(0.0, 0.62, 0.0, 0.42);
+            line(0.34, 0.62, 0.34, 0.42);
+            line(0.68, 0.62, 0.68, 0.42);
+            line(-0.72, -0.58, 0.72, -0.58);
+            line(-0.72, -0.38, 0.72, -0.38);
+        } else if (family_id == "washer") {
+            circle(0.0, -0.05, 0.54);
+            circle(0.0, -0.05, 0.12);
+            line(-0.82, 0.62, 0.82, 0.62);
+            circle(-0.58, 0.78, 0.07);
+            circle(0.0, 0.78, 0.07);
+            circle(0.58, 0.78, 0.07);
+        } else if (family_id == "dryer") {
+            circle(0.0, -0.05, 0.54);
+            line(-0.38, -0.05, 0.38, -0.05);
+            line(0.0, -0.43, 0.0, 0.33);
+            line(-0.82, 0.62, 0.82, 0.62);
+            line(-0.62, 0.78, -0.48, 0.78);
+            line(-0.18, 0.78, 0.18, 0.78);
+            line(0.48, 0.78, 0.62, 0.78);
+        } else if (family_id == "water-heater") {
+            circle(0.0, 0.0, 0.68);
+            line(-0.55, 0.0, 0.55, 0.0);
+            line(-0.3, 0.0, -0.3, 0.5);
+            line(0.3, 0.0, 0.3, -0.5);
+            line(-0.25, 0.88, -0.25, 0.68);
+            line(0.25, 0.88, 0.25, 0.68);
+        } else if (family_id == "wardrobe") {
+            line(0.0, -0.9, 0.0, 0.9);
+            line(-0.5, -0.72, -0.5, 0.72);
+            line(0.5, -0.72, 0.5, 0.72);
+            circle(-0.12, 0.0, 0.06);
+            circle(0.12, 0.0, 0.06);
+        } else if (family_id == "bookcase") {
+            line(-0.9, -0.55, 0.9, -0.55);
+            line(-0.9, -0.05, 0.9, -0.05);
+            line(-0.9, 0.45, 0.9, 0.45);
+            line(-0.72, 0.72, -0.72, -0.72);
+            line(0.72, 0.72, 0.72, -0.72);
+        } else if (family_id == "cabinet") {
+            line(0.0, -0.78, 0.0, 0.78);
+            line(-0.52, 0.0, -0.36, 0.0);
+            line(0.36, 0.0, 0.52, 0.0);
+            line(-0.72, 0.68, 0.72, 0.68);
+            line(-0.72, -0.68, 0.72, -0.68);
+        } else if (family_id == "shelving") {
+            for (const double y_value : {-0.68, -0.34, 0.0, 0.34, 0.68})
+                line(-0.88, y_value, 0.88, y_value);
+            line(-0.78, -0.82, -0.78, 0.82);
+            line(0.78, -0.82, 0.78, 0.82);
+        } else if (family_id == "toilet") {
             rect(-0.38, -0.92, 0.38, -0.5); // tank
             polyline({{-0.38, -0.5}, {-0.28, -0.2}, {-0.2, 0.28},
                       {0.2, 0.28}, {0.28, -0.2}, {0.38, -0.5}});
@@ -184,6 +255,7 @@ std::vector<SymbolDefinition> default_symbol_catalog() {
             line(-0.88, 0.54, -0.88, 0.86);
             line(0.88, 0.54, 0.88, 0.86);
             line(-0.88, -0.1, 0.88, -0.1);
+            if (family_id == "double-bed") line(0.0, -0.1, 0.0, 0.86);
         } else if (family_id == "sofa") {
             line(-0.72, 0.18, 0.72, 0.18);
             line(-0.72, -0.18, 0.72, -0.18);
@@ -200,12 +272,26 @@ std::vector<SymbolDefinition> default_symbol_catalog() {
                 line(-0.9, -0.2, -0.9, 0.55);
                 line(0.9, -0.2, 0.9, 0.55);
             }
+        } else if (family_id == "bench") {
+            line(-0.82, -0.34, 0.82, -0.34);
+            line(-0.82, 0.0, 0.82, 0.0);
+            line(-0.82, 0.34, 0.82, 0.34);
+            line(-0.72, -0.78, -0.72, 0.78);
+            line(0.72, -0.78, 0.72, 0.78);
         } else if (family_id == "desk" || family_id == "dining-table" ||
                    family_id == "coffee-table" || family_id == "side-table") {
             line(-0.78, 0.42, 0.78, 0.42);
             line(-0.78, -0.42, 0.78, -0.42);
             line(-0.6, -0.42, -0.6, -0.9);
             line(0.6, -0.42, 0.6, -0.9);
+            if (family_id == "dining-table") {
+                line(-0.45, 0.0, 0.45, 0.0);
+                line(-0.45, -0.25, 0.45, -0.25);
+            } else if (family_id == "coffee-table") {
+                circle(0.0, 0.0, 0.2);
+            } else if (family_id == "side-table") {
+                line(0.0, -0.42, 0.0, 0.42);
+            }
         } else if (family_id == "sink" || family_id == "double-sink") {
             const double centre = family_id == "double-sink" ? 0.45 : 0.0;
             circle(-centre, 0.0, 0.28);
@@ -222,11 +308,31 @@ std::vector<SymbolDefinition> default_symbol_catalog() {
             line(0.2, 0.78, 0.2, 0.2);
             line(-0.2, -0.2, 0.2, 0.2);
             line(-0.2, 0.2, 0.2, -0.2);
-        } else if (family_id == "floor-drain" || family_id == "cleanout" ||
-                   family_id == "hose-bib" || family_id == "water-meter") {
+        } else if (family_id == "floor-drain") {
             circle(0.0, 0.0, 0.55);
             line(-0.55, 0.0, 0.55, 0.0);
             line(0.0, -0.55, 0.0, 0.55);
+            line(-0.38, -0.38, 0.38, 0.38);
+            line(-0.38, 0.38, 0.38, -0.38);
+        } else if (family_id == "cleanout") {
+            circle(0.0, 0.0, 0.58);
+            circle(0.0, 0.0, 0.25);
+            line(-0.25, 0.0, 0.25, 0.0);
+        } else if (family_id == "hose-bib") {
+            circle(0.0, 0.0, 0.5);
+            line(-0.72, 0.0, -0.28, 0.0);
+            line(0.28, 0.0, 0.72, 0.0);
+            line(0.0, -0.5, 0.0, 0.5);
+            line(-0.25, 0.28, 0.25, 0.28);
+        } else if (family_id == "water-meter") {
+            rect(-0.68, -0.45, 0.68, 0.45);
+            circle(0.0, 0.0, 0.28);
+            line(-0.1, -0.1, 0.18, 0.16);
+        } else if (family_id == "urinal" || family_id == "bidet") {
+            rect(-0.62, -0.68, 0.62, 0.62);
+            circle(0.0, 0.0, family_id == "urinal" ? 0.34 : 0.26);
+            line(-0.25, 0.68, 0.25, 0.68);
+            line(0.0, 0.68, 0.0, 0.45);
         } else if (family_id == "grab-bar") {
             line(-0.75, -0.45, -0.75, 0.45);
             line(-0.75, 0.45, 0.75, 0.45);
@@ -272,6 +378,30 @@ std::vector<SymbolDefinition> default_symbol_catalog() {
                 line(-0.75, y_value, 0.75, y_value);
             }
             line(-0.75, -0.75, 0.75, 0.75);
+        } else if (family_id == "checkout-counter") {
+            line(-0.72, -0.2, 0.72, -0.2);
+            line(-0.72, 0.2, 0.72, 0.2);
+            line(-0.5, 0.2, -0.5, 0.72);
+            line(0.5, 0.2, 0.5, 0.72);
+            rect(-0.18, 0.28, 0.18, 0.58);
+            line(-0.82, -0.72, 0.82, -0.72);
+        } else if (family_id == "service-counter") {
+            line(-0.82, -0.45, 0.82, -0.45);
+            line(-0.82, 0.45, 0.82, 0.45);
+            line(-0.62, 0.45, -0.62, 0.82);
+            line(0.0, 0.45, 0.0, 0.82);
+            line(0.62, 0.45, 0.62, 0.82);
+        } else if (family_id == "display-case") {
+            line(-0.82, -0.55, 0.82, -0.55);
+            line(-0.82, 0.55, 0.82, 0.55);
+            line(-0.55, -0.55, -0.55, 0.55);
+            line(0.55, -0.55, 0.55, 0.55);
+            line(-0.72, 0.0, 0.72, 0.0);
+        } else if (family_id == "pallet-rack") {
+            for (const double y_value : {-0.62, 0.0, 0.62})
+                line(-0.82, y_value, 0.82, y_value);
+            line(-0.72, -0.82, -0.72, 0.82);
+            line(0.72, -0.82, 0.72, 0.82);
         }
         result.push_back(std::move(s));
     }

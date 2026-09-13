@@ -1,5 +1,6 @@
 #include "sketch/annotation_catalog.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -7,6 +8,7 @@
 #include <numbers>
 #include <set>
 #include <stdexcept>
+#include <vector>
 
 namespace {
 void require(bool value, const char* message) {
@@ -53,6 +55,37 @@ int main() {
     require(has_family("toilet") && has_family("single-bed") && has_family("sofa") &&
                 has_family("floor-drain"),
             "Core residential and plumbing families must have usable vector motifs");
+    const auto nominal = [&](const char* family) -> const SymbolDefinition& {
+        const auto found = std::find_if(catalog.begin(), catalog.end(), [&](const auto& definition) {
+            return definition.family == family && definition.id.ends_with("-w2-d2");
+        });
+        require(found != catalog.end(), "Every representative family needs a nominal variant");
+        return *found;
+    };
+    const auto normalized_preview = [](const SymbolDefinition& definition) {
+        std::vector<std::array<long long, 4>> result;
+        result.reserve(definition.preview.size());
+        const auto normalize = [](double value, double half_extent) {
+            return static_cast<long long>(std::llround(value / half_extent * 1000.0));
+        };
+        for (const auto& stroke : definition.preview) {
+            result.push_back({normalize(stroke.start.x - definition.anchor.x,
+                                        definition.width_metres / 2.0),
+                             normalize(stroke.start.y - definition.anchor.y,
+                                       definition.depth_metres / 2.0),
+                             normalize(stroke.end.x - definition.anchor.x,
+                                       definition.width_metres / 2.0),
+                             normalize(stroke.end.y - definition.anchor.y,
+                                       definition.depth_metres / 2.0)});
+        }
+        return result;
+    };
+    require(normalized_preview(nominal("range")) != normalized_preview(nominal("dishwasher")) &&
+                normalized_preview(nominal("washer")) != normalized_preview(nominal("dryer")) &&
+                normalized_preview(nominal("wardrobe")) != normalized_preview(nominal("bookcase")) &&
+                normalized_preview(nominal("checkout-counter")) !=
+                    normalized_preview(nominal("service-counter")),
+            "Named symbol families must retain distinguishable vector motifs");
     const auto repeated = default_symbol_catalog();
     for (std::size_t i=0;i<catalog.size();++i) {
         require(catalog[i].id == repeated[i].id && catalog[i].width_metres == repeated[i].width_metres,
@@ -96,6 +129,36 @@ int main() {
     const auto local = catalog.front().preview.front().start;
     require(std::abs(transformed.front().start.x-(10-2*local.y)) < 1e-12 &&
             std::abs(transformed.front().start.y-(20+2*local.x)) < 1e-12,"Placement rotation/scale/translation wrong");
+    const std::array representatives{"toilet", "double-bed", "sofa", "checkout-counter"};
+    const std::array resize_scales{0.5, 1.0, 2.4};
+    const std::array rotations{0.0, std::numbers::pi / 4.0, std::numbers::pi / 2.0};
+    for (std::size_t family_index = 0; family_index < representatives.size(); ++family_index) {
+        const auto& definition = nominal(representatives[family_index]);
+        for (const auto scale : resize_scales) {
+            for (const auto rotation : rotations) {
+                const AnnotationPlacement placement{{10.0 + static_cast<double>(family_index),
+                                                     20.0 + scale}, rotation, scale};
+                const auto placed = placed_symbol_preview(definition, placement);
+                require(!placed.empty(),
+                        "Representative symbols must render at every supported fixture scale and rotation");
+                const auto first = definition.preview.front().start;
+                const auto cosine = std::cos(rotation);
+                const auto sine = std::sin(rotation);
+                const auto local_x = (first.x - definition.anchor.x) * scale;
+                const auto local_y = (first.y - definition.anchor.y) * scale;
+                const Vec2 expected{placement.position.x + cosine * local_x - sine * local_y,
+                                    placement.position.y + sine * local_x + cosine * local_y};
+                require(std::abs(placed.front().start.x - expected.x) < 1e-12 &&
+                            std::abs(placed.front().start.y - expected.y) < 1e-12,
+                        "Representative symbol resize/rotation must preserve exact placement mathematics");
+                for (const auto& stroke : placed) {
+                    require(std::isfinite(stroke.start.x) && std::isfinite(stroke.start.y) &&
+                                std::isfinite(stroke.end.x) && std::isfinite(stroke.end.y),
+                            "Representative symbol transforms must remain finite");
+                }
+            }
+        }
+    }
     auto bad = state;
     bad.symbols[0].symbol_id = "missing";
     rejected([&]{validate_annotation_state(bad,catalog);});

@@ -58,6 +58,12 @@ sketch::Document make_document() {
     annotations.labels.push_back(label);
     annotations.symbols.push_back(
         {"symbol-1", "toilet-w3-d3", {{2.0, 1.5}, 0.35, 1.4}, {}, true});
+    annotations.symbols.push_back(
+        {"symbol-2", "double-bed-w2-d2", {{7.0, 1.5}, -0.2, 0.75}, {}, true});
+    annotations.symbols.push_back(
+        {"symbol-3", "sofa-w2-d2", {{10.0, 1.5}, 0.6, 1.25}, {}, true});
+    annotations.symbols.push_back(
+        {"symbol-4", "checkout-counter-w2-d2", {{13.0, 1.5}, 1.1, 0.9}, {}, true});
     return Document::create({std::move(boundary), std::move(dimension), std::move(wall),
                              std::move(opening), std::move(slab),
                              make_annotation_entity("annotations-1", annotations)});
@@ -66,6 +72,8 @@ sketch::Document make_document() {
 void run() {
     using namespace sketch;
     auto document = make_document();
+    const auto annotations = decode_annotation_entity(
+        document.snapshot().entities().at("annotations-1"));
     const auto exported = export_project_dxf(document.snapshot());
     check(exported.drawing.insertion_units == 6, "project units must be SI metres");
     check(exported.drawing.polylines.size() >= 2, "boundary and slab geometry must export");
@@ -74,9 +82,39 @@ void run() {
                         [](const auto& line) { return line.layer == "Openings"; }) == 3,
           "hosted openings must export deterministic plan markers");
     check(exported.drawing.labels.size() == 1, "annotation label must export");
-    check(std::any_of(exported.drawing.lines.begin(), exported.drawing.lines.end(),
-                      [](const auto& line) { return line.layer == "Symbols"; }),
-          "resized annotation symbols must export as vector geometry");
+    const auto symbol_lines = [&] {
+        std::vector<sketch::DxfLine> result;
+        for (const auto& line : exported.drawing.lines)
+            if (line.layer == "Symbols") result.push_back(line);
+        return result;
+    }();
+    const auto expected_symbol_lines = [&] {
+        std::size_t count = 0;
+        const auto catalog = default_symbol_catalog();
+        for (const auto& instance : annotations.symbols) {
+            const auto found = std::find_if(catalog.begin(), catalog.end(), [&](const auto& definition) {
+                return definition.id == instance.symbol_id;
+            });
+            check(found != catalog.end(), "DXF symbol fixture must use a catalog definition");
+            count += placed_symbol_preview(*found, instance.placement).size();
+        }
+        return count;
+    }();
+    check(symbol_lines.size() == expected_symbol_lines,
+          "DXF output must retain every vector stroke for every symbol instance");
+    const auto catalog = default_symbol_catalog();
+    const auto first_symbol_definition = std::find_if(
+        catalog.begin(), catalog.end(),
+        [](const auto& definition) { return definition.id == "toilet-w3-d3"; });
+    check(first_symbol_definition != catalog.end(),
+          "DXF fixture must retain its toilet definition");
+    const auto expected_first_stroke = placed_symbol_preview(
+        *first_symbol_definition, annotations.symbols.front().placement).front();
+    check(std::abs(symbol_lines.front().start.x - expected_first_stroke.start.x) < 1e-12 &&
+              std::abs(symbol_lines.front().start.y - expected_first_stroke.start.y) < 1e-12 &&
+              std::abs(symbol_lines.front().end.x - expected_first_stroke.end.x) < 1e-12 &&
+              std::abs(symbol_lines.front().end.y - expected_first_stroke.end.y) < 1e-12,
+          "DXF symbol coordinates must preserve the shared resize and rotation transform");
     check(exported.drawing.dimensions.size() == 1, "identified dimension must export");
     check(std::any_of(exported.diagnostics.begin(), exported.diagnostics.end(), [](const auto& item) {
         return item.source_id == "wall-1" && item.code == "wall_3d_semantics_not_representable";

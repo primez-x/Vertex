@@ -1252,7 +1252,7 @@
       "source_urls": [],
       "evidence_status": "documented",
       "implementation_status": "in_progress",
-      "acceptance": "The catalog contains at least 200 deterministic symbol entries across every required category; each entry has dimensional metadata, a validated preview, anchor, rotation, visibility, and scale limits; representative residential and light-commercial symbols can be resized, placed, saved/reopened, printed, and exported without geometry or visual loss.",
+      "acceptance": "The catalog contains at least 200 deterministic symbol entries across every required category; each entry has dimensional metadata, a validated preview, an anchor, and scale limits; each placed instance supports arbitrary rotation and visibility; representative residential and light-commercial symbols can be resized, placed, saved/reopened, printed, and exported without geometry or visual loss.",
       "package": 6,
       "blocker": null,
       "implementation_sources": [
@@ -1264,9 +1264,12 @@
         "tests/annotation_catalog_tests.cpp",
         "tests/test_cli.py",
         "tests/annotation_entity_codec_tests.cpp",
+        "tests/dxf_project_exchange_tests.cpp",
+        "scripts/validate_symbol_catalog.py",
+        "tests/test_symbol_catalog_manifest.py",
         "docs/annotation-catalog.md"
       ],
-      "implementation_note": "Deterministic catalog generation currently produces 468 scaled symbol variants across plumbing, furniture, storage, fixtures, appliances, accessibility, lighting, doors/windows, structural/site, and light-commercial equipment with physical-footprint validation, family-specific vector motifs, placement metadata, and previews; typed Document persistence, shared vector preview rendering, catalog-backed authoring, case-insensitive category/query filtering, family aliases that resolve to explicit nominal variants, inspector placement/visibility edits, independent resize assertions, resized DXF output coverage, and an offline property-cli symbols manifest for family/category/dimension/preview inspection are integrated. A production-complete library still requires final artwork review and clean production save/print/export visual qualification."
+      "implementation_note": "Deterministic catalog generation currently produces 468 scaled symbol variants across plumbing, furniture, storage, fixtures, appliances, accessibility, lighting, doors/windows, structural/site, and light-commercial equipment with physical-footprint validation, distinguishable family-specific vector motifs, placement metadata, and previews; typed Document persistence, shared vector preview rendering, catalog-backed authoring, case-insensitive category/query filtering, family aliases that resolve to explicit nominal variants, inspector placement/visibility edits, a multi-family resize/rotation geometry matrix, resized DXF output coverage, and an offline property-cli symbols manifest for family/category/dimension/preview inspection are integrated. A production-complete library still requires final artwork review and clean production save/print/export visual qualification."
     },
     {
       "id": "APX-TRACE-001",

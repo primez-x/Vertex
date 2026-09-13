@@ -17,13 +17,22 @@ The current deterministic catalog contains **468 parametric footprint entries:
 family’s nominal dimensions). IDs encode family and dimension indices. The
 families cover plumbing, furniture, storage, fixtures, appliances, accessibility,
 lighting, doors/windows, structural/site, and light-commercial equipment. These
-entries are a working schematic foundation, not the final production artwork.
+entries are a working vector foundation, not the final production artwork.
+Named appliance, storage, plumbing, furniture, and commercial families retain
+distinct plan motifs (for example burners, drum/controls, shelves, fixtures,
+and counter layouts) so the catalog cannot satisfy its count with duplicate
+generic rectangles alone. The test matrix also checks representative toilets,
+beds, furniture, and commercial entries at multiple scales and rotations using
+the exact placement transform.
 The production release criterion expands this catalog across plumbing, furniture,
 fixtures, appliances, accessibility, lighting, doors/windows, structural/site,
 and light-commercial equipment, while retaining at least 200 validated entries.
-The production qualification validator enforces this requirement in both the
+The production qualification contract requires this coverage in both the
 residential and light-commercial runs through mandatory `symbol_library`,
-`symbol_resize`, and `symbol_output` observations.
+`symbol_resize`, and `symbol_output` observations. Those observations still
+require human review of artwork and visual fidelity; the validator checks the
+declared evidence bindings and does not turn hashes or status text into an
+automatic visual certification.
 Each entry must expose physical width/depth metadata, a centre anchor, scale
 limits, and nonempty local preview strokes contained within its declared
 footprint. Symbol family/category search is case-insensitive while category
@@ -45,6 +54,11 @@ previews, family summaries, and category counts. It accepts an optional query
 and category (`property-cli symbols toilet` or `property-cli symbols "" commercial`)
 so release reviewers and downstream tooling can inspect the shipped library
 without opening a project or contacting a service.
+The complete unfiltered manifest can be checked independently with
+`python scripts/validate_symbol_catalog.py <manifest.json>`; that validator
+enforces the 200-entry threshold, every required category, representative
+toilet/bed/sofa/commercial families, deterministic counts/order, and preview
+strokes contained within each declared physical footprint.
 
 Version-1 JSON roundtrips instance content, style, placement, visibility, and
 overrides. Decoding rejects malformed fields, unsupported versions, duplicate

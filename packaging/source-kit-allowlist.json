@@ -923,6 +923,10 @@
     },
     {
       "category": "source",
+      "path": "scripts/validate_symbol_catalog.py"
+    },
+    {
+      "category": "source",
       "path": "scripts/verify-offline-bundle.ps1"
     },
     {
@@ -1876,6 +1880,10 @@
     {
       "category": "source",
       "path": "tests/test_stage_project_package.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_symbol_catalog_manifest.py"
     },
     {
       "category": "source",

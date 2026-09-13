@@ -3998,6 +3998,31 @@ int main(int argc, char** argv) {
     require(rendered_symbol != annotation_canvas->entities().end() &&
                 !rendered_symbol->segments.empty(),
             "resized symbols must reach the shared canvas renderer");
+    const auto symbol_catalog = sketch::default_symbol_catalog();
+    for (const auto& instance : annotation_state.symbols) {
+        const auto definition = std::find_if(
+            symbol_catalog.begin(), symbol_catalog.end(), [&](const auto& value) {
+                return value.id == instance.symbol_id;
+            });
+        require(definition != symbol_catalog.end(),
+                "every desktop symbol fixture must resolve to a catalog definition");
+        const auto expected = placed_symbol_preview(*definition, instance.placement);
+        const auto rendered = std::find_if(
+            annotation_canvas->entities().begin(), annotation_canvas->entities().end(),
+            [&](const auto& value) {
+                return value.id == QString::fromStdString(instance.id) &&
+                       value.type == QStringLiteral("symbol");
+            });
+        require(rendered != annotation_canvas->entities().end() &&
+                    rendered->segments.size() == expected.size() &&
+                    !expected.empty(),
+                "every residential and commercial symbol must retain all vector strokes on canvas");
+        require(std::abs(rendered->segments.front().start.x - expected.front().start.x) < 1e-9 &&
+                    std::abs(rendered->segments.front().start.y - expected.front().start.y) < 1e-9 &&
+                    std::abs(rendered->segments.front().end.x - expected.front().end.x) < 1e-9 &&
+                    std::abs(rendered->segments.front().end.y - expected.front().end.y) < 1e-9,
+                "canvas symbol coordinates must preserve the catalog resize and rotation transform");
+    }
     QTemporaryDir symbol_output_directory;
     require(symbol_output_directory.isValid(), "symbol output fixture needs a temporary directory");
     const auto symbol_pdf = symbol_output_directory.filePath(QStringLiteral("symbols.pdf"));
