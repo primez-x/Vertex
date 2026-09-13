@@ -14785,7 +14785,7 @@ public:
                 if (!selected.isEmpty()) exportIfc(selected);
             }},
             {QStringLiteral("Print preview (draft)"), [this] { showPrintPreview(); }},
-            {QStringLiteral("About internal checkpoint"), [this] { showAbout(); }},
+            {QStringLiteral("About"), [this] { showAbout(); }},
         };
 
         const auto repopulate = [&] {
@@ -20254,11 +20254,8 @@ private:
     void showAbout() {
         QMessageBox::information(
             owner, QStringLiteral("About Property Studio"),
-            QStringLiteral("Property Studio — Internal checkpoint\n\n"
-                           "An offline Windows application for property measurement\n"
-                           "and architectural design.\n\n"
-                           "This development build is incomplete. Apex compatibility\n"
-                           "and production acceptance have not been certified."));
+            QStringLiteral("An offline Windows application for property measurement\n"
+                           "and architectural design."));
     }
 
     void setError(const QString& error) {
