@@ -42,6 +42,29 @@ void run() {
     check(imported.drawing.hatches.at(0).boundary.size() == 4 &&
               imported.drawing.hatches.at(0).solid,
           "solid hatch lost");
+    check(encoded.find("92\n3\n72\n0\n73\n1\n") != std::string::npos,
+          "exported HATCH boundary does not declare an external polyline path");
+    const std::string polygon_hatch =
+        "0\nHATCH\n10\n0\n20\n0\n30\n0\n2\nSOLID\n70\n1\n71\n0\n"
+        "91\n1\n92\n2\n72\n0\n73\n1\n93\n3\n10\n0\n20\n0\n"
+        "10\n3\n20\n0\n10\n0\n20\n2\n97\n0\n75\n0\n76\n1\n";
+    const auto polygon_import = parse_dxf_ascii(file(polygon_hatch));
+    check(polygon_import.diagnostics.empty() && polygon_import.drawing.hatches.size() == 1 &&
+              polygon_import.drawing.hatches[0].boundary[1].x == 3,
+          "standard polyline HATCH boundary rejected");
+    auto external_polygon_hatch = polygon_hatch;
+    external_polygon_hatch.replace(external_polygon_hatch.find("92\n2\n"), 5, "92\n3\n");
+    const auto external_polygon_import = parse_dxf_ascii(file(external_polygon_hatch));
+    check(external_polygon_import.diagnostics.empty() && external_polygon_import.drawing.hatches.size() == 1,
+          "standard external polyline HATCH boundary rejected");
+    check(export_dxf_ascii(polygon_import.drawing) == export_dxf_ascii(external_polygon_import.drawing),
+          "single-loop polygon HATCH boundary flags did not canonicalize");
+    auto wrong_polygon_hatch = polygon_hatch;
+    wrong_polygon_hatch.replace(wrong_polygon_hatch.find("92\n2\n"), 5, "92\n1\n");
+    const auto wrong_polygon_import = parse_dxf_ascii(file(wrong_polygon_hatch));
+    check(wrong_polygon_import.drawing.hatches.empty() && wrong_polygon_import.diagnostics.size() == 1 &&
+              wrong_polygon_import.diagnostics[0].code == "unsupported_feature",
+          "non-polyline HATCH path interpreted as polygon vertices");
     check(imported.drawing.blocks.at(0).name == "Window" &&
               imported.drawing.blocks.at(0).lines.size() == 1 &&
               imported.drawing.inserts.at(0).block_name == "Window" &&

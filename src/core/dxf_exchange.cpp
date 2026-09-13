@@ -119,7 +119,7 @@ void entity(DxfImportResult& result, DxfDrawing& destination, std::string_view t
         DxfHatch v{{}, integer(r, 70) == 1, entity_layer};
         const auto path_count = integer(r, 91, -1);
         const auto path_flags = integer(r, 92, -1);
-        const auto edge_type = integer(r, 72, -1);
+        const auto has_bulge = integer(r, 72, -1);
         const auto closed = integer(r, 73, -1);
         const auto vertex_count = integer(r, 93, -1);
         const auto pattern = field(r, 2).value_or("");
@@ -150,7 +150,9 @@ void entity(DxfImportResult& result, DxfDrawing& destination, std::string_view t
         require(path_count >= 0 && path_flags >= 0 && vertex_count >= 0 &&
                 static_cast<std::size_t>(vertex_count) <= l.max_vertices - vertices);
         vertices += static_cast<std::size_t>(vertex_count);
-        const bool shape = path_count == 1 && path_flags == 1 && edge_type == 0 && closed == 1 &&
+        // Group 92 is bit-coded: 1 is external, 2 selects polyline data.
+        // A sole polygon loop may omit the external bit; export canonicalizes it.
+        const bool shape = path_count == 1 && (path_flags == 2 || path_flags == 3) && has_bulge == 0 && closed == 1 &&
             associative == 0 && hatch_style == 0 && pattern_type == 1 && source_count == 0 &&
             pattern == "SOLID" && v.solid && seen_vertices == vertex_count && have_y &&
             v.boundary.size() >= 3;
@@ -434,7 +436,7 @@ std::string export_dxf_ascii(const DxfDrawing& d, const DxfExchangeLimits& l) {
         w.put(10, 0.0); w.put(20, 0.0); w.put(30, 0.0);
         w.put(210, 0.0); w.put(220, 0.0); w.put(230, 1.0);
         w.put(2, "SOLID"); w.put(70, "1"); w.put(71, "0"); w.put(91, "1");
-        w.put(92, "1"); w.put(72, "0"); w.put(73, "1");
+        w.put(92, "3"); w.put(72, "0"); w.put(73, "1");
         w.put(93, std::to_string(v.boundary.size()));
         for (const auto& point : v.boundary) { w.xy(point); }
         w.put(97, "0"); w.put(75, "0"); w.put(76, "1");

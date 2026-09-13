@@ -80,6 +80,13 @@ BLOCK definitions contain lines, arcs, open/closed bulged polylines, and plain
 text; INSERT records retain the block name, insertion point, independent X/Y
 scale, rotation, and layer. Block names are unique and every insert must name
 a definition in the same file.
+The HATCH subset requires one closed polygon path without bulges. Group 92
+must include the polyline bit: imports accept `2` (polyline) or `3` (external
+polyline), and export canonicalizes the sole boundary to `3`. The prior
+codec's value `1` declares an external non-polyline edge path and is now
+diagnosed rather than interpreted as polygon vertices. Other path flags and
+edge-list boundaries remain unsupported. See Autodesk's
+[boundary path group codes](https://help.autodesk.com/cloudhelp/2016/ENU/AutoCAD-DXF/files/GUID-DC5215D6-E73F-4DFF-8BE9-01CA9610FAEE.htm).
 Arcs require distinct angles in `[0, 360)` and a positive radius. Polylines
 require at least two vertices; bulges remain analytical values and are never
 tessellated. Labels use baseline/left alignment with default width and no
@@ -96,7 +103,7 @@ and encoded text controls are outside this subset. Coordinates, radii, angles,
 and bulges have absolute numeric magnitude capped at `1e12`.
 
 `DxfImportResult::diagnostics` identifies unsupported entities by one-based
-ENTITIES ordinal, entity type, and a stable code. POLYLINE, MTEXT, BLOCK/INSERT,
+ENTITIES ordinal, entity type, and a stable code. POLYLINE, MTEXT,
 CIRCLE, and every other unimplemented type are reported as `unsupported_entity`.
 Unsupported dimension types, patterned or multi-loop hatches, nested blocks,
 attributes, unsupported block content, 3D coordinates, nondefault OCS,
@@ -117,7 +124,7 @@ export/import/export are byte-stable within this subset. Export rejects invalid
 records or strings instead of emitting injected group codes.
 
 `dxf_exchange_tests` covers this round trip, CRLF input, bulges, wrapped arcs,
-text whitespace, unsupported-feature diagnostics, malformed input, and both
+text whitespace, independent HATCH path-flag fixtures, unsupported-feature diagnostics, malformed input, and both
 input/output resource limits. This is synthetic codec evidence; external CAD
 application interoperability, desktop import/export, transactional project
 mapping, provenance, and retained-source handling remain separate integration
