@@ -16914,10 +16914,29 @@ private:
         };
         const auto build_architectural_geometry = [&](BuildingViewKind kind) {
             const auto view_context = architectural_view_context(snapshot, kind);
+            std::set<std::string, std::less<>> referenced(
+                view_context.object_ids.begin(), view_context.object_ids.end());
+            if (!referenced.empty()) {
+                // Hosted openings are represented by their wall's clipped
+                // solid in every architectural projection. Referencing an
+                // opening therefore admits its host as a derived dependency.
+                for (const auto& [id, entity] : snapshot.entities()) {
+                    if (entity.type != "opening" || !referenced.contains(id)) continue;
+                    const auto host = entity.properties.find("wall_id");
+                    if (host != entity.properties.end() && host->is_string()) {
+                        referenced.insert(host->get<std::string>());
+                    }
+                }
+                // A placed assembly is a transformed copy of its host. Keep
+                // that dependent preview when the view selects the host.
+                for (const auto& assembly : assembly_previews) {
+                    if (referenced.contains(assembly.host_entity_id)) {
+                        referenced.insert(assembly.child_id);
+                    }
+                }
+            }
             if (kind == BuildingViewKind::plan) {
-                if (view_context.object_ids.empty()) return all_geometry;
-                std::set<std::string, std::less<>> referenced(
-                    view_context.object_ids.begin(), view_context.object_ids.end());
+                if (referenced.empty()) return all_geometry;
                 std::vector<CanvasEntity> filtered;
                 filtered.reserve(all_geometry.size());
                 for (const auto& entity : all_geometry) {
@@ -16968,9 +16987,7 @@ private:
                 return key.str();
             }();
             for (const auto& [id, entity] : snapshot.entities()) {
-                if (!view_context.object_ids.empty() &&
-                    !std::binary_search(view_context.object_ids.begin(),
-                                        view_context.object_ids.end(), id)) {
+                if (!referenced.empty() && !referenced.contains(id)) {
                     continue;
                 }
                 try {
@@ -17097,13 +17114,8 @@ private:
                 }
             }
             for (const auto& assembly : assembly_previews) {
-                if (!view_context.object_ids.empty() &&
-                    !std::binary_search(view_context.object_ids.begin(),
-                                        view_context.object_ids.end(),
-                                        assembly.host_entity_id) &&
-                    !std::binary_search(view_context.object_ids.begin(),
-                                        view_context.object_ids.end(),
-                                        assembly.child_id)) {
+                if (!referenced.empty() && !referenced.contains(assembly.host_entity_id) &&
+                    !referenced.contains(assembly.child_id)) {
                     continue;
                 }
                 try {

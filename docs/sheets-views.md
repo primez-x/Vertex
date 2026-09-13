@@ -39,7 +39,10 @@ an ordered, deduplicated list of stable semantic object IDs for the walls,
 rooms, slabs, openings, terrain, and other source objects represented by that
 view. Document admission resolves those IDs and rejects a view that would keep
 a dangling object reference, so deletes cannot silently retarget presentation
-geometry. Cut depth is a
+geometry. Hosted opening references admit their wall as a projection dependency,
+and selecting an assembly host admits its placed assembly preview; this keeps
+the projected solid graph complete without copying or mutating source geometry.
+Cut depth is a
 nonnegative distance along the direction from the origin, limited by far depth;
 these are projection instructions, not computed model intersections. All kinds
 use the same frame contract; adapters choose the appropriate orientation. The

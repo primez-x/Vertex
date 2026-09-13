@@ -24,7 +24,9 @@ upgrade to the current model with an empty reference list. The Windows view
 settings editor now exposes those source IDs, accepts comma or semicolon
 separators, rejects duplicates before history mutation, and the architectural
 projection path filters referenced objects while preserving the shared retained
-geometry for other views.
+geometry for other views. View filtering also closes hosted-opening references
+to their wall and includes placed-assembly previews when their host is selected,
+so a dependency cannot disappear from an elevation, section, or plan.
 
 The requirement contract passes, while `python scripts/requirement_audit.py
 --release` still fails closed with 130 in-progress requirements. The corrected

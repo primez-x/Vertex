@@ -4107,6 +4107,30 @@ int main(int argc, char** argv) {
             "opening height should use the quantity parser and inspector command");
     require(window.editSelectedClassification("window"),
             "opening classification should distinguish door and window semantics");
+    require(window.editArchitecturalViewPresentation(
+                QStringLiteral("view-plan"), QStringLiteral("1.5"), QStringLiteral("80"),
+                QStringLiteral("0.7"), QStringLiteral("0.25"), true,
+                QStringLiteral("concrete"), QStringLiteral("2"), QStringLiteral("fine"),
+                opening_id),
+            "architectural opening references should commit through typed history");
+    auto* opening_reference_canvas = dynamic_cast<sketch::desktop::PlanCanvas*>(
+        window.findChild<QWidget*>(QStringLiteral("architecturalPlanCanvas")));
+    require(opening_reference_canvas != nullptr,
+            "opening reference filtering should expose the coordinated canvas");
+    const auto has_opening_reference_entity = [&](const QString& id) {
+        return std::find_if(opening_reference_canvas->entities().begin(),
+                            opening_reference_canvas->entities().end(),
+                            [&](const auto& entity) { return entity.id == id; }) !=
+               opening_reference_canvas->entities().end();
+    };
+    require(has_opening_reference_entity(wall_id) &&
+                !has_opening_reference_entity(curved_wall_id),
+            "opening-only architectural references should project their host wall dependency");
+    require(window.editArchitecturalViewPresentation(
+                QStringLiteral("view-plan"), QStringLiteral("1.5"), QStringLiteral("80"),
+                QStringLiteral("0.7"), QStringLiteral("0.25"), true,
+                QStringLiteral("concrete"), QStringLiteral("2"), QStringLiteral("fine")),
+            "architectural view references should be clearable through typed history");
 
     require(window.selectEntity(boundary_id), "closed boundary should be selectable for slab creation");
     const auto revision_before_invalid_slab = window.document().revision();
