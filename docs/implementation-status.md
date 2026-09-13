@@ -1,5 +1,22 @@
 # Implementation status
 
+## Latest integrated checkpoint
+
+At commit `c47c7e9`, the Release desktop build and CTest matrix completed with
+133 executed tests passing (the production acceptance test is intentionally
+disabled and the AppContainer runtime test is skipped when the host is already
+inside a parent Job Object). The focused Debug and Release architectural
+schedule tests also pass. Assembly instances now contribute read-only material
+slot rows, optional explicit cubic-metre volume/net-volume quantities, and
+grouped material-summary provenance while respecting host visibility.
+
+The requirement contract passes, while `python scripts/requirement_audit.py
+--release` still fails closed with 130 in-progress requirements. The corrected
+native model-view runtime probe exits with `ready=true exported=true error=` and
+no CRT dialog in the captured run. These are internal development and runtime
+checks; Apex native fixtures, physical input, clean-machine/offline installer
+qualification, and production evidence remain open.
+
 ## Current checkpoint (September 2026)
 
 The Windows desktop now uses the immutable save queue and owner-thread
