@@ -34,7 +34,17 @@ sketch::Document make_document() {
                  {"holes", nlohmann::json::array()}, {"thickness_m", 0.15},
                  {"elevation_m", 0.0}, {"element_kind", "floor"}},
                 false, nlohmann::json::object()};
-    return Document::create({std::move(boundary), std::move(wall), std::move(slab)});
+    const nlohmann::json opening_assembly{
+        {"version", 1}, {"kind", "door"}, {"frame_width_m", 0.08},
+        {"frame_depth_m", 0.12}, {"panel_thickness_m", 0.04},
+        {"glazing_thickness_m", 0.0}, {"inset_m", 0.0}};
+    Entity opening{"opening-1", "opening",
+                   {{"wall_id", "wall-1"}, {"opening_kind", "door"},
+                    {"offset_m", 1.0}, {"width_m", 1.0}, {"sill_m", 0.0},
+                    {"height_m", 2.0}, {"opening_assembly", opening_assembly}},
+                   false, nlohmann::json::object()};
+    return Document::create({std::move(boundary), std::move(wall),
+                             std::move(opening), std::move(slab)});
 }
 
 void run() {
@@ -47,9 +57,16 @@ void run() {
           "wall axis must export as an IFC wall product");
     check(exported.step.find("IFCSLAB") != std::string::npos,
           "slab footprint must export as an IFC slab product");
+    check(exported.step.find("IFCOPENINGELEMENT") != std::string::npos,
+          "hosted opening must export as an IFC opening product");
+    check(exported.step.find("IFCRELVOIDSELEMENT") != std::string::npos,
+          "hosted opening must retain an IFC wall void relationship");
     check(exported.step.find("IFCEXTRUDEDAREASOLID") != std::string::npos,
           "slab thickness must export as a swept solid");
     check(!exported.diagnostics.empty(), "lossy wall axis metadata must be diagnosed");
+    check(std::any_of(exported.diagnostics.begin(), exported.diagnostics.end(), [](const auto& item) {
+        return item.source_id == "opening-1" && item.code == "opening_assembly_not_exported";
+    }), "opening assembly loss must be explicit in the IFC fidelity report");
 
     const auto imported = import_project_ifc(exported.step);
     check(imported.entities.size() >= 3, "IFC products must reconstruct editable candidates");

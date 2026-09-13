@@ -135,14 +135,18 @@ work.
 `sketch/dxf_project_exchange.hpp` adds the first transactional-project mapping
 layer on top of the transport codec. `export_project_dxf` reads one immutable
 `DocumentSnapshot` and maps identified or legacy boundaries, wall baselines,
-slab footprints/holes, native labels, symbols, and resolvable boundary
-dimensions into the shared `DxfDrawing` model. SI metres are declared with
+hosted-opening jamb/threshold markers, slab footprints/holes, native labels,
+symbols, and resolvable boundary dimensions into the shared `DxfDrawing` model.
+SI metres are declared with
 `$INSUNITS = 6`; layer names are resolved through the native layer graph when
 available. Curved boundary edges stay analytical bulges, while positive
 single arcs on wall baselines stay ARC records. Wall envelopes and slab
 thickness/elevation/kind data have no DXF representation and are emitted as
-fidelity diagnostics. The function never mutates the source document or opens
-a path.
+fidelity diagnostics. Hosted openings are emitted on an `Openings` layer (or
+the explicitly assigned layer) as three plan markers; the host relationship,
+vertical dimensions, and opening assembly are retained only in the native
+project and are reported in the fidelity diagnostics. The function never
+mutates the source document or opens a path.
 
 Only segment-length dimensions map to DXF's bounded linear `DIMENSION` record.
 Angle and area dimensions remain native-only and produce an explicit
@@ -173,10 +177,13 @@ interoperability evidence remain production-gate work.
 
 `sketch/ifc_project_exchange.hpp` adds a bounded IFC4 STEP mapper on top of the
 native document model. Export emits an IFC4 envelope with deterministic owner,
-unit, placement, polyline, wall-axis, slab-footprint, and optional swept-solid
-records. Linear analytical boundaries remain polylines; a closed slab with an
-explicit thickness becomes an `IFCEXTRUDEDAREASOLID`. Curves, slab holes,
-wall thickness/profile data, unsupported architectural entities, and spatial
+unit, placement, polyline, wall-axis, hosted `IFCOPENINGELEMENT`, slab-footprint,
+and optional swept-solid records. Linear analytical boundaries remain
+polylines; a closed slab or straight hosted opening with explicit depth becomes
+an `IFCEXTRUDEDAREASOLID`. Straight hosted openings also receive an
+`IFCRELVOIDSELEMENT` relationship to their exported wall when both products
+are representable. Curves, slab holes, wall thickness/profile data, opening
+assembly parts, unsupported architectural entities, and other spatial
 relationships are diagnosed instead of silently flattened.
 
 Import accepts the same IFC4 STEP subset and walks product representation

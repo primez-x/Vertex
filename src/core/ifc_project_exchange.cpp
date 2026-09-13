@@ -461,6 +461,8 @@ struct ExportContext {
     int axis_placement{};
     int placement{};
     std::size_t ordinal{};
+    std::map<std::string, int, std::less<>> product_ids;
+    std::vector<std::pair<std::string, std::string>> opening_host_links;
 
     explicit ExportContext(const IfcExchangeLimits& limits) : limits(limits), builder(limits) {
         const auto person = builder.add("IFCPERSON", "$,$,'Vertex',$,$,$,$");
@@ -535,6 +537,95 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
         }
         boundary = *decoded;
         product_type = "IFCBUILDINGELEMENTPROXY";
+    } else if (type == "opening") {
+        if (!entity.properties.is_object()) {
+            add_diagnostic(diagnostics, entity.id, type,
+                           "opening_properties_not_representable");
+            return;
+        }
+        const auto host_id = entity.properties.value("wall_id", std::string{});
+        const auto host = document.entities().find(host_id);
+        if (host == document.entities().end() || host->second.type != "wall") {
+            add_diagnostic(diagnostics, entity.id, type, "opening_host_missing");
+            return;
+        }
+        const auto baseline = read_baseline(host->second);
+        if (!baseline) {
+            add_diagnostic(diagnostics, entity.id, type,
+                           "opening_host_baseline_not_representable");
+            return;
+        }
+        if (std::abs(baseline->sweep_radians) > kTolerance) {
+            add_diagnostic(diagnostics, entity.id, type,
+                           "opening_curved_host_not_representable");
+            return;
+        }
+        const auto read_number = [&](const char* key, double fallback) {
+            const auto found = entity.properties.find(key);
+            if (found == entity.properties.end()) return fallback;
+            return found->is_number() ? found->get<double>()
+                                     : std::numeric_limits<double>::quiet_NaN();
+        };
+        const auto offset = read_number("offset_m", std::numeric_limits<double>::quiet_NaN());
+        const auto width = read_number("width_m", std::numeric_limits<double>::quiet_NaN());
+        const auto sill = read_number("sill_m", std::numeric_limits<double>::quiet_NaN());
+        const auto height = read_number("height_m", std::numeric_limits<double>::quiet_NaN());
+        double wall_thickness = 0.0;
+        for (const auto* key : {"thickness_m", "thickness"}) {
+            const auto found = host->second.properties.find(key);
+            if (found != host->second.properties.end() && found->is_number()) {
+                wall_thickness = found->get<double>();
+                break;
+            }
+        }
+        double wall_height = 0.0;
+        for (const auto* key : {"height_m", "height"}) {
+            const auto found = host->second.properties.find(key);
+            if (found != host->second.properties.end() && found->is_number()) {
+                wall_height = found->get<double>();
+                break;
+            }
+        }
+        const auto length = std::hypot(baseline->end.x - baseline->start.x,
+                                       baseline->end.y - baseline->start.y);
+        if (!std::isfinite(offset) || !std::isfinite(width) || !std::isfinite(sill) ||
+            !std::isfinite(height) || !std::isfinite(wall_thickness) ||
+            !std::isfinite(length) || !(length > kTolerance) ||
+            !(offset >= -kTolerance) || !(width > kTolerance) || !(sill >= -kTolerance) ||
+            !(height > kTolerance) || !(wall_thickness > kTolerance) ||
+            offset + width > length + kTolerance) {
+            add_diagnostic(diagnostics, entity.id, type,
+                           "opening_dimensions_not_representable");
+            return;
+        }
+        if (std::isfinite(wall_height) && wall_height > kTolerance &&
+            sill + height > wall_height + kTolerance) {
+            add_diagnostic(diagnostics, entity.id, type,
+                           "opening_exceeds_host_height");
+            return;
+        }
+        const Vec2 tangent{(baseline->end.x - baseline->start.x) / length,
+                           (baseline->end.y - baseline->start.y) / length};
+        const Vec2 normal{-tangent.y, tangent.x};
+        const auto at = [&](double along, double across) {
+            return Vec2{baseline->start.x + tangent.x * along + normal.x * across,
+                        baseline->start.y + tangent.y * along + normal.y * across};
+        };
+        const auto half = wall_thickness * 0.5;
+        const auto first = at(offset, -half);
+        const auto second = at(offset + width, -half);
+        const auto third = at(offset + width, half);
+        const auto fourth = at(offset, half);
+        boundary = {{first, second, 0.0}, {second, third, 0.0},
+                    {third, fourth, 0.0}, {fourth, first, 0.0}};
+        product_type = "IFCOPENINGELEMENT";
+        depth = height;
+        use_solid = true;
+        context.opening_host_links.emplace_back(entity.id, host_id);
+        if (entity.properties.contains("opening_assembly")) {
+            add_diagnostic(diagnostics, entity.id, type,
+                           "opening_assembly_not_exported");
+        }
     } else if (type == "property" || type == "building" || type == "floor" || type == "layer" ||
                type == "sheet" || type == "view" || type == "sheet_view_model" ||
                type == "reference_asset" || type == "dxf_source") {
@@ -594,17 +685,25 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
                                          context.limits);
     const auto global_id = step_string(guid_for(entity.id, ++context.ordinal), context.limits);
     const auto placement = ref(context.placement);
+    int product_id{};
     if (product_type == "IFCWALLSTANDARDCASE") {
-        context.builder.add(product_type, global_id + "," + ref(context.owner_history) + "," +
-            name + "," + description + ",$," + placement + "," + ref(product_shape) + ",$");
+        product_id = context.builder.add(product_type,
+            global_id + "," + ref(context.owner_history) + "," + name + "," +
+            description + ",$," + placement + "," + ref(product_shape) + ",$");
     } else if (product_type == "IFCSLAB") {
-        context.builder.add(product_type, global_id + "," + ref(context.owner_history) + ","+
-            name + "," + description + ",$," + placement + "," + ref(product_shape) + ",$,.FLOOR.");
+        product_id = context.builder.add(product_type,
+            global_id + "," + ref(context.owner_history) + "," + name + "," +
+            description + ",$," + placement + "," + ref(product_shape) + ",$,.FLOOR.");
+    } else if (product_type == "IFCOPENINGELEMENT") {
+        product_id = context.builder.add(product_type,
+            global_id + "," + ref(context.owner_history) + "," + name + "," +
+            description + ",$," + placement + "," + ref(product_shape) + ",$,.OPENING.");
     } else {
-        context.builder.add(product_type, global_id + "," + ref(context.owner_history) + ","+
-            name + "," + description + ",$," + placement + "," + ref(product_shape) + ",$");
+        product_id = context.builder.add(product_type,
+            global_id + "," + ref(context.owner_history) + "," + name + "," +
+            description + ",$," + placement + "," + ref(product_shape) + ",$");
     }
-    (void)document;
+    if (product_id > 0) context.product_ids[entity.id] = product_id;
 }
 
 struct GeometryResult {
@@ -758,6 +857,20 @@ IfcProjectExportResult export_project_ifc(const DocumentSnapshot& document,
     for (const auto& [id, entity] : document.entities()) {
         (void)id;
         export_product(document, entity, context, result.diagnostics);
+    }
+    for (const auto& [opening_id, host_id] : context.opening_host_links) {
+        const auto opening = context.product_ids.find(opening_id);
+        const auto host = context.product_ids.find(host_id);
+        if (opening == context.product_ids.end() || host == context.product_ids.end()) {
+            add_diagnostic(result.diagnostics, opening_id, "opening",
+                           "opening_host_relationship_not_exported");
+            continue;
+        }
+        const auto global_id = step_string(
+            guid_for("void:" + opening_id + ":" + host_id, ++context.ordinal), limits);
+        context.builder.add("IFCRELVOIDSELEMENT",
+            global_id + "," + ref(context.owner_history) + ",$,$," +
+            ref(host->second) + "," + ref(opening->second));
     }
     try {
         result.step = context.builder.finish();

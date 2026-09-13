@@ -46,6 +46,11 @@ sketch::Document make_document() {
                  {"holes", nlohmann::json::array()}, {"thickness_m", 0.15},
                  {"elevation_m", 0.0}, {"element_kind", "floor"}},
                 false, nlohmann::json::object() };
+    Entity opening{"opening-1", "opening",
+                   {{"wall_id", "wall-1"}, {"opening_kind", "door"},
+                    {"offset_m", 1.0}, {"width_m", 1.0}, {"sill_m", 0.0},
+                    {"height_m", 2.0}},
+                   false, nlohmann::json::object()};
     AnnotationState annotations;
     auto label = instantiate_label(default_label_templates().front(), "label-1");
     label.content = "Kitchen";
@@ -54,7 +59,8 @@ sketch::Document make_document() {
     annotations.symbols.push_back(
         {"symbol-1", "toilet-w3-d3", {{2.0, 1.5}, 0.35, 1.4}, {}, true});
     return Document::create({std::move(boundary), std::move(dimension), std::move(wall),
-                             std::move(slab), make_annotation_entity("annotations-1", annotations)});
+                             std::move(opening), std::move(slab),
+                             make_annotation_entity("annotations-1", annotations)});
 }
 
 void run() {
@@ -64,6 +70,9 @@ void run() {
     check(exported.drawing.insertion_units == 6, "project units must be SI metres");
     check(exported.drawing.polylines.size() >= 2, "boundary and slab geometry must export");
     check(exported.drawing.lines.size() >= 1, "wall geometry must export");
+    check(std::count_if(exported.drawing.lines.begin(), exported.drawing.lines.end(),
+                        [](const auto& line) { return line.layer == "Openings"; }) == 3,
+          "hosted openings must export deterministic plan markers");
     check(exported.drawing.labels.size() == 1, "annotation label must export");
     check(std::any_of(exported.drawing.lines.begin(), exported.drawing.lines.end(),
                       [](const auto& line) { return line.layer == "Symbols"; }),
@@ -75,6 +84,10 @@ void run() {
     check(std::any_of(exported.diagnostics.begin(), exported.diagnostics.end(), [](const auto& item) {
         return item.source_id == "slab-1" && item.code == "slab_3d_semantics_not_representable";
     }), "slab 3D semantics must be explicit in the DXF fidelity report");
+    check(std::any_of(exported.diagnostics.begin(), exported.diagnostics.end(), [](const auto& item) {
+        return item.source_id == "opening-1" &&
+               item.code == "opening_host_relationship_not_representable";
+    }), "opening host loss must be explicit in the DXF fidelity report");
 
     const auto bytes = export_dxf_ascii(exported.drawing);
     const auto imported = import_project_dxf(bytes);

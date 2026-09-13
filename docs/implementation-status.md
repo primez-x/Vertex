@@ -58,9 +58,8 @@ Hosted openings now carry an optional strict version-1 opening assembly profile
 with shared native geometry for jambs, heads, sills, leaves, sash bars, glazing,
 and handed door motion. New openings receive a deterministic door/window default;
 legacy cut-only records remain valid, while schedule rows expose assembly
-dimensions. Profile editing beyond the current classification/default path and
-dimensions. The opening inspector now edits frame width/depth, panel or sash
-depth, glazing depth, and signed inset through a revision-checked preview with
+dimensions. The opening inspector edits frame width/depth, panel or sash depth,
+glazing depth, and signed inset through a revision-checked preview with
 one-command undo/redo. Full native interchange qualification remains open.
 The tracked source boundary is now explicit in
 `third_party/source-provenance.json`: a fail-closed audit assigns every tracked
@@ -894,15 +893,17 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   production interchange evidence are not implied by this codec. A separate
   native project-mapping layer now translates immutable snapshots to that
   drawing model and reconstructs bounded DXF geometry into editable boundary
-  candidates plus a typed annotation entity. It preserves analytical bulges,
+  candidates plus a typed annotation entity. Hosted openings emit explicit
+  jamb/threshold plan markers with source-retention diagnostics. It preserves analytical bulges,
   records source layer/primitive metadata, expands block INSERT geometry when
   representable, and marks unbound dimensions and unsupported transport data
   for original-byte retention. Desktop floor/layer assignment, source-asset
   retention, Apex native compatibility, external CAD fidelity, and production
   interchange qualification remain open.
 - A bounded IFC4 STEP project mapper now exports deterministic owner/unit
-  records, analytical linear boundaries, wall axes, slab footprints, and
-  optional slab swept solids from immutable snapshots. Import walks the product
+  records, analytical linear boundaries, wall axes, hosted opening products and
+  wall void relationships, slab footprints, and optional swept solids from
+  immutable snapshots. Import walks the product
   representation graph and reconstructs editable boundary candidates with
   `extensions.ifc_source` record identities, placement translations, and
   extrusion depth where representable. Unsupported products, properties,

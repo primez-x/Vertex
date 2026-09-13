@@ -2473,7 +2473,7 @@
         "src/core/ifc_project_exchange.cpp",
         "tests/ifc_project_exchange_tests.cpp"
       ],
-      "implementation_note": "A bounded IFC4 STEP project mapper now exports linear boundaries, wall axes, slab footprints and optional swept solids, and imports reliable product geometry with identifiable source metadata. Worker isolation, Reference View conformance, full types/properties/materials/relationships, desktop source retention, and representative cross-application fixtures remain open."
+      "implementation_note": "A bounded IFC4 STEP project mapper now exports linear boundaries, wall axes, hosted opening products, wall void relationships, slab footprints and optional swept solids, and imports reliable product geometry with identifiable source metadata. Opening assembly parts, worker isolation, Reference View conformance, full types/properties/materials/relationship reconstruction, desktop source retention, and representative cross-application fixtures remain open."
     },
     {
       "id": "IO-DXF-001",
@@ -2498,7 +2498,7 @@
         "tests/dxf_desktop_workflow_tests.cpp",
         "docs/interchange-profiles.md"
       ],
-      "implementation_note": "A bounded in-memory ASCII DXF R2013 codec now round-trips LINE, ARC, LWPOLYLINE (including bulges), plain TEXT, linear DIMENSION records, one-loop solid polygon HATCH records, BLOCK definitions, and INSERT references with deterministic serialization, hard limits, and explicit unsupported-feature diagnostics. A separate native project-mapping layer now translates immutable snapshots to that drawing model and reconstructs bounded geometry into editable boundary candidates plus typed annotation state, with explicit source-retention diagnostics. It does not claim nested blocks, patterned or multi-loop hatches, native Apex compatibility, active floor/layer assignment, original-source asset retention, worker isolation, or external CAD fidelity; those fixtures and integrations remain open."
+      "implementation_note": "A bounded in-memory ASCII DXF R2013 codec now round-trips LINE, ARC, LWPOLYLINE (including bulges), plain TEXT, linear DIMENSION records, one-loop solid polygon HATCH records, BLOCK definitions, and INSERT references with deterministic serialization, hard limits, and explicit unsupported-feature diagnostics. A separate native project-mapping layer now translates immutable snapshots to that drawing model, emits hosted-opening jamb/threshold plan markers with explicit host-loss diagnostics, and reconstructs bounded geometry into editable boundary candidates plus typed annotation state. It does not claim nested blocks, patterned or multi-loop hatches, native Apex compatibility, active floor/layer assignment, original-source asset retention, worker isolation, or external CAD fidelity; those fixtures and integrations remain open."
     },
     {
       "id": "IO-PDF-001",

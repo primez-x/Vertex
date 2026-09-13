@@ -308,6 +308,85 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
         }
         return;
     }
+    if (entity.type == "opening") {
+        // DXF project exchange is a bounded 2D profile.  Preserve a hosted
+        // opening as explicit jamb/threshold markers in plan while reporting
+        // the lost wall/vertical relationship instead of silently flattening
+        // it into an unrelated boundary.
+        if (!entity.properties.is_object()) {
+            diagnostic(result.diagnostics, entity.id, entity.type,
+                       "opening_properties_not_representable");
+            return;
+        }
+        const auto host_id = entity.properties.value("wall_id", std::string{});
+        const auto host = document.entities().find(host_id);
+        if (host == document.entities().end() || host->second.type != "wall") {
+            diagnostic(result.diagnostics, entity.id, entity.type,
+                       "opening_host_missing");
+            return;
+        }
+        const auto baseline = native_segment(host->second.properties.value(
+            "baseline", Json{}));
+        if (!baseline) {
+            diagnostic(result.diagnostics, entity.id, entity.type,
+                       "opening_host_baseline_not_representable");
+            return;
+        }
+        if (std::abs(baseline->sweep_radians) > kGeometryTolerance) {
+            diagnostic(result.diagnostics, entity.id, entity.type,
+                       "opening_curved_host_not_representable");
+            return;
+        }
+        const auto read_number = [&](const char* key, double fallback) {
+            const auto found = entity.properties.find(key);
+            if (found == entity.properties.end()) return fallback;
+            return found->is_number() ? found->get<double>()
+                                      : std::numeric_limits<double>::quiet_NaN();
+        };
+        const auto offset = read_number("offset_m", std::numeric_limits<double>::quiet_NaN());
+        const auto width = read_number("width_m", std::numeric_limits<double>::quiet_NaN());
+        const auto height = read_number("height_m", std::numeric_limits<double>::quiet_NaN());
+        double wall_thickness = 0.0;
+        for (const auto* key : {"thickness_m", "thickness"}) {
+            const auto found = host->second.properties.find(key);
+            if (found != host->second.properties.end() && found->is_number()) {
+                wall_thickness = found->get<double>();
+                break;
+            }
+        }
+        const auto length = std::hypot(baseline->end.x - baseline->start.x,
+                                       baseline->end.y - baseline->start.y);
+        if (!std::isfinite(offset) || !std::isfinite(width) || !std::isfinite(height) ||
+            !std::isfinite(wall_thickness) || !(offset >= -kGeometryTolerance) ||
+            !(width > kGeometryTolerance) || !(height > kGeometryTolerance) ||
+            !(wall_thickness > kGeometryTolerance) || !std::isfinite(length) ||
+            !(length > kGeometryTolerance) || offset + width > length + kGeometryTolerance) {
+            diagnostic(result.diagnostics, entity.id, entity.type,
+                       "opening_dimensions_not_representable");
+            return;
+        }
+        const Vec2 tangent{(baseline->end.x - baseline->start.x) / length,
+                           (baseline->end.y - baseline->start.y) / length};
+        const Vec2 normal{-tangent.y, tangent.x};
+        const auto at = [&](double along, double across) {
+            return DxfPoint{baseline->start.x + tangent.x * along + normal.x * across,
+                            baseline->start.y + tangent.y * along + normal.y * across};
+        };
+        const auto start = at(offset, 0.0);
+        const auto end = at(offset + width, 0.0);
+        const auto half = wall_thickness * 0.5;
+        const auto opening_layer = layer == "0" ? std::string("Openings") : layer;
+        result.drawing.lines.push_back({at(offset, -half), at(offset, half), opening_layer});
+        result.drawing.lines.push_back({at(offset + width, -half), at(offset + width, half), opening_layer});
+        result.drawing.lines.push_back({start, end, opening_layer});
+        diagnostic(result.diagnostics, entity.id, entity.type,
+                   "opening_host_relationship_not_representable");
+        if (entity.properties.contains("opening_assembly")) {
+            diagnostic(result.diagnostics, entity.id, entity.type,
+                       "opening_assembly_not_representable");
+        }
+        return;
+    }
     if (entity.type == kAnnotationEntityType) {
         try {
             const auto state = decode_annotation_entity(entity);
