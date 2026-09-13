@@ -1631,6 +1631,10 @@
     },
     {
       "category": "source",
+      "path": "tests/project_resource_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/project_store_tests.cpp"
     },
     {

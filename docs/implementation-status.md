@@ -45,9 +45,10 @@ restore helper materializes a verified package into a new destination and
 re-hashes each payload after copying, returning relative project and resource
 paths for an offline consumer. The Windows core now registers those restored
 templates, profiles, and documentation through a hash-verified local catalog;
-`property-cli resources` exposes the same deterministic registration result for
-inspection. Cross-machine fingerprint equivalence and production qualification
-remain open.
+the native desktop shell exposes the same deterministic registration result
+through its compact secondary command menu, while `property-cli resources`
+reports it for inspection and automation with `network_required=false`.
+Cross-machine fingerprint equivalence and production qualification remain open.
 
 Named revision comparison now reports semantic, geometric, calculation, and
 presentation change counts with bounded changed-property details. The report

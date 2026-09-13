@@ -31,6 +31,7 @@
 #include "sketch/sheet_output_scene.hpp"
 #include "sketch/calculations.hpp"
 #include "sketch/project_store.hpp"
+#include "sketch/project_resource_catalog.hpp"
 #include "sketch/project_ownership.hpp"
 #include "sketch/project_workspace.hpp"
 #include "sketch/recovery_copy_record.hpp"
@@ -2039,6 +2040,90 @@ public:
             projection.diagnostics.push_back(std::string("Design phase: ") + error.what());
         }
         return projection;
+    }
+
+    [[nodiscard]] bool registerProjectPackageResources(const QString& path) {
+        if (path.trimmed().isEmpty()) {
+            setError(QStringLiteral("Choose a project package directory."));
+            return false;
+        }
+        try {
+            auto catalog = ProjectResourceCatalog::register_package(filesystem_path(path));
+            m_project_resource_names.clear();
+            for (const auto& resource : catalog.resources()) {
+                m_project_resource_names.push_back(
+                    QStringLiteral("%1: %2")
+                        .arg(QString::fromUtf8(project_resource_kind_name(resource.kind)),
+                             QString::fromUtf8(resource.name)));
+            }
+            m_project_resource_catalog = std::move(catalog);
+            clearError();
+            owner->statusBar()->showMessage(
+                QStringLiteral("Registered %1 local project resource%2.")
+                    .arg(m_project_resource_names.size())
+                    .arg(m_project_resource_names.size() == 1 ? QString{} : QStringLiteral("s")),
+                5000);
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Project resources: %1")
+                         .arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    [[nodiscard]] QStringList registeredProjectResourceNames() const {
+        return m_project_resource_names;
+    }
+
+    void showProjectResources() {
+        const auto selected = QFileDialog::getExistingDirectory(
+            owner, QStringLiteral("Open project package"));
+        if (selected.isEmpty() || !registerProjectPackageResources(selected)) return;
+
+        QDialog dialog(owner);
+        dialog.setWindowTitle(QStringLiteral("Project resources"));
+        dialog.setModal(true);
+        dialog.resize(780, 360);
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* package = new QLabel(
+            QStringLiteral("Package: %1").arg(selected), &dialog);
+        package->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        layout->addWidget(package);
+
+        auto* table = new QTableWidget(static_cast<int>(m_project_resource_names.size()), 5,
+                                       &dialog);
+        table->setObjectName(QStringLiteral("projectResourceTable"));
+        table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        table->setSelectionBehavior(QAbstractItemView::SelectRows);
+        table->setHorizontalHeaderLabels(
+            {QStringLiteral("Kind"), QStringLiteral("Name"), QStringLiteral("Path"),
+             QStringLiteral("Size"), QStringLiteral("SHA-256")});
+        table->verticalHeader()->setVisible(false);
+        table->setAlternatingRowColors(true);
+        if (m_project_resource_catalog) {
+            const auto& resources = m_project_resource_catalog->resources();
+            for (int row = 0; row < table->rowCount(); ++row) {
+                const auto& resource = resources[static_cast<std::size_t>(row)];
+                table->setItem(row, 0, new QTableWidgetItem(
+                    QString::fromUtf8(project_resource_kind_name(resource.kind))));
+                table->setItem(row, 1, new QTableWidgetItem(QString::fromUtf8(resource.name)));
+                table->setItem(row, 2, new QTableWidgetItem(
+                    QString::fromStdString(resource.relative_path.generic_string())));
+                table->setItem(row, 3, new QTableWidgetItem(QString::number(resource.size)));
+                table->setItem(row, 4, new QTableWidgetItem(QString::fromUtf8(resource.sha256)));
+            }
+        }
+        table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+        table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+        table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+        table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+        table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
+        layout->addWidget(table, 1);
+
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        layout->addWidget(buttons);
+        dialog.exec();
     }
 
     [[nodiscard]] bool editProjectSubject(const QString& name,
@@ -11697,6 +11782,8 @@ public:
             m_file_sha256.clear();
             m_selected_id.clear();
             m_output_sheet_id.clear();
+            m_project_resource_catalog.reset();
+            m_project_resource_names.clear();
             clearPreview();
             m_tool = CanvasTool::select;
             syncToolControls();
@@ -11807,6 +11894,8 @@ public:
             }
             m_selected_id.clear();
             m_output_sheet_id.clear();
+            m_project_resource_catalog.reset();
+            m_project_resource_names.clear();
             clearPreview();
             m_tool = CanvasTool::select;
             syncToolControls();
@@ -15780,6 +15869,8 @@ private:
         more_menu->addSeparator();
         m_annotation_action = new QAction(QStringLiteral("Annotations"), owner);
         m_reference_action = new QAction(QStringLiteral("Reference image"), owner);
+        m_project_resources_action = new QAction(QStringLiteral("Project resources…"), owner);
+        m_project_resources_action->setObjectName(QStringLiteral("projectResources"));
         m_schedule_action = new QAction(QStringLiteral("Schedules"), owner);
         m_sheet_action = new QAction(QStringLiteral("Sheet settings"), owner);
         m_viewport_action = new QAction(QStringLiteral("Viewport settings"), owner);
@@ -15813,8 +15904,8 @@ private:
         m_about_action = new QAction(QStringLiteral("About Property Studio"), owner);
         auto* user_guide_action = new QAction(QStringLiteral("User guide…"), owner);
         user_guide_action->setObjectName(QStringLiteral("userGuide"));
-        const std::array<QAction*, 22> secondary_actions{
-            m_annotation_action, m_reference_action, m_schedule_action, m_sheet_action,
+        const std::array<QAction*, 23> secondary_actions{
+            m_annotation_action, m_reference_action, m_project_resources_action, m_schedule_action, m_sheet_action,
             m_viewport_action, m_schedule_placement_action, m_view_action, m_remodel_action,
             m_relationship_action, m_levels_action, m_reference_grid_action, m_assembly_action, m_assistance_action,
             m_calculation_profile_action,
@@ -15944,6 +16035,8 @@ private:
                          [this] { showAnnotationEditor(); });
         QObject::connect(m_reference_action, &QAction::triggered, owner,
                          [this] { showReferenceImport(); });
+        QObject::connect(m_project_resources_action, &QAction::triggered, owner,
+                         [this] { showProjectResources(); });
         QObject::connect(m_schedule_action, &QAction::triggered, owner,
                          [this] { showSchedules(); });
         QObject::connect(m_sheet_action, &QAction::triggered, owner,
@@ -20190,6 +20283,8 @@ private:
     QTimer* m_save_timer{};
     std::filesystem::path m_file_path;
     std::string m_file_sha256;
+    std::optional<ProjectResourceCatalog> m_project_resource_catalog;
+    QStringList m_project_resource_names;
     std::unique_ptr<ProjectOwnershipSession> m_project_ownership;
     Workspace m_workspace{Workspace::measurement};
     WorkspaceTheme m_theme{WorkspaceTheme::light};
@@ -20386,6 +20481,7 @@ private:
     QToolButton* m_quick_access_button{};
     QAction* m_annotation_action{};
     QAction* m_reference_action{};
+    QAction* m_project_resources_action{};
     QAction* m_schedule_action{};
     QAction* m_sheet_action{};
     QAction* m_viewport_action{};
@@ -20928,6 +21024,18 @@ void MainWindow::showAnnotationEditor() {
 
 void MainWindow::showReferenceImport() {
     m_impl->showReferenceImport();
+}
+
+bool MainWindow::registerProjectPackageResources(const QString& path) {
+    return m_impl->registerProjectPackageResources(path);
+}
+
+QStringList MainWindow::registeredProjectResourceNames() const {
+    return m_impl->registeredProjectResourceNames();
+}
+
+void MainWindow::showProjectResources() {
+    m_impl->showProjectResources();
 }
 
 void MainWindow::showAssistance() {

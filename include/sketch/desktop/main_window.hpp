@@ -533,6 +533,12 @@ public:
     void showDistoImport();
     void showAnnotationEditor();
     void showReferenceImport();
+    // Registers a verified local project package without changing the active
+    // document. The names are deterministic and remain available to the
+    // secondary resource view until the next project transition.
+    [[nodiscard]] bool registerProjectPackageResources(const QString& path);
+    [[nodiscard]] QStringList registeredProjectResourceNames() const;
+    void showProjectResources();
     void showReferenceCalibration();
     void showAssistance();
     void showRemodelingAlternatives();
