@@ -14,6 +14,15 @@ that a physical pen, touch device, screen reader, keyboard-only run, or every
 Qt style has passed. Those observations remain required for the final quality
 gate.
 
+The plan canvases opt into Qt touch and tablet tracking explicitly. A primary
+touch contact or active-pen press is routed through the same pointer path as a
+left mouse press, so selection, point placement, snapping, overview-map
+navigation, and the existing document commands remain pressure-independent.
+Tablet hover updates the coordinate readout; touch and pen input do not create a
+second geometry model or bypass undo/history. Multi-touch gestures and device-
+specific pressure or barrel-button behavior remain outside this first adapter
+and require physical-device qualification before release.
+
 ## Desktop shortcuts and measurement keypad
 
 Open **Shortcuts** on the workspace toolbar, or search for **Customize keyboard

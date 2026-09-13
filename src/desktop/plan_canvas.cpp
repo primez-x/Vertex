@@ -7,6 +7,8 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPaintEvent>
+#include <QTabletEvent>
+#include <QTouchEvent>
 #include <QTransform>
 #include <QWheelEvent>
 
@@ -248,6 +250,8 @@ PlanCanvas::PlanCanvas(QWidget* parent) : QWidget(parent) {
     setFocusPolicy(Qt::StrongFocus);
     setMinimumSize(480, 360);
     setMouseTracking(true);
+    setAttribute(Qt::WA_AcceptTouchEvents, true);
+    setAttribute(Qt::WA_TabletTracking, true);
     setAutoFillBackground(false);
 }
 
@@ -778,44 +782,98 @@ void PlanCanvas::setDraftRedoRequested(std::function<void()> callback) {
     m_draft_redo_requested = std::move(callback);
 }
 
-void PlanCanvas::paintEvent(QPaintEvent* event) {
-    Q_UNUSED(event);
-    QPainter painter(this);
-    renderScene(painter, QRectF(rect()));
+bool PlanCanvas::event(QEvent* event) {
+    switch (event->type()) {
+    case QEvent::TouchBegin: {
+        auto* touch = static_cast<QTouchEvent*>(event);
+        if (!m_touch_active && !touch->points().isEmpty()) {
+            const auto& point = touch->points().front();
+            m_touch_active = true;
+            m_touch_id = point.id();
+            pointerPress(point.position(), Qt::LeftButton);
+        }
+        event->accept();
+        return true;
+    }
+    case QEvent::TouchUpdate: {
+        auto* touch = static_cast<QTouchEvent*>(event);
+        if (m_touch_active) {
+            for (const auto& point : touch->points()) {
+                if (point.id() == m_touch_id) {
+                    pointerMove(point.position());
+                    break;
+                }
+            }
+        }
+        event->accept();
+        return true;
+    }
+    case QEvent::TouchEnd:
+    case QEvent::TouchCancel: {
+        auto* touch = static_cast<QTouchEvent*>(event);
+        if (m_touch_active) {
+            QPointF position = m_last_mouse_position.value_or(QPointF(width() / 2.0, height() / 2.0));
+            for (const auto& point : touch->points()) {
+                if (point.id() == m_touch_id) {
+                    position = point.position();
+                    break;
+                }
+            }
+            pointerRelease(position, Qt::LeftButton);
+            m_touch_active = false;
+            m_touch_id = -1;
+        }
+        event->accept();
+        return true;
+    }
+    case QEvent::TabletPress: {
+        auto* tablet = static_cast<QTabletEvent*>(event);
+        m_tablet_active = true;
+        pointerPress(tablet->position(), Qt::LeftButton, tablet->modifiers());
+        event->accept();
+        return true;
+    }
+    case QEvent::TabletMove: {
+        auto* tablet = static_cast<QTabletEvent*>(event);
+        pointerMove(tablet->position());
+        event->accept();
+        return true;
+    }
+    case QEvent::TabletRelease: {
+        auto* tablet = static_cast<QTabletEvent*>(event);
+        if (m_tablet_active) {
+            pointerRelease(tablet->position(), Qt::LeftButton);
+            m_tablet_active = false;
+        }
+        event->accept();
+        return true;
+    }
+    default:
+        return QWidget::event(event);
+    }
 }
 
-void PlanCanvas::mousePressEvent(QMouseEvent* event) {
+void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
+                              Qt::KeyboardModifiers modifiers) {
     setFocus();
-    const auto position = event->position();
     updateCursor(position);
-    if (event->button() == Qt::MiddleButton ||
-        (event->button() == Qt::LeftButton && event->modifiers().testFlag(Qt::AltModifier))) {
+    if (button == Qt::MiddleButton ||
+        (button == Qt::LeftButton && modifiers.testFlag(Qt::AltModifier))) {
         m_panning = true;
         m_pan_start = position;
         m_pan_view_start = m_view_center;
-        event->accept();
         return;
     }
-    if (event->button() != Qt::LeftButton) {
-        event->ignore();
-        return;
-    }
-    if (navigateOverviewMap(position)) {
-        event->accept();
-        return;
-    }
+    if (button != Qt::LeftButton) return;
+    if (navigateOverviewMap(position)) return;
     if (m_tool == CanvasTool::select) {
-        if (m_entity_clicked) {
-            m_entity_clicked(hitTest(position));
-        }
+        if (m_entity_clicked) m_entity_clicked(hitTest(position));
     } else if (m_point_clicked) {
         m_point_clicked(snapped(toModel(position, rect())));
     }
-    event->accept();
 }
 
-void PlanCanvas::mouseMoveEvent(QMouseEvent* event) {
-    const auto position = event->position();
+void PlanCanvas::pointerMove(QPointF position) {
     m_last_mouse_position = position;
     if (m_panning) {
         const auto delta = position - m_pan_start;
@@ -824,13 +882,43 @@ void PlanCanvas::mouseMoveEvent(QMouseEvent* event) {
         update();
     }
     updateCursor(position);
+}
+
+void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button) {
+    Q_UNUSED(position);
+    if (button == Qt::MiddleButton || button == Qt::LeftButton) m_panning = false;
+}
+
+void PlanCanvas::paintEvent(QPaintEvent* event) {
+    Q_UNUSED(event);
+    QPainter painter(this);
+    renderScene(painter, QRectF(rect()));
+}
+
+void PlanCanvas::mousePressEvent(QMouseEvent* event) {
+    if (event->source() != Qt::MouseEventNotSynthesized) {
+        event->accept();
+        return;
+    }
+    pointerPress(event->position(), event->button(), event->modifiers());
+    event->accept();
+}
+
+void PlanCanvas::mouseMoveEvent(QMouseEvent* event) {
+    if (event->source() != Qt::MouseEventNotSynthesized) {
+        event->accept();
+        return;
+    }
+    pointerMove(event->position());
     event->accept();
 }
 
 void PlanCanvas::mouseReleaseEvent(QMouseEvent* event) {
-    if (event->button() == Qt::MiddleButton || event->button() == Qt::LeftButton) {
-        m_panning = false;
+    if (event->source() != Qt::MouseEventNotSynthesized) {
+        event->accept();
+        return;
     }
+    pointerRelease(event->position(), event->button());
     event->accept();
 }
 

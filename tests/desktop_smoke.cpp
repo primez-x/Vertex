@@ -46,6 +46,7 @@
 #include <QPageSize>
 #include <QPdfWriter>
 #include <QPlainTextEdit>
+#include <QPointingDevice>
 #include <QPushButton>
 #include <QGroupBox>
 #include <QToolButton>
@@ -54,8 +55,10 @@
 #include <QStandardPaths>
 #include <QSplitter>
 #include <QSpinBox>
+#include <QTouchEvent>
 #include <QTimer>
 #include <QToolBar>
+#include <QTabletEvent>
 #include <QUuid>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
@@ -128,6 +131,16 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
                     window.findChild<QWidget*>(QStringLiteral("offlineBadge")) == nullptr &&
                     window.findChild<QWidget*>(QStringLiteral("appSubtitle")) == nullptr,
                     "modern workspace shell must expose a compact toolbar and tabs without redundant branding or status copy");
+        auto* measurement_canvas = dynamic_cast<sketch::desktop::PlanCanvas*>(
+            window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+        auto* architectural_canvas = dynamic_cast<sketch::desktop::PlanCanvas*>(
+            window.findChild<QWidget*>(QStringLiteral("architecturalPlanCanvas")));
+        require(measurement_canvas && architectural_canvas &&
+                    measurement_canvas->testAttribute(Qt::WA_AcceptTouchEvents) &&
+                    architectural_canvas->testAttribute(Qt::WA_AcceptTouchEvents) &&
+                    measurement_canvas->testAttribute(Qt::WA_TabletTracking) &&
+                    architectural_canvas->testAttribute(Qt::WA_TabletTracking),
+                "both workspace canvases must accept explicit touch and active-pen events");
         auto* tool_panel = window.findChild<QWidget*>(QStringLiteral("toolPanel"));
         auto* select_tool = window.findChild<QToolButton*>(QStringLiteral("selectTool"));
         require(tool_panel && tool_panel->minimumWidth() <= 60 && tool_panel->maximumWidth() <= 60 &&
@@ -502,6 +515,62 @@ void test_second_open_is_read_only() {
     require(second.createStraightWall({0.0, 1.0}, {4.0, 1.0}, QStringLiteral("interior")).isEmpty() &&
                 second.lastError().contains(QStringLiteral("read-only")),
             "read-only ownership conflicts must reject edits before mutation");
+}
+
+void test_plan_canvas_native_pointer_events() {
+    sketch::desktop::PlanCanvas canvas;
+    canvas.resize(800, 600);
+    canvas.setTool(sketch::desktop::CanvasTool::boundary);
+    canvas.setSnapEnabled(false);
+    int point_clicks = 0;
+    canvas.setPointClicked([&](sketch::Vec2) { ++point_clicks; });
+
+    QList<QEventPoint> touch_points;
+    touch_points.append(QEventPoint(7, QEventPoint::Pressed, QPointF(120, 130),
+                                    QPointF(120, 130)));
+    QTouchEvent touch_begin(QEvent::TouchBegin, nullptr, Qt::NoModifier, touch_points);
+    QCoreApplication::sendEvent(&canvas, &touch_begin);
+    require(touch_begin.isAccepted() && point_clicks == 1,
+            "a primary touch press must use the same precision point command as a mouse press");
+
+    touch_points[0] = QEventPoint(7, QEventPoint::Updated, QPointF(160, 150),
+                                  QPointF(160, 150));
+    QTouchEvent touch_update(QEvent::TouchUpdate, nullptr, Qt::NoModifier, touch_points);
+    QCoreApplication::sendEvent(&canvas, &touch_update);
+    require(touch_update.isAccepted() && point_clicks == 1,
+            "touch motion must update the canvas without creating extra geometry points");
+
+    touch_points[0] = QEventPoint(7, QEventPoint::Released, QPointF(160, 150),
+                                  QPointF(160, 150));
+    QTouchEvent touch_end(QEvent::TouchEnd, nullptr, Qt::NoModifier, touch_points);
+    QCoreApplication::sendEvent(&canvas, &touch_end);
+    require(touch_end.isAccepted() && point_clicks == 1,
+            "touch release must close the pointer transaction without a duplicate point");
+
+    QPointingDevice tablet_device(QStringLiteral("test-tablet"), 91,
+                                  QInputDevice::DeviceType::Stylus,
+                                  QPointingDevice::PointerType::Pen,
+                                  QInputDevice::Capability::Position |
+                                      QInputDevice::Capability::Pressure,
+                                  1, 1);
+    QTabletEvent tablet_press(QEvent::TabletPress, &tablet_device, QPointF(200, 180),
+                              QPointF(200, 180), 0.35, 0.0, 0.0, 0.0, 0.0, 0.0,
+                              Qt::NoModifier, Qt::LeftButton, Qt::LeftButton);
+    QCoreApplication::sendEvent(&canvas, &tablet_press);
+    require(tablet_press.isAccepted() && point_clicks == 2,
+            "an active-pen press must use the same precision point command as a mouse press");
+    QTabletEvent tablet_move(QEvent::TabletMove, &tablet_device, QPointF(220, 190),
+                             QPointF(220, 190), 0.05, 0.0, 0.0, 0.0, 0.0, 0.0,
+                             Qt::NoModifier, Qt::NoButton, Qt::NoButton);
+    QCoreApplication::sendEvent(&canvas, &tablet_move);
+    require(tablet_move.isAccepted(), "active-pen motion must be accepted by the canvas");
+    QTabletEvent tablet_release(QEvent::TabletRelease, &tablet_device, QPointF(220, 190),
+                                QPointF(220, 190), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                Qt::NoModifier, Qt::LeftButton, Qt::NoButton);
+    QCoreApplication::sendEvent(&canvas, &tablet_release);
+    require(tablet_release.isAccepted() && point_clicks == 2,
+            "active-pen release must close the pointer transaction without a duplicate point");
+
 }
 
 void test_external_project_change_blocks_save() {
@@ -3673,6 +3742,7 @@ int main(int argc, char** argv) {
     const auto families = QFontDatabase::applicationFontFamilies(font_id);
     require(!families.isEmpty(), "bundled Inter font must expose a family");
     application.setFont(QFont(families.front(), 10));
+    test_plan_canvas_native_pointer_events();
     QString field_ui_capture_directory;
     for (int index = 1; index + 1 < argc; ++index) {
         if (std::string_view(argv[index]) == "--capture-field-ui") {

@@ -34,6 +34,11 @@ only to an explicitly selected compatible dimension, retains the original unit
 and capture provenance in the entity extension, and rejects occupied targets or
 entity mismatches without mutation. This remains a local adapter boundary;
 vendor hardware, transport, and appraisal-caller qualification are still open.
+Both plan canvases now opt into Qt touch and tablet tracking. Primary touch and
+active-pen presses route through the same pressure-independent pointer path as
+mouse input, preserving snapping, focus, selection, and ordinary document
+history; physical-device qualification and richer multi-touch gestures remain
+open.
 The tracked source boundary is now explicit in
 `third_party/source-provenance.json`: a fail-closed audit assigns every tracked
 path to first-party source, third-party provenance, or an excluded generated

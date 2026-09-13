@@ -4,7 +4,9 @@
 #include "sketch/reference_grid.hpp"
 
 #include <QColor>
+#include <QEvent>
 #include <QImage>
+#include <QMouseEvent>
 #include <QRectF>
 #include <QString>
 #include <QWidget>
@@ -180,6 +182,7 @@ public:
     void setDraftRedoRequested(std::function<void()> callback);
 
 protected:
+    bool event(QEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
@@ -189,6 +192,10 @@ protected:
     void resizeEvent(QResizeEvent* event) override;
 
 private:
+    void pointerPress(QPointF position, Qt::MouseButton button,
+                      Qt::KeyboardModifiers modifiers = Qt::NoModifier);
+    void pointerMove(QPointF position);
+    void pointerRelease(QPointF position, Qt::MouseButton button);
     [[nodiscard]] std::optional<std::pair<Vec2, Vec2>> contentBounds() const;
     [[nodiscard]] bool navigateOverviewMap(QPointF position);
     void drawOverviewMap(QPainter& painter) const;
@@ -240,6 +247,9 @@ private:
     bool m_panning{false};
     QPointF m_pan_start;
     Vec2 m_pan_view_start{};
+    bool m_touch_active{false};
+    int m_touch_id{-1};
+    bool m_tablet_active{false};
 
     std::function<void(Vec2)> m_point_clicked;
     std::function<void(QString)> m_entity_clicked;
