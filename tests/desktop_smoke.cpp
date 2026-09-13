@@ -2674,8 +2674,15 @@ void test_design_phase_workflow() {
         require(dialog, "design phase manager should open from the shared workflow");
         auto* selection = dialog->findChild<QComboBox*>(QStringLiteral("remodelingPhaseSelection"));
         auto* demolition = dialog->findChild<QListWidget*>(QStringLiteral("remodelingDemolitionList"));
+        auto* compare_left = dialog->findChild<QComboBox*>(QStringLiteral("remodelingCompareLeft"));
+        auto* compare_right = dialog->findChild<QComboBox*>(QStringLiteral("remodelingCompareRight"));
+        auto* comparison = dialog->findChild<QListWidget*>(QStringLiteral("remodelingComparisonList"));
         require(selection && demolition && selection->count() == 2 && demolition->count() == 1,
                 "design phase manager should expose typed phase and demolition controls");
+        require(compare_left && compare_right && comparison && compare_left->count() == 2 &&
+                    compare_right->count() == 2 && comparison->count() == 1 &&
+                    comparison->item(0)->text().contains(QStringLiteral("demolished")),
+                "design phase manager should expose baseline-versus-alternative comparison");
         dialog->reject();
     });
     window.showRemodelingAlternatives();

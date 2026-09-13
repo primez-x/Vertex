@@ -41,6 +41,12 @@ baseline. It records both selections and reports only differing entities, ordere
 by entity ID. Each side is an optional phase: absence is distinct from demolition.
 Comparing does not switch the active alternative or change the shared baseline.
 
+The Windows design-phase manager exposes this comparison directly. The compact
+**Compare phases** panel lets the user choose the baseline or any named
+alternative on each side and lists every membership difference with its left and
+right phase. Comparison is read-only; applying a phase remains a separate,
+undoable command, so reviewing options cannot change the active model.
+
 `to_json` returns a detached canonical JSON object tagged `sketch.model_phases`,
 version 1. Registry IDs, baseline IDs, alternative IDs and member IDs are sorted;
 the active selection is persisted as a string or null. `from_json` rejects unknown

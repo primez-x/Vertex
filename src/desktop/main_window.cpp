@@ -4402,6 +4402,33 @@ public:
             status->setTextFormat(Qt::PlainText);
             layout->addWidget(status);
 
+            auto* comparison_box = new QGroupBox(QStringLiteral("Compare phases"), &dialog);
+            auto* comparison_layout = new QVBoxLayout(comparison_box);
+            comparison_layout->setContentsMargins(8, 6, 8, 6);
+            auto* comparison_selectors = new QHBoxLayout;
+            auto* comparison_left = new QComboBox(comparison_box);
+            comparison_left->setObjectName(QStringLiteral("remodelingCompareLeft"));
+            comparison_left->setToolTip(QStringLiteral("Left side of the comparison"));
+            auto* comparison_right = new QComboBox(comparison_box);
+            comparison_right->setObjectName(QStringLiteral("remodelingCompareRight"));
+            comparison_right->setToolTip(QStringLiteral("Right side of the comparison"));
+            comparison_selectors->addWidget(new QLabel(QStringLiteral("Left"), comparison_box));
+            comparison_selectors->addWidget(comparison_left, 1);
+            comparison_selectors->addWidget(new QLabel(QStringLiteral("Right"), comparison_box));
+            comparison_selectors->addWidget(comparison_right, 1);
+            comparison_layout->addLayout(comparison_selectors);
+            auto* comparison_list = new QListWidget(comparison_box);
+            comparison_list->setObjectName(QStringLiteral("remodelingComparisonList"));
+            comparison_list->setSelectionMode(QAbstractItemView::NoSelection);
+            comparison_list->setMinimumHeight(72);
+            comparison_layout->addWidget(comparison_list);
+            auto* comparison_status = new QLabel(comparison_box);
+            comparison_status->setObjectName(QStringLiteral("remodelingComparisonStatus"));
+            comparison_status->setWordWrap(true);
+            comparison_status->setTextFormat(Qt::PlainText);
+            comparison_layout->addWidget(comparison_status);
+            layout->addWidget(comparison_box);
+
             auto* buttons = new QHBoxLayout();
             auto* apply = new QPushButton(QStringLiteral("Apply phase"), &dialog);
             apply->setObjectName(QStringLiteral("applyRemodelingPhase"));
@@ -4416,6 +4443,60 @@ public:
             layout->addLayout(buttons);
 
             std::optional<PhaseModelRecord> record;
+            const auto phase_selection = [](const QComboBox* combo)
+                -> std::optional<std::string> {
+                if (combo == nullptr || combo->currentIndex() < 0) return std::nullopt;
+                const auto value = combo->currentData().toString().toStdString();
+                return value.empty() ? std::nullopt : std::optional<std::string>(value);
+            };
+            const auto phase_text = [](const std::optional<ModelPhase>& value) {
+                return value ? QString::fromStdString(phase_name(*value))
+                              : QStringLiteral("not present");
+            };
+            const auto refresh_comparison = [&] {
+                if (!record) return;
+                const auto comparison = record->model.compare(
+                    phase_selection(comparison_left), phase_selection(comparison_right));
+                comparison_list->clear();
+                for (const auto& difference : comparison.differences) {
+                    comparison_list->addItem(
+                        QStringLiteral("%1  ·  %2 → %3")
+                            .arg(id_from(difference.entity_id), phase_text(difference.left),
+                                 phase_text(difference.right)));
+                }
+                comparison_status->setText(
+                    comparison.differences.empty()
+                        ? QStringLiteral("The selected phases have no membership differences.")
+                        : QStringLiteral("%1 object%2 differ between the selected phases.")
+                              .arg(comparison.differences.size())
+                              .arg(comparison.differences.size() == 1 ? QString{} : QStringLiteral("s")));
+            };
+            const auto refresh_comparison_controls = [&] {
+                if (!record) return;
+                const auto previous_left = phase_selection(comparison_left);
+                const auto previous_right = phase_selection(comparison_right);
+                const QSignalBlocker left_blocker(comparison_left);
+                const QSignalBlocker right_blocker(comparison_right);
+                comparison_left->clear();
+                comparison_right->clear();
+                comparison_left->addItem(QStringLiteral("Existing baseline"), QString{});
+                comparison_right->addItem(QStringLiteral("Existing baseline"), QString{});
+                for (const auto& alternative : record->model.alternatives()) {
+                    const auto label = phase_alternative_label(alternative);
+                    comparison_left->addItem(label, id_from(alternative.id));
+                    comparison_right->addItem(label, id_from(alternative.id));
+                }
+                const auto left_index = previous_left
+                    ? comparison_left->findData(id_from(*previous_left)) : 0;
+                const auto active = record->model.active_alternative();
+                const auto right_index = previous_right
+                    ? comparison_right->findData(id_from(*previous_right))
+                    : (active ? comparison_right->findData(id_from(*active))
+                              : (comparison_right->count() > 1 ? 1 : 0));
+                comparison_left->setCurrentIndex(left_index >= 0 ? left_index : 0);
+                comparison_right->setCurrentIndex(right_index >= 0 ? right_index : 0);
+                refresh_comparison();
+            };
             const auto refresh_selection = [&] {
                 if (!record) return;
                 const auto selected = phase->currentData().toString().toStdString();
@@ -4461,6 +4542,7 @@ public:
                 const auto index = phase->findData(active);
                 phase->setCurrentIndex(index >= 0 ? index : 0);
                 refresh_selection();
+                refresh_comparison_controls();
                 status->setText(QStringLiteral("%1 model objects · %2 alternative%3.")
                     .arg(record->model.entity_ids().size())
                     .arg(record->model.alternatives().size())
@@ -4470,6 +4552,10 @@ public:
 
             QObject::connect(phase, &QComboBox::currentIndexChanged, &dialog,
                              [&](int) { refresh_selection(); });
+            QObject::connect(comparison_left, &QComboBox::currentIndexChanged, &dialog,
+                             [&](int) { refresh_comparison(); });
+            QObject::connect(comparison_right, &QComboBox::currentIndexChanged, &dialog,
+                             [&](int) { refresh_comparison(); });
             QObject::connect(apply, &QPushButton::clicked, &dialog, [&] {
                 if (!phase->count()) return;
                 if (selectRemodelingAlternative(phase->currentData().toString())) {

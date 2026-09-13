@@ -1864,10 +1864,12 @@
       "implementation_sources": [
         "include/sketch/model_phases.hpp",
         "src/core/model_phases.cpp",
+        "src/desktop/main_window.cpp",
         "tests/model_phases_tests.cpp",
+        "tests/desktop_smoke.cpp",
         "docs/phases-alternatives.md"
       ],
-      "implementation_note": "Mutually exclusive remodeling alternatives over a shared baseline and deterministic comparison state are implemented; coordinated model/views, save/print, and undo integration remain open."
+      "implementation_note": "Mutually exclusive remodeling alternatives over a shared baseline and deterministic comparison state are implemented; the Windows manager now exposes a read-only baseline-versus-alternative comparison list with stable controls. Coordinated model/views, save/print, and undo integration remain open."
     },
     {
       "id": "ARCH-3D-001",
