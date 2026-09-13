@@ -69,10 +69,14 @@ bundle installer now has guarded Install, Repair, and Uninstall actions with
 transactional publish and installed-marker verification; clean-machine
 installer qualification is still open. The corrected
 native model-view runtime probe exits with `ready=true exported=true error=` and
-no CRT dialog in the captured run. These are internal development and runtime
-checks; Apex native fixtures, physical input, clean-machine/offline installer
-qualification, and production evidence remain open. The distribution handoff
-now also emits a deterministic SPDX 2.3 SBOM from the hash-checked inventory;
+no CRT dialog in the captured run. The current Release PE inspection covers 44
+component binaries with no unresolved static imports; the staged offline bundle
+verified 558 declared files, installed 55 runtime files into a task-owned
+temporary directory, and passed the installed-runtime smoke for both workspaces
+with exit code 0. These are internal development and runtime checks; Apex native
+fixtures, physical input, clean-machine/offline installer qualification, and
+production evidence remain open. The distribution handoff now also emits a
+deterministic SPDX 2.3 SBOM from the hash-checked inventory;
 portable and offline bundle manifests bind the carried SBOM by path and hash.
 This improves reviewability but does not complete the separate licensing or
 clean-machine qualification gates.
