@@ -932,9 +932,12 @@
         "include/sketch/geometry_operations.hpp",
         "src/core/geometry_operations.cpp",
         "tests/geometry_operations_tests.cpp",
-        "docs/geometry-operations.md"
+        "docs/geometry-operations.md",
+        "src/desktop/main_window.cpp",
+        "tests/desktop_smoke.cpp",
+        "docs/workspace-accessibility.md"
       ],
-      "implementation_note": "Logical Apex operation names, conflict reporting, and deterministic preset bindings are implemented; physical key mapping, customizable workspace persistence, and full keyboard workflow evidence remain open."
+      "implementation_note": "Logical Apex operation names, conflict reporting, deterministic Apex preset bindings, and atomic local customizable shortcut persistence are implemented and covered by the desktop workflow. Physical key mapping, complete keyboard-only parity, and production evidence remain open."
     },
     {
       "id": "APX-KEY-004",
