@@ -120,6 +120,40 @@ void test_building_transform_updates_canonical_geometry() {
             "architectural transform redo must restore canonical geometry");
 }
 
+void test_railing_transform_updates_canonical_geometry() {
+    using namespace sketch;
+    auto railing = encode_building_entity(Railing{
+        .id = "railing-transform",
+        .base_position = {1.0, 2.0, 0.5},
+        .orientation_radians = 0.25,
+        .length = 4.0,
+        .height = 1.1,
+        .thickness = 0.08,
+        .post_spacing = 0.9,
+    });
+    Document document = Document::create({railing});
+    ArchitecturalOperation operation{ArchitecturalAction::transform, railing.id};
+    operation.transform = ArchitecturalTransform{2.0, -1.0, 0.5,
+                                                  std::numbers::pi / 2.0, 2.0};
+    const auto transaction = ArchitecturalTransaction::create(
+        "transform-railing", "r0", {railing.id}, {operation}, "Transform railing");
+    const auto preview = preview_architectural_transaction(document.snapshot(), transaction);
+    const auto transformed = std::get<Railing>(decode_building_entity(
+        preview.entities().at(railing.id)));
+    require(std::abs(transformed.base_position.x - (-2.0)) < 1e-9 &&
+                std::abs(transformed.base_position.y - 1.0) < 1e-9 &&
+                std::abs(transformed.base_position.z - 1.5) < 1e-9 &&
+                std::abs(transformed.orientation_radians -
+                         (0.25 + std::numbers::pi / 2.0)) < 1e-9 &&
+                std::abs(transformed.length - 8.0) < 1e-9 &&
+                std::abs(transformed.height - 2.2) < 1e-9 &&
+                std::abs(transformed.thickness - 0.16) < 1e-9 &&
+                std::abs(transformed.post_spacing - 1.8) < 1e-9,
+            "architectural railing transform must update canonical geometry");
+    require(document.snapshot().entities().at(railing.id) == railing,
+            "architectural railing transform preview must not mutate the source");
+}
+
 void test_shared_solid_transforms_update_canonical_geometry() {
     using namespace sketch;
 
@@ -305,6 +339,7 @@ int main() {
     try {
         test_material_assignments();
         test_building_transform_updates_canonical_geometry();
+        test_railing_transform_updates_canonical_geometry();
         test_shared_solid_transforms_update_canonical_geometry();
         test_connected_stair_transform_preserves_links_and_rejects_scale();
         test_wall_duplicate_and_delete_manage_hosted_openings();

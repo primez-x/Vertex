@@ -1,6 +1,6 @@
 # Apex compatibility discovery
 
-Discovery checkpoint: 2026-09-10. This is source evidence for the compatibility
+Discovery checkpoint: 2026-09-13. This is source evidence for the compatibility
 work, not a tested importer, caller protocol, or certification. The mandatory
 requirements remain `APX-INT-001`, `APX-INT-002`, `APX-NATIVE-AX5-001`,
 `APX-NATIVE-AX7-001`, `APX-NATIVE-LEGACY-001`, and `APX-COMPAT-001/002` in the
@@ -24,6 +24,7 @@ native source files, and actual caller applications remain to be identified.
 | Source | Observed information | Engineering consequence |
 | --- | --- | --- |
 | [Apex downloads](https://apexappraisalsolutions.com/downloads/) | The page lists v7 Pro build 39305 and Standard build 45588 separately. | Record the actual binary identity for each fixture; the two displayed build labels do not identify the user's installation or establish format equivalence. |
+| [Apex online store](https://www.apexwin.com/store) | The v7 product description names keyboard, mouse, digital-pen, finger/touch, and DISTO input as supported workflows. The same page identifies v5 integrations with a la mode, ACI, Bradford Technologies, SFREP, and WCA. | Keep keyboard, pen, touch, and DISTO as separate input fixtures. Treat the listed forms products as compatibility candidates only; capture exact host versions, bitness, exchange files/fields, and return behavior before implementing or advertising an adapter. |
 | [Official v7 user-interface reference](https://apexwin.com/support/ApexSketchv7/ApexSketchv7-User-Interface.pdf) | Save As and Export support an older v5.x format. Import retains the current sketch's subject information and filename. | Native open, import-into-current, Save As, and legacy export need distinct behavioral fixtures. A generic file conversion test does not cover all four. |
 | [TOTAL's Apex v7 listing](https://totalstore.alamode.com/product/apex-sketch-v7-standard) | Integrated use requires a separate TOTAL integration step in addition to installing Apex. | Standalone Apex execution cannot prove the TOTAL caller/return path. The integration component and host version belong in the fixture identity. |
 | [ACI v7 installation instructions](https://www.aciweb.com/kb/apex-v7-install/) | ACI documents an `APEX7` updater step after installing Apex. | Capture the ACI-side integration version and observed exchanges; Apex's version alone is insufficient. The linked historical installer URL redirected to the Apex homepage when followed at this checkpoint. |
