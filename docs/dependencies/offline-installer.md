@@ -59,6 +59,7 @@ that already exists is rejected. The output contains:
 | `bin/`, `plugins/`, `assets/`, `help/`, `licenses/` | Runtime files, local assistance assets, offline user guide, and notices selected by the portable allowlist and inventory. |
 | `source-kit/` | Files named by the source-kit manifest, including their category and hash. |
 | `metadata/distribution-inventory.json` | Exact dependency, license, notice, source, and runtime ownership evidence used for staging. |
+| `metadata/distribution-sbom.spdx.json` | SPDX 2.3 package/file/dependency record derived from the same inventory. |
 | `metadata/source-kit-manifest.json` | The source-kit input whose file hashes were checked before copying. |
 | `metadata/portable-package-manifest.json` | Lower-level runtime staging record. |
 | `runtime-manifest.json` | The subset copied to an installation directory. |

@@ -441,9 +441,10 @@
         "third_party/dependencies.json",
         "third_party/distribution-components.json",
         "scripts/distribution_inventory.py",
+        "scripts/distribution_sbom.py",
         "docs/dependencies/distribution-inventory.md"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "The inventory now produces a deterministic SPDX 2.3 document with package, notice, source, checksum, and dependency relationships; exact revisions, legal review, relink evidence, and the production gate remain open."
     },
     {
       "id": "COMP-LIC-002",
@@ -2752,9 +2753,11 @@
         "tests/test_source_kit_manifest.py",
         "docs/dependencies/source-kit.md",
         "scripts/stage_portable_package.py",
+        "scripts/distribution_sbom.py",
+        "docs/dependencies/distribution-sbom.md",
         "docs/dependencies/portable-package.md"
       ],
-      "implementation_note": "Deterministic source-kit and portable-package manifests are implemented with hash, size, path-safety, and allowlist checks; the offline package now includes the local user guide, and a task-owned install/verification smoke passes on the development host. Complete artifact inventory, notices/SBOM, clean-machine rebuild, and final handoff certification remain open."
+      "implementation_note": "Deterministic source-kit and portable-package manifests are implemented with hash, size, path-safety, and allowlist checks; both portable and offline bundle outputs now carry a hash-bound SPDX 2.3 SBOM and the local user guide, and a task-owned install/verification smoke passes on the development host. Complete artifact inventory, clean-machine rebuild, legal review, and final handoff certification remain open."
     }
   ]
 }

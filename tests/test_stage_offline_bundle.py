@@ -206,6 +206,10 @@ class StageOfflineBundleTests(unittest.TestCase):
         self.assertEqual(result["manifest_kind"], "offline-bundle")
         self.assertEqual(result["source_inventory"]["sha256"], digest(inventory))
         self.assertEqual(result["source_kit"]["sha256"], digest(source_kit))
+        self.assertEqual(result["sbom"]["format"], "SPDX-2.3")
+        self.assertEqual(result["sbom"]["sha256"], digest(bundle / "metadata/distribution-sbom.spdx.json"))
+        sbom = json.loads((bundle / "metadata/distribution-sbom.spdx.json").read_text(encoding="utf-8"))
+        stage._SBOM.validate_sbom(sbom)
         licenses = {row["component_id"]: row for row in result["license_inventory"]}
         self.assertEqual(licenses["inter-font"]["license"], "OFL-1.1")
         self.assertEqual(licenses["inter-font"]["notices"][0]["path"], "assets/fonts/OFL.txt")
@@ -233,6 +237,7 @@ class StageOfflineBundleTests(unittest.TestCase):
                 "metadata/distribution-inventory.json",
                 "metadata/source-kit-manifest.json",
                 "metadata/portable-package-manifest.json",
+                "metadata/distribution-sbom.spdx.json",
                 "runtime-manifest.json",
                 "install-offline-bundle.ps1",
                 "verify-offline-bundle.ps1",
@@ -438,6 +443,29 @@ class StageOfflineBundleTests(unittest.TestCase):
             stage.verify_bundle(bundle)
 
         self.assertIn("install list", str(context.exception).lower())
+
+    def test_bundle_verifier_rejects_a_structurally_invalid_sbom_even_if_hashes_are_rewritten(self):
+        fixture = self.fixture()
+        self.addCleanup(fixture[0].cleanup)
+        _, root, inventory, source_kit, allowlist, *_ = fixture
+        stage.stage_bundle(inventory, allowlist, source_kit, root, root / "out", "invalid-sbom")
+        bundle = root / "out" / "invalid-sbom"
+        sbom_path = bundle / "metadata" / "distribution-sbom.spdx.json"
+        sbom = json.loads(sbom_path.read_text(encoding="utf-8"))
+        sbom["relationships"][0]["relatedSpdxElement"] = "SPDXRef-unknown"
+        write_json(sbom_path, sbom)
+        sbom_hash = digest(sbom_path)
+        manifest_path = bundle / "offline-bundle-manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["sbom"]["sha256"] = sbom_hash
+        next(row for row in manifest["files"] if row["path"] ==
+             "metadata/distribution-sbom.spdx.json").update(
+                 sha256=sbom_hash, size=sbom_path.stat().st_size)
+        write_json(manifest_path, manifest)
+
+        with self.assertRaises(stage.BundleError) as context:
+            stage.verify_bundle(bundle)
+        self.assertIn("sbom", str(context.exception).lower())
 
 
 if __name__ == "__main__":

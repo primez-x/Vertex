@@ -48,6 +48,12 @@ license and source obligations remain part of the separate distribution review.
 retains the full inventory under `metadata/distribution-inventory.json`,
 derives a sorted `license_inventory` and `dependency_closure` summary in the
 bundle manifest, and checks every staged runtime byte against this report.
+It also emits `metadata/distribution-sbom.spdx.json`, a deterministic SPDX 2.3
+document containing the reviewed component packages, source/notice files,
+SHA-256 checksums, and package relationships. The same SBOM is present in the
+direct portable package so either handoff artifact carries the dependency
+record needed for review. The exporter is implemented in
+`scripts/distribution_sbom.py` and does not contact a package registry.
 This makes ownership and integrity review portable with the bundle while
 keeping it distinct from clean-machine installation and offline application
 qualification. The bundle command is documented in

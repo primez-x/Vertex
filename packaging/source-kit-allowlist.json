@@ -123,6 +123,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/dependencies/distribution-sbom.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/dependencies/native-build.md"
     },
     {
@@ -788,6 +792,10 @@
     {
       "category": "source",
       "path": "scripts/distribution_inventory.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/distribution_sbom.py"
     },
     {
       "category": "source",
@@ -1728,6 +1736,10 @@
     {
       "category": "source",
       "path": "tests/test_distribution_inventory.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_distribution_sbom.py"
     },
     {
       "category": "source",

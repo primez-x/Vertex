@@ -2,7 +2,7 @@
 
 ## Latest integrated checkpoint
 
-At commit `37c7bf4`, the Release desktop build and CTest matrix completed with
+At commit `0a68f9f`, the Release desktop build and CTest matrix completed with
 133 executed tests passing (the production acceptance test is intentionally
  disabled and the AppContainer runtime test is skipped when the host is already
 inside a parent Job Object). The focused Debug and Release architectural
@@ -17,7 +17,11 @@ The requirement contract passes, while `python scripts/requirement_audit.py
 native model-view runtime probe exits with `ready=true exported=true error=` and
 no CRT dialog in the captured run. These are internal development and runtime
 checks; Apex native fixtures, physical input, clean-machine/offline installer
-qualification, and production evidence remain open.
+qualification, and production evidence remain open. The distribution handoff
+now also emits a deterministic SPDX 2.3 SBOM from the hash-checked inventory;
+portable and offline bundle manifests bind the carried SBOM by path and hash.
+This improves reviewability but does not complete the separate licensing or
+clean-machine qualification gates.
 
 ## Current checkpoint (September 2026)
 

@@ -131,6 +131,10 @@ class StagePortablePackageTests(unittest.TestCase):
         self.assertFalse(manifest["installer_qualified"])
         self.assertFalse(manifest["offline_qualified"])
         self.assertEqual(manifest["source_inventory"]["sha256"], digest(inventory))
+        self.assertEqual(manifest["sbom"]["format"], "SPDX-2.3")
+        self.assertEqual(manifest["sbom"]["sha256"], digest(package / "metadata/distribution-sbom.spdx.json"))
+        sbom = json.loads((package / "metadata/distribution-sbom.spdx.json").read_text(encoding="utf-8"))
+        stager._SBOM.validate_sbom(sbom)
         self.assertEqual(
             {row["path"] for row in manifest["files"]},
             {
@@ -139,6 +143,7 @@ class StagePortablePackageTests(unittest.TestCase):
                 "assets/fonts/Inter.ttf",
                 "licenses/NOTICE.txt",
                 "licenses/Inter-OFL.txt",
+                "metadata/distribution-sbom.spdx.json",
             },
         )
         self.assertEqual((package / "bin/property-studio.exe").read_bytes(), app.read_bytes())

@@ -199,6 +199,7 @@ def _load_sibling(name: str, filename: str) -> Any:
 
 _PORTABLE = _load_sibling("stage_portable_package_for_offline_bundle", "stage_portable_package.py")
 _SOURCE_KIT = _load_sibling("source_kit_manifest_for_offline_bundle", "source_kit_manifest.py")
+_SBOM = _load_sibling("distribution_sbom_for_offline_bundle", "distribution_sbom.py")
 
 
 def _resolve_rooted_file(value: pathlib.Path | str, root: pathlib.Path, field: str) -> tuple[pathlib.Path, str]:
@@ -484,7 +485,7 @@ def _validate_bundle_references(manifest: Mapping[str, Any]) -> None:
     files = manifest["files"]
     by_path = {canonical_relative(row["path"], "bundle file path").casefold(): row
                for row in files}
-    for field in ("source_inventory", "source_kit", "runtime_manifest"):
+    for field in ("source_inventory", "source_kit", "runtime_manifest", "sbom"):
         reference = manifest.get(field)
         if reference is None:
             continue
@@ -495,6 +496,26 @@ def _validate_bundle_references(manifest: Mapping[str, Any]) -> None:
         _require(record is not None, f"bundle {field} has no file record: {relative}")
         _require(record["sha256"].lower() == expected,
                  f"bundle {field} hash does not match its file record: {relative}")
+        if field == "sbom":
+            _require(reference.get("format") == "SPDX-2.3",
+                     "bundle sbom format must be SPDX-2.3")
+
+
+def _validate_sbom_reference(root: pathlib.Path, manifest: Mapping[str, Any]) -> None:
+    reference = manifest.get("sbom")
+    if reference is None:
+        return
+    _require(isinstance(reference, Mapping), "bundle sbom reference must be an object")
+    relative = canonical_relative(reference.get("path"), "bundle sbom path")
+    path = _resolve_input_file(root, relative, "bundle sbom")
+    document = _read_json(path, "bundle SPDX SBOM")
+    try:
+        _SBOM.validate_sbom(document)
+    except (ValueError, RuntimeError) as exc:
+        _error(f"bundle SPDX SBOM is invalid: {exc}")
+    expected = _validate_sha256(reference.get("sha256"), "bundle sbom hash")
+    actual, _ = _hash_file(path)
+    _require(actual == expected, "bundle sbom hash does not match its file")
 
 
 def verify_bundle(bundle_root: pathlib.Path | str,
@@ -517,6 +538,7 @@ def verify_bundle(bundle_root: pathlib.Path | str,
     manifest = _read_json(manifest_path, "bundle manifest")
     kind = _validate_manifest_shape(manifest)
     _validate_bundle_references(manifest)
+    _validate_sbom_reference(root, manifest)
     _validate_runtime_manifest_consistency(root, manifest)
     if strict_files is None:
         strict_files = kind == "offline-bundle"
@@ -634,13 +656,14 @@ def stage_bundle(
             expected = _validate_sha256(row.get("sha256"), f"portable package files[{index}].sha256")
             _require(actual_hash == expected,
                      f"portable package hash changed while composing bundle: {relative}")
+            is_sbom = row.get("kind") == "sbom"
             runtime_records.append({
                 "path": relative,
                 "sha256": actual_hash,
                 "size": size,
                 "kind": _require_string(row.get("kind"), f"portable package files[{index}].kind"),
-                "role": "license" if row.get("kind") == "notice" else "runtime",
-                "install": True,
+                "role": "metadata" if is_sbom else ("license" if row.get("kind") == "notice" else "runtime"),
+                "install": not is_sbom,
                 "component_id": _require_string(row.get("component_id"), f"portable package files[{index}].component_id"),
             })
         runtime_records = _sorted_file_records(runtime_records)
@@ -686,6 +709,10 @@ def stage_bundle(
             ))
         source_records = _sorted_file_records(source_records)
 
+        installed_runtime_records = [row for row in runtime_records if row["install"]]
+        sbom_records = [row for row in runtime_records if row["kind"] == "sbom"]
+        _require(len(sbom_records) == 1, "portable package must contain exactly one SPDX SBOM")
+        sbom_record = sbom_records[0]
         runtime_manifest: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "manifest_version": MANIFEST_VERSION,
@@ -694,11 +721,11 @@ def stage_bundle(
             "installer_qualified": False,
             "offline_qualified": False,
             "qualification": {"installer_qualified": False, "offline_qualified": False},
-            "files": runtime_records,
+            "files": installed_runtime_records,
             "summary": {
-                "file_count": len(runtime_records),
-                "binary_count": sum(row["kind"] == "binary" for row in runtime_records),
-                "license_file_count": sum(row["kind"] == "notice" for row in runtime_records),
+                "file_count": len(installed_runtime_records),
+                "binary_count": sum(row["kind"] == "binary" for row in installed_runtime_records),
+                "license_file_count": sum(row["kind"] == "notice" for row in installed_runtime_records),
                 "installer_qualified": False,
                 "offline_qualified": False,
             },
@@ -750,6 +777,11 @@ def stage_bundle(
                 "path": DEFAULT_RUNTIME_MANIFEST,
                 "sha256": runtime_manifest_record["sha256"],
             },
+            "sbom": {
+                "path": sbom_record["path"],
+                "sha256": sbom_record["sha256"],
+                "format": "SPDX-2.3",
+            },
             "installer": {
                 "script": installer_relative,
                 "verifier": verifier_relative,
@@ -761,10 +793,11 @@ def stage_bundle(
             "files": bundle_files,
             "summary": {
                 "file_count": len(bundle_files),
-                "runtime_file_count": len(runtime_records),
+                "runtime_file_count": len(installed_runtime_records),
                 "source_kit_file_count": len(source_records),
-                "metadata_file_count": len(metadata_records) + 3,
+                "metadata_file_count": len(metadata_records) + 3 + len(sbom_records),
                 "license_file_count": sum(row["kind"] == "notice" for row in runtime_records),
+                "sbom_count": len(sbom_records),
                 "installer_qualified": False,
                 "offline_qualified": False,
             },

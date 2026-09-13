@@ -57,7 +57,11 @@ source inventory, and `audit_status: "incomplete"`. Its installer and offline
 qualification flags remain false. A successful staging run is an integrity
 and file-selection record; it does not qualify an installer, clean-machine
 installation, complete dynamic-load coverage, licensing, or offline
-operation.
+operation. The package also carries `metadata/distribution-sbom.spdx.json`, a
+deterministic SPDX 2.3 document generated from the same inventory. The
+manifest's `sbom` reference binds its format and hash to the copied document;
+the SBOM records packages, notices, source inputs, runtime checksums, and
+runtime package dependencies without claiming legal clearance.
 
 For the Windows handoff, use the higher-level
 [`stage_offline_bundle.py`](offline-installer.md) command. It consumes this

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import pathlib
 import re
@@ -27,10 +28,21 @@ WINDOWS_ABSOLUTE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 ALLOWLIST_KINDS = {"asset", "source", "notice"}
 DEFAULT_DESTINATION = "portable"
 DEFAULT_MANIFEST_NAME = "portable-package-manifest.json"
+DEFAULT_SBOM_PATH = "metadata/distribution-sbom.spdx.json"
 
 
 class StagingError(ValueError):
     """Raised when package inputs are incomplete, stale, or unsafe."""
+
+
+def _load_sibling(name: str, filename: str) -> Any:
+    path = pathlib.Path(__file__).resolve().with_name(filename)
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        _error(f"could not load packaging helper {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _error(message: str) -> None:
@@ -78,6 +90,9 @@ def sha256_file(path: pathlib.Path) -> str:
     except OSError as exc:
         _error(f"could not hash {path}: {exc}")
     raise AssertionError("unreachable")
+
+
+_SBOM = _load_sibling("distribution_sbom_for_portable_package", "distribution_sbom.py")
 
 
 def _read_json(path: pathlib.Path, field: str) -> dict[str, Any]:
@@ -448,7 +463,23 @@ def stage_package(
         })
 
     reserve(manifest_relative, "manifest name")
+    reserve(DEFAULT_SBOM_PATH, "SBOM path")
     inventory_hash = sha256_file(inventory_file)
+    try:
+        sbom = _SBOM.build_sbom(inventory, inventory_hash)
+        _SBOM.validate_sbom(sbom)
+    except (ValueError, RuntimeError) as exc:
+        _error(f"distribution SBOM could not be built: {exc}")
+    sbom_payload = (json.dumps(sbom, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    sbom_hash = hashlib.sha256(sbom_payload).hexdigest()
+    sbom_file = {
+        "kind": "sbom",
+        "inventory_entry": "distribution-sbom",
+        "component_id": "distribution-sbom",
+        "source": "generated:distribution-inventory",
+        "path": DEFAULT_SBOM_PATH,
+        "sha256": sbom_hash,
+    }
     files = [
         {
             "kind": row["kind"],
@@ -460,6 +491,8 @@ def stage_package(
         }
         for row in sorted(plan, key=lambda item: item["path"].casefold())
     ]
+    files.append(sbom_file)
+    files.sort(key=lambda item: (item["path"].casefold(), item["path"]))
     counts = {kind: sum(row["kind"] == kind for row in plan)
               for kind in ("binary", "source", "asset", "notice")}
     manifest = {
@@ -473,6 +506,11 @@ def stage_package(
             "sha256": inventory_hash,
         },
         "source_inventory_sha256": inventory_hash,
+        "sbom": {
+            "path": DEFAULT_SBOM_PATH,
+            "sha256": sbom_hash,
+            "format": "SPDX-2.3",
+        },
         "files": files,
         "summary": {
             "file_count": len(files),
@@ -480,13 +518,15 @@ def stage_package(
             "source_count": counts["source"],
             "asset_count": counts["asset"],
             "notice_count": counts["notice"],
+            "sbom_count": 1,
             "installer_qualified": False,
             "offline_qualified": False,
         },
         "boundary": (
             "This is a staged file set with integrity hashes only. It does not "
             "qualify an installer, clean-machine installation, offline behavior, "
-            "complete dynamic-load coverage, licensing, or redistributability."
+            "complete dynamic-load coverage, licensing, or redistributability. "
+            "The carried SPDX document is an inventory artifact, not legal clearance."
         ),
     }
 
@@ -506,6 +546,13 @@ def stage_package(
         destination_file = _output_path(package_root, row["path"])
         _copy_file(row["source_file"], destination_file, row["path"])
         _verify_copied_file(destination_file, row["sha256"], row["path"])
+    sbom_output = _output_path(package_root, DEFAULT_SBOM_PATH)
+    try:
+        sbom_output.parent.mkdir(parents=True, exist_ok=True)
+        sbom_output.write_bytes(sbom_payload)
+    except OSError as exc:
+        _error(f"could not write distribution SBOM {sbom_output}: {exc}")
+    _verify_copied_file(sbom_output, sbom_hash, DEFAULT_SBOM_PATH)
     _reject_output_symlinks(output_root_path, package_relative + "/" + manifest_relative)
     manifest_path = _output_path(package_root, manifest_relative)
     try:
