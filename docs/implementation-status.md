@@ -2,13 +2,15 @@
 
 ## Latest integrated checkpoint
 
-At commit `c47c7e9`, the Release desktop build and CTest matrix completed with
+At commit `37c7bf4`, the Release desktop build and CTest matrix completed with
 133 executed tests passing (the production acceptance test is intentionally
-disabled and the AppContainer runtime test is skipped when the host is already
+ disabled and the AppContainer runtime test is skipped when the host is already
 inside a parent Job Object). The focused Debug and Release architectural
-schedule tests also pass. Assembly instances now contribute read-only material
-slot rows, optional explicit cubic-metre volume/net-volume quantities, and
-grouped material-summary provenance while respecting host visibility.
+schedule tests and the focused Debug canvas test also pass. Assembly instances
+now contribute read-only material slot rows, optional explicit cubic-metre
+volume/net-volume quantities, and grouped material-summary provenance while
+respecting host visibility. Persisted annotation colors, fills, emphasis,
+text-height, and symbol stroke width now reach interactive and fitted output.
 
 The requirement contract passes, while `python scripts/requirement_audit.py
 --release` still fails closed with 130 in-progress requirements. The corrected
