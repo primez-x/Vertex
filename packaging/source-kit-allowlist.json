@@ -595,6 +595,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/noninteractive_errors.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/offline_policy.hpp"
     },
     {

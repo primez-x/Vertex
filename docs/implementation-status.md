@@ -125,6 +125,13 @@ DNS, URL, and Qt Network imports; transitive imports carried by third-party
 modules are recorded separately. This is static evidence only and does not
 replace the required network-denied clean-machine run.
 
+The unattended error policy is application-owned in
+`include/sketch/noninteractive_errors.hpp`. The desktop smoke path and native
+diagnostic probes use that public runtime header; the existing test helper is a
+thin compatibility wrapper, so production targets no longer include a
+test-only source path. The Debug build and full runnable CTest matrix pass
+after this boundary change.
+
 ## Current checkpoint (September 2026)
 
 The Windows desktop now uses the immutable save queue and owner-thread

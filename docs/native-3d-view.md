@@ -190,12 +190,14 @@ viewport is hidden. Undo restores a valid presentation. Successful framebuffer
 export requires a complete supported model; a partial or stale cache cannot
 silently produce a successful image.
 
-`tests/support/noninteractive_errors.hpp` sets process-local CRT/Windows error
-handling before Qt is created. Exceptions, aborts and assertions retain failing exit codes
-and write logs rather than waiting for a dialog. `noninteractive_test_errors`
-checks those failure paths. CMake links the process-policy initializer into
-every test executable. The assertion route is tested in both Debug and Release,
-and the probe explicitly verifies stderr is the CRT error destination. Full application captures run through
+`include/sketch/noninteractive_errors.hpp` owns the process-local CRT/Windows
+error handling used by unattended smoke and diagnostic launches. The test
+header is only a compatibility wrapper around that application-owned policy.
+Exceptions, aborts and assertions retain failing exit codes and write logs
+rather than waiting for a dialog. `noninteractive_test_errors` checks those
+failure paths. CMake links the process-policy initializer into every test
+executable. The assertion route is tested in both Debug and Release, and the
+probe explicitly verifies stderr is the CRT error destination. Full application captures run through
 `scripts/test-desktop.ps1`, which requests hidden `--smoke` windows, applies a
 15-second timeout to each case and records image and executable hashes.
 Standalone probes must use valid
