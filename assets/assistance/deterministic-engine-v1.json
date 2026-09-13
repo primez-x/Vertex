@@ -28,6 +28,6 @@
       "network": false
     }
   ],
-  "provenance": "Property Studio source",
-  "license": "Private Property Studio source; no third-party model weights"
+  "provenance": "Vertex source",
+  "license": "Private Vertex source; no third-party model weights"
 }
