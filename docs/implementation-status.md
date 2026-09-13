@@ -47,6 +47,14 @@ presentation change counts with bounded changed-property details. The report
 remains a read-only view over a retained historical prefix; restore continues
 to write a separate project copy.
 
+Calculation profiles now have a Windows editor in the shared inspector and
+command surfaces. It edits the persisted profile ID, display unit, decimal
+precision, and explicit building/living classification rules, validates the
+complete table before mutation, and records each changed profile as one
+versioned Document-history command. The editor remains deterministic and
+usable without a service; Apex standard-profile fixtures and production
+calculation certification remain open.
+
 The requirement contract passes, while `python scripts/requirement_audit.py
 --release` still fails closed with 130 in-progress requirements. The corrected
 native model-view runtime probe exits with `ready=true exported=true error=` and

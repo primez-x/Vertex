@@ -3452,6 +3452,221 @@ public:
         dialog.exec();
     }
 
+    void showCalculationProfileEditor() {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return;
+        }
+        QDialog dialog(owner);
+        styleDialog(dialog);
+        dialog.setObjectName(QStringLiteral("calculationProfileDialog"));
+        dialog.setWindowTitle(QStringLiteral("Calculation profile"));
+        dialog.setModal(true);
+        dialog.resize(680, 520);
+
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* help = new QLabel(QStringLiteral(
+            "Profiles are stored in the project and versioned with every change. "
+            "A classification rule controls whether an area contributes to building and living totals."),
+            &dialog);
+        help->setWordWrap(true);
+        layout->addWidget(help);
+
+        auto* profile_form = new QFormLayout;
+        auto* profile_id = new QLineEdit(&dialog);
+        profile_id->setObjectName(QStringLiteral("calculationProfileId"));
+        profile_id->setAccessibleName(QStringLiteral("Calculation profile ID"));
+        auto* profile_version = new QLabel(&dialog);
+        profile_version->setObjectName(QStringLiteral("calculationProfileEditorVersion"));
+        auto* display_unit = new QComboBox(&dialog);
+        display_unit->setObjectName(QStringLiteral("calculationProfileDisplayUnit"));
+        display_unit->addItem(QStringLiteral("Square metres (m²)"), QStringLiteral("square_metre"));
+        display_unit->addItem(QStringLiteral("Square feet (ft²)"), QStringLiteral("square_foot"));
+        display_unit->addItem(QStringLiteral("Acres"), QStringLiteral("acre"));
+        auto* decimal_places = new QSpinBox(&dialog);
+        decimal_places->setObjectName(QStringLiteral("calculationProfileDecimals"));
+        decimal_places->setRange(0, 6);
+        decimal_places->setSuffix(QStringLiteral(" decimals"));
+        profile_form->addRow(QStringLiteral("Profile ID"), profile_id);
+        profile_form->addRow(QStringLiteral("Version"), profile_version);
+        profile_form->addRow(QStringLiteral("Display unit"), display_unit);
+        profile_form->addRow(QStringLiteral("Precision"), decimal_places);
+        layout->addLayout(profile_form);
+
+        auto* classifications = new QTableWidget(&dialog);
+        classifications->setObjectName(QStringLiteral("calculationProfileClassifications"));
+        classifications->setColumnCount(3);
+        classifications->setHorizontalHeaderLabels(
+            {QStringLiteral("Classification"), QStringLiteral("Building total"),
+             QStringLiteral("Living total")});
+        classifications->setSelectionBehavior(QAbstractItemView::SelectRows);
+        classifications->setSelectionMode(QAbstractItemView::SingleSelection);
+        classifications->setAlternatingRowColors(true);
+        classifications->setEditTriggers(QAbstractItemView::DoubleClicked |
+                                         QAbstractItemView::EditKeyPressed |
+                                         QAbstractItemView::SelectedClicked);
+        classifications->horizontalHeader()->setStretchLastSection(true);
+        layout->addWidget(classifications, 1);
+
+        auto* class_actions = new QHBoxLayout;
+        auto* add_classification = new QPushButton(QStringLiteral("Add classification"), &dialog);
+        add_classification->setObjectName(QStringLiteral("addCalculationClassification"));
+        auto* remove_classification = new QPushButton(QStringLiteral("Remove selected"), &dialog);
+        remove_classification->setObjectName(QStringLiteral("removeCalculationClassification"));
+        class_actions->addWidget(add_classification);
+        class_actions->addWidget(remove_classification);
+        class_actions->addStretch(1);
+        layout->addLayout(class_actions);
+
+        auto* status = new QLabel(&dialog);
+        status->setObjectName(QStringLiteral("calculationProfileEditorStatus"));
+        status->setWordWrap(true);
+        status->setTextFormat(Qt::PlainText);
+        layout->addWidget(status);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel,
+                                             &dialog);
+        buttons->button(QDialogButtonBox::Save)->setObjectName(QStringLiteral("saveCalculationProfile"));
+        buttons->button(QDialogButtonBox::Cancel)->setObjectName(QStringLiteral("cancelCalculationProfile"));
+        layout->addWidget(buttons);
+
+        CalculationProfile persisted;
+        Revision record_revision{};
+        try {
+            const auto source = authoringSnapshot();
+            const auto property = propertyEntity();
+            if (!property.has_value()) throw std::invalid_argument("The project property is unavailable.");
+            persisted = read_calculation_profile(property->properties);
+            record_revision = source.revision();
+        } catch (const std::exception& error) {
+            status->setText(QStringLiteral("Profile cannot be edited: %1")
+                                .arg(QString::fromUtf8(error.what())));
+            buttons->button(QDialogButtonBox::Save)->setEnabled(false);
+        }
+
+        const auto set_check_cell = [](QTableWidgetItem* item, bool checked) {
+            item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+            item->setCheckState(checked ? Qt::Checked : Qt::Unchecked);
+        };
+        const auto populate = [&] {
+            profile_id->setText(QString::fromStdString(persisted.id));
+            profile_version->setText(QStringLiteral("%1  (next saved edit becomes %2)")
+                                         .arg(persisted.version)
+                                         .arg(persisted.version == std::numeric_limits<unsigned>::max()
+                                                  ? QStringLiteral("unavailable")
+                                                  : QString::number(persisted.version + 1)));
+            const auto unit_index = display_unit->findData(QString::fromStdString(
+                area_unit_name(persisted.display_unit)));
+            if (unit_index >= 0) display_unit->setCurrentIndex(unit_index);
+            decimal_places->setValue(static_cast<int>(persisted.decimal_places));
+            const QSignalBlocker blocker(classifications);
+            classifications->setRowCount(0);
+            for (const auto& [name, rule] : persisted.classifications) {
+                const auto row = classifications->rowCount();
+                classifications->insertRow(row);
+                auto* name_item = new QTableWidgetItem(QString::fromStdString(name));
+                classifications->setItem(row, 0, name_item);
+                auto* building_item = new QTableWidgetItem;
+                set_check_cell(building_item, rule.building_total);
+                classifications->setItem(row, 1, building_item);
+                auto* living_item = new QTableWidgetItem;
+                set_check_cell(living_item, rule.living_total);
+                classifications->setItem(row, 2, living_item);
+            }
+            if (classifications->rowCount() > 0) classifications->selectRow(0);
+        };
+        populate();
+
+        QObject::connect(add_classification, &QPushButton::clicked, &dialog, [&] {
+            const auto row = classifications->rowCount();
+            classifications->insertRow(row);
+            auto* name_item = new QTableWidgetItem(QStringLiteral("new_classification"));
+            classifications->setItem(row, 0, name_item);
+            auto* building_item = new QTableWidgetItem;
+            set_check_cell(building_item, false);
+            classifications->setItem(row, 1, building_item);
+            auto* living_item = new QTableWidgetItem;
+            set_check_cell(living_item, false);
+            classifications->setItem(row, 2, living_item);
+            classifications->selectRow(row);
+            classifications->editItem(name_item);
+        });
+        QObject::connect(remove_classification, &QPushButton::clicked, &dialog, [&] {
+            const auto row = classifications->currentRow();
+            if (row < 0) {
+                status->setText(QStringLiteral("Choose a classification first."));
+                return;
+            }
+            classifications->removeRow(row);
+            status->setText(QStringLiteral("Classification removed from the pending profile edit."));
+        });
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        QObject::connect(buttons->button(QDialogButtonBox::Save), &QPushButton::clicked, &dialog, [&] {
+            try {
+                const auto source = authoringSnapshot();
+                if (source.revision() != record_revision) {
+                    status->setText(QStringLiteral(
+                        "The project changed while the profile editor was open. Close and reopen the editor before saving."));
+                    return;
+                }
+                const auto property = propertyEntity();
+                if (!property.has_value()) throw std::invalid_argument("The project property is unavailable.");
+                const auto id = profile_id->text().trimmed().toStdString();
+                if (id.empty() || id.size() > 128 || id.find('\0') != std::string::npos)
+                    throw std::invalid_argument("Profile ID must contain 1-128 characters.");
+                CalculationProfile next;
+                next.id = id;
+                next.version = persisted.version;
+                const auto unit = display_unit->currentData().toString().toStdString();
+                next.display_unit = parse_area_unit(json(unit));
+                next.decimal_places = static_cast<unsigned>(decimal_places->value());
+                for (int row = 0; row < classifications->rowCount(); ++row) {
+                    const auto* name_item = classifications->item(row, 0);
+                    const auto* building_item = classifications->item(row, 1);
+                    const auto* living_item = classifications->item(row, 2);
+                    if (!name_item || !building_item || !living_item)
+                        throw std::invalid_argument("Each classification needs a name and two total rules.");
+                    const auto name = name_item->text().trimmed().toStdString();
+                    if (name.empty() || name.size() > 128 || name.find('\0') != std::string::npos)
+                        throw std::invalid_argument("Classification names must contain 1-128 characters.");
+                    if (!next.classifications.emplace(
+                            name, ClassificationRule{building_item->checkState() == Qt::Checked,
+                                                     living_item->checkState() == Qt::Checked})
+                             .second) {
+                        throw std::invalid_argument("Classification names must be unique.");
+                    }
+                }
+                if (next.classifications.empty())
+                    throw std::invalid_argument("Add at least one classification rule.");
+                // Serialize for equality so profile edits do not depend on an
+                // operator== implementation for ClassificationRule.  The
+                // codec is also the single validation boundary for persisted
+                // profile shape and map ordering.
+                if (next.id == persisted.id && next.display_unit == persisted.display_unit &&
+                    next.decimal_places == persisted.decimal_places &&
+                    calculation_profile_json(next) == calculation_profile_json(persisted)) {
+                    status->setText(QStringLiteral("No profile changes to save."));
+                    return;
+                }
+                if (persisted.version == std::numeric_limits<unsigned>::max())
+                    throw std::invalid_argument("Calculation profile version cannot advance further.");
+                next.version = persisted.version + 1;
+                auto updated = *property;
+                updated.properties["calculation_profile"] = calculation_profile_json(next);
+                if (!applyEntity(std::move(updated), "edit calculation profile", source.revision()))
+                    return;
+                persisted = std::move(next);
+                record_revision = authoringSnapshot().revision();
+                refresh();
+                status->setText(QStringLiteral("Profile saved as version %1 through document history.")
+                                    .arg(persisted.version));
+                populate();
+            } catch (const std::exception& error) {
+                status->setText(QStringLiteral("Profile: %1").arg(QString::fromUtf8(error.what())));
+            }
+        });
+        dialog.exec();
+    }
+
     struct RevisionDiffSummary {
         std::size_t added_entities = 0;
         std::size_t removed_entities = 0;
@@ -3507,7 +3722,8 @@ public:
         if (contains({"boundary", "segment", "vertex", "point", "start", "end", "sweep",
                       "arc", "rise", "run", "span", "width", "depth", "radius", "height",
                       "elevation", "thickness", "origin", "direction", "up", "coordinate",
-                      "transform", "geometry", "bounds", "viewport", "position", "x", "y", "z"})) {
+                      "transform", "geometry", "bounds", "viewport", "position", "x_m", "y_m",
+                      "z_m", "x_mm", "y_mm", "z_mm", ".x", ".y", ".z", "_x", "_y", "_z"})) {
             return RevisionChangeCategory::geometric;
         }
         return RevisionChangeCategory::semantic;
@@ -13898,6 +14114,7 @@ public:
         add(QStringLiteral("reference-grids"), m_reference_grid_action);
         add(QStringLiteral("assemblies"), m_assembly_action);
         add(QStringLiteral("assistance"), m_assistance_action);
+        add(QStringLiteral("calculation-profile"), m_calculation_profile_action);
         add(QStringLiteral("workspace-profiles"), m_workspace_profiles_action);
         add(QStringLiteral("revisions"), m_revisions_action);
         add(QStringLiteral("transform"), m_transform_action);
@@ -14369,6 +14586,7 @@ public:
                  m_area_attributes_group->setVisible(true);
                  m_area_attributes_edit->setFocus();
             }},
+            {QStringLiteral("Edit calculation profile"), [this] { showCalculationProfileEditor(); }},
             {QStringLiteral("Manage workspace profiles"), [this] { showWorkspaceProfiles(); }},
             {QStringLiteral("Named revisions and comparison"), [this] { showRevisionHistory(); }},
             {QStringLiteral("Transform selection"), [this] { showBoundaryTransformEditor(); }},
@@ -15573,6 +15791,8 @@ private:
         m_assembly_action = new QAction(QStringLiteral("Assemblies…"), owner);
         m_assembly_action->setObjectName(QStringLiteral("assemblyCatalog"));
         m_assistance_action = new QAction(QStringLiteral("Offline assistance…"), owner);
+        m_calculation_profile_action = new QAction(QStringLiteral("Calculation profile…"), owner);
+        m_calculation_profile_action->setObjectName(QStringLiteral("calculationProfile"));
         m_workspace_profiles_action = new QAction(QStringLiteral("Workspace profiles…"), owner);
         m_workspace_profiles_action->setObjectName(QStringLiteral("workspaceProfiles"));
         m_revisions_action = new QAction(QStringLiteral("Named revisions…"), owner);
@@ -15588,10 +15808,11 @@ private:
         m_about_action = new QAction(QStringLiteral("About Property Studio"), owner);
         auto* user_guide_action = new QAction(QStringLiteral("User guide…"), owner);
         user_guide_action->setObjectName(QStringLiteral("userGuide"));
-        const std::array<QAction*, 21> secondary_actions{
+        const std::array<QAction*, 22> secondary_actions{
             m_annotation_action, m_reference_action, m_schedule_action, m_sheet_action,
             m_viewport_action, m_schedule_placement_action, m_view_action, m_remodel_action,
             m_relationship_action, m_levels_action, m_reference_grid_action, m_assembly_action, m_assistance_action,
+            m_calculation_profile_action,
             m_workspace_profiles_action, m_revisions_action, m_transform_action, m_redefine_action,
             m_detect_areas_action,
             m_terrain_action,
@@ -15740,6 +15961,8 @@ private:
                          [this] { showAssemblies(); });
         QObject::connect(m_assistance_action, &QAction::triggered, owner,
                          [this] { showAssistance(); });
+        QObject::connect(m_calculation_profile_action, &QAction::triggered, owner,
+                         [this] { showCalculationProfileEditor(); });
         QObject::connect(m_workspace_profiles_action, &QAction::triggered, owner,
                          [this] { showWorkspaceProfiles(); });
         QObject::connect(m_revisions_action, &QAction::triggered, owner,
@@ -16622,6 +16845,11 @@ private:
                                                 profile_group);
         m_include_living_check->setObjectName(QStringLiteral("includeLivingTotal"));
         profile_layout->addWidget(m_include_living_check);
+        m_edit_calculation_profile_button = new QPushButton(QStringLiteral("Edit profile…"),
+                                                             profile_group);
+        m_edit_calculation_profile_button->setObjectName(QStringLiteral("editCalculationProfile"));
+        m_edit_calculation_profile_button->setAccessibleName(QStringLiteral("Edit calculation profile"));
+        profile_layout->addWidget(m_edit_calculation_profile_button);
         inspector_layout->addWidget(profile_group);
         m_area_attributes_group = new QGroupBox(QStringLiteral("Area attributes"), inspector_body);
         m_area_attributes_group->setObjectName(QStringLiteral("areaAttributes"));
@@ -16688,6 +16916,8 @@ private:
                                                             m_include_living_check->isChecked());
                              }
                          });
+        QObject::connect(m_edit_calculation_profile_button, &QPushButton::clicked, owner,
+                         [this] { showCalculationProfileEditor(); });
         QObject::connect(m_classification_combo, &QComboBox::currentTextChanged, owner,
                          [this](const QString& text) {
                              if (!m_refreshing) {
@@ -17879,6 +18109,7 @@ private:
             m_factor_edit->setEnabled(false);
             m_include_building_check->setEnabled(false);
             m_include_living_check->setEnabled(false);
+            m_edit_calculation_profile_button->setEnabled(false);
         };
         const auto set_calculation_error = [&](const QString& message) {
             clear_values();
@@ -17995,6 +18226,7 @@ private:
         m_factor_edit->setEnabled(editable);
         m_include_building_check->setEnabled(editable);
         m_include_living_check->setEnabled(editable);
+        m_edit_calculation_profile_button->setEnabled(editable);
 
         try {
             const auto& entities = snapshot.entities();
@@ -20069,6 +20301,7 @@ private:
     QLabel* m_calculation_living_total_value{};
     QLabel* m_calculation_profile_context{};
     QLabel* m_calculation_profile_version{};
+    QPushButton* m_edit_calculation_profile_button{};
     QLabel* m_read_only_label{};
     QComboBox* m_classification_combo{};
     QComboBox* m_unitsCombo{};
@@ -20159,6 +20392,7 @@ private:
     QAction* m_reference_grid_action{};
     QAction* m_assembly_action{};
     QAction* m_assistance_action{};
+    QAction* m_calculation_profile_action{};
     QAction* m_workspace_profiles_action{};
     QAction* m_revisions_action{};
     QAction* m_transform_action{};

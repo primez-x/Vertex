@@ -117,6 +117,13 @@ the original expression, reduced numerator/denominator, and readable numeric
 The property entity stores a versioned `calculation_profile` with explicit
 classification rules. The inspector's building and living checkboxes edit
 that profile through one normal document command and advance its version.
+The **Calculation profile** command opens the same persisted profile for
+controlled editing: profile ID, display unit, decimal precision, and the
+building/living contribution rule for every classification are validated as a
+single edit. A changed profile advances its version and is recorded in normal
+undo/redo history; a no-op edit does not create a revision. The editor is
+available from the overflow menu, command palette, quick access, and the
+contextual calculation inspector.
 Unknown or unassigned classifications block totals with an explicit error;
 living area is never inferred from free-form labels. `calculate_areas` also
   rejects unresolved references, invalid geometry, and overlapping areas rather

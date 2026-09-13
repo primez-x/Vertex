@@ -1123,7 +1123,7 @@
         "src/calculations/calculations.cpp",
         "tests/calculation_tests.cpp"
       ],
-      "implementation_note": "Custom versioned profiles, rational factors and base/net area are implemented; profile inspector and standards fixtures remain open."
+      "implementation_note": "Custom versioned profiles, rational factors and base/net area are implemented. The Windows profile editor exposes persisted ID, display unit, precision, and explicit classification rules through one undoable versioned command; Apex standards fixtures remain open."
     },
     {
       "id": "APX-AREA-003",

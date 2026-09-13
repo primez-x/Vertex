@@ -52,6 +52,7 @@
 #include <QTableWidget>
 #include <QStandardPaths>
 #include <QSplitter>
+#include <QSpinBox>
 #include <QTimer>
 #include <QToolBar>
 #include <QUuid>
@@ -4001,6 +4002,59 @@ int main(int argc, char** argv) {
                 !building_total->text().contains(QStringLiteral("—")) &&
                 !living_total->text().contains(QStringLiteral("—")),
             "assigned profile rules should restore building and living totals");
+
+    auto* profile_action = window.findChild<QAction*>(QStringLiteral("calculationProfile"));
+    require(profile_action, "calculation profile editor should be available as a command");
+    const auto profile_editor_revision = window.document().revision();
+    const auto profile_editor_before = window.document().snapshot().entities().at("property-1")
+                                           .properties.at("calculation_profile");
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("calculationProfileDialog"));
+        QLineEdit* profile_id = nullptr;
+        QSpinBox* decimals = nullptr;
+        QTableWidget* classifications = nullptr;
+        QPushButton* save = nullptr;
+        if (dialog != nullptr) {
+            profile_id = dialog->findChild<QLineEdit*>(QStringLiteral("calculationProfileId"));
+            decimals = dialog->findChild<QSpinBox*>(QStringLiteral("calculationProfileDecimals"));
+            classifications = dialog->findChild<QTableWidget*>(
+                QStringLiteral("calculationProfileClassifications"));
+            save = dialog->findChild<QPushButton*>(QStringLiteral("saveCalculationProfile"));
+        }
+        require(dialog && profile_id && decimals && classifications && save,
+                "calculation profile editor should expose version, precision, rules, and save controls");
+        require(profile_id->text() == QStringLiteral("property-studio-default") &&
+                    classifications->rowCount() >= 1,
+                "calculation profile editor should load the persisted profile");
+        decimals->setValue(3);
+        save->click();
+        require(dialog->isVisible() &&
+                    dialog->findChild<QLabel*>(QStringLiteral("calculationProfileEditorStatus"))
+                        ->text()
+                        .contains(QStringLiteral("saved"), Qt::CaseInsensitive),
+                "calculation profile editor should report a successful versioned save");
+        dialog->reject();
+    });
+    profile_action->trigger();
+    const auto profile_editor_after = window.document().snapshot().entities().at("property-1")
+                                          .properties.at("calculation_profile");
+    require(window.document().revision() == profile_editor_revision + 1 &&
+                profile_editor_after.at("version").get<unsigned>() ==
+                    profile_editor_before.at("version").get<unsigned>() + 1 &&
+                profile_editor_after.at("decimal_places").get<unsigned>() == 3,
+            "calculation profile editor should persist precision as one undoable versioned command");
+    require(window.undoCommand() &&
+                window.document().snapshot().entities().at("property-1")
+                        .properties.at("calculation_profile")
+                        .at("decimal_places")
+                        .get<unsigned>() == profile_editor_before.at("decimal_places").get<unsigned>() &&
+                window.redoCommand() &&
+                window.document().snapshot().entities().at("property-1")
+                        .properties.at("calculation_profile")
+                        .at("decimal_places")
+                        .get<unsigned>() == 3,
+            "calculation profile editor changes should be undoable and redoable");
+
     const auto overlapping_boundary_id = window.createBoundary(
         sketch::Boundary{{{{0.5, 0.5}, {1.5, 0.5}, 0.0},
                           {{1.5, 0.5}, {1.5, 1.5}, 0.0},
@@ -4015,8 +4069,8 @@ int main(int argc, char** argv) {
     require(!calculation_status->text().contains(QStringLiteral("blocked"), Qt::CaseInsensitive),
             "undoing the overlap should restore valid totals");
     window.setMetricUnits(true);
-    require(base_area->text().contains(QStringLiteral("6.00 m²")) &&
-                factored_area->text().contains(QStringLiteral("4.50 m²")),
+    require(base_area->text().contains(QStringLiteral("6.000 m²")) &&
+                factored_area->text().contains(QStringLiteral("4.500 m²")),
             "calculation values should refresh in metric display units");
     window.setMetricUnits(false);
 
@@ -4629,8 +4683,8 @@ int main(int argc, char** argv) {
     require(window.selectEntity(boundary_id), "reopened boundary should be selectable");
     require(edit_object_button->isHidden(), "building object editor must hide for a measurement boundary");
     require(!calculation_status->text().contains(QStringLiteral("blocked"), Qt::CaseInsensitive) &&
-                base_area->text().contains(QStringLiteral("6.00 m²")) &&
-                factored_area->text().contains(QStringLiteral("4.50 m²")),
+                base_area->text().contains(QStringLiteral("6.000 m²")) &&
+                factored_area->text().contains(QStringLiteral("4.500 m²")),
             "calculation inspector should refresh from the reopened document");
 
     auto malformed = window.document().snapshot().entities().at(column_id.toStdString());
