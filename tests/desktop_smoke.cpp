@@ -134,9 +134,10 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
         auto* user_guide = window.findChild<QAction*>(QStringLiteral("userGuide"));
         auto* quick_access = window.findChild<QToolButton*>(QStringLiteral("quickAccess"));
         auto* quick_access_settings = window.findChild<QAction*>(QStringLiteral("quickAccessSettings"));
+        auto* export_image = window.findChild<QAction*>(QStringLiteral("exportDraftImage"));
         require(settings && user_guide && quick_access && quick_access->menu() &&
-                    quick_access_settings && !quick_access->accessibleName().isEmpty(),
-                "shortcut editor, quick-access menu, and local user guide must be discoverable");
+                    quick_access_settings && export_image && !quick_access->accessibleName().isEmpty(),
+                "shortcut editor, quick-access menu, draft image export, and local user guide must be discoverable");
         const auto* copy = window.findChild<QAction*>(QStringLiteral("copySelection"));
         const auto* cut = window.findChild<QAction*>(QStringLiteral("cutSelection"));
         const auto* paste = window.findChild<QAction*>(QStringLiteral("pasteSelection"));
@@ -3837,6 +3838,9 @@ int main(int argc, char** argv) {
     const auto svg_path =
         std::filesystem::path(temporary_directory.path().toStdWString()) / "desktop-smoke.svg";
     const auto svg_path_qstring = QString::fromStdWString(svg_path.wstring());
+    const auto image_path =
+        std::filesystem::path(temporary_directory.path().toStdWString()) / "desktop-smoke.png";
+    const auto image_path_qstring = QString::fromStdWString(image_path.wstring());
     auto column = sketch::encode_building_entity(
         sketch::RectangularColumn{"", {1.0, 2.0, 0.0}, 0.3, 0.4, 3.0, 0.0},
         {{"private_note", "preserve this"}});
@@ -4074,6 +4078,20 @@ int main(int argc, char** argv) {
     const auto svg_fingerprint_path = std::filesystem::path(svg_path.wstring() + L".fingerprint.json");
     require(std::filesystem::file_size(svg_fingerprint_path) > 0,
             "draft SVG must have an adjacent output fingerprint");
+    require(window.exportDraftImage(image_path_qstring), "draft PNG export should succeed locally");
+    require(std::filesystem::file_size(image_path) > 0, "draft PNG should be nonempty");
+    QImage draft_image(image_path_qstring);
+    require(!draft_image.isNull() && draft_image.size() == QSize(1600, 1200),
+            "draft PNG should be a deterministic raster of the shared sheet scene");
+    const auto image_fingerprint_path = std::filesystem::path(image_path.wstring() + L".fingerprint.json");
+    QFile image_fingerprint(QString::fromStdWString(image_fingerprint_path.wstring()));
+    require(image_fingerprint.open(QIODevice::ReadOnly | QIODevice::Text),
+            "draft PNG fingerprint should be readable");
+    const auto image_fingerprint_json = nlohmann::json::parse(image_fingerprint.readAll().toStdString());
+    require(image_fingerprint_json.at("output_kind") == "png" &&
+                image_fingerprint_json.at("fingerprint").at("digest_sha256").is_string(),
+            "draft PNG fingerprint must identify the output and digest");
+    image_fingerprint.close();
     auto* page_size = window.findChild<QComboBox*>(QStringLiteral("outputPageSize"));
     require(page_size && page_size->count() == 5, "output sheet selector should expose five page sizes");
     page_size->setCurrentText(QStringLiteral("A3"));
@@ -4172,10 +4190,14 @@ int main(int argc, char** argv) {
         QString::fromStdWString((project_path.parent_path() / "must-not-exist.pdf").wstring());
     const auto protected_svg =
         QString::fromStdWString((project_path.parent_path() / "must-not-exist.svg").wstring());
+    const auto protected_png =
+        QString::fromStdWString((project_path.parent_path() / "must-not-exist.png").wstring());
     require(!window.exportDraftPdf(protected_output) && !window.exportDraftSvg(protected_svg) &&
+                !window.exportDraftImage(protected_png) &&
                 !window.showPrintPreview() &&
                 !std::filesystem::exists(std::filesystem::path(protected_output.toStdWString())) &&
-                !std::filesystem::exists(std::filesystem::path(protected_svg.toStdWString())),
+                !std::filesystem::exists(std::filesystem::path(protected_svg.toStdWString())) &&
+                !std::filesystem::exists(std::filesystem::path(protected_png.toStdWString())),
             "invalid plan geometry must block output before creating a file or print dialog");
     auto* plan_error = window.findChild<QLabel*>(QStringLiteral("planGeometryError"));
     require(plan_error && !plan_error->isHidden() && !plan_error->text().isEmpty(),

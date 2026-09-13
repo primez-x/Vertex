@@ -600,15 +600,19 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   Its parser repairs pass Debug/Release and independent re-review, including
   canonical ordering, signed/unsigned limits and typed UTF-8 errors. The privacy
   guarantee excludes snapshot-derived payloads; caller dependency metadata is
-  public and unredacted. Preview, draft PDF, draft SVG, and print share the
-  retained PlanCanvas vector renderer and visible draft stamp. PDF, SVG, and
-  native 3D image exports now write adjacent fingerprint manifests that bind
+  public and unredacted. Preview, draft PDF, draft SVG, draft PNG, and print
+  share the retained PlanCanvas vector renderer and visible draft stamp. PDF,
+  SVG, PNG, and native 3D image exports now write adjacent fingerprint manifests that bind
   the document head, view filters/page size, linked processing roles, and
   running Windows executable digest. Print preview now writes a local
   driver-evidence receipt with printer identity, DPI and page rectangles;
   persisted sheet layout, physical printer calibration, and production output
   qualification remain open. The desktop output selector now applies Letter, Legal, Tabloid, A4, or
-  A3 to draft PDF and print preview.
+  A3 to draft PDF and print preview. Draft PNG and SVG use a deterministic
+  output target independent of paper selection. Draft PNG is a deterministic
+  1600 × 1200 raster export at 144 DPI and is covered by the integrated desktop
+  output smoke workflow; physical printer calibration and production output
+  qualification remain open.
 - New desktop projects now seed a validated `sheet_view_model` entity with a
   coordinated plan/elevation/section views, an A-101 sheet with plan,
   elevation, and section viewports, title block, and independent viewport scale;

@@ -20,7 +20,7 @@ The root CMake integration includes these desktop sources and dependencies:
 | `src/desktop/plan_canvas.cpp` | QPainter grid, calibrated transform, analytic lines/arcs, pan/zoom, selection, and tools |
 | `src/desktop/main.cpp` | Executable entry point and visual smoke fixtures |
 | `src/visualization/native_model_view.cpp` | Native OCCT architectural viewport (integrated at the Architectural tab seam) |
-| `tests/desktop_smoke.cpp` | Programmatic Qt smoke coverage for shared document, edits, history, save/reopen, and draft PDF |
+| `tests/desktop_smoke.cpp` | Programmatic Qt smoke coverage for shared document, edits, history, save/reopen, and draft PDF/PNG output |
 
 The target needs Qt 6.8.3 modules `Core`, `Gui`, `Widgets`, and
 `PrintSupport`. The implementation uses Qt 6.8's `QPdfWriter` from `Gui` and
@@ -141,7 +141,7 @@ width, sill, and height quantities, then previews the host wall with all of its
 openings through `make_wall` before one atomic document command. Slab creation
 validates the selected closed boundary and previews the complete profile with
 `make_slab` before the slab command. The UI also exposes `createNewProject`,
-`saveProject`, `exportDraftPdf`, `exportNativeViewImage`, and
+`saveProject`, `exportDraftPdf`, `exportDraftImage`, `exportNativeViewImage`, and
 `showPrintPreview` for the normal workflow.
 
 Selecting the top-level property exposes the compact **Project details**
@@ -288,11 +288,14 @@ dark, or high-contrast palettes; these presentation controls do not alter
 document geometry or measurement units.
 
 Draft PDF and SVG export use the same fit-to-content vector scene as the
-interactive preview and print callback. Both outputs carry the visible draft
-stamp and remain separate from the future authoritative fingerprint/currentness
-gate. The workspace strip exposes Letter, Legal, Tabloid, A4, and A3 output
-sheet choices; the selected size is applied to PDF and print preview without
-changing document geometry or revision.
+interactive preview and print callback. Draft PNG export rasterizes that same
+scene at a deterministic 1600 × 1200 canvas with an independent 144 DPI output
+profile. All three outputs carry the visible draft stamp and remain separate
+from the future authoritative fingerprint/currentness gate. Each output writes
+an adjacent fingerprint manifest. The workspace strip exposes Letter, Legal,
+Tabloid, A4, and A3 paper choices for PDF and print preview; SVG and PNG retain
+their deterministic 1600 × 1200 output target. Changing output presentation never
+changes document geometry or revision.
 
 Open loads into a temporary `LoadResult` and swaps the document only after a
 successful load, so corrupt, unsupported, or unreadable files leave the
@@ -487,17 +490,19 @@ behavior and the scaled capture runner.
 
 PDF export and print preview use the canvas's shared QPainter geometry renderer
 with an independent fit-to-content paper transform and a white background.
-They stamp `DRAFT — internal checkpoint` while sheets, profiles, and complete
-output qualification remain open. PDF, SVG, and native 3D image exports write
-an adjacent output-fingerprint manifest covering the document head, page/filter
-view descriptor, linked processing roles, and running Windows executable. An
-active filter instead stamps `DRAFT — VIEW FILTER ACTIVE` and explains that
-view filters do not change totals. Draft output does not mutate the document.
+Draft PNG export uses the same scene and a fixed 1600 × 1200 raster target at
+144 DPI. They stamp `DRAFT — internal checkpoint` while sheets, profiles, and
+complete output qualification remain open. PDF, SVG, PNG, and native 3D image
+exports write an adjacent output-fingerprint manifest covering the document
+head, page/filter view descriptor, linked processing roles, and running Windows
+executable. An active filter instead stamps `DRAFT — VIEW FILTER ACTIVE` and
+explains that view filters do not change totals. Draft output does not mutate
+the document.
 
 The Drawing sheets command manages the persisted page set. Adding a page seeds
 coordinated plan/elevation/section viewports with independent scales; removing
 a page uses the typed graph validator and is undoable. The selected page in
-that dialog is the page rendered by draft PDF, SVG, and print, and its identity
+that dialog is the page rendered by draft PDF, SVG, PNG, and print, and its identity
 is bound into the adjacent output fingerprint.
 
 The executable supports:

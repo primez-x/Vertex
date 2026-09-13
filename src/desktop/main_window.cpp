@@ -10722,6 +10722,58 @@ public:
         }
     }
 
+    bool exportDraftImage(const QString& path) {
+        refreshOutput();
+        if (!m_plan_geometry_error.isEmpty()) {
+            setError(QStringLiteral("Image export blocked: %1").arg(m_plan_geometry_error));
+            return false;
+        }
+        if (path.trimmed().isEmpty()) {
+            setError(QStringLiteral("Choose an image destination."));
+            return false;
+        }
+        try {
+            constexpr int width = 1600;
+            constexpr int height = 1200;
+            QImage image(width, height, QImage::Format_ARGB32_Premultiplied);
+            image.setDotsPerMeterX(144 * 3937 / 100);
+            image.setDotsPerMeterY(144 * 3937 / 100);
+            image.fill(Qt::white);
+            QPainter painter(&image);
+            if (!painter.isActive()) {
+                setError(QStringLiteral("Image export could not create a painter."));
+                return false;
+            }
+            if (!renderSheetOutput(painter, QRectF(0.0, 0.0, width, height), Qt::white)) {
+                painter.end();
+                return false;
+            }
+            painter.setPen(QColor(150, 50, 50));
+            painter.setFont(QFont(QStringLiteral("Inter"), 16));
+            painter.drawText(QRectF(30.0, 30.0, width - 60.0, 80.0),
+                             Qt::TextWordWrap | Qt::AlignRight | Qt::AlignTop,
+                             draftOutputStamp());
+            painter.end();
+            if (!image.save(path, "PNG")) {
+                setError(QStringLiteral("PNG export could not save the destination."));
+                return false;
+            }
+            if (!QFileInfo::exists(path) || QFileInfo(path).size() <= 0) {
+                setError(QStringLiteral("PNG export did not produce a file."));
+                return false;
+            }
+            if (!writeOutputFingerprint(path, m_document->snapshot(), QStringLiteral("png"))) {
+                return false;
+            }
+            clearError();
+            owner->statusBar()->showMessage(QStringLiteral("Draft image exported locally."), 5000);
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("PNG export failed: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     bool exportNativeViewImage(const QString& path) {
         if (path.trimmed().isEmpty()) {
             setError(QStringLiteral("Choose an image destination."));
@@ -12677,6 +12729,12 @@ public:
                     owner, QStringLiteral("Export draft SVG"), {}, QStringLiteral("SVG document (*.svg)"));
                 if (!selected.isEmpty()) exportDraftSvg(selected);
             }},
+            {QStringLiteral("Export draft image"), [this] {
+                const auto selected = QFileDialog::getSaveFileName(
+                    owner, QStringLiteral("Export draft image"), {},
+                    QStringLiteral("PNG image (*.png)"));
+                if (!selected.isEmpty()) exportDraftImage(selected);
+            }},
             {QStringLiteral("Import DXF"), [this] {
                 const auto selected = QFileDialog::getOpenFileName(
                     owner, QStringLiteral("Import DXF"), {}, QStringLiteral("DXF drawing (*.dxf *.DXF)"));
@@ -13684,6 +13742,10 @@ private:
         georeferencing_action->setObjectName(QStringLiteral("georeferencingWorkflow"));
         QObject::connect(georeferencing_action, &QAction::triggered, owner,
                          [this] { showGeoreferencing(); });
+        auto* export_image_action = more_menu->addAction(QStringLiteral("Export draft image…"));
+        export_image_action->setObjectName(QStringLiteral("exportDraftImage"));
+        QObject::connect(export_image_action, &QAction::triggered, owner,
+                         [this] { exportImageFromDialog(); });
         m_copy_action = new QAction(QStringLiteral("Copy selection"), owner);
         m_copy_action->setObjectName(QStringLiteral("copySelection"));
         m_copy_action->setShortcut(QKeySequence::Copy);
@@ -17283,6 +17345,14 @@ private:
         }
     }
 
+    void exportImageFromDialog() {
+        const auto selected = QFileDialog::getSaveFileName(
+            owner, QStringLiteral("Export draft image"), {}, QStringLiteral("PNG image (*.png)"));
+        if (!selected.isEmpty()) {
+            exportDraftImage(selected);
+        }
+    }
+
     void showAbout() {
         QMessageBox::information(
             owner, QStringLiteral("About Property Studio"),
@@ -18024,6 +18094,10 @@ bool MainWindow::exportDraftPdf(const QString& path) {
 
 bool MainWindow::exportDraftSvg(const QString& path) {
     return m_impl->exportDraftSvg(path);
+}
+
+bool MainWindow::exportDraftImage(const QString& path) {
+    return m_impl->exportDraftImage(path);
 }
 
 bool MainWindow::exportNativeViewImage(const QString& path) {

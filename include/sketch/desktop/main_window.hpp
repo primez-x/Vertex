@@ -407,6 +407,7 @@ public:
     [[nodiscard]] bool offerStartupRecovery();
     [[nodiscard]] bool exportDraftPdf(const QString& path);
     [[nodiscard]] bool exportDraftSvg(const QString& path);
+    [[nodiscard]] bool exportDraftImage(const QString& path);
     [[nodiscard]] bool exportNativeViewImage(const QString& path);
     // Local DXF R2013 interchange. Export writes an adjacent fidelity report;
     // import commits mapped geometry in one undoable command and retains the

@@ -1335,7 +1335,7 @@
       "implementation_sources": [
         "src/desktop/main_window.cpp"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "Draft PDF, SVG, PNG, and print preview share the validated sheet renderer; PNG uses a deterministic 1600 x 1200 raster target at 144 DPI and writes the same adjacent output fingerprint contract. Physical printer calibration, complete page-layout qualification, Apex output comparison, and the production gate remain open."
     },
     {
       "id": "APX-UI-001",
