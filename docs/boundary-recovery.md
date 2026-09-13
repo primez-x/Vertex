@@ -1,7 +1,7 @@
 # Durable boundary recovery
 
 This document defines the implementation and reference contract for durable
-unfinished boundary recovery in Property Studio.
+unfinished boundary recovery in Vertex.
 
 The contract below includes both implemented core APIs and planned integration.
 The recovery ledger and internal v4 archive save/load routes are implemented;

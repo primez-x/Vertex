@@ -59,7 +59,7 @@ for `provenance`, `permissions`, `native_version`, `operation`, `settings`,
 `observed_behavior`, and `loss_report`. Record an explicit no-loss observation
 when appropriate; do not omit the loss report. Record the actual consumer and
 legacy target version in legacy provenance and behavior evidence. A native file
-must be selected for every row; PDFs or synthetic Property Studio files cannot
+must be selected for every row; PDFs or synthetic Vertex files cannot
 establish native compatibility even if their hashes validate.
 
 Four file references are mandatory: `native_source`, `replacement_project`,

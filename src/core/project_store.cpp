@@ -1289,7 +1289,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
     if (!application.row() || sqlite3_column_type(application.get(), 0) != SQLITE_INTEGER ||
         sqlite3_column_int(application.get(), 0) != kApplicationId || application.row()) {
         storage_error(StorageErrorCode::unsupported_format,
-                      "file is not a Property Studio project database");
+                      "file is not a Vertex project database");
     }
     Statement user_version(database, "PRAGMA user_version");
     if (!user_version.row() || sqlite3_column_type(user_version.get(), 0) != SQLITE_INTEGER ||

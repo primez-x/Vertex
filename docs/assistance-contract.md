@@ -1,6 +1,6 @@
 # Offline assistance
 
-Property Studio assistance is an optional, deterministic local feature. It is
+Vertex assistance is an optional, deterministic local feature. It is
 session-scoped and starts disabled. The current engine has no model weights,
 network client, account, activation check, or hosted service dependency.
 

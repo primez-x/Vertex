@@ -1,6 +1,6 @@
 # Workspace UI
 
-Property Studio uses a Windows desktop shell designed around the canvas rather
+Vertex uses a Windows desktop shell designed around the canvas rather
 than a legacy menu layout. The compact top toolbar keeps file, history,
 workspace, and command actions one click away in a single 20 px logical row. The
 primary commands use bundled icons with tooltips and accessible names; units,

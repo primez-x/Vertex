@@ -170,20 +170,20 @@ int main(int argc, char** argv) {
         }
     }
     QApplication application(argc, argv);
-    application.setApplicationName(QStringLiteral("Property Studio"));
-    application.setApplicationDisplayName(QStringLiteral("Property Studio"));
-    application.setOrganizationName(QStringLiteral("Property Studio"));
+    application.setApplicationName(QStringLiteral("Vertex"));
+    application.setApplicationDisplayName(QStringLiteral("Vertex"));
+    application.setOrganizationName(QStringLiteral("Vertex"));
     const auto font_loaded = loadBundledFont(application);
     const auto smoke = application.arguments().contains(QStringLiteral("--smoke"));
     const auto architectural = architectural_smoke(application.arguments());
     if (smoke && !smoke_workspace_is_valid(application.arguments())) {
-        qCritical() << "Property Studio: --smoke-workspace must be measurement or architectural";
+        qCritical() << "Vertex: --smoke-workspace must be measurement or architectural";
         return 2;
     }
     if (!font_loaded) {
-        qWarning() << "Property Studio: bundled Inter font was not loaded";
+        qWarning() << "Vertex: bundled Inter font was not loaded";
         if (smoke) {
-            qCritical() << "Property Studio: refusing visual smoke capture without bundled font";
+            qCritical() << "Vertex: refusing visual smoke capture without bundled font";
             return 3;
         }
     }
@@ -198,7 +198,7 @@ int main(int argc, char** argv) {
         }
         if (application.arguments().contains(QStringLiteral("--smoke-reference")) &&
             !seed_smoke_reference(window)) {
-            qCritical() << "Property Studio: reference underlay smoke fixture failed";
+            qCritical() << "Vertex: reference underlay smoke fixture failed";
             return 2;
         }
         window.fitView();
@@ -216,7 +216,7 @@ int main(int argc, char** argv) {
                            [&application, &window, output, native_output, architectural] {
             window.fitView();
             if (architectural && !window.exportNativeViewImage(native_output)) {
-                qCritical() << "Property Studio: native 3D smoke export failed:"
+                qCritical() << "Vertex: native 3D smoke export failed:"
                             << window.lastError();
                 application.exit(4);
                 return;
@@ -230,7 +230,7 @@ int main(int argc, char** argv) {
             }
             const auto image = window.grab();
             if (image.isNull() || !image.save(output)) {
-                qCritical() << "Property Studio: visual smoke capture failed:" << output;
+                qCritical() << "Vertex: visual smoke capture failed:" << output;
                 application.exit(2);
                 return;
             }

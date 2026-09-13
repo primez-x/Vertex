@@ -1,6 +1,6 @@
-# Property Studio project formats v1 through v6
+# Vertex project formats v1 through v6
 
-Property Studio projects are standalone SQLite files containing one immutable logical
+Vertex projects are standalone SQLite files containing one immutable logical
 document snapshot and the complete command history known when that snapshot was captured.
 The file is an interchange/save artifact. The current foundation keeps the working document
 in memory; it does not claim to be a live SQLite working journal.

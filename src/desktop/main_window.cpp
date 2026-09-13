@@ -4170,7 +4170,7 @@ public:
             }
             const auto path = QFileDialog::getSaveFileName(
                 owner, QStringLiteral("Restore named revision as"), {},
-                QStringLiteral("Property Studio project (*.bldproj)"));
+                QStringLiteral("Vertex project (*.bldproj)"));
             if (path.isEmpty()) return;
             if (restoreNamedRevision(item->data(Qt::UserRole + 1).toString(), path)) {
                 status->setText(QStringLiteral("Revision copy written. The current document is unchanged."));
@@ -12231,7 +12231,7 @@ public:
     bool saveProject() {
         if (m_file_path.empty()) {
             const auto selected = QFileDialog::getSaveFileName(
-            owner, QStringLiteral("Save project"), {}, QStringLiteral("Property Studio project (*.bldproj)"));
+            owner, QStringLiteral("Save project"), {}, QStringLiteral("Vertex project (*.bldproj)"));
             if (selected.isEmpty()) {
                 return false;
             }
@@ -12477,7 +12477,7 @@ public:
             generator.setFileName(path);
             generator.setSize(QSize(width, height));
             generator.setViewBox(QRect(0, 0, width, height));
-            generator.setTitle(QStringLiteral("Property Studio draft drawing"));
+            generator.setTitle(QStringLiteral("Vertex draft drawing"));
             generator.setDescription(QStringLiteral("Draft output from the shared vector canvas"));
             QPainter painter(&generator);
             if (!painter.isActive()) {
@@ -14093,7 +14093,7 @@ public:
         auto* layout = new QVBoxLayout(&dialog);
         auto* presets = new QComboBox(&dialog);
         presets->setObjectName(QStringLiteral("keyboardShortcutPreset"));
-        presets->addItems({QStringLiteral("Current bindings"), QStringLiteral("Property Studio defaults"),
+        presets->addItems({QStringLiteral("Current bindings"), QStringLiteral("Vertex defaults"),
                            QStringLiteral("Apex v7 compatible subset")});
         layout->addWidget(presets);
         auto* help = new QLabel(QStringLiteral(
@@ -19120,7 +19120,7 @@ private:
         if (projectDirty() || hasBoundaryDraftChanges()) {
             title += QStringLiteral(" *");
         }
-        owner->setWindowTitle(title);
+        owner->setWindowTitle(QStringLiteral("Vertex — ") + title);
         if (m_measurement_action) {
             QSignalBlocker first(m_measurement_action);
             QSignalBlocker second(m_architectural_action);
@@ -19519,7 +19519,7 @@ private:
 
     void openFromDialog() {
         const auto selected = QFileDialog::getOpenFileName(
-            owner, QStringLiteral("Open project"), {}, QStringLiteral("Property Studio project (*.bldproj)"));
+            owner, QStringLiteral("Open project"), {}, QStringLiteral("Vertex project (*.bldproj)"));
         if (!selected.isEmpty()) {
             openProject(selected);
         }
@@ -20251,7 +20251,7 @@ public:
 private:
     void saveAsFromDialog() {
         const auto selected = QFileDialog::getSaveFileName(
-            owner, QStringLiteral("Save project as"), {}, QStringLiteral("Property Studio project (*.bldproj)"));
+            owner, QStringLiteral("Save project as"), {}, QStringLiteral("Vertex project (*.bldproj)"));
         if (!selected.isEmpty()) {
             saveProjectAs(selected);
         }

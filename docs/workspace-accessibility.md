@@ -45,7 +45,7 @@ their current bindings until edited or reopened.
 The **Apex v7 compatible subset** preset assigns F2 to Save, F3 to Open, and F4
 to Define Area, following the official [Apex v7 user-interface guide](https://apexwin.com/support/ApexSketchv7/ApexSketchv7-User-Interface.pdf)
 and [Define First guide](https://www.apexwin.com/support/ApexSketchv7/ApexSketchv7-DefineFirst.pdf).
-Other commands retain Property Studio defaults. This subset does not establish
+Other commands retain Vertex defaults. This subset does not establish
 full Apex keyboard or behavior parity. Canvas F, D, Enter, Escape, Undo and Redo
 retain their existing meanings; navigation and ordinary text-editing keys cannot
 be reassigned by this editor.

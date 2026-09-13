@@ -221,9 +221,9 @@ std::string stable_id(std::string_view prefix, std::string_view material) {
 std::vector<AssistanceResource> resources() {
     return {
         {"assistance-engine-v1", "assets/assistance/deterministic-engine-v1.json",
-         "Property Studio deterministic offline assistance engine v1", "private-source-notice", true},
+         "Vertex deterministic offline assistance engine v1", "private-source-notice", true},
         {"Property-Studio-LICENSE", "LICENSE",
-         "Property Studio source ownership notice", "private-source-notice", true},
+         "Vertex source ownership notice", "private-source-notice", true},
     };
 }
 

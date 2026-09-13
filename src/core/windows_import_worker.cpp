@@ -537,7 +537,7 @@ bool parent_job_allows_breakaway(bool& parent_in_job, WindowsImportWorkerReport&
 bool app_container_sid(SidBuffer& sid, WindowsImportWorkerReport& report) {
     static constexpr wchar_t profile_name[] = L"PropertyStudio.ImportWorker";
     PSID value = nullptr;
-    auto result = CreateAppContainerProfile(profile_name, L"Property Studio import worker",
+    auto result = CreateAppContainerProfile(profile_name, L"Vertex import worker",
                                        L"Local worker for bounded drawing-file interchange", nullptr, 0, &value);
     if (SUCCEEDED(result) && value) {
         sid = SidBuffer(value);

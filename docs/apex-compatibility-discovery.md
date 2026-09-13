@@ -14,7 +14,7 @@ machine 32-bit, and current user) contained no display-name match for
 installation, a differently named product, or an installation on another
 computer. No representative native Apex project has been identified in the
 current workspace. The retained `.bldproj` compatibility fixtures are generated
-by Property Studio and cannot serve as evidence of Apex compatibility.
+by Vertex and cannot serve as evidence of Apex compatibility.
 
 The exact installed edition, executable version/hash, enabled modules, settings,
 native source files, and actual caller applications remain to be identified.

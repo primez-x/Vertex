@@ -1,7 +1,12 @@
-# Property Studio
+# Vertex
 
-Working name for an independent, offline Windows property-measurement and
-residential/light-commercial architectural application.
+Vertex is an independent, offline-first Windows application for property
+measurement and residential/light-commercial architectural work.
+
+The product name is **Vertex**. The current development build keeps the
+`property-studio.exe` executable name, `.bldproj` extension, and
+`property-studio` schema/package identifiers as stable compatibility IDs while
+the Vertex product surface is finalized.
 
 **Development checkpoint — not a production release or a certified Apex
 replacement.** The accepted scope requires Apex parity, compatibility, both

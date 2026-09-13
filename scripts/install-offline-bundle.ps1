@@ -91,7 +91,7 @@ function Assert-RuntimeInstall([string]$RootPath, [string]$ManifestName) {
     $verifierPath = Resolve-SafeChildPath $RootPath 'verify-offline-bundle.ps1' 'installed verifier path'
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf) -or
         -not (Test-Path -LiteralPath $verifierPath -PathType Leaf)) {
-        Fail 'install root is not a Property Studio offline runtime'
+        Fail 'install root is not a Vertex offline runtime'
     }
     try {
         $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -164,7 +164,7 @@ try {
         if (Test-Path -LiteralPath $targetRoot) {
             Fail 'install root could not be removed'
         }
-        Write-Output ("Removed the verified Property Studio runtime from {0}." -f $targetRoot)
+        Write-Output ("Removed the verified Vertex runtime from {0}." -f $targetRoot)
         exit 0
     }
 

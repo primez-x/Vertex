@@ -397,7 +397,7 @@ public:
         result.reserve(records_.size() * 80 + 256);
         result += "ISO-10303-21;\nHEADER;\n";
         result += "FILE_DESCRIPTION(('ViewDefinition [CoordinationView_V2.0]'),'2;1');\n";
-        result += "FILE_NAME('property-project.ifc','1970-01-01T00:00:00',('Property Studio'),('Property Studio'),'Property Studio','Property Studio','');\n";
+        result += "FILE_NAME('vertex-project.ifc','1970-01-01T00:00:00',('Vertex'),('Vertex'),'Vertex','Vertex','');\n";
         result += "FILE_SCHEMA(('IFC4'));\nENDSEC;\nDATA;\n";
         for (const auto& record : records_) {
             result += '#';
@@ -463,12 +463,12 @@ struct ExportContext {
     std::size_t ordinal{};
 
     explicit ExportContext(const IfcExchangeLimits& limits) : limits(limits), builder(limits) {
-        const auto person = builder.add("IFCPERSON", "$,$,'Property Studio',$,$,$,$");
+        const auto person = builder.add("IFCPERSON", "$,$,'Vertex',$,$,$,$");
         const auto organization = builder.add("IFCORGANIZATION", "$,'Private',$,$");
         const auto person_org = builder.add("IFCPERSONANDORGANIZATION",
                                             ref(person) + "," + ref(organization) + ",$");
         const auto application = builder.add("IFCAPPLICATION",
-                                             ref(organization) + ",'1.0','Property Studio','PS'");
+                                             ref(organization) + ",'1.0','Vertex','VX'");
         owner_history = builder.add("IFCOWNERHISTORY", ref(person_org) + "," + ref(application) +
             ",$,.ADDED.,$,$,$,0");
         const auto unit = builder.add("IFCSIUNIT", "* ,.LENGTHUNIT.,$,.METRE.");

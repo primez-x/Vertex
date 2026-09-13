@@ -87,11 +87,11 @@ manifest, and verifies the installed bytes again:
 ```powershell
 pwsh -NoProfile -NonInteractive `
   -File .\artifacts\packages\property-studio-offline\install-offline-bundle.ps1 `
-  -InstallRoot 'C:\Program Files\Property Studio'
+  -InstallRoot 'C:\Program Files\Vertex'
 
 pwsh -NoProfile -NonInteractive `
-  -File 'C:\Program Files\Property Studio\verify-offline-bundle.ps1' `
-  -Root 'C:\Program Files\Property Studio' `
+  -File 'C:\Program Files\Vertex\verify-offline-bundle.ps1' `
+  -Root 'C:\Program Files\Vertex' `
   -ManifestName runtime-manifest.json
 ```
 
@@ -107,12 +107,12 @@ destinations, and neither action contacts a network service:
 ```powershell
 pwsh -NoProfile -NonInteractive `
   -File .\artifacts\packages\property-studio-offline\install-offline-bundle.ps1 `
-  -InstallRoot 'C:\Program Files\Property Studio' `
+  -InstallRoot 'C:\Program Files\Vertex' `
   -Action Repair
 
 pwsh -NoProfile -NonInteractive `
   -File .\artifacts\packages\property-studio-offline\install-offline-bundle.ps1 `
-  -InstallRoot 'C:\Program Files\Property Studio' `
+  -InstallRoot 'C:\Program Files\Vertex' `
   -Action Uninstall
 ```
 
@@ -120,7 +120,7 @@ Run a hidden installed-runtime smoke check after the installed-byte verifier:
 
 ```powershell
 python scripts/test_installed_runtime.py `
-  --install-root 'C:\Program Files\Property Studio' `
+  --install-root 'C:\Program Files\Vertex' `
   --evidence-root artifacts/installed-runtime
 ```
 
