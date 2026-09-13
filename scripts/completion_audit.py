@@ -46,6 +46,7 @@ REQUIRED_DOCUMENTS = (
     "docs/project-format.md",
     "docs/production-qualification.md",
     "docs/dependencies/offline-static-audit.md",
+    "docs/dependencies/source-provenance.md",
     "docs/requirements/apex-parity.json",
     "docs/requirements/production-gates.json",
 )
@@ -192,6 +193,37 @@ def _offline_static_check(root: pathlib.Path):
                   details=result.get("errors", ()))
 
 
+def _source_provenance_check(root: pathlib.Path):
+    """Verify that tracked project paths have one declared ownership class."""
+
+    manifest = root / "third_party/source-provenance.json"
+    script = root / "scripts/source_provenance_audit.py"
+    evidence = (_relative(manifest, root), _relative(script, root))
+    if not manifest.is_file():
+        return _check("source_provenance", "missing",
+                      "Source ownership manifest is missing", evidence=evidence)
+    if not script.is_file():
+        return _check("source_provenance", "missing",
+                      "Source ownership audit script is missing", evidence=evidence)
+    try:
+        spec = importlib.util.spec_from_file_location("source_provenance_for_completion", script)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"could not load {script}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        result = module.audit_repository(root, manifest)
+    except (OSError, ValueError, RuntimeError, ImportError, UnicodeError) as error:
+        return _check("source_provenance", "blocked",
+                      "Source ownership audit could not be evaluated",
+                      evidence=evidence, details=(str(error),))
+    status = "pass" if result.get("audit_status") == "pass" else "blocked"
+    return _check("source_provenance", status,
+                  "Tracked paths have exactly one declared ownership class" if status == "pass" else
+                  "Source ownership boundary is incomplete or overlapping",
+                  evidence=evidence,
+                  details=result.get("errors", ()))
+
+
 def _latest_test_logs(root: pathlib.Path):
     return [root / "build/windows-release/Testing/Temporary/LastTest.log",
             root / "build/windows-debug/Testing/Temporary/LastTest.log"]
@@ -318,6 +350,7 @@ def build_report(root: pathlib.Path | str = ROOT):
     checks.append(_path_check(root, "documentation", "Required project documentation", REQUIRED_DOCUMENTS))
     checks.append(_configuration_check(root))
     checks.append(_offline_static_check(root))
+    checks.append(_source_provenance_check(root))
 
     log_results = [test_log_status(path) for path in _latest_test_logs(root)]
     log_passes = sum(result["status"] == "pass" for result in log_results)
@@ -351,8 +384,8 @@ def build_report(root: pathlib.Path | str = ROOT):
     checks.append(_qualification_check(root))
 
     summary = dict(collections.Counter(check["status"] for check in checks))
-    production_checks = {"production_gate", "runtime_smoke", "packaging", "offline_static", "compatibility",
-                         "qualification_manifest"}
+    production_checks = {"production_gate", "runtime_smoke", "packaging", "offline_static", "source_provenance",
+                         "compatibility", "qualification_manifest"}
     production_ready = all(next(check for check in checks if check["id"] == identifier)["status"] == "pass"
                            for identifier in production_checks)
     return {

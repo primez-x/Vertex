@@ -1,0 +1,50 @@
+{
+  "schema_version": "1.0",
+  "ownership": {
+    "first_party": {
+      "roots": [
+        "assets/",
+        "cmake/",
+        "docs/",
+        "include/",
+        "packaging/",
+        "scripts/",
+        "src/",
+        "tests/"
+      ],
+      "files": [
+        ".gitattributes",
+        ".gitignore",
+        "CMakeLists.txt",
+        "CMakePresets.json",
+        "LICENSE",
+        "README.md",
+        "vcpkg.json"
+      ]
+    },
+    "third_party_provenance": {
+      "roots": [
+        "third_party/"
+      ],
+      "files": []
+    },
+    "external_excluded": {
+      "roots": [
+        ".deps/",
+        "artifacts/",
+        "build/",
+        "dist/",
+        "generated/",
+        "local-generated/",
+        "out/",
+        "tmp/"
+      ],
+      "files": []
+    }
+  },
+  "third_party_manifests": [
+    "third_party/dependencies.json",
+    "third_party/distribution-components.json"
+  ],
+  "boundary": "First-party application source and project-authored metadata are separated from third-party provenance records. Contributor rights, legal title, and upstream license review remain independent checks."
+}

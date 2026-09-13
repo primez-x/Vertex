@@ -463,9 +463,13 @@
       "package": 2,
       "blocker": null,
       "implementation_sources": [
-        "third_party/dependencies.json"
+        "third_party/dependencies.json",
+        "third_party/source-provenance.json",
+        "scripts/source_provenance_audit.py",
+        "tests/test_source_provenance_audit.py",
+        "docs/dependencies/source-provenance.md"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "The tracked checkout now has a deterministic, fail-closed source provenance audit with one ownership class per path and explicit exclusions for generated/dependency-cache trees. Contributor rights, legal title, upstream license clearance, and the production gate remain open."
     },
     {
       "id": "COMP-LIC-003",

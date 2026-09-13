@@ -2,8 +2,9 @@
 
 ## Latest integrated checkpoint
 
-At the current integrated checkpoint, the Release desktop build and CTest matrix
-completed with 140 executed tests passing (the production acceptance test is
+At the current integrated checkpoint, the Release and Debug desktop builds and
+CTest matrices completed with 141 executed tests passing in each configuration
+(the production acceptance test is
 intentionally disabled and the AppContainer runtime test is skipped when the host is already
 inside a parent Job Object). The focused Debug and Release architectural
 schedule tests and the focused Debug canvas test also pass. Print preview now
@@ -33,6 +34,12 @@ only to an explicitly selected compatible dimension, retains the original unit
 and capture provenance in the entity extension, and rejects occupied targets or
 entity mismatches without mutation. This remains a local adapter boundary;
 vendor hardware, transport, and appraisal-caller qualification are still open.
+The tracked source boundary is now explicit in
+`third_party/source-provenance.json`: a fail-closed audit assigns every tracked
+path to first-party source, third-party provenance, or an excluded generated
+tree, with case-insensitive overlap and path-safety checks. This proves
+structural separation for private handoff review; contributor rights, legal
+title, and upstream license clearance remain separate production gates.
 Portable project transfer now has its own local staging path. The project
 package assembler reads a saved `.bldproj` through SQLite's read-only query
 path, preserves the project byte stream, verifies every revision asset, emits

@@ -60,6 +60,9 @@ can be composed into a deterministic Windows offline bundle with
 The Release PE import report also has a separate [offline static import audit](docs/dependencies/offline-static-audit.md);
 it records direct application imports separately from transitive third-party
 network libraries.
+The tracked checkout also has a [source provenance audit](docs/dependencies/source-provenance.md)
+that keeps first-party source separate from third-party provenance and excludes
+build, dependency-cache, and generated paths from private handoff review.
 
 The [project format](docs/project-format.md), [calculation contract](docs/calculations.md),
 [workspace UI](docs/workspace-ui.md),

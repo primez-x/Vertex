@@ -50,6 +50,17 @@ transport libraries, while retaining any transitive third-party imports as
 review data. This static result is intentionally independent of the runtime
 network-denied qualification gate.
 
+Run the [source provenance audit](source-provenance.md) alongside the inventory:
+
+```powershell
+python scripts/source_provenance_audit.py --root .
+```
+
+It verifies that the tracked checkout has exactly one declared ownership class
+per path and that generated or dependency-cache trees are excluded. This is a
+structural source-handoff check; it does not replace contributor-rights,
+upstream-license, or redistributability review.
+
 `stage_offline_bundle.py` consumes this report as an immutable input. It
 retains the full inventory under `metadata/distribution-inventory.json`,
 derives a sorted `license_inventory` and `dependency_closure` summary in the

@@ -167,6 +167,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/dependencies/source-provenance.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/desktop-workflow.md"
     },
     {
@@ -856,6 +860,10 @@
     {
       "category": "source",
       "path": "scripts/source_kit_manifest.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/source_provenance_audit.py"
     },
     {
       "category": "source",
@@ -1823,6 +1831,10 @@
     },
     {
       "category": "source",
+      "path": "tests/test_source_provenance_audit.py"
+    },
+    {
+      "category": "source",
       "path": "tests/test_stage_offline_bundle.py"
     },
     {
@@ -2004,6 +2016,10 @@
     {
       "category": "source",
       "path": "third_party/README.md"
+    },
+    {
+      "category": "source",
+      "path": "third_party/source-provenance.json"
     },
     {
       "category": "source",
