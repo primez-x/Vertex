@@ -298,10 +298,15 @@ void PlanCanvas::setCanvasBackground(QColor background) {
 }
 
 void PlanCanvas::setSelectedId(const QString& entity_id) {
-    m_selected_id = entity_id;
+    setSelectedIds(entity_id.isEmpty() ? QStringList{} : QStringList{entity_id});
+}
+
+void PlanCanvas::setSelectedIds(const QStringList& entity_ids) {
     for (auto& entity : m_entities) {
-        entity.selected = entity.id == m_selected_id;
+        entity.selected = entity_ids.contains(entity.id);
     }
+    for (auto& label : m_labels) label.selected = entity_ids.contains(label.id);
+    for (auto& reference : m_references) reference.selected = entity_ids.contains(reference.id);
     update();
 }
 
@@ -758,6 +763,10 @@ void PlanCanvas::setEntityClicked(std::function<void(QString)> callback) {
     m_entity_clicked = std::move(callback);
 }
 
+void PlanCanvas::setEntitySelectionClicked(std::function<void(QString, bool)> callback) {
+    m_entity_selection_clicked = std::move(callback);
+}
+
 void PlanCanvas::setCursorMoved(std::function<void(Vec2)> callback) {
     m_cursor_moved = std::move(callback);
 }
@@ -867,7 +876,9 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
     if (button != Qt::LeftButton) return;
     if (navigateOverviewMap(position)) return;
     if (m_tool == CanvasTool::select) {
-        if (m_entity_clicked) m_entity_clicked(hitTest(position));
+        if (m_entity_selection_clicked)
+            m_entity_selection_clicked(hitTest(position), modifiers.testFlag(Qt::ControlModifier));
+        else if (m_entity_clicked) m_entity_clicked(hitTest(position));
     } else if (m_point_clicked) {
         m_point_clicked(snapped(toModel(position, rect())));
     }

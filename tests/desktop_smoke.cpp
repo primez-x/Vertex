@@ -575,7 +575,21 @@ void test_plan_canvas_native_pointer_events() {
     QCoreApplication::sendEvent(&canvas, &tablet_release);
     require(tablet_release.isAccepted() && point_clicks == 2,
             "active-pen release must close the pointer transaction without a duplicate point");
-
+    canvas.setTool(sketch::desktop::CanvasTool::select);
+    int selection_clicks = 0;
+    bool toggle_selection = false;
+    canvas.setEntitySelectionClicked([&](QString, bool toggle) {
+        ++selection_clicks;
+        toggle_selection = toggle;
+    });
+    QMouseEvent control_click(QEvent::MouseButtonPress, QPointF(200, 200), QPointF(200, 200),
+                              Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
+    QCoreApplication::sendEvent(&canvas, &control_click);
+    require(selection_clicks == 1 && toggle_selection, "Ctrl-click requests additive toggle selection");
+    QMouseEvent plain_click(QEvent::MouseButtonPress, QPointF(200, 200), QPointF(200, 200),
+                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(&canvas, &plain_click);
+    require(selection_clicks == 2 && !toggle_selection, "plain click requests replacement selection");
 }
 
 void test_external_project_change_blocks_save() {
@@ -781,6 +795,65 @@ void test_room_volume_authoring_workflow() {
             "room elevation inspector editing must accept below-grade coordinates");
 }
 
+void test_multiple_selection_clipboard_workflow() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    const auto first = window.createStraightWall({0, 0}, {5, 0}, "exterior");
+    const auto opening = window.createHostedOpening("door", "1 ft", "3 ft", "0 ft", "7 ft");
+    const auto second = window.createStraightWall({0, 3}, {5, 3}, "interior");
+    require(!first.isEmpty() && !opening.isEmpty() && !second.isEmpty(), "multi-selection fixture");
+    require(window.selectEntity(first) && window.selectEntity(second, true) &&
+                window.selectedEntityIds() == QStringList{first, second}, "additive selection preserves order");
+    require(window.selectEntity(first, true) && window.selectedEntityIds() == QStringList{second} &&
+                window.selectEntity(first, true) && window.selectedEntityIds() == QStringList{second, first},
+            "Ctrl selection toggles roots without duplicates");
+    require(window.selectEntity(opening, true), "explicit hosted opening joins selection");
+    require(window.selectEntity({}, true) && window.selectedEntityIds().size() == 3,
+            "Ctrl-click on empty canvas preserves selection");
+    auto* canvas = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    require(canvas && std::count_if(canvas->entities().begin(), canvas->entities().end(),
+                [&](const auto& entity) { return entity.selected && (entity.id == first || entity.id == second); }) == 2,
+            "both selected walls are highlighted on the canvas");
+    const auto revision = window.document().revision();
+    require(window.copySelection() && window.document().revision() == revision, "combined copy is read only");
+    const auto payload = nlohmann::json::parse(QGuiApplication::clipboard()->text().toStdString());
+    require(payload.at("root_ids").size() == 3 && payload.at("entities").size() == 3,
+            "combined clipboard deduplicates explicitly selected hosted dependencies");
+    require(window.pasteSelection() && window.document().revision() == revision + 1,
+            "combined paste is exactly one revision");
+    const auto roots = window.selectedEntityIds();
+    const auto pasted = window.document().snapshot();
+    require(roots.size() == 3 && roots[0] != second && roots[1] != first && roots[2] != opening &&
+                pasted.entities().at(roots[2].toStdString()).properties.at("wall_id") == roots[1].toStdString(),
+            "paste selects all fresh roots in order and remaps the hosted link");
+    require(window.undoCommand() && !window.document().snapshot().entities().contains(roots[0].toStdString()) &&
+                !window.document().snapshot().entities().contains(roots[1].toStdString()) && window.redoCommand(),
+            "one undo and redo covers the complete pasted selection");
+    require(window.selectEntity(roots[0]) && window.selectEntity(roots[1], true), "select both pasted walls");
+    const auto cut_revision = window.document().revision();
+    require(window.cutSelection() && window.document().revision() == cut_revision + 1 &&
+                !window.document().snapshot().entities().contains(roots[2].toStdString()) &&
+                window.selectedEntityIds().isEmpty() && window.undoCommand(),
+            "cut atomically removes both walls and their opening and undo restores them");
+    require(window.selectEntity(first) && window.selectEntity(second, true), "select originals for delete");
+    const auto delete_revision = window.document().revision();
+    require(window.deleteSelection() && window.document().revision() == delete_revision + 1 &&
+                !window.document().snapshot().entities().contains(first.toStdString()) &&
+                !window.document().snapshot().entities().contains(second.toStdString()) &&
+                !window.document().snapshot().entities().contains(opening.toStdString()) &&
+                window.undoCommand() && window.redoCommand(), "combined delete is one undoable graph command");
+    require(window.selectEntity(roots[0]) && window.selectEntity("property-1", true), "mixed unsupported selection");
+    const auto rejected_revision = window.document().revision();
+    const auto clipboard_before = QGuiApplication::clipboard()->text();
+    require(!window.cutSelection() && !window.deleteSelection() && window.document().revision() == rejected_revision &&
+                QGuiApplication::clipboard()->text() == clipboard_before &&
+                window.document().snapshot().entities().contains(roots[0].toStdString()),
+            "unsupported mixed selections reject the complete operation without partial mutation");
+    require(window.selectEntity(roots[0]) && window.selectedEntityIds() == QStringList{roots[0]} &&
+                window.selectEntity({}) && window.selectedEntityIds().isEmpty(),
+            "ordinary replacement and empty selection retain single-selection behavior");
+}
+
 void test_selection_clipboard_workflow() {
     using namespace sketch;
     desktop::MainWindow window;
@@ -805,6 +878,10 @@ void test_selection_clipboard_workflow() {
     require(clipboard_text.contains(QStringLiteral("sketch.document.clipboard")) &&
                 clipboard_text.contains(wall_id) && clipboard_text.contains(opening_id),
             "clipboard payload must identify its format and retain the selected wall graph");
+
+    auto single_root_payload = nlohmann::json::parse(clipboard_text.toStdString());
+    single_root_payload.erase("root_ids");
+    QGuiApplication::clipboard()->setText(QString::fromStdString(single_root_payload.dump()));
 
     require(window.pasteSelection(), "pasting a copied wall graph should succeed");
     const auto pasted = window.document().snapshot();
@@ -1062,6 +1139,7 @@ void test_material_clipboard_transfer() {
         "material dependency transfer must be one undoable paste");
     require(target.selectEntity(QString::fromStdString(pasted_id)) && target.copySelection(),"copy pasted object");
     auto legacy=nlohmann::json::parse(QGuiApplication::clipboard()->text().toStdString());
+    legacy.erase("root_ids");
     legacy.erase("root_id");
     QGuiApplication::clipboard()->setText(QString::fromStdString(legacy.dump()));
     require(target.pasteSelection(),"legacy-root same-project material paste must remain available");
@@ -3795,6 +3873,14 @@ int main(int argc, char** argv) {
     require(!families.isEmpty(), "bundled Inter font must expose a family");
     application.setFont(QFont(families.front(), 10));
     test_plan_canvas_native_pointer_events();
+    if (argc == 2 && std::string_view(argv[1]) == "--selection-clipboard-only") {
+        test_multiple_selection_clipboard_workflow();
+        test_selection_clipboard_workflow();
+        test_material_clipboard_transfer();
+        test_delete_selection_workflow();
+        std::cout << "Selection clipboard workflow tests passed\n";
+        return 0;
+    }
     QString field_ui_capture_directory;
     for (int index = 1; index + 1 < argc; ++index) {
         if (std::string_view(argv[index]) == "--capture-field-ui") {
@@ -3809,6 +3895,7 @@ int main(int argc, char** argv) {
     test_workspace_profiles();
     test_room_boundary_from_existing_geometry();
     test_room_volume_authoring_workflow();
+    test_multiple_selection_clipboard_workflow();
     test_selection_clipboard_workflow();
     test_wall_transform_workflow(field_ui_capture_directory);
     test_sloped_wall_workflow();

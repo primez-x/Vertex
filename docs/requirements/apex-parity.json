@@ -1013,9 +1013,11 @@
         "docs/desktop-workflow.md",
         "include/sketch/desktop/main_window.hpp",
         "src/desktop/main_window.cpp",
+        "src/desktop/plan_canvas.hpp",
+        "src/desktop/plan_canvas.cpp",
         "tests/desktop_smoke.cpp"
       ],
-      "implementation_note": "Bounded local JSON clipboard supports copy, paste, cut, and guarded delete for supported geometry graphs; pasted walls carry hosted openings with fresh identities and remapped links, while boundary internals and annotation children are remapped. Multi-select, broader linked-object policies, and production qualification remain open."
+      "implementation_note": "Bounded local JSON clipboard supports copy, paste, cut, and guarded delete for supported geometry graphs. Ctrl-click toggles ordered selection roots, both plan canvases highlight the selection, and combined clipboard/delete commands deduplicate hosted dependencies in one revision and undo/redo step; paste preserves root order with fresh identities and remapped links. Desktop smoke covers two walls plus an explicitly selected hosted opening, replacement/toggle behavior, atomic rejection, and undo/redo. Individual annotation children retain single-selection delete behavior; multi-root cut/delete requires annotation groups. Selection filtering, broader linked-object policies, and production qualification remain open."
     },
     {
       "id": "APX-EDIT-002",

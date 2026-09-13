@@ -1,7 +1,7 @@
 # Native desktop workflow checkpoint
 
-This checkpoint is the first real Qt Widgets desktop workflow for Property
-Studio. It is an internal implementation checkpoint, not a production-ready
+This checkpoint is the first real Qt Widgets desktop workflow for Vertex. It is
+an internal implementation checkpoint, not a production-ready
 release and not an Apex compatibility claim. The native UI is a dense,
 canvas-centered precision workspace with one semantic document behind the
 Measurement and Architectural tabs.
@@ -251,6 +251,19 @@ geometry on the active drawing layer, and remaps hosted openings and dimension
 owners. Cut and delete remove owned hosted children in one guarded Document
 command, so undo and redo restore the complete graph. Unsupported, malformed,
 oversized, or referenced records fail before mutation.
+
+In the Select tool, **Ctrl-click** adds or toggles a root in an ordered selection;
+plain clicking replaces it, and Ctrl-clicking empty space keeps it. Both plan
+canvases highlight every selected root. The last selected root remains the
+inspector context, so existing property editors still edit that one object.
+Copy, paste, cut, and delete combine all selected roots into one graph and
+deduplicate shared children (including an opening selected alongside its wall).
+Paste selects the fresh roots in their original order. Each mutating clipboard
+operation creates one document revision and one undo/redo step. Older single-root
+clipboard payloads remain supported. Multi-root cut/delete requires selecting
+annotation groups rather than their individual labels/symbols; ordinary single
+annotation-child deletion retains its existing behavior. Selection filtering and
+broader linked-object ownership policies remain open qualification work.
 
 Paste remaps documented relationship fields and local boundary/annotation
 identities only. Names, descriptions, label content, template and symbol catalog

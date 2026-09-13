@@ -9,6 +9,7 @@
 #include <QMouseEvent>
 #include <QRectF>
 #include <QString>
+#include <QStringList>
 #include <QWidget>
 
 #include <functional>
@@ -134,6 +135,7 @@ public:
     // any explicit output background passed to renderScene(...).
     void setCanvasBackground(QColor background);
     void setSelectedId(const QString& entity_id);
+    void setSelectedIds(const QStringList& entity_ids);
     void setLabels(std::vector<CanvasLabel> labels);
     [[nodiscard]] const std::vector<CanvasLabel>& labels() const noexcept { return m_labels; }
     void setReference(std::optional<CanvasReference> reference);
@@ -174,6 +176,7 @@ public:
 
     void setPointClicked(std::function<void(Vec2)> callback);
     void setEntityClicked(std::function<void(QString)> callback);
+    void setEntitySelectionClicked(std::function<void(QString, bool)> callback);
     void setCursorMoved(std::function<void(Vec2)> callback);
     void setFinishRequested(std::function<void()> callback);
     void setCancelRequested(std::function<void()> callback);
@@ -240,7 +243,6 @@ private:
     bool m_overview_map_enabled{true};
     bool m_metric_units{false};
     QColor m_canvas_background{248, 250, 252};
-    QString m_selected_id;
     double m_scale{80.0};
     Vec2 m_view_center{0.0, 0.0};
     std::optional<QPointF> m_last_mouse_position;
@@ -253,6 +255,7 @@ private:
 
     std::function<void(Vec2)> m_point_clicked;
     std::function<void(QString)> m_entity_clicked;
+    std::function<void(QString, bool)> m_entity_selection_clicked;
     std::function<void(Vec2)> m_cursor_moved;
     std::function<void()> m_finish_requested;
     std::function<void()> m_cancel_requested;

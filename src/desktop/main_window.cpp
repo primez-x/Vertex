@@ -9733,9 +9733,11 @@ public:
         }
     }
 
-    bool selectEntity(const QString& entity_id) {
+    bool selectEntity(const QString& entity_id, bool toggle = false) {
         if (entity_id.isEmpty()) {
+            if (toggle) return true;
             m_selected_id.clear();
+            m_selected_ids.clear();
             refresh();
             return true;
         }
@@ -9770,6 +9772,14 @@ public:
             setError(QStringLiteral("No entity named %1 exists in this document.").arg(entity_id));
             return false;
         }
+        if (!toggle) m_selected_ids.clear();
+        if (toggle && m_selected_ids.contains(selection_id)) {
+            m_selected_ids.removeAll(selection_id);
+            m_selected_id = m_selected_ids.isEmpty() ? QString{} : m_selected_ids.back();
+            refresh();
+            return true;
+        }
+        m_selected_ids.push_back(selection_id);
         m_selected_id = selection_id;
         const auto organization = organize_project(snapshot);
         if (annotation_child) {
@@ -9800,11 +9810,25 @@ public:
         return true;
     }
 
+    std::vector<Entity> clipboardSelectionGraph(const DocumentSnapshot& snapshot) const {
+        std::vector<Entity> result;
+        std::set<std::string> ids;
+        for (const auto& id : m_selected_ids) {
+            const auto graph = clipboard_entities_for_selection(snapshot, id.toStdString());
+            if (graph.empty()) throw std::invalid_argument("Every selected root must support clipboard operations.");
+            for (const auto& entity : graph) {
+                if (ids.insert(entity.id).second) result.push_back(entity);
+            }
+        }
+        if (result.size() > kMaximumClipboardEntities)
+            throw std::invalid_argument("The selected geometry graph exceeds the clipboard entity limit.");
+        return result;
+    }
+
     bool copySelection() {
         try {
             const auto snapshot = authoringSnapshot();
-            auto entities = clipboard_entities_for_selection(
-                snapshot, m_selected_id.toStdString());
+            auto entities = clipboardSelectionGraph(snapshot);
             if (entities.empty()) {
                 throw std::invalid_argument(
                     "Select supported geometry, an area, an architectural object, or annotations.");
@@ -9827,7 +9851,12 @@ public:
             if(entities.size()>kMaximumClipboardEntities)
                 throw std::invalid_argument("Clipboard material dependencies exceed the entity limit.");
             json payload{{"format", std::string(kClipboardFormat)}, {"version", 1}, {"root_id",entities.front().id},
-                         {"entities", json::array()}};
+                         {"root_ids", json::array()}, {"entities", json::array()}};
+            std::set<std::string> roots;
+            for (const auto& id : m_selected_ids) {
+                const auto graph = clipboard_entities_for_selection(snapshot, id.toStdString());
+                if (roots.insert(graph.front().id).second) payload["root_ids"].push_back(graph.front().id);
+            }
             for (const auto& entity : entities) {
                 payload["entities"].push_back(clipboard_entity_json(entity));
             }
@@ -10896,18 +10925,18 @@ public:
     bool cutSelection() {
         try {
             const auto source = authoringSnapshot();
-            const auto selected = m_selected_id.toStdString();
-            if (!source.entities().contains(selected) &&
-                annotation_parent_for_child(source, selected).has_value()) {
-                throw std::invalid_argument(
-                    "Select the annotation group before cutting its children.");
+            for (const auto& id : m_selected_ids) {
+                const auto selected = id.toStdString();
+                if (!source.entities().contains(selected) &&
+                    annotation_parent_for_child(source, selected).has_value()) {
+                    throw std::invalid_argument("Select the annotation group before cutting its children.");
+                }
             }
-            const auto entities = clipboard_entities_for_selection(source, selected);
+            const auto entities = clipboardSelectionGraph(source);
             if (entities.empty()) {
                 throw std::invalid_argument(
                     "Select supported geometry, an area, or an architectural object to cut.");
             }
-            if (!copySelection()) return false;
             std::vector<EntityChange> changes;
             changes.reserve(entities.size());
             for (const auto& entity : entities) changes.push_back(EntityChange::erase(entity.id));
@@ -10915,6 +10944,7 @@ public:
                 source.revision(), std::move(changes), {}, "Cut selection"};
             const auto authored = augmentAuthoredCommand(Command{command});
             (void)Document::preview_command(source, authored);
+            if (!copySelection()) return false;
             applyAuthoredCommand(authored);
             m_selected_id.clear();
             clearError();
@@ -11000,10 +11030,17 @@ public:
                 }
             }
 
-            const auto root_id = payload.value("root_id",source_entities.front().id);
-            const auto root_mapping = remap.find(root_id);
-            if (root_mapping == remap.end()) {
-                throw std::invalid_argument("Clipboard root identity is missing from its payload.");
+            const auto root_ids = payload.value("root_ids", json::array({payload.value("root_id",source_entities.front().id)}));
+            if (!root_ids.is_array() || root_ids.empty() || root_ids.size() > kMaximumClipboardEntities)
+                throw std::invalid_argument("Clipboard selection roots are invalid.");
+            QStringList pasted_roots;
+            for (const auto& root : root_ids) {
+                const auto root_id = root.get<std::string>();
+                const auto root_mapping = remap.find(root_id);
+                if (!source_ids.contains(root_id) || root_mapping == remap.end())
+                    throw std::invalid_argument("Clipboard root identity is missing from its payload.");
+                const auto mapped = id_from(root_mapping->second);
+                if (!pasted_roots.contains(mapped)) pasted_roots.push_back(mapped);
             }
 
             std::vector<EntityChange> changes;
@@ -11039,7 +11076,8 @@ public:
                 source.revision(), std::move(changes), {}, "Paste selection"};
             (void)Document::preview_command(source, command);
             applyDocumentCommand(command);
-            m_selected_id = id_from(root_mapping->second);
+            m_selected_ids = pasted_roots;
+            m_selected_id = m_selected_ids.back();
             clearError();
             refresh();
             return true;
@@ -11053,7 +11091,7 @@ public:
         try {
             const auto source = authoringSnapshot();
             const auto selected = m_selected_id.toStdString();
-            if (!source.entities().contains(selected)) {
+            if (!source.entities().contains(selected) && m_selected_ids.size() == 1) {
                 const auto annotation_parent = annotation_parent_for_child(source, selected);
                 if (annotation_parent.has_value()) {
                     if (!deleteAnnotation(m_selected_id)) return false;
@@ -11061,11 +11099,14 @@ public:
                 }
                 throw std::invalid_argument("Select an entity before deleting it.");
             }
-            const auto root = source.entities().at(selected);
-            if (root.required) {
-                throw std::invalid_argument("Required project entities cannot be deleted.");
+            for (const auto& id : m_selected_ids) {
+                const auto found = source.entities().find(id.toStdString());
+                if (found == source.entities().end())
+                    throw std::invalid_argument("Select annotation groups before deleting multiple selections containing their children.");
+                if (found->second.required)
+                    throw std::invalid_argument("Required project entities cannot be deleted.");
             }
-            const auto entities = clipboard_entities_for_selection(source, selected);
+            const auto entities = clipboardSelectionGraph(source);
             if (entities.empty()) {
                 throw std::invalid_argument(
                     "Select a boundary, wall, opening, architectural object, or annotation group.");
@@ -11360,6 +11401,7 @@ public:
     }
 
     [[nodiscard]] QString selectedEntityId() const { return m_selected_id; }
+    [[nodiscard]] QStringList selectedEntityIds() const { return m_selected_ids; }
 
     bool editSelectedClassification(const QString& classification) {
         if (classification.trimmed().isEmpty()) {
@@ -17296,7 +17338,7 @@ private:
 
     void connectCanvas(PlanCanvas* canvas) {
         canvas->setPointClicked([this](Vec2 point) { onCanvasPoint(point); });
-        canvas->setEntityClicked([this](QString id) { selectEntity(id); });
+        canvas->setEntitySelectionClicked([this](QString id, bool toggle) { selectEntity(id, toggle); });
         canvas->setCursorMoved([this, canvas](Vec2 point) {
             // Snap toggles update both canvases; only the active workspace
             // owns the shared authoring pointer and cursor status.
@@ -17318,6 +17360,17 @@ private:
     }
 
     void refresh() {
+        // Legacy single-object authoring commands still set the primary ID.
+        // Reconcile that deliberate replacement before presenting selection.
+        if (m_selected_id.isEmpty()) m_selected_ids.clear();
+        else if (m_selected_ids.isEmpty() || m_selected_ids.back() != m_selected_id)
+            m_selected_ids = {m_selected_id};
+        const auto snapshot = m_document->snapshot();
+        m_selected_ids.removeIf([&](const QString& id) {
+            return !snapshot.entities().contains(id.toStdString()) &&
+                !annotation_parent_for_child(snapshot, id.toStdString());
+        });
+        m_selected_id = m_selected_ids.isEmpty() ? QString{} : m_selected_ids.back();
         m_refreshing = true;
         refreshCanvases();
         refreshNavigator();
@@ -18154,8 +18207,8 @@ private:
         m_architecturalCanvas->setReferenceGrids(std::move(reference_grids));
         m_plan_error_banner->setText(m_plan_geometry_error);
         m_plan_error_banner->setVisible(!m_plan_geometry_error.isEmpty());
-        m_measurementCanvas->setSelectedId(m_selected_id);
-        m_architecturalCanvas->setSelectedId(m_selected_id);
+        m_measurementCanvas->setSelectedIds(m_selected_ids);
+        m_architecturalCanvas->setSelectedIds(m_selected_ids);
         m_measurementCanvas->setGridEnabled(m_grid_enabled);
         m_architecturalCanvas->setGridEnabled(m_grid_enabled);
         m_measurementCanvas->setSnapEnabled(m_snap_enabled);
@@ -20612,6 +20665,7 @@ private:
     QLabel* m_visibility_label{};
     QPushButton* m_show_all_button{};
     QString m_selected_id;
+    QStringList m_selected_ids;
     QString m_last_error;
     QString m_plan_geometry_error;
     std::map<std::string, std::pair<std::string, Boundary>> m_plan_projection_cache;
@@ -21125,8 +21179,12 @@ QString MainWindow::createTerrainSurfaceFromSelectedBoundary(
     return m_impl->createTerrainSurfaceFromSelectedBoundary(std::move(elevations), revision);
 }
 
-bool MainWindow::selectEntity(const QString& entity_id) {
-    return m_impl->selectEntity(entity_id);
+bool MainWindow::selectEntity(const QString& entity_id, bool toggle) {
+    return m_impl->selectEntity(entity_id, toggle);
+}
+
+QStringList MainWindow::selectedEntityIds() const {
+    return m_impl->selectedEntityIds();
 }
 
 QString MainWindow::selectedEntityId() const {

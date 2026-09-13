@@ -401,8 +401,11 @@ The selection command surface now includes bounded local JSON copy, cut, paste,
 and delete operations. Wall selections carry their hosted openings; pasted
 graphs receive fresh entity, boundary-edge, vertex, and annotation-child IDs,
 and supported ownership links are remapped before a single Document command is
-admitted. Cut/delete remove owned children atomically and preserve undo/redo.
-Multi-select, broader relationship-aware edit policies, and production
+admitted. Ctrl-click now toggles ordered roots on both plan canvases, and
+combined clipboard/delete operations deduplicate owned children in one
+Document command while preserving the last-selected inspector context. Cut/
+delete remove owned children atomically and preserve undo/redo. Selection
+filtering, broader relationship-aware edit policies, and production
 compatibility evidence remain open.
 
 Identified receipt-free boundaries now support guarded vertex insertion from the
