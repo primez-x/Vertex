@@ -130,7 +130,7 @@ living area is never inferred from free-form labels. `calculate_areas` also
 
 The public methods used by the smoke test are `createBoundary`,
 `createRoomBoundary`,
-`createStraightWall`, `createHostedOpening`,
+`createStraightWall`, `createCurvedWall`, `createHostedOpening`,
 `createSlabFromSelectedBoundary`, `createSlabFromBoundary`, `selectEntity`,
 `editSelectedClassification`, `editSelectedLength`, `editSelectedHeight`,
 `editSelectedThickness`, `editSelectedFactor`, `setSelectedCalculationRule`,
@@ -185,12 +185,17 @@ PDF geometry remain future work.
 The left navigator expands project, building, floor, and layer nodes. The tool
 rail provides Select, Boundary, Wall, Object, Grid, Snap, and Fit. Boundary drawing
 accepts clicks, Enter closes the path, and `D` opens a distance/direction input
-such as `10 ft @ 90 deg`. Wall drawing accepts two clicks. Select and the
+such as `10 ft @ 90 deg`. Wall drawing accepts two clicks. **Draw curved wall**
+opens a compact endpoint and signed-sweep editor; entries such as `90 deg` and
+`pi/2` are retained beside the analytical arc. Selecting an existing curved
+wall exposes **Edit curve…** in the inspector; changing endpoints or sweep
+revalidates hosted openings and records one undoable command. Select and the
 navigator select existing semantic objects, so edits and history operate on
 the same document in either workspace tab. Walls display their opening gaps in
 the plan canvas; the OCCT architectural view derives the corresponding cut
-solids from the wall and opening entities. Command search provides `Create door
-opening`, `Create window opening`, and `Create slab from selected boundary`;
+solids from the wall and opening entities. Command search provides `Draw curved
+wall`, `Create door opening`, `Create window opening`, and `Create slab from
+selected boundary`;
 each prompts for quantities and runs the same validated commands as the public
 workflow seam.
 

@@ -469,6 +469,13 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   forms to the native viewer; malformed forms block framebuffer export, and
   hidden views track document changes. All six forms now have a parameter
   editor connected to revision-checked commands, undo/redo and save/reopen.
+  Windows now also exposes **Draw curved wall** from More and command search.
+  The editor parses endpoint quantities and a signed angle, validates the
+  analytical arc through the shared wall kernel, and stores the source sweep
+  beside the wall for save/reopen. Selecting an arc exposes the same compact
+  editor for endpoint and sweep edits, with hosted-opening validation and
+  undoable save/reopen coverage. Curved-wall joins, richer constraints, and
+  production compatibility certification remain open.
   Exact top-down projections also feed the shared plan/PDF renderer; failed
   projections block output. Hidden editor captures cover both display scales.
   Review added exact segment-set/circle-topology checks and exact quantity

@@ -66,6 +66,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <numbers>
 #include <string_view>
 
 namespace {
@@ -135,9 +136,11 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
         auto* quick_access = window.findChild<QToolButton*>(QStringLiteral("quickAccess"));
         auto* quick_access_settings = window.findChild<QAction*>(QStringLiteral("quickAccessSettings"));
         auto* export_image = window.findChild<QAction*>(QStringLiteral("exportDraftImage"));
+        auto* curved_wall_action = window.findChild<QAction*>(QStringLiteral("curvedWall"));
         require(settings && user_guide && quick_access && quick_access->menu() &&
-                    quick_access_settings && export_image && !quick_access->accessibleName().isEmpty(),
-                "shortcut editor, quick-access menu, draft image export, and local user guide must be discoverable");
+                    quick_access_settings && export_image && curved_wall_action &&
+                    !quick_access->accessibleName().isEmpty(),
+                "shortcut editor, quick-access menu, draft image export, curved-wall authoring, and local user guide must be discoverable");
         const auto* copy = window.findChild<QAction*>(QStringLiteral("copySelection"));
         const auto* cut = window.findChild<QAction*>(QStringLiteral("cutSelection"));
         const auto* paste = window.findChild<QAction*>(QStringLiteral("pasteSelection"));
@@ -227,6 +230,71 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
             }
         }
         require(reopened_annotations_pinned, "quick-access commands must survive a new workspace window");
+
+        const auto curved_revision = window.document().revision();
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = window.findChild<QDialog*>(QStringLiteral("curvedWallDialog"));
+            require(dialog, "curved-wall authoring dialog must open from More");
+            auto* start_x = dialog->findChild<QLineEdit*>(QStringLiteral("curvedWallStartX"));
+            auto* start_y = dialog->findChild<QLineEdit*>(QStringLiteral("curvedWallStartY"));
+            auto* end_x = dialog->findChild<QLineEdit*>(QStringLiteral("curvedWallEndX"));
+            auto* end_y = dialog->findChild<QLineEdit*>(QStringLiteral("curvedWallEndY"));
+            auto* sweep = dialog->findChild<QLineEdit*>(QStringLiteral("curvedWallSweep"));
+            auto* classification = dialog->findChild<QLineEdit*>(QStringLiteral("curvedWallClassification"));
+            auto* buttons = dialog->findChild<QDialogButtonBox*>(QStringLiteral("curvedWallButtons"));
+            auto* status = dialog->findChild<QLabel*>(QStringLiteral("curvedWallStatus"));
+            require(start_x && start_y && end_x && end_y && sweep && classification && buttons && status,
+                    "curved-wall dialog must expose endpoint, sweep, classification and status controls");
+            start_x->setText(QStringLiteral("20 ft"));
+            start_y->setText(QStringLiteral("10 ft"));
+            end_x->setText(QStringLiteral("30 ft"));
+            end_y->setText(QStringLiteral("10 ft"));
+            sweep->setText(QStringLiteral("0 deg"));
+            buttons->button(QDialogButtonBox::Apply)->click();
+            require(dialog->isVisible() && window.document().revision() == curved_revision &&
+                        !status->text().isEmpty(),
+                    "invalid curved-wall sweep must preserve the document and show a useful error");
+            sweep->setText(QStringLiteral("90 deg"));
+            classification->setText(QStringLiteral("exterior"));
+            if (!capture_directory.isEmpty())
+                require(dialog->grab().save(capture_directory + QStringLiteral("/curved-wall.png")),
+                        "curved-wall dialog capture");
+            buttons->button(QDialogButtonBox::Apply)->click();
+        });
+        curved_wall_action->trigger();
+        const auto curved_wall_id = window.selectedEntityId();
+        require(!curved_wall_id.isEmpty() && window.document().revision() == curved_revision + 1,
+                "curved-wall dialog must commit one atomic document command");
+        const auto curved_wall_document = window.document().snapshot();
+        const auto& curved_wall = curved_wall_document.entities().at(curved_wall_id.toStdString());
+        require(curved_wall.type == "wall" &&
+                    std::abs(curved_wall.properties.at("baseline").at("sweep_radians").get<double>() -
+                             std::numbers::pi / 2.0) < 1e-9 &&
+                    curved_wall.properties.at("classification") == "exterior" &&
+                    curved_wall.extensions.at("curve_input").at("sweep") == "90 deg",
+                "curved-wall authoring must retain analytical sweep and source input");
+        auto* edit_curve = window.findChild<QPushButton*>(QStringLiteral("editCurvedWall"));
+        require(edit_curve && !edit_curve->isHidden() && edit_curve->isEnabled(),
+                "selected curved walls must expose a contextual curve editor");
+        const auto curved_edit_revision = window.document().revision();
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = window.findChild<QDialog*>(QStringLiteral("curvedWallDialog"));
+            require(dialog && dialog->windowTitle() == QStringLiteral("Edit curved wall"),
+                    "curve editor must open in edit mode for a selected arc");
+            dialog->findChild<QLineEdit*>(QStringLiteral("curvedWallEndX"))->setText(QStringLiteral("32 ft"));
+            dialog->findChild<QLineEdit*>(QStringLiteral("curvedWallSweep"))->setText(QStringLiteral("-90 deg"));
+            dialog->findChild<QDialogButtonBox*>(QStringLiteral("curvedWallButtons"))
+                ->button(QDialogButtonBox::Apply)->click();
+        });
+        edit_curve->click();
+        require(window.document().revision() == curved_edit_revision + 1,
+                "curved-wall edits must commit one revision-fenced command");
+        const auto edited_curved_document = window.document().snapshot();
+        const auto& edited_curved_wall = edited_curved_document.entities().at(curved_wall_id.toStdString());
+        require(std::abs(edited_curved_wall.properties.at("baseline").at("sweep_radians").get<double>() +
+                         std::numbers::pi / 2.0) < 1e-9 &&
+                    edited_curved_wall.extensions.at("curve_input").at("sweep") == "-90 deg",
+                "curved-wall edits must update analytical geometry and source input");
 
         const auto wall = window.createStraightWall({0, 0}, {4, 0});
         require(!wall.isEmpty() && window.selectEntity(wall), "keypad fixture wall must be selectable");
@@ -646,9 +714,14 @@ void test_wall_transform_workflow(const QString& capture_directory) {
     window.document().apply(ApplyEntityChanges{window.document().revision(),{EntityChange::erase(vertical.id)},{},"remove test constraint"});
     auto curved=window.document().snapshot().entities().at(wall_id.toStdString());
     curved.properties["baseline"]["sweep_radians"]=0.75;
+    curved.extensions["curve_input"] = {{"version", 1}, {"start", {3.0, 1.0}},
+        {"end", {3.0, 5.0}}, {"sweep", "0.75"}, {"normalized_sweep", "0.75"},
+        {"radians", 0.75}};
     window.document().apply(ApplyEntityChanges{window.document().revision(),{EntityChange::upsert(curved)},{},"curved transform fixture"});
     require(window.transformSelectedBoundary("30",true,false,"2 m","1 m",false) &&
-        window.document().snapshot().entities().at(wall_id.toStdString()).properties.at("baseline").at("sweep_radians")==-0.75,
+        window.document().snapshot().entities().at(wall_id.toStdString()).properties.at("baseline").at("sweep_radians")==-0.75 &&
+        window.document().snapshot().entities().at(wall_id.toStdString()).extensions.at("curve_input").at("radians")==-0.75 &&
+        window.document().snapshot().entities().at(wall_id.toStdString()).extensions.at("curve_input").at("sweep")=="-0.75",
         "curved wall reflection must reverse analytical arc orientation");
     QTemporaryDir stored;
     const auto path=stored.filePath("transformed-wall.bldproj");
@@ -3714,6 +3787,14 @@ int main(int argc, char** argv) {
 
     const auto wall_id = window.createStraightWall({0.0, 0.0}, {3.0, 0.0}, "exterior");
     require(!wall_id.isEmpty(), "straight wall should be accepted as a document command");
+    const auto curved_wall_id = window.createCurvedWall(
+        {8.0, 2.0}, {11.0, 2.0}, QStringLiteral("pi/2"), QStringLiteral("exterior"));
+    require(!curved_wall_id.isEmpty(), "curved wall should be accepted as an analytical document command");
+    const auto curved_wall_snapshot = window.document().snapshot().entities().at(curved_wall_id.toStdString());
+    require(std::abs(curved_wall_snapshot.properties.at("baseline").at("sweep_radians").get<double>() -
+                     std::numbers::pi / 2.0) < 1e-9 &&
+                curved_wall_snapshot.extensions.at("curve_input").at("sweep") == "pi/2",
+            "curved wall should retain its analytical sweep and source expression");
     require(window.selectEntity(wall_id), "created wall should be selectable");
     require(window.editSelectedClassification("party"),
             "wall classification should be editable from the inspector API");
@@ -4112,6 +4193,13 @@ int main(int argc, char** argv) {
             "save/reopen must preserve edited building object dimensions and metadata");
     require(reopened.entities().contains(wall_id.toStdString()),
             "reopened project should preserve the semantic wall entity");
+    require(reopened.entities().contains(curved_wall_id.toStdString()) &&
+                std::abs(reopened.entities().at(curved_wall_id.toStdString()).properties
+                             .at("baseline").at("sweep_radians").get<double>() -
+                         std::numbers::pi / 2.0) < 1e-9 &&
+                reopened.entities().at(curved_wall_id.toStdString()).extensions
+                             .at("curve_input").at("sweep") == "pi/2",
+            "save/reopen must preserve the analytical curved wall and its source expression");
     require(reopened.entities().contains(opening_id.toStdString()),
             "reopened project should preserve the hosted opening entity");
     require(reopened.entities().contains(slab_id.toStdString()),

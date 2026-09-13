@@ -208,6 +208,24 @@ public:
         Vec2 end,
         QString classification = QStringLiteral("interior"),
         std::optional<Revision> expected_revision = std::nullopt);
+    // Creates one analytical arc wall from two world endpoints and an
+    // explicit sweep expression (for example, "90 deg" or "pi/2"). The
+    // geometry is validated by the same wall kernel used for openings,
+    // projection, schedules, and output before the atomic Document command.
+    [[nodiscard]] QString createCurvedWall(
+        Vec2 start,
+        Vec2 end,
+        QString sweep,
+        QString classification = QStringLiteral("interior"),
+        std::optional<Revision> expected_revision = std::nullopt);
+    // Replaces the selected analytical arc wall through the same validated,
+    // revision-fenced command used by the curved-wall editor. Hosted openings
+    // remain attached and are revalidated against the proposed baseline.
+    [[nodiscard]] bool editSelectedCurvedWall(
+        Vec2 start,
+        Vec2 end,
+        QString sweep,
+        std::optional<Revision> expected_revision = std::nullopt);
     // The object dialog and smoke tests share this atomic, validated command.
     // A stale dialog revision cannot overwrite intervening document edits.
     [[nodiscard]] QString commitBuildingObject(

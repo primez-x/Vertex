@@ -18,6 +18,7 @@
 #include "sketch/desktop/boundary_input_dialog.hpp"
 #include "sketch/boundary_commit.hpp"
 #include "sketch/boundary_dimension.hpp"
+#include "sketch/boundary_receipt.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/dxf_project_exchange.hpp"
 #include "sketch/ifc_project_exchange.hpp"
@@ -1890,6 +1891,18 @@ public:
                 rebase_wall_length_receipt(entity, baseline);
                 const auto geometry = segment_json(baseline);
                 for (const auto& [key, value] : geometry.items()) entity.properties["baseline"][key] = value;
+                if (entity.extensions.contains("curve_input") &&
+                    entity.extensions.at("curve_input").is_object()) {
+                    auto& curve_input = entity.extensions["curve_input"];
+                    curve_input["start"] = point_json(baseline.start);
+                    curve_input["end"] = point_json(baseline.end);
+                    curve_input["radians"] = baseline.sweep_radians;
+                    if (reflected) {
+                        const auto reflected_sweep = angle_from_radians(baseline.sweep_radians);
+                        curve_input["sweep"] = reflected_sweep.original_expression;
+                        curve_input["normalized_sweep"] = reflected_sweep.normalized_expression;
+                    }
+                }
             } else if (reflected && entity.properties.contains("door_operation")) {
                 auto operation = decode_door_operation(entity.properties.at("door_operation"));
                 operation.swing_left = !operation.swing_left;
@@ -7709,6 +7722,121 @@ public:
         return id;
     }
 
+    QString createCurvedWall(Vec2 start, Vec2 end, const QString& sweep_expression,
+                             const QString& classification,
+                             std::optional<Revision> expected_revision = std::nullopt) {
+        const auto revision = expected_revision.value_or(m_document->revision());
+        const auto drawing_context = requireDrawingContext();
+        if (!drawing_context) return {};
+        try {
+            if (!std::isfinite(start.x) || !std::isfinite(start.y) ||
+                !std::isfinite(end.x) || !std::isfinite(end.y) ||
+                std::hypot(end.x - start.x, end.y - start.y) <= 1e-7) {
+                throw std::invalid_argument("Wall arc endpoints must be finite and distinct.");
+            }
+            const auto expression = sweep_expression.trimmed();
+            if (expression.isEmpty()) {
+                throw std::invalid_argument("Wall arc sweep is required.");
+            }
+            const auto sweep = parse_angle(expression.toUtf8().toStdString());
+            if (!std::isfinite(sweep.radians) || std::abs(sweep.radians) <= 1e-7 ||
+                std::abs(sweep.radians) >= 2.0 * std::numbers::pi - 1e-9) {
+                throw std::invalid_argument("Wall arc sweep must be between zero and two pi.");
+            }
+            const Segment baseline{start, end, sweep.radians};
+            validate_wall_semantics(Wall{"", baseline, 0.14, 2.4384, 0.0, {}});
+            const auto entity_id = new_id("wall");
+            const auto id = id_from(entity_id);
+            auto properties = json{{"floor_id", drawing_context->floor_id},
+                                   {"layer_id", drawing_context->layer_id},
+                                   {"baseline", segment_json(baseline)},
+                                   {"thickness_m", 0.14},
+                                   {"height_m", 2.4384},
+                                   {"elevation_m", 0.0},
+                                   {"classification", classification.trimmed().isEmpty()
+                                                           ? std::string("interior")
+                                                           : classification.trimmed().toStdString()}};
+            add_default_level_placement(properties, *drawing_context);
+            const auto curve_input = json{
+                {"version", 1},
+                {"start", point_json(start)},
+                {"end", point_json(end)},
+                {"sweep", sweep.original_expression},
+                {"normalized_sweep", sweep.normalized_expression},
+                {"radians", sweep.radians},
+            };
+            if (!applyEntity(Entity{entity_id, "wall", properties, false,
+                                    json{{"curve_input", curve_input}}},
+                             "create curved wall", revision)) {
+                return {};
+            }
+            m_selected_id = id;
+            refresh();
+            return id;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Curved wall: %1").arg(QString::fromUtf8(error.what())));
+            return {};
+        }
+    }
+
+    bool editSelectedCurvedWall(Vec2 start, Vec2 end, const QString& sweep_expression,
+                                std::optional<Revision> expected_revision = std::nullopt) {
+        const auto revision = expected_revision.value_or(m_document->revision());
+        try {
+            const auto selected = selectedEntity();
+            if (!selected || selected->type != "wall")
+                throw std::invalid_argument("Select a curved wall before editing its curve.");
+            const auto current_baseline = read_required_segment(selected->properties, "baseline");
+            if (!current_baseline || std::abs(current_baseline->sweep_radians) <= 1e-7)
+                throw std::invalid_argument("The selected wall is straight; use wall dimensions and constraints instead.");
+            if (!std::isfinite(start.x) || !std::isfinite(start.y) ||
+                !std::isfinite(end.x) || !std::isfinite(end.y) ||
+                std::hypot(end.x - start.x, end.y - start.y) <= 1e-7) {
+                throw std::invalid_argument("Wall arc endpoints must be finite and distinct.");
+            }
+            const auto expression = sweep_expression.trimmed();
+            if (expression.isEmpty()) throw std::invalid_argument("Wall arc sweep is required.");
+            const auto sweep = parse_angle(expression.toUtf8().toStdString());
+            if (!std::isfinite(sweep.radians) || std::abs(sweep.radians) <= 1e-7 ||
+                std::abs(sweep.radians) >= 2.0 * std::numbers::pi - 1e-9) {
+                throw std::invalid_argument("Wall arc sweep must be between zero and two pi.");
+            }
+            const Segment baseline{start, end, sweep.radians};
+            auto candidate = *selected;
+            candidate.properties["baseline"] = segment_json(baseline);
+            auto curve_input = candidate.extensions.value("curve_input", json::object());
+            if (!curve_input.is_object()) curve_input = json::object();
+            curve_input["version"] = 1;
+            curve_input["start"] = point_json(start);
+            curve_input["end"] = point_json(end);
+            curve_input["sweep"] = sweep.original_expression;
+            curve_input["normalized_sweep"] = sweep.normalized_expression;
+            curve_input["radians"] = sweep.radians;
+            candidate.extensions["curve_input"] = std::move(curve_input);
+
+            const auto snapshot = m_document->snapshot();
+            std::vector<const Entity*> openings;
+            for (const auto& [id, entity] : snapshot.entities()) {
+                (void)id;
+                if (entity.type == "opening" &&
+                    entity.properties.value("wall_id", std::string{}) == selected->id)
+                    openings.push_back(&entity);
+            }
+            Wall wall;
+            std::string diagnostic;
+            if (!read_document_wall(candidate, openings, wall, diagnostic))
+                throw std::invalid_argument(diagnostic);
+            validate_wall_semantics(wall);
+            if (!applyEntity(std::move(candidate), "edit curved wall", revision)) return false;
+            m_selected_id = QString::fromStdString(selected->id);
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Curved wall: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     QString commitBuildingObject(Entity candidate, std::uint64_t expected_revision,
                                  bool replace_selected) {
         try {
@@ -12697,6 +12825,7 @@ public:
             {QStringLiteral("Define area before drawing"),
              [this] { (void)beginBoundaryDrawing(BoundaryAuthoringMode::define_first, {}); }},
             {QStringLiteral("Draw straight wall"), [this] { setTool(CanvasTool::wall); }},
+            {QStringLiteral("Draw curved wall"), [this] { showCurvedWallDialog(); }},
             {QStringLiteral("Create door opening"),
              [this] { createOpeningFromDialog(QStringLiteral("door")); }},
             {QStringLiteral("Create window opening"),
@@ -13744,6 +13873,12 @@ private:
         georeferencing_action->setObjectName(QStringLiteral("georeferencingWorkflow"));
         QObject::connect(georeferencing_action, &QAction::triggered, owner,
                          [this] { showGeoreferencing(); });
+        auto* curved_wall_action = more_menu->addAction(QStringLiteral("Draw curved wall…"));
+        curved_wall_action->setObjectName(QStringLiteral("curvedWall"));
+        curved_wall_action->setToolTip(QStringLiteral(
+            "Create an analytical circular wall from two endpoints and a signed sweep"));
+        QObject::connect(curved_wall_action, &QAction::triggered, owner,
+                         [this] { showCurvedWallDialog(); });
         auto* export_image_action = more_menu->addAction(QStringLiteral("Export draft image…"));
         export_image_action->setObjectName(QStringLiteral("exportDraftImage"));
         QObject::connect(export_image_action, &QAction::triggered, owner,
@@ -14368,6 +14503,13 @@ private:
         inspector_layout->addWidget(m_edit_object_button);
         QObject::connect(m_edit_object_button, &QPushButton::clicked, owner,
                          [this] { showBuildingObjectDialog(true); });
+        m_edit_curve_button = new QPushButton(QStringLiteral("Edit curve…"), inspector_body);
+        m_edit_curve_button->setObjectName(QStringLiteral("editCurvedWall"));
+        m_edit_curve_button->setToolTip(QStringLiteral(
+            "Edit the selected wall's analytical endpoints and signed sweep"));
+        inspector_layout->addWidget(m_edit_curve_button);
+        QObject::connect(m_edit_curve_button, &QPushButton::clicked, owner,
+                         [this] { showCurvedWallDialog(); });
         m_roof_properties_group = new QGroupBox(QStringLiteral("Roof dimensions"), inspector_body);
         m_roof_properties_group->setObjectName(QStringLiteral("roofProperties"));
         auto* roof_properties_form = new QFormLayout(m_roof_properties_group);
@@ -16063,6 +16205,13 @@ private:
         const bool wall = entity.has_value() && entity->type == "wall";
         m_constraint_button->setVisible(wall);
         m_constraint_button->setEnabled(wall && m_document->is_editable());
+        const bool curved_wall = [&] {
+            if (!wall) return false;
+            const auto baseline = read_required_segment(entity->properties, "baseline");
+            return baseline && std::abs(baseline->sweep_radians) > 1e-7;
+        }();
+        m_edit_curve_button->setVisible(curved_wall);
+        m_edit_curve_button->setEnabled(curved_wall && editable);
         const bool opening = entity.has_value() && entity->type == "opening";
         m_door_swing_button->setVisible(opening && entity->properties.value("opening_kind", std::string{}) == "door");
         m_door_swing_button->setEnabled(m_document->is_editable());
@@ -17174,6 +17323,179 @@ public:
     }
 
 private:
+    void showCurvedWallDialog() {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return;
+        }
+        if (m_boundary_session || m_pending_wall_start) {
+            setError(QStringLiteral(
+                "Finish or cancel the active drawing input before creating a curved wall."));
+            return;
+        }
+
+        const auto selected = selectedEntity();
+        std::optional<Segment> existing_baseline;
+        if (selected && selected->type == "wall") {
+            if (const auto baseline = read_required_segment(selected->properties, "baseline");
+                baseline && std::abs(baseline->sweep_radians) > 1e-7) {
+                existing_baseline = *baseline;
+            }
+        }
+        const bool editing = existing_baseline.has_value();
+        const auto context = captureModalContext();
+        QDialog dialog(owner);
+        styleDialog(dialog);
+        dialog.setObjectName(QStringLiteral("curvedWallDialog"));
+        dialog.setWindowTitle(editing ? QStringLiteral("Edit curved wall")
+                                      : QStringLiteral("Draw curved wall"));
+        dialog.setModal(true);
+        dialog.resize(520, 360);
+
+        auto* layout = new QVBoxLayout(&dialog);
+        layout->setContentsMargins(20, 18, 20, 16);
+        layout->setSpacing(12);
+        auto* help = new QLabel(
+            editing
+                ? QStringLiteral("Edit the selected analytical circular wall. Change its model-space "
+                                 "endpoints or signed sweep, then apply the validated result.")
+                : QStringLiteral("Create an analytical circular wall from two model-space endpoints. "
+                                 "Use a signed sweep such as 90 deg or pi/2; positive values turn counter-clockwise."),
+            &dialog);
+        help->setObjectName(QStringLiteral("curvedWallHelp"));
+        help->setWordWrap(true);
+        layout->addWidget(help);
+
+        auto* form = new QFormLayout;
+        form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        const auto start = existing_baseline ? existing_baseline->start
+            : (std::isfinite(m_last_cursor.x) && std::isfinite(m_last_cursor.y)
+                ? m_last_cursor : Vec2{});
+        const auto end = existing_baseline ? existing_baseline->end
+            : Vec2{start.x + 4.0, start.y};
+        const auto x_text = format_length(start.x, m_metric_units);
+        const auto y_text = format_length(start.y, m_metric_units);
+        const auto end_x_text = format_length(end.x, m_metric_units);
+        const auto end_y_text = format_length(end.y, m_metric_units);
+        auto initial_sweep = QStringLiteral("90 deg");
+        auto initial_classification = QStringLiteral("interior");
+        if (editing) {
+            initial_sweep = QStringLiteral("%1 deg")
+                .arg(existing_baseline->sweep_radians * 180.0 / std::numbers::pi, 0, 'g', 12);
+            if (selected) {
+                const auto classification = read_string(selected->properties, "classification");
+                if (classification && !classification->empty())
+                    initial_classification = QString::fromStdString(*classification);
+                try {
+                    const auto& source = selected->extensions.at("curve_input");
+                    const auto source_sweep = source.at("sweep");
+                    if (source.is_object() && source_sweep.is_string() &&
+                        !source_sweep.get<std::string>().empty()) {
+                        const auto parsed = parse_angle(source_sweep.get<std::string>());
+                        if (parsed.radians == existing_baseline->sweep_radians)
+                            initial_sweep = QString::fromStdString(source_sweep.get<std::string>());
+                    }
+                } catch (const std::exception&) {
+                    // A legacy arc without a receipt falls back to degrees.
+                }
+            }
+        }
+
+        auto* start_x = new QLineEdit(&dialog);
+        start_x->setObjectName(QStringLiteral("curvedWallStartX"));
+        start_x->setText(x_text);
+        start_x->setToolTip(QStringLiteral("Start point X in the active units"));
+        auto* start_y = new QLineEdit(&dialog);
+        start_y->setObjectName(QStringLiteral("curvedWallStartY"));
+        start_y->setText(y_text);
+        start_y->setToolTip(QStringLiteral("Start point Y in the active units"));
+        auto* end_x = new QLineEdit(&dialog);
+        end_x->setObjectName(QStringLiteral("curvedWallEndX"));
+        end_x->setText(end_x_text);
+        end_x->setToolTip(QStringLiteral("End point X in the active units"));
+        auto* end_y = new QLineEdit(&dialog);
+        end_y->setObjectName(QStringLiteral("curvedWallEndY"));
+        end_y->setText(end_y_text);
+        end_y->setToolTip(QStringLiteral("End point Y in the active units"));
+        auto* sweep = new QLineEdit(&dialog);
+        sweep->setObjectName(QStringLiteral("curvedWallSweep"));
+        sweep->setText(initial_sweep);
+        sweep->setToolTip(QStringLiteral("Signed sweep angle, for example 90 deg, -45 deg, or pi/2"));
+        auto* classification = new QLineEdit(&dialog);
+        classification->setObjectName(QStringLiteral("curvedWallClassification"));
+        classification->setText(initial_classification);
+        classification->setToolTip(QStringLiteral("Area and wall classification"));
+        form->addRow(QStringLiteral("Start X"), start_x);
+        form->addRow(QStringLiteral("Start Y"), start_y);
+        form->addRow(QStringLiteral("End X"), end_x);
+        form->addRow(QStringLiteral("End Y"), end_y);
+        form->addRow(QStringLiteral("Sweep"), sweep);
+        form->addRow(QStringLiteral("Classification"), classification);
+        layout->addLayout(form);
+
+        auto* status = new QLabel(&dialog);
+        status->setObjectName(QStringLiteral("curvedWallStatus"));
+        status->setWordWrap(true);
+        status->setText(editing
+            ? QStringLiteral("The current wall and hosted openings are revalidated before the edit is saved.")
+            : QStringLiteral("The endpoints and sweep are validated before the wall is added."));
+        layout->addWidget(status);
+
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel, &dialog);
+        buttons->setObjectName(QStringLiteral("curvedWallButtons"));
+        layout->addWidget(buttons);
+        QObject::connect(buttons->button(QDialogButtonBox::Cancel), &QPushButton::clicked,
+                         &dialog, &QDialog::reject);
+        QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked,
+                         &dialog, [&] {
+                             try {
+                                 if (!modalContextUnchanged(context)) {
+                                     status->setText(lastError());
+                                     return;
+                                 }
+                                 const auto unit = m_metric_units ? Unit::metre : Unit::foot;
+                                 const auto read_coordinate = [&](QLineEdit* field, const char* label) {
+                                     const auto expression = field->text().trimmed();
+                                     if (expression.isEmpty())
+                                         throw std::invalid_argument(std::string(label) + " is required.");
+                                     const auto value = parse_quantity(expression.toStdString(), unit).metres;
+                                     if (!std::isfinite(value))
+                                         throw std::invalid_argument(std::string(label) + " must be finite.");
+                                     return value;
+                                 };
+                                 const Vec2 first{
+                                     read_coordinate(start_x, "Start X"),
+                                     read_coordinate(start_y, "Start Y")};
+                                 const Vec2 second{
+                                     read_coordinate(end_x, "End X"),
+                                     read_coordinate(end_y, "End Y")};
+                                 if (sweep->text().trimmed().isEmpty())
+                                     throw std::invalid_argument("Sweep is required.");
+                                 if (editing) {
+                                     if (!editSelectedCurvedWall(first, second, sweep->text(),
+                                                                  context.revision)) {
+                                         status->setText(lastError());
+                                         return;
+                                     }
+                                 } else {
+                                     const auto id = createCurvedWall(first, second, sweep->text(),
+                                         classification->text(), context.revision);
+                                     if (id.isEmpty()) {
+                                         status->setText(lastError());
+                                         return;
+                                     }
+                                 }
+                                 dialog.accept();
+                             } catch (const std::exception& error) {
+                                 const auto message = QString::fromUtf8(error.what());
+                                 setError(QStringLiteral("Curved wall: %1").arg(message));
+                                 status->setText(message);
+                             }
+                         });
+        dialog.exec();
+    }
+
     void showBuildingObjectDialog(bool editing) {
         const auto context = captureModalContext();
         const auto original = editing ? selectedEntity() : std::optional<Entity>{};
@@ -17530,6 +17852,7 @@ private:
     QToolButton* m_wall_button{};
     QToolButton* m_object_button{};
     QPushButton* m_edit_object_button{};
+    QPushButton* m_edit_curve_button{};
     QPushButton* m_delete_annotation_button{};
     QGroupBox* m_annotation_group{};
     QLineEdit* m_annotation_content_edit{};
@@ -17805,6 +18128,16 @@ QStringList MainWindow::detectRoomBoundariesFromExistingWalls(
 QString MainWindow::createStraightWall(Vec2 start, Vec2 end, QString classification,
                                        std::optional<Revision> revision) {
     return m_impl->createStraightWall(start, end, classification, revision);
+}
+
+QString MainWindow::createCurvedWall(Vec2 start, Vec2 end, QString sweep,
+                                     QString classification, std::optional<Revision> revision) {
+    return m_impl->createCurvedWall(start, end, std::move(sweep), std::move(classification), revision);
+}
+
+bool MainWindow::editSelectedCurvedWall(Vec2 start, Vec2 end, QString sweep,
+                                        std::optional<Revision> revision) {
+    return m_impl->editSelectedCurvedWall(start, end, std::move(sweep), revision);
 }
 
 QString MainWindow::commitBuildingObject(Entity candidate, std::uint64_t expected_revision,

@@ -963,7 +963,7 @@
         "tests/boundary_authoring_session_tests.cpp",
         "tests/calculation_tests.cpp"
       ],
-      "implementation_note": "Analytical chord, arc-length, arc-height, and angle construction is implemented with retained receipts and area/perimeter tests; full curved-wall edit/render/save-reopen evidence remains open."
+      "implementation_note": "Analytical chord, arc-length, arc-height, and angle construction is implemented with retained receipts and area/perimeter tests. Windows now exposes a bounded curved-wall authoring dialog/API that stores an analytical sweep and validates it through the wall kernel; selecting an arc exposes endpoint and sweep editing with hosted-opening validation, undo, save/reopen, and rendering smoke. Full curved-wall edit/render/save-reopen parity fixtures, joins, and production qualification remain open."
     },
     {
       "id": "APX-EDIT-001",
@@ -1401,7 +1401,7 @@
       "implementation_sources": [
         "src/desktop/main_window.cpp"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "Straight and curved wall geometry share semantic wall identity, thickness, openings, transforms, projection, schedules, and output; Windows now exposes explicit curved-wall authoring. Composite joins, material/quantity certification, and complete production acceptance remain open."
     },
     {
       "id": "APX-INPUT-002",
