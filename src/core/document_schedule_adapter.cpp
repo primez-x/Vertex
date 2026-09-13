@@ -3,6 +3,7 @@
 #include "sketch/geometry.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/door_operation.hpp"
+#include "sketch/opening_assembly.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -134,6 +135,28 @@ void add_opening(const Entity& entity, std::vector<ScheduleRecord>& records,
         record.properties.emplace("description", *description);
     if (const auto fire_rated = field(entity, "fire_rated"); fire_rated && fire_rated->is_boolean())
         record.properties.emplace("fire_rated", fire_rated->get<bool>());
+    if (entity.properties.contains("opening_assembly")) {
+        try {
+            const auto assembly = parse_opening_assembly(
+                entity.properties.at("opening_assembly"));
+            record.properties.emplace("assembly_kind",
+                                      std::string(opening_assembly_kind_name(assembly.kind)));
+            record.properties.emplace("frame_width",
+                                      ScheduleQuantity{assembly.frame_width_m, ScheduleUnit::metre});
+            record.properties.emplace("frame_depth",
+                                      ScheduleQuantity{assembly.frame_depth_m, ScheduleUnit::metre});
+            record.properties.emplace("panel_thickness",
+                                      ScheduleQuantity{assembly.panel_thickness_m, ScheduleUnit::metre});
+            record.properties.emplace("glazing_thickness",
+                                      ScheduleQuantity{assembly.glazing_thickness_m, ScheduleUnit::metre});
+            record.properties.emplace("inset",
+                                      ScheduleQuantity{assembly.inset_m, ScheduleUnit::metre});
+        } catch (const std::exception& error) {
+            diagnostic(diagnostics, entity,
+                       std::string("opening_assembly is invalid: ") + error.what());
+            return;
+        }
+    }
     record.calculated.emplace("area", ScheduleCalculation{
         ScheduleQuantity{*width * *height, ScheduleUnit::square_metre},
         {{entity.id, "width"}, {entity.id, "height"}}, "Width multiplied by height"});

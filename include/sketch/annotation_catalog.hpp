@@ -77,6 +77,11 @@ struct AnnotationState {
 
 [[nodiscard]] std::vector<LabelTemplate> default_label_templates();
 [[nodiscard]] std::vector<SymbolDefinition> default_symbol_catalog();
+// Empty query/category match all; matching covers stable ID, family, and
+// category without mutating the catalog records.
+[[nodiscard]] std::vector<SymbolDefinition> filter_symbol_catalog(
+    const std::vector<SymbolDefinition>&, std::string_view query,
+    std::string_view category = {});
 [[nodiscard]] LabelInstance instantiate_label(const LabelTemplate&, std::string id);
 // Empty query/category match all; filtering does not mutate records.
 [[nodiscard]] std::vector<LabelTemplate> filter_label_templates(

@@ -603,6 +603,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/opening_assembly.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/output_fingerprint.hpp"
     },
     {
@@ -1123,6 +1127,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/opening_assembly.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/output_fingerprint.cpp"
     },
     {
@@ -1632,6 +1640,10 @@
     {
       "category": "source",
       "path": "tests/offline_policy_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/opening_assembly_tests.cpp"
     },
     {
       "category": "source",

@@ -7,6 +7,7 @@
 #include "sketch/document.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/assembly_model.hpp"
+#include "sketch/opening_assembly.hpp"
 #include "sketch/terrain_surface.hpp"
 #include <QColor>
 
@@ -379,6 +380,108 @@ public:
             if (entity.type == "roof" && joined_roof_owner.contains(id)) {
                 remove_solid(id);
                 changed = true;
+                continue;
+            }
+            if (entity.type == "opening" && entity.properties.contains("opening_assembly")) {
+                std::string wall_id;
+                std::string relation_error;
+                if (!read_document_wall_id(entity, wall_id, relation_error)) {
+                    append_unique(errors, "opening assembly '" + id + "': " + relation_error);
+                    remove_solid(id);
+                    changed = true;
+                    continue;
+                }
+                const auto host = entities.find(wall_id);
+                if (host == entities.end() || host->second.type != "wall") {
+                    append_unique(errors, "opening assembly '" + id +
+                                             "' references missing wall '" + wall_id + "'");
+                    remove_solid(id);
+                    changed = true;
+                    continue;
+                }
+                try {
+                    const auto resolved_host = resolve_vertical_placement(*snapshot, host->second);
+                    Wall host_wall;
+                    std::string parse_error;
+                    if (!read_document_wall(resolved_host, openings_by_wall[wall_id],
+                                            host_wall, parse_error)) {
+                        throw std::invalid_argument(parse_error);
+                    }
+                    const auto hosted = std::find_if(host_wall.openings.begin(),
+                                                     host_wall.openings.end(),
+                                                     [&](const HostedOpening& candidate) {
+                                                         return candidate.id == id;
+                                                     });
+                    if (hosted == host_wall.openings.end()) {
+                        throw std::invalid_argument("opening is not present on its host wall");
+                    }
+                    const auto assembly = parse_opening_assembly(
+                        entity.properties.at("opening_assembly"));
+                    std::optional<DoorOperation> operation;
+                    if (assembly.kind == OpeningAssemblyKind::door &&
+                        entity.properties.contains("door_operation")) {
+                        operation = decode_door_operation(entity.properties.at("door_operation"));
+                    }
+                    auto content = entity_content(resolved_host, openings_by_wall[wall_id]);
+                    append_entity_content(content, entity);
+                    std::optional<std::string> material_color;
+                    if (entity.properties.contains("material_assignment")) {
+                        const auto& assignment = entity.properties.at("material_assignment");
+                        const auto found = material_colors.find({
+                            assignment.at("catalog_id").get<std::string>(),
+                            assignment.at("material_id").get<std::string>()});
+                        if (found != material_colors.end()) material_color = found->second;
+                    }
+                    auto presentation_color = assembly.kind == OpeningAssemblyKind::door
+                        ? Quantity_Color(0.92, 0.58, 0.28, Quantity_TOC_RGB)
+                        : Quantity_Color(0.30, 0.78, 0.88, Quantity_TOC_RGB);
+                    if (material_color) {
+                        const QColor color(QString::fromStdString(*material_color));
+                        if (color.isValid()) {
+                            presentation_color = Quantity_Color(color.redF(), color.greenF(),
+                                                               color.blueF(), Quantity_TOC_sRGB);
+                        }
+                    }
+                    supported_ids.insert(id);
+                    const auto cached = solids.find(id);
+                    if (cached != solids.end() && cached->second.content == content) {
+                        if (cached->second.material_color != material_color) {
+                            cached->second.presentation->SetColor(presentation_color);
+                            context->Redisplay(cached->second.presentation, false);
+                            cached->second.material_color = material_color;
+                            changed = true;
+                        }
+                        const bool visible = !visible_ids || visible_ids->contains(id) ||
+                                             visible_ids->contains(wall_id);
+                        if (visible != static_cast<bool>(context->IsDisplayed(
+                                cached->second.presentation))) {
+                            if (visible) context->Display(cached->second.presentation, false);
+                            else context->Erase(cached->second.presentation, false);
+                            changed = true;
+                        }
+                        continue;
+                    }
+                    const auto shape = make_opening_assembly(host_wall, *hosted, assembly,
+                                                             operation);
+                    auto presentation = occ::handle<AIS_Shape>(new AIS_Shape(shape));
+                    presentation->SetColor(presentation_color);
+                    presentation->SetDisplayMode(AIS_Shaded);
+                    remove_solid(id);
+                    const bool visible = !visible_ids || visible_ids->contains(id) ||
+                                         visible_ids->contains(wall_id);
+                    if (visible) context->Display(presentation, false);
+                    solids.emplace(id, CachedSolid{std::move(content), shape, presentation,
+                                                   material_color});
+                    changed = true;
+                } catch (const std::exception& error) {
+                    append_unique(errors, "opening assembly '" + id + "': " + error.what());
+                    remove_solid(id);
+                    changed = true;
+                } catch (...) {
+                    append_unique(errors, "opening assembly '" + id + "': unknown OCCT failure");
+                    remove_solid(id);
+                    changed = true;
+                }
                 continue;
             }
             if (entity.type != "wall" && entity.type != "slab" && entity.type != "room" &&

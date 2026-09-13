@@ -111,7 +111,10 @@ projects, devices, and integrations:
 - Selection, clipboard operations, transforms, vertex editing, cloning,
   reopening, redefining, deletion, complete undo/redo, area detection,
   aggregation, deductions, classifications, factors, totals, provenance,
-  labels, dimensions, styles, fills, symbols, calibrated PDF/raster tracing,
+  labels, dimensions, styles, fills, and a comprehensive size-adjustable symbol
+  library (toilets, beds, furniture, plumbing, fixtures, appliances,
+  accessibility, lighting, doors/windows, structural/site, and light-commercial
+  equipment), plus calibrated PDF/raster tracing,
   multipage output, print preview, PDF/image export, and legacy/native exchange.
 - Pan/zoom, independent output scale, grid, filters, overview, themes, command
   palette, shortcut presets, saved workspaces, mouse/keyboard/pen/touch input,

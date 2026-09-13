@@ -17,6 +17,8 @@ struct HostedOpening {
     double width{};
     double sill{};
     double height{};
+
+    bool operator==(const HostedOpening&) const = default;
 };
 
 // A wall layer is ordered through the containing wall's `layers` vector from

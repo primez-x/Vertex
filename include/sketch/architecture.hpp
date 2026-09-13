@@ -4,6 +4,8 @@
 #include "sketch/slab_semantics.hpp"
 #include "sketch/terrain_surface.hpp"
 #include "sketch/roof_join_semantics.hpp"
+#include "sketch/opening_assembly.hpp"
+#include "sketch/door_operation.hpp"
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Face.hxx>
 #include <optional>
@@ -55,6 +57,13 @@ struct RoomVolume {
 // does not replace the individual wall entities or their quantities.
 [[nodiscard]] TopoDS_Shape make_wall_join(const WallJoin& join,
                                           std::span<const Wall> walls);
+// Build the derived frame, leaf/sash, and glazing solids for one hosted
+// opening. The wall cut and opening dimensions remain authoritative; this
+// result is a coordinated-view presentation only.
+[[nodiscard]] TopoDS_Shape make_opening_assembly(
+    const Wall& wall, const HostedOpening& opening,
+    const OpeningAssembly& assembly,
+    const std::optional<DoorOperation>& door_operation = std::nullopt);
 // Build the derived solid for a first-class fused roof join.  Source roof
 // solids remain authoritative semantic objects; this result is only the
 // coordinated-view union.

@@ -1,4 +1,5 @@
 #include "sketch/door_operation.hpp"
+#include "sketch/opening_assembly.hpp"
 #include "sketch/document_schedule_adapter.hpp"
 #include <cmath>
 #include <iostream>
@@ -33,20 +34,26 @@ int main(){
         auto malformed=encode_door_operation({}); malformed["version"]=2;
         rejects([&]{(void)decode_door_operation(malformed);});
         auto opening=Entity::create("opening",{{"opening_kind","door"},{"mark","D1"},
-            {"width_m",1},{"height_m",2},{"door_operation",encode_door_operation({true,false,120})}});
+            {"width_m",1},{"height_m",2},{"door_operation",encode_door_operation({true,false,120})},
+            {"opening_assembly", opening_assembly_json(default_opening_assembly(OpeningAssemblyKind::door))}});
         opening.id="door";
         auto document=Document::create({opening});
         const auto projection=build_document_schedules(document.snapshot());
         const auto& cells=projection.snapshot.rows.front().cells;
         require(std::get<std::string>(cells.at("hinge").value)=="end" &&
             std::get<std::string>(cells.at("swing_side").value)=="right" &&
-            std::get<double>(cells.at("swing_angle_degrees").value)==120 && !cells.at("hinge").editable,
+            std::get<double>(cells.at("swing_angle_degrees").value)==120 &&
+            std::get<std::string>(cells.at("assembly_kind").value)=="door" &&
+            std::get<ScheduleQuantity>(cells.at("frame_width").value).value > 0.0 &&
+            !cells.at("hinge").editable,
             "schedule must expose stored handing with provenance");
         opening.properties["door_operation"]=malformed;
         rejects([&]{document.apply(ApplyEntityChanges{document.revision(),{EntityChange::upsert(opening)},{},"invalid handing"});});
         require(document.revision()==0,"invalid handing must preserve document revision");
         opening=document.snapshot().entities().at("door");
         opening.properties["opening_kind"]="window";
+        opening.properties["opening_assembly"] =
+            opening_assembly_json(default_opening_assembly(OpeningAssemblyKind::window));
         document.apply(ApplyEntityChanges{document.revision(),{EntityChange::upsert(opening)},{},"change classification"});
         require(!build_document_schedules(document.snapshot()).snapshot.rows.front().cells.contains("hinge") &&
             document.snapshot().entities().at("door").properties.contains("door_operation"),

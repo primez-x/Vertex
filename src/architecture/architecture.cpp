@@ -8,10 +8,12 @@
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepBuilderAPI_Transform.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepGProp.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepPrimAPI_MakeBox.hxx>
 #include <GC_MakeArcOfCircle.hxx>
 #include <GProp_GProps.hxx>
 #include <Standard_Failure.hxx>
@@ -20,6 +22,9 @@
 #include <TopoDS_Wire.hxx>
 #include <TopoDS_Compound.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Ax2.hxx>
+#include <gp_Ax1.hxx>
+#include <gp_Dir.hxx>
 #include <gp_Vec.hxx>
 
 #include <algorithm>
@@ -59,6 +64,83 @@ Vec2 point_at(const Segment& segment, double fraction) {
     const double dy = segment.start.y - origin.y;
     return {origin.x + dx * std::cos(angle) - dy * std::sin(angle),
             origin.y + dx * std::sin(angle) + dy * std::cos(angle)};
+}
+
+struct OpeningFrame {
+    Vec2 origin;
+    Vec2 along;
+    Vec2 left;
+};
+
+OpeningFrame opening_frame(const Segment& baseline, double fraction) {
+    const auto origin = point_at(baseline, fraction);
+    Vec2 along;
+    if (baseline.sweep_radians == 0.0) {
+        const auto length = segment_length(baseline);
+        along = {(baseline.end.x - baseline.start.x) / length,
+                 (baseline.end.y - baseline.start.y) / length};
+    } else {
+        const auto centre_point = centre(baseline);
+        const auto radial = Vec2{origin.x - centre_point.x, origin.y - centre_point.y};
+        const auto radius = std::hypot(radial.x, radial.y);
+        if (!std::isfinite(radius) || radius <= tolerance) {
+            throw std::invalid_argument("Opening host tangent is not representable");
+        }
+        along = baseline.sweep_radians > 0.0
+                    ? Vec2{-radial.y / radius, radial.x / radius}
+                    : Vec2{radial.y / radius, -radial.x / radius};
+    }
+    if (!std::isfinite(along.x) || !std::isfinite(along.y)) {
+        throw std::invalid_argument("Opening host tangent is not finite");
+    }
+    return {origin, along, Vec2{-along.y, along.x}};
+}
+
+gp_Pnt opening_point(const OpeningFrame& frame, double along, double across,
+                     double elevation) {
+    return {frame.origin.x + frame.along.x * along + frame.left.x * across,
+            frame.origin.y + frame.along.y * along + frame.left.y * across,
+            elevation};
+}
+
+TopoDS_Shape opening_box(const OpeningFrame& frame, double along, double across,
+                         double length, double depth, double height, double elevation,
+                         const char* message) {
+    if (!std::isfinite(length) || length <= tolerance || !std::isfinite(depth) ||
+        depth <= tolerance || !std::isfinite(height) || height <= tolerance) {
+        throw std::invalid_argument(message);
+    }
+    try {
+        const auto origin = opening_point(frame, along, across, elevation);
+        const gp_Ax2 axes(origin, gp_Dir(0.0, 0.0, 1.0),
+                          gp_Dir(frame.along.x, frame.along.y, 0.0));
+        BRepPrimAPI_MakeBox builder(axes, length, depth, height);
+        builder.Build();
+        if (!builder.IsDone() || builder.Shape().IsNull() ||
+            !BRepCheck_Analyzer(builder.Shape()).IsValid()) {
+            throw std::invalid_argument(message);
+        }
+        return builder.Shape();
+    } catch (const Standard_Failure& error) {
+        throw std::invalid_argument(std::string(message) + ": " + error.what());
+    }
+}
+
+TopoDS_Shape rotate_opening_part(const TopoDS_Shape& source, const gp_Pnt& hinge,
+                                 double angle, const char* message) {
+    if (source.IsNull() || !std::isfinite(angle)) throw std::invalid_argument(message);
+    try {
+        gp_Trsf transform;
+        transform.SetRotation(gp_Ax1(hinge, gp_Dir(0.0, 0.0, 1.0)), angle);
+        BRepBuilderAPI_Transform rotated(source, transform, true);
+        if (!rotated.IsDone() || rotated.Shape().IsNull() ||
+            !BRepCheck_Analyzer(rotated.Shape()).IsValid()) {
+            throw std::invalid_argument(message);
+        }
+        return rotated.Shape();
+    } catch (const Standard_Failure& error) {
+        throw std::invalid_argument(std::string(message) + ": " + error.what());
+    }
 }
 
 TopoDS_Wire wire(const Boundary& boundary, double elevation) {
@@ -385,6 +467,150 @@ TopoDS_Shape make_wall(const Wall& wall) {
     } catch (const Standard_Failure& error) {
         throw std::invalid_argument(std::string("Wall geometry failed: ") + error.what());
     }
+}
+
+TopoDS_Shape make_opening_assembly(const Wall& wall, const HostedOpening& opening,
+                                   const OpeningAssembly& assembly,
+                                   const std::optional<DoorOperation>& door_operation) {
+    validate_opening_assembly(assembly);
+    Wall checked = wall;
+    const auto existing = std::find_if(checked.openings.begin(), checked.openings.end(),
+                                       [&](const HostedOpening& candidate) {
+                                           return candidate.id == opening.id;
+                                       });
+    if (existing == checked.openings.end()) {
+        checked.openings.push_back(opening);
+    } else if (*existing != opening) {
+        throw std::invalid_argument("Opening assembly host contains a different opening with the same ID");
+    }
+    validate_wall_semantics(checked);
+
+    const auto wall_length = segment_length(wall.baseline);
+    if (!std::isfinite(wall_length) || wall_length <= tolerance ||
+        opening.offset < -tolerance || opening.offset + opening.width > wall_length + tolerance) {
+        throw std::invalid_argument("Opening assembly dimensions do not fit the host wall");
+    }
+    if (assembly.frame_depth_m > wall.thickness + tolerance ||
+        std::abs(assembly.inset_m) + assembly.frame_depth_m * 0.5 >
+            wall.thickness * 0.5 + tolerance) {
+        throw std::invalid_argument("Opening assembly frame does not fit the wall thickness");
+    }
+    if (assembly.frame_width_m * 2.0 >= opening.width - tolerance) {
+        throw std::invalid_argument("Opening assembly frame leaves no clear opening width");
+    }
+    const bool window = assembly.kind == OpeningAssemblyKind::window;
+    const double clear_height = opening.height - (window ? 2.0 : 1.0) * assembly.frame_width_m;
+    if (!std::isfinite(clear_height) || clear_height <= tolerance) {
+        throw std::invalid_argument("Opening assembly frame leaves no clear opening height");
+    }
+    if (window && assembly.frame_width_m * 2.0 >= opening.height - tolerance) {
+        throw std::invalid_argument("Window assembly frame leaves no clear opening height");
+    }
+
+    const auto frame = opening_frame(wall.baseline, opening.offset / wall_length);
+    const double base_elevation = wall.elevation + opening.sill;
+    const double frame_across = assembly.inset_m - assembly.frame_depth_m * 0.5;
+    const double panel_across = assembly.inset_m - assembly.panel_thickness_m * 0.5;
+    const double frame_width = assembly.frame_width_m;
+    const double clear_width = opening.width - 2.0 * frame_width;
+
+    TopoDS_Compound compound;
+    BRep_Builder builder;
+    builder.MakeCompound(compound);
+    const auto add = [&](const TopoDS_Shape& part) {
+        if (part.IsNull()) throw std::invalid_argument("Opening assembly contains an empty part");
+        builder.Add(compound, part);
+    };
+    add(opening_box(frame, 0.0, frame_across, frame_width,
+                   assembly.frame_depth_m, opening.height, base_elevation,
+                   "Opening assembly jamb construction failed"));
+    add(opening_box(frame, opening.width - frame_width, frame_across, frame_width,
+                   assembly.frame_depth_m, opening.height, base_elevation,
+                   "Opening assembly jamb construction failed"));
+    add(opening_box(frame, frame_width, frame_across, clear_width,
+                   assembly.frame_depth_m, frame_width,
+                   base_elevation + opening.height - frame_width,
+                   "Opening assembly head construction failed"));
+    if (window) {
+        add(opening_box(frame, frame_width, frame_across, clear_width,
+                       assembly.frame_depth_m, frame_width, base_elevation,
+                       "Window assembly sill construction failed"));
+    }
+
+    const double panel_depth = assembly.panel_thickness_m;
+    const auto panel = [&](double along, double across, double length, double height) {
+        return opening_box(frame, along, across, length, panel_depth, height, base_elevation,
+                           "Opening assembly panel construction failed");
+    };
+    if (!window) {
+        auto leaf = panel(frame_width, panel_across, clear_width, clear_height);
+        std::optional<gp_Pnt> hinge;
+        double swing_angle = 0.0;
+        if (door_operation.has_value()) {
+            // Reuse the analytical operation's validation so a native solid
+            // can never silently accept a different handing contract.
+            (void)door_plan_symbol(wall.baseline, opening.offset, opening.width,
+                                   *door_operation);
+            const double hinge_along = door_operation->hinge_at_end
+                                           ? opening.width - frame_width
+                                           : frame_width;
+            hinge = opening_point(frame, hinge_along, panel_across + panel_depth * 0.5,
+                                  base_elevation);
+            swing_angle = door_operation->angle_degrees * std::numbers::pi / 180.0 *
+                          (door_operation->swing_left ? 1.0 : -1.0) *
+                          (door_operation->hinge_at_end ? -1.0 : 1.0);
+            leaf = rotate_opening_part(leaf, *hinge, swing_angle,
+                                       "Opening assembly leaf rotation failed");
+        }
+        add(leaf);
+        if (assembly.glazing_thickness_m > tolerance) {
+            const double glazing_width = clear_width * 0.65;
+            const double glazing_height = clear_height * 0.65;
+            auto glazing = opening_box(frame,
+                                       frame_width + clear_width * 0.175,
+                                       assembly.inset_m - assembly.glazing_thickness_m * 0.5,
+                                       glazing_width, assembly.glazing_thickness_m,
+                                       glazing_height,
+                                       base_elevation + clear_height * 0.175,
+                                       "Door assembly glazing construction failed");
+            if (hinge.has_value()) {
+                glazing = rotate_opening_part(glazing, *hinge, swing_angle,
+                                              "Door assembly glazing rotation failed");
+            }
+            add(glazing);
+        }
+    } else {
+        const double sash_bar = std::min(frame_width * 0.6, clear_width * 0.2);
+        if (sash_bar <= tolerance || clear_height - 2.0 * sash_bar <= tolerance) {
+            throw std::invalid_argument("Window assembly leaves no clear glazing pane");
+        }
+        add(opening_box(frame, frame_width, panel_across, sash_bar, panel_depth,
+                        clear_height, base_elevation + frame_width,
+                        "Window assembly sash construction failed"));
+        add(opening_box(frame, opening.width - frame_width - sash_bar, panel_across,
+                        sash_bar, panel_depth, clear_height, base_elevation + frame_width,
+                        "Window assembly sash construction failed"));
+        add(opening_box(frame, frame_width + sash_bar, panel_across,
+                        clear_width - 2.0 * sash_bar, panel_depth, sash_bar,
+                        base_elevation + frame_width,
+                        "Window assembly sash construction failed"));
+        add(opening_box(frame, frame_width + sash_bar, panel_across,
+                        clear_width - 2.0 * sash_bar, panel_depth, sash_bar,
+                        base_elevation + opening.height - frame_width - sash_bar,
+                        "Window assembly sash construction failed"));
+        add(opening_box(frame, frame_width + sash_bar,
+                        assembly.inset_m - assembly.glazing_thickness_m * 0.5,
+                        clear_width - 2.0 * sash_bar, assembly.glazing_thickness_m,
+                        clear_height - 2.0 * sash_bar,
+                        base_elevation + frame_width + sash_bar,
+                        "Window assembly glazing construction failed"));
+    }
+
+    if (compound.IsNull() || !BRepCheck_Analyzer(compound).IsValid() ||
+        solid_volume(compound) <= tolerance * tolerance * tolerance) {
+        throw std::invalid_argument("Opening assembly did not produce valid solids");
+    }
+    return compound;
 }
 
 TopoDS_Shape make_wall_join(const WallJoin& join, std::span<const Wall> walls) {

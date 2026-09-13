@@ -3906,6 +3906,28 @@ int main(int argc, char** argv) {
                 rendered_label->bold && rendered_label->italic &&
                 std::abs(rendered_label->text_height_metres - 0.006) < 1e-12,
             "annotation style must reach the shared canvas renderer");
+    require(window.editAnnotation(symbol_id, QString(), QStringLiteral("4.25"),
+                                  QStringLiteral("2.75"), QStringLiteral("30"),
+                                  QStringLiteral("2.4"), true),
+            "symbol resizing and placement should use the typed command path");
+    annotation_state = decode_annotation_entity(
+        window.document().snapshot().entities().at("annotations-1"));
+    const auto edited_symbol = std::find_if(
+        annotation_state.symbols.begin(), annotation_state.symbols.end(),
+        [&](const auto& value) { return value.id == symbol_id.toStdString(); });
+    require(edited_symbol != annotation_state.symbols.end() &&
+                std::abs(edited_symbol->placement.position.x - 4.25) < 1e-9 &&
+                std::abs(edited_symbol->placement.position.y - 2.75) < 1e-9 &&
+                std::abs(edited_symbol->placement.rotation_radians -
+                         (30.0 * std::numbers::pi / 180.0)) < 1e-9 &&
+                std::abs(edited_symbol->placement.scale - 2.4) < 1e-9,
+            "symbol resizing must persist physical placement metadata");
+    const auto rendered_symbol = std::find_if(
+        annotation_canvas->entities().begin(), annotation_canvas->entities().end(),
+        [&](const auto& value) { return value.id == symbol_id && value.type == QStringLiteral("symbol"); });
+    require(rendered_symbol != annotation_canvas->entities().end() &&
+                !rendered_symbol->segments.empty(),
+            "resized symbols must reach the shared canvas renderer");
     require(window.selectEntity(label_id), "a persisted annotation child should be selectable");
     require(window.deleteAnnotation(label_id), "annotation deletion should be undoable");
     annotation_state = decode_annotation_entity(

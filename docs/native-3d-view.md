@@ -243,3 +243,12 @@ The standalone object probe used while the application target is being
 integrated is kept under `.deps/probes/visualization`; it builds
 `src/visualization/native_model_view.cpp` with MSVC 19.44, Qt 6.8.3, and OCCT
 8.0.1. It does not create generated files in the repository root.
+
+The hosted-opening extension uses a strict `opening_assembly` profile:
+
+* A hosted opening with an `opening_assembly` profile is presented under its
+  stable opening ID. The wall remains the source solid and the profile adds a
+  derived compound for frame, leaf/sash, and glazing. Rebuilding the wall,
+  changing dimensions, changing handing, or changing the profile invalidates
+  that presentation cache. Selecting the derived parts therefore resolves to
+  the persisted opening entity for ordinary editing.

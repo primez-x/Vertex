@@ -3,7 +3,7 @@
 ## Latest integrated checkpoint
 
 At the current integrated checkpoint, the Release and Debug desktop builds and
-CTest matrices completed with 141 executed tests passing in each configuration
+CTest matrices completed with 144 runnable tests passing in each configuration
 (the production acceptance test is
 intentionally disabled and the AppContainer runtime test is skipped when the host is already
 inside a parent Job Object). The focused Debug and Release architectural
@@ -54,6 +54,12 @@ OCCT union without replacing roof parameters, openings, or quantities; codec,
 document, and solid regression coverage is included in the next Debug/Release
 matrix. Roof material propagation, mitered/curved roof junctions, and
 production qualification remain open.
+Hosted openings now carry an optional strict version-1 opening assembly profile
+with shared native geometry for jambs, heads, sills, leaves, sash bars, glazing,
+and handed door motion. New openings receive a deterministic door/window default;
+legacy cut-only records remain valid, while schedule rows expose assembly
+dimensions. Profile editing beyond the current classification/default path and
+full native interchange qualification remain open.
 The tracked source boundary is now explicit in
 `third_party/source-provenance.json`: a fail-closed audit assigns every tracked
 path to first-party source, third-party provenance, or an excluded generated
@@ -98,7 +104,7 @@ installer qualification is still open. The corrected
 native model-view runtime probe exits with `ready=true exported=true error=` and
 no CRT dialog in the captured run. The current Release PE inspection covers 44
 component binaries with no unresolved static imports; the staged offline bundle
-verified 558 declared files, installed 55 runtime files into a task-owned
+verified 577 declared files, installed 55 runtime files into a task-owned
 temporary directory, and passed the installed-runtime smoke for both workspaces
 with exit code 0. The native 3D viewport now supports Ctrl+left-drag previews
 and one-command world-space translation requests for supported architectural
@@ -336,7 +342,14 @@ independent assembly profiles, Apex compatibility, and production acceptance
 evidence remain open.
 
 The current foundation also has a strict typed annotation Document entity and
-semantic annotation/style records with a 216-entry parametric symbol catalog.
+semantic annotation/style records with a 468-entry parametric symbol catalog:
+52 stable families across plumbing, furniture, storage, fixtures, appliances,
+accessibility, lighting, doors/windows, structural/site, and light-commercial
+equipment, each with nine physical width/depth variants and validated scale
+limits. Representative symbol resize/placement now has a desktop regression
+fixture, and resized symbols are covered by vector DXF output. Polished artwork,
+catalog search/filtering, and final print/export visual qualification remain
+production-gate work.
 Stored label and symbol stroke/fill colors, fill patterns, paper text height,
 bold/italic emphasis, and symbol stroke width now flow through the shared
 interactive and fitted/output canvas renderer. Coordinated view/sheet records with

@@ -88,7 +88,21 @@ std::vector<SymbolDefinition> default_symbol_catalog() {
         Family{"shower","fixtures",0.9,0.9,5}, Family{"toilet","fixtures",0.4,0.7,5},
         Family{"range","appliances",0.6,0.6,6}, Family{"refrigerator","appliances",0.9,0.7,6},
         Family{"dishwasher","appliances",0.6,0.6,6}, Family{"washer","appliances",0.6,0.65,6},
-        Family{"dryer","appliances",0.6,0.65,6}, Family{"water-heater","appliances",0.6,0.6,6}};
+        Family{"dryer","appliances",0.6,0.65,6}, Family{"water-heater","appliances",0.6,0.6,6},
+        Family{"floor-drain","plumbing",0.15,0.15,5}, Family{"cleanout","plumbing",0.15,0.15,5},
+        Family{"hose-bib","plumbing",0.12,0.12,5}, Family{"water-meter","plumbing",0.3,0.2,5},
+        Family{"urinal","fixtures",0.45,0.45,5}, Family{"double-sink","fixtures",1.2,0.5,5},
+        Family{"bidet","fixtures",0.4,0.6,5}, Family{"accessible-toilet","accessibility",0.8,0.8,7},
+        Family{"grab-bar","accessibility",0.9,0.1,8}, Family{"accessible-shower","accessibility",1.5,1.5,5},
+        Family{"ceiling-light","lighting",0.3,0.3,9}, Family{"wall-sconce","lighting",0.2,0.15,9},
+        Family{"recessed-light","lighting",0.15,0.15,9}, Family{"ceiling-fan","lighting",1.2,1.2,10},
+        Family{"single-door","doors_windows",0.9,0.1,11}, Family{"double-door","doors_windows",1.8,0.1,11},
+        Family{"sliding-door","doors_windows",1.8,0.12,11}, Family{"window","doors_windows",1.2,0.12,12},
+        Family{"bay-window","doors_windows",2.4,0.3,12}, Family{"parking-space","site",2.7,5.5,13},
+        Family{"north-arrow","site",0.3,0.3,14}, Family{"tree","site",3.0,3.0,15},
+        Family{"column-symbol","structural",0.3,0.3,16}, Family{"stair-symbol","structural",1.0,2.0,17},
+        Family{"checkout-counter","commercial",1.8,0.7,18}, Family{"service-counter","commercial",2.4,0.8,18},
+        Family{"display-case","commercial",1.5,0.6,4}, Family{"pallet-rack","commercial",2.7,1.1,4}};
     std::vector<SymbolDefinition> result;
     for (const auto& f : families) for (int w = 0; w < 3; ++w) for (int d = 0; d < 3; ++d) {
         SymbolDefinition s;
@@ -104,7 +118,32 @@ std::vector<SymbolDefinition> default_symbol_catalog() {
         if (f.shape == 4) { line(0,-1,0,1); line(-1,0,1,0); }
         if (f.shape == 5) { line(-0.7,-0.7,0.7,-0.7); line(0.7,-0.7,0.7,0.7); line(0.7,0.7,-0.7,0.7); line(-0.7,0.7,-0.7,-0.7); line(-0.15,0.5,0.15,0.5); }
         if (f.shape == 6) { line(-1,-1,1,1); line(-1,1,1,-1); }
+        if (f.shape == 7) { line(-0.8,-0.8,0.8,-0.8); line(0.8,-0.8,0.8,0.8); line(0.8,0.8,-0.8,0.8); line(-0.8,0.8,-0.8,-0.8); line(-0.8,0,0.8,0); }
+        if (f.shape == 8) { line(-0.8,0,0.8,0); line(-0.8,-0.35,-0.8,0.35); line(0.8,-0.35,0.8,0.35); }
+        if (f.shape == 9) { line(-0.7,0,0.7,0); line(0,-0.7,0,0.7); line(-0.5,-0.5,0.5,0.5); line(-0.5,0.5,0.5,-0.5); }
+        if (f.shape == 10) { line(0,-1,0,1); line(-1,0,1,0); line(-0.7,-0.7,0.7,0.7); line(-0.7,0.7,0.7,-0.7); }
+        if (f.shape == 11) { line(-1,-1,1,-1); line(1,-1,1,1); line(-1,1,1,1); line(-0.9,-0.9,0.8,0.8); }
+        if (f.shape == 12) { line(-0.75,-0.75,0.75,-0.75); line(0.75,-0.75,0.75,0.75); line(0.75,0.75,-0.75,0.75); line(-0.75,0.75,-0.75,-0.75); line(-0.75,0,0.75,0); }
+        if (f.shape == 14) { line(0,-0.9,0,0.9); line(0,0.9,-0.25,0.55); line(0,0.9,0.25,0.55); }
+        if (f.shape == 15) { line(-0.7,0,0.7,0); line(0,-0.7,0,0.7); line(-0.5,-0.5,0.5,0.5); line(-0.5,0.5,0.5,-0.5); }
+        if (f.shape == 16) { line(-0.7,-0.7,0.7,0.7); line(-0.7,0.7,0.7,-0.7); }
+        if (f.shape == 17) { line(-0.8,-0.7,0.8,-0.7); line(-0.8,-0.35,0.8,-0.35); line(-0.8,0,0.8,0); line(-0.8,0.35,0.8,0.35); line(-0.8,0.7,0.8,0.7); }
+        if (f.shape == 18) { line(-0.8,-0.55,-0.8,0.55); line(-0.8,0.55,0.8,0.55); line(0.8,0.55,0.8,-0.55); line(-0.8,0,0.8,0); }
         result.push_back(std::move(s));
+    }
+    return result;
+}
+
+std::vector<SymbolDefinition> filter_symbol_catalog(
+    const std::vector<SymbolDefinition>& catalog, std::string_view query,
+    std::string_view category) {
+    std::vector<SymbolDefinition> result;
+    for (const auto& symbol : catalog) {
+        if (!category.empty() && symbol.category != category) continue;
+        if (!query.empty() && symbol.id.find(query) == std::string::npos &&
+            symbol.family.find(query) == std::string::npos &&
+            symbol.category.find(query) == std::string::npos) continue;
+        result.push_back(symbol);
     }
     return result;
 }

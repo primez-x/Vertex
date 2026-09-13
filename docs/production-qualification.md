@@ -129,11 +129,13 @@ All runs require `create`, `measure`, `editable_3d`, `edit`, `calculate`, `revis
 
 Residential OPS-QA-002 additionally requires `architectural_authoring`, `plans`,
 `elevations`, `sections`, `schedules`, `alternatives`, `revisions`, `sheets`,
-`semantic`, `calculation`, `output`, and `fidelity`.
+`symbol_library`, `symbol_resize`, `symbol_output`, `semantic`, `calculation`,
+`output`, and `fidelity`.
 
 Light-commercial OPS-QA-003 additionally requires `multiple_levels`, `assemblies`,
 `structural_objects`, `schedules`, `quantities`, `sheets`, `coordinated_views`,
-`semantic`, `calculation`, `output`, and `fidelity`.
+`symbol_library`, `symbol_resize`, `symbol_output`, `semantic`, `calculation`,
+`output`, and `fidelity`.
 
 At each DPI scale OPS-QA-005 additionally requires `real_pen`, `real_touch`,
 `keyboard_navigation`, `focus`, `accessible_properties`, `light_theme`,

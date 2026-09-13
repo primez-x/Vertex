@@ -40,7 +40,19 @@ angle with source provenance. Ordinary dimension edits preserve operation data;
 conversion to a window retains it as dormant metadata and suppresses its symbol
 and schedule cells. Undo or conversion back to a door restores its use.
 
-Type-driven door/window assemblies, frame/leaf/glazing solids, and the full
-ARCH-MOD-002 export acceptance remain open. The current
-architectural solid is the cut in the host wall, not a complete manufactured
-door or window assembly.
+Newly authored doors and windows also receive an optional, versioned
+`opening_assembly` profile. The profile is type-driven (`door` or `window`) and
+stores frame width/depth, panel thickness, glazing thickness, and signed inset
+in metres. The host wall cut remains authoritative; the native 3D view adds a
+derived frame, leaf or sash, and glazing compound inside that cut. A door leaf
+and its optional glazing follow the persisted handed swing. Window profiles
+produce a four-bar sash and a real glazing pane. Legacy openings without the
+profile remain valid and continue to render as wall cuts, which keeps import
+lossless while a user upgrades selected instances.
+
+Schedules expose the profile kind and dimensions as read-only source-backed
+properties. The profile is strict schema version 1: unknown versions, missing
+fields, kind mismatches, impossible panel/depth relationships, and assemblies
+that do not fit the host wall are rejected before a Document mutation. The
+derived compound is not exported as authoritative project geometry; native
+DXF/IFC and full ARCH-MOD-002 export acceptance remain production-gate work.

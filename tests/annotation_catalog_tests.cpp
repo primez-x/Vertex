@@ -4,6 +4,7 @@
 #include <iostream>
 #include <limits>
 #include <numbers>
+#include <set>
 #include <stdexcept>
 
 namespace {
@@ -19,8 +20,28 @@ template<class F> void rejected(F f) {
 int main() {
     using namespace sketch;
     const auto catalog = default_symbol_catalog();
-    require(catalog.size() == 216,"Expected 24 families with nine dimension variants");
+    require(catalog.size() == 468,"Expected 52 families with nine dimension variants");
     validate_symbol_catalog(catalog);
+    const std::set<std::string> required_categories{
+        "plumbing", "furniture", "fixtures", "appliances", "accessibility",
+        "lighting", "doors_windows", "structural", "site", "commercial"};
+    std::set<std::string> categories;
+    std::set<std::string> families;
+    for (const auto& definition : catalog) {
+        categories.insert(definition.category);
+        families.insert(definition.family);
+        require(definition.width_metres > 0 && definition.depth_metres > 0,
+                "Every symbol must expose physical dimensions");
+        require(definition.minimum_scale < 1.0 && definition.maximum_scale > 1.0,
+                "Every symbol must support practical resizing");
+    }
+    for (const auto& category : required_categories)
+        require(categories.contains(category), "Required symbol category is missing");
+    require(families.size() == 52, "Every symbol family must have a stable identity");
+    const auto plumbing = filter_symbol_catalog(catalog, "", "plumbing");
+    require(plumbing.size() == 36, "Category filtering must return all plumbing variants");
+    const auto toilets = filter_symbol_catalog(catalog, "toilet");
+    require(toilets.size() == 18, "Query filtering must match toilet families and variants");
     const auto repeated = default_symbol_catalog();
     for (std::size_t i=0;i<catalog.size();++i) {
         require(catalog[i].id == repeated[i].id && catalog[i].width_metres == repeated[i].width_metres,

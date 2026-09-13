@@ -1,5 +1,6 @@
 #include "sketch/document.hpp"
 #include "sketch/door_operation.hpp"
+#include "sketch/opening_assembly.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
@@ -324,6 +325,27 @@ void validate_entity(const Entity& entity) {
             (slope.is_number_float() && !std::isfinite(slope.get<double>()))) {
             document_error(DocumentErrorCode::invalid_entity,
                            "wall slope_rise_m must be a finite number");
+        }
+    }
+    if (entity.properties.contains("opening_assembly")) {
+        if (entity.type != "opening") {
+            document_error(DocumentErrorCode::invalid_entity,
+                           "Opening assembly requires an opening entity");
+        }
+        try {
+            const auto assembly = parse_opening_assembly(
+                entity.properties.at("opening_assembly"));
+            const auto kind = entity.properties.find("opening_kind");
+            if (kind == entity.properties.end() || !kind->is_string() ||
+                kind->get<std::string>() != opening_assembly_kind_name(assembly.kind)) {
+                document_error(DocumentErrorCode::invalid_entity,
+                               "Opening assembly kind must match opening_kind");
+            }
+        } catch (const DocumentError&) {
+            throw;
+        } catch (const std::exception& error) {
+            document_error(DocumentErrorCode::invalid_entity,
+                           std::string("Invalid opening assembly: ") + error.what());
         }
     }
     if (entity.type == "wall_join") {

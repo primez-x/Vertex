@@ -195,6 +195,30 @@ extents. The fused shape is a derived cache: source wall dimensions, hosted
 openings, classifications, and schedule quantities remain authoritative and
 are never replaced by the join record.
 
+An opening may carry an optional `properties.opening_assembly` object. The
+object is exactly:
+
+```json
+{
+  "version": 1,
+  "kind": "door",
+  "frame_width_m": 0.08,
+  "frame_depth_m": 0.12,
+  "panel_thickness_m": 0.04,
+  "glazing_thickness_m": 0.0,
+  "inset_m": 0.0
+}
+```
+
+`kind` must match the opening's `opening_kind` (`door` or `window`). All
+dimensions are finite metres; frame and panel dimensions are positive, glazing
+is nonnegative, and the panel cannot be deeper than its frame. Window profiles
+require positive glazing. `inset_m` is signed toward the wall's left-hand
+normal and the profile must fit within the host wall thickness. The profile is
+an instance presentation contract: the wall cut, hosted dimensions, and
+handing remain the source of truth, while frame, leaf/sash, and glazing solids
+are derived for coordinated views.
+
 A `roof_join` is a version-1 architectural relationship that preserves the
 source roof entities while providing one derived fused solid for coordinated
 views. Its properties contain exactly `version: 1`, `style: "fused"`, and a

@@ -51,6 +51,8 @@ sketch::Document make_document() {
     label.content = "Kitchen";
     label.placement.position = {1, 1};
     annotations.labels.push_back(label);
+    annotations.symbols.push_back(
+        {"symbol-1", "toilet-w3-d3", {{2.0, 1.5}, 0.35, 1.4}, {}, true});
     return Document::create({std::move(boundary), std::move(dimension), std::move(wall),
                              std::move(slab), make_annotation_entity("annotations-1", annotations)});
 }
@@ -63,6 +65,9 @@ void run() {
     check(exported.drawing.polylines.size() >= 2, "boundary and slab geometry must export");
     check(exported.drawing.lines.size() >= 1, "wall geometry must export");
     check(exported.drawing.labels.size() == 1, "annotation label must export");
+    check(std::any_of(exported.drawing.lines.begin(), exported.drawing.lines.end(),
+                      [](const auto& line) { return line.layer == "Symbols"; }),
+          "resized annotation symbols must export as vector geometry");
     check(exported.drawing.dimensions.size() == 1, "identified dimension must export");
     check(std::any_of(exported.diagnostics.begin(), exported.diagnostics.end(), [](const auto& item) {
         return item.source_id == "wall-1" && item.code == "wall_3d_semantics_not_representable";

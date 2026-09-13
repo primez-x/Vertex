@@ -4,6 +4,7 @@
 #include "draft_image_stamp.hpp"
 
 #include "sketch/architecture.hpp"
+#include "sketch/opening_assembly.hpp"
 #include <QColorDialog>
 #include <QDoubleSpinBox>
 #include "sketch/architectural_schedule.hpp"
@@ -9432,6 +9433,10 @@ public:
                                          {"height_m", height},
                                          {"opening_kind", normalized_kind.toStdString()},
                                          {"classification", normalized_kind.toStdString()}};
+            properties["opening_assembly"] = opening_assembly_json(
+                default_opening_assembly(normalized_kind == QStringLiteral("door")
+                                             ? OpeningAssemblyKind::door
+                                             : OpeningAssemblyKind::window));
             if(door_operation) properties["door_operation"] = encode_door_operation(*door_operation);
             if (!applyEntity(Entity{entity_id, "opening", properties, false, json::object()},
                              "create hosted opening", revision)) {
@@ -11362,6 +11367,16 @@ public:
             properties["classification"] = value.toStdString();
             if (entity->type == "opening") {
                 properties["opening_kind"] = value.toStdString();
+                if (properties.contains("opening_assembly")) {
+                    auto assembly = parse_opening_assembly(properties.at("opening_assembly"));
+                    assembly.kind = value == QStringLiteral("door")
+                        ? OpeningAssemblyKind::door : OpeningAssemblyKind::window;
+                    if (assembly.kind == OpeningAssemblyKind::window &&
+                        assembly.glazing_thickness_m <= default_geometry_tolerance_metres) {
+                        assembly.glazing_thickness_m = std::min(0.02, assembly.panel_thickness_m);
+                    }
+                    properties["opening_assembly"] = opening_assembly_json(assembly);
+                }
             }
         },
                             "edit classification");
@@ -13713,17 +13728,49 @@ public:
 
         auto* symbol = new QComboBox(&dialog);
         symbol->setObjectName(QStringLiteral("annotationSymbol"));
-        for (const auto& definition : default_symbol_catalog()) {
-            symbol->addItem(QStringLiteral("%1  (%2 × %3 m)")
-                                .arg(QString::fromStdString(definition.family))
-                                .arg(QString::number(definition.width_metres, 'g', 4))
-                                .arg(QString::number(definition.depth_metres, 'g', 4)),
-                            QString::fromStdString(definition.id));
-        }
+        symbol->setAccessibleName(QStringLiteral("Drawing symbol"));
+        auto* symbol_category = new QComboBox(&dialog);
+        symbol_category->setObjectName(QStringLiteral("annotationSymbolCategory"));
+        symbol_category->setAccessibleName(QStringLiteral("Drawing symbol category"));
+        auto* symbol_search = new QLineEdit(&dialog);
+        symbol_search->setObjectName(QStringLiteral("annotationSymbolSearch"));
+        symbol_search->setAccessibleName(QStringLiteral("Search drawing symbols"));
+        symbol_search->setPlaceholderText(QStringLiteral("Search family or category"));
+        const auto catalog = default_symbol_catalog();
+        std::set<std::string> symbol_categories;
+        for (const auto& definition : catalog) symbol_categories.insert(definition.category);
+        symbol_category->addItem(QStringLiteral("All categories"), QString());
+        for (const auto& category : symbol_categories)
+            symbol_category->addItem(QString::fromStdString(category),
+                                     QString::fromStdString(category));
+        const auto populate_symbols = [symbol, symbol_category, symbol_search, catalog] {
+            const auto previous = symbol->currentData().toString();
+            const auto query = symbol_search->text().trimmed().toLower().toStdString();
+            const auto category = symbol_category->currentData().toString().toStdString();
+            const auto filtered = filter_symbol_catalog(catalog, query, category);
+            const QSignalBlocker blocker(*symbol);
+            symbol->clear();
+            for (const auto& definition : filtered) {
+                symbol->addItem(QStringLiteral("%1  (%2 × %3 m)")
+                                     .arg(QString::fromStdString(definition.family))
+                                     .arg(QString::number(definition.width_metres, 'g', 4))
+                                     .arg(QString::number(definition.depth_metres, 'g', 4)),
+                                 QString::fromStdString(definition.id));
+            }
+            const auto restored = symbol->findData(previous);
+            if (restored >= 0) symbol->setCurrentIndex(restored);
+            else if (symbol->count() > 0) symbol->setCurrentIndex(0);
+        };
+        QObject::connect(symbol_category, &QComboBox::currentIndexChanged,
+                         &dialog, populate_symbols);
+        QObject::connect(symbol_search, &QLineEdit::textChanged, &dialog, populate_symbols);
+        populate_symbols();
         auto* symbol_x = new QLineEdit(QStringLiteral("0"), &dialog);
         auto* symbol_y = new QLineEdit(QStringLiteral("0"), &dialog);
         symbol_x->setObjectName(QStringLiteral("annotationSymbolX"));
         symbol_y->setObjectName(QStringLiteral("annotationSymbolY"));
+        form->addRow(QStringLiteral("Symbol category"), symbol_category);
+        form->addRow(QStringLiteral("Find symbol"), symbol_search);
         form->addRow(QStringLiteral("Symbol"), symbol);
         form->addRow(QStringLiteral("Symbol X (m)"), symbol_x);
         form->addRow(QStringLiteral("Symbol Y (m)"), symbol_y);
