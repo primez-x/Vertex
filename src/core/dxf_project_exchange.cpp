@@ -322,6 +322,15 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
                 diagnostic(result.diagnostics, entity.id, entity.type, "dimension_semantics_unsupported");
                 return;
             }
+            // DxfDimension is deliberately limited to a linear measurement.
+            // Angle and area dimensions have different analytical semantics;
+            // exporting their first segment as a linear dimension would make
+            // a successful-looking file lie about the source document.
+            if (decoded.dimension->kind != BoundaryDimensionKind::segment_length) {
+                diagnostic(result.diagnostics, entity.id, entity.type,
+                           "dimension_semantics_not_representable");
+                return;
+            }
             const auto owner = document.entities().find(decoded.dimension->boundary_id);
             if (owner == document.entities().end()) {
                 diagnostic(result.diagnostics, entity.id, entity.type, "dimension_owner_missing");

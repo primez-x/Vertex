@@ -135,6 +135,11 @@ available. Curved boundary edges stay analytical bulges, while positive
 single arcs on wall baselines stay ARC records. The function never mutates the
 source document or opens a path.
 
+Only segment-length dimensions map to DXF's bounded linear `DIMENSION` record.
+Angle and area dimensions remain native-only and produce an explicit
+`dimension_semantics_not_representable` diagnostic; they are never flattened
+into a misleading linear measurement.
+
 `import_project_dxf` parses the bounded drawing and returns unparented editable
 boundary candidates plus one typed annotation entity for labels. Lines, arcs,
 polylines, solid hatch loops, and block INSERT geometry are reconstructed with

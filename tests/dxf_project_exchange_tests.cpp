@@ -99,11 +99,59 @@ void run() {
     check(rejected, "malformed DXF must fail closed");
 }
 
+void test_non_linear_dimensions_are_not_flattened() {
+    using namespace sketch;
+    auto source = make_document();
+    const auto snapshot = source.snapshot();
+    std::vector<Entity> entities;
+    entities.reserve(snapshot.entities().size() + 2);
+    for (const auto& [id, entity] : snapshot.entities()) {
+        (void)id;
+        entities.push_back(entity);
+    }
+    entities.push_back(encode_boundary_dimension_entity(BoundaryDimension{
+        .id = "dimension-angle",
+        .boundary_id = "boundary-1",
+        .segment_id = "edge-1",
+        .text_position = {2.0, -0.5},
+        .placement = BoundaryDimensionPlacement::manual,
+        .automatic_placement_version = std::nullopt,
+        .presentation = std::nullopt,
+        .kind = BoundaryDimensionKind::angle,
+        .vertex_id = "vertex-2",
+        .secondary_segment_id = "edge-2"}));
+    entities.push_back(encode_boundary_dimension_entity(BoundaryDimension{
+        .id = "dimension-area",
+        .boundary_id = "boundary-1",
+        .segment_id = {},
+        .text_position = {2.0, 1.5},
+        .placement = BoundaryDimensionPlacement::manual,
+        .automatic_placement_version = std::nullopt,
+        .presentation = std::nullopt,
+        .kind = BoundaryDimensionKind::area,
+        .vertex_id = {},
+        .secondary_segment_id = {}}));
+    const auto mapped = export_project_dxf(Document::create(std::move(entities)).snapshot());
+    check(mapped.drawing.dimensions.size() == 1,
+          "only linear boundary dimensions may become DXF DIMENSION records");
+    const auto has_diagnostic = [&](const char* id) {
+        return std::any_of(mapped.diagnostics.begin(), mapped.diagnostics.end(), [&](const auto& item) {
+            return item.source_id == id && item.source_kind == "dimension" &&
+                   item.code == "dimension_semantics_not_representable";
+        });
+    };
+    check(has_diagnostic("dimension-angle"),
+          "angle dimensions must report their unsupported DXF semantics");
+    check(has_diagnostic("dimension-area"),
+          "area dimensions must report their unsupported DXF semantics");
+}
+
 } // namespace
 
 int main() {
     try {
         run();
+        test_non_linear_dimensions_are_not_flattened();
         std::cout << "DXF project exchange tests passed\n";
         return 0;
     } catch (const std::exception& error) {
