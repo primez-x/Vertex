@@ -175,9 +175,9 @@ are rejected without advancing history. The desktop now exposes the model-phase
 selector and alternative manager; active-phase filtering reaches the plan,
 architectural views, native 3D visibility, schedules, and sheet output through
 the shared visible-ID path. Assembly instances now support validated host
-placements, transformed plan previews, and read-only quantity schedules. Room
-relationship parity, independent assembly profiles, cross-view assembly
-projection, Apex compatibility, and production acceptance evidence remain open.
+placements, transformed plan/elevation/section previews, native 3D solids, and
+read-only quantity schedules. Room relationship parity, independent assembly
+profiles, Apex compatibility, and production acceptance evidence remain open.
 
 The current foundation also has a strict typed annotation Document entity and
 semantic annotation/style records with a 216-entry parametric symbol catalog,

@@ -24,7 +24,8 @@ production qualification remain open. The desktop Architectural tab now has a tr
 Plan/Elevation/Section selector. Non-plan views show derived wall, slab,
 room-volume, and building-object edges on the canvas and route selected-workspace
 draft output
-through that canvas; the section plane is the frame origin plane. Persisted
+through that canvas; placed assembly instances use transformed host solids in
+all three views, and the section plane is the frame origin plane. Persisted
 coordinated-view frames and section cut depth now drive the selector when a
 matching typed sheet/view entity is present; the built-in 1.2 m frame remains a
 safe fallback. A conservative object-level far-depth filter now culls solids

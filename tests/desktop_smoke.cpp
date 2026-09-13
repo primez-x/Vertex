@@ -3210,6 +3210,9 @@ void test_assembly_placement_plan_preview() {
     require(has_assembly_instance(),
             "placed assembly should project through the coordinated section view");
     architectural_view->setCurrentIndex(0);
+    require(window.selectEntity(QStringLiteral("assembly-catalog:instance:lintel-1")) &&
+                window.selectedEntityId() == QStringLiteral("host-wall"),
+            "native or canvas assembly selection should resolve to its persisted host");
 }
 
 void test_vertical_levels_workflow() {
