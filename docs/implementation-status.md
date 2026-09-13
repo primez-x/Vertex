@@ -43,8 +43,11 @@ The verifier now cross-checks file kinds, project/asset/resource records,
 summary counts, symlink chains, and resource-manifest hashes. A copy-only
 restore helper materializes a verified package into a new destination and
 re-hashes each payload after copying, returning relative project and resource
-paths for an offline consumer. Cross-machine fingerprint equivalence and
-application-level template registration remain production qualification work.
+paths for an offline consumer. The Windows core now registers those restored
+templates, profiles, and documentation through a hash-verified local catalog;
+`property-cli resources` exposes the same deterministic registration result for
+inspection. Cross-machine fingerprint equivalence and production qualification
+remain open.
 
 Named revision comparison now reports semantic, geometric, calculation, and
 presentation change counts with bounded changed-property details. The report

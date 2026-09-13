@@ -1,6 +1,7 @@
 #include "sketch/document.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/project_exchange.hpp"
+#include "sketch/project_resource_catalog.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -40,7 +41,8 @@ int run(int argc, wchar_t** argv) {
     if (argc < 3) {
         std::cerr << "Usage: property-cli <new|inspect|validate> <project.bldproj>\n"
                   << "       property-cli extract <project.bldproj> <new-directory>\n"
-                  << "       property-cli migrate <project.bldproj> <new-project.bldproj>\n";
+                  << "       property-cli migrate <project.bldproj> <new-project.bldproj>\n"
+                  << "       property-cli resources <project-package-directory>\n";
         return 2;
     }
     const std::wstring command(argv[1]);
@@ -93,6 +95,23 @@ int run(int argc, wchar_t** argv) {
         const auto destination = std::filesystem::absolute(argv[3]);
         sketch::extract_project(loaded.document.snapshot(), destination);
         std::cout << Json({{"extracted_to", utf8(destination)}, {"revision", loaded.document.revision()}}).dump() << '\n';
+        return 0;
+    }
+    if (command == L"resources" && argc == 3) {
+        const auto catalog = sketch::ProjectResourceCatalog::register_package(file);
+        Json resources = Json::array();
+        for (const auto& resource : catalog.resources()) {
+            resources.push_back({{"kind", sketch::project_resource_kind_name(resource.kind)},
+                                 {"name", resource.name},
+                                 {"path", resource.relative_path.generic_string()},
+                                 {"sha256", resource.sha256}, {"size", resource.size}});
+        }
+        std::cout << Json({{"package_root", utf8(catalog.package_root())},
+                           {"resource_count", catalog.resources().size()},
+                           {"resources", std::move(resources)},
+                           {"network_required", false}})
+                         .dump(2)
+                  << '\n';
         return 0;
     }
     throw std::runtime_error("Unknown command or incorrect argument count");

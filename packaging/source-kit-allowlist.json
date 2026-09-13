@@ -603,6 +603,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/project_resource_catalog.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/project_store.hpp"
     },
     {
@@ -1100,6 +1104,10 @@
     {
       "category": "source",
       "path": "src/core/project_ownership.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/project_resource_catalog.cpp"
     },
     {
       "category": "source",
@@ -1616,6 +1624,10 @@
     {
       "category": "source",
       "path": "tests/project_ownership_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/project_resource_catalog_tests.cpp"
     },
     {
       "category": "source",

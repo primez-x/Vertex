@@ -79,6 +79,22 @@ result = restore_project_package(
 print(result["project_path"], result["resource_paths"])
 ```
 
+The Windows application registers the restored package resources through the
+same manifest and hash checks before exposing them to the workspace. The local
+CLI provides a deterministic inspection surface for that registration:
+
+```powershell
+.\build\windows-release\property-cli.exe resources C:\Projects\Imported\sample
+```
+
+The command reports the package-relative kind, name, path, size, and SHA-256
+for each template, profile, or documentation entry and always reports
+`network_required: false`. The catalog keeps package bytes in place, rechecks
+the digest on each read, rejects traversal and reparse paths, and does not
+consult a hosted catalog. This is the application-level local resource seam;
+cross-machine fingerprint equivalence and production qualification remain
+separate acceptance gates.
+
 Verification rejects modified or missing files, unsafe paths, symlinked
 payloads, unlisted files, inconsistent project, asset, or resource records, and
 packages that claim offline or production qualification. The package is an

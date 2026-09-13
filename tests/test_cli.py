@@ -51,6 +51,44 @@ def main():
         corrupt.write_bytes(b"not a database")
         invoke("validate", corrupt, success=False)
 
+        # The resource command is the application-level registration seam for
+        # templates/profiles/documentation restored from a local project
+        # package. It must consume only the package manifest and verified bytes.
+        resource_package = root / "resource-package"
+        template_bytes = b'{"kind":"template","name":"Residential"}\n'
+        profile_bytes = b'{"units":"imperial"}\n'
+        documentation_bytes = b"Project format reference\n"
+        (resource_package / "templates").mkdir(parents=True)
+        (resource_package / "profiles").mkdir(parents=True)
+        (resource_package / "documentation").mkdir(parents=True)
+        (resource_package / "templates" / "residential.json").write_bytes(template_bytes)
+        (resource_package / "profiles" / "imperial.json").write_bytes(profile_bytes)
+        (resource_package / "documentation" / "project-format.md").write_bytes(documentation_bytes)
+        def resource_record(kind, name, relative, payload):
+            return {"kind": kind, "name": name, "path": relative,
+                    "sha256": hashlib.sha256(payload).hexdigest(), "size": len(payload)}
+        resources = [
+            resource_record("template", "Residential", "templates/residential.json", template_bytes),
+            resource_record("profile", "Imperial", "profiles/imperial.json", profile_bytes),
+            resource_record("documentation", "Project format", "documentation/project-format.md", documentation_bytes),
+        ]
+        files = [{"kind": entry["kind"], "path": entry["path"],
+                  "sha256": entry["sha256"], "size": entry["size"]}
+                 for entry in resources]
+        (resource_package / "project-package-manifest.json").write_text(
+            json.dumps({"schema_version": 1, "manifest_version": 1,
+                        "manifest_kind": "project-package", "audit_status": "incomplete",
+                        "offline_qualified": False, "resources": resources, "files": files,
+                        "summary": {"file_count": len(files) + 1, "asset_count": 0,
+                                    "template_count": 1, "profile_count": 1,
+                                    "documentation_count": 1}},
+                       indent=2) + "\n", encoding="utf-8")
+        registered = invoke("resources", resource_package)
+        assert registered["resource_count"] == 3
+        assert registered["network_required"] is False
+        assert [entry["name"] for entry in registered["resources"]] == [
+            "Project format", "Imperial", "Residential"]
+
         def constraint_fixture(path, *, version=1, slope=0):
             # Independently construct a format-v1 fixture with a valid logical
             # digest. A semantic rejection must not merely be a checksum error.
