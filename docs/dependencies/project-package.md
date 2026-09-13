@@ -62,9 +62,26 @@ from scripts.stage_project_package import verify_package
 verify_package(r"C:\Transfers\sample")
 ```
 
+To materialize a verified transfer into a new local project directory, use the
+copy-only restore helper. It keeps the source package unchanged, refuses an
+existing destination, re-hashes every payload after copying, and returns the
+relative project/resource paths a local consumer can open or register:
+
+```python
+from scripts.stage_project_package import restore_project_package
+
+result = restore_project_package(
+    r"C:\Transfers\sample",
+    r"C:\Projects\Imported",
+    "sample",
+)
+# Open C:\Projects\Imported\sample\project\sample.bldproj
+print(result["project_path"], result["resource_paths"])
+```
+
 Verification rejects modified or missing files, unsafe paths, symlinked
-payloads, unlisted files, inconsistent project or asset records, and packages
-that claim offline or production qualification. The package is an offline
-ownership and transfer artifact; it does not certify Apex compatibility,
+payloads, unlisted files, inconsistent project, asset, or resource records, and
+packages that claim offline or production qualification. The package is an
+offline ownership and transfer artifact; it does not certify Apex compatibility,
 installer behavior, or cross-machine output equivalence. Those remain part of
 the unified production acceptance gate.

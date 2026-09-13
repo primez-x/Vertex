@@ -2348,7 +2348,7 @@
         "tests/test_stage_portable_package.py",
         "docs/dependencies/portable-package.md"
       ],
-      "implementation_note": "Portable runtime staging remains integrity-only. A separate local project-package assembler now preserves the saved .bldproj byte stream, closes over every revision asset with verified content-addressed copies, and carries explicitly declared templates, profiles, and documentation. Cross-machine calculated/output fingerprint acceptance, reusable template consumption, and production qualification remain open."
+      "implementation_note": "Portable runtime staging remains integrity-only. A separate local project-package assembler now preserves the saved .bldproj byte stream, closes over every revision asset with verified content-addressed copies, and carries explicitly declared templates, profiles, and documentation. Package verification now cross-checks file kinds, project/asset/resource records, summary counts, symlink chains, and resource-manifest hashes; a copy-only restore helper re-hashes each payload while materializing a new local destination. Cross-machine calculated/output fingerprint acceptance, application-level template registration, and production qualification remain open."
     },
     {
       "id": "REC-004",

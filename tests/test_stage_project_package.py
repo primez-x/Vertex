@@ -185,6 +185,40 @@ class StageProjectPackageTests(unittest.TestCase):
             stage.verify_package(package)
         self.assertIn("unlisted", str(context.exception).lower())
 
+    def test_restores_verified_package_with_project_and_resources(self):
+        fixture = self.fixture()
+        self.addCleanup(fixture[0].cleanup)
+        _, root, project, resources, payload, payload_hash = fixture
+        package = root / "out" / "house"
+        stage.stage_project_package(project, root, root / "out", "house", resources)
+
+        result = stage.restore_project_package(package, root / "restored", "copy")
+        restored = root / "restored" / "copy"
+        self.assertEqual(result["manifest_kind"], "project-package")
+        self.assertEqual(result["project_path"], "project/house.bldproj")
+        self.assertEqual(result["resource_count"], 3)
+        self.assertEqual((restored / "project/house.bldproj").read_bytes(), project.read_bytes())
+        self.assertEqual((restored / f"assets/{payload_hash}.bin").read_bytes(), payload)
+        self.assertEqual((restored / "templates/residential.json").read_text(encoding="utf-8"),
+                         '{"kind":"template","name":"Residential"}\n')
+        self.assertEqual(stage.verify_package(restored)["file_count"],
+                         stage.verify_package(package)["file_count"])
+
+    def test_restore_rejects_existing_or_unsafe_destination(self):
+        fixture = self.fixture()
+        self.addCleanup(fixture[0].cleanup)
+        _, root, project, _, _, _ = fixture
+        package = root / "out" / "project-package"
+        stage.stage_project_package(project, root, root / "out")
+        destination_root = root / "restored"
+        destination_root.mkdir()
+        with self.assertRaises(stage.ProjectPackageError):
+            stage.restore_project_package(package, destination_root, "../escape")
+        stage.restore_project_package(package, destination_root, "copy")
+        with self.assertRaises(stage.ProjectPackageError) as context:
+            stage.restore_project_package(package, destination_root, "copy")
+        self.assertIn("already exists", str(context.exception).lower())
+
 
 if __name__ == "__main__":
     unittest.main()

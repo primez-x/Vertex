@@ -508,15 +508,20 @@ def verify_package(package_root: pathlib.Path | str) -> dict[str, Any]:
     files = manifest.get("files")
     _require(isinstance(files, list), "project package files must be a list")
     expected: dict[str, dict[str, Any]] = {}
+    allowed_file_kinds = {"project", "asset", *RESOURCE_KINDS, "resource-manifest"}
     for index, row in enumerate(files):
         _require(isinstance(row, Mapping), f"project package files[{index}] must be an object")
         path = canonical_relative(row.get("path"), f"project package files[{index}].path")
         _require(path.casefold() not in expected, f"project package repeats file {path}")
+        kind = _require_string(row.get("kind"), f"project package files[{index}].kind").lower()
+        _require(kind in allowed_file_kinds,
+                 f"project package files[{index}].kind is unsupported: {kind}")
         digest = _validate_sha256(row.get("sha256"), f"project package files[{index}].sha256")
         size = row.get("size")
         _require(isinstance(size, int) and not isinstance(size, bool) and size >= 0,
                  f"project package files[{index}].size must be nonnegative")
-        expected[path.casefold()] = {"path": path, "sha256": digest, "size": size}
+        expected[path.casefold()] = {"path": path, "kind": kind,
+                                     "sha256": digest, "size": size}
     for key, row in expected.items():
         path = root.joinpath(*pathlib.PurePosixPath(row["path"]).parts)
         _reject_link_chain(path, f"project package payload {row['path']}")
@@ -526,6 +531,7 @@ def verify_package(package_root: pathlib.Path | str) -> dict[str, Any]:
                  f"project package payload hash mismatch: {row['path']}")
     listed = {pathlib.PurePosixPath(row["path"]).as_posix().casefold() for row in expected.values()}
     for path in root.rglob("*"):
+        _require(not _is_link(path), f"project package contains a symlink or junction: {path.relative_to(root).as_posix()}")
         if path.is_dir():
             continue
         relative = path.relative_to(root).as_posix().casefold()
@@ -533,23 +539,146 @@ def verify_package(package_root: pathlib.Path | str) -> dict[str, Any]:
                  f"project package contains an unlisted file: {relative}")
     project = manifest.get("project")
     _require(isinstance(project, Mapping), "project package project record is missing")
+    project_source = canonical_relative(project.get("source"), "project package project.source")
     project_path = canonical_relative(project.get("path"), "project package project.path")
     _require(project_path.casefold() in expected, "project package project file is not listed")
+    _require(expected[project_path.casefold()]["kind"] == "project",
+             "project package project file has the wrong kind")
     _require(project.get("sha256") == expected[project_path.casefold()]["sha256"],
              "project package project hash does not match its file record")
+    _require(project.get("size") == expected[project_path.casefold()]["size"],
+             "project package project size does not match its file record")
     assets = manifest.get("assets")
     _require(isinstance(assets, list), "project package assets must be a list")
+    asset_paths: set[str] = set()
     for index, asset in enumerate(assets):
         _require(isinstance(asset, Mapping), f"project package assets[{index}] must be an object")
         digest = _validate_sha256(asset.get("sha256"), f"project package assets[{index}].sha256")
         path = canonical_relative(asset.get("path"), f"project package assets[{index}].path")
         _require(path == f"assets/{digest}.bin", f"project package asset path is not content-addressed: {path}")
         _require(path.casefold() in expected, f"project package asset is not listed: {path}")
+        _require(expected[path.casefold()]["kind"] == "asset",
+                 f"project package asset has the wrong file kind: {path}")
         _require(asset.get("size") == expected[path.casefold()]["size"],
                  f"project package asset size does not match its file record: {path}")
+        _require(path.casefold() not in asset_paths, f"project package repeats asset {path}")
+        asset_paths.add(path.casefold())
+
+    resources = manifest.get("resources")
+    _require(isinstance(resources, list), "project package resources must be a list")
+    resource_paths: set[str] = set()
+    resource_counts = {kind: 0 for kind in RESOURCE_KINDS}
+    for index, resource in enumerate(resources):
+        _require(isinstance(resource, Mapping),
+                 f"project package resources[{index}] must be an object")
+        kind = _require_string(resource.get("kind"),
+                               f"project package resources[{index}].kind").lower()
+        _require(kind in RESOURCE_KINDS,
+                 f"project package resources[{index}].kind is unsupported: {kind}")
+        path = canonical_relative(resource.get("path"),
+                                  f"project package resources[{index}].path")
+        _require(path.casefold() not in resource_paths,
+                 f"project package repeats resource {path}")
+        resource_paths.add(path.casefold())
+        _require(path.casefold() in expected,
+                 f"project package resource is not listed: {path}")
+        _require(expected[path.casefold()]["kind"] == kind,
+                 f"project package resource has the wrong file kind: {path}")
+        digest = _validate_sha256(resource.get("sha256"),
+                                  f"project package resources[{index}].sha256")
+        _require(digest == expected[path.casefold()]["sha256"],
+                 f"project package resource hash does not match its file record: {path}")
+        _require(resource.get("size") == expected[path.casefold()]["size"],
+                 f"project package resource size does not match its file record: {path}")
+        resource_counts[kind] += 1
+
+    resource_manifest = manifest.get("resource_manifest")
+    if resource_manifest is None:
+        _require(DEFAULT_RESOURCE_MANIFEST_NAME.casefold() not in expected,
+                 "project package has an unreferenced resource manifest file")
+    else:
+        _require(isinstance(resource_manifest, Mapping),
+                 "project package resource_manifest must be an object")
+        manifest_resource_path = canonical_relative(resource_manifest.get("path"),
+                                                    "project package resource_manifest.path")
+        _require(manifest_resource_path == DEFAULT_RESOURCE_MANIFEST_NAME,
+                 "project package resource manifest path is not canonical")
+        _require(manifest_resource_path.casefold() in expected,
+                 "project package resource manifest is not listed")
+        _require(expected[manifest_resource_path.casefold()]["kind"] == "resource-manifest",
+                 "project package resource manifest has the wrong file kind")
+        digest = _validate_sha256(resource_manifest.get("sha256"),
+                                  "project package resource_manifest.sha256")
+        _require(digest == expected[manifest_resource_path.casefold()]["sha256"],
+                 "project package resource manifest hash does not match its file record")
+        _require(resource_manifest.get("size") == expected[manifest_resource_path.casefold()]["size"],
+                 "project package resource manifest size does not match its file record")
+
+    summary = manifest.get("summary")
+    _require(isinstance(summary, Mapping), "project package summary is missing")
+    _require(summary.get("file_count") == len(files) + 1,
+             "project package summary file count is inconsistent")
+    _require(summary.get("asset_count") == len(assets),
+             "project package summary asset count is inconsistent")
+    for kind, field in (("template", "template_count"), ("profile", "profile_count"),
+                        ("documentation", "documentation_count")):
+        _require(summary.get(field) == resource_counts[kind],
+                 f"project package summary {field} is inconsistent")
     return {"manifest_kind": "project-package", "file_count": len(files),
-            "asset_count": len(assets),
-            "resource_count": len(manifest.get("resources", []))}
+            "asset_count": len(assets), "resource_count": len(resources),
+            "template_count": resource_counts["template"],
+            "profile_count": resource_counts["profile"],
+            "documentation_count": resource_counts["documentation"]}
+
+
+def restore_project_package(
+    package_root: pathlib.Path | str,
+    output_root: pathlib.Path | str,
+    destination: pathlib.Path | str = DEFAULT_DESTINATION,
+) -> dict[str, Any]:
+    """Verify and materialize a project package into a new local directory.
+
+    The operation is copy-only: the source package remains untouched, the
+    destination must not already exist, and publication occurs only after every
+    copied payload is re-hashed. The returned paths are package-relative so a
+    caller can open ``project_path`` and enumerate the carried resources
+    without depending on the source machine's absolute paths.
+    """
+
+    source_root = _resolve_directory(package_root, "project package")
+    verification = verify_package(source_root)
+    manifest = _read_json(source_root / DEFAULT_MANIFEST_NAME, "project package manifest")
+    destination_root = _resolve_directory(output_root, "restore output root", create=True)
+    destination_relative = canonical_relative(destination, "restore destination")
+    destination_path = _output_path(destination_root, destination_relative)
+    _reject_link_chain(destination_path, "restore destination")
+    _require(not destination_path.exists() and not _is_link(destination_path),
+             "restore destination already exists or is a symlink/junction")
+
+    staging = pathlib.Path(tempfile.mkdtemp(prefix=f".{destination_path.name}.restore-",
+                                             dir=str(destination_root)))
+    try:
+        for row in manifest["files"]:
+            relative = canonical_relative(row.get("path"), "project package file.path")
+            source = _output_path(source_root, relative)
+            target = _output_path(staging, relative)
+            actual, size = _copy_file(source, target, relative)
+            _require(actual == row["sha256"] and size == row["size"],
+                     f"restored project package payload changed during copy: {relative}")
+        manifest_source = source_root / DEFAULT_MANIFEST_NAME
+        _copy_file(manifest_source, _output_path(staging, DEFAULT_MANIFEST_NAME),
+                   DEFAULT_MANIFEST_NAME)
+        staging.replace(destination_path)
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+    return {
+        **verification,
+        "destination": destination_relative,
+        "project_path": manifest["project"]["path"],
+        "resource_paths": [resource["path"] for resource in manifest["resources"]],
+    }
 
 
 def main(argv: list[str] | None = None) -> int:

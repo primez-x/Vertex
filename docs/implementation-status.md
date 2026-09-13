@@ -39,8 +39,12 @@ path, preserves the project byte stream, verifies every revision asset, emits
 one content-addressed copy per asset, and can carry explicitly allowlisted
 templates, profiles, and documentation with a package manifest. It publishes
 through a private staging directory and rejects unsafe or modified payloads.
-Cross-machine fingerprint equivalence and reusable template consumption remain
-production qualification work.
+The verifier now cross-checks file kinds, project/asset/resource records,
+summary counts, symlink chains, and resource-manifest hashes. A copy-only
+restore helper materializes a verified package into a new destination and
+re-hashes each payload after copying, returning relative project and resource
+paths for an offline consumer. Cross-machine fingerprint equivalence and
+application-level template registration remain production qualification work.
 
 Named revision comparison now reports semantic, geometric, calculation, and
 presentation change counts with bounded changed-property details. The report
