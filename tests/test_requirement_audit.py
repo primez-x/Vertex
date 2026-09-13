@@ -1,6 +1,8 @@
 import copy
+import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import pathlib
 import sys
@@ -176,6 +178,17 @@ class RequirementAuditCliTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as raised:
             self.run_audit("--contract", "--release")
         self.assertEqual(raised.exception.code, 2)
+
+    def test_contract_json_does_not_certify_production(self):
+        self.write_contract()
+        self.evidence_path.write_text("unfinished evidence", encoding="utf-8")
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(self.run_audit("--contract", "--json"), 0)
+        report = json.loads(output.getvalue())
+        self.assertFalse(report["release_evaluated"])
+        self.assertNotIn("production_accepted", report)
+        self.assertNotIn("release_gaps", report)
 
     def test_release_mode_reports_pass_when_evidence_is_current(self):
         requirements = self.write_contract(implementation_status="verified")
