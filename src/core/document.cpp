@@ -625,6 +625,27 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
                                    std::string(*reference.expected_type));
             }
         }
+        if (entity.type == kSheetViewEntityType) {
+            try {
+                const auto model = decode_sheet_view_entity(entity);
+                for (const auto& view : model.views()) {
+                    for (const auto& object_id : view.object_ids) {
+                        if (!entities.contains(object_id)) {
+                            document_error(
+                                DocumentErrorCode::dangling_reference,
+                                "coordinated view " + view.id +
+                                    " references missing object " + object_id);
+                        }
+                    }
+                }
+            } catch (const DocumentError&) {
+                throw;
+            } catch (const std::exception& error) {
+                document_error(DocumentErrorCode::invalid_entity,
+                               "invalid coordinated-view object references in " + id +
+                                   ": " + error.what());
+            }
+        }
         if (entity.type == "assembly_model" && entity.properties.contains("model")) {
             const auto model = AssemblyModel::from_json(entity.properties.at("model"));
             for (const auto& instance : model.instances()) {

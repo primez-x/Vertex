@@ -18,6 +18,9 @@ cursor readouts, draft previews, tool instructions, overview maps, and selected
 interactive colors are excluded before the viewport is painted. Persisted
 architectural cut and projection line widths now flow into fixed paper-space
 strokes for section and elevation output, independent of viewport model scale.
+Coordinated views also persist canonical semantic object IDs; Document
+admission rejects missing referenced objects, while version-1 view payloads
+upgrade to the current model with an empty reference list.
 
 The requirement contract passes, while `python scripts/requirement_audit.py
 --release` still fails closed with 130 in-progress requirements. The corrected

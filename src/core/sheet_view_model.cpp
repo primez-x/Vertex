@@ -16,6 +16,14 @@ void identifier(const std::string& value) {
     require(!value.empty() && !std::all_of(value.begin(), value.end(),
         [](unsigned char c) { return std::isspace(c); }), "sheet/view identity must not be blank");
 }
+void object_references(std::vector<std::string>& values) {
+    std::set<std::string> ids;
+    for (const auto& value : values) {
+        identifier(value);
+        require(ids.insert(value).second, "duplicate coordinated-view object reference");
+    }
+    std::sort(values.begin(), values.end());
+}
 void positive(double value) {
     require(std::isfinite(value) && value > 0, "sheet/view dimension or scale must be finite and positive");
 }
@@ -62,6 +70,7 @@ void validate_view(const CoordinatedView& view) {
     require(p.cut_depth_m <= p.far_depth_m, "cut depth exceeds far depth");
     positive(p.cut_line_mm); positive(p.projection_line_mm); positive(p.hatch_scale);
     identifier(p.hatch_pattern);
+    for (const auto& object_id : view.object_ids) identifier(object_id);
 }
 // Reject unknown keys and wrong container lengths, including excess frame values.
 // Numeric scalar types are checked by JSON decoding and semantic validation.
@@ -124,7 +133,8 @@ void from_json(const nlohmann::json& value, ViewDetail& detail) {
 }
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ViewPresentation, cut_depth_m, far_depth_m, cut_line_mm,
     projection_line_mm, hatch_enabled, hatch_pattern, hatch_scale, detail)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CoordinatedView, id, name, kind, origin_m, direction, up, presentation)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CoordinatedView, id, name, kind, origin_m, direction, up,
+    presentation, object_ids)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SheetRect, x_mm, y_mm, width_mm, height_mm)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SheetViewport, id, view_id, bounds, scale_denominator)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SheetTitleBlock, project, title, author, issue_date)
@@ -144,7 +154,10 @@ SheetViewModel SheetViewModel::create(std::vector<CoordinatedView> views,
         require(schedules.insert(id).second, "duplicate schedule identity");
     }
     std::sort(schedule_ids.begin(), schedule_ids.end());
-    for (const auto& view : views) validate_view(view);
+    for (auto& view : views) {
+        object_references(view.object_ids);
+        validate_view(view);
+    }
     std::set<std::string> numbers;
     for (auto& sheet : sheets) {
         identifier(sheet.number);
@@ -317,18 +330,31 @@ SheetViewModel SheetViewModel::with_removed_callout(const std::string& sheet_id,
 }
 
 nlohmann::json SheetViewModel::to_json() const {
-    return {{"schema", "sketch.sheet_view_model"}, {"version", 1}, {"views", views_},
+    return {{"schema", "sketch.sheet_view_model"}, {"version", 2}, {"views", views_},
         {"sheets", sheets_}, {"schedule_ids", schedule_ids_}};
 }
 SheetViewModel SheetViewModel::from_json(const nlohmann::json& value) {
     try {
         require(value.at("schema") == "sketch.sheet_view_model" &&
-            value.at("version").is_number_integer() && value.at("version") == 1,
+            value.at("version").is_number_integer() &&
+            (value.at("version") == 1 || value.at("version") == 2),
             "unsupported sheet/view schema");
-        auto result = create(value.at("views").get<std::vector<CoordinatedView>>(),
-            value.at("sheets").get<std::vector<DrawingSheet>>(),
-            value.at("schedule_ids").get<std::vector<std::string>>());
-        shape(value, result.to_json());
+        auto normalized = value;
+        if (value.at("version") == 1) {
+            // Version 1 views had no semantic source-object references. Keep
+            // those projects readable while normalizing them to the current
+            // immutable model before strict shape validation.
+            normalized["version"] = 2;
+            for (auto& view : normalized.at("views")) {
+                if (!view.is_object() || !view.contains("object_ids")) {
+                    view["object_ids"] = nlohmann::json::array();
+                }
+            }
+        }
+        auto result = create(normalized.at("views").get<std::vector<CoordinatedView>>(),
+            normalized.at("sheets").get<std::vector<DrawingSheet>>(),
+            normalized.at("schedule_ids").get<std::vector<std::string>>());
+        shape(normalized, result.to_json());
         return result;
     } catch (const nlohmann::json::exception& error) {
         throw std::invalid_argument(std::string("invalid sheet/view JSON: ") + error.what());

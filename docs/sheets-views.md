@@ -34,7 +34,12 @@ included in the output scene fingerprint without dirtying the document.
 
 Views identify plan, elevation and section definitions by stable ID. A view owns
 its finite origin in metres, orthonormal direction/up frame, cut and far depths,
-paper line widths, hatch enable/pattern/scale and detail level. Cut depth is a
+paper line widths, hatch enable/pattern/scale and detail level. It can also carry
+an ordered, deduplicated list of stable semantic object IDs for the walls,
+rooms, slabs, openings, terrain, and other source objects represented by that
+view. Document admission resolves those IDs and rejects a view that would keep
+a dangling object reference, so deletes cannot silently retarget presentation
+geometry. Cut depth is a
 nonnegative distance along the direction from the origin, limited by far depth;
 these are projection instructions, not computed model intersections. All kinds
 use the same frame contract; adapters choose the appropriate orientation. The
@@ -65,9 +70,11 @@ lexical order. The desktop editor exposes the persisted revision and callout
 collections with typed graph validation; callout target sheet and viewport
 references are never inferred from display labels.
 
-Version 1 JSON uses `sketch.sheet_view_model`, rejects unknown/missing fields,
+Version 2 JSON uses `sketch.sheet_view_model`, rejects unknown/missing fields,
 invalid enum names, nonfinite numeric values, malformed frames and dangling
-references. Collections serialize in ID order (schedule registry lexically),
+references. Version 1 documents remain readable and normalize missing
+`object_ids` to empty lists before strict validation. Collections serialize in
+ID order (schedule registry lexically),
 independent of insertion order. JSON output and caller inputs are detached from
 the stored snapshot. Import validates the complete graph before returning a
 snapshot. Tests cover coordinated edits, scale independence, input isolation,

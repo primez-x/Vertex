@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
 namespace {
 void require(bool value, const char* message) {
@@ -16,7 +17,8 @@ void rejects_document(F&& operation) {
     try {
         operation();
     } catch (const sketch::DocumentError& error) {
-        require(error.code() == sketch::DocumentErrorCode::invalid_entity,
+        require(error.code() == sketch::DocumentErrorCode::invalid_entity ||
+                    error.code() == sketch::DocumentErrorCode::dangling_reference,
                 "invalid sheet/view entity returned the wrong Document error");
         return;
     }
@@ -52,6 +54,27 @@ int main() {
                     model.to_json(),
                 "sheet/view entity did not survive save/reopen");
         std::filesystem::remove(path);
+
+        auto referenced_views = model.views();
+        referenced_views[0].object_ids = {"wall-target"};
+        const auto referenced_model = sketch::SheetViewModel::create(
+            std::move(referenced_views), model.sheets());
+        auto referenced_entity = sketch::make_sheet_view_entity("sheet-view", referenced_model);
+        auto wall = sketch::Entity::create("wall");
+        wall.id = "wall-target";
+        auto referenced_document = sketch::Document::create({wall, referenced_entity});
+        const auto referenced_path = std::filesystem::temp_directory_path() /
+            "property-studio-sheet-view-references.bldproj";
+        std::filesystem::remove(referenced_path);
+        (void)sketch::ProjectStore::save(referenced_path, referenced_document.snapshot());
+        const auto reopened_references = sketch::ProjectStore::load(referenced_path).document.snapshot();
+        require(sketch::decode_sheet_view_entity(reopened_references.entities().at("sheet-view"))
+                    .views().front().object_ids == std::vector<std::string>{"wall-target"},
+                "coordinated-view object references did not survive save/reopen");
+        std::filesystem::remove(referenced_path);
+
+        referenced_entity.properties["model"]["views"][0]["object_ids"] = {"missing-object"};
+        rejects_document([&] { (void)sketch::Document::create({wall, referenced_entity}); });
 
         entity.properties["version"] = 2;
         rejects_document([&] { (void)sketch::Document::create({entity}); });

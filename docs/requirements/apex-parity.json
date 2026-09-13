@@ -2057,7 +2057,7 @@
         "src/core/typed_relationships.cpp",
         "docs/typed-relationships.md"
       ],
-    "implementation_note": "Typed stable references and cycle/ambiguity validation are present, and the Windows editor now exposes live relationship declarations through typed Document history; cross-view semantic object persistence and controlled retargeting remain open."
+    "implementation_note": "Typed stable references and cycle/ambiguity validation are present, and the Windows editor now exposes live relationship declarations through typed Document history. Coordinated view definitions now persist canonical semantic object IDs; Document admission rejects missing referenced objects and legacy view payloads upgrade with an empty reference list. View-object editing UI, controlled retargeting and full cross-view production evidence remain open."
     },
     {
       "id": "ARCH-OUTPUT-001",

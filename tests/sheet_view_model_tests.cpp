@@ -17,6 +17,7 @@ template<class F> void rejects(F operation) {
 }
 sketch::SheetViewModel fixture() {
     sketch::CoordinatedView plan{"plan", "Ground floor"};
+    plan.object_ids = {"wall-main", "room-main"};
     sketch::CoordinatedView elevation{"elevation", "South elevation", sketch::CoordinatedViewKind::elevation};
     elevation.direction = {0, 1, 0}; elevation.up = {0, 0, 1};
     sketch::CoordinatedView section{"section", "Section A", sketch::CoordinatedViewKind::section};
@@ -173,6 +174,16 @@ void sheet_lifecycle() {
 void serialization() {
     const auto saved = fixture().to_json();
     require(sketch::SheetViewModel::from_json(saved).to_json().dump() == saved.dump(), "canonical roundtrip");
+    auto legacy = saved;
+    legacy["version"] = 1;
+    for (auto& view : legacy["views"]) view.erase("object_ids");
+    auto legacy_views = fixture().views();
+    for (auto& view : legacy_views) view.object_ids.clear();
+    const auto legacy_expected = sketch::SheetViewModel::create(
+        std::move(legacy_views), fixture().sheets(), {"doors", "rooms"});
+    require(sketch::SheetViewModel::from_json(legacy).to_json().dump() ==
+                legacy_expected.to_json().dump(),
+            "version 1 sheet/view data must upgrade with empty object references");
     auto shuffled = saved;
     std::reverse(shuffled["views"].begin(), shuffled["views"].end());
     std::reverse(shuffled["sheets"].begin(), shuffled["sheets"].end());
@@ -193,7 +204,7 @@ void serialization() {
     }
     auto invalid = saved; invalid["views"][0]["direction"].push_back(0);
     rejects([&] { (void)sketch::SheetViewModel::from_json(invalid); });
-    for (const auto& version : {nlohmann::json(2), nlohmann::json(1.0), nlohmann::json("1")}) {
+    for (const auto& version : {nlohmann::json(3), nlohmann::json(2.0), nlohmann::json("2")}) {
         invalid = saved; invalid["version"] = version;
         rejects([&] { (void)sketch::SheetViewModel::from_json(invalid); });
     }
@@ -222,6 +233,11 @@ void invalid_values() {
     bad("/sheets/0/callouts/0/x_mm", 421);
     bad("/sheets/0/schedules/0/schedule_id", "missing");
     bad("/schedule_ids", {"doors", "doors"});
+    auto duplicate_references = model.views();
+    duplicate_references[0].object_ids = {"wall-main", "wall-main"};
+    rejects([&] {
+        (void)sketch::SheetViewModel::create(duplicate_references, model.sheets(), {"doors", "rooms"});
+    });
     for (const double number : {std::numeric_limits<double>::infinity(),
                                std::numeric_limits<double>::quiet_NaN()}) {
         auto views = model.views(); views[0].origin_m[0] = number;

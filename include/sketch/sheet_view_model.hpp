@@ -28,6 +28,10 @@ struct CoordinatedView {
     std::array<double, 3> direction{0, 0, -1};
     std::array<double, 3> up{0, 1, 0};
     ViewPresentation presentation;
+    // Stable semantic source objects represented by this coordinated view.
+    // The list is persisted in canonical ID order and validated against the
+    // owning Document when the sheet/view entity is admitted.
+    std::vector<std::string> object_ids;
     bool operator==(const CoordinatedView&) const = default;
 };
 struct SheetRect {
