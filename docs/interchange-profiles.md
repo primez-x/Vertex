@@ -182,8 +182,9 @@ and optional swept-solid records. Linear analytical boundaries remain
 polylines; a closed slab or straight hosted opening with explicit depth becomes
 an `IFCEXTRUDEDAREASOLID`. Straight hosted openings also receive an
 `IFCRELVOIDSELEMENT` relationship to their exported wall when both products
-are representable. Curves, slab holes, wall thickness/profile data, opening
-assembly parts, unsupported architectural entities, and other spatial
+are representable; wall elevation plus opening sill are retained in a local
+placement. Curves, slab holes, wall thickness/profile data, opening assembly
+parts, unsupported architectural entities, and other spatial
 relationships are diagnosed instead of silently flattened.
 
 Import accepts the same IFC4 STEP subset and walks product representation

@@ -40,7 +40,7 @@ sketch::Document make_document() {
         {"glazing_thickness_m", 0.0}, {"inset_m", 0.0}};
     Entity opening{"opening-1", "opening",
                    {{"wall_id", "wall-1"}, {"opening_kind", "door"},
-                    {"offset_m", 1.0}, {"width_m", 1.0}, {"sill_m", 0.0},
+                    {"offset_m", 1.0}, {"width_m", 1.0}, {"sill_m", 0.1},
                     {"height_m", 2.0}, {"opening_assembly", opening_assembly}},
                    false, nlohmann::json::object()};
     return Document::create({std::move(boundary), std::move(wall),
@@ -61,6 +61,8 @@ void run() {
           "hosted opening must export as an IFC opening product");
     check(exported.step.find("IFCRELVOIDSELEMENT") != std::string::npos,
           "hosted opening must retain an IFC wall void relationship");
+    check(exported.step.find("(0.,0.,0.10000000000000001)") != std::string::npos,
+          "opening sill must be represented by a local IFC placement");
     check(exported.step.find("IFCEXTRUDEDAREASOLID") != std::string::npos,
           "slab thickness must export as a swept solid");
     check(!exported.diagnostics.empty(), "lossy wall axis metadata must be diagnosed");

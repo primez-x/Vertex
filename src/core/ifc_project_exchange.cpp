@@ -490,6 +490,7 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
     bool closed = false;
     bool use_solid = false;
     double depth = 0.0;
+    double local_elevation = 0.0;
 
     if (type == "wall") {
         const auto baseline = read_baseline(entity);
@@ -579,10 +580,18 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
             }
         }
         double wall_height = 0.0;
+        double wall_elevation = 0.0;
         for (const auto* key : {"height_m", "height"}) {
             const auto found = host->second.properties.find(key);
             if (found != host->second.properties.end() && found->is_number()) {
                 wall_height = found->get<double>();
+                break;
+            }
+        }
+        for (const auto* key : {"elevation_m", "elevation"}) {
+            const auto found = host->second.properties.find(key);
+            if (found != host->second.properties.end() && found->is_number()) {
+                wall_elevation = found->get<double>();
                 break;
             }
         }
@@ -621,6 +630,7 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
         product_type = "IFCOPENINGELEMENT";
         depth = height;
         use_solid = true;
+        local_elevation = wall_elevation + sill;
         context.opening_host_links.emplace_back(entity.id, host_id);
         if (entity.properties.contains("opening_assembly")) {
             add_diagnostic(diagnostics, entity.id, type,
@@ -684,7 +694,16 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
     const auto description = step_string(entity.type + ":" + classification,
                                          context.limits);
     const auto global_id = step_string(guid_for(entity.id, ++context.ordinal), context.limits);
-    const auto placement = ref(context.placement);
+    std::string placement = ref(context.placement);
+    if (type == "opening" && std::abs(local_elevation) > kTolerance) {
+        const auto location = context.builder.add("IFCCARTESIANPOINT",
+            "(0.,0.," + real_text(local_elevation) + ")");
+        const auto axis = context.builder.add("IFCAXIS2PLACEMENT3D",
+            ref(location) + ",$,$");
+        const auto local = context.builder.add("IFCLOCALPLACEMENT",
+            "$," + ref(axis));
+        placement = ref(local);
+    }
     int product_id{};
     if (product_type == "IFCWALLSTANDARDCASE") {
         product_id = context.builder.add(product_type,

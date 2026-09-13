@@ -381,6 +381,8 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
         result.drawing.lines.push_back({start, end, opening_layer});
         diagnostic(result.diagnostics, entity.id, entity.type,
                    "opening_host_relationship_not_representable");
+        diagnostic(result.diagnostics, entity.id, entity.type,
+                   "opening_vertical_dimensions_not_representable");
         if (entity.properties.contains("opening_assembly")) {
             diagnostic(result.diagnostics, entity.id, entity.type,
                        "opening_assembly_not_representable");

@@ -903,7 +903,8 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
 - A bounded IFC4 STEP project mapper now exports deterministic owner/unit
   records, analytical linear boundaries, wall axes, hosted opening products and
   wall void relationships, slab footprints, and optional swept solids from
-  immutable snapshots. Import walks the product
+  immutable snapshots; hosted opening sill/elevation is carried by a local
+  placement. Import walks the product
   representation graph and reconstructs editable boundary candidates with
   `extensions.ifc_source` record identities, placement translations, and
   extrusion depth where representable. Unsupported products, properties,
