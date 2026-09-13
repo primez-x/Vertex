@@ -143,6 +143,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/dependencies/project-package.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/dependencies/qt-provisioning.md"
     },
     {
@@ -840,6 +844,10 @@
     {
       "category": "source",
       "path": "scripts/stage_portable_package.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/stage_project_package.py"
     },
     {
       "category": "source",
@@ -1780,6 +1788,10 @@
     {
       "category": "source",
       "path": "tests/test_stage_portable_package.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_stage_project_package.py"
     },
     {
       "category": "source",

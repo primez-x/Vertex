@@ -2341,11 +2341,14 @@
       "package": 3,
       "blocker": null,
       "implementation_sources": [
+        "scripts/stage_project_package.py",
+        "tests/test_stage_project_package.py",
+        "docs/dependencies/project-package.md",
         "scripts/stage_portable_package.py",
         "tests/test_stage_portable_package.py",
         "docs/dependencies/portable-package.md"
       ],
-      "implementation_note": "Portable staging validates explicit inventories and emits relative-path integrity manifests; project-package assembly, asset closure, templates, and cross-machine offline fingerprint acceptance remain open."
+      "implementation_note": "Portable runtime staging remains integrity-only. A separate local project-package assembler now preserves the saved .bldproj byte stream, closes over every revision asset with verified content-addressed copies, and carries explicitly declared templates, profiles, and documentation. Cross-machine calculated/output fingerprint acceptance, reusable template consumption, and production qualification remain open."
     },
     {
       "id": "REC-004",

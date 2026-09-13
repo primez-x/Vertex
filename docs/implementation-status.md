@@ -33,6 +33,14 @@ only to an explicitly selected compatible dimension, retains the original unit
 and capture provenance in the entity extension, and rejects occupied targets or
 entity mismatches without mutation. This remains a local adapter boundary;
 vendor hardware, transport, and appraisal-caller qualification are still open.
+Portable project transfer now has its own local staging path. The project
+package assembler reads a saved `.bldproj` through SQLite's read-only query
+path, preserves the project byte stream, verifies every revision asset, emits
+one content-addressed copy per asset, and can carry explicitly allowlisted
+templates, profiles, and documentation with a package manifest. It publishes
+through a private staging directory and rejects unsafe or modified payloads.
+Cross-machine fingerprint equivalence and reusable template consumption remain
+production qualification work.
 
 The requirement contract passes, while `python scripts/requirement_audit.py
 --release` still fails closed with 130 in-progress requirements. The corrected
