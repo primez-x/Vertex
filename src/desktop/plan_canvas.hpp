@@ -42,6 +42,9 @@ struct CanvasEntity {
     // An invalid color or non-positive width keeps the canvas default.
     QColor stroke_color{};
     double stroke_width_metres{};
+    // Fixed paper-space line weight for fitted or explicitly scaled output.
+    // Zero keeps the normal model-space or cosmetic canvas default.
+    double output_stroke_width_mm{};
 };
 
 // A retained document annotation. Unlike BoundaryDraftPreview, labels are
@@ -204,7 +207,8 @@ private:
     void drawCursorReadout(QPainter& painter, const QRectF& viewport,
                            QColor background) const;
     void drawEntity(QPainter& painter, const CanvasEntity& entity, bool output,
-                    QColor background) const;
+                    QColor background,
+                    std::optional<double> paper_pixels_per_mm) const;
     void drawSegment(QPainter& painter, const Segment& segment) const;
     void drawLabels(QPainter& painter, const QRectF& viewport, double scale,
                     Vec2 view_center, bool output, QColor background,

@@ -1944,7 +1944,7 @@
         "tests/sheet_view_entity_codec_tests.cpp",
         "docs/sheets-views.md"
       ],
-      "implementation_note": "Section presentation settings are validated and persist through the typed Document entity; analytical solid-plane section edges and persisted section cut-depth consumption are implemented for supported objects, and the desktop view settings command edits cut/far depth, line widths, hatching and detail through Document history. A conservative object-level BRep-bounds far-depth filter culls solids wholly beyond the selected limit, while crossing solids are clipped with an exact OCCT half-space before projection. Enabled section projections now carry the persisted hatch pattern and scale into the retained canvas and draft output renderer, with fills limited to ordered closed paths. Complete section annotation/detail overlays, sheet layout, print fixtures, and production qualification remain open."
+      "implementation_note": "Section presentation settings are validated and persist through the typed Document entity; analytical solid-plane section edges and persisted section cut-depth consumption are implemented for supported objects, and the desktop view settings command edits cut/far depth, line widths, hatching and detail through Document history. A conservative object-level BRep-bounds far-depth filter culls solids wholly beyond the selected limit, while crossing solids are clipped with an exact OCCT half-space before projection. Enabled section projections now carry the persisted hatch pattern and scale into the retained canvas and draft output renderer, with fills limited to ordered closed paths; persisted cut and projection widths now become fixed paper-space strokes for section and elevation output. Complete section annotation/detail overlays, sheet layout, print fixtures, and production qualification remain open."
     },
     {
       "id": "ARCH-SCH-001",
@@ -2459,7 +2459,7 @@
         "src/desktop/main_window.cpp",
         "tests/desktop_smoke.cpp"
       ],
-      "implementation_note": "Preview, draft PDF, draft SVG, and print use one shared canvas geometry renderer; draft exports now render persisted sheet bounds, independent viewport scales, title-block data, and revision-bound schedule placements with a visible draft stamp. Explicitly scaled sheet viewports share the fitted-output boundary and exclude interactive grids, previews, instructions, overview maps, and selection colors. PDF, SVG, native 3D image, and print-preview receipts bind the output fingerprint; physical printer/output comparison and production qualification remain open."
+      "implementation_note": "Preview, draft PDF, draft SVG, and print use one shared canvas geometry renderer; draft exports now render persisted sheet bounds, independent viewport scales, title-block data, and revision-bound schedule placements with a visible draft stamp. Explicitly scaled sheet viewports share the fitted-output boundary and exclude interactive grids, previews, instructions, overview maps, and selection colors; persisted architectural cut and projection widths render as fixed paper-space strokes. PDF, SVG, native 3D image, and print-preview receipts bind the output fingerprint; physical printer/output comparison and production qualification remain open."
     },
     {
       "id": "IO-OUTPUT-002",

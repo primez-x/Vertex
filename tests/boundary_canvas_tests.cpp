@@ -801,6 +801,45 @@ void test_explicit_output_excludes_interactive_state() {
             "explicit sheet output must exclude interactive overlays and instructions");
 }
 
+void test_output_stroke_width_is_paper_space() {
+    PlanCanvas canvas;
+    canvas.resize(640, 480);
+    canvas.setGridEnabled(false);
+    canvas.setOverviewMapEnabled(false);
+    CanvasEntity line{
+        QStringLiteral("line"), QStringLiteral("dimension_line"),
+        Boundary{{Segment{{-4.0, 0.0}, {4.0, 0.0}, 0.0}}}};
+    line.output_stroke_width_mm = 1.0;
+    canvas.setEntities({line});
+
+    const auto render_output = [&](double scale) {
+        QImage image(640, 480, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::white);
+        QPainter painter(&image);
+        canvas.renderSceneAt(painter, QRectF(image.rect()), scale, {0.0, 0.0}, Qt::white,
+                             4.0);
+        return image;
+    };
+    const auto dark_span = [](const QImage& image) {
+        int span = 0;
+        for (int y = 0; y < image.height(); ++y) {
+            const auto color = image.pixelColor(image.width() / 2, y);
+            if (color.lightness() < 180) ++span;
+        }
+        return span;
+    };
+
+    const auto at_50 = render_output(50.0);
+    const auto at_200 = render_output(200.0);
+    require(std::abs(dark_span(at_50) - dark_span(at_200)) <= 1,
+            "output line treatment must stay the same across independent viewport scales");
+
+    line.output_stroke_width_mm = 3.0;
+    canvas.setEntities({line});
+    require(dark_span(render_output(50.0)) > dark_span(at_50) + 4,
+            "larger persisted paper line width must visibly increase output stroke weight");
+}
+
 int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QApplication application(argc, argv);
@@ -824,6 +863,7 @@ int main(int argc, char** argv) {
         test_reference_grid_labels_render_in_screen_and_output();
         test_closed_entity_hatching_and_open_path_safety();
         test_explicit_output_excludes_interactive_state();
+        test_output_stroke_width_is_paper_space();
         test_paper_label_style_and_hit_testing();
         std::cout << "Boundary canvas tests passed\n";
         return 0;

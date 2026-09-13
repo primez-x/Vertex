@@ -520,7 +520,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     }
     drawReferenceGrids(painter);
     for (const auto& entity : m_entities) {
-        drawEntity(painter, entity, output, background);
+        drawEntity(painter, entity, output, background, paper_pixels_per_mm);
     }
 
     // Transient overlays belong to the interactive canvas only. Both fitted
@@ -1176,13 +1176,27 @@ void PlanCanvas::drawCursorReadout(QPainter& painter, const QRectF& viewport,
 }
 
 void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool output,
-                           QColor background) const {
+                           QColor background,
+                           std::optional<double> paper_pixels_per_mm) const {
     const auto default_color = output
         ? (background.lightnessF() > 0.5 ? QColor(25, 25, 25) : QColor(235, 235, 235))
         : color_for(entity);
     const auto color = entity.stroke_color.isValid() ? entity.stroke_color : default_color;
     QPen pen(color, 0.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
-    if (entity.type == QStringLiteral("wall")) {
+    const auto paper_width = output && std::isfinite(entity.output_stroke_width_mm) &&
+                             entity.output_stroke_width_mm > 0.0
+        ? entity.output_stroke_width_mm *
+              (paper_pixels_per_mm && std::isfinite(*paper_pixels_per_mm) &&
+                       *paper_pixels_per_mm > 0.0
+                   ? *paper_pixels_per_mm
+                   : painter.device()->logicalDpiX() / 25.4)
+        : 0.0;
+    if (paper_width > 0.0 && std::isfinite(paper_width)) {
+        // Output line treatment is a paper-space width. Cosmetic pens keep it
+        // independent of the model-to-paper scale and avoid altering geometry.
+        pen.setCosmetic(true);
+        pen.setWidthF(std::max(0.1, paper_width));
+    } else if (entity.type == QStringLiteral("wall")) {
         pen.setWidthF(std::max(entity.thickness_metres, 0.04));
     } else if (entity.stroke_width_metres > 0.0 &&
                std::isfinite(entity.stroke_width_metres)) {

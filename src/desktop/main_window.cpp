@@ -16899,6 +16899,18 @@ private:
             const auto& frame = view_context.frame;
             const auto& depth = view_context.depth;
             const auto decorate_projection = [&](CanvasEntity entity) {
+                const auto& presentation = view_context.presentation;
+                const auto line_width_mm = kind == BuildingViewKind::section
+                    ? presentation.cut_line_mm
+                    : kind == BuildingViewKind::elevation
+                        ? presentation.projection_line_mm
+                        : 0.0;
+                if (std::isfinite(line_width_mm) && line_width_mm > 0.0) {
+                    // Persisted view line treatment is expressed in paper
+                    // millimetres. The shared canvas converts it at render
+                    // time, so a sheet viewport can keep its own scale.
+                    entity.output_stroke_width_mm = line_width_mm;
+                }
                 // Section hatching is a view presentation value. Keep it on
                 // the retained canvas entity so interactive, print, and image
                 // output all consume the same projected path and pattern.

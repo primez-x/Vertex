@@ -15,7 +15,9 @@ respecting host visibility. Persisted annotation colors, fills, emphasis,
 text-height, and symbol stroke width now reach interactive and fitted output.
 Explicitly scaled sheet viewports now use the same output boundary: grids,
 cursor readouts, draft previews, tool instructions, overview maps, and selected
-interactive colors are excluded before the viewport is painted.
+interactive colors are excluded before the viewport is painted. Persisted
+architectural cut and projection line widths now flow into fixed paper-space
+strokes for section and elevation output, independent of viewport model scale.
 
 The requirement contract passes, while `python scripts/requirement_audit.py
 --release` still fails closed with 130 in-progress requirements. The corrected
