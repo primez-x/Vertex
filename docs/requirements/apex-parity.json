@@ -2716,7 +2716,11 @@
       "package": 9,
       "blocker": null,
       "implementation_sources": [
-        "tests/desktop_smoke.cpp"
+        "scripts/production_qualification.py",
+        "tests/test_production_qualification.py",
+        "tests/desktop_smoke.cpp",
+        "docs/production-qualification.md",
+        "docs/production-qualification.pending.json"
       ],
       "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
     },

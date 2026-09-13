@@ -1,7 +1,7 @@
 # Production and accessibility evidence contract
 
 `scripts/production_qualification.py` validates explicitly supplied evidence for
-OPS-QA-002, OPS-QA-003, and OPS-QA-005. It does not launch the application, generate
+OPS-QA-002, OPS-QA-003, OPS-QA-004, and OPS-QA-005. It does not launch the application, generate
 production fixtures, infer visual correctness, or qualify a device. No real
 production or device observations are supplied by this package.
 
@@ -141,6 +141,12 @@ At each DPI scale OPS-QA-005 additionally requires `real_pen`, `real_touch`,
 under these conditions. Evidence must show usable keyboard navigation and focus,
 assistive access to properties, readable contrast, and no clipped or inaccessible
 controls. Record failures even when a mouse workaround exists.
+
+The OPS-QA-004 run is the packaged clean-offline workflow. In addition to the
+core checks, it must explicitly record `packaged_install`, `network_denied`, and
+`assistance_disabled`; these observations prevent a generic desktop smoke run
+from being presented as proof of the packaged offline boundary or the
+assistance-independent path.
 
 Production captures must retain independently specified semantic/calculation
 expectations, project state before and after save/reopen and recovery, and actual

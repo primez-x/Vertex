@@ -81,6 +81,11 @@ portable and offline bundle manifests bind the carried SBOM by path and hash.
 This improves reviewability but does not complete the separate licensing or
 clean-machine qualification gates.
 
+The default CTest matrix now also runs the production evidence-contract tests,
+including the explicit OPS-QA-004 packaged/offline/assistance-disabled checks.
+Those tests validate the manifest shape and hash bindings only; they do not
+turn synthetic or development-host observations into production qualification.
+
 ## Current checkpoint (September 2026)
 
 The Windows desktop now uses the immutable save queue and owner-thread

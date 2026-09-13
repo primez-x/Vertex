@@ -14,6 +14,10 @@ ASSERTIONS = ("semantic", "calculation", "output", "recovery", "fidelity")
 PRODUCTION = {
     "OPS-QA-002": tuple(dict.fromkeys(CORE + ("architectural_authoring", "plans", "elevations", "sections", "schedules", "alternatives", "revisions", "sheets") + ASSERTIONS)),
     "OPS-QA-003": tuple(dict.fromkeys(CORE + ("multiple_levels", "assemblies", "structural_objects", "schedules", "quantities", "sheets", "coordinated_views") + ASSERTIONS)),
+    # This is the packaged clean-offline end-to-end workflow. Keep the
+    # environmental and deterministic-mode assertions explicit so a generic
+    # desktop smoke run cannot masquerade as this production boundary.
+    "OPS-QA-004": tuple(dict.fromkeys(CORE + ("packaged_install", "network_denied", "assistance_disabled"))),
 }
 ACCESSIBILITY = ("real_pen", "real_touch", "keyboard_navigation", "focus", "accessible_properties", "light_theme", "dark_theme", "high_contrast", "dpi_layout")
 

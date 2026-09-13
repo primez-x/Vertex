@@ -548,6 +548,10 @@ if(BUILD_TESTING)
   # Keep the default test-suite explicit: this checks the requirement/gate
   # schema only. Release evidence is evaluated by the separate disabled gate.
   add_test(NAME requirement_schema_contract COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/requirement_audit.py" --contract)
+  # The evidence manifest contract is part of the default verification matrix.
+  # It remains fail-closed and never certifies runtime behavior by itself.
+  add_test(NAME production_qualification_contract COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+    -s "${CMAKE_SOURCE_DIR}/tests" -p test_production_qualification.py)
   # Explicit production-acceptance gate: fails closed with --release and must be
   # run explicitly via a dedicated CI/lifecycle step.
   add_test(NAME production_acceptance_gate COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/requirement_audit.py" --release)

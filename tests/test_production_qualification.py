@@ -175,14 +175,25 @@ class QualificationTests(unittest.TestCase):
         original = copy.deepcopy(self.manifest)
         mutations = [lambda m: m["runs"].pop(), lambda m: m["runs"][0].pop("source_project"),
                      lambda m: m["runs"][0]["observations"].pop("recovery"),
-                     lambda m: m["runs"][2].pop("device"),
-                     lambda m: m["runs"][2].update(dpi_percent=True),
+                     lambda m: next(run for run in m["runs"]
+                                    if run["requirement"] == "OPS-QA-005" and run.get("dpi_percent") == 100).pop("device"),
+                     lambda m: next(run for run in m["runs"]
+                                    if run["requirement"] == "OPS-QA-005" and run.get("dpi_percent") == 100).update(dpi_percent=True),
                      lambda m: m["runs"][0].update(recorded_at="yesterday"),
                      lambda m: m["runs"].append(copy.deepcopy(m["runs"][0]))]
         for mutation in mutations:
             self.manifest = copy.deepcopy(original)
             mutation(self.manifest)
             self.assertFalse(self.report()["contract_valid"])
+
+    def test_integrated_offline_workflow_requires_explicit_boundary_observations(self):
+        run = next(run for run in self.manifest["runs"] if run["requirement"] == "OPS-QA-004")
+        self.assertEqual(set(run["observations"]), set(qa.PRODUCTION["OPS-QA-004"]))
+        for name in ("packaged_install", "network_denied", "assistance_disabled"):
+            manifest = copy.deepcopy(self.manifest)
+            target = next(item for item in manifest["runs"] if item["requirement"] == "OPS-QA-004")
+            target["observations"].pop(name)
+            self.assertFalse(qa.validate_and_build(manifest, root=self.root)["contract_valid"], name)
 
     def test_failure_and_blocked_observations_prevent_complete_evidence(self):
         self.declare_real_role_artifacts()
