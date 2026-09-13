@@ -10754,7 +10754,9 @@ public:
                              Qt::TextWordWrap | Qt::AlignRight | Qt::AlignTop,
                              draftOutputStamp());
             painter.end();
-            if (!image.save(path, "PNG")) {
+            QSaveFile file(path);
+            if (!file.open(QIODevice::WriteOnly) || !image.save(&file, "PNG") || !file.commit()) {
+                file.cancelWriting();
                 setError(QStringLiteral("PNG export could not save the destination."));
                 return false;
             }
