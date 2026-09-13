@@ -1093,14 +1093,14 @@
       "package": 4,
       "blocker": null,
       "implementation_sources": [
+        "include/sketch/document.hpp",
+        "src/core/document.cpp",
         "src/desktop/main_window.cpp",
-        "include/sketch/dxf_project_exchange.hpp",
-        "src/core/dxf_project_exchange.cpp",
-        "tests/dxf_project_exchange_tests.cpp",
-        "tests/dxf_desktop_workflow_tests.cpp",
-        "docs/interchange-profiles.md"
+        "tests/document_tests.cpp",
+        "tests/desktop_smoke.cpp",
+        "tests/project_store_tests.cpp"
       ],
-      "implementation_note": "Local save/open and deterministic native DXF project mapping are implemented as bounded slices; desktop floor/layer assignment, source-byte retention, additional interchange formats, Apex native compatibility, and the complete fidelity-report acceptance statement remain open."
+      "implementation_note": "Document history records accepted classification, calibration, geometry, annotation, architectural, and compound edits as reversible revisions; desktop and storage fixtures exercise undo/redo and save/reopen boundaries. A complete mixed-command byte-equivalence fixture across every supported operation, crash-recovery replay, and production qualification remain open."
     },
     {
       "id": "APX-AREA-001",
