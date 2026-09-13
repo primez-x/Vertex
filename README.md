@@ -57,6 +57,9 @@ current binary/plugin inventory and its packaging limitations.
 The reviewed runtime inventory, source-kit manifest, and portable allowlist
 can be composed into a deterministic Windows offline bundle with
 `scripts/stage_offline_bundle.py`; see [offline bundle instructions](docs/dependencies/offline-installer.md).
+The Release PE import report also has a separate [offline static import audit](docs/dependencies/offline-static-audit.md);
+it records direct application imports separately from transitive third-party
+network libraries.
 
 The [project format](docs/project-format.md), [calculation contract](docs/calculations.md),
 [workspace UI](docs/workspace-ui.md),

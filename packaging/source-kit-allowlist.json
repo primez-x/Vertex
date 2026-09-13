@@ -139,6 +139,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/dependencies/offline-static-audit.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/dependencies/planegcs.md"
     },
     {
@@ -824,6 +828,10 @@
     {
       "category": "source",
       "path": "scripts/native-process-guard.ps1"
+    },
+    {
+      "category": "source",
+      "path": "scripts/offline_static_audit.py"
     },
     {
       "category": "source",
@@ -1788,6 +1796,10 @@
     {
       "category": "source",
       "path": "tests/test_native_process_guard.ps1"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_offline_static_audit.py"
     },
     {
       "category": "source",

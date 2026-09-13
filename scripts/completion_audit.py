@@ -45,6 +45,7 @@ REQUIRED_DOCUMENTS = (
     "docs/production-plan.md",
     "docs/project-format.md",
     "docs/production-qualification.md",
+    "docs/dependencies/offline-static-audit.md",
     "docs/requirements/apex-parity.json",
     "docs/requirements/production-gates.json",
 )
@@ -161,6 +162,34 @@ def _latest_runtime_report(root: pathlib.Path):
     candidates = sorted((root / "artifacts/installed-runtime/current").glob(
         "run-*/report.json"))
     return candidates[-1] if candidates else None
+
+
+def _offline_static_check(root: pathlib.Path):
+    """Classify the direct-import offline audit without certifying runtime use."""
+
+    path = root / "artifacts/runtime/release-imports.json"
+    script = root / "scripts/offline_static_audit.py"
+    if not path.is_file():
+        return _check("offline_static", "missing", "No Release PE import report is available")
+    if not script.is_file():
+        return _check("offline_static", "missing", "Offline static audit script is missing",
+                      evidence=(_relative(path, root),))
+    try:
+        spec = importlib.util.spec_from_file_location("offline_static_audit_for_completion", script)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"could not load {script}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        result = module.audit_report(module.load_import_report(path))
+    except (OSError, ValueError, RuntimeError, ImportError, json.JSONDecodeError) as error:
+        return _check("offline_static", "blocked", "Offline static import report is invalid",
+                      evidence=(_relative(path, root), _relative(script, root)), details=(str(error),))
+    status = "pass" if result.get("static_network_audit_passed") is True else "blocked"
+    return _check("offline_static", status,
+                  "Application entry points have no direct network imports" if status == "pass" else
+                  "Application entry points have a direct or unresolved network import",
+                  evidence=(_relative(path, root), _relative(script, root)),
+                  details=result.get("errors", ()))
 
 
 def _latest_test_logs(root: pathlib.Path):
@@ -288,6 +317,7 @@ def build_report(root: pathlib.Path | str = ROOT):
 
     checks.append(_path_check(root, "documentation", "Required project documentation", REQUIRED_DOCUMENTS))
     checks.append(_configuration_check(root))
+    checks.append(_offline_static_check(root))
 
     log_results = [test_log_status(path) for path in _latest_test_logs(root)]
     log_passes = sum(result["status"] == "pass" for result in log_results)
@@ -321,7 +351,7 @@ def build_report(root: pathlib.Path | str = ROOT):
     checks.append(_qualification_check(root))
 
     summary = dict(collections.Counter(check["status"] for check in checks))
-    production_checks = {"production_gate", "runtime_smoke", "packaging", "compatibility",
+    production_checks = {"production_gate", "runtime_smoke", "packaging", "offline_static", "compatibility",
                          "qualification_manifest"}
     production_ready = all(next(check for check in checks if check["id"] == identifier)["status"] == "pass"
                            for identifier in production_checks)

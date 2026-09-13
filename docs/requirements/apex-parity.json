@@ -135,9 +135,12 @@
         "include/sketch/offline_policy.hpp",
         "src/core/offline_policy.cpp",
         "tests/offline_policy_tests.cpp",
+        "scripts/offline_static_audit.py",
+        "tests/test_offline_static_audit.py",
+        "docs/dependencies/offline-static-audit.md",
         "docs/offline-policy.md"
       ],
-      "implementation_note": "The startup policy rejects unknown/required account, activation, subscription, and network dependencies; static dependency and runtime network-denial qualification remain open."
+      "implementation_note": "The startup policy rejects unknown/required account, activation, subscription, and network dependencies; a static PE audit now rejects direct network imports from application entry points while reporting transitive third-party imports. Runtime network-denial qualification remains open."
     },
     {
       "id": "CORE-OFF-003",
@@ -2766,7 +2769,9 @@
       "blocker": null,
       "implementation_sources": [
         "scripts/stage_portable_package.py",
+        "scripts/offline_static_audit.py",
         "tests/test_stage_portable_package.py",
+        "tests/test_offline_static_audit.py",
         "docs/dependencies/portable-package.md"
       ],
       "implementation_note": "Portable staging now verifies explicit inventory hashes, allowlists, path safety, and emits an integrity manifest; the offline bundle installer provides guarded transactional Install, Repair, and Uninstall actions with fail-closed marker/hash checks. Signing, clean-machine/offline qualification, and package certification remain open."
@@ -2787,6 +2792,8 @@
         "docs/dependencies/source-kit.md",
         "scripts/stage_portable_package.py",
         "scripts/distribution_sbom.py",
+        "scripts/offline_static_audit.py",
+        "tests/test_offline_static_audit.py",
         "docs/dependencies/distribution-sbom.md",
         "docs/dependencies/portable-package.md"
       ],

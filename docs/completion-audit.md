@@ -19,6 +19,7 @@ The report includes these checks:
 - required plan, format, qualification, and gate documentation
 - CMake/preset configuration and explicit production-gate registration
 - Debug and Release CTest terminal logs
+- the Release PE import report and direct application network-import audit
 - the newest installed-runtime report, including clean-machine, network,
   registry-isolation, and production-qualification flags
 - offline package manifests and SBOM inputs
@@ -27,7 +28,7 @@ The report includes these checks:
 
 Each check is `pass`, `partial`, `blocked`, or `missing`. `production_ready`
 is true only when the production gate, runtime boundary, packaging, Apex and
-integration evidence, and qualification manifest all pass. The default command
+integration evidence, static offline audit, and qualification manifest all pass. The default command
 returns zero so it can be used to inspect an incomplete checkpoint; `--strict`
 returns `2` while any required production check remains unresolved.
 

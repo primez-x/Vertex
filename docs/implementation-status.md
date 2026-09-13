@@ -93,6 +93,12 @@ integration evidence, and the production qualification manifest. Its strict
 mode remains fail-closed until the single production gate and every external
 evidence boundary pass.
 
+The Release PE import report now also has a dedicated offline static audit.
+Application entry points are checked for direct WinHTTP, WinINet, Winsock,
+DNS, URL, and Qt Network imports; transitive imports carried by third-party
+modules are recorded separately. This is static evidence only and does not
+replace the required network-denied clean-machine run.
+
 ## Current checkpoint (September 2026)
 
 The Windows desktop now uses the immutable save queue and owner-thread

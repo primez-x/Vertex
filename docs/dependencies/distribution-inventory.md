@@ -44,6 +44,12 @@ license clearance, or commercial redistributability. The runtime manifest
 explicitly names the Qt PDF and SVG modules used by the application; their
 license and source obligations remain part of the separate distribution review.
 
+After generating the PE report, run the separate [offline static import audit](offline-static-audit.md).
+It checks that application entry points do not directly import network
+transport libraries, while retaining any transitive third-party imports as
+review data. This static result is intentionally independent of the runtime
+network-denied qualification gate.
+
 `stage_offline_bundle.py` consumes this report as an immutable input. It
 retains the full inventory under `metadata/distribution-inventory.json`,
 derives a sorted `license_inventory` and `dependency_closure` summary in the
