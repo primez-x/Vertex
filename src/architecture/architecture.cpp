@@ -338,33 +338,54 @@ TopoDS_Shape make_slab(const Slab& slab) {
     positive(slab.thickness, "Slab thickness must be positive");
     if (!std::isfinite(slab.elevation)) throw std::invalid_argument("Slab elevation must be finite");
     try {
-        auto result = extrude(slab.boundary, slab.elevation, slab.thickness);
-        const auto original = result;
-        const auto outer_wire = wire(slab.boundary, slab.elevation);
-        std::vector<TopoDS_Shape> previous;
-        std::vector<TopoDS_Wire> previous_wires;
-        for (const auto& hole : slab.holes) {
-            auto tool = extrude(hole, slab.elevation, slab.thickness);
-            auto hole_wire = wire(hole, slab.elevation);
-            const double volume = solid_volume(tool);
-            if (std::abs(common_volume(original, tool) - volume) > std::max(1e-10, volume * 1e-9)) {
-                throw std::invalid_argument("Slab opening is outside its boundary");
-            }
-            BRepExtrema_DistShapeShape outer_distance(outer_wire, hole_wire);
-            if (!outer_distance.IsDone() || outer_distance.Value() <= tolerance) {
-                throw std::invalid_argument("Slab opening touches its outer boundary");
-            }
-            for (std::size_t i = 0; i < previous.size(); ++i) {
-                BRepExtrema_DistShapeShape separation(previous_wires[i], hole_wire);
-                if (common_volume(previous[i], tool) > 1e-10 || !separation.IsDone() || separation.Value() <= tolerance) {
-                    throw std::invalid_argument("Slab openings overlap or touch");
+        validate_slab_layers(slab.layers, slab.thickness);
+        const auto make_layer = [&](double elevation, double thickness) {
+            auto result = extrude(slab.boundary, elevation, thickness);
+            const auto original = result;
+            const auto outer_wire = wire(slab.boundary, elevation);
+            std::vector<TopoDS_Shape> previous;
+            std::vector<TopoDS_Wire> previous_wires;
+            for (const auto& hole : slab.holes) {
+                auto tool = extrude(hole, elevation, thickness);
+                auto hole_wire = wire(hole, elevation);
+                const double volume = solid_volume(tool);
+                if (std::abs(common_volume(original, tool) - volume) > std::max(1e-10, volume * 1e-9)) {
+                    throw std::invalid_argument("Slab opening is outside its boundary");
                 }
+                BRepExtrema_DistShapeShape outer_distance(outer_wire, hole_wire);
+                if (!outer_distance.IsDone() || outer_distance.Value() <= tolerance) {
+                    throw std::invalid_argument("Slab opening touches its outer boundary");
+                }
+                for (std::size_t i = 0; i < previous.size(); ++i) {
+                    BRepExtrema_DistShapeShape separation(previous_wires[i], hole_wire);
+                    if (common_volume(previous[i], tool) > 1e-10 || !separation.IsDone() || separation.Value() <= tolerance) {
+                        throw std::invalid_argument("Slab openings overlap or touch");
+                    }
+                }
+                result = cut(result, tool);
+                previous.push_back(tool);
+                previous_wires.push_back(hole_wire);
             }
-            result = cut(result, tool);
-            previous.push_back(tool);
-            previous_wires.push_back(hole_wire);
+            return result;
+        };
+        if (slab.layers.empty()) return make_layer(slab.elevation, slab.thickness);
+
+        TopoDS_Compound compound;
+        BRep_Builder builder;
+        builder.MakeCompound(compound);
+        double layer_elevation = slab.elevation;
+        for (const auto& layer : slab.layers) {
+            if (!std::isfinite(layer_elevation)) {
+                throw std::invalid_argument("Slab layer elevation exceeds the supported numeric range");
+            }
+            builder.Add(compound, make_layer(layer_elevation, layer.thickness));
+            layer_elevation += layer.thickness;
         }
-        return result;
+        if (!std::isfinite(layer_elevation) || !BRepCheck_Analyzer(compound).IsValid() ||
+            solid_volume(compound) <= tolerance * tolerance * tolerance) {
+            throw std::invalid_argument("Composite slab did not produce valid solids");
+        }
+        return compound;
     } catch (const Standard_Failure& error) {
         throw std::invalid_argument(std::string("Slab geometry failed: ") + error.what());
     }

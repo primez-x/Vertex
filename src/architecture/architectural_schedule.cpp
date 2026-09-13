@@ -286,6 +286,93 @@ void append_layer_material_rows(
             projection.diagnostics.push_back(id + ": layer material unavailable: " + error.what());
         }
     }
+    for (const auto& [id, entity] : document.entities()) {
+        if (entity.type != "slab" ||
+            (visible_entity_ids && !visible_entity_ids->contains(id)) ||
+            !entity.properties.contains("layers")) {
+            continue;
+        }
+        try {
+            Slab slab;
+            std::string error;
+            if (!read_document_slab(entity, slab, error)) {
+                throw std::invalid_argument(error);
+            }
+            if (slab.layers.empty()) continue;
+            double layer_elevation = slab.elevation;
+            for (const auto& layer : slab.layers) {
+                if (!layer.material.has_value()) {
+                    layer_elevation += layer.thickness;
+                    continue;
+                }
+                const auto& assignment = *layer.material;
+                if (!catalogs.contains(assignment.catalog_id)) {
+                    const auto catalog = document.entities().find(assignment.catalog_id);
+                    if (catalog == document.entities().end() || catalog->second.type != "assembly_model") {
+                        throw std::invalid_argument("layer material catalog is missing");
+                    }
+                    const auto model = catalog->second.properties.find("model");
+                    if (model == catalog->second.properties.end()) {
+                        throw std::invalid_argument("layer material catalog has no model");
+                    }
+                    catalogs.emplace(assignment.catalog_id, AssemblyModel::from_json(model.value()));
+                }
+                const auto& materials = catalogs.at(assignment.catalog_id).materials();
+                const auto material = std::find_if(materials.begin(), materials.end(),
+                    [&](const auto& candidate) { return candidate.id == assignment.material_id; });
+                if (material == materials.end()) {
+                    throw std::invalid_argument("layer material is missing from its catalog");
+                }
+
+                ScheduleRow row;
+                row.object_id = id + std::string(layer_marker) + layer.id +
+                                std::string(material_suffix);
+                row.mark = "M-" + id + "-" + layer.id;
+                row.kind = ScheduleRowKind::material;
+                const auto source_prefix = id + ":layers." + layer.id;
+                row.cells.emplace("name", ScheduleCell{
+                    material->name, false,
+                    {{id, source_prefix + ".material_assignment"},
+                     {assignment.catalog_id, "model"}},
+                    "Assigned material name for this slab layer"});
+                row.cells.emplace("count", ScheduleCell{
+                    std::int64_t{1}, false, {{id, source_prefix}},
+                    "One material layer instance"});
+                row.cells.emplace("layer_id", ScheduleCell{
+                    layer.id, false, {{id, "layers"}}, "Stable slab layer identity"});
+                row.cells.emplace("thickness", ScheduleCell{
+                    ScheduleQuantity{layer.thickness, ScheduleUnit::metre}, false,
+                    {{id, source_prefix + ".thickness_m"}}, "Authored layer thickness"});
+                row.cells.emplace("catalog_id", ScheduleCell{
+                    assignment.catalog_id, false,
+                    {{id, source_prefix + ".material_assignment"}},
+                    "Layer material catalog identity"});
+                row.cells.emplace("material_id", ScheduleCell{
+                    assignment.material_id, false,
+                    {{id, source_prefix + ".material_assignment"}},
+                    "Layer material identity"});
+
+                Slab homogeneous{id, slab.boundary, slab.holes, layer.thickness,
+                                layer_elevation, slab.element_kind, {}};
+                const auto shape = make_slab(homogeneous);
+                const auto volume = solid_volume(shape);
+                if (!std::isfinite(volume) || volume <= 0.0) {
+                    throw std::invalid_argument("layer solid volume must be positive and finite");
+                }
+                row.cells.emplace("volume", ScheduleCell{
+                    ScheduleQuantity{volume, ScheduleUnit::cubic_metre}, false,
+                    {{id, "geometry"}},
+                    "Net slab layer solid volume after openings"});
+                projection.snapshot.rows.push_back(std::move(row));
+                layer_elevation += layer.thickness;
+            }
+        } catch (const Standard_Failure& error) {
+            projection.diagnostics.push_back(id + ": layer material volume unavailable: " +
+                (error.what() ? error.what() : "solid construction failed"));
+        } catch (const std::exception& error) {
+            projection.diagnostics.push_back(id + ": layer material unavailable: " + error.what());
+        }
+    }
 }
 
 DocumentScheduleProjection augment(const DocumentSnapshot& document, DocumentScheduleProjection projection,

@@ -199,7 +199,16 @@ straight baseline, and hosted openings must fit below the local sloped top.
 ```
 
 A slab uses `boundary`, an array of the same `{start,end,sweep_radians}` segments; `holes` is
-an array of boundary arrays. Its scalar fields are `thickness_m` and `elevation_m`.
+an array of boundary arrays. Its scalar fields are `thickness_m` and `elevation_m`. An optional
+`element_kind` is one of `slab`, `floor`, `ceiling`, or `foundation`; the four kinds share the
+same geometry and quantity rules. An optional `layers` array uses the same strict layer object
+shape as walls (`id`, `thickness_m`, and an optional version-1 `material_assignment`) but orders
+layers from the lower surface to the upper surface. Layer thicknesses must be positive and sum
+to the parent `thickness_m` within the document precision tolerance. Each material assignment
+resolves to an `assembly_model` catalog and is retained for per-layer quantities and schedules.
+The native solid reader and all plan, elevation, section, and 3D projections decode this stack;
+each layer receives the same boundary holes at its own elevation so the compound volume remains
+the authoritative sum of the layer solids.
 Entered unit text and exact quantity fields are separate semantic properties; display units do
 not change the metre geometry.
 

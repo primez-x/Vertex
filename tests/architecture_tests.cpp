@@ -95,6 +95,17 @@ int main() {
         slab.holes.push_back({{{1, 1}, {2, 1}, 0}, {{2, 1}, {2, 2}, 0},
                               {{2, 2}, {1, 2}, 0}, {{1, 2}, {1, 1}, 0}});
         near(solid_volume(make_slab(slab)), 2.75, 1e-8, "Slab opening subtracts exact area");
+        auto layered_slab = slab;
+        layered_slab.id = "layered-floor-1";
+        layered_slab.layers = {
+            {"structure", 0.15, WallLayerMaterial{"catalog", "concrete"}},
+            {"finish", 0.10, WallLayerMaterial{"catalog", "finish"}},
+        };
+        near(solid_volume(make_slab(layered_slab)), 2.75, 1e-8,
+             "Layered slab preserves total net volume and openings");
+        auto invalid_layered_slab = layered_slab;
+        invalid_layered_slab.layers.front().thickness += 0.01;
+        rejected([&] { (void)make_slab(invalid_layered_slab); });
         auto invalid_slab = slab;
         invalid_slab.holes.push_back(slab.holes.front());
         rejected([&] { (void)make_slab(invalid_slab); });

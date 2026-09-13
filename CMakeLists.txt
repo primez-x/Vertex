@@ -32,7 +32,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   target_include_directories(sketch_architecture PUBLIC include)
   target_include_directories(sketch_architecture SYSTEM PUBLIC "${OpenCASCADE_INCLUDE_DIR}")
   target_compile_definitions(sketch_architecture PUBLIC ${SKETCH_OCCT_DEFINITIONS})
-  target_link_libraries(sketch_architecture PUBLIC sketch_wall_semantics sketch_terrain_surface TKernel TKMath TKG2d TKG3d TKGeomBase TKBRep TKGeomAlgo TKTopAlgo TKPrim TKBO TKBool)
+  target_link_libraries(sketch_architecture PUBLIC sketch_wall_semantics sketch_slab_semantics sketch_terrain_surface TKernel TKMath TKG2d TKG3d TKGeomBase TKBRep TKGeomAlgo TKTopAlgo TKPrim TKBO TKBool)
   add_library(sketch_building_objects src/architecture/building_objects.cpp)
   target_link_libraries(sketch_building_objects PUBLIC sketch_architecture)
   add_library(sketch_building_entities src/architecture/building_entity.cpp src/architecture/document_solid.cpp)
@@ -152,7 +152,7 @@ add_library(sketch_document src/core/document.cpp src/core/document_digest.cpp s
   src/core/annotation_entity_codec.cpp src/core/georeferencing_entity_codec.cpp)
 target_include_directories(sketch_document PUBLIC include)
 target_link_libraries(sketch_document PUBLIC sketch_json PRIVATE sketch_wall_semantics sketch_boundary_receipts
-  sketch_sheet_view_model sketch_annotation_catalog sketch_assembly_model sketch_model_phases
+  sketch_slab_semantics sketch_sheet_view_model sketch_annotation_catalog sketch_assembly_model sketch_model_phases
   sketch_room_relationships sketch_vertical_levels sketch_reference_grid sketch_terrain_surface
   sketch_georeferencing_contract bcrypt)
 if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
@@ -232,6 +232,9 @@ add_library(sketch_boundary_receipts src/core/boundary_receipt.cpp)
 target_link_libraries(sketch_boundary_receipts PUBLIC sketch_precision sketch_json)
 add_library(sketch_wall_semantics src/core/wall_semantics.cpp)
 target_link_libraries(sketch_wall_semantics PUBLIC sketch_precision sketch_json)
+add_library(sketch_slab_semantics src/core/slab_semantics.cpp)
+target_include_directories(sketch_slab_semantics PUBLIC include)
+target_link_libraries(sketch_slab_semantics PUBLIC sketch_wall_semantics sketch_json)
 add_library(sketch_boundary_authoring
   src/core/boundary_authoring_session.cpp
   src/core/boundary_authoring_recovery.cpp
@@ -1009,6 +1012,9 @@ if(BUILD_TESTING)
   add_executable(wall_semantics_tests tests/wall_semantics_tests.cpp)
   target_link_libraries(wall_semantics_tests PRIVATE sketch_wall_semantics)
   add_test(NAME wall_semantics COMMAND wall_semantics_tests)
+  add_executable(slab_semantics_tests tests/slab_semantics_tests.cpp)
+  target_link_libraries(slab_semantics_tests PRIVATE sketch_slab_semantics)
+  add_test(NAME slab_semantics COMMAND slab_semantics_tests)
   add_executable(constraint_entity_tests tests/constraint_entity_tests.cpp)
   target_link_libraries(constraint_entity_tests PRIVATE sketch_document sketch_precision)
   add_test(NAME constraint_entities COMMAND constraint_entity_tests)

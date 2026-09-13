@@ -502,9 +502,20 @@
       "package": 2,
       "blocker": null,
       "implementation_sources": [
-        "src/architecture/architecture.cpp"
+        "include/sketch/slab_semantics.hpp",
+        "src/core/slab_semantics.cpp",
+        "src/core/document.cpp",
+        "src/architecture/architecture.cpp",
+        "src/architecture/document_solid.cpp",
+        "src/architecture/architectural_schedule.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/slab_semantics_tests.cpp",
+        "tests/architecture_tests.cpp",
+        "tests/architectural_schedule_tests.cpp",
+        "tests/desktop_smoke.cpp",
+        "docs/project-format.md"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "Floors, ceilings, foundations, and generic slabs share a validated boundary/holes/thickness/elevation model. Ordered lower-to-upper slab layers now have strict JSON/material-reference validation, exact per-layer OCCT solids with hole cuts, shared plan/elevation/section/native-3D decoding, revision-fenced Windows editing, and material schedule quantities. Cross-floor level behavior, richer catalog authoring, complete output qualification, and the production gate remain open."
     },
     {
       "id": "COMP-GEO-002",
@@ -1939,7 +1950,7 @@
         "tests/schedule_model_tests.cpp",
         "docs/schedules.md"
       ],
-      "implementation_note": "Standalone typed records and a revision-bound Document-derived adapter now generate door/window, room, and material rows with stable marks, source-backed calculated cells and explicit diagnostics. Active organization/design-phase masks filter source entities before projection, preserving derived material rows and suppressing hidden-source diagnostics. Architectural projections append deterministic read-only material-summary rows grouped by catalog/material identity or normalized explicit name, with aggregate counts, complete net-volume totals when every source is valid, and all contributing provenance. Schedule persistence and complete sheet/output integration remain open."
+      "implementation_note": "Standalone typed records and a revision-bound Document-derived adapter now generate door/window, room, and material rows with stable marks, source-backed calculated cells and explicit diagnostics. Active organization/design-phase masks filter source entities before projection, preserving derived material rows and suppressing hidden-source diagnostics. Architectural projections append deterministic read-only material-summary rows grouped by catalog/material identity or normalized explicit name, with aggregate counts, complete net-volume totals when every source is valid, and all contributing provenance. Composite wall and horizontal slab layers now contribute per-layer thickness, catalog/material identity, and net solid-volume rows from the same OCCT geometry. Schedule persistence and complete sheet/output integration remain open."
     },
     {
       "id": "ARCH-SCH-002",

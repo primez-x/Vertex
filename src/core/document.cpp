@@ -12,6 +12,7 @@
 #include "sketch/constraint_integrity.hpp"
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/wall_semantics.hpp"
+#include "sketch/slab_semantics.hpp"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -236,6 +237,24 @@ void validate_entity(const Entity& entity) {
                            std::string("invalid wall layers: ") + error.what());
         }
     }
+    if (entity.type == "slab" && entity.properties.contains("layers")) {
+        try {
+            const auto thickness = entity.properties.find("thickness_m");
+            const auto legacy_thickness = entity.properties.find("thickness");
+            const auto* thickness_value = thickness != entity.properties.end() ? &thickness.value() :
+                                          (legacy_thickness != entity.properties.end() ? &legacy_thickness.value() : nullptr);
+            if (thickness_value == nullptr || !thickness_value->is_number()) {
+                document_error(DocumentErrorCode::invalid_entity,
+                               "slab layers require a numeric thickness_m");
+            }
+            (void)parse_slab_layers(entity.properties.at("layers"), thickness_value->get<double>());
+        } catch (const DocumentError&) {
+            throw;
+        } catch (const std::exception& error) {
+            document_error(DocumentErrorCode::invalid_entity,
+                           std::string("invalid slab layers: ") + error.what());
+        }
+    }
     if (entity.type == "wall" && entity.properties.contains("slope_rise_m")) {
         const auto& slope = entity.properties.at("slope_rise_m");
         if (!slope.is_number() ||
@@ -377,6 +396,28 @@ void collect_references(const Entity& entity, std::vector<EntityReference>& refe
         } catch (const std::exception& error) {
             document_error(DocumentErrorCode::invalid_entity,
                            std::string("invalid wall layer reference: ") + error.what());
+        }
+    }
+    if (entity.type == "slab" && entity.properties.contains("layers")) {
+        const auto thickness = entity.properties.find("thickness_m");
+        const auto legacy_thickness = entity.properties.find("thickness");
+        const auto* thickness_value = thickness != entity.properties.end() ? &thickness.value() :
+                                      (legacy_thickness != entity.properties.end() ? &legacy_thickness.value() : nullptr);
+        if (thickness_value == nullptr || !thickness_value->is_number()) {
+            document_error(DocumentErrorCode::invalid_entity,
+                           "slab layers require a numeric thickness_m");
+        }
+        try {
+            for (const auto& layer : parse_slab_layers(entity.properties.at("layers"),
+                                                       thickness_value->get<double>())) {
+                if (layer.material.has_value()) {
+                    references.push_back({layer.material->catalog_id, "assembly_model",
+                                          EntityReference::Target::entity});
+                }
+            }
+        } catch (const std::exception& error) {
+            document_error(DocumentErrorCode::invalid_entity,
+                           std::string("invalid slab layer reference: ") + error.what());
         }
     }
     for (const auto& [key, value] : entity.properties.items()) {
@@ -606,6 +647,49 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
             } catch (const std::exception& error) {
                 document_error(DocumentErrorCode::invalid_entity,
                                "Invalid wall layer material: " + std::string(error.what()));
+            }
+        }
+        if (entity.type == "slab" && entity.properties.contains("layers")) {
+            try {
+                const auto thickness = entity.properties.find("thickness_m");
+                const auto legacy_thickness = entity.properties.find("thickness");
+                const auto* thickness_value = thickness != entity.properties.end() ? &thickness.value() :
+                                              (legacy_thickness != entity.properties.end() ? &legacy_thickness.value() : nullptr);
+                if (thickness_value == nullptr || !thickness_value->is_number()) {
+                    document_error(DocumentErrorCode::invalid_entity,
+                                   "slab layers require a numeric thickness_m");
+                }
+                const auto layers = parse_slab_layers(entity.properties.at("layers"),
+                                                      thickness_value->get<double>());
+                for (const auto& layer : layers) {
+                    if (!layer.material.has_value()) continue;
+                    const auto& assignment = *layer.material;
+                    const auto catalog = entities.find(assignment.catalog_id);
+                    if (catalog == entities.end()) {
+                        document_error(DocumentErrorCode::dangling_reference,
+                                       "Slab layer material references a missing catalog");
+                    }
+                    if (catalog->second.type != "assembly_model") {
+                        document_error(DocumentErrorCode::invalid_entity,
+                                       "Slab layer material target is not an assembly catalog");
+                    }
+                    if (!material_catalogs.contains(assignment.catalog_id)) {
+                        material_catalogs.emplace(assignment.catalog_id,
+                                                  AssemblyModel::from_json(catalog->second.properties.at("model")));
+                    }
+                    const auto& materials = material_catalogs.at(assignment.catalog_id).materials();
+                    if (std::none_of(materials.begin(), materials.end(), [&](const auto& material) {
+                            return material.id == assignment.material_id;
+                        })) {
+                        document_error(DocumentErrorCode::dangling_reference,
+                                       "Slab layer material references a missing material");
+                    }
+                }
+            } catch (const DocumentError&) {
+                throw;
+            } catch (const std::exception& error) {
+                document_error(DocumentErrorCode::invalid_entity,
+                               "Invalid slab layer material: " + std::string(error.what()));
             }
         }
         if (entity.type == "model_phases") {

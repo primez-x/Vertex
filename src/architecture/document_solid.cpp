@@ -226,10 +226,21 @@ bool read_document_slab(const Entity& entity, Slab& output, std::string& error) 
         }
         output.holes.push_back(std::move(hole));
     }
-    return required_number(entity.properties, {"thickness_m", "thickness"}, output.thickness,
-                           "thickness_m", error) &&
-           required_number(entity.properties, {"elevation_m", "elevation"}, output.elevation,
-                           "elevation_m", error);
+    if (!required_number(entity.properties, {"thickness_m", "thickness"}, output.thickness,
+                         "thickness_m", error) ||
+        !required_number(entity.properties, {"elevation_m", "elevation"}, output.elevation,
+                         "elevation_m", error)) {
+        return false;
+    }
+    if (const auto* layers = property(entity.properties, {"layers"})) {
+        try {
+            output.layers = parse_slab_layers(*layers, output.thickness);
+        } catch (const std::exception& exception) {
+            error = exception.what();
+            return false;
+        }
+    }
+    return true;
 }
 
 bool read_document_wall_id(const Entity& entity, std::string& wall_id, std::string& error) {

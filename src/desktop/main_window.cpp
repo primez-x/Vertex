@@ -8059,6 +8059,48 @@ public:
         }
     }
 
+    bool editSelectedSlabLayers(const QString& layers_json,
+                                std::optional<Revision> expected_revision = std::nullopt) {
+        const auto revision = expected_revision.value_or(m_document->revision());
+        try {
+            const auto selected = selectedEntity();
+            if (!selected || selected->type != "slab") {
+                throw std::invalid_argument("Select a slab, floor, ceiling, or foundation before editing its assembly layers.");
+            }
+            const auto thickness = read_finite_number(selected->properties, "thickness_m");
+            const auto elevation = read_finite_number(selected->properties, "elevation_m");
+            const auto boundary = read_required_boundary(selected->properties, "boundary");
+            const auto holes = read_required_holes(selected->properties);
+            if (!thickness.has_value() || !elevation.has_value() || !boundary.has_value() || !holes.has_value()) {
+                throw std::invalid_argument("Slab boundary, holes, thickness_m, and elevation_m are required before editing layers.");
+            }
+            const auto encoded = json::parse(layers_json.toUtf8().toStdString());
+            if (!encoded.is_array()) {
+                throw std::invalid_argument("Slab layers must be a JSON array.");
+            }
+            const auto layers = parse_slab_layers(encoded, *thickness);
+            auto candidate = *selected;
+            if (layers.empty()) {
+                candidate.properties.erase("layers");
+            } else {
+                candidate.properties["layers"] = slab_layers_json(layers);
+            }
+            Slab slab{candidate.id, *boundary, *holes, *thickness, *elevation,
+                      read_slab_element_kind(candidate.properties)};
+            slab.layers = layers;
+            (void)make_slab(slab);
+            if (!applyEntity(std::move(candidate), "edit slab assembly layers", revision)) {
+                return false;
+            }
+            m_selected_id = QString::fromStdString(selected->id);
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Slab assembly: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     bool editSelectedWallSlope(const QString& rise_expression,
                                std::optional<Revision> expected_revision = std::nullopt) {
         const auto revision = expected_revision.value_or(m_document->revision());
@@ -13071,7 +13113,7 @@ public:
             {QStringLiteral("Manage workspace profiles"), [this] { showWorkspaceProfiles(); }},
             {QStringLiteral("Named revisions and comparison"), [this] { showRevisionHistory(); }},
             {QStringLiteral("Transform selection"), [this] { showBoundaryTransformEditor(); }},
-            {QStringLiteral("Edit wall assembly layers"), [this] { showWallLayerEditor(); }},
+            {QStringLiteral("Edit assembly layers"), [this] { showWallLayerEditor(); }},
             {QStringLiteral("Draw sloped wall"), [this] { setTool(CanvasTool::sloped_wall); }},
             {QStringLiteral("Measurement workspace"), [this] { setWorkspace(Workspace::measurement); }},
             {QStringLiteral("Architectural workspace"), [this] { setWorkspace(Workspace::architectural); }},
@@ -13448,8 +13490,13 @@ private:
         }
         try {
             const auto element_kind = read_slab_element_kind(properties);
-            (void)make_slab(Slab{slab_entity.id, *boundary, *holes, *thickness, *elevation,
-                                 element_kind});
+            Slab preview{slab_entity.id, *boundary, *holes, *thickness, *elevation,
+                         element_kind};
+            if (const auto layers = properties.find("layers");
+                layers != properties.end()) {
+                preview.layers = parse_slab_layers(*layers, *thickness);
+            }
+            (void)make_slab(preview);
             return true;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Slab preview rejected: %1")
@@ -14808,7 +14855,7 @@ private:
         m_edit_layers_button = new QPushButton(QStringLiteral("Edit assembly…"), inspector_body);
         m_edit_layers_button->setObjectName(QStringLiteral("editWallLayers"));
         m_edit_layers_button->setToolTip(QStringLiteral(
-            "Edit the selected wall's ordered material layers and thicknesses"));
+            "Edit the selected architectural assembly's ordered material layers and thicknesses"));
         inspector_layout->addWidget(m_edit_layers_button);
         QObject::connect(m_edit_layers_button, &QPushButton::clicked, owner,
                          [this] { showWallLayerEditor(); });
@@ -15683,8 +15730,13 @@ private:
                             validation_error = QStringLiteral("thickness and elevation are required");
                         } else {
                             try {
-                                (void)make_slab(Slab{id, segments, *holes, *thickness, *elevation,
-                                                     read_slab_element_kind(geometry_entity.properties)});
+                                Slab preview{id, segments, *holes, *thickness, *elevation,
+                                              read_slab_element_kind(geometry_entity.properties)};
+                                if (const auto layers = geometry_entity.properties.find("layers");
+                                    layers != geometry_entity.properties.end()) {
+                                    preview.layers = parse_slab_layers(*layers, *thickness);
+                                }
+                                (void)make_slab(preview);
                             } catch (const std::exception& error) {
                                 validation_error = QString::fromUtf8(error.what());
                             }
@@ -15866,8 +15918,13 @@ private:
                         if (!boundary || !holes || !thickness || !elevation) {
                             throw std::invalid_argument("slab projection requires boundary, holes, thickness, and elevation");
                         }
-                        const auto shape = make_slab(Slab{id, *boundary, *holes, *thickness, *elevation,
-                                                           read_slab_element_kind(resolved.properties)});
+                        Slab projection_slab{id, *boundary, *holes, *thickness, *elevation,
+                                             read_slab_element_kind(resolved.properties)};
+                        if (const auto layers = resolved.properties.find("layers");
+                            layers != resolved.properties.end()) {
+                            projection_slab.layers = parse_slab_layers(*layers, *thickness);
+                        }
+                        const auto shape = make_slab(projection_slab);
                         if (!shape_intersects_view_depth(shape, depth)) continue;
                         const auto clipped_shape = clip_shape_to_view_depth(shape, depth);
                         if (clipped_shape.IsNull()) continue;
@@ -16583,12 +16640,12 @@ private:
         }();
         m_edit_curve_button->setVisible(curved_wall);
         m_edit_curve_button->setEnabled(curved_wall && editable);
-        m_edit_layers_button->setVisible(wall);
-        m_edit_layers_button->setEnabled(wall && editable);
+        const bool slab = entity.has_value() && entity->type == "slab";
+        m_edit_layers_button->setVisible(wall || slab);
+        m_edit_layers_button->setEnabled((wall || slab) && editable);
         const bool opening = entity.has_value() && entity->type == "opening";
         m_door_swing_button->setVisible(opening && entity->properties.value("opening_kind", std::string{}) == "door");
         m_door_swing_button->setEnabled(m_document->is_editable());
-        const bool slab = entity.has_value() && entity->type == "slab";
         const bool reference_asset = entity.has_value() && entity->type == "reference_asset";
         const bool project_entity = entity.has_value() && entity->type == "property";
         const bool area_entity = entity.has_value() && is_closed_boundary_entity(entity->type);
@@ -17729,31 +17786,39 @@ public:
 
     void showWallLayerEditor() {
         const auto selected = selectedEntity();
-        if (!selected || selected->type != "wall" || !m_document->is_editable()) {
-            setError(QStringLiteral("Select an editable wall before editing its assembly."));
+        const bool wall = selected && selected->type == "wall";
+        const bool slab = selected && selected->type == "slab";
+        if ((!wall && !slab) || !m_document->is_editable()) {
+            setError(QStringLiteral("Select an editable wall or horizontal assembly before editing its assembly."));
             return;
         }
         const auto thickness = read_finite_number(selected->properties, "thickness_m");
         if (!thickness.has_value()) {
-            setError(QStringLiteral("Wall thickness_m is required before editing its assembly."));
+            setError(QStringLiteral("Assembly thickness_m is required before editing its layers."));
             return;
         }
         const auto context = captureModalContext();
         QDialog dialog(owner);
         styleDialog(dialog);
-        dialog.setObjectName(QStringLiteral("wallLayerDialog"));
-        dialog.setWindowTitle(QStringLiteral("Wall assembly"));
+        dialog.setObjectName(wall ? QStringLiteral("wallLayerDialog")
+                                  : QStringLiteral("slabLayerDialog"));
+        dialog.setWindowTitle(wall ? QStringLiteral("Wall assembly")
+                                   : QStringLiteral("Horizontal assembly"));
         dialog.setModal(true);
         dialog.resize(560, 400);
         auto* layout = new QVBoxLayout(&dialog);
         auto* description = new QLabel(
-            QStringLiteral("Enter ordered layers from the negative to positive baseline normal. "
-                           "Thicknesses must sum to %1.").arg(format_length(*thickness, m_metric_units)),
+            (wall ? QStringLiteral("Enter ordered layers from the negative to positive baseline normal. "
+                                  "Thicknesses must sum to %1.")
+                  : QStringLiteral("Enter ordered layers from the lower to upper surface. "
+                                   "Thicknesses must sum to %1."))
+                .arg(format_length(*thickness, m_metric_units)),
             &dialog);
         description->setWordWrap(true);
         layout->addWidget(description);
         auto* editor = new QPlainTextEdit(&dialog);
-        editor->setObjectName(QStringLiteral("wallLayersJson"));
+        editor->setObjectName(wall ? QStringLiteral("wallLayersJson")
+                                   : QStringLiteral("slabLayersJson"));
         editor->setPlaceholderText(QStringLiteral(
             "[{\"id\":\"outer\",\"thickness_m\":0.02}, ...]"));
         editor->setTabStopDistance(4 * QFontMetrics(editor->font()).horizontalAdvance(QLatin1Char(' ')));
@@ -17778,10 +17843,13 @@ public:
         const auto validate = [&] {
             try {
                 const auto encoded = json::parse(editor->toPlainText().toUtf8().toStdString());
-                const auto layers = parse_wall_layers(encoded, *thickness);
-                status->setText(layers.empty()
-                    ? QStringLiteral("Monolithic wall (no layers).")
-                    : QStringLiteral("%1 layers valid.").arg(layers.size()));
+                 const auto layer_count = wall
+                     ? parse_wall_layers(encoded, *thickness).size()
+                     : parse_slab_layers(encoded, *thickness).size();
+                 status->setText(layer_count == 0
+                     ? (wall ? QStringLiteral("Monolithic wall (no layers).")
+                             : QStringLiteral("Monolithic assembly (no layers)."))
+                     : QStringLiteral("%1 layers valid.").arg(layer_count));
                 status->setStyleSheet(QString());
                 buttons->button(QDialogButtonBox::Apply)->setEnabled(true);
             } catch (const std::exception& error) {
@@ -17800,7 +17868,10 @@ public:
                                  buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
                                  return;
                              }
-                             if (editSelectedWallLayers(editor->toPlainText(), context.revision)) {
+                             const bool applied = wall
+                                 ? editSelectedWallLayers(editor->toPlainText(), context.revision)
+                                 : editSelectedSlabLayers(editor->toPlainText(), context.revision);
+                             if (applied) {
                                  dialog.accept();
                              } else {
                                  status->setText(lastError());
@@ -18708,6 +18779,11 @@ bool MainWindow::editSelectedCurvedWallFromConstruction(
 bool MainWindow::editSelectedWallLayers(const QString& layers_json,
                                         std::optional<Revision> revision) {
     return m_impl->editSelectedWallLayers(layers_json, revision);
+}
+
+bool MainWindow::editSelectedSlabLayers(const QString& layers_json,
+                                        std::optional<Revision> revision) {
+    return m_impl->editSelectedSlabLayers(layers_json, revision);
 }
 
 bool MainWindow::editSelectedWallSlope(QString rise,

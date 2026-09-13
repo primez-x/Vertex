@@ -78,14 +78,16 @@ legacy material rows retain their existing authored name/volume behavior.
 The architectural schedule additionally measures net solid volume for assigned
 walls, slabs, columns, beams, stairs, railings, and roofs. It uses the same document decoders
 and solid builders as the native view, including wall openings, slab holes, and
-roof cuts. A hidden hosted opening still cuts its wall. The volume cell is
+roof cuts. Composite wall and horizontal slab assemblies add one material row per
+assigned layer, including its authored thickness and net layer volume. A hidden hosted opening still cuts its wall. The volume cell is
 read-only and identifies the source object and its hosted openings. Invalid or
 unsupported solids leave volume absent with an explicit diagnostic. Rooms and
 opening objects currently have no material solid volume.
 
-This quantity treats each assigned object as one homogeneous material. It does
-not subtract intersections with other objects, split composite layers, add waste,
-or infer quantities for assembly instances. The Materials tab edits names and
+This quantity treats each assigned object as one homogeneous material when it has
+no layers. Layered walls and slabs use one measured solid per layer, with shared
+openings or holes applied to each layer. It does not subtract intersections with
+other objects, add waste, or infer quantities for assembly instances. The Materials tab edits names and
 colors by stable material ID; clearing the color uses the object's default
 appearance. Assigned solid objects use that color in the native 3D view. Catalog
 color changes refresh cached presentations without rebuilding unchanged solids,

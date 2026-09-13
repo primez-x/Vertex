@@ -263,6 +263,12 @@ public:
     [[nodiscard]] bool editSelectedWallLayers(
         const QString& layers_json,
         std::optional<Revision> expected_revision = std::nullopt);
+    // Replaces the selected slab/floor/ceiling/foundation layer stack. The
+    // JSON array follows the same versioned material-reference contract as
+    // wall assemblies and is committed through the revision-fenced command.
+    [[nodiscard]] bool editSelectedSlabLayers(
+        const QString& layers_json,
+        std::optional<Revision> expected_revision = std::nullopt);
     // Replaces the selected straight wall's signed top rise through the same
     // revision-checked geometry and opening validation as creation.
     [[nodiscard]] bool editSelectedWallSlope(

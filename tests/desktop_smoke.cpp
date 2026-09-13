@@ -3953,6 +3953,21 @@ int main(int argc, char** argv) {
                 slab_after_undo->second.properties.at("thickness_m").get<double>() < 0.16,
             "undo should restore the previous slab thickness");
     require(window.redoCommand(), "slab thickness edit should be redoable");
+    const auto layered_slab_json = QStringLiteral(
+        "[{\"id\":\"structure\",\"thickness_m\":0.15},"
+        "{\"id\":\"finish\",\"thickness_m\":0.05}]");
+    require(window.editSelectedSlabLayers(layered_slab_json),
+            "slab assembly layers should be editable through the document command seam");
+    const auto layered_slab_entity = window.document().snapshot().entities().at(slab_id.toStdString());
+    require(layered_slab_entity.properties.at("layers").is_array() &&
+                layered_slab_entity.properties.at("layers").size() == 2,
+            "slab assembly layers should persist in canonical project JSON");
+    require(window.undoCommand() &&
+                !window.document().snapshot().entities().at(slab_id.toStdString()).properties.contains("layers"),
+            "slab assembly layer edit should be undoable");
+    require(window.redoCommand() &&
+                window.document().snapshot().entities().at(slab_id.toStdString()).properties.contains("layers"),
+            "slab assembly layer edit should be redoable");
 
     const auto architectural_snapshot = window.document().snapshot();
     const auto& architectural_entities = architectural_snapshot.entities();

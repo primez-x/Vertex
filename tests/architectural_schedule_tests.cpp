@@ -172,12 +172,68 @@ void test_composite_wall_layers_produce_material_quantities() {
                 std::abs(std::get<ScheduleQuantity>(summary.cells.at("volume").value).value - 5.04) < 1e-7,
             "layer material summary must aggregate net quantities by catalog material");
 }
+
+void test_composite_slab_layers_produce_material_quantities() {
+    auto catalog = Entity::create("assembly_model", {{"version", 1},
+        {"model", AssemblyModel::create({{"concrete", "Concrete"}, {"finish", "Finish"}}, {}, {}).to_json()}});
+    catalog.id = "catalog";
+    auto slab = Entity::create("slab", {
+        {"boundary", rectangle(0, 0, 10, 8)}, {"holes", Json::array({rectangle(2, 2, 2, 2)})},
+        {"thickness_m", 0.25}, {"elevation_m", 0.0}, {"element_kind", "floor"},
+        {"layers", Json::array({
+            Json{{"id", "structure"}, {"thickness_m", 0.20},
+                 {"material_assignment", {{"version", 1}, {"catalog_id", "catalog"},
+                                             {"material_id", "concrete"}}}},
+            Json{{"id", "finish"}, {"thickness_m", 0.05},
+                 {"material_assignment", {{"version", 1}, {"catalog_id", "catalog"},
+                                             {"material_id", "finish"}}}},
+        })}});
+    slab.id = "layered-slab";
+    const auto document = Document::create({catalog, slab});
+    const auto projection = build_architectural_schedules(document.snapshot());
+    require(projection.diagnostics.empty(), "valid layered slab schedules must have no diagnostics");
+
+    const auto find_layer = [&](const std::string& layer_id) -> const ScheduleRow& {
+        const auto expected = "layered-slab:layer:" + layer_id + ":material";
+        const auto found = std::find_if(projection.snapshot.rows.begin(), projection.snapshot.rows.end(),
+            [&](const auto& value) { return value.object_id == expected; });
+        if (found == projection.snapshot.rows.end()) throw std::runtime_error("missing slab layer material row");
+        return *found;
+    };
+    const auto layer_volume = [&](const std::string& layer_id, double expected) {
+        const auto& cell = find_layer(layer_id).cells.at("volume");
+        const auto quantity = std::get<ScheduleQuantity>(cell.value);
+        require(quantity.unit == ScheduleUnit::cubic_metre &&
+                    std::abs(quantity.value - expected) < 1e-7 && !cell.editable,
+                "slab layer material volume must include the slab hole cut");
+    };
+    layer_volume("structure", 15.2);
+    layer_volume("finish", 3.8);
+    const auto find_summary = [&](const std::string& name) -> const ScheduleRow& {
+        const auto found = std::find_if(projection.snapshot.rows.begin(), projection.snapshot.rows.end(),
+            [&](const auto& value) {
+                return value.kind == ScheduleRowKind::material_summary &&
+                       value.cells.contains("name") &&
+                       std::get<std::string>(value.cells.at("name").value) == name;
+            });
+        if (found == projection.snapshot.rows.end()) throw std::runtime_error("missing slab material summary row");
+        return *found;
+    };
+    const auto& concrete_summary = find_summary("Concrete");
+    const auto& finish_summary = find_summary("Finish");
+    require(std::get<std::int64_t>(concrete_summary.cells.at("count").value) == 1 &&
+                std::abs(std::get<ScheduleQuantity>(concrete_summary.cells.at("volume").value).value - 15.2) < 1e-7 &&
+                std::get<std::int64_t>(finish_summary.cells.at("count").value) == 1 &&
+                std::abs(std::get<ScheduleQuantity>(finish_summary.cells.at("volume").value).value - 3.8) < 1e-7,
+            "slab layer material summaries must aggregate net quantities by catalog material");
+}
 }
 int main() {
     try {
         test_net_volumes();
         test_explicit_material_grouping_is_stable_and_normalized();
         test_composite_wall_layers_produce_material_quantities();
+        test_composite_slab_layers_produce_material_quantities();
         std::cout<<"architectural schedule tests passed\n";
         return 0;
     }

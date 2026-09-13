@@ -61,9 +61,13 @@ floors, ceilings, and foundations from a closed boundary; the kind is validated
 at the Document boundary, decoded by the native solid reader, preserved through
 save/reopen, shown in the Inspector, and included in material schedule rows.
 All four kinds use the same validated boundary, holes, thickness, elevation,
-level placement, material, and quantity geometry.  This closes the bounded
-semantic floor-system slice while the full production acceptance statement,
-materials/assemblies, and Apex compatibility certification remain open.
+level placement, material, and quantity geometry. Horizontal assemblies now also
+support an ordered lower-to-upper typed layer stack with strict JSON validation,
+catalog/material references, exact per-layer OCCT solids with hole cuts, shared
+plan/elevation/section/native-3D decoding, revision-fenced Windows editing, and
+per-layer material schedule quantities. This closes the bounded semantic
+floor-system slice while richer catalog authoring, broader schedule presentation,
+and Apex compatibility certification remain open.
 
 The architectural object slice now accepts a true flat roof through the
 existing sloped-panel schema: zero rise and zero pitch produce a thickened

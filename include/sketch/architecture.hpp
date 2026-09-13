@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/wall_semantics.hpp"
+#include "sketch/slab_semantics.hpp"
 #include "sketch/terrain_surface.hpp"
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Face.hxx>
@@ -28,6 +29,7 @@ struct Slab {
     double thickness{};
     double elevation{};
     SlabElementKind element_kind{SlabElementKind::slab};
+    std::vector<SlabLayer> layers;
 };
 
 // Shapes are derived caches. Persist semantic parameters, never replace the
