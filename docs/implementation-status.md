@@ -96,6 +96,14 @@ portable and offline bundle manifests bind the carried SBOM by path and hash.
 This improves reviewability but does not complete the separate licensing or
 clean-machine qualification gates.
 
+The visual smoke path now exports the native OCCT model image before capturing
+the architectural Qt workspace and temporarily collapses the native child pane
+for that capture only. Qt cannot include an HWND-backed child in
+`QWidget::grab()`, so this keeps the review screenshot free of a misleading
+black strip while leaving the native 3D pane visible in the normal workspace.
+Release and Debug desktop smoke both pass all eight workspace, size, and DPI
+cases after this change.
+
 The default CTest matrix now also runs the production evidence-contract tests,
 including the explicit OPS-QA-004 packaged/offline/assistance-disabled checks.
 Those tests validate the manifest shape and hash bindings only; they do not
