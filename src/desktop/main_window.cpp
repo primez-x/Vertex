@@ -14196,6 +14196,7 @@ public:
         add(QStringLiteral("disto-import"), m_disto_action);
         add(QStringLiteral("annotations"), m_annotation_action);
         add(QStringLiteral("reference"), m_reference_action);
+        add(QStringLiteral("project-resources"), m_project_resources_action);
         add(QStringLiteral("schedules"), m_schedule_action);
         add(QStringLiteral("sheet-settings"), m_sheet_action);
         add(QStringLiteral("architectural-view"), m_view_action);
@@ -14691,6 +14692,7 @@ public:
             {QStringLiteral("Add labels and symbols"), [this] { showAnnotationEditor(); }},
             {QStringLiteral("Add angle or area dimension"), [this] { showDimensionCreator(); }},
             {QStringLiteral("Import reference image"), [this] { showReferenceImport(); }},
+            {QStringLiteral("Open project resources"), [this] { showProjectResources(); }},
             {QStringLiteral("Calibrate selected reference image"),
              [this] { showReferenceCalibration(); }},
             {QStringLiteral("Trace selected reference"), [this] { beginReferenceTrace(); }},
