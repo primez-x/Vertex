@@ -221,6 +221,13 @@ int main(int argc, char** argv) {
                 application.exit(4);
                 return;
             }
+            // Qt window grabs cannot include the native OCCT child surface.
+            // Keep the dedicated 3D export above, then collapse that child so
+            // the architectural UI capture contains no misleading black pane.
+            if (architectural) {
+                window.setNativeModelViewVisible(false);
+                application.processEvents();
+            }
             const auto image = window.grab();
             if (image.isNull() || !image.save(output)) {
                 qCritical() << "Property Studio: visual smoke capture failed:" << output;

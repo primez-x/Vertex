@@ -12632,6 +12632,26 @@ public:
         return true;
     }
 
+    void setNativeModelViewVisible(bool visible) {
+        if (m_nativeModelView == nullptr) {
+            return;
+        }
+        m_nativeModelView->setVisible(visible);
+        if (m_architectural_splitter == nullptr) {
+            return;
+        }
+        const auto width = m_architectural_splitter->width();
+        if (!visible) {
+            m_architectural_splitter->setSizes({std::max(1, width), 0});
+            return;
+        }
+        const auto sizes = m_architectural_splitter->sizes();
+        if (sizes.size() >= 2 && sizes.at(1) == 0) {
+            const auto half = std::max(1, width / 2);
+            m_architectural_splitter->setSizes({half, half});
+        }
+    }
+
     bool exportDxf(const QString& path) {
         if (path.trimmed().isEmpty()) {
             setError(QStringLiteral("Choose a DXF destination."));
@@ -21107,6 +21127,10 @@ bool MainWindow::exportDraftImage(const QString& path) {
 
 bool MainWindow::exportNativeViewImage(const QString& path) {
     return m_impl->exportNativeViewImage(path);
+}
+
+void MainWindow::setNativeModelViewVisible(bool visible) {
+    m_impl->setNativeModelViewVisible(visible);
 }
 
 bool MainWindow::exportDxf(const QString& path) {

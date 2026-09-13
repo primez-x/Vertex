@@ -517,6 +517,10 @@ public:
     [[nodiscard]] bool exportDraftSvg(const QString& path);
     [[nodiscard]] bool exportDraftImage(const QString& path);
     [[nodiscard]] bool exportNativeViewImage(const QString& path);
+    // Controls the optional native 3D pane in the architectural workspace.
+    // Hiding it is useful when a host cannot capture native child surfaces;
+    // it does not alter the document or the exported 3D view.
+    void setNativeModelViewVisible(bool visible);
     // Local DXF R2013 interchange. Export writes an adjacent fidelity report;
     // import commits mapped geometry in one undoable command and retains the
     // original source bytes as a project asset for any reported gaps.

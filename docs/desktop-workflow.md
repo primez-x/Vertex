@@ -563,6 +563,12 @@ viewer returns a nonzero exit code. If no output path is given, each image is
 written under the system temporary directory with a unique filename.
 `--smoke-size` is optional and defaults to 1366 × 768.
 
+The architectural UI capture is taken after the dedicated native 3D export and
+temporarily collapses the native child surface because `QWidget::grab()` cannot
+capture that HWND. This keeps the review screenshot free of a misleading black
+strip while the separate `--smoke-3d-output` image remains the authoritative
+native 3D capture. The normal application workspace keeps the 3D pane visible.
+
 On native Windows the Architectural tab contains the shared semantic plan
 canvas beside the real OCCT `NativeModelView`. Snapshot refreshes, stable-ID
 selection, errors, and Fit are wired to the same `Document`. Offscreen and
