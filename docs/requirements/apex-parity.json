@@ -346,9 +346,10 @@
       "package": 3,
       "blocker": null,
       "implementation_sources": [
-        "src/core/quantity.cpp"
+        "src/core/quantity.cpp",
+        "tests/quantity_tests.cpp"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "Exact rational parsing now covers fractional inches, feet-and-inches, metric units, equivalent imperial/metric geometry, original-expression preservation, and canonical display round trips; hardware/input parity, independent acceptance evidence, and the production gate remain open."
     },
     {
       "id": "CORE-DOC-007",
@@ -925,9 +926,10 @@
       "package": 4,
       "blocker": null,
       "implementation_sources": [
-        "src/core/quantity.cpp"
+        "src/core/quantity.cpp",
+        "tests/quantity_tests.cpp"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "Exact rational parsing now covers fractional inches, feet-and-inches, metric units, equivalent imperial/metric geometry, original-expression preservation, and canonical display round trips; hardware/input parity, independent acceptance evidence, and the production gate remain open."
     },
     {
       "id": "APX-KEY-003",

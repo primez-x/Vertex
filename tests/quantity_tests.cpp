@@ -86,6 +86,24 @@ void test_feet_and_inches_preserve_exact_fraction() {
                   "explicit positive feet plus fractional inches");
 }
 
+void test_imperial_and_metric_entries_share_exact_geometry() {
+    const auto imperial = sketch::parse_quantity("12' 3 1/2\"");
+    const auto metres = sketch::parse_quantity("3.7465m");
+    const auto centimetres = sketch::parse_quantity("374.65cm");
+    require(imperial.exact_metres == metres.exact_metres,
+            "equivalent imperial and metre entries should share exact geometry");
+    require(imperial.exact_metres == centimetres.exact_metres,
+            "equivalent imperial and centimetre entries should share exact geometry");
+    require(metres.original_expression == "3.7465m",
+            "metric entry should preserve its original expression");
+    require(metres.entered_unit == Unit::metre,
+            "metre entry should preserve its entered unit");
+    require(centimetres.original_expression == "374.65cm",
+            "centimetre entry should preserve its original expression");
+    require(centimetres.entered_unit == Unit::centimetre,
+            "centimetre entry should preserve its entered unit");
+}
+
 void test_invalid_and_overflowing_input_is_rejected() {
     require_invalid("", "empty input should be rejected");
     require_invalid("12cm trailing", "trailing text should be rejected");
@@ -127,6 +145,7 @@ void test_display_round_trip_is_exact_and_non_mutating() {
 int main() {
     test_decimal_units_are_exact();
     test_feet_and_inches_preserve_exact_fraction();
+    test_imperial_and_metric_entries_share_exact_geometry();
     test_invalid_and_overflowing_input_is_rejected();
     test_display_round_trip_is_exact_and_non_mutating();
     return 0;
