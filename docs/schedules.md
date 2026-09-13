@@ -59,6 +59,14 @@ geometry. New projects include a `building-objects` sheet placement beside the
 default door schedule, so architectural quantities are visible in draft output
 without additional sheet setup.
 
+Placed assembly instances also produce one read-only material row for each
+resolved catalog slot. The row retains catalog, instance, slot, and host
+identities as source references. A declared `volume` or `net_volume` quantity
+with cubic-metre units is promoted to the row's net volume; other assembly
+quantities remain on the assembly row with their original names and units.
+These rows participate in the same deterministic material summaries as object
+and layer rows, while host visibility continues to scope placed instances.
+
 `make_schedule_edit` returns a deterministic command description containing the
 source target, expected document revision, prior value and replacement. It
 rejects edits to calculated cells with an explanation naming the sources, type

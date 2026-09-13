@@ -235,7 +235,8 @@ void test_placed_assemblies_produce_read_only_quantity_rows() {
             {AssemblyType{"lintel", "Lintel", {}, {{"finish", "steel"}},
                 {{"count", {2, AssemblyQuantityUnit::count}},
                  {"length", {1.8, AssemblyQuantityUnit::metre}},
-                 {"mass", {24.5, AssemblyQuantityUnit::kilogram}}}}},
+                 {"mass", {24.5, AssemblyQuantityUnit::kilogram}},
+                 {"volume", {0.18, AssemblyQuantityUnit::cubic_metre}}}}},
             {AssemblyInstance{"lintel-1", "lintel", {}, {}, {},
                 AssemblyPlacement{"host-wall", {0.25, 1.2}, 0.1, 1.0}}}).to_json()}});
     catalog.id = "assembly-catalog";
@@ -256,6 +257,36 @@ void test_placed_assemblies_produce_read_only_quantity_rows() {
             "assembly schedule should expose resolved placement and quantities");
     for (const auto& [name, cell] : found->cells)
         require(!cell.editable, "assembly schedule source data should be read-only");
+    const auto material_row = std::find_if(projection.snapshot.rows.begin(), projection.snapshot.rows.end(),
+        [](const auto& row) {
+            return row.kind == ScheduleRowKind::material &&
+                   row.cells.contains("instance_id") &&
+                   std::get<std::string>(row.cells.at("instance_id").value) == "lintel-1";
+        });
+    require(material_row != projection.snapshot.rows.end(),
+            "placed assembly material slot should have a material schedule row");
+    require(std::get<std::string>(material_row->cells.at("name").value) == "Steel" &&
+                std::get<std::string>(material_row->cells.at("catalog_id").value) ==
+                    "assembly-catalog" &&
+                std::get<std::string>(material_row->cells.at("material_id").value) == "steel" &&
+                std::get<ScheduleQuantity>(material_row->cells.at("volume").value).unit ==
+                    ScheduleUnit::cubic_metre &&
+                std::abs(std::get<ScheduleQuantity>(material_row->cells.at("volume").value).value -
+                         0.18) < 1e-9 &&
+                !material_row->cells.at("volume").editable,
+            "assembly material row should expose explicit net volume and provenance");
+    const auto material_summary_row = std::find_if(
+        projection.snapshot.rows.begin(), projection.snapshot.rows.end(),
+        [](const auto& row) {
+            return row.kind == ScheduleRowKind::material_summary &&
+                   row.cells.contains("name") &&
+                   std::get<std::string>(row.cells.at("name").value) == "Steel";
+        });
+    require(material_summary_row != projection.snapshot.rows.end() &&
+                std::get<std::int64_t>(material_summary_row->cells.at("count").value) == 1 &&
+                std::abs(std::get<ScheduleQuantity>(material_summary_row->cells.at("volume").value).value -
+                         0.18) < 1e-9,
+            "assembly material should contribute to the grouped material summary");
     const auto visible = build_architectural_schedules(document.snapshot(), {"host-wall"});
     require(std::any_of(visible.snapshot.rows.begin(), visible.snapshot.rows.end(),
                         [](const auto& row) { return row.kind == ScheduleRowKind::assembly; }),
@@ -264,6 +295,12 @@ void test_placed_assemblies_produce_read_only_quantity_rows() {
     require(std::none_of(hidden.snapshot.rows.begin(), hidden.snapshot.rows.end(),
                          [](const auto& row) { return row.kind == ScheduleRowKind::assembly; }),
             "hidden assembly hosts should be omitted from scoped schedules");
+    require(std::none_of(hidden.snapshot.rows.begin(), hidden.snapshot.rows.end(),
+                         [](const auto& row) {
+                             return row.kind == ScheduleRowKind::material &&
+                                    row.cells.contains("instance_id");
+                         }),
+            "hidden assembly hosts should omit their derived material rows");
 }
 
 void test_building_object_rows_expose_dimensions_and_solid_volume() {

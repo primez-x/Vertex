@@ -96,7 +96,10 @@ opening objects currently have no material solid volume.
 This quantity treats each assigned object as one homogeneous material when it has
 no layers. Layered walls and slabs use one measured solid per layer, with shared
 openings or holes applied to each layer. It does not subtract intersections with
-other objects, add waste, or infer quantities for assembly instances. The Materials tab edits names and
+other objects or add waste. Placed assembly instances now contribute one
+read-only material row per resolved catalog slot; an explicit `volume` or
+`net_volume` cubic-metre quantity is carried into that row and the grouped
+summary. The Materials tab edits names and
 colors by stable material ID; clearing the color uses the object's default
 appearance. Assigned solid objects use that color in the native 3D view. Catalog
 color changes refresh cached presentations without rebuilding unchanged solids,
@@ -112,7 +115,7 @@ the placed host's visibility. The geometric binding is a deterministic
 transformed copy of the host solid. Placed instances now project through the
 same plan, elevation, and section view adapters as their host, while retaining
 the host as the source of truth. Independent assembly profiles, nested
-assemblies, composite material takeoff, material physical properties, and
+assemblies, composite material takeoff across nested geometry, material physical properties, and
 publication workflows remain open. Semantic snapshot
 restoration plus the desktop history checks do not establish full production
 assembly qualification.

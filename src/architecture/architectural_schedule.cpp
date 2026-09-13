@@ -83,6 +83,16 @@ bool is_layer_material_row(const ScheduleRow& row) {
     return row.cells.contains("layer_id") && row.kind == ScheduleRowKind::material;
 }
 
+bool is_assembly_material_row(const ScheduleRow& row) {
+    // Assembly material rows are derived from an immutable catalog instance;
+    // their synthetic IDs therefore do not resolve to a Document entity.
+    // Keep the explicit cells as the discriminator rather than parsing IDs.
+    return row.kind == ScheduleRowKind::material &&
+           row.cells.contains("instance_id") &&
+           row.cells.contains("catalog_id") &&
+           row.cells.contains("material_id");
+}
+
 void append_material_summaries(const DocumentSnapshot& document,
                                DocumentScheduleProjection& projection) {
     std::map<std::string, MaterialGroup, std::less<>> groups;
@@ -95,7 +105,9 @@ void append_material_summaries(const DocumentSnapshot& document,
         const auto source_id = material_source_id(row.object_id);
         const auto source = document.entities().find(source_id);
         const auto name_cell = row.cells.find("name");
-        if (source == document.entities().end() || name_cell == row.cells.end() ||
+        const auto assembly_material = is_assembly_material_row(row);
+        if ((source == document.entities().end() && !assembly_material) ||
+            name_cell == row.cells.end() ||
             !std::holds_alternative<std::string>(name_cell->second.value)) {
             projection.diagnostics.push_back(
                 source_id + ": material summary source is incomplete");
@@ -103,8 +115,15 @@ void append_material_summaries(const DocumentSnapshot& document,
         }
         const auto display_name = std::get<std::string>(name_cell->second.value);
         std::string group_key;
-        const auto assignment = source->second.properties.find("material_assignment");
-        if (!is_layer_material_row(row) && assignment != source->second.properties.end() && assignment->is_object()) {
+        const nlohmann::json* assignment = nullptr;
+        if (!is_layer_material_row(row) && !assembly_material &&
+            source != document.entities().end()) {
+            const auto found = source->second.properties.find("material_assignment");
+            if (found != source->second.properties.end() && found->is_object()) {
+                assignment = &*found;
+            }
+        }
+        if (assignment != nullptr) {
             const auto catalog = assignment->find("catalog_id");
             const auto material = assignment->find("material_id");
             if (catalog != assignment->end() && material != assignment->end() &&
@@ -400,6 +419,7 @@ void append_assembly_rows(const DocumentSnapshot& document,
                           DocumentScheduleProjection& projection,
                           const std::set<std::string, std::less<>>* visible_entity_ids) {
     std::vector<ScheduleRecord> records;
+    std::vector<ScheduleRecord> material_records;
     for (const auto& [catalog_id, entity] : document.entities()) {
         if (entity.type != "assembly_model" || !entity.properties.contains("model")) continue;
         try {
@@ -446,6 +466,49 @@ void append_assembly_rows(const DocumentSnapshot& document,
                 for (const auto& [slot, material_id] : resolved.materials)
                     record.properties.emplace("material:" + slot, material_id);
                 records.push_back(std::move(record));
+
+                // Material slots are schedule-bearing sources in their own
+                // right.  Keep one deterministic row per instance/slot so
+                // grouped summaries can aggregate them without treating the
+                // catalog definition as a measured quantity.  A catalog may
+                // declare an explicit `volume` or `net_volume` quantity;
+                // those are the only quantity names promoted to the material
+                // schedule's net volume column.
+                for (const auto& [slot, material_id] : resolved.materials) {
+                    const auto material = std::find_if(model.materials().begin(), model.materials().end(),
+                        [&](const auto& candidate) { return candidate.id == material_id; });
+                    if (material == model.materials().end()) {
+                        projection.diagnostics.push_back(
+                            catalog_id + ": assembly instance " + instance.id +
+                            " references missing material " + material_id);
+                        continue;
+                    }
+                    ScheduleRecord material_record;
+                    material_record.object_id = catalog_id + ":instance:" + instance.id +
+                                                ":slot:" + slot + ":material";
+                    material_record.mark = "AM-" + catalog_id + "-" + instance.id + "-" + slot;
+                    material_record.kind = ScheduleRowKind::material;
+                    material_record.properties.emplace("name", material->name);
+                    material_record.properties.emplace("count", std::int64_t{1});
+                    material_record.properties.emplace("catalog_id", catalog_id);
+                    material_record.properties.emplace("material_id", material_id);
+                    material_record.properties.emplace("instance_id", instance.id);
+                    material_record.properties.emplace("slot", slot);
+                    if (instance.placement) {
+                        material_record.properties.emplace("host_entity_id",
+                                                           instance.placement->host_entity_id);
+                    }
+                    const auto volume = std::find_if(resolved.quantities.begin(), resolved.quantities.end(),
+                        [](const auto& entry) {
+                            if (entry.second.unit != AssemblyQuantityUnit::cubic_metre) return false;
+                            return entry.first == "volume" || entry.first == "net_volume";
+                        });
+                    if (volume != resolved.quantities.end()) {
+                        material_record.properties.emplace(
+                            "volume", assembly_quantity_value(volume->second));
+                    }
+                    material_records.push_back(std::move(material_record));
+                }
             }
         } catch (const std::exception& error) {
             projection.diagnostics.push_back(catalog_id + ": assembly schedule unavailable: " + error.what());
@@ -464,6 +527,22 @@ void append_assembly_rows(const DocumentSnapshot& document,
         }
     } catch (const std::exception& error) {
         projection.diagnostics.push_back(std::string("assembly schedule rejected: ") + error.what());
+    }
+    if (!material_records.empty()) {
+        try {
+            auto rows = build_schedule(material_records, document.revision()).rows;
+            for (auto& row : rows) {
+                for (auto& [name, cell] : row.cells) {
+                    cell.editable = false;
+                    cell.sources = {{row.object_id, name}};
+                    cell.explanation = "Resolved assembly material slot from its catalog instance";
+                }
+                projection.snapshot.rows.push_back(std::move(row));
+            }
+        } catch (const std::exception& error) {
+            projection.diagnostics.push_back(
+                std::string("assembly material schedule rejected: ") + error.what());
+        }
     }
 }
 
