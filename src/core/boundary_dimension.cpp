@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <numbers>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -162,6 +163,13 @@ std::optional<BoundaryDimensionPlacement> placement_from_name(std::string_view n
     return std::nullopt;
 }
 
+std::optional<BoundaryDimensionKind> kind_from_name(std::string_view name) {
+    if (name == "segment_length") return BoundaryDimensionKind::segment_length;
+    if (name == "angle") return BoundaryDimensionKind::angle;
+    if (name == "area") return BoundaryDimensionKind::area;
+    return std::nullopt;
+}
+
 void validate_presentation(const BoundaryDimensionPresentation& value) {
     if (!std::isfinite(value.text_height_mm) || value.text_height_mm < 0.5 || value.text_height_mm > 20.0)
         invalid("dimension text height must be between 0.5 and 20 millimetres");
@@ -198,8 +206,33 @@ void validate_model(const BoundaryDimension& dimension) {
     if (!valid_identifier(dimension.boundary_id)) {
         invalid("dimension target entity id is empty or invalid");
     }
-    if (!valid_identifier(dimension.segment_id)) {
-        invalid("dimension target segment id is empty or invalid");
+    switch (dimension.kind) {
+        case BoundaryDimensionKind::segment_length:
+            if (!valid_identifier(dimension.segment_id)) {
+                invalid("dimension target segment id is empty or invalid");
+            }
+            if (!dimension.vertex_id.empty() || !dimension.secondary_segment_id.empty()) {
+                invalid("segment-length dimension contains angle target fields");
+            }
+            break;
+        case BoundaryDimensionKind::angle:
+            if (!valid_identifier(dimension.segment_id) ||
+                !valid_identifier(dimension.secondary_segment_id) ||
+                !valid_identifier(dimension.vertex_id)) {
+                invalid("angle dimension target IDs are empty or invalid");
+            }
+            if (dimension.segment_id == dimension.secondary_segment_id) {
+                invalid("angle dimension must reference two different segments");
+            }
+            break;
+        case BoundaryDimensionKind::area:
+            if (!dimension.segment_id.empty() || !dimension.vertex_id.empty() ||
+                !dimension.secondary_segment_id.empty()) {
+                invalid("area dimension cannot contain segment or vertex target fields");
+            }
+            break;
+        default:
+            invalid("dimension kind is unsupported");
     }
     if (!std::isfinite(dimension.text_position.x) ||
         !std::isfinite(dimension.text_position.y)) {
@@ -221,6 +254,70 @@ void validate_model(const BoundaryDimension& dimension) {
     invalid("dimension placement origin is unsupported");
 }
 
+const IdentifiedSegment* find_segment(const IdentifiedBoundary& boundary,
+                                      std::string_view id) {
+    const auto found = std::find_if(boundary.segments.begin(), boundary.segments.end(),
+                                    [&](const IdentifiedSegment& segment) {
+                                        return segment.segment_id == id;
+                                    });
+    return found == boundary.segments.end() ? nullptr : &*found;
+}
+
+Vec2 tangent_from_vertex(const IdentifiedSegment& identified, std::string_view vertex_id) {
+    const auto& segment = identified.segment;
+    const bool at_start = identified.start_vertex_id == vertex_id;
+    const bool at_end = identified.end_vertex_id == vertex_id;
+    if (at_start == at_end) {
+        invalid("angle dimension target segment does not contain the requested vertex");
+    }
+    Vec2 tangent{segment.end.x - segment.start.x, segment.end.y - segment.start.y};
+    if (segment.sweep_radians != 0.0) {
+        const auto chord_x = tangent.x;
+        const auto chord_y = tangent.y;
+        const auto chord = std::hypot(chord_x, chord_y);
+        const auto half_sweep = segment.sweep_radians * 0.5;
+        const auto arc_tangent = std::tan(half_sweep);
+        if (!(chord > default_geometry_tolerance_metres) || !std::isfinite(arc_tangent) ||
+            std::abs(arc_tangent) <= 1e-12) {
+            invalid("angle dimension cannot resolve an invalid arc tangent");
+        }
+        const Vec2 midpoint{(segment.start.x + segment.end.x) * 0.5,
+                            (segment.start.y + segment.end.y) * 0.5};
+        const auto center_offset = chord / (2.0 * arc_tangent);
+        const Vec2 center{midpoint.x - chord_y / chord * center_offset,
+                          midpoint.y + chord_x / chord * center_offset};
+        const Vec2 point = at_start ? segment.start : segment.end;
+        const Vec2 radial{point.x - center.x, point.y - center.y};
+        tangent = segment.sweep_radians > 0.0
+                      ? Vec2{-radial.y, radial.x}
+                      : Vec2{radial.y, -radial.x};
+        if (at_end) tangent = {-tangent.x, -tangent.y};
+    } else if (at_end) {
+        tangent = {-tangent.x, -tangent.y};
+    }
+    const auto magnitude = std::hypot(tangent.x, tangent.y);
+    if (!(magnitude > default_geometry_tolerance_metres) || !std::isfinite(magnitude)) {
+        invalid("angle dimension target segment has a degenerate tangent");
+    }
+    return {tangent.x / magnitude, tangent.y / magnitude};
+}
+
+bool closed_boundary(const Boundary& boundary) {
+    if (boundary.empty()) return false;
+    for (std::size_t index = 1; index < boundary.size(); ++index) {
+        const auto& previous = boundary[index - 1];
+        const auto& current = boundary[index];
+        if (std::hypot(previous.end.x - current.start.x,
+                       previous.end.y - current.start.y) > default_geometry_tolerance_metres) {
+            return false;
+        }
+    }
+    const auto& first = boundary.front();
+    const auto& last = boundary.back();
+    return std::hypot(last.end.x - first.start.x, last.end.y - first.start.y) <=
+           default_geometry_tolerance_metres;
+}
+
 BoundaryDimensionDecodeResult unsupported_result(const Entity& entity, std::uint64_t version,
                                                   std::string kind, std::string reason) {
     return BoundaryDimensionDecodeResult{
@@ -236,6 +333,15 @@ BoundaryDimensionDecodeResult unsupported_result(const Entity& entity, std::uint
 
 bool can_recognize_boundary_dimension_entity_type(std::string_view type) noexcept {
     return type == "dimension";
+}
+
+std::string_view boundary_dimension_kind_name(BoundaryDimensionKind kind) {
+    switch (kind) {
+        case BoundaryDimensionKind::segment_length: return "segment_length";
+        case BoundaryDimensionKind::angle: return "angle";
+        case BoundaryDimensionKind::area: return "area";
+    }
+    invalid("unknown dimension kind");
 }
 
 std::string_view boundary_dimension_placement_name(BoundaryDimensionPlacement placement) {
@@ -279,7 +385,8 @@ BoundaryDimensionDecodeResult decode_boundary_dimension_entity(const Entity& ent
 
     const auto kind = json_string(required_property(entity.properties, "dimension_kind"),
                                   "dimension kind must be a string");
-    if (kind != "segment_length") {
+    const auto parsed_kind = kind_from_name(kind);
+    if (!parsed_kind.has_value()) {
         return unsupported_result(entity, version, kind,
                                   "unsupported boundary dimension kind " + kind);
     }
@@ -290,8 +397,26 @@ BoundaryDimensionDecodeResult decode_boundary_dimension_entity(const Entity& ent
     }
     const auto boundary_id = json_identifier(
         required_property(target, "entity_id"), "dimension target entity_id must be a valid id");
-    const auto segment_id = json_identifier(
-        required_property(target, "segment_id"), "dimension target segment_id must be a valid id");
+    std::string segment_id;
+    std::string vertex_id;
+    std::string secondary_segment_id;
+    if (*parsed_kind == BoundaryDimensionKind::segment_length) {
+        segment_id = json_identifier(required_property(target, "segment_id"),
+                                     "dimension target segment_id must be a valid id");
+    } else if (*parsed_kind == BoundaryDimensionKind::angle) {
+        segment_id = json_identifier(required_property(target, "segment_id"),
+                                     "angle dimension target segment_id must be a valid id");
+        secondary_segment_id = json_identifier(
+            required_property(target, "second_segment_id"),
+            "angle dimension target second_segment_id must be a valid id");
+        vertex_id = json_identifier(required_property(target, "vertex_id"),
+                                    "angle dimension target vertex_id must be a valid id");
+    } else {
+        if (target.contains("segment_id") || target.contains("second_segment_id") ||
+            target.contains("vertex_id")) {
+            invalid("area dimension target cannot contain segment or vertex fields");
+        }
+    }
     const auto text_position = json_point(
         required_property(entity.properties, "text_position"), "dimension text_position");
     const auto placement_name = json_string(
@@ -327,6 +452,9 @@ BoundaryDimensionDecodeResult decode_boundary_dimension_entity(const Entity& ent
         .text_position = text_position,
         .placement = *placement,
         .automatic_placement_version = automatic_version,
+        .kind = *parsed_kind,
+        .vertex_id = vertex_id,
+        .secondary_segment_id = secondary_segment_id,
     };
     if (version == 2)
         result.presentation = decode_presentation(required_property(entity.properties, "presentation"));
@@ -368,7 +496,7 @@ Entity encode_boundary_dimension_entity(const BoundaryDimension& dimension,
             {"bold", value.bold}, {"italic", value.italic}, {"visible", value.visible},
             {"rotation_radians", value.rotation_radians}};
     }
-    properties["dimension_kind"] = "segment_length";
+    properties["dimension_kind"] = std::string(boundary_dimension_kind_name(dimension.kind));
     Json target = Json::object();
     const auto previous_target = properties.find("target");
     if (previous_target != properties.end()) {
@@ -378,7 +506,23 @@ Entity encode_boundary_dimension_entity(const BoundaryDimension& dimension,
         target = *previous_target;
     }
     target["entity_id"] = dimension.boundary_id;
-    target["segment_id"] = dimension.segment_id;
+    switch (dimension.kind) {
+        case BoundaryDimensionKind::segment_length:
+            target["segment_id"] = dimension.segment_id;
+            target.erase("second_segment_id");
+            target.erase("vertex_id");
+            break;
+        case BoundaryDimensionKind::angle:
+            target["segment_id"] = dimension.segment_id;
+            target["second_segment_id"] = dimension.secondary_segment_id;
+            target["vertex_id"] = dimension.vertex_id;
+            break;
+        case BoundaryDimensionKind::area:
+            target.erase("segment_id");
+            target.erase("second_segment_id");
+            target.erase("vertex_id");
+            break;
+    }
     properties["target"] = std::move(target);
     properties["text_position"] = Json::array({dimension.text_position.x,
                                                   dimension.text_position.y});
@@ -406,14 +550,45 @@ BoundaryDimensionResolution resolve_boundary_dimension(const BoundaryDimension& 
         invalid("dimension source boundary must use identified model version one");
     }
     const auto source = decode_identified_boundary_entity(boundary_entity);
-    const auto found = std::find_if(
-        source.segments.begin(), source.segments.end(), [&](const IdentifiedSegment& segment) {
-            return segment.segment_id == dimension.segment_id;
-        });
-    if (found == source.segments.end()) {
-        invalid("dimension source boundary is missing the target segment id");
+    if (dimension.kind == BoundaryDimensionKind::segment_length) {
+        const auto found = find_segment(source, dimension.segment_id);
+        if (found == nullptr) {
+            invalid("dimension source boundary is missing the target segment id");
+        }
+        return BoundaryDimensionResolution{found->segment, segment_length(found->segment),
+                                           BoundaryDimensionKind::segment_length, 0.0, 0.0};
     }
-    return BoundaryDimensionResolution{found->segment, segment_length(found->segment)};
+    if (dimension.kind == BoundaryDimensionKind::angle) {
+        const auto first = find_segment(source, dimension.segment_id);
+        const auto second = find_segment(source, dimension.secondary_segment_id);
+        if (first == nullptr || second == nullptr) {
+            invalid("angle dimension source boundary is missing a target segment");
+        }
+        const auto first_tangent = tangent_from_vertex(*first, dimension.vertex_id);
+        const auto second_tangent = tangent_from_vertex(*second, dimension.vertex_id);
+        const auto dot_product = std::clamp(first_tangent.x * second_tangent.x +
+                                                 first_tangent.y * second_tangent.y,
+                                             -1.0, 1.0);
+        const auto angle = std::acos(dot_product);
+        if (!std::isfinite(angle) || angle <= default_geometry_tolerance_metres) {
+            invalid("angle dimension target tangents do not form a measurable angle");
+        }
+        return BoundaryDimensionResolution{first->segment, segment_length(first->segment),
+                                           BoundaryDimensionKind::angle, angle, 0.0};
+    }
+
+    Boundary boundary;
+    boundary.reserve(source.segments.size());
+    for (const auto& segment : source.segments) boundary.push_back(segment.segment);
+    if (!closed_boundary(boundary)) {
+        invalid("area dimension source boundary must be closed");
+    }
+    const auto area = std::abs(signed_area(boundary));
+    if (!std::isfinite(area) || area <= default_geometry_tolerance_metres *
+                                      default_geometry_tolerance_metres) {
+        invalid("area dimension source boundary has no measurable area");
+    }
+    return BoundaryDimensionResolution{{}, 0.0, BoundaryDimensionKind::area, 0.0, area};
 }
 
 BoundaryDimensionResolution BoundaryDimension::resolve(const Entity& boundary_entity) const {

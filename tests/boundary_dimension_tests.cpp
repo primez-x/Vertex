@@ -255,11 +255,57 @@ void test_unknown_versions_and_kinds_are_explicitly_opaque() {
     }, "encoding over an unsupported future dimension must reject");
 
     auto future_kind = sketch::encode_boundary_dimension_entity(manual_dimension());
-    future_kind.properties["dimension_kind"] = "angle";
+    future_kind.properties["dimension_kind"] = "future_kind";
     const auto kind_result = sketch::decode_boundary_dimension_entity(future_kind);
     require(!kind_result.supported() && kind_result.original_entity == future_kind &&
-                kind_result.kind == "angle",
+                kind_result.kind == "future_kind",
             "unsupported dimension kinds must remain opaque");
+}
+
+void test_angle_and_area_dimensions_are_semantic_kinds() {
+    auto angle_entity = sketch::encode_boundary_dimension_entity(manual_dimension("segment-a"));
+    angle_entity.properties["dimension_kind"] = "angle";
+    angle_entity.properties["target"]["vertex_id"] = "vertex-a";
+    angle_entity.properties["target"]["second_segment_id"] = "segment-d";
+    const auto angle = sketch::decode_boundary_dimension_entity(angle_entity);
+    require(angle.supported(), "angle dimension kind must decode as a supported semantic dimension");
+    const auto angle_resolution = angle.dimension->resolve(
+        sketch::encode_identified_boundary_entity(rectangle_model()));
+    require(angle.dimension->kind == sketch::BoundaryDimensionKind::angle &&
+                angle.dimension->vertex_id == "vertex-a" &&
+                angle.dimension->secondary_segment_id == "segment-d" &&
+                std::abs(angle_resolution.angle_radians - std::numbers::pi * 0.5) < 1e-12,
+            "angle dimension must resolve the included angle at its stable vertex");
+
+    auto area_entity = sketch::encode_boundary_dimension_entity(manual_dimension("segment-a"));
+    area_entity.properties["dimension_kind"] = "area";
+    area_entity.properties["target"].erase("segment_id");
+    const auto area = sketch::decode_boundary_dimension_entity(area_entity);
+    require(area.supported(), "area dimension kind must decode as a supported semantic dimension");
+    const auto area_resolution = area.dimension->resolve(
+        sketch::encode_identified_boundary_entity(rectangle_model()));
+    require(area.dimension->kind == sketch::BoundaryDimensionKind::area &&
+                area.dimension->segment_id.empty() &&
+                std::abs(area_resolution.area_square_metres - 12.0) < 1e-12,
+            "area dimension must resolve the analytical boundary area");
+
+    require(sketch::decode_boundary_dimension_entity(
+                sketch::encode_boundary_dimension_entity(*angle.dimension))
+                .dimension == angle.dimension,
+            "angle dimension must round-trip through its canonical target fields");
+    require(sketch::decode_boundary_dimension_entity(
+                sketch::encode_boundary_dimension_entity(*area.dimension))
+                .dimension == area.dimension,
+            "area dimension must round-trip through its canonical target fields");
+
+    auto bad_angle = angle_entity;
+    bad_angle.properties["target"].erase("vertex_id");
+    rejected([&] { (void)sketch::decode_boundary_dimension_entity(bad_angle); },
+             "angle dimension without a vertex must reject");
+    auto bad_area = area_entity;
+    bad_area.properties["target"]["segment_id"] = "segment-a";
+    rejected([&] { (void)sketch::decode_boundary_dimension_entity(bad_area); },
+             "area dimension with a segment target must reject");
 }
 
 void test_source_boundary_binding_errors_reject() {
@@ -442,6 +488,7 @@ int main() {
     test_automatic_and_manual_placement_semantics_are_strict();
     test_malformed_envelopes_and_canonical_fields_reject();
     test_unknown_versions_and_kinds_are_explicitly_opaque();
+    test_angle_and_area_dimensions_are_semantic_kinds();
     test_source_boundary_binding_errors_reject();
     test_encoder_rejects_invalid_models_and_preserves_identity();
     test_presentation_versioning_round_trip_and_metadata();

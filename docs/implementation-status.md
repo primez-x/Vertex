@@ -530,17 +530,20 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   states. Unknown boundary versions remain read-only. The shared plan and
   calculation path uses identified canonical segments even when auxiliary
   vendor geometry is present. Focused regressions and the full v17c suites pass.
-- A strict segment-length dimension codec derives measurements from stable
-  boundary/edge references and preserves nested metadata. Document state and
-  retained history reject dangling references and require atomic dimension
-  retargeting or deletion when an edge is retired. Unknown dimension versions,
-  kinds and boundary owners remain read-only without skipping other supported
-  validation. The codec and document tests pass in both v18 configurations.
-  Dimension labels, styles, authoring, and retained straight-segment extension/
-  dimension linework now render from the current stable source edge; curved
-  dimensions use a true offset analytical arc with radial extension lines.
-  Angle/area dimension construction and complete Apex workflow/output
-  qualification remain required.
+- A strict dimension codec derives measurements from stable boundary/edge
+  references and preserves nested metadata. Segment lengths reference one edge,
+  angles reference two edges plus their shared vertex, and areas reference a
+  complete identified boundary. Document state and retained history reject
+  dangling references and require atomic dimension retargeting or deletion when
+  an edge is retired. Unknown dimension versions, kinds and boundary owners
+  remain read-only without skipping other supported validation. The codec and
+  document tests pass in both v18 configurations. Dimension labels, styles,
+  authoring, and retained straight-segment extension/dimension linework render
+  from the current stable source edge; curved dimensions use a true offset
+  analytical arc with radial extension lines. Angle and area dimensions now
+  have semantic creation commands, current-geometry recalculation, shared
+  canvas/output labels, and focused save/undo coverage. Apex workflow/output
+  qualification remains required.
 - Storage format v2 protects identified boundaries across the entire retained
   history, including an anonymous head reached by undo. Legacy-only v1 files
   still load. The retained v16 CLI rejects three actual v2 fixtures; the current

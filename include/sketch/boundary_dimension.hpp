@@ -19,14 +19,27 @@ struct BoundaryDimensionVersion {
 
 enum class BoundaryDimensionPlacement { manual, automatic };
 
+// Placed dimensions share one persisted presentation contract while keeping
+// their analytical target explicit. Segment lengths reference one stable
+// edge; angles reference two stable edges and their common vertex; areas
+// reference the complete closed boundary.
+enum class BoundaryDimensionKind { segment_length, angle, area };
+
+[[nodiscard]] std::string_view boundary_dimension_kind_name(BoundaryDimensionKind kind);
+
 [[nodiscard]] std::string_view boundary_dimension_placement_name(
     BoundaryDimensionPlacement placement);
 
 struct BoundaryDimensionResolution {
     Segment segment;
     double segment_length_metres{};
+    BoundaryDimensionKind kind{BoundaryDimensionKind::segment_length};
+    double angle_radians{};
+    double area_square_metres{};
 
     [[nodiscard]] double segment_length() const noexcept { return segment_length_metres; }
+    [[nodiscard]] double angle() const noexcept { return angle_radians; }
+    [[nodiscard]] double area() const noexcept { return area_square_metres; }
 };
 
 struct BoundaryDimensionPresentation {
@@ -48,17 +61,22 @@ struct BoundaryDimension {
     BoundaryDimensionPlacement placement{BoundaryDimensionPlacement::manual};
     std::optional<std::uint32_t> automatic_placement_version;
     std::optional<BoundaryDimensionPresentation> presentation;
+    BoundaryDimensionKind kind{BoundaryDimensionKind::segment_length};
+    std::string vertex_id;
+    std::string secondary_segment_id;
 
     bool operator==(const BoundaryDimension& other) const noexcept {
         return id == other.id && boundary_id == other.boundary_id &&
                segment_id == other.segment_id && text_position.x == other.text_position.x &&
                text_position.y == other.text_position.y && placement == other.placement &&
                automatic_placement_version == other.automatic_placement_version &&
-               presentation == other.presentation;
+               presentation == other.presentation && kind == other.kind &&
+               vertex_id == other.vertex_id && secondary_segment_id == other.secondary_segment_id;
     }
 
-    // Resolves the exact stable source segment and derives its current
-    // analytical length from the canonical identified boundary geometry.
+    // Resolves the stable analytical target from canonical identified boundary
+    // geometry. The returned value is a segment length, angle, or area based
+    // on this dimension's semantic kind.
     [[nodiscard]] BoundaryDimensionResolution resolve(const Entity& boundary_entity) const;
 };
 

@@ -71,6 +71,16 @@ derived from the same stable source segment on every refresh, so moving or
 transforming the boundary cannot leave stale pixel geometry behind. Curved
 dimensions use an offset arc with the source sweep and radial extension lines;
 their displayed value remains the analytical source arc length.
+
+The model also supports semantic `angle` and `area` dimensions. An angle
+references two identified segments and their shared vertex; its value is
+derived from the current analytical tangents and is rendered in degrees with a
+shortest-path arc overlay. An area references the complete identified closed
+boundary and derives the absolute signed area from its current geometry. Both
+kind values persist through save/reopen, survive source geometry edits, and
+render in both workspace canvases and fitted output using the active unit
+system. Area dimensions intentionally have no segment target, so a boundary
+owner remains the single source of truth.
 Hidden dimensions retain their semantic references and remain editable through
 selection in the project navigator. Paper text height uses the rendering
 device's logical DPI, or the explicit fitted sheet paper scale in previews,
@@ -79,6 +89,8 @@ retain their existing model-space behavior. Global visibility filters still
 apply. The shown value is derived from the referenced geometry in the selected
 workspace units, not user-entered replacement measurement text.
 
-Additional interactive dimension-line tools, angle/area dimension kinds, and
-full Apex workflow/output qualification remain open. These
-capabilities do not certify the complete dimensioning requirement.
+The desktop workspace provides an offline creator for choosing angle rays or an
+area owner. Full Apex workflow/output qualification remains open. The semantic
+model, recalculation, persistence, shared rendering paths, and normal undoable
+creation command are implemented, but the remaining qualification gate is
+still required before the complete dimensioning requirement can be certified.

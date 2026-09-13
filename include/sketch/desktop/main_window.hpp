@@ -367,6 +367,20 @@ public:
     [[nodiscard]] bool editBoundaryDimension(const QString& id, const QString& x,
         const QString& y, const QString& height_mm, const QString& color,
         bool bold, bool italic, bool visible, const QString& rotation_degrees);
+    // Creates a semantic angle dimension from two identified boundary edges
+    // and their shared vertex. The analytical angle is resolved from current
+    // geometry; the text position is stored in model metres.
+    [[nodiscard]] QString createAngleDimension(const QString& boundary_id,
+                                               const QString& first_segment_id,
+                                               const QString& second_segment_id,
+                                               const QString& vertex_id,
+                                               Vec2 text_position,
+                                               std::optional<Revision> expected_revision = std::nullopt);
+    // Creates a semantic area dimension for a complete identified closed
+    // boundary. The value is derived from current geometry on every refresh.
+    [[nodiscard]] QString createAreaDimension(const QString& boundary_id,
+                                              Vec2 text_position,
+                                              std::optional<Revision> expected_revision = std::nullopt);
     // Stores bounded string attributes on the selected closed boundary. The
     // JSON object remains inspectable in the native project format and the
     // update uses the normal undoable Document history.

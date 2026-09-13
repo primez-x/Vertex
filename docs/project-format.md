@@ -24,11 +24,13 @@ translation history and v6 transform history, plus v4/v5/v6 archives through
 recovery-aware APIs. Under-versioned semantic data and versions above 6 reject. Legacy-only history
 is still written as v1. Unknown boundary entity
 versions in v2 remain preserved read-only. See `boundary-entity-format.md`.
-Version 2 also recognizes `dimension` entities. Their supported segment-length
-form refers to a stable child ID on an identified boundary; every retained
-state validates those references. Unknown dimension versions and kinds remain
-opaque and make the project read-only. A supported dimension on an unknown
-boundary version is preserved read-only without guessing its geometry.
+Version 2 also recognizes `dimension` entities. Segment-length dimensions refer
+to one stable child ID; angle dimensions refer to two stable child IDs and their
+shared vertex; area dimensions refer to the complete identified closed boundary.
+Every retained state validates the supported references. Unknown dimension
+versions and kinds remain opaque and make the project read-only. A supported
+dimension on an unknown boundary version is preserved read-only without
+guessing its geometry.
 See `boundary-dimensions.md` for the typed dimension contract.
 
 Version 3 retains the v1 and v2 tables and adds a storage guard for the reserved

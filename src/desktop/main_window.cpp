@@ -738,6 +738,125 @@ std::optional<Boundary> dimension_overlay(const Segment& source, Vec2 text_posit
     };
 }
 
+QString format_dimension_angle(double radians) {
+    if (!std::isfinite(radians)) {
+        return QStringLiteral("—");
+    }
+    const auto degrees = radians * 180.0 / std::numbers::pi;
+    if (!std::isfinite(degrees)) {
+        return QStringLiteral("—");
+    }
+    return QStringLiteral("%1°").arg(degrees, 0, 'f', 1);
+}
+
+QString format_dimension_area(double square_metres, bool metric) {
+    if (!std::isfinite(square_metres)) {
+        return QStringLiteral("—");
+    }
+    if (metric) {
+        return QStringLiteral("%1 m²").arg(square_metres, 0, 'f', 2);
+    }
+    constexpr double square_metres_per_square_foot = 0.09290304;
+    return QStringLiteral("%1 ft²")
+        .arg(square_metres / square_metres_per_square_foot, 0, 'f', 1);
+}
+
+std::optional<Vec2> dimension_tangent_at_vertex(const IdentifiedSegment& identified,
+                                                std::string_view vertex_id) {
+    const auto& segment = identified.segment;
+    const bool at_start = identified.start_vertex_id == vertex_id;
+    const bool at_end = identified.end_vertex_id == vertex_id;
+    if (at_start == at_end) {
+        return std::nullopt;
+    }
+    Vec2 tangent{segment.end.x - segment.start.x, segment.end.y - segment.start.y};
+    if (segment.sweep_radians != 0.0) {
+        const auto chord = std::hypot(tangent.x, tangent.y);
+        const auto half_sweep = segment.sweep_radians * 0.5;
+        const auto arc_tangent = std::tan(half_sweep);
+        if (!(chord > 1e-7) || !std::isfinite(arc_tangent) || std::abs(arc_tangent) <= 1e-12) {
+            return std::nullopt;
+        }
+        const Vec2 midpoint{(segment.start.x + segment.end.x) * 0.5,
+                            (segment.start.y + segment.end.y) * 0.5};
+        const auto center_offset = chord / (2.0 * arc_tangent);
+        const Vec2 center{midpoint.x - tangent.y / chord * center_offset,
+                          midpoint.y + tangent.x / chord * center_offset};
+        const Vec2 point = at_start ? segment.start : segment.end;
+        const Vec2 radial{point.x - center.x, point.y - center.y};
+        tangent = segment.sweep_radians > 0.0
+                      ? Vec2{-radial.y, radial.x}
+                      : Vec2{radial.y, -radial.x};
+        if (at_end) tangent = {-tangent.x, -tangent.y};
+    } else if (at_end) {
+        tangent = {-tangent.x, -tangent.y};
+    }
+    const auto magnitude = std::hypot(tangent.x, tangent.y);
+    if (!(magnitude > 1e-7) || !std::isfinite(magnitude)) {
+        return std::nullopt;
+    }
+    return Vec2{tangent.x / magnitude, tangent.y / magnitude};
+}
+
+std::optional<Boundary> angle_dimension_overlay(const IdentifiedBoundary& source,
+                                                const BoundaryDimension& dimension) {
+    const auto first = std::find_if(source.segments.begin(), source.segments.end(),
+                                    [&](const auto& segment) {
+                                        return segment.segment_id == dimension.segment_id;
+                                    });
+    const auto second = std::find_if(source.segments.begin(), source.segments.end(),
+                                     [&](const auto& segment) {
+                                         return segment.segment_id == dimension.secondary_segment_id;
+                                     });
+    if (first == source.segments.end() || second == source.segments.end()) {
+        return std::nullopt;
+    }
+    const auto first_tangent = dimension_tangent_at_vertex(*first, dimension.vertex_id);
+    const auto second_tangent = dimension_tangent_at_vertex(*second, dimension.vertex_id);
+    if (!first_tangent || !second_tangent) {
+        return std::nullopt;
+    }
+    Vec2 vertex{};
+    bool vertex_found = false;
+    const auto find_vertex = [&](const IdentifiedSegment& segment) {
+        if (segment.start_vertex_id == dimension.vertex_id) {
+            vertex = segment.segment.start;
+            vertex_found = true;
+        } else if (segment.end_vertex_id == dimension.vertex_id) {
+            vertex = segment.segment.end;
+            vertex_found = true;
+        }
+    };
+    find_vertex(*first);
+    if (!vertex_found) find_vertex(*second);
+    if (!vertex_found) return std::nullopt;
+
+    const auto cross = first_tangent->x * second_tangent->y -
+                       first_tangent->y * second_tangent->x;
+    const auto dot = first_tangent->x * second_tangent->x +
+                     first_tangent->y * second_tangent->y;
+    const auto sweep = std::atan2(cross, dot);
+    if (!std::isfinite(sweep) || std::abs(sweep) <= 1e-7) {
+        return std::nullopt;
+    }
+    const auto requested_radius = std::hypot(dimension.text_position.x - vertex.x,
+                                             dimension.text_position.y - vertex.y);
+    const auto first_length = segment_length(first->segment);
+    const auto second_length = segment_length(second->segment);
+    const auto fallback_radius = std::max(0.25, std::min(first_length, second_length) * 0.25);
+    const auto radius = std::isfinite(requested_radius) && requested_radius > 1e-7
+                            ? requested_radius
+                            : fallback_radius;
+    if (!(radius > 1e-7) || !std::isfinite(radius)) return std::nullopt;
+    const auto first_angle = std::atan2(first_tangent->y, first_tangent->x);
+    const Vec2 start{vertex.x + radius * std::cos(first_angle),
+                     vertex.y + radius * std::sin(first_angle)};
+    const Vec2 end{vertex.x + radius * std::cos(first_angle + sweep),
+                   vertex.y + radius * std::sin(first_angle + sweep)};
+    return Boundary{Segment{vertex, start, 0.0}, Segment{start, end, sweep},
+                    Segment{end, vertex, 0.0}};
+}
+
 Vec2 assembly_placement_point(Vec2 point, const AssemblyPlacement& placement) {
     const auto scaled_x = point.x * placement.scale;
     const auto scaled_y = point.y * placement.scale;
@@ -9710,6 +9829,82 @@ public:
         return format_length(metres, m_metric_units);
     }
 
+    QString createSemanticBoundaryDimension(BoundaryDimension dimension,
+                                             const char* action_message,
+                                             std::optional<Revision> expected_revision) {
+        try {
+            if (!m_document->is_editable()) {
+                throw std::invalid_argument("This document is read-only.");
+            }
+            if (!std::isfinite(dimension.text_position.x) ||
+                !std::isfinite(dimension.text_position.y)) {
+                throw std::invalid_argument("Dimension position must be finite.");
+            }
+            const auto source = authoringSnapshot();
+            const auto found = source.entities().find(dimension.boundary_id);
+            if (found == source.entities().end() ||
+                !can_recognize_boundary_entity_type(found->second.type)) {
+                throw std::invalid_argument("Choose an identified boundary as the dimension source.");
+            }
+            auto target = found->second;
+            const auto original_target = target;
+            if (inspect_boundary_entity_version(target).format == BoundaryEntityFormat::anonymous_legacy) {
+                target = upgrade_legacy_boundary_entity(target);
+                dimension.boundary_id = target.id;
+            }
+            dimension.id = new_id("dimension");
+            // Resolve before committing so an invalid edge pair, shared vertex,
+            // or open area boundary cannot create a dangling presentation row.
+            (void)dimension.resolve(target);
+            auto encoded = encode_boundary_dimension_entity(dimension);
+            for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"}) {
+                if (target.properties.contains(key)) encoded.properties[key] = target.properties.at(key);
+            }
+            std::vector<EntityChange> changes;
+            if (target.properties != original_target.properties ||
+                target.extensions != original_target.extensions ||
+                target.type != original_target.type) {
+                changes.push_back(EntityChange::upsert(std::move(target)));
+            }
+            changes.push_back(EntityChange::upsert(std::move(encoded)));
+            const ApplyEntityChanges command{
+                expected_revision.value_or(source.revision()), std::move(changes), {}, action_message};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            m_selected_id = id_from(dimension.id);
+            clearError();
+            refresh();
+            return m_selected_id;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Create dimension: %1").arg(QString::fromUtf8(error.what())));
+            return {};
+        }
+    }
+
+    QString createAngleDimension(const QString& boundary_id, const QString& first_segment_id,
+                                 const QString& second_segment_id, const QString& vertex_id,
+                                 Vec2 text_position, std::optional<Revision> expected_revision) {
+        BoundaryDimension dimension;
+        dimension.boundary_id = boundary_id.trimmed().toStdString();
+        dimension.segment_id = first_segment_id.trimmed().toStdString();
+        dimension.secondary_segment_id = second_segment_id.trimmed().toStdString();
+        dimension.vertex_id = vertex_id.trimmed().toStdString();
+        dimension.text_position = text_position;
+        dimension.kind = BoundaryDimensionKind::angle;
+        return createSemanticBoundaryDimension(std::move(dimension), "Create angle dimension",
+                                               expected_revision);
+    }
+
+    QString createAreaDimension(const QString& boundary_id, Vec2 text_position,
+                                std::optional<Revision> expected_revision) {
+        BoundaryDimension dimension;
+        dimension.boundary_id = boundary_id.trimmed().toStdString();
+        dimension.text_position = text_position;
+        dimension.kind = BoundaryDimensionKind::area;
+        return createSemanticBoundaryDimension(std::move(dimension), "Create area dimension",
+                                               expected_revision);
+    }
+
     bool editBoundaryDimension(const QString& id, const QString& x, const QString& y,
         const QString& height_mm, const QString& color, bool bold, bool italic,
         bool visible, const QString& rotation_degrees) {
@@ -12599,6 +12794,145 @@ public:
         dialog.exec();
     }
 
+    void showDimensionCreator() {
+        QDialog dialog(owner);
+        styleDialog(dialog);
+        dialog.setWindowTitle(QStringLiteral("Add dimensions"));
+        dialog.setModal(true);
+        dialog.resize(520, 360);
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* form = new QFormLayout;
+        auto* boundary = new QComboBox(&dialog);
+        boundary->setObjectName(QStringLiteral("dimensionSourceBoundary"));
+        auto* first_segment = new QComboBox(&dialog);
+        first_segment->setObjectName(QStringLiteral("dimensionFirstSegment"));
+        auto* second_segment = new QComboBox(&dialog);
+        second_segment->setObjectName(QStringLiteral("dimensionSecondSegment"));
+        auto* vertex = new QComboBox(&dialog);
+        vertex->setObjectName(QStringLiteral("dimensionVertex"));
+        auto* x = new QLineEdit(QStringLiteral("0"), &dialog);
+        auto* y = new QLineEdit(QStringLiteral("0"), &dialog);
+        x->setObjectName(QStringLiteral("dimensionCreateX"));
+        y->setObjectName(QStringLiteral("dimensionCreateY"));
+        form->addRow(QStringLiteral("Source boundary"), boundary);
+        form->addRow(QStringLiteral("First segment"), first_segment);
+        form->addRow(QStringLiteral("Second segment"), second_segment);
+        form->addRow(QStringLiteral("Shared vertex"), vertex);
+        form->addRow(QStringLiteral("Label X (m)"), x);
+        form->addRow(QStringLiteral("Label Y (m)"), y);
+        layout->addLayout(form);
+
+        auto* actions = new QHBoxLayout;
+        auto* add_angle = new QPushButton(QStringLiteral("Add angle"), &dialog);
+        auto* add_area = new QPushButton(QStringLiteral("Add area"), &dialog);
+        add_angle->setObjectName(QStringLiteral("addAngleDimension"));
+        add_area->setObjectName(QStringLiteral("addAreaDimension"));
+        actions->addWidget(add_angle);
+        actions->addWidget(add_area);
+        actions->addStretch();
+        layout->addLayout(actions);
+        auto* status = new QLabel(&dialog);
+        status->setObjectName(QStringLiteral("dimensionCreatorStatus"));
+        status->setWordWrap(true);
+        layout->addWidget(status);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+        layout->addWidget(buttons);
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+        const auto populate_boundaries = [this, boundary] {
+            const auto selected = m_selected_id;
+            boundary->clear();
+            const auto snapshot = authoringSnapshot();
+            for (const auto& [id, entity] : snapshot.entities()) {
+                if (!can_recognize_boundary_entity_type(entity.type)) continue;
+                try {
+                    if (inspect_boundary_entity_version(entity).format != BoundaryEntityFormat::identified_v1)
+                        continue;
+                    const auto identified = decode_identified_boundary_entity(entity);
+                    if (identified.segments.empty()) continue;
+                    boundary->addItem(QString::fromStdString(id), QString::fromStdString(id));
+                } catch (const std::exception&) {
+                    // Malformed retained boundaries remain visible through the
+                    // normal document diagnostics, but cannot be dimensioned.
+                }
+            }
+            const auto preferred = boundary->findData(selected);
+            if (preferred >= 0) boundary->setCurrentIndex(preferred);
+        };
+        const auto populate_targets = [this, boundary, first_segment, second_segment, vertex, status] {
+            first_segment->clear();
+            second_segment->clear();
+            vertex->clear();
+            const auto source = authoringSnapshot();
+            const auto found = source.entities().find(boundary->currentData().toString().toStdString());
+            if (found == source.entities().end()) return;
+            try {
+                const auto identified = decode_identified_boundary_entity(found->second);
+                std::set<std::string, std::less<>> vertices;
+                for (const auto& segment : identified.segments) {
+                    first_segment->addItem(QString::fromStdString(segment.segment_id),
+                                           QString::fromStdString(segment.segment_id));
+                    second_segment->addItem(QString::fromStdString(segment.segment_id),
+                                            QString::fromStdString(segment.segment_id));
+                    vertices.insert(segment.start_vertex_id);
+                    vertices.insert(segment.end_vertex_id);
+                }
+                for (const auto& id : vertices)
+                    vertex->addItem(QString::fromStdString(id), QString::fromStdString(id));
+                if (second_segment->count() > 1) second_segment->setCurrentIndex(1);
+            } catch (const std::exception&) {
+                status->setText(QStringLiteral("The selected boundary cannot be dimensioned."));
+            }
+        };
+        QObject::connect(boundary, &QComboBox::currentIndexChanged, &dialog,
+                         [populate_targets](int) { populate_targets(); });
+        populate_boundaries();
+        populate_targets();
+
+        const auto parse_position = [x, y] {
+            bool x_ok = false;
+            bool y_ok = false;
+            const Vec2 result{x->text().trimmed().toDouble(&x_ok),
+                              y->text().trimmed().toDouble(&y_ok)};
+            if (!x_ok || !y_ok || !std::isfinite(result.x) || !std::isfinite(result.y))
+                throw std::invalid_argument("Dimension coordinates must be finite metres.");
+            return result;
+        };
+        QObject::connect(add_angle, &QPushButton::clicked, &dialog,
+                         [this, boundary, first_segment, second_segment, vertex,
+                          status, parse_position] {
+            try {
+                if (boundary->currentData().toString().isEmpty() ||
+                    first_segment->currentData().toString().isEmpty() ||
+                    second_segment->currentData().toString().isEmpty() ||
+                    vertex->currentData().toString().isEmpty())
+                    throw std::invalid_argument("Choose a boundary, two segments, and a shared vertex.");
+                const auto id = createAngleDimension(
+                    boundary->currentData().toString(), first_segment->currentData().toString(),
+                    second_segment->currentData().toString(), vertex->currentData().toString(),
+                    parse_position(), std::nullopt);
+                if (id.isEmpty()) throw std::invalid_argument(lastError().toStdString());
+                status->setText(QStringLiteral("Added angle dimension %1").arg(id));
+            } catch (const std::exception& error) {
+                status->setText(QStringLiteral("Angle: %1").arg(QString::fromUtf8(error.what())));
+            }
+        });
+        QObject::connect(add_area, &QPushButton::clicked, &dialog,
+                         [this, boundary, status, parse_position] {
+            try {
+                if (boundary->currentData().toString().isEmpty())
+                    throw std::invalid_argument("Choose a source boundary.");
+                const auto id = createAreaDimension(boundary->currentData().toString(), parse_position(),
+                                                     std::nullopt);
+                if (id.isEmpty()) throw std::invalid_argument(lastError().toStdString());
+                status->setText(QStringLiteral("Added area dimension %1").arg(id));
+            } catch (const std::exception& error) {
+                status->setText(QStringLiteral("Area: %1").arg(QString::fromUtf8(error.what())));
+            }
+        });
+        dialog.exec();
+    }
+
     void showReferenceImport() {
         const auto selected = QFileDialog::getOpenFileName(
             owner, QStringLiteral("Import reference image"), {},
@@ -13311,6 +13645,7 @@ public:
             {QStringLiteral("Measurement workspace"), [this] { setWorkspace(Workspace::measurement); }},
             {QStringLiteral("Architectural workspace"), [this] { setWorkspace(Workspace::architectural); }},
             {QStringLiteral("Add labels and symbols"), [this] { showAnnotationEditor(); }},
+            {QStringLiteral("Add angle or area dimension"), [this] { showDimensionCreator(); }},
             {QStringLiteral("Import reference image"), [this] { showReferenceImport(); }},
             {QStringLiteral("Calibrate selected reference image"),
              [this] { showReferenceCalibration(); }},
@@ -14395,6 +14730,12 @@ private:
         // presentation commands remain one click away in an overflow menu,
         // while their QAction identities and shortcuts stay stable.
         auto* more_menu = new QMenu(owner);
+        auto* dimension_action = more_menu->addAction(QStringLiteral("Add angle or area dimension…"));
+        dimension_action->setObjectName(QStringLiteral("dimensionCreator"));
+        dimension_action->setToolTip(QStringLiteral(
+            "Create a semantic angle or area dimension from identified geometry"));
+        QObject::connect(dimension_action, &QAction::triggered, owner,
+                         [this] { showDimensionCreator(); });
         auto* survey_action = more_menu->addAction(QStringLiteral("Survey traverse…"));
         survey_action->setObjectName(QStringLiteral("surveyTraverse"));
         QObject::connect(survey_action, &QAction::triggered, owner, [this] { showSurveyCalculator(); });
@@ -15809,9 +16150,20 @@ private:
                         throw std::invalid_argument("source boundary is missing");
                     const auto resolved = dimension.resolve(source->second);
                     if (dimension.presentation && !dimension.presentation->visible) continue;
-                    CanvasLabel label{id_from(id), dimension.text_position,
-                        format_length(resolved.segment_length_metres, m_metric_units),
-                        id_from(id) == m_selected_id};
+                    QString label_text;
+                    std::optional<Boundary> overlay;
+                    if (resolved.kind == BoundaryDimensionKind::segment_length) {
+                        label_text = format_length(resolved.segment_length_metres, m_metric_units);
+                        overlay = dimension_overlay(resolved.segment, dimension.text_position);
+                    } else if (resolved.kind == BoundaryDimensionKind::angle) {
+                        label_text = format_dimension_angle(resolved.angle_radians);
+                        const auto identified = decode_identified_boundary_entity(source->second);
+                        overlay = angle_dimension_overlay(identified, dimension);
+                    } else {
+                        label_text = format_dimension_area(resolved.area_square_metres, m_metric_units);
+                    }
+                    CanvasLabel label{id_from(id), dimension.text_position, std::move(label_text),
+                                      id_from(id) == m_selected_id};
                     if (dimension.presentation) {
                         const auto& presentation = *dimension.presentation;
                         label.paper_height_mm = presentation.text_height_mm;
@@ -15820,8 +16172,7 @@ private:
                         label.italic = presentation.italic;
                         label.rotation_radians = presentation.rotation_radians;
                     }
-                    if (const auto overlay = dimension_overlay(resolved.segment,
-                                                               dimension.text_position)) {
+                    if (overlay) {
                         all_geometry.push_back(CanvasEntity{
                             id_from(id), QStringLiteral("dimension_line"), *overlay, 0.0,
                             id_from(id) == m_selected_id});
@@ -19183,6 +19534,19 @@ bool MainWindow::editBoundaryDimension(const QString& id, const QString& x,
     bool bold, bool italic, bool visible, const QString& rotation_degrees) {
     return m_impl->editBoundaryDimension(id, x, y, height_mm, color,
         bold, italic, visible, rotation_degrees);
+}
+
+QString MainWindow::createAngleDimension(const QString& boundary_id,
+    const QString& first_segment_id, const QString& second_segment_id,
+    const QString& vertex_id, Vec2 text_position,
+    std::optional<Revision> expected_revision) {
+    return m_impl->createAngleDimension(boundary_id, first_segment_id, second_segment_id,
+                                        vertex_id, text_position, expected_revision);
+}
+
+QString MainWindow::createAreaDimension(const QString& boundary_id, Vec2 text_position,
+    std::optional<Revision> expected_revision) {
+    return m_impl->createAreaDimension(boundary_id, text_position, expected_revision);
 }
 
 bool MainWindow::setSelectedCalculationRule(bool include_in_building, bool include_in_living) {

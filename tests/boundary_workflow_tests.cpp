@@ -1226,6 +1226,54 @@ void test_dimension_presentation_editing() {
     }
 }
 
+void test_semantic_angle_and_area_dimension_creation() {
+    MainWindow window;
+    prepare_window(window);
+    auto* target = canvas(window, QStringLiteral("measurementPlanCanvas"));
+    require(window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, "living"),
+            "start semantic dimension fixture");
+    for (const auto point : {Vec2{0, 0}, Vec2{2, 0}, Vec2{2, 2}, Vec2{0, 2}})
+        send_click(*target, point);
+    send_key(*target, Qt::Key_Return);
+    const auto before = window.document().snapshot();
+    const auto boundary_entity = committed_boundary(before);
+    const auto boundary = sketch::decode_identified_boundary_entity(boundary_entity);
+    require(boundary.segments.size() == 4, "semantic dimension fixture must be rectangular");
+    window.setMetricUnits(true);
+    const auto angle_id = window.createAngleDimension(
+        QString::fromStdString(boundary.id),
+        QString::fromStdString(boundary.segments[0].segment_id),
+        QString::fromStdString(boundary.segments[3].segment_id),
+        QString::fromStdString(boundary.segments[0].start_vertex_id), {0.75, 0.75});
+    const auto area_id = window.createAreaDimension(QString::fromStdString(boundary.id), {1.0, 1.0});
+    require(!angle_id.isEmpty() && !area_id.isEmpty() && angle_id != area_id,
+            "semantic angle and area dimensions must be creatable");
+    const auto after = window.document().snapshot();
+    const auto angle = sketch::decode_boundary_dimension_entity(after.entities().at(angle_id.toStdString()));
+    const auto area = sketch::decode_boundary_dimension_entity(after.entities().at(area_id.toStdString()));
+    require(angle.supported() && area.supported() &&
+                angle.dimension->kind == sketch::BoundaryDimensionKind::angle &&
+                area.dimension->kind == sketch::BoundaryDimensionKind::area,
+            "created dimensions must retain semantic kinds");
+    const auto resolved_angle = angle.dimension->resolve(after.entities().at(boundary.id));
+    const auto resolved_area = area.dimension->resolve(after.entities().at(boundary.id));
+    require(std::abs(resolved_angle.angle_radians - std::numbers::pi / 2.0) < 1e-12 &&
+                std::abs(resolved_area.area_square_metres - 4.0) < 1e-12,
+            "created semantic dimensions must resolve current geometry");
+    const auto labels = label_texts(*target);
+    require(labels.at(angle_id.toStdString()) == "90.0°" &&
+                labels.at(area_id.toStdString()) == "4.00 m²",
+            "semantic dimension labels must use the active unit system");
+    const auto angle_line_count = static_cast<std::size_t>(std::count_if(
+        target->entities().begin(), target->entities().end(), [](const auto& entity) {
+            return entity.type == QStringLiteral("dimension_line");
+        }));
+    require(angle_line_count == 5,
+            "angle dimensions must add one semantic overlay while areas remain label-only");
+    require(window.undoCommand() && window.redoCommand(),
+            "semantic dimension creation must use normal undo and redo history");
+}
+
 void install_test_font() {
     const auto font_id = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"));
     require(font_id >= 0, "boundary workflow test must load the bundled Inter font");
@@ -1253,6 +1301,7 @@ int main(int argc, char** argv) {
         test_off_grid_snapped_commit_in_each_workspace();
         test_receipt_boundary_offset_copy();
         test_dimension_presentation_editing();
+        test_semantic_angle_and_area_dimension_creation();
         std::cout << "Boundary workflow event tests passed\n";
         return 0;
     } catch (const std::exception& error) {

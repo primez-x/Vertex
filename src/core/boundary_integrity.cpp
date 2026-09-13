@@ -348,8 +348,17 @@ std::optional<std::string> validate_boundary_integrity(
         // the read-only document without pretending to resolve its child IDs.
         if (future_boundaries.contains(owner->first)) continue;
         const auto boundary_edges = edges.find(owner->first);
-        if (boundary_edges == edges.end() || !boundary_edges->second.contains(dimension.segment_id))
-            throw std::invalid_argument("Dimension " + id + ": missing identified source segment");
+        if (boundary_edges == edges.end())
+            throw std::invalid_argument("Dimension " + id + ": missing identified source boundary");
+        if (dimension.kind == BoundaryDimensionKind::segment_length) {
+            if (!boundary_edges->second.contains(dimension.segment_id))
+                throw std::invalid_argument("Dimension " + id + ": missing identified source segment");
+        } else if (dimension.kind == BoundaryDimensionKind::angle) {
+            if (!boundary_edges->second.contains(dimension.segment_id) ||
+                !boundary_edges->second.contains(dimension.secondary_segment_id)) {
+                throw std::invalid_argument("Dimension " + id + ": missing identified angle source segment");
+            }
+        }
     }
     return unsupported;
 }

@@ -180,6 +180,36 @@ Entity dimension() {
         false, Json::object()};
 }
 
+Entity angle_dimension() {
+    return {"angle-dimension-1", "dimension",
+        {{"dimension_version", 1}, {"dimension_kind", "angle"},
+         {"target", {{"entity_id", "boundary-1"}, {"segment_id", "edge-0"},
+                      {"second_segment_id", "edge-3"}, {"vertex_id", "vertex-0"}}},
+         {"text_position", {2, -0.5}}, {"placement_origin", "manual"}},
+        false, Json::object()};
+}
+
+Entity area_dimension() {
+    return {"area-dimension-1", "dimension",
+        {{"dimension_version", 1}, {"dimension_kind", "area"},
+         {"target", {{"entity_id", "boundary-1"}}},
+         {"text_position", {2, 1.5}}, {"placement_origin", "manual"}},
+        false, Json::object()};
+}
+
+void test_advanced_dimension_references_are_validated() {
+    auto document = Document::create({rectangle(), angle_dimension(), area_dimension()});
+    require(document.is_editable(), "valid angle and area dimensions must remain editable");
+    auto bad_angle = angle_dimension();
+    bad_angle.properties["target"]["second_segment_id"] = "missing-edge";
+    require_rejected_unchanged(document, bad_angle,
+                               "dangling angle dimension segment reference was accepted");
+    auto bad_area = area_dimension();
+    bad_area.properties["target"]["entity_id"] = "missing-boundary";
+    require_rejected_unchanged(document, bad_area,
+                               "dangling area dimension owner was accepted");
+}
+
 void test_dimension_references_are_atomic_and_survive_history() {
     auto document = Document::create({rectangle(), dimension()});
     const auto original = document.snapshot();
@@ -628,6 +658,7 @@ int main() {
         test_downgrade_is_rejected_but_upgrade_undo_is_valid();
         test_future_boundary_version_is_preserved_read_only();
         test_dimension_references_are_atomic_and_survive_history();
+        test_advanced_dimension_references_are_validated();
         test_unknown_dimensions_preserve_read_only_without_hiding_invalid_known_data();
         test_v1_upgrade_preserves_original_file_and_reversible_history();
         test_abandoned_unknown_history_and_forged_navigation();
