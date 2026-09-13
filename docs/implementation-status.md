@@ -1007,5 +1007,6 @@ build converts those requirements into completed parity.
    including full architectural objects/constraints, Apex workflows/adapters,
    local assistance, recovery, output, packaging and certification.
 
-No remote repository is configured. Source publication, a product release and
-deployment have not been performed.
+The private Vertex remote is configured and the source handoff is pushed. A
+public source publication, product release, and deployment have not been
+performed.

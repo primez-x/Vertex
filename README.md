@@ -84,6 +84,7 @@ filter both plans and 3D without changing totals; Show all clears the filters.
 Floor association currently leaves world elevations unchanged.
 See [project organization](docs/project-organization.md) for the tested boundary.
 
-The source is private. Third-party components retain their licenses; see
-`LICENSE` and the component notices. No source publication or product release
-is implied by this repository.
+The source is private and backed up in the [Vertex GitHub repository](https://github.com/primez-x/Vertex).
+Third-party components retain their licenses; see `LICENSE` and the component
+notices. No public source publication, product release, or deployment is
+implied by this repository.
