@@ -668,10 +668,29 @@ void test_room_volume_authoring_workflow() {
                 window.document().snapshot().entities().at(room_id.toStdString())
                     .properties.at("height_m") == 3.0,
             "room volume edits must preserve undo and redo semantics");
+    auto* elevation_inspector = window.findChild<QLineEdit*>(QStringLiteral("inspectorElevation"));
+    require(elevation_inspector != nullptr && !elevation_inspector->isHidden() &&
+                elevation_inspector->isEnabled(),
+            "room selection must expose an editable base elevation in the contextual inspector");
     require(window.editSelectedHeight(QStringLiteral("3.25 m")) &&
                 window.document().snapshot().entities().at(room_id.toStdString())
                     .properties.at("height_m") == 3.25,
             "room height inspector editing must use the shared room-volume validator");
+    require(window.editSelectedElevation(QStringLiteral("0.35 m")) &&
+                window.document().snapshot().entities().at(room_id.toStdString())
+                    .properties.at("elevation_m") == 0.35,
+            "room elevation inspector editing must use the shared room-volume validator");
+    require(window.undoCommand() &&
+                window.document().snapshot().entities().at(room_id.toStdString())
+                    .properties.at("elevation_m") == 0.15 &&
+                window.redoCommand() &&
+                window.document().snapshot().entities().at(room_id.toStdString())
+                    .properties.at("elevation_m") == 0.35,
+            "room elevation inspector editing must preserve undo and redo semantics");
+    require(window.editSelectedElevation(QStringLiteral("-0.5 m")) &&
+                window.document().snapshot().entities().at(room_id.toStdString())
+                    .properties.at("elevation_m") == -0.5,
+            "room elevation inspector editing must accept below-grade coordinates");
 }
 
 void test_selection_clipboard_workflow() {

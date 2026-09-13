@@ -163,11 +163,12 @@ same undo/redo and save/reopen path.
 measurement or room boundary into a distinct architectural `room` entity. The
 command asks for explicit room height and base elevation, retains optional
 boundary holes, previews the shared solid kernel, and commits one undoable
-Document command. Selecting a room volume exposes its height in the geometry
-inspector; **Edit selected room volume** in the command palette updates height
-and elevation through the same validated command. Room volumes remain separate
-from `room_boundary` records and use the same geometry for plan, elevation,
-section, native 3D, schedules, and save/reopen.
+Document command. Selecting a room volume exposes editable height and base
+elevation fields in the contextual geometry inspector; the **Edit selected room
+volume** command remains available for editing both values together. All paths
+use the same validated command. Room volumes remain separate from
+`room_boundary` records and use the same geometry for plan, elevation, section,
+native 3D, schedules, and save/reopen.
 
 The `Reference` command imports a local PNG, JPEG, BMP, TIFF, or a selected page
 of a PDF into the portable Document Asset store and creates a `reference_asset`

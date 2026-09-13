@@ -10744,6 +10744,11 @@ public:
         return editSelectedQuantity(expression, "height_m", "height", "edit wall height");
     }
 
+    bool editSelectedElevation(const QString& expression) {
+        return editSelectedQuantity(expression, "elevation_m", "base elevation",
+                                    "edit architectural base elevation");
+    }
+
     bool editSelectedThickness(const QString& expression) {
         return editSelectedQuantity(expression, "thickness_m", "thickness", "edit wall thickness");
     }
@@ -14216,12 +14221,13 @@ private:
                               QString label, const char* message) {
         const auto entity = selectedEntity();
         const auto key_is_height = key == "height_m";
+        const auto key_is_elevation = key == "elevation_m";
         const auto key_is_thickness = key == "thickness_m";
         const auto allowed = entity.has_value() &&
                              ((entity->type == "wall") ||
                               (entity->type == "opening" && key_is_height) ||
-                              (entity->type == "slab" && key_is_thickness) ||
-                              (entity->type == "room" && key_is_height));
+                              (entity->type == "slab" && (key_is_thickness || key_is_elevation)) ||
+                              (entity->type == "room" && (key_is_height || key_is_elevation)));
         if (!allowed) {
             setError(QStringLiteral("Select a compatible architectural object to edit its %1.").arg(label));
             return false;
@@ -14229,7 +14235,12 @@ private:
         try {
             const auto quantity = parse_quantity(
                 expression.toStdString(), m_metric_units ? Unit::metre : Unit::foot);
-            if (!(quantity.metres > 1e-7)) {
+            if (key_is_elevation) {
+                if (!std::isfinite(quantity.metres) || std::abs(quantity.metres) > 1e9) {
+                    setError(QStringLiteral("Base elevation must be a finite coordinate within the supported range."));
+                    return false;
+                }
+            } else if (!(quantity.metres > 1e-7)) {
                 setError(QStringLiteral("%1 must be greater than zero.").arg(label));
                 return false;
             }
@@ -15886,6 +15897,11 @@ private:
         m_height_edit->setObjectName(QStringLiteral("inspectorHeight"));
         m_height_edit->setMinimumWidth(0);
         form->addRow(QStringLiteral("Height"), m_height_edit);
+        m_elevation_edit = new QLineEdit(inspector_body);
+        m_elevation_edit->setObjectName(QStringLiteral("inspectorElevation"));
+        m_elevation_edit->setToolTip(QStringLiteral("Base elevation in the current input units"));
+        m_elevation_edit->setMinimumWidth(0);
+        form->addRow(QStringLiteral("Base elevation"), m_elevation_edit);
         m_slope_rise_edit = new QLineEdit(inspector_body);
         m_slope_rise_edit->setObjectName(QStringLiteral("inspectorSlopeRise"));
         m_slope_rise_edit->setToolTip(QStringLiteral(
@@ -16084,6 +16100,12 @@ private:
                          });
         QObject::connect(m_height_edit, &QLineEdit::editingFinished, owner,
                          [this] { editSelectedHeight(m_height_edit->text()); });
+        QObject::connect(m_elevation_edit, &QLineEdit::editingFinished, owner,
+                         [this] {
+                             if (m_refreshing || !m_elevation_edit->isModified()) return;
+                             m_elevation_edit->setModified(false);
+                             (void)editSelectedElevation(m_elevation_edit->text());
+                         });
         QObject::connect(m_slope_rise_edit, &QLineEdit::editingFinished, owner,
                          [this] {
                              if (m_refreshing || !m_slope_rise_edit->isModified()) return;
@@ -17634,10 +17656,12 @@ private:
             m_geometry_form->setRowVisible(m_length_edit, false);
             m_geometry_form->setRowVisible(m_classification_combo, false);
             m_geometry_form->setRowVisible(m_height_edit, false);
+            m_geometry_form->setRowVisible(m_elevation_edit, false);
             m_geometry_form->setRowVisible(m_slope_rise_edit, false);
             m_geometry_form->setRowVisible(m_thickness_edit, false);
             m_length_edit->setEnabled(false);
             m_height_edit->setEnabled(false);
+            m_elevation_edit->setEnabled(false);
             m_slope_rise_edit->setEnabled(false);
             m_thickness_edit->setEnabled(false);
             m_classification_combo->setEnabled(false);
@@ -17729,10 +17753,12 @@ private:
             m_geometry_form->setRowVisible(m_length_edit, false);
             m_geometry_form->setRowVisible(m_classification_combo, false);
             m_geometry_form->setRowVisible(m_height_edit, false);
+            m_geometry_form->setRowVisible(m_elevation_edit, false);
             m_geometry_form->setRowVisible(m_slope_rise_edit, false);
             m_geometry_form->setRowVisible(m_thickness_edit, false);
             m_length_edit->setEnabled(false);
             m_height_edit->setEnabled(false);
+            m_elevation_edit->setEnabled(false);
             m_slope_rise_edit->setEnabled(false);
             m_thickness_edit->setEnabled(false);
             m_classification_combo->setEnabled(false);
@@ -17797,6 +17823,7 @@ private:
         m_geometry_form->setRowVisible(m_classification_combo, editable_geometry);
         const bool room = entity.has_value() && entity->type == "room";
         m_geometry_form->setRowVisible(m_height_edit, wall || opening || room);
+        m_geometry_form->setRowVisible(m_elevation_edit, wall || slab || room);
         m_geometry_form->setRowVisible(m_slope_rise_edit, wall);
         m_geometry_form->setRowVisible(m_thickness_edit, wall || slab);
         if (auto* label = qobject_cast<QLabel*>(m_geometry_form->labelForField(m_length_edit))) {
@@ -17808,6 +17835,7 @@ private:
             m_inspector_context->setText(QStringLiteral("No selection\nUse Select or choose an object in the navigator."));
             m_length_edit->clear();
             m_height_edit->clear();
+            m_elevation_edit->clear();
             m_slope_rise_edit->clear();
             m_thickness_edit->clear();
             {
@@ -17816,6 +17844,7 @@ private:
             }
             m_length_edit->setEnabled(false);
             m_height_edit->setEnabled(false);
+            m_elevation_edit->setEnabled(false);
             m_slope_rise_edit->setEnabled(false);
             m_thickness_edit->setEnabled(false);
             m_classification_combo->setEnabled(false);
@@ -17933,6 +17962,12 @@ private:
                 read_number(entity->properties, "height_m", 0.0), m_metric_units));
         }
         {
+            QSignalBlocker blocker(m_elevation_edit);
+            m_elevation_edit->setText(format_length(
+                read_number(entity->properties, "elevation_m", 0.0), m_metric_units));
+            m_elevation_edit->setModified(false);
+        }
+        {
             QSignalBlocker blocker(m_slope_rise_edit);
             m_slope_rise_edit->setText(format_length(
                 read_number(entity->properties, "slope_rise_m", 0.0), m_metric_units));
@@ -17945,6 +17980,7 @@ private:
         }
         m_length_edit->setEnabled(editable && (wall || opening));
         m_height_edit->setEnabled(editable && (wall || opening || room));
+        m_elevation_edit->setEnabled(editable && (wall || slab || room));
         m_slope_rise_edit->setEnabled(editable && wall);
         m_thickness_edit->setEnabled(editable && (wall || slab));
         m_classification_combo->setEnabled(editable &&
@@ -19292,6 +19328,7 @@ private:
     QComboBox* m_unitsCombo{};
     QLineEdit* m_length_edit{};
     QLineEdit* m_height_edit{};
+    QLineEdit* m_elevation_edit{};
     QLineEdit* m_slope_rise_edit{};
     QLineEdit* m_thickness_edit{};
     QLineEdit* m_factor_edit{};
@@ -19753,6 +19790,10 @@ bool MainWindow::editSelectedLength(const QString& expression) {
 
 bool MainWindow::editSelectedHeight(const QString& expression) {
     return m_impl->editSelectedHeight(expression);
+}
+
+bool MainWindow::editSelectedElevation(const QString& expression) {
+    return m_impl->editSelectedElevation(expression);
 }
 
 bool MainWindow::editSelectedThickness(const QString& expression) {

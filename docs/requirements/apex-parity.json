@@ -2094,7 +2094,7 @@
       "implementation_sources": [
         "src/desktop/main_window.cpp"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "Contextual property selection and guarded edits are implemented for supported geometry, including room height and base elevation fields backed by the shared validator; the complete selection fixture and production gate remain open."
     },
     {
       "id": "UX-WORK-003",

@@ -380,6 +380,9 @@ public:
     [[nodiscard]] bool editSelectedClassification(const QString& classification);
     [[nodiscard]] bool editSelectedLength(const QString& expression);
     [[nodiscard]] bool editSelectedHeight(const QString& expression);
+    // Edits an architectural object's base elevation through the same
+    // validated, revision-checked geometry path as its other dimensions.
+    [[nodiscard]] bool editSelectedElevation(const QString& expression);
     [[nodiscard]] bool editSelectedThickness(const QString& expression);
     [[nodiscard]] bool editSelectedFactor(const QString& expression);
     // Edits only the dimension's placement and presentation, preserving its
