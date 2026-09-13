@@ -15,6 +15,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <stdexcept>
 #include <utility>
 
 namespace sketch {
@@ -408,12 +409,23 @@ Json source_extension(const std::string& layer, std::string_view primitive) {
 }
 
 Entity imported_boundary(std::string id, const Boundary& boundary, std::string classification,
-                         std::string layer, std::string primitive) {
+                         std::string layer, std::string primitive,
+                         Json extra_extensions = Json::object()) {
+    if (!extra_extensions.is_object()) {
+        throw std::invalid_argument("DXF import extension metadata must be an object");
+    }
+    Json extensions{{"dxf_source", source_extension(layer, primitive)}};
+    for (const auto& [key, value] : extra_extensions.items()) {
+        if (key == "dxf_source") {
+            throw std::invalid_argument("DXF import extension cannot replace dxf_source");
+        }
+        extensions[key] = value;
+    }
     return Entity{std::move(id), "boundary",
                   Json{{"boundary", boundary_json(boundary)},
                        {"classification", std::move(classification)}},
                   false,
-                  Json{{"dxf_source", source_extension(layer, primitive)}}};
+                  std::move(extensions)};
 }
 
 double radians_from_degrees(double degrees) { return degrees * std::numbers::pi / 180.0; }
@@ -540,10 +552,20 @@ void import_dimensions(const std::vector<DxfDimension>& dimensions,
     for (const auto& dimension : dimensions) {
         const Boundary extension{{{dimension.extension_start.x, dimension.extension_start.y},
                                   {dimension.extension_end.x, dimension.extension_end.y}, 0.0}};
-        result.entities.push_back(imported_boundary("dxf-boundary-" + std::to_string(++boundary_counter),
-            extension, "dxf_dimension_extension", dimension.layer, "DIMENSION"));
+        const auto boundary_id = "dxf-boundary-" + std::to_string(++boundary_counter);
+        const auto label_id = "dxf-dimension-" + std::to_string(++label_counter);
+        result.entities.push_back(imported_boundary(
+            boundary_id, extension, "dxf_dimension_extension", dimension.layer, "DIMENSION",
+            Json{{"dxf_dimension", Json{
+                {"dimension_line", Json::array({dimension.dimension_line.x,
+                                                 dimension.dimension_line.y})},
+                {"text_position", Json::array({dimension.text_position.x,
+                                                dimension.text_position.y})},
+                {"rotation_degrees", dimension.rotation_degrees},
+                {"text", dimension.text},
+                {"annotation_id", label_id}}}}));
         LabelInstance label;
-        label.id = "dxf-dimension-" + std::to_string(++label_counter);
+        label.id = label_id;
         label.template_id = "dxf-dimension";
         label.content = dimension.text.empty() ? "Dimension" : dimension.text;
         label.style.text_height_metres = 0.15;

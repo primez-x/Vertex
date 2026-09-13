@@ -81,6 +81,20 @@ void run() {
         return entity.type == "boundary" && entity.properties.value("classification", "") ==
                "dxf_polyline_closed";
     }), "closed polyline must reconstruct a closed native boundary candidate");
+    const auto dimension_candidate = std::find_if(
+        imported.entities.begin(), imported.entities.end(), [](const auto& entity) {
+            return entity.type == "boundary" &&
+                   entity.properties.value("classification", "") == "dxf_dimension_extension";
+        });
+    check(dimension_candidate != imported.entities.end(),
+          "imported dimension must retain its extension candidate");
+    check(dimension_candidate->extensions.contains("dxf_dimension") &&
+              dimension_candidate->extensions.at("dxf_dimension").value("dimension_line",
+                                                                          nlohmann::json{}) ==
+                  nlohmann::json::array({2.0, 1.0}) &&
+              dimension_candidate->extensions.at("dxf_dimension").value("annotation_id", "") ==
+                  "dxf-dimension-2",
+          "dimension line and reconstructed annotation link must be retained");
     check(std::any_of(imported.diagnostics.begin(), imported.diagnostics.end(), [](const auto& item) {
         return item.source_kind == "DIMENSION" && item.code == "dimension_associativity_unbound";
     }), "unbound imported dimensions must be explicit");
