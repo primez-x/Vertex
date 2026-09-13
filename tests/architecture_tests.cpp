@@ -22,6 +22,17 @@ int main() {
         using namespace sketch;
         Wall wall{"wall-1", {{0, 0}, {4, 0}, 0}, 0.2, 3.0, 0.0, {}};
         near(solid_volume(make_wall(wall)), 2.4, 1e-8, "Straight wall volume");
+        auto sloped = wall;
+        sloped.id = "sloped-wall";
+        sloped.slope_rise = 1.0;
+        near(solid_volume(make_wall(sloped)), 2.8, 1e-8,
+             "Positive sloped wall volume uses the average top height");
+        sloped.slope_rise = -1.0;
+        near(solid_volume(make_wall(sloped)), 2.0, 1e-8,
+             "Negative sloped wall volume uses the average top height");
+        sloped.openings.push_back({"too-tall", 3.0, 0.5, 0.0, 2.6});
+        rejected([&] { (void)make_wall(sloped); });
+        sloped.openings.clear();
         wall.openings.push_back({"door-1", 0.5, 1.0, 0.0, 2.1});
         wall.openings.push_back({"window-1", 2.5, 1.0, 1.0, 1.0});
         near(solid_volume(make_wall(wall)), 2.4 - 0.42 - 0.2, 1e-8, "Hosted openings cut wall volume");

@@ -104,6 +104,13 @@ void validate_wall_host(const std::string& wall_id, const Entities& entities) {
             layers != entity.properties.end()) {
             wall.layers = parse_wall_layers(layers.value(), wall.thickness);
         }
+        if (const auto slope = entity.properties.find("slope_rise_m");
+            slope != entity.properties.end()) {
+            if (!slope->is_number()) {
+                invalid("Wall slope_rise_m must be a finite number");
+            }
+            wall.slope_rise = slope->get<double>();
+        }
         for (const auto& [id, candidate] : entities) {
             if (candidate.type != "opening" || !candidate.properties.is_object()) {
                 continue;

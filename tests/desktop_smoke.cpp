@@ -827,6 +827,38 @@ void test_wall_transform_workflow(const QString& capture_directory) {
     window.showBoundaryTransformEditor();
 }
 
+void test_sloped_wall_workflow() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    const auto wall_id = window.createSlopedWall({0.0, 0.0}, {4.0, 0.0}, "1 m");
+    require(!wall_id.isEmpty(), "sloped wall creation must commit");
+    auto wall = window.document().snapshot().entities().at(wall_id.toStdString());
+    require(wall.properties.at("slope_rise_m") == 1.0,
+            "sloped wall creation must persist the signed rise");
+    require(window.selectEntity(wall_id), "select sloped wall for hosted opening");
+    const auto opening_id = window.createHostedOpening(
+        "window", "0.5 m", "1 m", "0 m", "2 m");
+    require(!opening_id.isEmpty(), "sloped wall must host a fitting opening");
+    require(window.selectEntity(wall_id) && window.editSelectedWallSlope("-0.5 m"),
+            "sloped wall edit must validate hosted openings and commit");
+    const auto changed = window.document().snapshot();
+    require(changed.entities().at(wall_id.toStdString()).properties.at("slope_rise_m") == -0.5,
+            "sloped wall edit must replace the signed rise");
+    require(window.undoCommand() &&
+                window.document().snapshot().entities().at(wall_id.toStdString()).properties.at("slope_rise_m") == 1.0 &&
+                window.redoCommand() &&
+                window.document().snapshot().entities().at(wall_id.toStdString()).properties.at("slope_rise_m") == -0.5,
+            "sloped wall slope edit must undo and redo atomically");
+    QTemporaryDir stored;
+    const auto path = stored.filePath("sloped-wall.bldproj");
+    require(stored.isValid() && window.saveProjectAs(path),
+            "sloped wall project must save");
+    desktop::MainWindow reopened;
+    require(reopened.openProject(path), "sloped wall project must reopen");
+    require(reopened.document().snapshot().entities() == changed.entities(),
+            "sloped wall and hosted opening must preserve semantics through reopen");
+}
+
 void test_material_clipboard_transfer() {
     using namespace sketch;
     desktop::MainWindow source;
@@ -3396,6 +3428,7 @@ int main(int argc, char** argv) {
     test_room_boundary_from_existing_geometry();
     test_selection_clipboard_workflow();
     test_wall_transform_workflow(field_ui_capture_directory);
+    test_sloped_wall_workflow();
     test_material_clipboard_transfer();
     test_delete_selection_workflow();
     test_boundary_vertex_insertion_workflow();

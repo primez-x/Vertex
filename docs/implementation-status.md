@@ -482,8 +482,10 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   opening cuts applied to each layer; plan/elevation/section decoding preserves
   the stack. Windows exposes a revision-checked JSON layer editor with undo,
   redo, and save/reopen coverage, and schedules include per-layer material
-  quantities. A richer table/catalog authoring surface, sloped-wall workflow,
-  joins, and production compatibility certification remain open.
+  quantities. Straight sloped walls now use an exact level-bottom wedge,
+  local opening-fit validation, shared plan/elevation/3D decoding, and a
+  signed rise editor. A richer table/catalog authoring surface, curved-top
+  sloped walls, joins, and production compatibility certification remain open.
   Exact top-down projections also feed the shared plan/PDF renderer; failed
   projections block output. Hidden editor captures cover both display scales.
   Review added exact segment-set/circle-topology checks and exact quantity

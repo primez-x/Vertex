@@ -1508,6 +1508,8 @@ QString tool_name(CanvasTool tool) {
         return QStringLiteral("Draw boundary");
     case CanvasTool::wall:
         return QStringLiteral("Draw wall");
+    case CanvasTool::sloped_wall:
+        return QStringLiteral("Draw sloped wall");
     case CanvasTool::select:
     default:
         return QStringLiteral("Select");
@@ -7743,6 +7745,56 @@ public:
         return id;
     }
 
+    QString createSlopedWall(Vec2 start, Vec2 end, const QString& rise_expression,
+                             const QString& classification,
+                             std::optional<Revision> expected_revision = std::nullopt) {
+        const auto revision = expected_revision.value_or(m_document->revision());
+        const auto drawing_context = requireDrawingContext();
+        if (!drawing_context) return {};
+        try {
+            if (!std::isfinite(start.x) || !std::isfinite(start.y) ||
+                !std::isfinite(end.x) || !std::isfinite(end.y) ||
+                std::hypot(end.x - start.x, end.y - start.y) <= 1e-7) {
+                throw std::invalid_argument("Wall endpoints must be finite and distinct.");
+            }
+            const auto expression = rise_expression.trimmed();
+            if (expression.isEmpty()) {
+                throw std::invalid_argument("Wall slope rise is required.");
+            }
+            const auto rise = parse_quantity(
+                expression.toStdString(), m_metric_units ? Unit::metre : Unit::foot).metres;
+            if (!std::isfinite(rise) || std::abs(rise) <= 1e-7) {
+                throw std::invalid_argument("Wall slope rise must be finite and nonzero.");
+            }
+            Wall wall{"", Segment{start, end, 0.0}, 0.14, 2.4384, 0.0, {}};
+            wall.slope_rise = rise;
+            validate_wall_semantics(wall);
+            const auto entity_id = new_id("wall");
+            const auto id = id_from(entity_id);
+            auto properties = json{{"floor_id", drawing_context->floor_id},
+                                   {"layer_id", drawing_context->layer_id},
+                                   {"baseline", segment_json(wall.baseline)},
+                                   {"thickness_m", wall.thickness},
+                                   {"height_m", wall.height},
+                                   {"elevation_m", wall.elevation},
+                                   {"slope_rise_m", rise},
+                                   {"classification", classification.trimmed().isEmpty()
+                                                           ? std::string("interior")
+                                                           : classification.trimmed().toStdString()}};
+            add_default_level_placement(properties, *drawing_context);
+            if (!applyEntity(Entity{entity_id, "wall", properties, false, json::object()},
+                             "create sloped wall", revision)) {
+                return {};
+            }
+            m_selected_id = id;
+            refresh();
+            return id;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Sloped wall: %1").arg(QString::fromUtf8(error.what())));
+            return {};
+        }
+    }
+
     QString createCurvedWall(Vec2 start, Vec2 end, const QString& sweep_expression,
                              const QString& classification,
                              std::optional<Revision> expected_revision = std::nullopt) {
@@ -8003,6 +8055,60 @@ public:
             return true;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Wall assembly: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    bool editSelectedWallSlope(const QString& rise_expression,
+                               std::optional<Revision> expected_revision = std::nullopt) {
+        const auto revision = expected_revision.value_or(m_document->revision());
+        try {
+            const auto selected = selectedEntity();
+            if (!selected || selected->type != "wall") {
+                throw std::invalid_argument("Select a wall before editing its slope.");
+            }
+            const auto baseline = read_required_segment(selected->properties, "baseline");
+            const auto thickness = read_finite_number(selected->properties, "thickness_m");
+            const auto height = read_finite_number(selected->properties, "height_m");
+            const auto elevation = read_finite_number(selected->properties, "elevation_m");
+            if (!baseline || !thickness || !height || !elevation) {
+                throw std::invalid_argument("Wall baseline, thickness, height, and elevation are required.");
+            }
+            const auto expression = rise_expression.trimmed();
+            if (expression.isEmpty()) throw std::invalid_argument("Wall slope rise is required.");
+            const auto rise = parse_quantity(
+                expression.toStdString(), m_metric_units ? Unit::metre : Unit::foot).metres;
+            if (!std::isfinite(rise)) {
+                throw std::invalid_argument("Wall slope rise must be finite.");
+            }
+            auto candidate = *selected;
+            if (std::abs(rise) <= 1e-7) {
+                candidate.properties.erase("slope_rise_m");
+            } else {
+                candidate.properties["slope_rise_m"] = rise;
+            }
+            std::vector<const Entity*> openings;
+            const auto snapshot = m_document->snapshot();
+            for (const auto& [id, entity] : snapshot.entities()) {
+                (void)id;
+                if (entity.type == "opening" &&
+                    entity.properties.value("wall_id", std::string{}) == selected->id) {
+                    openings.push_back(&entity);
+                }
+            }
+            Wall wall;
+            std::string diagnostic;
+            if (!read_document_wall(candidate, openings, wall, diagnostic)) {
+                throw std::invalid_argument(diagnostic);
+            }
+            validate_wall_semantics(wall);
+            (void)make_wall(wall);
+            if (!applyEntity(std::move(candidate), "edit wall slope", revision)) return false;
+            m_selected_id = QString::fromStdString(selected->id);
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Wall slope: %1").arg(QString::fromUtf8(error.what())));
             return false;
         }
     }
@@ -12966,6 +13072,7 @@ public:
             {QStringLiteral("Named revisions and comparison"), [this] { showRevisionHistory(); }},
             {QStringLiteral("Transform selection"), [this] { showBoundaryTransformEditor(); }},
             {QStringLiteral("Edit wall assembly layers"), [this] { showWallLayerEditor(); }},
+            {QStringLiteral("Draw sloped wall"), [this] { setTool(CanvasTool::sloped_wall); }},
             {QStringLiteral("Measurement workspace"), [this] { setWorkspace(Workspace::measurement); }},
             {QStringLiteral("Architectural workspace"), [this] { setWorkspace(Workspace::architectural); }},
             {QStringLiteral("Add labels and symbols"), [this] { showAnnotationEditor(); }},
@@ -13241,6 +13348,13 @@ private:
             if (const auto layers = wall_entity.properties.find("layers");
                 layers != wall_entity.properties.end()) {
                 wall.layers = parse_wall_layers(layers.value(), *thickness);
+            }
+            if (const auto slope = wall_entity.properties.find("slope_rise_m");
+                slope != wall_entity.properties.end()) {
+                if (!slope->is_number()) {
+                    throw std::invalid_argument("Wall slope_rise_m must be a finite number.");
+                }
+                wall.slope_rise = slope->get<double>();
             }
             (void)make_wall(wall);
             return true;
@@ -14054,6 +14168,12 @@ private:
             "Create an analytical circular wall from two endpoints using an angle, arc length, or arc height"));
         QObject::connect(curved_wall_action, &QAction::triggered, owner,
                          [this] { showCurvedWallDialog(); });
+        auto* sloped_wall_action = more_menu->addAction(QStringLiteral("Draw sloped wall…"));
+        sloped_wall_action->setObjectName(QStringLiteral("slopedWall"));
+        sloped_wall_action->setToolTip(QStringLiteral(
+            "Create a straight wall with a signed linear rise or fall at its top"));
+        QObject::connect(sloped_wall_action, &QAction::triggered, owner,
+                         [this] { setTool(CanvasTool::sloped_wall); });
         auto* export_image_action = more_menu->addAction(QStringLiteral("Export draft image…"));
         export_image_action->setObjectName(QStringLiteral("exportDraftImage"));
         QObject::connect(export_image_action, &QAction::triggered, owner,
@@ -14988,6 +15108,12 @@ private:
         m_height_edit->setObjectName(QStringLiteral("inspectorHeight"));
         m_height_edit->setMinimumWidth(0);
         form->addRow(QStringLiteral("Height"), m_height_edit);
+        m_slope_rise_edit = new QLineEdit(inspector_body);
+        m_slope_rise_edit->setObjectName(QStringLiteral("inspectorSlopeRise"));
+        m_slope_rise_edit->setToolTip(QStringLiteral(
+            "Signed change in top height from the wall start to its end; zero clears the slope"));
+        m_slope_rise_edit->setMinimumWidth(0);
+        form->addRow(QStringLiteral("Top rise"), m_slope_rise_edit);
         m_thickness_edit = new QLineEdit(inspector_body);
         m_thickness_edit->setObjectName(QStringLiteral("inspectorThickness"));
         m_thickness_edit->setMinimumWidth(0);
@@ -15180,6 +15306,12 @@ private:
                          });
         QObject::connect(m_height_edit, &QLineEdit::editingFinished, owner,
                          [this] { editSelectedHeight(m_height_edit->text()); });
+        QObject::connect(m_slope_rise_edit, &QLineEdit::editingFinished, owner,
+                         [this] {
+                             if (m_refreshing || !m_slope_rise_edit->isModified()) return;
+                             m_slope_rise_edit->setModified(false);
+                             (void)editSelectedWallSlope(m_slope_rise_edit->text());
+                         });
         QObject::connect(m_thickness_edit, &QLineEdit::editingFinished, owner,
                          [this] { editSelectedThickness(m_thickness_edit->text()); });
         QObject::connect(m_factor_edit, &QLineEdit::editingFinished, owner,
@@ -15232,6 +15364,11 @@ private:
             button->setIcon(modern_toolbar_icon(
                 "<path d='M5 4v16M19 4v16M5 8h14M5 16h14'/>"));
             button->setObjectName(QStringLiteral("wallTool"));
+            break;
+        case CanvasTool::sloped_wall:
+            button->setIcon(modern_toolbar_icon(
+                "<path d='M5 18 19 6M5 12h14M5 18h14'/>"));
+            button->setObjectName(QStringLiteral("slopedWallTool"));
             break;
         }
         button->setIconSize(QSize(18, 18));
@@ -15510,6 +15647,13 @@ private:
                         layers != geometry_entity.properties.end()) {
                         wall.layers = parse_wall_layers(*layers, *thickness);
                     }
+                    if (const auto slope = geometry_entity.properties.find("slope_rise_m");
+                        slope != geometry_entity.properties.end()) {
+                        if (!slope->is_number()) {
+                            throw std::invalid_argument("Wall slope_rise_m must be a finite number");
+                        }
+                        wall.slope_rise = slope->get<double>();
+                    }
                     validate_wall_semantics(wall);
                 } catch (const std::exception& error) {
                     append_geometry_error(QStringLiteral("Wall %1: %2")
@@ -15693,6 +15837,13 @@ private:
                         if (const auto layers = resolved.properties.find("layers");
                             layers != resolved.properties.end()) {
                             wall.layers = parse_wall_layers(*layers, *thickness);
+                        }
+                        if (const auto slope = resolved.properties.find("slope_rise_m");
+                            slope != resolved.properties.end()) {
+                            if (!slope->is_number()) {
+                                throw std::invalid_argument("Wall slope_rise_m must be a finite number");
+                            }
+                            wall.slope_rise = slope->get<double>();
                         }
                         validate_wall_semantics(wall);
                         const auto shape = make_wall(wall);
@@ -16590,9 +16741,11 @@ private:
             m_geometry_form->setRowVisible(m_length_edit, false);
             m_geometry_form->setRowVisible(m_classification_combo, false);
             m_geometry_form->setRowVisible(m_height_edit, false);
+            m_geometry_form->setRowVisible(m_slope_rise_edit, false);
             m_geometry_form->setRowVisible(m_thickness_edit, false);
             m_length_edit->setEnabled(false);
             m_height_edit->setEnabled(false);
+            m_slope_rise_edit->setEnabled(false);
             m_thickness_edit->setEnabled(false);
             m_classification_combo->setEnabled(false);
             m_read_only_label->setText(editable ? QString{} : QStringLiteral("Read-only: %1")
@@ -16683,9 +16836,11 @@ private:
             m_geometry_form->setRowVisible(m_length_edit, false);
             m_geometry_form->setRowVisible(m_classification_combo, false);
             m_geometry_form->setRowVisible(m_height_edit, false);
+            m_geometry_form->setRowVisible(m_slope_rise_edit, false);
             m_geometry_form->setRowVisible(m_thickness_edit, false);
             m_length_edit->setEnabled(false);
             m_height_edit->setEnabled(false);
+            m_slope_rise_edit->setEnabled(false);
             m_thickness_edit->setEnabled(false);
             m_classification_combo->setEnabled(false);
             m_read_only_label->setText(editable ? QString{} : QStringLiteral("Read-only: %1")
@@ -16748,6 +16903,7 @@ private:
         m_geometry_form->setRowVisible(m_length_edit, editable_geometry);
         m_geometry_form->setRowVisible(m_classification_combo, editable_geometry);
         m_geometry_form->setRowVisible(m_height_edit, wall || opening);
+        m_geometry_form->setRowVisible(m_slope_rise_edit, wall);
         m_geometry_form->setRowVisible(m_thickness_edit, wall || slab);
         if (auto* label = qobject_cast<QLabel*>(m_geometry_form->labelForField(m_length_edit))) {
             label->setText(opening ? QStringLiteral("Width") :
@@ -16758,6 +16914,7 @@ private:
             m_inspector_context->setText(QStringLiteral("No selection\nUse Select or choose an object in the navigator."));
             m_length_edit->clear();
             m_height_edit->clear();
+            m_slope_rise_edit->clear();
             m_thickness_edit->clear();
             {
                 QSignalBlocker blocker(m_classification_combo);
@@ -16765,6 +16922,7 @@ private:
             }
             m_length_edit->setEnabled(false);
             m_height_edit->setEnabled(false);
+            m_slope_rise_edit->setEnabled(false);
             m_thickness_edit->setEnabled(false);
             m_classification_combo->setEnabled(false);
             m_read_only_label->setText(editable ? QString{} : QStringLiteral("Read-only: %1")
@@ -16881,12 +17039,19 @@ private:
                 read_number(entity->properties, "height_m", 0.0), m_metric_units));
         }
         {
+            QSignalBlocker blocker(m_slope_rise_edit);
+            m_slope_rise_edit->setText(format_length(
+                read_number(entity->properties, "slope_rise_m", 0.0), m_metric_units));
+            m_slope_rise_edit->setModified(false);
+        }
+        {
             QSignalBlocker blocker(m_thickness_edit);
             m_thickness_edit->setText(format_length(read_number(entity->properties, "thickness_m", 0.0),
                                                     m_metric_units));
         }
         m_length_edit->setEnabled(editable && (wall || opening));
         m_height_edit->setEnabled(editable && (wall || opening));
+        m_slope_rise_edit->setEnabled(editable && wall);
         m_thickness_edit->setEnabled(editable && (wall || slab));
         m_classification_combo->setEnabled(editable &&
                                            (wall || opening || slab ||
@@ -17089,7 +17254,7 @@ private:
             }
             return;
         }
-        if (m_tool == CanvasTool::wall) {
+        if (m_tool == CanvasTool::wall || m_tool == CanvasTool::sloped_wall) {
             if (!m_pending_wall_start.has_value()) {
                 m_pending_wall_start = point;
                 m_measurementCanvas->setWallPreview(std::make_pair(point, point));
@@ -17097,8 +17262,26 @@ private:
                 owner->statusBar()->showMessage(QStringLiteral("Wall start recorded  •  click the end point"));
                 return;
             }
-            const auto id = createStraightWall(*m_pending_wall_start, point,
-                                               QStringLiteral("interior"));
+            QString id;
+            if (m_tool == CanvasTool::sloped_wall) {
+                const auto context = captureModalContext();
+                bool accepted = false;
+                const auto rise = QInputDialog::getText(
+                    owner, QStringLiteral("Create sloped wall"),
+                    QStringLiteral("Signed top rise from start to end:"), QLineEdit::Normal,
+                    m_metric_units ? QStringLiteral("0.3 m") : QStringLiteral("1 ft"),
+                    &accepted);
+                if (!accepted || !modalContextUnchanged(context)) {
+                    m_pending_wall_start.reset();
+                    clearPreview();
+                    return;
+                }
+                id = createSlopedWall(*m_pending_wall_start, point, rise,
+                                      QStringLiteral("interior"), context.revision);
+            } else {
+                id = createStraightWall(*m_pending_wall_start, point,
+                                        QStringLiteral("interior"));
+            }
             if (!id.isEmpty()) {
                 clearPreview();
                 setTool(CanvasTool::select);
@@ -18201,6 +18384,7 @@ private:
     QComboBox* m_unitsCombo{};
     QLineEdit* m_length_edit{};
     QLineEdit* m_height_edit{};
+    QLineEdit* m_slope_rise_edit{};
     QLineEdit* m_thickness_edit{};
     QLineEdit* m_factor_edit{};
     QCheckBox* m_include_building_check{};
@@ -18489,6 +18673,13 @@ QString MainWindow::createStraightWall(Vec2 start, Vec2 end, QString classificat
     return m_impl->createStraightWall(start, end, classification, revision);
 }
 
+QString MainWindow::createSlopedWall(Vec2 start, Vec2 end, QString rise,
+                                     QString classification,
+                                     std::optional<Revision> revision) {
+    return m_impl->createSlopedWall(start, end, std::move(rise),
+                                    std::move(classification), revision);
+}
+
 QString MainWindow::createCurvedWall(Vec2 start, Vec2 end, QString sweep,
                                      QString classification, std::optional<Revision> revision) {
     return m_impl->createCurvedWall(start, end, std::move(sweep), std::move(classification), revision);
@@ -18517,6 +18708,11 @@ bool MainWindow::editSelectedCurvedWallFromConstruction(
 bool MainWindow::editSelectedWallLayers(const QString& layers_json,
                                         std::optional<Revision> revision) {
     return m_impl->editSelectedWallLayers(layers_json, revision);
+}
+
+bool MainWindow::editSelectedWallSlope(QString rise,
+                                       std::optional<Revision> revision) {
+    return m_impl->editSelectedWallSlope(std::move(rise), revision);
 }
 
 QString MainWindow::commitBuildingObject(Entity candidate, std::uint64_t expected_revision,

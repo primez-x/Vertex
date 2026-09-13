@@ -22,6 +22,7 @@ enum class CanvasTool {
     select,
     boundary,
     wall,
+    sloped_wall,
 };
 
 struct CanvasEntity {

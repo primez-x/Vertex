@@ -191,7 +191,9 @@ and arc-height modes. Entries such as `90 deg`, `5 ft`, and `1 ft` are retained
 beside the analytical arc; a signed arc length selects clockwise orientation.
 Selecting an existing curved wall exposes **Edit curve…** in the inspector;
 changing endpoints or its defining measure revalidates hosted openings and
-records one undoable command. Select and the
+records one undoable command. Selecting a wall also exposes **Edit assembly…**
+for the versioned layer stack; layer edits validate material catalog links,
+preview the compound solid, and remain undoable. Select and the
 navigator select existing semantic objects, so edits and history operate on
 the same document in either workspace tab. Walls display their opening gaps in
 the plan canvas; the OCCT architectural view derives the corresponding cut

@@ -155,6 +155,7 @@ All geometry properties use metres and radians. A wall and opening can be repres
     "thickness_m": 0.14,
     "height_m": 2.4,
     "elevation_m": 0.0,
+    "slope_rise_m": 0.3,
     "layers": [
       {"id": "outer", "thickness_m": 0.02},
       {"id": "core", "thickness_m": 0.10,
@@ -176,6 +177,10 @@ precision tolerance. A layer material points to an `assembly_model` entity and
 its cataloged material. The same hosted opening geometry is cut through every
 layer, while the layer stack remains available for schedules and future
 assembly editing. An empty array is equivalent to a monolithic wall.
+An optional signed `slope_rise_m` changes the wall-top height linearly from
+the baseline start to its end while keeping the bottom at `elevation_m`;
+`height_m` is the start height. Nonzero sloped walls currently require a
+straight baseline, and hosted openings must fit below the local sloped top.
 
 ```json
 {

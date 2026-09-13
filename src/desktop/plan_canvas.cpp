@@ -523,9 +523,13 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
             !m_boundary_draft_preview->instruction.isEmpty()) {
             instruction = m_boundary_draft_preview->instruction;
         } else if (m_tool != CanvasTool::select) {
-            instruction = m_tool == CanvasTool::boundary
-                ? QStringLiteral("Boundary tool  •  click points, Enter closes, D precise segment")
-                : QStringLiteral("Wall tool  •  click two points");
+            if (m_tool == CanvasTool::boundary) {
+                instruction = QStringLiteral("Boundary tool  •  click points, Enter closes, D precise segment");
+            } else if (m_tool == CanvasTool::sloped_wall) {
+                instruction = QStringLiteral("Sloped wall tool  •  click two points, then enter the signed rise");
+            } else {
+                instruction = QStringLiteral("Wall tool  •  click two points");
+            }
         }
         if (!instruction.isEmpty()) {
             painter.save();

@@ -92,6 +92,31 @@ TopoDS_Shape extrude(const Boundary& boundary, double elevation, double height) 
     return prism.Shape();
 }
 
+TopoDS_Shape extrude_polygon(const std::vector<gp_Pnt>& points,
+                             const gp_Vec& direction,
+                             const char* what) {
+    if (points.size() < 3) throw std::invalid_argument(what);
+    BRepBuilderAPI_MakePolygon polygon;
+    for (const auto& point : points) {
+        if (!std::isfinite(point.X()) || !std::isfinite(point.Y()) ||
+            !std::isfinite(point.Z())) {
+            throw std::invalid_argument(what);
+        }
+        polygon.Add(point);
+    }
+    polygon.Close();
+    if (!polygon.IsDone()) throw std::invalid_argument(what);
+    BRepBuilderAPI_MakeFace face(polygon.Wire(), true);
+    if (!face.IsDone()) throw std::invalid_argument(what);
+    BRepPrimAPI_MakePrism prism(face.Face(), direction, true);
+    prism.Build();
+    if (!prism.IsDone() || prism.Shape().IsNull() ||
+        !BRepCheck_Analyzer(prism.Shape()).IsValid()) {
+        throw std::invalid_argument(what);
+    }
+    return prism.Shape();
+}
+
 Boundary strip_range(const Segment& baseline, double inner_offset, double outer_offset) {
     if (!std::isfinite(inner_offset) || !std::isfinite(outer_offset) ||
         !(outer_offset > inner_offset + tolerance)) {
@@ -128,6 +153,64 @@ Boundary strip_range(const Segment& baseline, double inner_offset, double outer_
 
 Boundary strip(const Segment& baseline, double thickness) {
     return strip_range(baseline, -thickness * 0.5, thickness * 0.5);
+}
+
+TopoDS_Shape sloped_layer(const Segment& baseline, double inner_offset,
+                          double outer_offset, double elevation, double start_height,
+                          double rise) {
+    if (baseline.sweep_radians != 0.0 && std::abs(rise) > tolerance) {
+        throw std::invalid_argument("Sloped wall layers require a straight baseline");
+    }
+    if (std::abs(rise) <= tolerance) {
+        return extrude(strip_range(baseline, inner_offset, outer_offset),
+                       elevation, start_height);
+    }
+    const double length = segment_length(baseline);
+    const double dx = (baseline.end.x - baseline.start.x) / length;
+    const double dy = (baseline.end.y - baseline.start.y) / length;
+    const Vec2 normal{-dy, dx};
+    const auto offset_point = [&](Vec2 point, double offset) {
+        return Vec2{point.x + normal.x * offset, point.y + normal.y * offset};
+    };
+    const auto inner_start = offset_point(baseline.start, inner_offset);
+    const auto inner_end = offset_point(baseline.end, inner_offset);
+    const auto base_height = std::min(start_height, start_height + rise);
+    const auto end_height = start_height + rise;
+    if (!std::isfinite(base_height) || base_height <= tolerance ||
+        !std::isfinite(end_height) || end_height <= tolerance) {
+        throw std::invalid_argument("Sloped wall heights must remain positive");
+    }
+
+    // The lower prism carries the common vertical height. A triangular prism
+    // adds the signed rise at the high end, keeping the bottom face level.
+    auto result = extrude(strip_range(baseline, inner_offset, outer_offset),
+                          elevation, base_height);
+    std::vector<gp_Pnt> profile;
+    if (rise > 0.0) {
+        profile = {
+            {inner_start.x, inner_start.y, elevation + base_height},
+            {inner_end.x, inner_end.y, elevation + base_height},
+            {inner_end.x, inner_end.y, elevation + end_height},
+        };
+    } else {
+        profile = {
+            {inner_start.x, inner_start.y, elevation + base_height},
+            {inner_end.x, inner_end.y, elevation + base_height},
+            {inner_start.x, inner_start.y, elevation + start_height},
+        };
+    }
+    const auto across = gp_Vec(normal.x * (outer_offset - inner_offset),
+                               normal.y * (outer_offset - inner_offset), 0.0);
+    const auto wedge = extrude_polygon(profile, across, "Sloped wall wedge construction failed");
+    TopoDS_Compound compound;
+    BRep_Builder builder;
+    builder.MakeCompound(compound);
+    builder.Add(compound, result);
+    builder.Add(compound, wedge);
+    if (!BRepCheck_Analyzer(compound).IsValid()) {
+        throw std::invalid_argument("Sloped wall layer is invalid");
+    }
+    return compound;
 }
 
 TopoDS_Shape cut(const TopoDS_Shape& base, const TopoDS_Shape& tool) {
@@ -219,9 +302,11 @@ TopoDS_Shape make_wall(const Wall& wall) {
             return result;
         };
 
+        const auto rise = wall.slope_rise.value_or(0.0);
         if (wall.layers.empty()) {
-            return cut_openings(extrude(strip(wall.baseline, wall.thickness),
-                                        wall.elevation, wall.height));
+            return cut_openings(sloped_layer(wall.baseline, -wall.thickness * 0.5,
+                                             wall.thickness * 0.5, wall.elevation,
+                                             wall.height, rise));
         }
 
         TopoDS_Compound compound;
@@ -230,8 +315,8 @@ TopoDS_Shape make_wall(const Wall& wall) {
         double inner_offset = -wall.thickness * 0.5;
         for (const auto& layer : wall.layers) {
             const auto outer_offset = inner_offset + layer.thickness;
-            auto layer_shape = extrude(strip_range(wall.baseline, inner_offset, outer_offset),
-                                       wall.elevation, wall.height);
+            auto layer_shape = sloped_layer(wall.baseline, inner_offset, outer_offset,
+                                            wall.elevation, wall.height, rise);
             layer_shape = cut_openings(std::move(layer_shape));
             builder.Add(compound, layer_shape);
             inner_offset = outer_offset;

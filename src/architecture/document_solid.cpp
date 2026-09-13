@@ -154,6 +154,11 @@ bool read_document_wall(const Entity& entity, const std::vector<const Entity*>& 
             return false;
         }
     }
+    if (const auto* slope = property(entity.properties, {"slope_rise_m", "slope_rise"})) {
+        if (!finite_number(*slope, output.slope_rise.emplace(), "slope_rise_m", error)) {
+            return false;
+        }
+    }
 
     output.openings.reserve(opening_entities.size());
     for (const auto* opening_entity : opening_entities) {

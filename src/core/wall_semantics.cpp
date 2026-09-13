@@ -451,6 +451,23 @@ void validate_wall_semantics(const Wall& wall) {
     require_finite_sum(wall.elevation, wall.height,
                        "Wall elevation plus height exceeds the supported numeric range");
 
+    if (wall.slope_rise.has_value()) {
+        if (!std::isfinite(*wall.slope_rise)) {
+            reject("Wall slope rise must be finite");
+        }
+        if (std::abs(*wall.slope_rise) > tolerance && wall.baseline.sweep_radians != 0.0) {
+            reject("Sloped walls require a straight baseline");
+        }
+        const auto end_height = wall.height + *wall.slope_rise;
+        if (!std::isfinite(end_height) || end_height <= tolerance) {
+            reject("Wall slope leaves a non-positive end height");
+        }
+        require_finite_sum(wall.elevation, *wall.slope_rise,
+                           "Wall end elevation exceeds the supported numeric range");
+        require_finite_sum(wall.elevation + *wall.slope_rise, wall.height,
+                           "Wall end elevation exceeds the supported numeric range");
+    }
+
     const double length = wall_baseline_length(wall.baseline);
     if (wall.baseline.sweep_radians == 0.0) {
         require_finite_line_strip(wall.baseline, length, wall.thickness);
@@ -496,6 +513,17 @@ void validate_wall_semantics(const Wall& wall) {
         if (end > length_limit || top > height_limit) {
             reject("Opening extends beyond its wall");
         }
+        if (wall.slope_rise.has_value() &&
+            std::abs(*wall.slope_rise) > tolerance) {
+            const auto start_fraction = opening.offset / length;
+            const auto end_fraction = end / length;
+            const auto start_height = wall.height + *wall.slope_rise * start_fraction;
+            const auto end_height = wall.height + *wall.slope_rise * end_fraction;
+            const auto local_height = std::min(start_height, end_height);
+            if (!std::isfinite(local_height) || top > local_height + tolerance) {
+                reject("Opening extends beyond the sloped wall top");
+            }
+        }
         bounds.push_back({opening.offset, end, opening.sill, top});
     }
 
@@ -505,7 +533,8 @@ void validate_wall_semantics(const Wall& wall) {
     // wall height. It intentionally does not treat a positive gap smaller
     // than tolerance as covered; the OCCT volume check remains authoritative
     // for such numerically ambiguous near-boundary states.
-    if (openings_cover_wall(bounds, length, wall.height)) {
+    if ((!wall.slope_rise.has_value() || std::abs(*wall.slope_rise) <= tolerance) &&
+        openings_cover_wall(bounds, length, wall.height)) {
         reject("Openings remove the entire wall");
     }
 }

@@ -1612,13 +1612,15 @@
         "src/architecture/document_solid.cpp",
         "src/architecture/architectural_schedule.cpp",
         "src/desktop/main_window.cpp",
+        "src/desktop/plan_canvas.cpp",
         "tests/wall_semantics_tests.cpp",
         "tests/architecture_tests.cpp",
+        "tests/desktop_smoke.cpp",
         "tests/architectural_schedule_tests.cpp",
         "tests/document_tests.cpp",
         "docs/project-format.md"
       ],
-      "implementation_note": "Straight and curved wall solids are implemented. Composite wall layers now use a typed versioned stack with contiguous compound geometry, opening cuts through every layer, document/catalog/material validation, native plan/elevation/section decoding, and per-layer schedule quantities. Windows exposes a revision-checked JSON layer editor with undo, redo, and save/reopen coverage; richer table/catalog authoring, sloped-wall workflow, joins, and production compatibility certification remain open."
+      "implementation_note": "Straight and curved wall solids are implemented. Composite wall layers now use a typed versioned stack with contiguous compound geometry, opening cuts through every layer, document/catalog/material validation, native plan/elevation/section decoding, and per-layer schedule quantities. Windows exposes a revision-checked JSON layer editor with undo, redo, and save/reopen coverage. Straight sloped walls use an exact level-bottom wedge, local opening-fit validation, shared plan/elevation/3D decoding, and signed-rise creation/editing; richer table/catalog authoring, curved-top sloped walls, joins, and production compatibility certification remain open."
     },
     {
       "id": "ARCH-MOD-002",

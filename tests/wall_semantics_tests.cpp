@@ -40,7 +40,8 @@ void require_same(const Wall& actual, const Wall& expected) {
                 actual.baseline.sweep_radians == expected.baseline.sweep_radians &&
                 actual.thickness == expected.thickness && actual.height == expected.height &&
                 actual.elevation == expected.elevation && actual.openings.size() == expected.openings.size() &&
-                actual.layers.size() == expected.layers.size(),
+                actual.layers.size() == expected.layers.size() &&
+                actual.slope_rise == expected.slope_rise,
             "wall validation must not mutate scalar or baseline fields");
     for (std::size_t index = 0; index < actual.openings.size(); ++index) {
         const auto& left = actual.openings[index];
@@ -247,6 +248,24 @@ void test_composite_wall_layers_are_typed_and_lossless() {
              "incomplete layer material assignments must be rejected");
 }
 
+void test_sloped_wall_semantics() {
+    auto wall = straight_wall();
+    wall.slope_rise = 0.75;
+    const auto before = wall;
+    sketch::validate_wall_semantics(wall);
+    require_same(wall, before);
+
+    auto curved = wall;
+    curved.baseline = {{2.0, 0.0}, {0.0, 2.0}, std::numbers::pi / 2.0};
+    rejected([&] { sketch::validate_wall_semantics(curved); },
+             "nonzero sloped curved walls must be rejected until curved-top support exists");
+
+    auto invalid = wall;
+    invalid.slope_rise = -wall.height;
+    rejected([&] { sketch::validate_wall_semantics(invalid); },
+             "a sloped wall with a non-positive end height must be rejected");
+}
+
 }  // namespace
 
 int main() {
@@ -258,6 +277,7 @@ int main() {
         test_openings_cannot_remove_entire_wall();
         test_sweep_exact_coverage_and_event_order();
         test_composite_wall_layers_are_typed_and_lossless();
+        test_sloped_wall_semantics();
         std::cout << "Wall semantic tests passed\n";
         return 0;
     } catch (const std::exception& error) {

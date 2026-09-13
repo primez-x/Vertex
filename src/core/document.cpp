@@ -236,6 +236,14 @@ void validate_entity(const Entity& entity) {
                            std::string("invalid wall layers: ") + error.what());
         }
     }
+    if (entity.type == "wall" && entity.properties.contains("slope_rise_m")) {
+        const auto& slope = entity.properties.at("slope_rise_m");
+        if (!slope.is_number() ||
+            (slope.is_number_float() && !std::isfinite(slope.get<double>()))) {
+            document_error(DocumentErrorCode::invalid_entity,
+                           "wall slope_rise_m must be a finite number");
+        }
+    }
     const auto validate_embedded_model = [&](auto decoder, std::string_view name) {
         if (!entity.properties.contains("model")) {
             document_error(DocumentErrorCode::invalid_entity,

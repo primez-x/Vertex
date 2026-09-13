@@ -45,6 +45,10 @@ struct Wall {
     double elevation{};
     std::vector<HostedOpening> openings;
     std::vector<WallLayer> layers;
+    // Optional signed change in wall-top height from baseline start to end.
+    // A nonzero slope is currently supported for straight baselines; the
+    // bottom remains at `elevation` and `height` is the start height.
+    std::optional<double> slope_rise;
 };
 
 // Validate the shared semantic contract used by document editing and solid

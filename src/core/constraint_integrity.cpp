@@ -67,6 +67,10 @@ Wall read_wall(const std::string& owner, const Entities& entities,
     if (const auto layers = properties.find("layers"); layers != properties.end()) {
         wall.layers = parse_wall_layers(layers.value(), wall.thickness);
     }
+    if (const auto slope = properties.find("slope_rise_m"); slope != properties.end()) {
+        if (!slope->is_number()) invalid("Wall slope_rise_m must be a finite number");
+        wall.slope_rise = slope->get<double>();
+    }
     const auto hosted = openings_by_wall.find(owner);
     if (hosted != openings_by_wall.end()) {
         wall.openings.reserve(hosted->second.size());

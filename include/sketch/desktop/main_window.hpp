@@ -208,6 +208,15 @@ public:
         Vec2 end,
         QString classification = QStringLiteral("interior"),
         std::optional<Revision> expected_revision = std::nullopt);
+    // Creates a straight wall whose top rises (or falls) linearly from the
+    // baseline start to its end. The signed rise uses the active unit system;
+    // hosted openings are checked against the local sloped top.
+    [[nodiscard]] QString createSlopedWall(
+        Vec2 start,
+        Vec2 end,
+        QString rise,
+        QString classification = QStringLiteral("interior"),
+        std::optional<Revision> expected_revision = std::nullopt);
     // Creates one analytical arc wall from two world endpoints and an
     // explicit sweep expression (for example, "90 deg" or "pi/2"). The
     // geometry is validated by the same wall kernel used for openings,
@@ -253,6 +262,11 @@ public:
     // geometry previews, and undo all use the ordinary document command path.
     [[nodiscard]] bool editSelectedWallLayers(
         const QString& layers_json,
+        std::optional<Revision> expected_revision = std::nullopt);
+    // Replaces the selected straight wall's signed top rise through the same
+    // revision-checked geometry and opening validation as creation.
+    [[nodiscard]] bool editSelectedWallSlope(
+        QString rise,
         std::optional<Revision> expected_revision = std::nullopt);
     // The object dialog and smoke tests share this atomic, validated command.
     // A stale dialog revision cannot overwrite intervening document edits.
