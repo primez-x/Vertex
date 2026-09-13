@@ -47,6 +47,13 @@ displays that union once while retaining the source walls for schedules and
 edits. Codec, document-reference, geometry, and native build coverage pass in
 the current Debug and Release builds; miter-specific profiles, curved-top
 sloped joins, and production qualification remain open.
+Version-1 `roof_join` entities now preserve source roof identities while
+validating typed references and unique ownership at the Document boundary.
+The native 3D path validates touching source solids and presents one derived
+OCCT union without replacing roof parameters, openings, or quantities; codec,
+document, and solid regression coverage is included in the next Debug/Release
+matrix. Roof material propagation, mitered/curved roof junctions, and
+production qualification remain open.
 The tracked source boundary is now explicit in
 `third_party/source-provenance.json`: a fail-closed audit assigns every tracked
 path to first-party source, third-party provenance, or an excluded generated

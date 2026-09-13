@@ -266,6 +266,25 @@ TopoDS_Shape fuse_wall_shapes(const TopoDS_Shape& first, const TopoDS_Shape& sec
     }
     return operation.Shape();
 }
+
+bool shapes_touch(const TopoDS_Shape& first, const TopoDS_Shape& second) {
+    BRepExtrema_DistShapeShape distance(first, second);
+    if (!distance.IsDone() || !std::isfinite(distance.Value())) {
+        throw std::invalid_argument("Roof join shape connectivity is unresolved");
+    }
+    return distance.Value() <= tolerance;
+}
+
+TopoDS_Shape fuse_shapes(const TopoDS_Shape& first, const TopoDS_Shape& second,
+                         const char* context) {
+    BRepAlgoAPI_Fuse operation(first, second);
+    operation.Build();
+    if (!operation.IsDone() || operation.HasErrors() || operation.Shape().IsNull() ||
+        !BRepCheck_Analyzer(operation.Shape()).IsValid()) {
+        throw std::invalid_argument(context);
+    }
+    return operation.Shape();
+}
 }
 
 double solid_volume(const TopoDS_Shape& shape) {
@@ -428,6 +447,49 @@ TopoDS_Shape make_wall_join(const WallJoin& join, std::span<const Wall> walls) {
         return result;
     } catch (const Standard_Failure& error) {
         throw std::invalid_argument(std::string("Wall join geometry failed: ") + error.what());
+    }
+}
+
+TopoDS_Shape make_roof_join(const RoofJoin& join, std::span<const TopoDS_Shape> roofs) {
+    validate_roof_join_semantics(join);
+    if (roofs.size() != join.roof_ids.size()) {
+        throw std::invalid_argument("Roof join source roof count does not match roof_ids");
+    }
+    for (const auto& roof : roofs) {
+        if (roof.IsNull() || !BRepCheck_Analyzer(roof).IsValid() ||
+            !std::isfinite(solid_volume(roof)) ||
+            solid_volume(roof) <= tolerance * tolerance * tolerance) {
+            throw std::invalid_argument("Roof join source roof is not a valid solid");
+        }
+    }
+
+    std::vector<bool> connected(roofs.size(), false);
+    for (std::size_t first = 0; first < roofs.size(); ++first) {
+        for (std::size_t second = first + 1; second < roofs.size(); ++second) {
+            if (shapes_touch(roofs[first], roofs[second])) {
+                connected[first] = true;
+                connected[second] = true;
+            }
+        }
+    }
+    if (std::find(connected.begin(), connected.end(), false) != connected.end()) {
+        throw std::invalid_argument("Roof join roofs must touch another member");
+    }
+
+    try {
+        auto result = roofs.front();
+        for (std::size_t index = 1; index < roofs.size(); ++index) {
+            result = fuse_shapes(result, roofs[index],
+                                 "Roof join boolean union did not produce a valid solid");
+        }
+        if (result.IsNull() || !BRepCheck_Analyzer(result).IsValid() ||
+            !std::isfinite(solid_volume(result)) ||
+            solid_volume(result) <= tolerance * tolerance * tolerance) {
+            throw std::invalid_argument("Roof join produced an empty solid");
+        }
+        return result;
+    } catch (const Standard_Failure& error) {
+        throw std::invalid_argument(std::string("Roof join geometry failed: ") + error.what());
     }
 }
 

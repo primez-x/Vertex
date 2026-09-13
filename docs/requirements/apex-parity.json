@@ -372,6 +372,7 @@
         "src/core/document_schedule_adapter.cpp",
         "src/desktop/main_window.cpp",
         "tests/architecture_tests.cpp",
+        "tests/wall_join_tests.cpp",
         "tests/architectural_schedule_tests.cpp",
         "tests/document_tests.cpp",
         "tests/desktop_smoke.cpp",
@@ -1654,6 +1655,7 @@
         "src/desktop/plan_canvas.cpp",
         "tests/wall_semantics_tests.cpp",
         "tests/architecture_tests.cpp",
+        "tests/wall_join_tests.cpp",
         "tests/desktop_smoke.cpp",
         "tests/architectural_schedule_tests.cpp",
         "tests/document_tests.cpp",
@@ -1743,17 +1745,23 @@
       "package": 4,
       "blocker": null,
       "implementation_sources": [
+        "include/sketch/roof_join_semantics.hpp",
+        "src/core/roof_join_semantics.cpp",
+        "src/core/document.cpp",
+        "src/architecture/architecture.cpp",
+        "src/visualization/native_model_view.cpp",
         "src/architecture/building_objects.cpp",
         "src/architecture/building_entity.cpp",
         "src/architecture/building_plan_projection.cpp",
         "src/desktop/building_object_dialog.cpp",
         "src/desktop/main_window.cpp",
         "tests/building_object_tests.cpp",
+        "tests/roof_join_tests.cpp",
         "tests/building_object_dialog_tests.cpp",
         "tests/building_plan_projection_tests.cpp",
         "tests/desktop_smoke.cpp"
       ],
-      "implementation_note": "Sloped panels (including zero-rise flat roofs), gable roofs, and equal-pitch rectangular hip roofs have semantic solids, parameter editors, plan projections, and contextual inspector dimensions with derived pitch preview. Hip roofs include the square pyramidal case, exact persistence and native 3D rendering, with analytic plan/elevation/section bounds tests. Rectangular vertical through-openings are supported on panel, gable and hip forms with versioned persistence, overlap/clearance validation, undo/redo and native 3D rendering. Roof joins, materials and coordinated production qualification remain open."
+      "implementation_note": "Sloped panels (including zero-rise flat roofs), gable roofs, and equal-pitch rectangular hip roofs have semantic solids, parameter editors, plan projections, and contextual inspector dimensions with derived pitch preview. Hip roofs include the square pyramidal case, exact persistence and native 3D rendering, with analytic plan/elevation/section bounds tests. Rectangular vertical through-openings are supported on panel, gable and hip forms with versioned persistence, overlap/clearance validation, undo/redo and native 3D rendering. Version-1 fused roof joins now preserve source identities, validate typed references and unique membership at the document boundary, require touching source solids, and render one derived OCCT union in the native 3D view; roof material propagation, mitered/curved junctions, and coordinated production qualification remain open."
     },
     {
       "id": "ARCH-MOD-006",

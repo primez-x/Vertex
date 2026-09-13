@@ -335,6 +335,21 @@ public:
                 append_unique(pending, "wall join '" + id + "': " + error.what());
             }
         }
+        // A valid roof_join owns the 3D presentation of its source roofs.
+        // Keep the source entities available for schedules and edits while
+        // presenting the derived union only once.
+        std::map<std::string, std::string, std::less<>> joined_roof_owner;
+        for (const auto& [id, entity] : entities) {
+            if (entity.type != "roof_join") continue;
+            try {
+                const auto join = parse_roof_join(entity.properties, id);
+                for (const auto& roof_id : join.roof_ids) {
+                    joined_roof_owner.emplace(roof_id, id);
+                }
+            } catch (const std::exception& error) {
+                append_unique(pending, "roof join '" + id + "': " + error.what());
+            }
+        }
 
         std::map<std::string, std::vector<const Entity*>, std::less<>> openings_by_wall;
         for (const auto& [id, entity] : entities) {
@@ -361,8 +376,14 @@ public:
                 changed = true;
                 continue;
             }
+            if (entity.type == "roof" && joined_roof_owner.contains(id)) {
+                remove_solid(id);
+                changed = true;
+                continue;
+            }
             if (entity.type != "wall" && entity.type != "slab" && entity.type != "room" &&
                 entity.type != "terrain_surface" && entity.type != "wall_join" &&
+                entity.type != "roof_join" &&
                 !can_recognize_building_entity_type(entity.type)) {
                 if (entity.type == "opening") {
                     continue;
@@ -406,6 +427,17 @@ public:
                     }
                 } catch (const std::exception& error) {
                     append_unique(errors, "wall join '" + id + "': " + error.what());
+                }
+            }
+            if (geometry_entity.type == "roof_join") {
+                try {
+                    const auto join = parse_roof_join(geometry_entity.properties, id);
+                    for (const auto& roof_id : join.roof_ids) {
+                        const auto source = entities.find(roof_id);
+                        if (source != entities.end()) append_entity_content(content, source->second);
+                    }
+                } catch (const std::exception& error) {
+                    append_unique(errors, "roof join '" + id + "': " + error.what());
                 }
             }
             std::optional<std::string> material_color;
@@ -473,6 +505,21 @@ public:
                         source_walls.push_back(std::move(wall));
                     }
                     shape = make_wall_join(join, source_walls);
+                } else if (geometry_entity.type == "roof_join") {
+                    const auto join = parse_roof_join(geometry_entity.properties, id);
+                    std::vector<TopoDS_Shape> source_roofs;
+                    source_roofs.reserve(join.roof_ids.size());
+                    for (const auto& roof_id : join.roof_ids) {
+                        const auto source = entities.find(roof_id);
+                        if (source == entities.end() || source->second.type != "roof") {
+                            throw std::invalid_argument("roof join source roof is missing: " + roof_id);
+                        }
+                        const auto resolved_source = resolve_vertical_placement(*snapshot,
+                                                                                 source->second);
+                        source_roofs.push_back(make_building_shape(
+                            decode_building_entity(resolved_source)));
+                    }
+                    shape = make_roof_join(join, source_roofs);
                 } else if (geometry_entity.type == "slab") {
                     Slab slab;
                     if (!read_document_slab(geometry_entity, slab, parse_error)) {

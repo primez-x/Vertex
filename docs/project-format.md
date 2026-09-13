@@ -137,7 +137,7 @@ and a JSON `extensions` object. IDs are document identity and are never derived 
 The v1 known types are:
 
 `property`, `building`, `floor`, `layer`, `boundary`, `measurement_boundary`, `room_boundary`,
-`wall`, `wall_join`, `opening`, `room`, `slab`, `roof`, `stair`, `railing`, `column`, `beam`, `label`, `sheet`, `view`,
+`wall`, `wall_join`, `opening`, `room`, `slab`, `roof`, `roof_join`, `stair`, `railing`, `column`, `beam`, `label`, `sheet`, `view`,
 `constraint`, `reference_grid`, `terrain_surface`, `dxf_source`, and `ifc_source`.
 
 All geometry properties use metres and radians. A wall and opening can be represented as:
@@ -194,6 +194,15 @@ connected endpoint with another member and to have overlapping vertical
 extents. The fused shape is a derived cache: source wall dimensions, hosted
 openings, classifications, and schedule quantities remain authoritative and
 are never replaced by the join record.
+
+A `roof_join` is a version-1 architectural relationship that preserves the
+source roof entities while providing one derived fused solid for coordinated
+views. Its properties contain exactly `version: 1`, `style: "fused"`, and a
+`roof_ids` array of two to sixteen unique roof IDs. Every referenced roof must
+exist and be a `roof`; one roof may not belong to more than one join. The
+native geometry builder additionally requires every source solid to touch at
+least one other member. Source roof parameters, openings, materials, and
+schedule quantities remain authoritative and are never replaced by the join.
 
 ```json
 {

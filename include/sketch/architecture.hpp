@@ -3,6 +3,7 @@
 #include "sketch/wall_semantics.hpp"
 #include "sketch/slab_semantics.hpp"
 #include "sketch/terrain_surface.hpp"
+#include "sketch/roof_join_semantics.hpp"
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Face.hxx>
 #include <optional>
@@ -54,6 +55,11 @@ struct RoomVolume {
 // does not replace the individual wall entities or their quantities.
 [[nodiscard]] TopoDS_Shape make_wall_join(const WallJoin& join,
                                           std::span<const Wall> walls);
+// Build the derived solid for a first-class fused roof join.  Source roof
+// solids remain authoritative semantic objects; this result is only the
+// coordinated-view union.
+[[nodiscard]] TopoDS_Shape make_roof_join(const RoofJoin& join,
+                                          std::span<const TopoDS_Shape> roofs);
 [[nodiscard]] TopoDS_Shape make_slab(const Slab& slab);
 [[nodiscard]] TopoDS_Shape make_room_volume(const RoomVolume& room);
 // Build a derived triangulated terrain surface from the validated local TIN

@@ -39,7 +39,7 @@ is mapped back to the stable document entity ID and delivered through
 lets the inspector clear its selection.
 
 Ctrl+left-drag directly translates a native architectural object. The press
-selects a supported wall, fused wall join, slab, room, column, beam, stair, railing, or roof,
+selects a supported wall, fused wall join, slab, room, column, beam, stair, railing, roof, or fused roof join,
 converts the cursor to the current view projection plane, and previews the
 world-space movement on the derived AIS presentation. Release clears the preview and emits one
 `onEntityTranslationRequested` callback with the stable entity ID and the
@@ -91,6 +91,9 @@ The current native solid contract covers:
   the document truth, while the native view validates endpoint connectivity
   and displays the resulting OCCT union once so a joined corner is not
   double-presented.
+* A `roof_join` entity references two or more roofs. The source roofs remain
+  authoritative, while the native view validates touching source solids and
+  displays their OCCT union once so overlapping roof panels are not duplicated.
 * A `slab` entity requires a `boundary` segment array, a `holes` array of
   segment arrays, `thickness_m`, and `elevation_m`.
 * A `room` entity requires a `boundary` (or migration-compatible `segments`)
