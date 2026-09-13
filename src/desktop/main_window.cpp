@@ -15903,7 +15903,8 @@ private:
         m_detect_areas_action->setObjectName(QStringLiteral("detectClosedAreas"));
         m_terrain_action = new QAction(QStringLiteral("Create terrain surface…"), owner);
         m_terrain_action->setObjectName(QStringLiteral("createTerrainSurface"));
-        m_about_action = new QAction(QStringLiteral("About Property Studio"), owner);
+        m_about_action = new QAction(QStringLiteral("About"), owner);
+        m_about_action->setObjectName(QStringLiteral("aboutAction"));
         auto* user_guide_action = new QAction(QStringLiteral("User guide…"), owner);
         user_guide_action->setObjectName(QStringLiteral("userGuide"));
         const std::array<QAction*, 23> secondary_actions{
@@ -20253,7 +20254,7 @@ private:
 
     void showAbout() {
         QMessageBox::information(
-            owner, QStringLiteral("About Property Studio"),
+            owner, QStringLiteral("About"),
             QStringLiteral("An offline Windows application for property measurement\n"
                            "and architectural design."));
     }
