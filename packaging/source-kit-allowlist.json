@@ -663,6 +663,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/roof_join_semantics.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/room_relationship_geometry.hpp"
     },
     {
@@ -1184,6 +1188,10 @@
     {
       "category": "source",
       "path": "src/core/reference_grid.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/roof_join_semantics.cpp"
     },
     {
       "category": "source",
@@ -1720,6 +1728,10 @@
     {
       "category": "source",
       "path": "tests/reference_grid_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/roof_join_tests.cpp"
     },
     {
       "category": "source",
