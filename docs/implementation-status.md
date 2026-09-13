@@ -76,8 +76,10 @@ solid and the same geometry is projected in plan, elevation, section, and the
 desktop architectural workspace. `room_boundary` remains a 2D appraisal/space
 boundary. Legacy `room` records that omit height or elevation remain visible in
 plan but report an explicit incomplete-volume diagnostic in native 3D and other
-solid-driven views. Schedules, richer room relationships, Apex compatibility,
-and production qualification remain open.
+solid-driven views. Height edits from the geometry inspector and height/elevation
+edits from the command palette use the same revision-fenced history path.
+Schedules, richer room relationships, Apex compatibility, and production
+qualification remain open.
 
 The architectural object slice now accepts a true flat roof through the
 existing sloped-panel schema: zero rise and zero pitch produce a thickened

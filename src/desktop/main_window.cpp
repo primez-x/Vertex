@@ -7902,6 +7902,47 @@ public:
         }
     }
 
+    bool editSelectedRoomVolume(
+        const QString& height_expression, const QString& elevation_expression,
+        std::optional<Revision> expected_revision = std::nullopt) {
+        const auto revision = expected_revision.value_or(m_document->revision());
+        const auto selected = selectedEntity();
+        if (!selected || selected->type != "room") {
+            setError(QStringLiteral("Select an architectural room volume before editing it."));
+            return false;
+        }
+        try {
+            const auto unit = m_metric_units ? Unit::metre : Unit::foot;
+            const auto height = parse_quantity(height_expression.trimmed().toStdString(), unit).metres;
+            const auto elevation = parse_quantity(elevation_expression.trimmed().toStdString(), unit).metres;
+            if (!std::isfinite(height) || height <= 1e-7) {
+                throw std::invalid_argument("Room height must be greater than zero.");
+            }
+            if (!std::isfinite(elevation)) {
+                throw std::invalid_argument("Room elevation must be finite.");
+            }
+            auto candidate = *selected;
+            candidate.properties["height_m"] = height;
+            candidate.properties["elevation_m"] = elevation;
+            RoomVolume room;
+            std::string room_error;
+            if (!read_document_room(candidate, room, room_error)) {
+                throw std::invalid_argument(room_error);
+            }
+            (void)make_room_volume(room);
+            if (!applyEntity(std::move(candidate), "edit room volume", revision)) {
+                return false;
+            }
+            m_selected_id = id_from(selected->id);
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Room volume: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     QString createRoomBoundaryFromExistingGeometry(const QString& classification,
                                                    std::optional<Revision> expected_revision = std::nullopt) {
         const auto revision = expected_revision.value_or(m_document->revision());
@@ -8136,6 +8177,29 @@ public:
                                                : QStringLiteral("0 ft"), &accepted);
         if (!accepted || !modalContextUnchanged(context)) return;
         (void)createRoomVolumeFromSelectedBoundary(height, elevation, context.revision);
+    }
+
+    void editRoomVolumeFromDialog() {
+        const auto context = captureModalContext();
+        const auto selected = selectedEntity();
+        if (!selected || selected->type != "room") {
+            setError(QStringLiteral("Select an architectural room volume before editing it."));
+            return;
+        }
+        const auto default_height = format_length(
+            read_number(selected->properties, "height_m", 2.4), m_metric_units);
+        const auto default_elevation = format_length(
+            read_number(selected->properties, "elevation_m", 0.0), m_metric_units);
+        bool accepted = false;
+        const auto height = QInputDialog::getText(
+            owner, QStringLiteral("Edit room volume"), QStringLiteral("Room height:"),
+            QLineEdit::Normal, default_height, &accepted);
+        if (!accepted) return;
+        const auto elevation = QInputDialog::getText(
+            owner, QStringLiteral("Edit room volume"), QStringLiteral("Base elevation:"),
+            QLineEdit::Normal, default_elevation, &accepted);
+        if (!accepted || !modalContextUnchanged(context)) return;
+        (void)editSelectedRoomVolume(height, elevation, context.revision);
     }
 
     QString createStraightWall(Vec2 start, Vec2 end, const QString& classification,
@@ -13778,6 +13842,8 @@ public:
              [this] { createRoomBoundaryFromSelection(); }},
             {QStringLiteral("Create room volume from selected boundary"),
              [this] { createRoomVolumeFromDialog(); }},
+            {QStringLiteral("Edit selected room volume"),
+             [this] { editRoomVolumeFromDialog(); }},
             {QStringLiteral("Edit reusable assemblies"),
              [this] { showAssemblies(); }},
             {QStringLiteral("Offline assistance"), [this] { showAssistance(); }},
@@ -14154,9 +14220,10 @@ private:
         const auto allowed = entity.has_value() &&
                              ((entity->type == "wall") ||
                               (entity->type == "opening" && key_is_height) ||
-                              (entity->type == "slab" && key_is_thickness));
+                              (entity->type == "slab" && key_is_thickness) ||
+                              (entity->type == "room" && key_is_height));
         if (!allowed) {
-            setError(QStringLiteral("Select a wall, opening, or slab to edit its %1.").arg(label));
+            setError(QStringLiteral("Select a compatible architectural object to edit its %1.").arg(label));
             return false;
         }
         try {
@@ -14174,6 +14241,23 @@ private:
                 }
             } else if (entity->type == "slab") {
                 if (!previewSlab(*entity, properties)) {
+                    return false;
+                }
+            } else if (entity->type == "room") {
+                RoomVolume room;
+                std::string room_error;
+                const Entity candidate{entity->id, entity->type, properties,
+                                       entity->required, entity->extensions};
+                if (!read_document_room(candidate, room, room_error)) {
+                    setError(QStringLiteral("Room preview rejected: %1")
+                                 .arg(QString::fromStdString(room_error)));
+                    return false;
+                }
+                try {
+                    (void)make_room_volume(room);
+                } catch (const std::exception& error) {
+                    setError(QStringLiteral("Room preview rejected: %1")
+                                 .arg(QString::fromUtf8(error.what())));
                     return false;
                 }
             }
@@ -17711,7 +17795,8 @@ private:
         }
         m_geometry_form->setRowVisible(m_length_edit, editable_geometry);
         m_geometry_form->setRowVisible(m_classification_combo, editable_geometry);
-        m_geometry_form->setRowVisible(m_height_edit, wall || opening);
+        const bool room = entity.has_value() && entity->type == "room";
+        m_geometry_form->setRowVisible(m_height_edit, wall || opening || room);
         m_geometry_form->setRowVisible(m_slope_rise_edit, wall);
         m_geometry_form->setRowVisible(m_thickness_edit, wall || slab);
         if (auto* label = qobject_cast<QLabel*>(m_geometry_form->labelForField(m_length_edit))) {
@@ -17859,7 +17944,7 @@ private:
                                                     m_metric_units));
         }
         m_length_edit->setEnabled(editable && (wall || opening));
-        m_height_edit->setEnabled(editable && (wall || opening));
+        m_height_edit->setEnabled(editable && (wall || opening || room));
         m_slope_rise_edit->setEnabled(editable && wall);
         m_thickness_edit->setEnabled(editable && (wall || slab));
         m_classification_combo->setEnabled(editable &&
@@ -19497,6 +19582,11 @@ QString MainWindow::createRoomVolumeFromBoundary(
     std::vector<Boundary> holes, std::optional<Revision> revision) {
     return m_impl->createRoomVolumeFromBoundary(boundary, std::move(height), std::move(elevation),
                                                 std::move(holes), revision);
+}
+
+bool MainWindow::editSelectedRoomVolume(
+    QString height, QString elevation, std::optional<Revision> revision) {
+    return m_impl->editSelectedRoomVolume(std::move(height), std::move(elevation), revision);
 }
 
 QStringList MainWindow::detectRoomBoundariesFromExistingWalls(

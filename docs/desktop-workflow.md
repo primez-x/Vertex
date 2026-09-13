@@ -159,6 +159,16 @@ attributes**. The editor stores a bounded JSON object of string metadata under
 `area_attributes`, validates it before mutation, and keeps the update in the
 same undo/redo and save/reopen path.
 
+**Create room volume from selected boundary** turns a validated closed
+measurement or room boundary into a distinct architectural `room` entity. The
+command asks for explicit room height and base elevation, retains optional
+boundary holes, previews the shared solid kernel, and commits one undoable
+Document command. Selecting a room volume exposes its height in the geometry
+inspector; **Edit selected room volume** in the command palette updates height
+and elevation through the same validated command. Room volumes remain separate
+from `room_boundary` records and use the same geometry for plan, elevation,
+section, native 3D, schedules, and save/reopen.
+
 The `Reference` command imports a local PNG, JPEG, BMP, TIFF, or a selected page
 of a PDF into the portable Document Asset store and creates a `reference_asset`
 record. Raster source bytes are rendered directly. PDF source bytes remain in
@@ -265,6 +275,11 @@ new `room_boundary` entity with its own name, classification, area, and
 analytical segments; the source remains unchanged and the new entity is fully
 undoable. This gives architectural rooms a deliberate creation path while
 keeping appraisal measurement geometry separate.
+
+**Create room volume from selected boundary** follows that distinction with
+explicit vertical semantics. It requires a positive height and finite base
+elevation, reports invalid or incomplete legacy room rows in solid-driven
+views, and keeps every edit reversible.
 
 **Detect closed areas…** scans the selected wall's floor and drawing layer as an
 endpoint-connected analytical graph. Every simple bounded face becomes its own

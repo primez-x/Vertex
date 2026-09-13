@@ -210,6 +210,12 @@ public:
         QString elevation,
         std::vector<Boundary> holes = {},
         std::optional<Revision> expected_revision = std::nullopt);
+    // Updates the selected architectural room volume's explicit height and
+    // base elevation through one validated, undoable Document command.
+    [[nodiscard]] bool editSelectedRoomVolume(
+        QString height,
+        QString elevation,
+        std::optional<Revision> expected_revision = std::nullopt);
     // Detects all simple bounded faces in the selected wall's floor/layer
     // graph and creates one independent room boundary per face in one atomic
     // Document command. Open wall stubs are ignored; invalid segment graphs

@@ -654,6 +654,24 @@ void test_room_volume_authoring_workflow() {
                 window.redoCommand() &&
                 window.document().snapshot().entities().contains(room_id.toStdString()),
             "room volume authoring must participate in undo and redo");
+    require(window.selectEntity(room_id) &&
+                window.editSelectedRoomVolume(QStringLiteral("3 m"), QStringLiteral("0.15 m")),
+            "room volume edits must validate and commit through the public workflow");
+    const auto edited = window.document().snapshot().entities().at(room_id.toStdString());
+    require(edited.properties.at("height_m") == 3.0 &&
+                edited.properties.at("elevation_m") == 0.15,
+            "room volume edits must update the canonical height and elevation fields");
+    require(window.undoCommand() &&
+                window.document().snapshot().entities().at(room_id.toStdString())
+                    .properties.at("height_m") == 2.4 &&
+                window.redoCommand() &&
+                window.document().snapshot().entities().at(room_id.toStdString())
+                    .properties.at("height_m") == 3.0,
+            "room volume edits must preserve undo and redo semantics");
+    require(window.editSelectedHeight(QStringLiteral("3.25 m")) &&
+                window.document().snapshot().entities().at(room_id.toStdString())
+                    .properties.at("height_m") == 3.25,
+            "room height inspector editing must use the shared room-volume validator");
 }
 
 void test_selection_clipboard_workflow() {

@@ -2027,7 +2027,7 @@
         "tests/desktop_smoke.cpp",
         "docs/architectural-workflow-contract.md"
       ],
-      "implementation_note": "Architectural create/select/property-edit/transform/duplicate/delete intents are translated into one revision-fenced atomic Document command with preview, undo, and save/reopen coverage. Recognized building entities receive type-aware canonical transforms, and wall duplication/deletion carries or removes hosted openings with deterministic remapping. The Windows editor exposes scale, rotation, XYZ translation, clone, and preview controls for recognized building objects. Complete type schemas, cross-view relationship propagation, and user-observed output remain open."
+      "implementation_note": "Architectural create/select/property-edit/transform/duplicate/delete intents are translated into one revision-fenced atomic Document command with preview, undo, and save/reopen coverage. Room volumes now support validated creation plus explicit height/elevation edits through the public workflow and command palette, while keeping their analytical boundary and native/projection state linked. Recognized building entities receive type-aware canonical transforms, and wall duplication/deletion carries or removes hosted openings with deterministic remapping. The Windows editor exposes scale, rotation, XYZ translation, clone, and preview controls for recognized building objects. Complete type schemas, cross-view relationship propagation, and user-observed output remain open."
     },
     {
       "id": "ARCH-REL-001",
