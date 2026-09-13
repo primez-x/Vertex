@@ -19,6 +19,9 @@ namespace {
 
 using sketch::ApplyEntityChanges;
 using sketch::AssemblyModel;
+using sketch::AssemblyType;
+using sketch::AssemblyInstance;
+using sketch::AssemblyPlacement;
 using sketch::Asset;
 using sketch::AssetChange;
 using sketch::Document;
@@ -552,6 +555,31 @@ void test_embedded_architectural_models_are_validated_at_document_boundary() {
         },
         DocumentErrorCode::invalid_entity,
         "assembly model entities must carry a validated embedded model");
+
+    const auto placed_model = AssemblyModel::create(
+        {}, {AssemblyType{"panel", "Panel", {}, {}, {}}},
+        {AssemblyInstance{"panel-1", "panel", {}, {}, {},
+                          AssemblyPlacement{"host-wall", {1.0, 2.0}, 0.0, 1.0}}});
+    require_error(
+        [&] {
+            (void)Document::create({entity("placed-catalog", "assembly_model",
+                                            {{"model", placed_model.to_json()}})});
+        },
+        DocumentErrorCode::dangling_reference,
+        "a placed assembly must reject a missing host geometry entity");
+    const auto catalog_with_placement = entity(
+        "placed-catalog", "assembly_model", {{"model", placed_model.to_json()}});
+    require_error(
+        [&] {
+            (void)Document::create({catalog_with_placement,
+                                    entity("host-wall", "property")});
+        },
+        DocumentErrorCode::invalid_entity,
+        "a placed assembly host must be a geometry-bearing architectural entity");
+    auto valid_placed = Document::create({catalog_with_placement,
+                                         entity("host-wall", "wall")});
+    require(valid_placed.snapshot().entities().contains("placed-catalog"),
+            "a placed assembly with a valid architectural host should be admitted");
 
     const auto levels = sketch::VerticalLevelGraph({{"ground", 0}, {"first", 3}},
         {{"ground-first", "ground", "first"}});

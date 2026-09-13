@@ -1,5 +1,7 @@
 #pragma once
 
+#include "sketch/geometry.hpp"
+
 #include <nlohmann/json.hpp>
 #include <map>
 #include <optional>
@@ -31,12 +33,29 @@ struct AssemblyType {
     std::map<std::string, AssemblyQuantityProperty> quantities;
     bool operator==(const AssemblyType&) const = default;
 };
+// Optional placement binds an instance to an existing document geometry
+// object.  The host remains the source of geometric truth; the placement is a
+// deterministic transform used for repeated assembly previews and takeoffs.
+struct AssemblyPlacement {
+    std::string host_entity_id;
+    Vec2 translation_m{};
+    double rotation_radians{};
+    double scale{1.0};
+    bool operator==(const AssemblyPlacement& other) const noexcept {
+        return host_entity_id == other.host_entity_id &&
+               translation_m.x == other.translation_m.x &&
+               translation_m.y == other.translation_m.y &&
+               rotation_radians == other.rotation_radians &&
+               scale == other.scale;
+    }
+};
 struct AssemblyInstance {
     std::string id;
     std::string type_id;
     std::map<std::string, std::string> property_overrides;
     std::map<std::string, std::string> material_overrides;
     std::map<std::string, AssemblyQuantityProperty> quantity_overrides;
+    std::optional<AssemblyPlacement> placement;
     bool operator==(const AssemblyInstance&) const = default;
 };
 struct ResolvedAssembly {

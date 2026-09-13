@@ -3082,6 +3082,36 @@ void test_assembly_catalog_workflow() {
             "assembly instance type should survive project reopen");
 }
 
+void test_assembly_placement_plan_preview() {
+    using namespace sketch;
+    auto catalog = Entity::create("assembly_model", {
+        {"model", AssemblyModel::create(
+            {{"steel", "Steel", "#d08030"}},
+            {AssemblyType{"lintel", "Lintel", {}, {{"finish", "steel"}}, {}}},
+            {AssemblyInstance{"lintel-1", "lintel", {}, {}, {},
+                AssemblyPlacement{"host-wall", {1.0, 2.0}, std::numbers::pi / 2.0, 1.0}}}).to_json()}});
+    catalog.id = "assembly-catalog";
+    auto host = Entity::create("wall", {
+        {"baseline", {{"start", {0.0, 0.0}}, {"end", {10.0, 0.0}}, {"sweep_radians", 0.0}}},
+        {"height_m", 3.0}, {"thickness_m", 0.2}, {"elevation_m", 0.0}});
+    host.id = "host-wall";
+    auto document = std::make_shared<Document>(Document::create({catalog, host}));
+    desktop::MainWindow window(document);
+    QApplication::processEvents();
+    auto* canvas = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    require(canvas, "assembly placement fixture should expose the measurement canvas");
+    const auto found = std::find_if(canvas->entities().begin(), canvas->entities().end(),
+        [](const auto& entity) { return entity.type == QStringLiteral("assembly_instance"); });
+    require(found != canvas->entities().end(), "placed assembly should render a retained plan preview");
+    require(found->id == QStringLiteral("assembly-catalog:instance:lintel-1") &&
+                std::abs(found->segments.front().start.x - 1.0) < 1e-8 &&
+                std::abs(found->segments.front().start.y - 2.0) < 1e-8 &&
+                std::abs(found->segments.front().end.x - 1.0) < 1e-8 &&
+                std::abs(found->segments.front().end.y - 12.0) < 1e-8 &&
+                found->filled && found->fill_color == QColor("#d08030"),
+            "assembly placement should apply its transform and material appearance");
+}
+
 void test_vertical_levels_workflow() {
     using namespace sketch;
     desktop::MainWindow window;
@@ -3443,6 +3473,7 @@ int main(int argc, char** argv) {
     test_vertical_levels_workflow();
     test_reference_grid_workflow();
     test_assembly_catalog_workflow();
+    test_assembly_placement_plan_preview();
     test_material_color_catalog(field_ui_capture_directory);
     test_hosted_opening_editor(field_ui_capture_directory);
     test_calculation_deduction_workflow();

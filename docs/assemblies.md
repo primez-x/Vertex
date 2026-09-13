@@ -59,6 +59,15 @@ Removing a referenced material or catalog requires detaching its users in the
 same atomic command. Assignment and removal use normal revision-checked history
 and survive project save/reopen. This does not bind objects to assembly instances.
 
+An instance may also carry an explicit `placement` in assembly schema v3. The
+placement stores a host entity ID, model-space X/Y translation, rotation in
+radians, and a positive uniform scale. Document validation treats the host as a
+typed nested reference and accepts only geometry-bearing architectural objects;
+removing or changing a host is therefore blocked by the same dangling-reference
+rules as ordinary entity links. The Windows plan canvas renders a retained
+transformed copy of the host boundary, and the same value feeds print and image
+output. Clearing placement returns the catalog to v1/v2-compatible encoding.
+
 Copy captures the referenced material subset with its names and colors, omitting
 unrelated catalog entries, types, and instances. Paste uses the payload's root
 identity independently of the destination selection. It maps catalog entity IDs
@@ -96,6 +105,12 @@ the rendering engine. Textures, transparency, roughness, and physical properties
 remain open; a surface color alone is not a physically specified material.
 
 Assembly geometry bindings and placement, composite material takeoff, nested
-assemblies, material physical properties, and publication workflows remain
-open. Semantic snapshot restoration plus the desktop history checks do not
-establish full production assembly qualification.
+Placed assembly instances now have a read-only Assembly schedule row exposing
+the resolved type, host, transform, material slots, and declared quantities
+(including count, length/area/volume, and mass units). Scoped schedules follow
+the placed host's visibility. The initial geometric binding is a plan-preview
+copy of host linework; independent assembly profiles, elevation/section
+projection, nested assemblies, composite material takeoff, material physical
+properties, and publication workflows remain open. Semantic snapshot
+restoration plus the desktop history checks do not establish full production
+assembly qualification.

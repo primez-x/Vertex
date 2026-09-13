@@ -420,6 +420,23 @@ void collect_references(const Entity& entity, std::vector<EntityReference>& refe
                            std::string("invalid slab layer reference: ") + error.what());
         }
     }
+    if (entity.type == "assembly_model" && entity.properties.contains("model")) {
+        try {
+            const auto model = AssemblyModel::from_json(entity.properties.at("model"));
+            // Placement hosts are semantic references nested inside the
+            // versioned catalog payload, so surface them through the same
+            // dangling-reference guard used by ordinary entity properties.
+            for (const auto& instance : model.instances()) {
+                if (instance.placement) {
+                    references.push_back({instance.placement->host_entity_id, std::nullopt,
+                                          EntityReference::Target::entity});
+                }
+            }
+        } catch (const std::exception& error) {
+            document_error(DocumentErrorCode::invalid_entity,
+                           std::string("invalid assembly placement data: ") + error.what());
+        }
+    }
     for (const auto& [key, value] : entity.properties.items()) {
         if (key == "vertical_level_binding") {
             try {
@@ -540,6 +557,22 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
                                "entity " + id + " reference " + reference.id +
                                    " has type " + target->second.type + ", expected " +
                                    std::string(*reference.expected_type));
+            }
+        }
+        if (entity.type == "assembly_model" && entity.properties.contains("model")) {
+            const auto model = AssemblyModel::from_json(entity.properties.at("model"));
+            for (const auto& instance : model.instances()) {
+                if (!instance.placement) continue;
+                const auto host = entities.find(instance.placement->host_entity_id);
+                if (host == entities.end()) continue; // reported by the reference pass above
+                static constexpr std::array<std::string_view, 12> host_types{
+                    "boundary", "measurement_boundary", "room_boundary", "wall", "opening",
+                    "slab", "roof", "stair", "railing", "column", "beam", "terrain_surface"};
+                if (std::find(host_types.begin(), host_types.end(), host->second.type) == host_types.end()) {
+                    document_error(DocumentErrorCode::invalid_entity,
+                                   "assembly placement host " + instance.placement->host_entity_id +
+                                       " is not a geometry-bearing architectural entity");
+                }
             }
         }
         if (entity.type == "floor" && entity.properties.contains("vertical_level_binding")) {

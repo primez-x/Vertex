@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cctype>
 #include <map>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <string_view>
@@ -375,6 +376,96 @@ void append_layer_material_rows(
     }
 }
 
+ScheduleValue assembly_quantity_value(const AssemblyQuantityProperty& quantity) {
+    switch (quantity.unit) {
+    case AssemblyQuantityUnit::count:
+        if (quantity.value > static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
+            throw std::invalid_argument("assembly count exceeds schedule integer range");
+        }
+        return ScheduleValue{static_cast<std::int64_t>(quantity.value)};
+    case AssemblyQuantityUnit::metre:
+        return ScheduleValue{ScheduleQuantity{quantity.value, ScheduleUnit::metre}};
+    case AssemblyQuantityUnit::square_metre:
+        return ScheduleValue{ScheduleQuantity{quantity.value, ScheduleUnit::square_metre}};
+    case AssemblyQuantityUnit::cubic_metre:
+        return ScheduleValue{ScheduleQuantity{quantity.value, ScheduleUnit::cubic_metre}};
+    case AssemblyQuantityUnit::kilogram:
+        return ScheduleValue{ScheduleQuantity{quantity.value, ScheduleUnit::kilogram}};
+    }
+    throw std::invalid_argument("unknown assembly quantity unit");
+}
+
+void append_assembly_rows(const DocumentSnapshot& document,
+                          DocumentScheduleProjection& projection,
+                          const std::set<std::string, std::less<>>* visible_entity_ids) {
+    std::vector<ScheduleRecord> records;
+    for (const auto& [catalog_id, entity] : document.entities()) {
+        if (entity.type != "assembly_model" || !entity.properties.contains("model")) continue;
+        try {
+            const auto model = AssemblyModel::from_json(entity.properties.at("model"));
+            for (const auto& instance : model.instances()) {
+                if (visible_entity_ids) {
+                    // A placed instance follows its host visibility. Unplaced
+                    // catalog entries are scoped by the catalog entity itself.
+                    if (instance.placement) {
+                        if (!visible_entity_ids->contains(instance.placement->host_entity_id)) continue;
+                    } else if (!visible_entity_ids->contains(catalog_id)) {
+                        continue;
+                    }
+                }
+                const auto resolved = model.resolve(instance.id);
+                const auto type = std::find_if(model.types().begin(), model.types().end(),
+                    [&](const auto& candidate) { return candidate.id == resolved.type_id; });
+                if (type == model.types().end()) {
+                    projection.diagnostics.push_back(catalog_id + ": assembly instance type is missing");
+                    continue;
+                }
+                ScheduleRecord record;
+                record.object_id = catalog_id + ":instance:" + instance.id;
+                record.mark = "A-" + catalog_id + "-" + instance.id;
+                record.kind = ScheduleRowKind::assembly;
+                record.properties.emplace("catalog_id", catalog_id);
+                record.properties.emplace("instance_id", instance.id);
+                record.properties.emplace("type_id", resolved.type_id);
+                record.properties.emplace("name", type->name);
+                if (instance.placement) {
+                    record.properties.emplace("host_entity_id", instance.placement->host_entity_id);
+                    record.properties.emplace("rotation_radians", instance.placement->rotation_radians);
+                    record.properties.emplace("scale", instance.placement->scale);
+                    record.properties.emplace("translation_x_m",
+                                              ScheduleQuantity{instance.placement->translation_m.x,
+                                                               ScheduleUnit::metre});
+                    record.properties.emplace("translation_y_m",
+                                              ScheduleQuantity{instance.placement->translation_m.y,
+                                                               ScheduleUnit::metre});
+                }
+                for (const auto& [key, quantity] : resolved.quantities) {
+                    record.properties.emplace("quantity:" + key, assembly_quantity_value(quantity));
+                }
+                for (const auto& [slot, material_id] : resolved.materials)
+                    record.properties.emplace("material:" + slot, material_id);
+                records.push_back(std::move(record));
+            }
+        } catch (const std::exception& error) {
+            projection.diagnostics.push_back(catalog_id + ": assembly schedule unavailable: " + error.what());
+        }
+    }
+    if (records.empty()) return;
+    try {
+        auto rows = build_schedule(records, document.revision()).rows;
+        for (auto& row : rows) {
+            for (auto& [name, cell] : row.cells) {
+                cell.editable = false;
+                cell.sources = {{row.object_id, name}};
+                cell.explanation = "Resolved reusable assembly instance data from its catalog";
+            }
+            projection.snapshot.rows.push_back(std::move(row));
+        }
+    } catch (const std::exception& error) {
+        projection.diagnostics.push_back(std::string("assembly schedule rejected: ") + error.what());
+    }
+}
+
 DocumentScheduleProjection augment(const DocumentSnapshot& document, DocumentScheduleProjection projection,
                                    const std::set<std::string, std::less<>>* visible_entity_ids) {
     std::map<std::string, std::vector<const Entity*>, std::less<>> openings;
@@ -426,6 +517,7 @@ DocumentScheduleProjection augment(const DocumentSnapshot& document, DocumentSch
         }
     }
     append_layer_material_rows(document, openings, projection, visible_entity_ids);
+    append_assembly_rows(document, projection, visible_entity_ids);
     append_material_summaries(document, projection);
     std::sort(projection.diagnostics.begin(), projection.diagnostics.end());
     projection.diagnostics.erase(std::unique(projection.diagnostics.begin(), projection.diagnostics.end()),

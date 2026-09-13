@@ -87,6 +87,30 @@ void validation_and_serialization() {
     invalid([&] { (void)AssemblyModel::from_json(json); });
     require(AssemblyModel::from_json(AssemblyModel::create({}, {}, {}).to_json()).instances().empty(), "empty catalog supported");
 }
+void placement_round_trip_and_validation() {
+    using namespace sketch;
+    AssemblyType type{"panel", "Panel", {}, {}, {{"count", {2, AssemblyQuantityUnit::count}}}};
+    AssemblyInstance instance{"panel-a", "panel", {}, {}, {},
+        AssemblyPlacement{"wall-host", {1.25, -0.5}, 0.5, 1.2}};
+    const auto model = AssemblyModel::create({}, {type}, {instance});
+    require(model.to_json().at("schema") == "sketch.assemblies.v3",
+            "placed instances use the v3 assembly schema");
+    require(AssemblyModel::from_json(model.to_json()).instances().front() == instance,
+            "placement survives assembly serialization");
+    auto json = model.to_json();
+    json.at("instances")[0].at("placement")["scale"] = 0.0;
+    invalid([&] { (void)AssemblyModel::from_json(json); });
+    json = model.to_json();
+    json.at("instances")[0].at("placement")["translation_m"][0] = nullptr;
+    invalid([&] { (void)AssemblyModel::from_json(json); });
+    auto unplaced = instance;
+    unplaced.placement.reset();
+    require(AssemblyModel::create({}, {type}, {unplaced}).to_json().at("schema") ==
+                "sketch.assemblies.v1",
+            "unplaced instances retain the legacy schema");
+    unplaced.placement = AssemblyPlacement{"", {}, 0.0, 1.0};
+    invalid([&] { (void)AssemblyModel::create({}, {type}, {unplaced}); });
+}
 } // namespace
 void material_appearance() {
     using namespace sketch;
@@ -104,6 +128,6 @@ void material_appearance() {
 }
 int main() {
     material_appearance();
-    update_and_undo(); validation_and_serialization();
+    update_and_undo(); validation_and_serialization(); placement_round_trip_and_validation();
     std::cout << "assembly_model_tests passed\n";
 }

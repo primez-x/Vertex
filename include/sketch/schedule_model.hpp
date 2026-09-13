@@ -12,8 +12,8 @@ namespace sketch {
 // fields can round-trip through the document.  Architectural projections may
 // additionally append read-only material_summary rows that aggregate those
 // sources by material identity/name.
-enum class ScheduleRowKind { door, window, room, material, material_summary };
-enum class ScheduleUnit { metre, square_metre, cubic_metre };
+enum class ScheduleRowKind { door, window, room, material, material_summary, assembly };
+enum class ScheduleUnit { metre, square_metre, cubic_metre, kilogram };
 struct ScheduleQuantity {
     double value{};
     ScheduleUnit unit{ScheduleUnit::metre};

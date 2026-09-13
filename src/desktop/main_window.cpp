@@ -738,6 +738,27 @@ std::optional<Boundary> dimension_overlay(const Segment& source, Vec2 text_posit
     };
 }
 
+Vec2 assembly_placement_point(Vec2 point, const AssemblyPlacement& placement) {
+    const auto scaled_x = point.x * placement.scale;
+    const auto scaled_y = point.y * placement.scale;
+    const auto cosine = std::cos(placement.rotation_radians);
+    const auto sine = std::sin(placement.rotation_radians);
+    return {cosine * scaled_x - sine * scaled_y + placement.translation_m.x,
+            sine * scaled_x + cosine * scaled_y + placement.translation_m.y};
+}
+
+Boundary assembly_placement_boundary(const Boundary& source,
+                                     const AssemblyPlacement& placement) {
+    Boundary result;
+    result.reserve(source.size());
+    for (const auto& segment : source) {
+        result.push_back({assembly_placement_point(segment.start, placement),
+                          assembly_placement_point(segment.end, placement),
+                          segment.sweep_radians});
+    }
+    return result;
+}
+
 Boundary wall_segments_without_openings(const Segment& baseline,
                                          const std::vector<HostedOpening>& openings) {
     if (openings.empty()) {
@@ -1123,7 +1144,8 @@ QString schedule_value_text(const ScheduleValue& value) {
         } else {
             const auto unit = item.unit == ScheduleUnit::metre
                 ? QStringLiteral("m") : item.unit == ScheduleUnit::square_metre
-                ? QStringLiteral("m²") : QStringLiteral("m³");
+                ? QStringLiteral("m²") : item.unit == ScheduleUnit::cubic_metre
+                ? QStringLiteral("m³") : QStringLiteral("kg");
             return QStringLiteral("%1 %2").arg(item.value, 0, 'f', 3).arg(unit);
         }
     }, value);
@@ -1136,6 +1158,7 @@ QString schedule_kind_text(ScheduleRowKind kind) {
     case ScheduleRowKind::room: return QStringLiteral("Room");
     case ScheduleRowKind::material: return QStringLiteral("Material");
     case ScheduleRowKind::material_summary: return QStringLiteral("Material summary");
+    case ScheduleRowKind::assembly: return QStringLiteral("Assembly");
     }
     return QStringLiteral("Unknown");
 }
@@ -5930,6 +5953,27 @@ public:
             override_form->addRow(QStringLiteral("Value"), override_value);
             override_form->addRow(QStringLiteral("Unit"), override_unit);
             override_layout->addLayout(override_form);
+            auto* placement_form = new QFormLayout;
+            auto* placement_host = new QLineEdit(override_page);
+            placement_host->setObjectName(QStringLiteral("assemblyPlacementHost"));
+            placement_host->setPlaceholderText(QStringLiteral("Host wall, slab, or boundary ID"));
+            auto* placement_x = new QLineEdit(override_page);
+            placement_x->setObjectName(QStringLiteral("assemblyPlacementX"));
+            auto* placement_y = new QLineEdit(override_page);
+            placement_y->setObjectName(QStringLiteral("assemblyPlacementY"));
+            auto* placement_rotation = new QLineEdit(override_page);
+            placement_rotation->setObjectName(QStringLiteral("assemblyPlacementRotation"));
+            placement_rotation->setPlaceholderText(QStringLiteral("Radians"));
+            auto* placement_scale = new QLineEdit(override_page);
+            placement_scale->setObjectName(QStringLiteral("assemblyPlacementScale"));
+            placement_scale->setText(QStringLiteral("1"));
+            placement_form->addRow(QStringLiteral("Host geometry"), placement_host);
+            placement_form->addRow(QStringLiteral("Translate X (m)"), placement_x);
+            placement_form->addRow(QStringLiteral("Translate Y (m)"), placement_y);
+            placement_form->addRow(QStringLiteral("Rotation (rad)"), placement_rotation);
+            placement_form->addRow(QStringLiteral("Scale"), placement_scale);
+            override_layout->addWidget(new QLabel(QStringLiteral("Placement preview"), override_page));
+            override_layout->addLayout(placement_form);
             auto* override_buttons = new QHBoxLayout;
             auto* save_override = new QPushButton(QStringLiteral("Save override"), override_page);
             save_override->setObjectName(QStringLiteral("saveAssemblyInstanceOverride"));
@@ -5939,8 +5983,18 @@ public:
             override_buttons->addWidget(remove_override);
             override_buttons->addStretch(1);
             override_layout->addLayout(override_buttons);
+            auto* placement_buttons = new QHBoxLayout;
+            auto* save_placement = new QPushButton(QStringLiteral("Save placement"), override_page);
+            save_placement->setObjectName(QStringLiteral("saveAssemblyPlacement"));
+            auto* clear_placement = new QPushButton(QStringLiteral("Clear placement"), override_page);
+            clear_placement->setObjectName(QStringLiteral("clearAssemblyPlacement"));
+            placement_buttons->addWidget(save_placement);
+            placement_buttons->addWidget(clear_placement);
+            placement_buttons->addStretch(1);
+            override_layout->addLayout(placement_buttons);
             auto* override_note = new QLabel(QStringLiteral(
-                "Overrides are explicit instance data. Quantity units must match the type declaration."),
+                "Overrides are explicit instance data. Quantity units must match the type declaration. "
+                "Placement transforms a copy of the selected host geometry in plan view."),
                 override_page);
             override_note->setWordWrap(true);
             override_layout->addWidget(override_note);
@@ -6046,6 +6100,11 @@ public:
                 override_key->clear();
                 override_value->clear();
                 override_unit->setCurrentIndex(0);
+                placement_host->clear();
+                placement_x->clear();
+                placement_y->clear();
+                placement_rotation->clear();
+                placement_scale->setText(QStringLiteral("1"));
                 if (!record) return;
                 const auto* selected = instances->currentItem();
                 if (!selected) return;
@@ -6077,6 +6136,13 @@ public:
                 for (const auto& [key, value] : found->quantity_overrides)
                     add_entry(QStringLiteral("Quantity"), QString::fromStdString(key),
                               assembly_quantity_text(value), assembly_quantity_unit_label(value.unit));
+                if (found->placement) {
+                    placement_host->setText(QString::fromStdString(found->placement->host_entity_id));
+                    placement_x->setText(QString::number(found->placement->translation_m.x, 'g', 12));
+                    placement_y->setText(QString::number(found->placement->translation_m.y, 'g', 12));
+                    placement_rotation->setText(QString::number(found->placement->rotation_radians, 'g', 12));
+                    placement_scale->setText(QString::number(found->placement->scale, 'g', 12));
+                }
                 if (type != record->model.types().end()) {
                     for (int index = 0; index < override_unit->count(); ++index) {
                         if (override_unit->itemData(index).toString() == QStringLiteral("count")) {
@@ -6160,6 +6226,8 @@ public:
                 remove_type_entry->setEnabled(has_type);
                 save_override->setEnabled(!record->model.instances().empty());
                 remove_override->setEnabled(!record->model.instances().empty());
+                save_placement->setEnabled(!record->model.instances().empty());
+                clear_placement->setEnabled(!record->model.instances().empty());
                 remove_material->setEnabled(!record->model.materials().empty());
             };
             populate();
@@ -6549,6 +6617,62 @@ public:
                     if (applyAssemblyModel(updated, QStringLiteral("Remove assembly instance"))) {
                         populate();
                         status->setText(QStringLiteral("Instance removed through document history."));
+                    }
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            });
+
+            QObject::connect(save_placement, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    const auto current = current_record();
+                    if (!current) return;
+                    const auto id = selected_instance_id();
+                    if (id.empty()) throw std::invalid_argument("Choose a placed instance first.");
+                    const auto host = placement_host->text().trimmed().toStdString();
+                    if (host.empty()) throw std::invalid_argument("Enter a host geometry ID.");
+                    const auto read_finite = [](QLineEdit* field, const char* label) {
+                        bool ok = false;
+                        const auto value = field->text().trimmed().toDouble(&ok);
+                        if (!ok || !std::isfinite(value))
+                            throw std::invalid_argument(std::string("Enter a finite ") + label + ".");
+                        return value;
+                    };
+                    const auto x = read_finite(placement_x, "X translation");
+                    const auto y = read_finite(placement_y, "Y translation");
+                    const auto rotation = read_finite(placement_rotation, "rotation");
+                    const auto scale = read_finite(placement_scale, "scale");
+                    if (!(scale > 0.0)) throw std::invalid_argument("Placement scale must be positive.");
+                    auto replacement = *std::find_if(current->model.instances().begin(),
+                                                     current->model.instances().end(),
+                        [&](const auto& candidate) { return candidate.id == id; });
+                    replacement.placement = AssemblyPlacement{host, {x, y}, rotation, scale};
+                    const auto updated = current->model.with_instance(std::move(replacement));
+                    if (applyAssemblyModel(updated, QStringLiteral("Save assembly placement"))) {
+                        populate();
+                        data_tabs->setCurrentWidget(override_page);
+                        status->setText(QStringLiteral("Assembly placement saved through document history."));
+                    }
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            });
+
+            QObject::connect(clear_placement, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    const auto current = current_record();
+                    if (!current) return;
+                    const auto id = selected_instance_id();
+                    if (id.empty()) throw std::invalid_argument("Choose a placed instance first.");
+                    auto replacement = *std::find_if(current->model.instances().begin(),
+                                                     current->model.instances().end(),
+                        [&](const auto& candidate) { return candidate.id == id; });
+                    replacement.placement.reset();
+                    const auto updated = current->model.with_instance(std::move(replacement));
+                    if (applyAssemblyModel(updated, QStringLiteral("Clear assembly placement"))) {
+                        populate();
+                        data_tabs->setCurrentWidget(override_page);
+                        status->setText(QStringLiteral("Assembly placement cleared through document history."));
                     }
                 } catch (const std::exception& error) {
                     status->setText(QString::fromUtf8(error.what()));
@@ -10790,6 +10914,7 @@ public:
                 if (schedule_name.contains(QStringLiteral("door"))) kind = ScheduleRowKind::door;
                 else if (schedule_name.contains(QStringLiteral("window"))) kind = ScheduleRowKind::window;
                 else if (schedule_name.contains(QStringLiteral("room"))) kind = ScheduleRowKind::room;
+                else if (schedule_name.contains(QStringLiteral("assembl"))) kind = ScheduleRowKind::assembly;
                 else if (schedule_name.contains(QStringLiteral("material"))) kind = ScheduleRowKind::material;
                 QString heading = schedule_name.isEmpty() ? QStringLiteral("SCHEDULE")
                                                             : schedule_name.toUpper() + QStringLiteral(" SCHEDULE");
@@ -15888,6 +16013,61 @@ private:
                                            .arg(id_from(id), QString::fromUtf8(error.what())));
             }
         }
+        // Reusable assembly instances are retained inside the catalog model,
+        // but their plan preview is a transformed copy of the declared host
+        // geometry.  This keeps screen, print, and export paths on the same
+        // source geometry while leaving the catalog instance immutable data.
+        std::map<std::string, CanvasEntity, std::less<>> host_geometry;
+        for (const auto& entity : all_geometry) {
+            const auto key = entity.id.toStdString();
+            if (!host_geometry.contains(key)) host_geometry.emplace(key, entity);
+        }
+        std::vector<std::pair<std::string, std::string>> assembly_child_hosts;
+        for (const auto& [catalog_id, catalog_entity] : snapshot.entities()) {
+            if (catalog_entity.type != "assembly_model" ||
+                !catalog_entity.properties.contains("model")) continue;
+            try {
+                const auto model = AssemblyModel::from_json(catalog_entity.properties.at("model"));
+                for (const auto& instance : model.instances()) {
+                    if (!instance.placement) continue;
+                    const auto host = host_geometry.find(instance.placement->host_entity_id);
+                    if (host == host_geometry.end()) {
+                        append_geometry_error(QStringLiteral("Assembly %1: host %2 is not available for plan preview")
+                            .arg(id_from(catalog_id), id_from(instance.placement->host_entity_id)));
+                        continue;
+                    }
+                    auto segments = assembly_placement_boundary(host->second.segments,
+                                                                 *instance.placement);
+                    if (segments.empty()) continue;
+                    const auto child_id = catalog_id + ":instance:" + instance.id;
+                    CanvasEntity preview{id_from(child_id), QStringLiteral("assembly_instance"),
+                                         std::move(segments),
+                                         host->second.thickness_metres * instance.placement->scale,
+                                         id_from(child_id) == m_selected_id};
+                    const auto resolved = model.resolve(instance.id);
+                    for (const auto& [slot, material_id] : resolved.materials) {
+                        (void)slot;
+                        const auto material = std::find_if(model.materials().begin(), model.materials().end(),
+                            [&](const auto& candidate) { return candidate.id == material_id; });
+                        if (material != model.materials().end() && material->color_srgb) {
+                            const QColor color(QString::fromStdString(*material->color_srgb));
+                            if (color.isValid()) {
+                                preview.filled = true;
+                                preview.hatch_pattern = QStringLiteral("solid");
+                                preview.hatch_scale = 1.0;
+                                preview.fill_color = color;
+                            }
+                            break;
+                        }
+                    }
+                    all_geometry.push_back(std::move(preview));
+                    assembly_child_hosts.emplace_back(child_id, instance.placement->host_entity_id);
+                }
+            } catch (const std::exception& error) {
+                append_geometry_error(QStringLiteral("Assembly %1: %2")
+                                           .arg(id_from(catalog_id), QString::fromUtf8(error.what())));
+            }
+        }
         // Measurement always retains its plan geometry. Build all three
         // architectural presentations from the same snapshot so persisted
         // sheet viewports can render independently of the active workspace.
@@ -16049,6 +16229,9 @@ private:
         } catch (const std::exception& error) {
             append_geometry_error(QStringLiteral("Design phase: %1")
                                       .arg(QString::fromUtf8(error.what())));
+        }
+        for (const auto& [child_id, host_id] : assembly_child_hosts) {
+            if (visible_ids.contains(host_id)) visible_ids.insert(child_id);
         }
         // Annotation children are presentation records nested under the
         // validated annotation entity rather than standalone Document

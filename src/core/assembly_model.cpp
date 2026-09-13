@@ -36,6 +36,16 @@ void quantities(const std::map<std::string, AssemblyQuantityProperty>& values) {
             "assembly count must be integral");
     }
 }
+void placement(const std::optional<AssemblyPlacement>& value) {
+    if (!value) return;
+    identifier(value->host_entity_id);
+    require(std::isfinite(value->translation_m.x) && std::isfinite(value->translation_m.y),
+            "assembly placement translation must be finite");
+    require(std::isfinite(value->rotation_radians),
+            "assembly placement rotation must be finite");
+    require(std::isfinite(value->scale) && value->scale > 0.0,
+            "assembly placement scale must be finite and positive");
+}
 template<class T> void canonical(std::vector<T>& values) {
     std::set<std::string> ids;
     for (const auto& value : values) {
@@ -115,6 +125,7 @@ AssemblyModel AssemblyModel::create(std::vector<AssemblyMaterial> materials,
         quantities(instance.quantity_overrides);
         for (const auto& [key, value] : instance.quantity_overrides)
             require(type.quantities.at(key).unit == value.unit, "assembly override changes quantity dimension");
+        placement(instance.placement);
     }
     AssemblyModel model;
     model.materials_ = std::move(materials); model.types_ = std::move(types); model.instances_ = std::move(instances);
@@ -152,26 +163,43 @@ std::vector<AssemblyTypeUpdateImpact> AssemblyModel::preview_type_update(Assembl
 nlohmann::json AssemblyModel::to_json() const {
     nlohmann::json result{{"schema", "sketch.assemblies.v1"}, {"materials", nlohmann::json::array()},
         {"types", nlohmann::json::array()}, {"instances", nlohmann::json::array()}};
+    bool has_placement = false;
+    for (const auto& instance : instances_) has_placement = has_placement || instance.placement.has_value();
+    if (has_placement) result["schema"] = "sketch.assemblies.v3";
     for (const auto& material : materials_) {
         nlohmann::json value{{"id", material.id}, {"name", material.name}};
         if (material.color_srgb) {
-            result["schema"] = "sketch.assemblies.v2";
+            if (!has_placement) result["schema"] = "sketch.assemblies.v2";
             value["color_srgb"] = *material.color_srgb;
         }
         result["materials"].push_back(std::move(value));
     }
     for (const auto& type : types_) result["types"].push_back({{"id", type.id}, {"name", type.name},
         {"properties", type.properties}, {"materials", type.materials}, {"quantities", encode_quantities(type.quantities)}});
-    for (const auto& instance : instances_) result["instances"].push_back({{"id", instance.id}, {"type_id", instance.type_id},
-        {"property_overrides", instance.property_overrides}, {"material_overrides", instance.material_overrides},
-        {"quantity_overrides", encode_quantities(instance.quantity_overrides)}});
+    for (const auto& instance : instances_) {
+        nlohmann::json value{{"id", instance.id}, {"type_id", instance.type_id},
+            {"property_overrides", instance.property_overrides},
+            {"material_overrides", instance.material_overrides},
+            {"quantity_overrides", encode_quantities(instance.quantity_overrides)}};
+        if (instance.placement) {
+            value["placement"] = {
+                {"host_entity_id", instance.placement->host_entity_id},
+                {"translation_m", {instance.placement->translation_m.x,
+                                      instance.placement->translation_m.y}},
+                {"rotation_radians", instance.placement->rotation_radians},
+                {"scale", instance.placement->scale}};
+        }
+        result["instances"].push_back(std::move(value));
+    }
     return result;
 }
 AssemblyModel AssemblyModel::from_json(const nlohmann::json& value) {
     try {
         fields(value, {"schema", "materials", "types", "instances"});
-        const bool appearance = value.at("schema") == "sketch.assemblies.v2";
-        require(appearance || value.at("schema") == "sketch.assemblies.v1", "unsupported assembly schema");
+        const auto schema = value.at("schema").get<std::string>();
+        const bool appearance = schema == "sketch.assemblies.v2" || schema == "sketch.assemblies.v3";
+        const bool placements = schema == "sketch.assemblies.v3";
+        require(appearance || schema == "sketch.assemblies.v1", "unsupported assembly schema");
         for (const auto* key : {"materials", "types", "instances"})
             require(value.at(key).is_array(), "assembly collections must be arrays");
         std::vector<AssemblyMaterial> materials;
@@ -190,10 +218,31 @@ AssemblyModel AssemblyModel::from_json(const nlohmann::json& value) {
                 item.at("properties").get<Strings>(), item.at("materials").get<Strings>(), decode_quantities(item.at("quantities"))});
         }
         for (const auto& item : value.at("instances")) {
-            fields(item, {"id", "type_id", "property_overrides", "material_overrides", "quantity_overrides"});
+            const bool has_placement = item.is_object() && item.contains("placement");
+            require(!has_placement || placements, "assembly placement requires schema v3");
+            if (has_placement) fields(item, {"id", "type_id", "property_overrides", "material_overrides", "quantity_overrides", "placement"});
+            else fields(item, {"id", "type_id", "property_overrides", "material_overrides", "quantity_overrides"});
+            std::optional<AssemblyPlacement> decoded_placement;
+            if (has_placement) {
+                const auto& encoded = item.at("placement");
+                fields(encoded, {"host_entity_id", "translation_m", "rotation_radians", "scale"});
+                require(encoded.at("host_entity_id").is_string() &&
+                        encoded.at("translation_m").is_array() &&
+                        encoded.at("translation_m").size() == 2 &&
+                        encoded.at("translation_m")[0].is_number() &&
+                        encoded.at("translation_m")[1].is_number() &&
+                        encoded.at("rotation_radians").is_number() &&
+                        encoded.at("scale").is_number(), "invalid assembly placement");
+                decoded_placement = AssemblyPlacement{
+                    encoded.at("host_entity_id").get<std::string>(),
+                    {encoded.at("translation_m")[0].get<double>(),
+                     encoded.at("translation_m")[1].get<double>()},
+                    encoded.at("rotation_radians").get<double>(),
+                    encoded.at("scale").get<double>()};
+            }
             instances.push_back({item.at("id").get<std::string>(), item.at("type_id").get<std::string>(),
                 item.at("property_overrides").get<Strings>(), item.at("material_overrides").get<Strings>(),
-                decode_quantities(item.at("quantity_overrides"))});
+                decode_quantities(item.at("quantity_overrides")), std::move(decoded_placement)});
         }
         return create(std::move(materials), std::move(types), std::move(instances));
     } catch (const nlohmann::json::exception& error) {

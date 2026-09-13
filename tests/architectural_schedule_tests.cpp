@@ -227,6 +227,43 @@ void test_composite_slab_layers_produce_material_quantities() {
                 std::abs(std::get<ScheduleQuantity>(finish_summary.cells.at("volume").value).value - 3.8) < 1e-7,
             "slab layer material summaries must aggregate net quantities by catalog material");
 }
+void test_placed_assemblies_produce_read_only_quantity_rows() {
+    auto catalog = Entity::create("assembly_model", {
+        {"model", AssemblyModel::create(
+            {{"steel", "Steel"}},
+            {AssemblyType{"lintel", "Lintel", {}, {{"finish", "steel"}},
+                {{"count", {2, AssemblyQuantityUnit::count}},
+                 {"length", {1.8, AssemblyQuantityUnit::metre}},
+                 {"mass", {24.5, AssemblyQuantityUnit::kilogram}}}}},
+            {AssemblyInstance{"lintel-1", "lintel", {}, {}, {},
+                AssemblyPlacement{"host-wall", {0.25, 1.2}, 0.1, 1.0}}}).to_json()}});
+    catalog.id = "assembly-catalog";
+    auto host = Entity::create("wall", {{"mark", "W1"}});
+    host.id = "host-wall";
+    const auto document = Document::create({catalog, host});
+    const auto projection = build_architectural_schedules(document.snapshot());
+    const auto found = std::find_if(projection.snapshot.rows.begin(), projection.snapshot.rows.end(),
+        [](const auto& row) { return row.kind == ScheduleRowKind::assembly; });
+    require(found != projection.snapshot.rows.end(), "placed assembly should have a schedule row");
+    require(std::get<std::string>(found->cells.at("name").value) == "Lintel" &&
+                std::get<std::string>(found->cells.at("host_entity_id").value) == "host-wall" &&
+                std::get<std::int64_t>(found->cells.at("quantity:count").value) == 2 &&
+                std::get<ScheduleQuantity>(found->cells.at("quantity:length").value).unit ==
+                    ScheduleUnit::metre &&
+                std::get<ScheduleQuantity>(found->cells.at("quantity:mass").value).unit ==
+                    ScheduleUnit::kilogram,
+            "assembly schedule should expose resolved placement and quantities");
+    for (const auto& [name, cell] : found->cells)
+        require(!cell.editable, "assembly schedule source data should be read-only");
+    const auto visible = build_architectural_schedules(document.snapshot(), {"host-wall"});
+    require(std::any_of(visible.snapshot.rows.begin(), visible.snapshot.rows.end(),
+                        [](const auto& row) { return row.kind == ScheduleRowKind::assembly; }),
+            "assembly schedule visibility should follow the placed host");
+    const auto hidden = build_architectural_schedules(document.snapshot(), {"other-wall"});
+    require(std::none_of(hidden.snapshot.rows.begin(), hidden.snapshot.rows.end(),
+                         [](const auto& row) { return row.kind == ScheduleRowKind::assembly; }),
+            "hidden assembly hosts should be omitted from scoped schedules");
+}
 }
 int main() {
     try {
@@ -234,6 +271,7 @@ int main() {
         test_explicit_material_grouping_is_stable_and_normalized();
         test_composite_wall_layers_produce_material_quantities();
         test_composite_slab_layers_produce_material_quantities();
+        test_placed_assemblies_produce_read_only_quantity_rows();
         std::cout<<"architectural schedule tests passed\n";
         return 0;
     }
