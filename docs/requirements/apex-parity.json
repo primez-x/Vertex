@@ -2459,7 +2459,7 @@
         "src/desktop/main_window.cpp",
         "tests/desktop_smoke.cpp"
       ],
-      "implementation_note": "Preview, draft PDF, draft SVG, and print use one shared canvas geometry renderer; draft exports now render persisted sheet bounds, independent viewport scales, title-block data, and revision-bound schedule placements with a visible draft stamp. PDF, SVG, native 3D image, and print-preview receipts bind the output fingerprint; physical printer/output comparison and production qualification remain open."
+      "implementation_note": "Preview, draft PDF, draft SVG, and print use one shared canvas geometry renderer; draft exports now render persisted sheet bounds, independent viewport scales, title-block data, and revision-bound schedule placements with a visible draft stamp. Explicitly scaled sheet viewports share the fitted-output boundary and exclude interactive grids, previews, instructions, overview maps, and selection colors. PDF, SVG, native 3D image, and print-preview receipts bind the output fingerprint; physical printer/output comparison and production qualification remain open."
     },
     {
       "id": "IO-OUTPUT-002",
@@ -2497,7 +2497,7 @@
         "tests/desktop_smoke.cpp",
         "tests/output_fingerprint_tests.cpp"
       ],
-      "implementation_note": "Draft output stamping covers PDF, SVG, print, and native 3D images; native image export stages a visible draft/filter footer before atomic destination replacement and fails on read/stamp/write errors while retaining the fingerprint sidecar. Print preview now runs the same scene/fingerprint gate before opening and records the serialized fingerprint with driver evidence. Invalid-geometry blocking, fingerprint mismatch checks, and revision-bound persisted schedule placement rendering are implemented; integrated stale calculations/assets/reference fixtures and production authority qualification remain open."
+      "implementation_note": "Draft output stamping covers PDF, SVG, print, and native 3D images; native image export stages a visible draft/filter footer before atomic destination replacement and fails on read/stamp/write errors while retaining the fingerprint sidecar. Print preview now runs the same scene/fingerprint gate before opening and records the serialized fingerprint with driver evidence. Explicitly scaled sheet viewport rendering now shares the fitted-output boundary and suppresses interactive-only state. Invalid-geometry blocking, fingerprint mismatch checks, and revision-bound persisted schedule placement rendering are implemented; integrated stale calculations/assets/reference fixtures and production authority qualification remain open."
     },
     {
       "id": "SEC-WORKER-001",

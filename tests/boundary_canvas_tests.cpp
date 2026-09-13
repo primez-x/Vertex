@@ -767,6 +767,40 @@ void test_closed_entity_hatching_and_open_path_safety() {
             "open or split paths must never receive a misleading material fill");
 }
 
+void test_explicit_output_excludes_interactive_state() {
+    PlanCanvas canvas;
+    canvas.resize(640, 480);
+    canvas.setGridEnabled(true);
+    canvas.setOverviewMapEnabled(false);
+    CanvasEntity wall{
+        QStringLiteral("wall"), QStringLiteral("wall"),
+        Boundary{{Segment{{-1.0, 0.0}, {1.0, 0.0}, 0.0}}}, 0.12, true};
+    canvas.setEntities({wall});
+    canvas.setBoundaryPreview({{-1.0, -1.0}, {1.0, -1.0}});
+    canvas.setWallPreview(std::make_pair(Vec2{-1.0, 1.0}, Vec2{1.0, 1.0}));
+    BoundaryDraftPreview draft;
+    draft.segments = {Segment{{-1.0, -0.5}, {1.0, -0.5}, 0.0}};
+    draft.instruction = QStringLiteral("interactive draft instruction");
+    canvas.setBoundaryDraftPreview(draft);
+    canvas.setTool(CanvasTool::boundary);
+
+    const auto output = [&](PlanCanvas& target) {
+        QImage image(640, 480, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::white);
+        QPainter painter(&image);
+        target.renderSceneAt(painter, QRectF(image.rect()), 100.0, {0.0, 0.0}, Qt::white);
+        return image;
+    };
+
+    PlanCanvas clean;
+    clean.resize(640, 480);
+    clean.setGridEnabled(true);
+    clean.setOverviewMapEnabled(false);
+    clean.setEntities({wall});
+    require(images_equal(output(canvas), output(clean)),
+            "explicit sheet output must exclude interactive overlays and instructions");
+}
+
 int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QApplication application(argc, argv);
@@ -789,6 +823,7 @@ int main(int argc, char** argv) {
         test_analytic_arc_fit_bounds();
         test_reference_grid_labels_render_in_screen_and_output();
         test_closed_entity_hatching_and_open_path_safety();
+        test_explicit_output_excludes_interactive_state();
         test_paper_label_style_and_hit_testing();
         std::cout << "Boundary canvas tests passed\n";
         return 0;

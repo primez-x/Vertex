@@ -487,6 +487,10 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     }
     auto scale = explicit_scale.value_or(m_scale);
     auto view_center = explicit_center.value_or(m_view_center);
+    // An explicit transform is the sheet/output path even when the caller
+    // supplies its own model scale and center. Keep that path free of
+    // interactive-only state just like fit-to-content output.
+    const bool output = fit_to_content || explicit_scale.has_value();
     if (!explicit_scale.has_value() && fit_to_content) {
         if (const auto bounds = contentBounds()) {
             const auto minimum = bounds->first;
@@ -511,17 +515,17 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
         if (reference.visible) drawReference(painter, reference);
     }
 
-    if (m_grid_enabled && !fit_to_content) {
+    if (m_grid_enabled && !output) {
         drawGrid(painter, viewport, scale, view_center);
     }
     drawReferenceGrids(painter);
     for (const auto& entity : m_entities) {
-        drawEntity(painter, entity, fit_to_content, background);
+        drawEntity(painter, entity, output, background);
     }
 
-    // Transient overlays belong to the interactive canvas only. The output
-    // path uses fit_to_content=true and must contain document entities alone.
-    if (!fit_to_content) {
+    // Transient overlays belong to the interactive canvas only. Both fitted
+    // and explicitly scaled output must contain document entities alone.
+    if (!output) {
         if (m_boundary_preview.size() >= 2) {
             QPen pen(QColor(255, 220, 126), 0.0, Qt::DashLine);
             painter.setPen(pen);
@@ -573,21 +577,19 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     }
     painter.restore();
 
-    drawReferenceGridLabels(painter, viewport, scale, view_center,
-                            fit_to_content || explicit_scale.has_value(), background,
+    drawReferenceGridLabels(painter, viewport, scale, view_center, output, background,
                             paper_pixels_per_mm);
 
     // Committed labels use the same model-to-screen mapping as the current
     // scene, including fit-to-content output. Drawing after restoring the
     // world transform keeps text upright and readable at its device scale.
-    drawLabels(painter, viewport, scale, view_center,
-               fit_to_content || explicit_scale.has_value(), background, paper_pixels_per_mm);
+    drawLabels(painter, viewport, scale, view_center, output, background, paper_pixels_per_mm);
 
-    if (!fit_to_content && !explicit_scale.has_value()) {
+    if (!output) {
         drawCursorReadout(painter, viewport, background);
     }
 
-    if (!fit_to_content) {
+    if (!output) {
         QString instruction;
         if (m_boundary_draft_preview.has_value() &&
             !m_boundary_draft_preview->instruction.isEmpty()) {
@@ -611,7 +613,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
             painter.restore();
         }
     }
-    if (!fit_to_content && m_boundary_draft_preview.has_value()) {
+    if (!output && m_boundary_draft_preview.has_value()) {
         const auto& draft = *m_boundary_draft_preview;
         const auto to_screen = [&](Vec2 point) {
             return QPointF(viewport.center().x() + (point.x - view_center.x) * scale,
@@ -639,7 +641,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
         }
         painter.restore();
     }
-    if (!fit_to_content) drawOverviewMap(painter);
+    if (!output) drawOverviewMap(painter);
 }
 
 void PlanCanvas::drawOverviewMap(QPainter& painter) const {

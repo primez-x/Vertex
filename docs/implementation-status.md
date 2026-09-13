@@ -13,6 +13,9 @@ now contribute read-only material slot rows, optional explicit cubic-metre
 volume/net-volume quantities, and grouped material-summary provenance while
 respecting host visibility. Persisted annotation colors, fills, emphasis,
 text-height, and symbol stroke width now reach interactive and fitted output.
+Explicitly scaled sheet viewports now use the same output boundary: grids,
+cursor readouts, draft previews, tool instructions, overview maps, and selected
+interactive colors are excluded before the viewport is painted.
 
 The requirement contract passes, while `python scripts/requirement_audit.py
 --release` still fails closed with 130 in-progress requirements. The corrected
