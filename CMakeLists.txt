@@ -169,7 +169,8 @@ target_link_libraries(sketch_architectural_document_adapter PUBLIC sketch_archit
 add_library(sketch_document src/core/document.cpp src/core/document_digest.cpp src/core/constraint_entity.cpp
   src/core/constraint_integrity.cpp src/core/boundary_entity.cpp src/core/boundary_integrity.cpp
   src/core/boundary_dimension.cpp src/core/sheet_view_entity_codec.cpp
-  src/core/annotation_entity_codec.cpp src/core/georeferencing_entity_codec.cpp)
+  src/core/annotation_entity_codec.cpp src/core/georeferencing_entity_codec.cpp
+  src/core/vertical_level_document_adapter.cpp)
 target_include_directories(sketch_document PUBLIC include)
 target_link_libraries(sketch_document PUBLIC sketch_json PRIVATE sketch_wall_semantics sketch_roof_join_semantics sketch_boundary_receipts
   sketch_slab_semantics sketch_sheet_view_model sketch_annotation_catalog sketch_assembly_model sketch_model_phases

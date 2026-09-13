@@ -4,6 +4,7 @@
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
 #include "sketch/vertical_levels.hpp"
+#include "sketch/vertical_level_document_adapter.hpp"
 #include "sketch/reference_grid.hpp"
 #include "sketch/terrain_surface.hpp"
 #include "support/noninteractive_errors.hpp"
@@ -927,11 +928,113 @@ void test_session_read_only_latch_survives_navigation_and_fork() {
                   "a fork must not clear the session read-only latch");
 }
 
+void test_connected_stair_level_edit() {
+    const sketch::VerticalLevelGraph graph({{"ground", 0}, {"first", 3}},
+        {{"storey", "ground", "first"}});
+    auto stair = entity("stair-1", "stair", {
+        {"version", 1}, {"form", "straight_stair_flight"},
+        {"base_position_m", {1.0, 2.0, 0.0}}, {"orientation_rad", 0.3},
+        {"riser_count", 18}, {"total_rise_m", 3.0}, {"going_m", 0.25},
+        {"width_m", 1.1}, {"top_landing", {{"depth_m", 1.0}, {"thickness_m", 0.2}}},
+        {"level_connection", {{"version", 1}, {"graph_id", "levels-1"},
+            {"link_id", "storey"}, {"lower_level_id", "ground"}, {"upper_level_id", "first"}}}});
+    stair.properties["quantity_entries"] = {{"/total_rise_m", {{"metres", 3.0}}},
+        {"/going_m", {{"metres", 0.25}}}};
+    stair.extensions["vendor"] = "preserve";
+    auto second = stair;
+    second.id = "stair-2";
+    second.properties["base_position_m"] = {5.0, 6.0, 0.0};
+    auto unrelated = stair;
+    unrelated.id = "stair-unrelated";
+    unrelated.properties.erase("level_connection");
+    auto other_graph_stair = stair;
+    other_graph_stair.id = "stair-other-graph";
+    other_graph_stair.properties["level_connection"]["graph_id"] = "levels-2";
+    auto document = Document::create({stair, second, unrelated, other_graph_stair,
+        entity("levels-2", "vertical_levels", {{"model", nlohmann::json::parse(graph.serialize())}}),
+        entity("levels-1", "vertical_levels",
+        {{"model", nlohmann::json::parse(graph.serialize())}})});
+    const auto source = document.snapshot();
+    const auto candidate = sketch::prepare_vertical_level_edit(source, "levels-1",
+        graph.with_elevation("first", 3.2));
+    const auto& preview = candidate.snapshot();
+    require(preview.entities().at("stair-1").properties.at("total_rise_m") == 3.2,
+            "connected stair rise must follow the level edit");
+    require(source.entities() == document.snapshot().entities() &&
+            document.revision() == source.revision(), "preview mutated source");
+    require(candidate.affected_stairs() == std::vector<sketch::ConnectedStairRiseChange>{
+        {"stair-1", 3.0, 3.2}, {"stair-2", 3.0, 3.2}}, "preview omitted affected stair rises");
+    for (const auto* id : {"stair-1", "stair-2"}) {
+        auto expected = source.entities().at(id);
+        expected.properties["total_rise_m"] = 3.2;
+        expected.properties["quantity_entries"].erase("/total_rise_m");
+        require(preview.entities().at(id) == expected, "propagation changed unrelated stair data");
+    }
+    require(preview.entities().at("stair-unrelated") == unrelated, "unconnected stair changed");
+    require(preview.entities().at("stair-other-graph") == other_graph_stair,
+            "stair connected to another graph changed");
+    const auto receipt = sketch::apply_vertical_level_edit(document, candidate);
+    require(receipt.revision == source.revision() + 1 &&
+            receipt.affected_stairs == candidate.affected_stairs() &&
+            document.snapshot().entities() == preview.entities(), "apply did not commit the preview atomically");
+    require(sketch::VerticalLevelGraph::from_json(document.snapshot().entities().at("levels-1")
+        .properties.at("model")).floor_to_floor_height("storey") == 3.2, "graph did not update with stairs");
+    require_error([&] { (void)sketch::apply_vertical_level_edit(document, candidate); },
+        DocumentErrorCode::stale_revision, "reused candidate was accepted");
+    document.undo(document.revision());
+    require(document.snapshot().entities() == source.entities(), "undo did not restore graph and stairs");
+    document.redo(document.revision());
+    require(document.snapshot().entities() == preview.entities(), "redo did not restore graph and stairs");
+
+    // A divergent fork can share document identity and revision with the source.
+    auto left = Document::fork(source);
+    auto right = Document::fork(source);
+    left.apply(NameRevision{source.revision(), "left"});
+    right.apply(NameRevision{source.revision(), "right"});
+    const auto fork_candidate = sketch::prepare_vertical_level_edit(left.snapshot(), "levels-1",
+        graph.with_elevation("first", 3.2));
+    require_error([&] { (void)sketch::apply_vertical_level_edit(right, fork_candidate); },
+        DocumentErrorCode::stale_revision, "same-revision divergent source was accepted");
+
+    const auto reject_graph = [&](const sketch::VerticalLevelGraph& changed) {
+        require_error([&] { (void)sketch::prepare_vertical_level_edit(source, "levels-1", changed); },
+            DocumentErrorCode::invalid_entity, "unsupported connected link edit was accepted");
+        require(document_snapshot_digest(source) == document_snapshot_digest(Document::fork(source).snapshot()),
+            "rejected preview changed source");
+    };
+    reject_graph(graph.freeze("storey"));
+    reject_graph(graph.disconnect("storey"));
+    reject_graph(sketch::VerticalLevelGraph(graph.levels()));
+    reject_graph(sketch::VerticalLevelGraph({{"ground", 0}, {"first", 3}, {"roof", 6}},
+        {{"storey", "ground", "roof"}}));
+    auto frozen_source = Document::create({stair, entity("levels-1", "vertical_levels",
+        {{"model", nlohmann::json::parse(graph.freeze("storey").serialize())}})});
+    require_error([&] { (void)sketch::prepare_vertical_level_edit(frozen_source.snapshot(), "levels-1", graph); },
+        DocumentErrorCode::invalid_entity, "source frozen link was propagated");
+    for (const auto* field : {"form", "total_rise_m", "riser_count"}) {
+        auto unsupported = stair;
+        if (std::string_view(field) == "form") unsupported.properties[field] = "spiral_stair";
+        else unsupported.properties.erase(field);
+        auto unsupported_document = Document::create({unsupported, entity("levels-1", "vertical_levels",
+            {{"model", nlohmann::json::parse(graph.serialize())}})});
+        require_error([&] { (void)sketch::prepare_vertical_level_edit(unsupported_document.snapshot(),
+            "levels-1", graph.with_elevation("first", 3.2)); }, DocumentErrorCode::invalid_entity,
+            "noncanonical connected stair was propagated");
+    }
+    auto malformed = nlohmann::json::parse(graph.serialize());
+    malformed["levels"][1]["elevation_m"] = -1.0;
+    try {
+        (void)sketch::prepare_vertical_level_edit(source, "levels-1", sketch::VerticalLevelGraph::from_json(malformed));
+        fail("malformed replacement graph was accepted");
+    } catch (const sketch::VerticalLevelError&) {}
+}
+
 }  // namespace
 
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_connected_stair_level_edit();
         test_compound_change_is_atomic_and_references_are_checked();
         test_stale_revision_is_rejected();
         test_undo_redo_and_branch_history_are_preserved();

@@ -255,11 +255,122 @@ void test_hidden_linear_dimensions_stay_hidden_in_dxf_output() {
     }), "hidden dimensions should not create export diagnostics");
 }
 
+void test_source_units_are_normalized_to_metres() {
+    using namespace sketch;
+    for (const auto units : {1, 2, 4, 5, 6, 7}) {
+        const double source_length = units == 1 ? 12.0 : units == 2 ? 1.0 :
+            units == 4 ? 1000.0 : units == 5 ? 100.0 : units == 7 ? 0.001 : 1.0;
+        const double expected = units == 1 || units == 2 ? 0.3048 : 1.0;
+        DxfDrawing drawing;
+        drawing.insertion_units = units;
+        drawing.lines.push_back({{0, 0}, {source_length, 0}});
+        const auto imported = import_project_dxf(export_dxf_ascii(drawing));
+        check(imported.complete() && !imported.source_retention_required,
+              "supported units must import without fidelity diagnostics");
+        check(std::abs(imported.entities.at(0).properties.at("boundary").at(0)
+                           .at("end").at(0).get<double>() - expected) < 1e-12,
+              "source-unit line must be converted to metres");
+    }
+}
+
+void test_units_cover_primitives_annotations_and_blocks() {
+    using namespace sketch;
+    DxfDrawing drawing;
+    drawing.insertion_units = 4;
+    drawing.arcs.push_back({{1000, 2000}, 500, 0, 90});
+    drawing.polylines.push_back({{{{1000, 2000}, 1}, {{3000, 2000}, 0}}, false});
+    drawing.hatches.push_back({{{0, 0}, {1000, 0}, {0, 1000}}});
+    drawing.labels.push_back({{1000, 2000}, 250, 30, "text"});
+    drawing.dimensions.push_back({{0, 0}, {1000, 0}, {500, 200}, {500, 300}, 30, "1 m"});
+    drawing.blocks.push_back({"fixture", {1000, 2000},
+        {{{1000, 2000}, {2000, 2000}}},
+        {{{1000, 2000}, 500, 0, 90}},
+        {{{{{1000, 2000}, 1}, {{2000, 2000}, 0}}, false}},
+        {{{1000, 2000}, 100, 30, "block"}}});
+    drawing.inserts.push_back({"fixture", {10000, 20000}, 2, 2, 90});
+    const auto imported = import_project_dxf(export_dxf_ascii(drawing));
+    const auto boundary = [&](const char* classification) -> const Entity& {
+        const auto found = std::find_if(imported.entities.begin(), imported.entities.end(),
+            [&](const auto& entity) { return entity.properties.value("classification", "") == classification; });
+        check(found != imported.entities.end(), "expected primitive candidate must exist");
+        return *found;
+    };
+    const auto near = [](const auto& value, double expected) {
+        check(std::abs(value.template get<double>() - expected) < 1e-10,
+              "all primitive lengths must be in metres and angles unchanged");
+    };
+    const auto segment = [&](const char* classification) {
+        return boundary(classification).properties.at("boundary").at(0);
+    };
+    near(segment("dxf_arc")["start"][0], 1.5);
+    near(segment("dxf_arc")["end"][1], 2.5);
+    near(segment("dxf_arc")["sweep_radians"], std::acos(-1.0) / 2);
+    near(segment("dxf_polyline_open")["start"][1], 2);
+    near(segment("dxf_polyline_open")["end"][0], 3);
+    near(segment("dxf_polyline_open")["sweep_radians"], std::acos(-1.0));
+    near(segment("dxf_hatch_solid")["end"][0], 1);
+    near(segment("dxf_dimension_extension")["end"][0], 1);
+    const auto& dimension = boundary("dxf_dimension_extension").extensions.at("dxf_dimension");
+    near(dimension["dimension_line"][0], 0.5);
+    near(dimension["dimension_line"][1], 0.2);
+    near(dimension["text_position"][1], 0.3);
+    near(dimension["rotation_degrees"], 30);
+    near(segment("dxf_insert_line")["start"][0], 10);
+    near(segment("dxf_insert_line")["start"][1], 20);
+    near(segment("dxf_insert_line")["end"][1], 22);
+    near(segment("dxf_insert_arc")["start"][1], 21);
+    near(segment("dxf_insert_arc")["end"][0], 9);
+    near(segment("dxf_insert_polyline_open")["end"][1], 22);
+    near(segment("dxf_insert_polyline_open")["sweep_radians"], std::acos(-1.0));
+    const auto annotations = decode_annotation_entity(imported.entities.back());
+    check(annotations.labels.size() == 3, "text and dimension labels must remain editable");
+    check(std::abs(annotations.labels[0].style.text_height_metres - 0.25) < 1e-12 &&
+          std::abs(annotations.labels[0].placement.position.y - 2) < 1e-12 &&
+          std::abs(annotations.labels[0].placement.rotation_radians - std::acos(-1.0) / 6) < 1e-12 &&
+          std::abs(annotations.labels[1].placement.position.y - 0.3) < 1e-12 &&
+          std::abs(annotations.labels[2].style.text_height_metres - 0.2) < 1e-12 &&
+          std::abs(annotations.labels[2].placement.position.x - 10) < 1e-12 &&
+          std::abs(annotations.labels[2].placement.position.y - 20) < 1e-12,
+          "text height, positions and insert scale must normalize without scaling angles");
+    check(imported.source_retention_required, "dimension fidelity diagnostics must still retain source");
+}
+
+void test_unspecified_or_unsupported_units_fail_closed() {
+    using namespace sketch;
+    for (const int units : {0, 3, 20}) {
+        DxfDrawing drawing;
+        drawing.insertion_units = units;
+        drawing.lines.push_back({{0, 0}, {1000, 0}});
+        const auto imported = import_project_dxf(export_dxf_ascii(drawing));
+        check(imported.entities.empty() && !imported.complete() && imported.source_retention_required,
+              "unresolved units must not silently create metre geometry");
+        check(std::any_of(imported.diagnostics.begin(), imported.diagnostics.end(), [&](const auto& item) {
+            return item.source_kind == "HEADER" && item.code ==
+                (units == 0 ? "source_units_unspecified" : "source_units_unsupported");
+        }), "unresolved source units must have an actionable fidelity diagnostic");
+    }
+    auto missing = wrapped_entities("0\nCIRCLE\n10\n0\n20\n0\n40\n2\n");
+    missing.erase(missing.find("9\n$INSUNITS\n70\n6\n"), std::string("9\n$INSUNITS\n70\n6\n").size());
+    const auto unspecified = import_project_dxf(missing);
+    check(unspecified.entities.empty() && unspecified.source_retention_required &&
+          unspecified.diagnostics.size() == 2,
+          "missing units must preserve both units and unsupported-record diagnostics");
+    auto unknown = wrapped_entities("0\nLINE\n10\n0\n20\n0\n11\n1000\n21\n0\n");
+    unknown.replace(unknown.find("$INSUNITS\n70\n6"), std::string("$INSUNITS\n70\n6").size(), "$INSUNITS\n70\n99");
+    bool rejected = false;
+    try { (void)import_project_dxf(unknown); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    check(rejected, "unknown unit codes must fail closed");
+}
+
 } // namespace
 
 int main() {
     try {
         run();
+        test_source_units_are_normalized_to_metres();
+        test_units_cover_primitives_annotations_and_blocks();
+        test_unspecified_or_unsupported_units_fail_closed();
         test_non_linear_dimensions_are_not_flattened();
         test_hidden_linear_dimensions_stay_hidden_in_dxf_output();
         std::cout << "DXF project exchange tests passed\n";

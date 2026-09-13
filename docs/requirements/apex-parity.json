@@ -833,7 +833,9 @@
       "blocker": null,
       "implementation_sources": [
         "include/sketch/vertical_levels.hpp",
+        "include/sketch/vertical_level_document_adapter.hpp",
         "src/core/vertical_levels.cpp",
+        "src/core/vertical_level_document_adapter.cpp",
         "src/core/document.cpp",
         "src/desktop/main_window.cpp",
         "tests/vertical_levels_tests.cpp",
@@ -841,7 +843,7 @@
         "tests/document_tests.cpp",
         "docs/vertical-levels.md"
       ],
-      "implementation_note": "A validated vertical level graph with connected, frozen, and disconnected floor-to-floor links now has strict version-1 JSON decoding, Document admission through the vertical_levels entity, explicit validated floor bindings, and a Windows Levels editor for revision-checked create/edit/link/freeze/disconnect/assign operations. Newly created walls, slabs, and architectural objects on a bound floor carry an opt-in versioned level placement record; plan, elevation, section, and native 3D projections resolve it from the same snapshot without mutating source coordinates. Site/terrain tools and full cross-view production qualification remain open."
+      "implementation_note": "A validated vertical level graph with connected, frozen, and disconnected floor-to-floor links now has strict version-1 JSON decoding, Document admission through the vertical_levels entity, explicit validated floor bindings, and a Windows Levels editor for revision-checked create/edit/link/freeze/disconnect/assign operations. A revision-bound adapter now previews and atomically applies endpoint-preserving elevation edits together with canonical total_rise_m updates for connected straight stairs, preserving unrelated properties and rejecting frozen, retargeted, deleted, malformed, stale, or divergent candidates; the Levels editor shows affected stair rises and requires confirmation before the single undoable revision. Newly created walls, slabs, and architectural objects on a bound floor carry an opt-in versioned level placement record; plan, elevation, section, and native 3D projections resolve it from the same snapshot without mutating source coordinates. Site/terrain tools and full cross-view production qualification remain open."
     },
     {
       "id": "APX-WF-001",
@@ -1788,6 +1790,8 @@
       "implementation_sources": [
         "src/architecture/building_objects.cpp",
         "src/architecture/building_entity.cpp",
+        "include/sketch/vertical_level_document_adapter.hpp",
+        "src/core/vertical_level_document_adapter.cpp",
         "src/core/document.cpp",
         "src/architecture/building_plan_projection.cpp",
         "src/desktop/building_object_dialog.cpp",
@@ -1799,7 +1803,7 @@
         "tests/architectural_schedule_tests.cpp",
         "tests/desktop_smoke.cpp"
       ],
-      "implementation_note": "Straight stair flights with optional landings and straight railings with validated top rails and endpoint/interior posts have semantic solids, parameter editors, transforms, exact top-down projections, native 3D rendering, and save/reopen coverage. Stairs may now persist a graph/link/lower-level/upper-level connection; Document admission verifies the retained vertical graph, matching endpoints, connected link state, and total rise, while the editor exposes the IDs and connected-stair uniform scaling fails closed. Curved or baluster profiles, stair hosting and coordinated production acceptance remain open."
+      "implementation_note": "Straight stair flights with optional landings and straight railings with validated top rails and endpoint/interior posts have semantic solids, parameter editors, transforms, exact top-down projections, native 3D rendering, and save/reopen coverage. Stairs may now persist a graph/link/lower-level/upper-level connection; Document admission verifies the retained vertical graph, matching endpoints, connected link state, and total rise. A revision-bound level edit previews and atomically propagates changed floor-to-floor height to every connected canonical straight stair while preserving risers, going, landing, placement, IDs, extensions, and unrelated stairs; the Windows editor displays the affected rises and confirms the one-step update. Connected-stair scaling still fails closed when it would break the level relation. Curved or baluster profiles, stair hosting and coordinated production acceptance remain open."
     },
     {
       "id": "ARCH-MOD-007",
@@ -2409,7 +2413,7 @@
         "src/cli/main.cpp",
         "tests/test_cli.py"
       ],
-      "implementation_note": "Portable runtime staging remains integrity-only. A separate local project-package assembler now preserves the saved .bldproj byte stream, closes over every revision asset with verified content-addressed copies, and carries explicitly declared templates, profiles, and documentation. Package verification now cross-checks file kinds, project/asset/resource records, summary counts, symlink chains, and resource-manifest hashes; a copy-only restore helper re-hashes each payload while materializing a new local destination. The Windows core and native desktop shell now register package templates, profiles, and documentation through a hash-verified local catalog; the compact Project resources command and property-cli expose deterministic results with network_required=false. Cross-machine calculated/output fingerprint acceptance and production qualification remain open."
+      "implementation_note": "Portable runtime staging remains integrity-only. A separate local project-package assembler now preserves the saved .bldproj byte stream, closes over every revision asset with verified content-addressed copies, and carries explicitly declared templates, profiles, and documentation. Package staging derives metadata and the complete revision asset closure from the copied database, so a source change after the byte copy cannot mix revisions; verification reopens the packaged database and cross-checks all project metadata, asset references, payload hashes, file kinds, project/asset/resource records, summary counts, symlink chains, and resource-manifest hashes. A copy-only restore helper re-hashes each payload while materializing a new local destination. The Windows core and native desktop shell now register package templates, profiles, and documentation through a hash-verified local catalog; the compact Project resources command and property-cli expose deterministic results with network_required=false. The source must remain stable during byte copy; arbitrary concurrent SQLite writes and uncheckpointed WAL contents remain a separate qualification boundary. Cross-machine calculated/output fingerprint acceptance and production qualification remain open."
     },
     {
       "id": "REC-004",
@@ -2505,7 +2509,7 @@
         "tests/dxf_desktop_workflow_tests.cpp",
         "docs/interchange-profiles.md"
       ],
-      "implementation_note": "A bounded in-memory ASCII DXF R2013 codec now round-trips LINE, ARC, LWPOLYLINE (including bulges), plain TEXT, linear DIMENSION records, one-loop solid polygon HATCH records, BLOCK definitions, and INSERT references with deterministic serialization, hard limits, and explicit unsupported-feature diagnostics. A separate native project-mapping layer now translates immutable snapshots to that drawing model, emits hosted-opening jamb/threshold plan markers with explicit host-loss diagnostics, and reconstructs bounded geometry into editable boundary candidates plus typed annotation state. It does not claim nested blocks, patterned or multi-loop hatches, native Apex compatibility, active floor/layer assignment, original-source asset retention, worker isolation, or external CAD fidelity; those fixtures and integrations remain open."
+      "implementation_note": "A bounded in-memory ASCII DXF R2013 codec now round-trips LINE, ARC, LWPOLYLINE (including bulges), plain TEXT, linear DIMENSION records, one-loop solid polygon HATCH records, BLOCK definitions, and INSERT references with deterministic serialization, hard limits, and explicit unsupported-feature diagnostics. Before native mapping, declared inches, feet, millimetres, centimetres, metres, and kilometres are converted to SI metres across direct and block geometry, annotation dimensions, text heights, hatch paths, and insert bases/transforms; missing or unsupported units return no candidates with source-retention diagnostics instead of silently assuming metres. A separate native project-mapping layer now translates immutable snapshots to that drawing model, emits hosted-opening jamb/threshold plan markers with explicit host-loss diagnostics, and reconstructs bounded geometry into editable boundary candidates plus typed annotation state. It does not claim nested blocks, patterned or multi-loop hatches, native Apex compatibility, active floor/layer assignment, original-source asset retention, worker isolation, or external CAD fidelity; those fixtures and integrations remain open."
     },
     {
       "id": "IO-PDF-001",
@@ -2540,7 +2544,7 @@
         "src/desktop/main_window.cpp",
         "tests/desktop_smoke.cpp"
       ],
-      "implementation_note": "Preview, draft PDF, draft SVG, and print use one shared canvas geometry renderer; draft exports now render persisted sheet bounds, independent viewport scales, title-block data, and revision-bound schedule placements with a visible draft stamp. Explicitly scaled sheet viewports share the fitted-output boundary and exclude interactive grids, previews, instructions, overview maps, and selection colors; persisted architectural cut and projection widths render as fixed paper-space strokes. PDF, SVG, native 3D image, and print-preview receipts bind the output fingerprint; physical printer/output comparison and production qualification remain open."
+      "implementation_note": "Preview, draft PDF, draft SVG, and print use one shared canvas geometry renderer; draft exports now render persisted sheet bounds, independent viewport scales, title-block data, and revision-bound schedule placements with a visible draft stamp. Explicitly scaled sheet viewports share the fitted-output boundary and exclude interactive grids, previews, instructions, overview maps, and selection colors; persisted architectural cut and projection widths render as fixed paper-space strokes. PDF, SVG, native 3D image, and print-preview receipts bind the output fingerprint. Persisted selected-sheet dimensions now set the zero-margin PDF physical page, SVG physical dimensions and aspect, and print-preview requested paper independently of the toolbar preset; numeric PDF/SVG and preview-driver regressions cover landscape and custom portrait sheets. Physical printer/output comparison and paired production qualification remain open."
     },
     {
       "id": "IO-OUTPUT-002",
@@ -2560,7 +2564,7 @@
         "src/desktop/main_window.cpp",
         "tests/desktop_smoke.cpp"
       ],
-      "implementation_note": "Letter, Legal, Tabloid, A4, A3, and architectural page sizes plus independent viewport scales are validated; the desktop selector applies the five named sizes to draft PDF/print, the persisted sheet renderer maps viewport bounds/scales to paper coordinates, and viewport bounds/scale edits use typed Document history. Print preview records driver page/DPI evidence; physical printer calibration and output evidence remain open."
+      "implementation_note": "Letter, Legal, Tabloid, A4, A3, and architectural page sizes plus independent viewport scales are validated; persisted selected-sheet dimensions determine PDF physical page, SVG dimensions/aspect, and requested print paper, while the toolbar preset is only a fallback for documents without sheets. The persisted sheet renderer maps viewport bounds/scales to paper coordinates, and viewport bounds/scale edits use typed Document history. Numeric landscape/custom portrait tests verify exported geometry and preset independence. Print preview records requested_sheet_mm separately from actual driver paper/page rectangles and DPI; physical printer calibration and paired production output evidence remain open."
     },
     {
       "id": "IO-OUTPUT-003",

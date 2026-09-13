@@ -52,6 +52,7 @@
 #include "sketch/georeferencing_entity_codec.hpp"
 #include "sketch/georeferencing_runtime.hpp"
 #include "sketch/vertical_levels.hpp"
+#include "sketch/vertical_level_document_adapter.hpp"
 #include "sketch/reference_grid.hpp"
 #include "sketch/terrain_surface.hpp"
 #include "sketch/visualization/native_model_view.hpp"
@@ -92,6 +93,7 @@
 #include <QPageSize>
 #include <QPalette>
 #include <QBuffer>
+#include <QRegularExpression>
 #include <QPainter>
 #include <QPdfDocument>
 #include <QPdfWriter>
@@ -5766,13 +5768,29 @@ public:
             const auto source = authoringSnapshot();
             const auto record = decode_vertical_levels(source);
             if (!record) throw std::invalid_argument("The vertical level graph is unavailable.");
-            auto entity = source.entities().at(record->entity_id);
-            entity.properties["model"] = json::parse(model.serialize());
-            const ApplyEntityChanges command{
-                source.revision(), {EntityChange::upsert(std::move(entity))}, {},
-                message.toStdString()};
-            (void)Document::preview_command(source, Command{command});
-            applyDocumentCommand(Command{command});
+            const auto candidate = prepare_vertical_level_edit(
+                source, record->entity_id, model);
+            if (!candidate.affected_stairs().empty()) {
+                QStringList updates;
+                for (const auto& change : candidate.affected_stairs()) {
+                    updates << QStringLiteral("%1: %2 → %3 m")
+                        .arg(QString::fromStdString(change.stair_id))
+                        .arg(change.old_rise_m, 0, 'f', 3)
+                        .arg(change.new_rise_m, 0, 'f', 3);
+                }
+                const auto answer = QMessageBox::question(
+                    owner, QStringLiteral("Update connected stairs"),
+                    QStringLiteral("This level edit changes the connected stair rises:\n\n%1\n\n"
+                                   "Apply the graph and stair changes as one undoable revision?")
+                        .arg(updates.join('\n')),
+                    QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+                if (answer != QMessageBox::Yes) {
+                    setError(QStringLiteral("Level edit cancelled."));
+                    return false;
+                }
+            }
+            (void)message;
+            (void)apply_vertical_level_edit(*m_document, candidate);
             clearError();
             refresh();
             return true;
@@ -12115,6 +12133,24 @@ public:
         return static_cast<QPageSize::PageSizeId>(m_pageSizeCombo->currentData().toInt());
     }
 
+    [[nodiscard]] QSizeF selectedSheetPageMm(const DocumentSnapshot& snapshot) const {
+        const auto record = decode_sheet_model(snapshot);
+        if (!record) return QPageSize(selectedPageSize()).size(QPageSize::Millimeter);
+        const auto& sheets = record->model.sheets();
+        if (sheets.empty()) throw std::invalid_argument("no drawing sheets are defined");
+        const auto selected_id = outputSheetId().toStdString();
+        const auto found = std::find_if(sheets.begin(), sheets.end(),
+            [&](const auto& sheet) { return sheet.id == selected_id; });
+        if (found == sheets.end())
+            throw std::invalid_argument("selected drawing sheet is no longer available");
+        return QSizeF(found->width_mm, found->height_mm);
+    }
+
+    [[nodiscard]] QPageSize selectedSheetPageSize(const DocumentSnapshot& snapshot) const {
+        return QPageSize(selectedSheetPageMm(snapshot), QPageSize::Millimeter,
+                         QStringLiteral("Selected drawing sheet"), QPageSize::ExactMatch);
+    }
+
     [[nodiscard]] PlanCanvas* outputCanvas() const noexcept {
         return m_workspace == Workspace::architectural ? m_architecturalCanvas
                                                         : m_measurementCanvas;
@@ -12573,11 +12609,12 @@ public:
                 : std::filesystem::path(m_file_path.wstring() + L".print-receipt.json");
             const auto page_mm = printer.pageRect(QPrinter::Millimeter);
             const auto paper_mm = printer.paperRect(QPrinter::Millimeter);
+            const auto requested_mm = selectedSheetPageMm(snapshot);
             const auto payload = json{
                 {"schema", "property-studio.print-receipt.v1"},
                 {"document_revision", snapshot.revision()},
-                {"page_size", m_pageSizeCombo ? m_pageSizeCombo->currentText().toStdString()
-                                                 : std::string("A4")},
+                {"page_size", printer.pageLayout().pageSize().name().toStdString()},
+                {"requested_sheet_mm", {requested_mm.width(), requested_mm.height()}},
                 {"printer_name", printer.printerName().toStdString()},
                 {"output_format", static_cast<int>(printer.outputFormat())},
                 {"resolution_dpi", printer.resolution()},
@@ -12616,7 +12653,8 @@ public:
         }
         try {
             QPdfWriter writer(path);
-            writer.setPageSize(QPageSize(selectedPageSize()));
+            writer.setPageLayout(QPageLayout(selectedSheetPageSize(m_document->snapshot()),
+                QPageLayout::Portrait, QMarginsF(), QPageLayout::Millimeter));
             writer.setResolution(144);
             QPainter painter(&writer);
             if (!painter.isActive()) {
@@ -12661,12 +12699,19 @@ public:
             return false;
         }
         try {
-            constexpr int width = 1600;
-            constexpr int height = 1200;
+            const auto page_mm = selectedSheetPageMm(m_document->snapshot());
             QSvgGenerator generator;
-            generator.setFileName(path);
-            generator.setSize(QSize(width, height));
-            generator.setViewBox(QRect(0, 0, width, height));
+            const auto width = page_mm.width() * generator.resolution() / 25.4;
+            const auto height = page_mm.height() * generator.resolution() / 25.4;
+            if (width > std::numeric_limits<int>::max() ||
+                height > std::numeric_limits<int>::max() || width < 0.5 || height < 0.5)
+                throw std::invalid_argument("sheet dimensions exceed SVG device limits");
+            QByteArray svg_bytes;
+            QBuffer svg_buffer(&svg_bytes);
+            svg_buffer.open(QIODevice::WriteOnly);
+            generator.setOutputDevice(&svg_buffer);
+            generator.setSize(QSize(qRound(width), qRound(height)));
+            generator.setViewBox(QRectF(0, 0, width, height));
             generator.setTitle(QStringLiteral("Vertex draft drawing"));
             generator.setDescription(QStringLiteral("Draft output from the shared vector canvas"));
             QPainter painter(&generator);
@@ -12684,6 +12729,28 @@ public:
                              Qt::TextWordWrap | Qt::AlignRight | Qt::AlignTop,
                              draftOutputStamp());
             painter.end();
+            // QSvgGenerator rounds the device size to integers. Preserve its
+            // normal font DPI, but publish the exact paper dimensions instead
+            // of allowing that rounding to redefine the physical page.
+            auto svg = QString::fromUtf8(svg_bytes);
+            const QRegularExpression root_pattern(QStringLiteral("<svg\\b[^>]*>"));
+            const auto root_match = root_pattern.match(svg);
+            if (!root_match.hasMatch()) throw std::runtime_error("SVG root was not generated");
+            auto root = root_match.captured();
+            for (const auto& attribute : {std::pair{QStringLiteral("width"), page_mm.width()},
+                                          std::pair{QStringLiteral("height"), page_mm.height()}}) {
+                const QRegularExpression pattern(QStringLiteral("\\b%1=\"[^\"]*\"").arg(attribute.first));
+                if (!pattern.match(root).hasMatch())
+                    throw std::runtime_error("SVG physical size was not generated");
+                root.replace(pattern, QStringLiteral("%1=\"%2mm\"")
+                    .arg(attribute.first, QString::number(attribute.second, 'g', 15)));
+            }
+            svg.replace(root_match.capturedStart(), root_match.capturedLength(), root);
+            const auto exact_svg = svg.toUtf8();
+            QSaveFile svg_file(path);
+            if (!svg_file.open(QIODevice::WriteOnly) ||
+                svg_file.write(exact_svg) != exact_svg.size() || !svg_file.commit())
+                throw std::runtime_error("SVG destination could not be saved");
             if (!QFileInfo::exists(path) || QFileInfo(path).size() <= 0) {
                 setError(QStringLiteral("SVG export did not produce a file."));
                 return false;
@@ -13170,7 +13237,17 @@ public:
                                  setError(QStringLiteral("Printing blocked: %1").arg(m_plan_geometry_error));
                                  return;
                              }
-                             printer->setPageSize(QPageSize(selectedPageSize()));
+                             try {
+                                 (void)outputFingerprintForSnapshot(m_document->snapshot());
+                                 printer->setPageLayout(QPageLayout(
+                                     selectedSheetPageSize(m_document->snapshot()),
+                                     QPageLayout::Portrait, QMarginsF(), QPageLayout::Millimeter));
+                                 printer->setFullPage(true);
+                             } catch (const std::exception& error) {
+                                 setError(QStringLiteral("Printing blocked: %1")
+                                     .arg(QString::fromUtf8(error.what())));
+                                 return;
+                             }
                              QPainter painter(printer);
                              const auto page = printer->pageRect(QPrinter::DevicePixel);
                              if (!renderSheetOutput(painter, QRectF(page), Qt::white)) return;
@@ -16244,7 +16321,9 @@ private:
             m_pageSizeCombo->addItem(label, static_cast<int>(page_size));
         }
         m_pageSizeCombo->setCurrentIndex(m_pageSizeCombo->findData(static_cast<int>(QPageSize::A4)));
-        m_pageSizeCombo->setToolTip(QStringLiteral("Paper size for PDF, print preview, and sheets"));
+        m_pageSizeCombo->setToolTip(QStringLiteral(
+            "Fallback paper size for documents without drawing sheets. "
+            "Choose the output page and its dimensions in Drawing sheets."));
         toolbar->addWidget(m_pageSizeCombo);
         m_architecturalViewCombo = new QComboBox(toolbar);
         m_architecturalViewCombo->setObjectName(QStringLiteral("architecturalView"));

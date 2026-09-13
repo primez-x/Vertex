@@ -31,6 +31,15 @@ coordinated view. Removing a page is undoable and fails when it would leave a
 dangling cross-sheet callout or remove the final page. The dialog selects the
 page used by draft PDF, SVG, and print output; that presentation selection is
 included in the output scene fingerprint without dirtying the document.
+The selected sheet's persisted width and height in millimetres determine the
+PDF physical page with zero margins, SVG physical dimensions and
+viewBox aspect, and the custom paper requested by print preview. Changing the
+toolbar page preset does not override a persisted sheet. The preset remains a
+fallback for documents without a sheet graph. Print receipts report
+`requested_sheet_mm` separately from the actual driver paper/page rectangles
+and DPI; driver acceptance does not establish physical printer calibration.
+Numeric PDF/SVG and preview-driver regression checks are development evidence.
+Physical calibration and paired production-output certification remain open.
 
 Views identify plan, elevation and section definitions by stable ID. A view owns
 its finite origin in metres, orthonormal direction/up frame, cut and far depths,

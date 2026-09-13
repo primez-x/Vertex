@@ -90,6 +90,30 @@ flight at the wrong height. Moving or rotating a connected stair preserves the
 relationship; uniform scaling is rejected by the architectural transform
 adapter because the graph height would otherwise become inconsistent.
 
+`prepare_vertical_level_edit(source, graph_entity_id, replacement)` in
+`vertical_level_document_adapter.hpp` prepares a detached, validated preview
+that changes the graph and the canonical `total_rise_m` of every straight stair
+connected to its changed heights in one Document command. The immutable
+`VerticalLevelEditCandidate` exposes `snapshot()` and `affected_stairs()`; each
+affected stair record contains its stable ID and old/new rise in metres. Riser
+count, going, landing, placement, connection IDs, extensions, and unrelated
+properties are preserved. Only the obsolete `/total_rise_m` quantity entry is
+removed when that canonical value changes. Stairs without a connection or
+connected to another graph remain unchanged.
+
+`apply_vertical_level_edit(document, candidate)` returns a receipt with the new
+revision and the same affected stair records. It binds application to the full
+source snapshot digest as well as its revision, rejecting divergent forks even
+when their document ID and revision coincide. Graph and stair changes enter one
+revision, so undo/redo restores them together. Preparation and rejected
+application never mutate the source. Normal Document admission is unchanged.
+
+Propagation requires both old and replacement links to be connected with the
+same link ID and endpoint IDs. Deleted, retargeted, frozen, or disconnected links
+used by a stair reject the whole preview. Unsupported or incomplete canonical
+stair forms and malformed graphs also fail closed. This adapter does not infer
+new connections, resize riser count or going, or certify stair code compliance.
+
 The Windows Architectural workspace exposes **Levels and floor-to-floor links**
 from the More menu and command palette. The editor creates or edits level IDs
 and metre elevations, adds validated connected links, and can freeze or

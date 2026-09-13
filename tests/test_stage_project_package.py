@@ -5,6 +5,7 @@ import pathlib
 import sqlite3
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -145,6 +146,89 @@ class StageProjectPackageTests(unittest.TestCase):
         self.assertEqual(result["summary"]["asset_count"], 1)
         self.assertEqual(len(list((root / "out/project-package/assets").glob("*.bin"))), 1)
         self.assertEqual(len(result["assets"][0]["references"]), 2)
+
+    def test_source_change_after_copy_keeps_staged_database_and_assets_consistent(self):
+        fixture = self.fixture()
+        self.addCleanup(fixture[0].cleanup)
+        _, root, project, _, payload, payload_hash = fixture
+        original_project = project.read_bytes()
+        copy_file = stage._copy_file
+
+        def copy_then_change_source(source, destination, relative):
+            result = copy_file(source, destination, relative)
+            if source == project:
+                database = sqlite3.connect(project)
+                try:
+                    database.execute("UPDATE metadata SET value=? WHERE key='document_id'",
+                                     ("document-replaced",))
+                    database.execute("UPDATE revision_assets SET data=?,sha256=?",
+                                     (b"updated-asset", digest(b"updated-asset")))
+                    database.commit()
+                finally:
+                    database.close()
+            return result
+
+        with mock.patch.object(stage, "_copy_file", side_effect=copy_then_change_source):
+            manifest = stage.stage_project_package(project, root, root / "out")
+        package = root / "out/project-package"
+        self.assertEqual((package / manifest["project"]["path"]).read_bytes(), original_project)
+        self.assertNotEqual(project.read_bytes(), original_project)
+        self.assertEqual(manifest["project"]["document_id"], "document-1")
+        self.assertEqual(manifest["assets"][0]["sha256"], payload_hash)
+        self.assertEqual((package / manifest["assets"][0]["path"]).read_bytes(), payload)
+        self.assertEqual(stage.verify_package(package)["asset_count"], 1)
+
+    def test_verify_rejects_manifest_metadata_not_matching_packaged_database(self):
+        fixture = self.fixture()
+        self.addCleanup(fixture[0].cleanup)
+        _, root, project, _, _, _ = fixture
+        manifest = stage.stage_project_package(project, root, root / "out")
+        package = root / "out/project-package"
+        for field, changed in (("document_id", "document-replaced"),
+                               ("format_version", 2), ("head_revision", 0),
+                               ("saved_revision", None), ("logical_digest", "1" * 64),
+                               ("revision_count", 3)):
+            with self.subTest(field=field):
+                original = manifest["project"][field]
+                manifest["project"][field] = changed
+                write_json(package / stage.DEFAULT_MANIFEST_NAME, manifest)
+                with self.assertRaisesRegex(stage.ProjectPackageError, "metadata"):
+                    stage.verify_package(package)
+                manifest["project"][field] = original
+
+    def test_verify_rejects_asset_records_not_matching_packaged_database(self):
+        fixture = self.fixture()
+        self.addCleanup(fixture[0].cleanup)
+        _, root, project, _, _, _ = fixture
+        original = stage.stage_project_package(project, root, root / "out")
+        package = root / "out/project-package"
+        for change in ("reference", "omitted"):
+            with self.subTest(change=change):
+                manifest = json.loads(json.dumps(original))
+                if change == "reference":
+                    manifest["assets"][0]["references"][0]["asset_id"] = "replaced-asset"
+                else:
+                    manifest["assets"] = []
+                    manifest["summary"]["asset_count"] = 0
+                write_json(package / stage.DEFAULT_MANIFEST_NAME, manifest)
+                with self.assertRaisesRegex(stage.ProjectPackageError, "assets"):
+                    stage.verify_package(package)
+
+    def test_verify_rejects_rehashed_asset_payload_not_matching_database(self):
+        fixture = self.fixture()
+        self.addCleanup(fixture[0].cleanup)
+        _, root, project, _, payload, _ = fixture
+        manifest = stage.stage_project_package(project, root, root / "out")
+        package = root / "out/project-package"
+        asset_path = manifest["assets"][0]["path"]
+        replacement = b"x" * len(payload)
+        (package / asset_path).write_bytes(replacement)
+        for record in manifest["files"]:
+            if record["path"] == asset_path:
+                record["sha256"] = digest(replacement)
+        write_json(package / stage.DEFAULT_MANIFEST_NAME, manifest)
+        with self.assertRaisesRegex(stage.ProjectPackageError, "asset.*hash"):
+            stage.verify_package(package)
 
     def test_stale_project_asset_is_rejected_without_publishing(self):
         fixture = self.fixture()

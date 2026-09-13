@@ -7,11 +7,18 @@ package adds a copy of every stored revision asset under a content-addressed
 document identity, format version, revision range, asset references, and
 integrity hashes.
 
-The command reads the project through SQLite's read-only URI and checks the
+The command copies the project byte-for-byte, then reads that staged copy
+through SQLite's read-only URI and checks the
 database integrity, required metadata, revision head, asset metadata, and
 asset bytes before publishing. It stages into a private directory and publishes
 only after all payloads and the manifest have been written. Existing package
 destinations are never replaced.
+
+Document metadata and the complete revision asset closure come from the staged
+database, so later source changes cannot mix a newer source revision with the
+copied project. The source must be a stable saved database while the byte copy
+runs; this does not provide a transactional snapshot of concurrent in-place
+SQLite writes or capture uncheckpointed WAL contents.
 
 From the repository root:
 
@@ -97,7 +104,10 @@ separate acceptance gates.
 
 Verification rejects modified or missing files, unsafe paths, symlinked
 payloads, unlisted files, inconsistent project, asset, or resource records, and
-packages that claim offline or production qualification. The package is an
+packages that claim offline or production qualification. It reopens the packaged
+database and compares all recorded document/revision metadata and complete asset
+records, including revision references, to the manifest; valid payload hashes
+alone do not establish that agreement. The package is an
 offline ownership and transfer artifact; it does not certify Apex compatibility,
 installer behavior, or cross-machine output equivalence. Those remain part of
 the unified production acceptance gate.

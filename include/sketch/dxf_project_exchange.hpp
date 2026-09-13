@@ -51,6 +51,9 @@ struct DxfProjectImportResult {
 // responsible for assigning the active floor/layer and committing one atomic
 // document command. Malformed transport input throws and returns no partial
 // result. Unsupported records are reported in diagnostics.
+// Inches, feet, millimetres, centimetres, metres and kilometres are normalized
+// to native SI metres before mapping. Missing/unitless or other source units
+// return no candidates, an explicit diagnostic and required source retention.
 [[nodiscard]] DxfProjectImportResult import_project_dxf(
     std::string_view bytes,
     const DxfExchangeLimits& limits = {});

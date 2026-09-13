@@ -46,6 +46,8 @@
 #include <QPainter>
 #include <QPageSize>
 #include <QPdfWriter>
+#include <QPdfDocument>
+#include <QXmlStreamReader>
 #include <QPlainTextEdit>
 #include <QPointingDevice>
 #include <QPushButton>
@@ -4868,6 +4870,21 @@ int main(int argc, char** argv) {
             "new drawing sheet should persist its metadata and coordinated viewports");
     require(window.exportDraftPdf(pdf_path_qstring),
             "selected new drawing sheet should render through the shared PDF path");
+    const auto require_pdf_page_mm = [&](double width, double height) {
+        QPdfDocument pdf;
+        require(pdf.load(pdf_path_qstring) == QPdfDocument::Error::None,
+                "sheet PDF should load for physical page measurement");
+        const auto points = pdf.pagePointSize(0);
+        require(std::abs(points.width() * 25.4 / 72.0 - width) < 0.4 &&
+                    std::abs(points.height() * 25.4 / 72.0 - height) < 0.4,
+                "PDF physical page must match persisted selected sheet millimetres");
+    };
+    require_pdf_page_mm(420.0, 297.0);
+    auto* physical_page_preset = window.findChild<QComboBox*>(QStringLiteral("outputPageSize"));
+    require(physical_page_preset != nullptr, "output page preset should exist");
+    physical_page_preset->setCurrentText(QStringLiteral("Letter"));
+    require(window.exportDraftPdf(pdf_path_qstring), "sheet PDF should export after preset change");
+    require_pdf_page_mm(420.0, 297.0);
     QFile selected_sheet_fingerprint(QString::fromStdWString(
         std::filesystem::path(pdf_path.wstring() + L".fingerprint.json").wstring()));
     require(selected_sheet_fingerprint.open(QIODevice::ReadOnly | QIODevice::Text),
@@ -4884,6 +4901,27 @@ int main(int argc, char** argv) {
         }
     }
     require(selected_sheet_bound, "selected-sheet output fingerprint must bind the requested page");
+    const auto portrait_sheet = window.createDrawingSheet(QStringLiteral("A-202"),
+        QStringLiteral("215.5"), QStringLiteral("330.2"), QStringLiteral("Custom portrait"));
+    require(!portrait_sheet.isEmpty() && window.exportDraftPdf(pdf_path_qstring),
+            "custom portrait sheet should export a PDF");
+    require_pdf_page_mm(215.5, 330.2);
+    require(window.exportDraftSvg(svg_path_qstring), "custom portrait sheet should export SVG");
+    QFile physical_svg(svg_path_qstring);
+    require(physical_svg.open(QIODevice::ReadOnly), "physical SVG should be readable");
+    QXmlStreamReader physical_svg_xml(&physical_svg);
+    require(physical_svg_xml.readNextStartElement() && physical_svg_xml.name() == QStringLiteral("svg"),
+            "physical SVG must have a root element");
+    const auto svg_attributes = physical_svg_xml.attributes();
+    require(svg_attributes.value(QStringLiteral("width")) == QStringLiteral("215.5mm") &&
+                svg_attributes.value(QStringLiteral("height")) == QStringLiteral("330.2mm"),
+            "SVG physical dimensions must match the selected persisted portrait sheet");
+    const auto view_box = svg_attributes.value(QStringLiteral("viewBox")).toString().split(' ');
+    require(view_box.size() == 4 &&
+                std::abs(view_box[2].toDouble() / view_box[3].toDouble() - 215.5 / 330.2) < 0.00001,
+            "SVG viewBox aspect must match its persisted paper dimensions");
+    physical_svg.close();
+    require(window.removeDrawingSheet(portrait_sheet), "custom portrait test sheet should be removable");
     require(window.selectOutputSheet(QStringLiteral("sheet-1")) &&
                 window.outputSheetId() == QStringLiteral("sheet-1"),
             "output sheet selection should be local presentation state");

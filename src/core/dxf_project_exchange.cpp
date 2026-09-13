@@ -543,11 +543,12 @@ struct InsertTransform {
     double scale_x{1};
     double scale_y{1};
     double rotation{};
+    DxfPoint base;
 };
 
 DxfPoint transform_point(DxfPoint point, const InsertTransform& transform) {
-    const auto x = point.x * transform.scale_x;
-    const auto y = point.y * transform.scale_y;
+    const auto x = (point.x - transform.base.x) * transform.scale_x;
+    const auto y = (point.y - transform.base.y) * transform.scale_y;
     const auto c = std::cos(transform.rotation);
     const auto s = std::sin(transform.rotation);
     return {transform.origin.x + c * x - s * y, transform.origin.y + s * x + c * y};
@@ -667,7 +668,7 @@ void import_inserts(const DxfDrawing& drawing, DxfProjectImportResult& result,
             [&](const auto& value) { return value.name == insert.block_name; });
         if (block == drawing.blocks.end()) continue;
         const InsertTransform transform{{insert.insertion.x, insert.insertion.y}, insert.scale_x,
-            insert.scale_y, radians_from_degrees(insert.rotation_degrees)};
+            insert.scale_y, radians_from_degrees(insert.rotation_degrees), block->base};
         for (const auto& line : block->lines) {
             const DxfPoint start = transform_point(line.start, transform);
             const DxfPoint end = transform_point(line.end, transform);
@@ -711,6 +712,48 @@ void import_inserts(const DxfDrawing& drawing, DxfProjectImportResult& result,
     }
 }
 
+std::optional<double> metres_per_source_unit(int units) {
+    switch (units) {
+    case 1: return 0.0254; // Inches.
+    case 2: return 0.3048; // Feet.
+    case 4: return 0.001;  // Millimetres.
+    case 5: return 0.01;   // Centimetres.
+    case 6: return 1.0;    // Metres.
+    case 7: return 1000.0; // Kilometres.
+    default: return std::nullopt;
+    }
+}
+
+void normalize_drawing_to_metres(DxfDrawing& drawing, double factor) {
+    const auto length = [factor](double& value) {
+        value *= factor;
+        if (!std::isfinite(value))
+            throw std::invalid_argument("DXF source-unit conversion exceeds finite metre range");
+    };
+    const auto point = [&](DxfPoint& value) { length(value.x); length(value.y); };
+    // The direct drawing and each block share these primitive families. Only
+    // their linear fields change; bulges, rotations and insert scales do not.
+    const auto primitives = [&](auto& contents) {
+        for (auto& line : contents.lines) { point(line.start); point(line.end); }
+        for (auto& arc : contents.arcs) { point(arc.center); length(arc.radius); }
+        for (auto& polyline : contents.polylines)
+            for (auto& vertex : polyline.vertices) point(vertex.point);
+        for (auto& label : contents.labels) { point(label.position); length(label.height); }
+    };
+    primitives(drawing);
+    for (auto& dimension : drawing.dimensions) {
+        point(dimension.extension_start);
+        point(dimension.extension_end);
+        point(dimension.dimension_line);
+        point(dimension.text_position);
+    }
+    for (auto& hatch : drawing.hatches)
+        for (auto& vertex : hatch.boundary) point(vertex);
+    for (auto& block : drawing.blocks) { point(block.base); primitives(block); }
+    for (auto& insert : drawing.inserts) point(insert.insertion);
+    drawing.insertion_units = 6;
+}
+
 } // namespace
 
 DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
@@ -735,10 +778,18 @@ DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
 
 DxfProjectImportResult import_project_dxf(std::string_view bytes,
                                           const DxfExchangeLimits& limits) {
-    const auto parsed = parse_dxf_ascii(bytes, limits);
+    auto parsed = parse_dxf_ascii(bytes, limits);
     DxfProjectImportResult result;
     for (const auto& item : parsed.diagnostics)
         diagnostic(result.diagnostics, {}, item.entity_type, item.code);
+    const auto factor = metres_per_source_unit(parsed.drawing.insertion_units);
+    if (!factor) {
+        diagnostic(result.diagnostics, {}, "HEADER",
+                   parsed.drawing.insertion_units == 0 ? "source_units_unspecified" : "source_units_unsupported");
+        result.source_retention_required = true;
+        return result;
+    }
+    normalize_drawing_to_metres(parsed.drawing, *factor);
     std::size_t boundary_counter = 0;
     import_direct_geometry(parsed.drawing, result, boundary_counter);
     AnnotationState annotations;

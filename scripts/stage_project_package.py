@@ -402,8 +402,9 @@ def stage_project_package(
     staging = pathlib.Path(tempfile.mkdtemp(prefix=f".{package_root.name}.stage-",
                                              dir=str(output_root_path)))
     try:
+        staged_project = _output_path(staging, project_relative)
         project_hash, project_size = _copy_file(
-            project_file, _output_path(staging, project_relative), project_relative)
+            project_file, staged_project, project_relative)
         assets: list[dict[str, Any]] = []
 
         def write_asset(digest: str, data: bytes) -> None:
@@ -417,7 +418,7 @@ def stage_project_package(
             _require(actual == digest and size == len(data),
                      f"staged asset {digest} failed hash verification")
 
-        project_metadata, assets = _inspect_project(project_file, write_asset)
+        project_metadata, assets = _inspect_project(staged_project, write_asset)
         resources, resource_manifest_record = _resource_entries(
             source_root_path, resource_manifest, destinations)
         for resource in resources:
@@ -491,7 +492,7 @@ def stage_project_package(
 
 
 def verify_package(package_root: pathlib.Path | str) -> dict[str, Any]:
-    """Verify the package manifest and every listed payload byte."""
+    """Verify payload bytes and manifest agreement with the packaged database."""
 
     root = _resolve_directory(package_root, "project package")
     manifest_path = root / DEFAULT_MANIFEST_NAME
@@ -559,10 +560,20 @@ def verify_package(package_root: pathlib.Path | str) -> dict[str, Any]:
         _require(path.casefold() in expected, f"project package asset is not listed: {path}")
         _require(expected[path.casefold()]["kind"] == "asset",
                  f"project package asset has the wrong file kind: {path}")
+        _require(digest == expected[path.casefold()]["sha256"],
+                 f"project package asset hash does not match its file record: {path}")
         _require(asset.get("size") == expected[path.casefold()]["size"],
                  f"project package asset size does not match its file record: {path}")
         _require(path.casefold() not in asset_paths, f"project package repeats asset {path}")
         asset_paths.add(path.casefold())
+
+    project_metadata, project_assets = _inspect_project(
+        _output_path(root, project_path), lambda digest, data: None)
+    for field, value in project_metadata.items():
+        _require(field in project and project[field] == value,
+                 f"project package metadata {field} does not match the packaged database")
+    _require(assets == project_assets,
+             "project package assets do not match the packaged database")
 
     resources = manifest.get("resources")
     _require(isinstance(resources, list), "project package resources must be a list")

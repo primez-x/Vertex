@@ -246,6 +246,9 @@ void test_output_refreshes_current_document_head() {
                 alternate_rendered->segments.front().start.x == 20.0,
             "output cache accepted different geometry with identical document identity and revision");
 
+    require(!direct.createDrawingSheet(QStringLiteral("P-201"), QStringLiteral("215.5"),
+                                      QStringLiteral("330.2"), QStringLiteral("Print paper")).isEmpty(),
+            "print fixture should select a persisted custom portrait sheet");
     require(direct.showPrintPreview(), "valid document should open a draft print preview");
     auto* print_preview = direct.findChild<QPrintPreviewDialog*>();
     require(print_preview != nullptr, "draft preview dialog is missing");
@@ -265,11 +268,17 @@ void test_output_refreshes_current_document_head() {
             "print receipt should be readable");
     const auto receipt_json = nlohmann::json::parse(receipt_file.readAll().toStdString());
     require(receipt_json.at("schema") == "property-studio.print-receipt.v1" &&
+                receipt_json.at("requested_sheet_mm") == nlohmann::json::array({215.5, 330.2}) &&
+                receipt_json.at("driver_paper_mm").size() == 4 &&
                 receipt_json.at("verification") == "preview-driver-evidence-only" &&
                 receipt_json.at("physical_dpi").size() == 2 &&
                 receipt_json.at("output_fingerprint").at("digest_sha256").is_string() &&
                 receipt_json.at("output_fingerprint").at("manifest").is_object(),
             "print receipt should bind driver evidence to the rendered output fingerprint");
+    const auto requested_paper = valid_printer.pageLayout().pageSize().size(QPageSize::Millimeter);
+    require(std::abs(requested_paper.width() - 215.5) < 0.4 &&
+                std::abs(requested_paper.height() - 330.2) < 0.4,
+            "print preview should request the selected persisted paper dimensions");
     receipt_file.close();
 
     auto direct_invalid = direct.document().snapshot().entities().at(direct_wall.toStdString());
