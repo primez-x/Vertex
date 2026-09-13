@@ -147,7 +147,8 @@ stable import-local IDs and an inspectable `extensions.dxf_source` record.
 Dimensions retain their extension geometry and displayed text as annotation
 content, but are explicitly diagnosed as `dimension_associativity_unbound`
 until a user selects a native boundary segment. Nonuniform block scaling of
-curved geometry is diagnosed rather than flattened. The result sets
+curved geometry is diagnosed rather than flattened; malformed INSERT
+references with missing block definitions are rejected before mapping. The result sets
 `source_retention_required` whenever either the transport parser or project
 mapper reports a limitation, so a desktop adapter can retain the original DXF
 bytes alongside the editable candidates.
