@@ -22,7 +22,9 @@ The production release criterion expands this catalog across plumbing, furniture
 fixtures, appliances, accessibility, lighting, doors/windows, structural/site,
 and light-commercial equipment, while retaining at least 200 validated entries.
 Each entry must expose physical width/depth metadata, a centre anchor, scale
-limits, and nonempty local preview strokes. Placement subtracts the anchor,
+limits, and nonempty local preview strokes contained within its declared
+footprint. Symbol family/category search is case-insensitive while category
+selection remains exact. Placement subtracts the anchor,
 uniformly scales, rotates counterclockwise in radians, then translates in metres;
 the final acceptance fixtures must prove representative symbols can be resized
 and remain legible at print and export scales. Instance style and visibility stay
@@ -42,7 +44,7 @@ entity, uses the deterministic catalog, and is included in the new-project
 scaffold. Visible labels and symbol previews are projected into the shared
 desktop vector canvas and persisted output. The desktop Annotations command
 creates template-backed labels and catalog-backed symbols through normal
-Document history; a category selector and family/category search keep the
+Document history; a category selector and case-insensitive family/category search keep the
 catalog usable at its full size. Navigator rows and canvas hit testing expose
 stable child IDs, deletion is undoable, and the inspector edits label text or
 either annotation kind's position, rotation, scale, and visibility through
@@ -53,9 +55,9 @@ bold/italic emphasis, and symbol stroke width now flow into the same renderer
 for interactive views and fitted sheet/export scenes.
 
 This is a bounded semantic and authoring slice for APX-ANNO-001, APX-ANNO-003
-and APX-SYM-001, **not completed parity**. Polished assets, independent
-resize/placement fixtures, visibility/override inspectors, and production
-visual QA remain open.
+and APX-SYM-001, **not completed parity**. Polished assets, visibility/override
+inspectors, and production visual QA remain open.
 Headless tests check every catalog preview, instance edits and JSON roundtrip,
 typed Document admission, save/reopen, category/query filtering, placement mathematics,
-deterministic IDs, and malformed-data rejection.
+deterministic IDs, physical-footprint bounds, independent resize behavior, and
+malformed-data rejection.

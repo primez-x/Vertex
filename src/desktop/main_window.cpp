@@ -11382,6 +11382,125 @@ public:
                             "edit classification");
     }
 
+    bool editSelectedOpeningAssembly(const QString& frame_width_expression,
+                                     const QString& frame_depth_expression,
+                                     const QString& panel_thickness_expression,
+                                     const QString& glazing_thickness_expression,
+                                     const QString& inset_expression,
+                                     std::optional<Revision> expected_revision = std::nullopt) {
+        const auto entity = selectedEntity();
+        if (!entity.has_value() || entity->type != "opening") {
+            setError(QStringLiteral("Select a hosted door or window to edit its assembly."));
+            return false;
+        }
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        const auto revision = expected_revision.value_or(m_document->revision());
+        if (revision != m_document->revision()) {
+            setError(QStringLiteral(
+                "The project changed while the opening assembly was being edited. Start again."));
+            return false;
+        }
+        try {
+            const auto kind_text = read_string(entity->properties, "opening_kind")
+                .value_or(read_string(entity->properties, "classification").value_or("door"));
+            const auto kind = parse_opening_assembly_kind(kind_text);
+            if (!kind.has_value()) {
+                throw std::invalid_argument("Opening kind must be Door or Window.");
+            }
+            OpeningAssembly assembly = entity->properties.contains("opening_assembly")
+                ? parse_opening_assembly(entity->properties.at("opening_assembly"))
+                : default_opening_assembly(*kind);
+            assembly.kind = *kind;
+            const auto unit = m_metric_units ? Unit::metre : Unit::foot;
+            const auto read_dimension = [&](const QString& expression, const char* label,
+                                            bool allow_zero) {
+                const auto trimmed = expression.trimmed();
+                if (trimmed.isEmpty()) {
+                    throw std::invalid_argument(std::string(label) + " is required.");
+                }
+                const auto value = parse_quantity(trimmed.toStdString(), unit).metres;
+                if (!std::isfinite(value) || (allow_zero ? value < 0.0 : value <= 1e-7)) {
+                    throw std::invalid_argument(std::string(label) +
+                                                (allow_zero ? " must be zero or greater."
+                                                             : " must be greater than zero."));
+                }
+                return value;
+            };
+            assembly.frame_width_m = read_dimension(frame_width_expression, "Frame width", false);
+            assembly.frame_depth_m = read_dimension(frame_depth_expression, "Frame depth", false);
+            assembly.panel_thickness_m = read_dimension(
+                panel_thickness_expression, "Panel or sash depth", false);
+            assembly.glazing_thickness_m = read_dimension(
+                glazing_thickness_expression, "Glazing depth", true);
+            const auto inset_text = inset_expression.trimmed();
+            if (inset_text.isEmpty()) {
+                throw std::invalid_argument("Inset is required.");
+            }
+            assembly.inset_m = parse_quantity(inset_text.toStdString(), unit).metres;
+            if (!std::isfinite(assembly.inset_m)) {
+                throw std::invalid_argument("Inset must be finite.");
+            }
+            validate_opening_assembly(assembly);
+            auto properties = entity->properties;
+            properties["opening_assembly"] = opening_assembly_json(assembly);
+            if (!previewOpening(*entity, properties)) {
+                return false;
+            }
+            // The wall-cut preview above protects sibling openings. Run the
+            // same native assembly builder as the 3D view as a second gate so
+            // frame depth/inset and clear panel dimensions are validated before
+            // the profile reaches Document history.
+            const auto snapshot = m_document->snapshot();
+            const auto wall_id = read_string(properties, "wall_id");
+            if (!wall_id.has_value()) {
+                throw std::invalid_argument("Opening assembly requires a host wall.");
+            }
+            const auto wall = snapshot.entities().find(*wall_id);
+            if (wall == snapshot.entities().end() || wall->second.type != "wall") {
+                throw std::invalid_argument("Opening assembly host wall does not exist.");
+            }
+            Entity candidate_entity = *entity;
+            candidate_entity.properties = properties;
+            std::vector<const Entity*> sibling_entities;
+            for (const auto& [id, sibling] : snapshot.entities()) {
+                if (sibling.type != "opening" ||
+                    read_string(sibling.properties, "wall_id").value_or("") != *wall_id) {
+                    continue;
+                }
+                sibling_entities.push_back(id == entity->id ? &candidate_entity : &sibling);
+            }
+            std::string wall_error;
+            Wall host;
+            if (!read_document_wall(wall->second, sibling_entities, host, wall_error)) {
+                throw std::invalid_argument(wall_error);
+            }
+            QString opening_error;
+            const auto hosted = read_hosted_opening(candidate_entity, &opening_error);
+            if (!hosted.has_value()) {
+                throw std::invalid_argument(opening_error.toStdString());
+            }
+            std::optional<DoorOperation> operation;
+            if (assembly.kind == OpeningAssemblyKind::door &&
+                candidate_entity.properties.contains("door_operation")) {
+                operation = decode_door_operation(candidate_entity.properties.at("door_operation"));
+            }
+            (void)make_opening_assembly(host, *hosted, assembly, operation);
+            auto candidate = std::move(candidate_entity);
+            applyDocumentCommand(ApplyEntityChanges{
+                revision, {EntityChange::upsert(std::move(candidate))}, {},
+                "edit opening assembly"});
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Opening assembly: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     bool editSelectedLength(const QString& expression) {
         const auto entity = selectedEntity();
         if (!entity.has_value() || (entity->type != "wall" && entity->type != "opening")) {
@@ -16524,6 +16643,13 @@ private:
         m_door_swing_button->setObjectName("editDoorSwing");
         inspector_layout->addWidget(m_door_swing_button);
         QObject::connect(m_door_swing_button, &QPushButton::clicked, owner, [this] { showDoorSwingEditor(); });
+        m_opening_assembly_button = new QPushButton(QStringLiteral("Opening assembly…"), inspector_body);
+        m_opening_assembly_button->setObjectName(QStringLiteral("editOpeningAssembly"));
+        m_opening_assembly_button->setToolTip(QStringLiteral(
+            "Edit the hosted frame, panel or sash, glazing, and wall-centreline inset."));
+        inspector_layout->addWidget(m_opening_assembly_button);
+        QObject::connect(m_opening_assembly_button, &QPushButton::clicked, owner,
+                         [this] { showOpeningAssemblyEditor(); });
         QObject::connect(apply_material, &QPushButton::clicked, owner, [this] {
             try {
                 if (!m_material_context || !modalContextUnchanged(*m_material_context))
@@ -18663,6 +18789,8 @@ private:
         const bool opening = entity.has_value() && entity->type == "opening";
         m_door_swing_button->setVisible(opening && entity->properties.value("opening_kind", std::string{}) == "door");
         m_door_swing_button->setEnabled(m_document->is_editable());
+        m_opening_assembly_button->setVisible(opening);
+        m_opening_assembly_button->setEnabled(opening && m_document->is_editable());
         const bool reference_asset = entity.has_value() && entity->type == "reference_asset";
         const bool project_entity = entity.has_value() && entity->type == "property";
         const bool area_entity = entity.has_value() && is_closed_boundary_entity(entity->type);
@@ -20161,6 +20289,92 @@ private:
         }
     }
 
+    void showOpeningAssemblyEditor() {
+        const auto context = captureModalContext();
+        const auto source = selectedEntity();
+        if (!source || source->type != "opening") {
+            setError(QStringLiteral("Select a hosted door or window first."));
+            return;
+        }
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return;
+        }
+        try {
+            const auto kind_text = read_string(source->properties, "opening_kind")
+                .value_or(read_string(source->properties, "classification").value_or("door"));
+            const auto kind = parse_opening_assembly_kind(kind_text);
+            if (!kind.has_value()) {
+                throw std::invalid_argument("Opening kind must be Door or Window.");
+            }
+            const auto assembly = source->properties.contains("opening_assembly")
+                ? parse_opening_assembly(source->properties.at("opening_assembly"))
+                : default_opening_assembly(*kind);
+            QDialog dialog(owner);
+            dialog.setObjectName(QStringLiteral("openingAssemblyDialog"));
+            dialog.setWindowTitle(QStringLiteral("Opening assembly"));
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* description = new QLabel(
+                QStringLiteral("%1 profile dimensions are stored in metres and remain editable after placement.")
+                    .arg(QString::fromUtf8(opening_assembly_kind_name(assembly.kind).data())),
+                &dialog);
+            description->setWordWrap(true);
+            layout->addWidget(description);
+            auto* form = new QFormLayout;
+            auto* frame_width = new QLineEdit(format_length(assembly.frame_width_m, m_metric_units), &dialog);
+            auto* frame_depth = new QLineEdit(format_length(assembly.frame_depth_m, m_metric_units), &dialog);
+            auto* panel = new QLineEdit(format_length(assembly.panel_thickness_m, m_metric_units), &dialog);
+            auto* glazing = new QLineEdit(format_length(assembly.glazing_thickness_m, m_metric_units), &dialog);
+            auto* inset = new QLineEdit(format_length(assembly.inset_m, m_metric_units), &dialog);
+            frame_width->setObjectName(QStringLiteral("openingFrameWidth"));
+            frame_depth->setObjectName(QStringLiteral("openingFrameDepth"));
+            panel->setObjectName(QStringLiteral("openingPanelThickness"));
+            glazing->setObjectName(QStringLiteral("openingGlazingThickness"));
+            inset->setObjectName(QStringLiteral("openingInset"));
+            frame_width->setToolTip(QStringLiteral("Positive frame width across the opening."));
+            frame_depth->setToolTip(QStringLiteral("Positive frame depth through the wall."));
+            panel->setToolTip(QStringLiteral("Door leaf or window sash depth; it cannot exceed frame depth."));
+            glazing->setToolTip(QStringLiteral("Zero is allowed for doors; windows require positive glazing."));
+            inset->setToolTip(QStringLiteral("Signed offset from the wall centreline toward its left-hand normal."));
+            form->addRow(QStringLiteral("Frame width"), frame_width);
+            form->addRow(QStringLiteral("Frame depth"), frame_depth);
+            form->addRow(QStringLiteral("Panel / sash depth"), panel);
+            form->addRow(QStringLiteral("Glazing depth"), glazing);
+            form->addRow(QStringLiteral("Inset"), inset);
+            layout->addLayout(form);
+            auto* status = new QLabel(&dialog);
+            status->setObjectName(QStringLiteral("openingAssemblyError"));
+            status->setWordWrap(true);
+            status->setStyleSheet(QStringLiteral("color:#b3261e;"));
+            status->hide();
+            layout->addWidget(status);
+            auto* buttons = new QDialogButtonBox(
+                QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
+            buttons->button(QDialogButtonBox::Save)->setObjectName(QStringLiteral("saveOpeningAssembly"));
+            layout->addWidget(buttons);
+            QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+            QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+                if (!modalContextUnchanged(context)) {
+                    status->setText(QStringLiteral(
+                        "The project changed while this editor was open. Reselect the opening and try again."));
+                    status->show();
+                    return;
+                }
+                if (editSelectedOpeningAssembly(frame_width->text(), frame_depth->text(),
+                                                 panel->text(), glazing->text(), inset->text(),
+                                                 context.revision)) {
+                    dialog.accept();
+                    return;
+                }
+                status->setText(lastError());
+                status->show();
+            });
+            dialog.exec();
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Opening assembly: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
     void showDoorSwingEditor() {
         const auto context = captureModalContext();
         const auto source = selectedEntity();
@@ -20446,6 +20660,7 @@ private:
     std::optional<ModalContext> m_building_edit_context;
     QWidget* m_material_group{};
     QPushButton* m_door_swing_button{};
+    QPushButton* m_opening_assembly_button{};
     QComboBox* m_material_combo{};
     QLabel* m_material_error{};
     std::optional<ModalContext> m_material_context;
@@ -20948,6 +21163,18 @@ bool MainWindow::editSelectedClassification(const QString& classification) {
 
 bool MainWindow::editSelectedLength(const QString& expression) {
     return m_impl->editSelectedLength(expression);
+}
+
+bool MainWindow::editSelectedOpeningAssembly(
+    const QString& frame_width,
+    const QString& frame_depth,
+    const QString& panel_thickness,
+    const QString& glazing_thickness,
+    const QString& inset,
+    std::optional<Revision> expected_revision) {
+    return m_impl->editSelectedOpeningAssembly(
+        frame_width, frame_depth, panel_thickness, glazing_thickness, inset,
+        expected_revision);
 }
 
 bool MainWindow::editSelectedHeight(const QString& expression) {

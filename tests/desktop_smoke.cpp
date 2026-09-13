@@ -4,6 +4,7 @@
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
 #include "sketch/assembly_model.hpp"
+#include "sketch/opening_assembly.hpp"
 #include "sketch/desktop/hosted_opening_dialog.hpp"
 #include "sketch/vertical_levels.hpp"
 #include "sketch/reference_grid.hpp"
@@ -3074,10 +3075,57 @@ void test_hosted_opening_editor(const QString& capture_directory) {
     window.findChild<QPushButton*>("editDoorSwing")->click();
     require(window.document().snapshot().entities().at(opening->first).properties.at("door_operation").at("side")=="right",
         "door operation edits persist through inspector command");
+    require(window.findChild<QPushButton*>("editOpeningAssembly") != nullptr,
+        "opening inspector exposes typed assembly editing");
+    const auto assembly_before = window.document().revision();
+    const auto assembly_edit_ok = window.editSelectedOpeningAssembly(
+        "100 mm", "90 mm", "35 mm", "0 mm", "-20 mm");
+    if (!assembly_edit_ok) std::cerr << "opening assembly edit error: "
+                                    << window.lastError().toStdString() << '\n';
+    require(assembly_edit_ok,
+        "door assembly dimensions edit through the shared command");
+    const auto edited_assembly = parse_opening_assembly(
+        window.document().snapshot().entities().at(opening->first).properties.at("opening_assembly"));
+    require(std::abs(edited_assembly.frame_width_m - 0.1) < 1e-9 &&
+                std::abs(edited_assembly.frame_depth_m - 0.09) < 1e-9 &&
+                std::abs(edited_assembly.panel_thickness_m - 0.035) < 1e-9 &&
+                edited_assembly.glazing_thickness_m == 0.0 &&
+                std::abs(edited_assembly.inset_m + 0.02) < 1e-9 &&
+                window.document().revision() == assembly_before + 1,
+        "opening assembly edit must retain exact dimensional and signed inset values");
+    const auto rejected_assembly_revision = window.document().revision();
+    require(!window.editSelectedOpeningAssembly("600 mm", "140 mm", "35 mm", "0 mm", "0 mm") &&
+                window.document().revision() == rejected_assembly_revision,
+        "opening assembly preview must reject a frame that removes the clear opening");
+    require(window.undoCommand() &&
+                window.document().snapshot().entities().at(opening->first).properties.at("opening_assembly") ==
+                    opening->second.properties.at("opening_assembly") &&
+                window.redoCommand(),
+        "opening assembly dimensions participate in undo and redo");
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>("openingAssemblyDialog");
+        require(dialog, "opening assembly inspector dialog opens");
+        dialog->findChild<QLineEdit*>("openingFrameWidth")->setText("120 mm");
+        dialog->findChild<QLineEdit*>("openingFrameDepth")->setText("120 mm");
+        dialog->findChild<QLineEdit*>("openingPanelThickness")->setText("40 mm");
+        dialog->findChild<QLineEdit*>("openingGlazingThickness")->setText("0 mm");
+        dialog->findChild<QLineEdit*>("openingInset")->setText("0 mm");
+        dialog->findChild<QPushButton*>("saveOpeningAssembly")->click();
+    });
+    window.findChild<QPushButton*>("editOpeningAssembly")->click();
+    const auto ui_assembly = parse_opening_assembly(
+        window.document().snapshot().entities().at(opening->first).properties.at("opening_assembly"));
+    require(std::abs(ui_assembly.frame_width_m - 0.12) < 1e-9 &&
+                std::abs(ui_assembly.frame_depth_m - 0.12) < 1e-9 &&
+                std::abs(ui_assembly.panel_thickness_m - 0.04) < 1e-9 &&
+                ui_assembly.inset_m == 0.0,
+        "opening assembly inspector must commit edited profile fields");
     QTemporaryDir project;
     require(window.saveProjectAs(project.filePath("door.bldproj")) && window.openProject(project.filePath("door.bldproj")) &&
-        window.document().snapshot().entities().at(opening->first).properties.at("door_operation").at("side")=="right",
-        "door handing survives project reopen");
+        window.document().snapshot().entities().at(opening->first).properties.at("door_operation").at("side")=="right" &&
+        parse_opening_assembly(window.document().snapshot().entities().at(opening->first)
+                                   .properties.at("opening_assembly")).frame_width_m == 0.12,
+        "door handing and typed assembly dimensions survive project reopen");
     if(!capture_directory.isEmpty()) {
         window.resize(1200,850); window.show(); QApplication::processEvents(); window.fitView();
         require(window.grab().save(capture_directory+"/door-swing-plan.png"),"capture analytic door swing on plan");

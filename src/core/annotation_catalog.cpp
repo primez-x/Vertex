@@ -2,9 +2,13 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
+#include <initializer_list>
+#include <numbers>
 #include <set>
 #include <stdexcept>
+#include <utility>
 
 namespace sketch {
 namespace {
@@ -46,6 +50,14 @@ AnnotationPlacement decode_placement(const json& j) {
 }
 void unique_id(std::set<std::string>& ids, const std::string& id) {
     check(!id.empty() && id.size() <= 256 && ids.insert(id).second, "Empty, oversized, or duplicate annotation ID");
+}
+std::string folded(std::string_view value) {
+    std::string result;
+    result.reserve(value.size());
+    for (const auto character : value) {
+        result.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(character))));
+    }
+    return result;
 }
 }
 
@@ -111,6 +123,29 @@ std::vector<SymbolDefinition> default_symbol_catalog() {
         s.width_metres = f.width * (0.8 + 0.2*w); s.depth_metres = f.depth * (0.8 + 0.2*d);
         const double x = s.width_metres/2, y = s.depth_metres/2;
         auto line = [&](double ax, double ay, double bx, double by) { s.preview.push_back({{ax*x,ay*y},{bx*x,by*y}}); };
+        const auto rect = [&](double left, double bottom, double right, double top) {
+            line(left, bottom, right, bottom);
+            line(right, bottom, right, top);
+            line(right, top, left, top);
+            line(left, top, left, bottom);
+        };
+        const auto polyline = [&](std::initializer_list<std::pair<double, double>> points) {
+            if (points.size() < 2) return;
+            auto previous = points.begin();
+            for (auto current = std::next(previous); current != points.end(); ++current) {
+                line(previous->first, previous->second, current->first, current->second);
+                previous = current;
+            }
+        };
+        const auto circle = [&](double centre_x, double centre_y, double radius) {
+            constexpr int segments = 12;
+            for (int index = 0; index < segments; ++index) {
+                const double first = 2.0 * std::numbers::pi * index / segments;
+                const double second = 2.0 * std::numbers::pi * (index + 1) / segments;
+                line(centre_x + radius * std::cos(first), centre_y + radius * std::sin(first),
+                     centre_x + radius * std::cos(second), centre_y + radius * std::sin(second));
+            }
+        };
         line(-1,-1,1,-1); line(1,-1,1,1); line(1,1,-1,1); line(-1,1,-1,-1);
         if (f.shape == 1) { line(-0.7,-1,-0.7,0.7); line(0.7,-1,0.7,0.7); line(-1,0.7,1,0.7); }
         if (f.shape == 2) { line(-0.8,-0.8,0.8,-0.8); line(0.8,-0.8,0.8,0.8); line(0.8,0.8,-0.8,0.8); line(-0.8,0.8,-0.8,-0.8); }
@@ -129,6 +164,114 @@ std::vector<SymbolDefinition> default_symbol_catalog() {
         if (f.shape == 16) { line(-0.7,-0.7,0.7,0.7); line(-0.7,0.7,0.7,-0.7); }
         if (f.shape == 17) { line(-0.8,-0.7,0.8,-0.7); line(-0.8,-0.35,0.8,-0.35); line(-0.8,0,0.8,0); line(-0.8,0.35,0.8,0.35); line(-0.8,0.7,0.8,0.7); }
         if (f.shape == 18) { line(-0.8,-0.55,-0.8,0.55); line(-0.8,0.55,0.8,0.55); line(0.8,0.55,0.8,-0.55); line(-0.8,0,0.8,0); }
+        const std::string_view family_id = f.id;
+        if (family_id == "toilet") {
+            rect(-0.38, -0.92, 0.38, -0.5); // tank
+            polyline({{-0.38, -0.5}, {-0.28, -0.2}, {-0.2, 0.28},
+                      {0.2, 0.28}, {0.28, -0.2}, {0.38, -0.5}});
+            line(-0.2, 0.28, 0.2, 0.28);
+        } else if (family_id == "accessible-toilet") {
+            rect(-0.42, -0.9, 0.42, -0.52);
+            polyline({{-0.42, -0.52}, {-0.28, -0.15}, {-0.2, 0.35},
+                      {0.2, 0.35}, {0.28, -0.15}, {0.42, -0.52}});
+            circle(0.0, 0.48, 0.2);
+            line(-0.65, -0.82, -0.65, 0.65);
+            line(-0.65, 0.65, 0.05, 0.65);
+        } else if (family_id == "single-bed" || family_id == "double-bed") {
+            line(-0.88, 0.54, 0.88, 0.54);
+            line(-0.88, 0.2, 0.88, 0.2);
+            line(-0.88, 0.54, -0.88, 0.86);
+            line(0.88, 0.54, 0.88, 0.86);
+            line(-0.88, -0.1, 0.88, -0.1);
+        } else if (family_id == "sofa") {
+            line(-0.72, 0.18, 0.72, 0.18);
+            line(-0.72, -0.18, 0.72, -0.18);
+            line(-0.72, 0.18, -0.72, -0.18);
+            line(0.72, 0.18, 0.72, -0.18);
+            line(-0.9, -0.75, -0.9, 0.55);
+            line(0.9, -0.75, 0.9, 0.55);
+        } else if (family_id == "chair" || family_id == "armchair") {
+            line(-0.62, 0.15, 0.62, 0.15);
+            line(-0.62, 0.15, -0.62, -0.65);
+            line(0.62, 0.15, 0.62, -0.65);
+            line(-0.82, -0.65, 0.82, -0.65);
+            if (family_id == "armchair") {
+                line(-0.9, -0.2, -0.9, 0.55);
+                line(0.9, -0.2, 0.9, 0.55);
+            }
+        } else if (family_id == "desk" || family_id == "dining-table" ||
+                   family_id == "coffee-table" || family_id == "side-table") {
+            line(-0.78, 0.42, 0.78, 0.42);
+            line(-0.78, -0.42, 0.78, -0.42);
+            line(-0.6, -0.42, -0.6, -0.9);
+            line(0.6, -0.42, 0.6, -0.9);
+        } else if (family_id == "sink" || family_id == "double-sink") {
+            const double centre = family_id == "double-sink" ? 0.45 : 0.0;
+            circle(-centre, 0.0, 0.28);
+            if (family_id == "double-sink") circle(centre, 0.0, 0.28);
+            line(-0.2, 0.72, 0.2, 0.72);
+            line(0.0, 0.72, 0.0, 0.45);
+        } else if (family_id == "bathtub") {
+            rect(-0.78, -0.62, 0.78, 0.62);
+            polyline({{-0.58, -0.42}, {0.58, -0.42}, {0.58, 0.42}, {-0.58, 0.42}});
+            circle(0.58, 0.42, 0.08);
+        } else if (family_id == "shower" || family_id == "accessible-shower") {
+            circle(0.0, 0.0, 0.32);
+            line(-0.78, 0.78, 0.2, 0.78);
+            line(0.2, 0.78, 0.2, 0.2);
+            line(-0.2, -0.2, 0.2, 0.2);
+            line(-0.2, 0.2, 0.2, -0.2);
+        } else if (family_id == "floor-drain" || family_id == "cleanout" ||
+                   family_id == "hose-bib" || family_id == "water-meter") {
+            circle(0.0, 0.0, 0.55);
+            line(-0.55, 0.0, 0.55, 0.0);
+            line(0.0, -0.55, 0.0, 0.55);
+        } else if (family_id == "grab-bar") {
+            line(-0.75, -0.45, -0.75, 0.45);
+            line(-0.75, 0.45, 0.75, 0.45);
+            line(0.75, 0.45, 0.75, -0.45);
+        } else if (family_id == "ceiling-light" || family_id == "wall-sconce" ||
+                   family_id == "recessed-light") {
+            circle(0.0, 0.0, 0.5);
+            line(-0.35, -0.35, 0.35, 0.35);
+            line(-0.35, 0.35, 0.35, -0.35);
+        } else if (family_id == "ceiling-fan") {
+            circle(0.0, 0.0, 0.2);
+            line(0.0, 0.2, 0.0, 0.9);
+            line(0.0, -0.2, 0.0, -0.9);
+            line(0.2, 0.0, 0.9, 0.0);
+            line(-0.2, 0.0, -0.9, 0.0);
+        } else if (family_id == "single-door" || family_id == "double-door" ||
+                   family_id == "sliding-door") {
+            line(-0.85, -0.82, 0.85, -0.82);
+            line(-0.85, 0.82, 0.85, 0.82);
+            line(-0.85, -0.82, -0.85, 0.82);
+            line(0.0, -0.82, 0.0, 0.82);
+            line(-0.85, -0.82, 0.65, 0.55);
+            if (family_id == "double-door") line(0.85, -0.82, -0.65, 0.55);
+        } else if (family_id == "window" || family_id == "bay-window") {
+            line(-0.72, -0.72, 0.72, 0.72);
+            line(-0.72, 0.72, 0.72, -0.72);
+            line(0.0, -0.85, 0.0, 0.85);
+            line(-0.85, 0.0, 0.85, 0.0);
+        } else if (family_id == "parking-space") {
+            line(-0.75, -0.85, -0.75, 0.85);
+            line(0.75, -0.85, 0.75, 0.85);
+            line(-0.75, -0.7, 0.75, -0.7);
+        } else if (family_id == "tree") {
+            circle(0.0, 0.0, 0.72);
+            line(-0.12, -0.72, -0.12, -0.95);
+            line(0.12, -0.72, 0.12, -0.95);
+        } else if (family_id == "column-symbol") {
+            line(-0.55, -0.55, 0.55, 0.55);
+            line(-0.55, 0.55, 0.55, -0.55);
+        } else if (family_id == "stair-symbol") {
+            for (int step = -3; step <= 3; ++step) {
+                const double y_value = step * 0.22;
+                line(-0.75, y_value, 0.75, y_value);
+            }
+            line(-0.75, -0.75, 0.75, 0.75);
+        }
         result.push_back(std::move(s));
     }
     return result;
@@ -138,11 +281,12 @@ std::vector<SymbolDefinition> filter_symbol_catalog(
     const std::vector<SymbolDefinition>& catalog, std::string_view query,
     std::string_view category) {
     std::vector<SymbolDefinition> result;
+    const auto folded_query = folded(query);
     for (const auto& symbol : catalog) {
         if (!category.empty() && symbol.category != category) continue;
-        if (!query.empty() && symbol.id.find(query) == std::string::npos &&
-            symbol.family.find(query) == std::string::npos &&
-            symbol.category.find(query) == std::string::npos) continue;
+        if (!folded_query.empty() && folded(symbol.id).find(folded_query) == std::string::npos &&
+            folded(symbol.family).find(folded_query) == std::string::npos &&
+            folded(symbol.category).find(folded_query) == std::string::npos) continue;
         result.push_back(symbol);
     }
     return result;
@@ -161,6 +305,12 @@ void validate_symbol_catalog(const std::vector<SymbolDefinition>& catalog) {
         for (const auto& stroke : s.preview) {
             point(stroke.start); point(stroke.end);
             check(stroke.start.x != stroke.end.x || stroke.start.y != stroke.end.y, "Degenerate symbol stroke");
+            const auto within_footprint = [&](Vec2 value) {
+                return std::abs(value.x - s.anchor.x) <= s.width_metres / 2.0 + 1e-9 &&
+                       std::abs(value.y - s.anchor.y) <= s.depth_metres / 2.0 + 1e-9;
+            };
+            check(within_footprint(stroke.start) && within_footprint(stroke.end),
+                  "Symbol preview extends beyond its physical footprint");
         }
     }
 }

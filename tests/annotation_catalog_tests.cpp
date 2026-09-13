@@ -1,4 +1,5 @@
 #include "sketch/annotation_catalog.hpp"
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -42,6 +43,16 @@ int main() {
     require(plumbing.size() == 36, "Category filtering must return all plumbing variants");
     const auto toilets = filter_symbol_catalog(catalog, "toilet");
     require(toilets.size() == 18, "Query filtering must match toilet families and variants");
+    require(filter_symbol_catalog(catalog, "TOILET").size() == 18,
+            "Symbol search must be case-insensitive for field use");
+    const auto has_family = [&](const char* family) {
+        return std::any_of(catalog.begin(), catalog.end(), [&](const auto& definition) {
+            return definition.family == family && definition.preview.size() >= 5;
+        });
+    };
+    require(has_family("toilet") && has_family("single-bed") && has_family("sofa") &&
+                has_family("floor-drain"),
+            "Core residential and plumbing families must have usable vector motifs");
     const auto repeated = default_symbol_catalog();
     for (std::size_t i=0;i<catalog.size();++i) {
         require(catalog[i].id == repeated[i].id && catalog[i].width_metres == repeated[i].width_metres,
@@ -92,6 +103,9 @@ int main() {
     auto invalid_catalog = catalog; invalid_catalog.push_back(catalog.front());
     rejected([&]{validate_symbol_catalog(invalid_catalog);});
     invalid_catalog = catalog; invalid_catalog[0].preview.clear();
+    rejected([&]{validate_symbol_catalog(invalid_catalog);});
+    invalid_catalog = catalog;
+    invalid_catalog[0].preview.front().start.x = invalid_catalog[0].width_metres;
     rejected([&]{validate_symbol_catalog(invalid_catalog);});
     std::cout << "annotation_catalog_tests passed\n";
 }

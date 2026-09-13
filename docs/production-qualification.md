@@ -137,6 +137,16 @@ Light-commercial OPS-QA-003 additionally requires `multiple_levels`, `assemblies
 `symbol_library`, `symbol_resize`, `symbol_output`, `semantic`, `calculation`,
 `output`, and `fidelity`.
 
+The `symbol_library` observation must enumerate the shipped deterministic
+catalog and prove at least 200 usable entries across plumbing, furniture,
+fixtures, appliances, accessibility, lighting, doors/windows, structural/site,
+and commercial equipment. `symbol_resize` must place representative toilets,
+beds, furniture, and commercial symbols at multiple scales and rotations while
+retaining their declared physical footprint and anchor through save/reopen.
+`symbol_output` must compare those same instances in print preview, PDF/SVG, and
+image output at the supported page scales. Missing categories, placeholder-only
+artwork, clipped geometry, or an unverified output path is a production blocker.
+
 At each DPI scale OPS-QA-005 additionally requires `real_pen`, `real_touch`,
 `keyboard_navigation`, `focus`, `accessible_properties`, `light_theme`,
 `dark_theme`, `high_contrast`, and `dpi_layout`. Capture the entire core workflow

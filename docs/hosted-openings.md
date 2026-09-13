@@ -54,5 +54,14 @@ Schedules expose the profile kind and dimensions as read-only source-backed
 properties. The profile is strict schema version 1: unknown versions, missing
 fields, kind mismatches, impossible panel/depth relationships, and assemblies
 that do not fit the host wall are rejected before a Document mutation. The
-derived compound is not exported as authoritative project geometry; native
-DXF/IFC and full ARCH-MOD-002 export acceptance remain production-gate work.
+The opening inspector's **Opening assembly…** command edits all five profile
+dimensions (frame width/depth, panel or sash depth, glazing depth, and signed
+wall-centreline inset) in the active unit system. The command previews the
+complete host and sibling openings, applies one revision-checked history entry,
+and supports undo/redo. A door may keep zero glazing; a window requires a
+positive glazing depth. Malformed or stale edits remain visible in the dialog
+and leave the document unchanged.
+
+The derived compound is not exported as authoritative project geometry;
+native DXF/IFC and full ARCH-MOD-002 export acceptance remain production-gate
+work.

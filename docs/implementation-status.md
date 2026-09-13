@@ -59,7 +59,9 @@ with shared native geometry for jambs, heads, sills, leaves, sash bars, glazing,
 and handed door motion. New openings receive a deterministic door/window default;
 legacy cut-only records remain valid, while schedule rows expose assembly
 dimensions. Profile editing beyond the current classification/default path and
-full native interchange qualification remain open.
+dimensions. The opening inspector now edits frame width/depth, panel or sash
+depth, glazing depth, and signed inset through a revision-checked preview with
+one-command undo/redo. Full native interchange qualification remains open.
 The tracked source boundary is now explicit in
 `third_party/source-provenance.json`: a fail-closed audit assigns every tracked
 path to first-party source, third-party provenance, or an excluded generated
@@ -348,8 +350,9 @@ accessibility, lighting, doors/windows, structural/site, and light-commercial
 equipment, each with nine physical width/depth variants and validated scale
 limits. Representative symbol resize/placement now has a desktop regression
 fixture, and resized symbols are covered by vector DXF output. Polished artwork,
-catalog search/filtering, and final print/export visual qualification remain
-production-gate work.
+physical-footprint bounds, family-specific motifs, and case-insensitive
+catalog search/filtering are now covered. Final print/export visual
+qualification and artwork review remain production-gate work.
 Stored label and symbol stroke/fill colors, fill patterns, paper text height,
 bold/italic emphasis, and symbol stroke width now flow through the shared
 interactive and fitted/output canvas renderer. Coordinated view/sheet records with

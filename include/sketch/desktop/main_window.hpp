@@ -380,6 +380,17 @@ public:
                                                 const QString& classification = {});
     [[nodiscard]] bool editSelectedClassification(const QString& classification);
     [[nodiscard]] bool editSelectedLength(const QString& expression);
+    // Updates the selected hosted door/window's typed frame, panel/glazing,
+    // and signed inset dimensions. All values use the active input units and
+    // are committed as one revision-checked, undoable command after the wall
+    // and every sibling opening pass the architecture preview.
+    [[nodiscard]] bool editSelectedOpeningAssembly(
+        const QString& frame_width,
+        const QString& frame_depth,
+        const QString& panel_thickness,
+        const QString& glazing_thickness,
+        const QString& inset,
+        std::optional<Revision> expected_revision = std::nullopt);
     [[nodiscard]] bool editSelectedHeight(const QString& expression);
     // Edits an architectural object's base elevation through the same
     // validated, revision-checked geometry path as its other dimensions.
