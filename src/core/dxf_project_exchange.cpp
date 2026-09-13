@@ -331,6 +331,13 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
                            "dimension_semantics_not_representable");
                 return;
             }
+            if (decoded.dimension->presentation &&
+                !decoded.dimension->presentation->visible) {
+                // Visibility is presentation state. Keep hidden dimensions
+                // out of exported drawing output just as the desktop canvas
+                // and sheet renderer do.
+                return;
+            }
             const auto owner = document.entities().find(decoded.dimension->boundary_id);
             if (owner == document.entities().end()) {
                 diagnostic(result.diagnostics, entity.id, entity.type, "dimension_owner_missing");

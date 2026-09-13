@@ -146,12 +146,46 @@ void test_non_linear_dimensions_are_not_flattened() {
           "area dimensions must report their unsupported DXF semantics");
 }
 
+void test_hidden_linear_dimensions_stay_hidden_in_dxf_output() {
+    using namespace sketch;
+    auto source = make_document();
+    const auto snapshot = source.snapshot();
+    std::vector<Entity> entities;
+    entities.reserve(snapshot.entities().size() + 1);
+    for (const auto& [id, entity] : snapshot.entities()) {
+        (void)id;
+        entities.push_back(entity);
+    }
+    entities.push_back(encode_boundary_dimension_entity(BoundaryDimension{
+        .id = "dimension-hidden",
+        .boundary_id = "boundary-1",
+        .segment_id = "edge-2",
+        .text_position = {4.5, 1.5},
+        .placement = BoundaryDimensionPlacement::manual,
+        .automatic_placement_version = std::nullopt,
+        .presentation = BoundaryDimensionPresentation{
+            .text_height_mm = 2.5,
+            .color = "#263241",
+            .bold = false,
+            .italic = false,
+            .visible = false,
+            .rotation_radians = 0.0},
+        .kind = BoundaryDimensionKind::segment_length}));
+    const auto mapped = export_project_dxf(Document::create(std::move(entities)).snapshot());
+    check(mapped.drawing.dimensions.size() == 1,
+          "hidden linear dimensions must not be emitted to DXF output");
+    check(std::none_of(mapped.diagnostics.begin(), mapped.diagnostics.end(), [](const auto& item) {
+        return item.source_id == "dimension-hidden";
+    }), "hidden dimensions should not create export diagnostics");
+}
+
 } // namespace
 
 int main() {
     try {
         run();
         test_non_linear_dimensions_are_not_flattened();
+        test_hidden_linear_dimensions_stay_hidden_in_dxf_output();
         std::cout << "DXF project exchange tests passed\n";
         return 0;
     } catch (const std::exception& error) {
