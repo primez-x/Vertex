@@ -5,6 +5,11 @@
 #include <BRepBndLib.hxx>
 #include <BRepLib.hxx>
 #include <BRep_Tool.hxx>
+#include <BRepAlgoAPI_Common.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
+#include <BRepCheck_Analyzer.hxx>
+#include <BRepPrimAPI_MakeHalfSpace.hxx>
 #include <Geom2d_Circle.hxx>
 #include <Geom2d_Curve.hxx>
 #include <Geom2d_Line.hxx>
@@ -311,6 +316,157 @@ Boundary project_section(const TopoDS_Shape& shape, const FrameBasis& frame) {
     return result;
 }
 
+struct DepthBounds {
+    double minimum = std::numeric_limits<double>::infinity();
+    double maximum = -std::numeric_limits<double>::infinity();
+};
+
+void validate_depth(const BuildingViewDepth& depth) {
+    const auto finite_vec3 = [](const Vec3& value) {
+        return std::isfinite(value.x) && std::isfinite(value.y) &&
+               std::isfinite(value.z);
+    };
+    if (!finite_vec3(depth.origin) || !finite_vec3(depth.direction)) {
+        projection_error("Building view depth contains a non-finite vector");
+    }
+    const auto direction_length = std::sqrt(
+        depth.direction.x * depth.direction.x +
+        depth.direction.y * depth.direction.y +
+        depth.direction.z * depth.direction.z);
+    if (!std::isfinite(direction_length) ||
+        std::abs(direction_length - 1.0) > 1e-9) {
+        projection_error("Building view depth direction must be unit length");
+    }
+    if ((!std::isfinite(depth.far_depth_m) && !std::isinf(depth.far_depth_m)) ||
+        depth.far_depth_m < 0.0) {
+        projection_error("Building view far depth must be nonnegative or infinity");
+    }
+}
+
+DepthBounds depth_bounds(const TopoDS_Shape& shape, const BuildingViewDepth& depth) {
+    DepthBounds result;
+    Bnd_Box box;
+    BRepBndLib::Add(shape, box);
+    if (box.IsVoid()) return result;
+    double xmin = 0.0;
+    double ymin = 0.0;
+    double zmin = 0.0;
+    double xmax = 0.0;
+    double ymax = 0.0;
+    double zmax = 0.0;
+    box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    for (const auto x : {xmin, xmax}) {
+        for (const auto y : {ymin, ymax}) {
+            for (const auto z : {zmin, zmax}) {
+                const auto value = (x - depth.origin.x) * depth.direction.x +
+                                   (y - depth.origin.y) * depth.direction.y +
+                                   (z - depth.origin.z) * depth.direction.z;
+                if (!std::isfinite(value)) {
+                    projection_error("Building view depth exceeded numeric range");
+                }
+                result.minimum = std::min(result.minimum, value);
+                result.maximum = std::max(result.maximum, value);
+            }
+        }
+    }
+    return result;
+}
+
+Vec3 depth_cross(Vec3 left, Vec3 right) {
+    return {left.y * right.z - left.z * right.y,
+            left.z * right.x - left.x * right.z,
+            left.x * right.y - left.y * right.x};
+}
+
+double depth_dot(Vec3 left, Vec3 right) {
+    return left.x * right.x + left.y * right.y + left.z * right.z;
+}
+
+Vec3 depth_scale(Vec3 value, double factor) {
+    return {value.x * factor, value.y * factor, value.z * factor};
+}
+
+Vec3 depth_add(Vec3 left, Vec3 right) {
+    return {left.x + right.x, left.y + right.y, left.z + right.z};
+}
+
+Vec3 depth_normalize(Vec3 value) {
+    const auto magnitude = std::sqrt(depth_dot(value, value));
+    if (!std::isfinite(magnitude) || magnitude <= tolerance) {
+        projection_error("Building view depth has no stable clipping basis");
+    }
+    return depth_scale(value, 1.0 / magnitude);
+}
+
+TopoDS_Face make_depth_plane(const TopoDS_Shape& shape,
+                             const BuildingViewDepth& depth) {
+    Bnd_Box box;
+    BRepBndLib::Add(shape, box);
+    if (box.IsVoid()) projection_error("Building view depth cannot clip an empty shape");
+    double xmin = 0.0;
+    double ymin = 0.0;
+    double zmin = 0.0;
+    double xmax = 0.0;
+    double ymax = 0.0;
+    double zmax = 0.0;
+    box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+
+    // Pick a deterministic orthonormal basis in the far plane. The first
+    // reference avoids a near-parallel cross product for vertical directions.
+    const Vec3 reference = std::abs(depth.direction.z) < 0.9
+                               ? Vec3{0.0, 0.0, 1.0}
+                               : Vec3{1.0, 0.0, 0.0};
+    const auto horizontal = depth_normalize(depth_cross(reference, depth.direction));
+    const auto vertical = depth_normalize(depth_cross(depth.direction, horizontal));
+    const auto plane_origin = depth_add(depth.origin,
+                                        depth_scale(depth.direction, depth.far_depth_m));
+
+    double minimum_horizontal = std::numeric_limits<double>::infinity();
+    double maximum_horizontal = -std::numeric_limits<double>::infinity();
+    double minimum_vertical = std::numeric_limits<double>::infinity();
+    double maximum_vertical = -std::numeric_limits<double>::infinity();
+    for (const auto x : {xmin, xmax}) {
+        for (const auto y : {ymin, ymax}) {
+            for (const auto z : {zmin, zmax}) {
+                const Vec3 point{x, y, z};
+                const Vec3 offset{point.x - plane_origin.x,
+                                  point.y - plane_origin.y,
+                                  point.z - plane_origin.z};
+                minimum_horizontal = std::min(minimum_horizontal, depth_dot(offset, horizontal));
+                maximum_horizontal = std::max(maximum_horizontal, depth_dot(offset, horizontal));
+                minimum_vertical = std::min(minimum_vertical, depth_dot(offset, vertical));
+                maximum_vertical = std::max(maximum_vertical, depth_dot(offset, vertical));
+            }
+        }
+    }
+    const auto span = std::max({maximum_horizontal - minimum_horizontal,
+                                maximum_vertical - minimum_vertical, 1.0});
+    const auto margin = std::max(1.0, span * 0.05);
+    minimum_horizontal -= margin;
+    maximum_horizontal += margin;
+    minimum_vertical -= margin;
+    maximum_vertical += margin;
+    const auto point_at = [&](double horizontal_value, double vertical_value) {
+        return gp_Pnt(plane_origin.x + horizontal.x * horizontal_value + vertical.x * vertical_value,
+                      plane_origin.y + horizontal.y * horizontal_value + vertical.y * vertical_value,
+                      plane_origin.z + horizontal.z * horizontal_value + vertical.z * vertical_value);
+    };
+    BRepBuilderAPI_MakePolygon polygon;
+    polygon.Add(point_at(minimum_horizontal, minimum_vertical));
+    polygon.Add(point_at(maximum_horizontal, minimum_vertical));
+    polygon.Add(point_at(maximum_horizontal, maximum_vertical));
+    polygon.Add(point_at(minimum_horizontal, maximum_vertical));
+    polygon.Close();
+    if (!polygon.IsDone()) projection_error("Building view depth plane construction failed");
+    const gp_Pln plane(gp_Pnt(plane_origin.x, plane_origin.y, plane_origin.z),
+                       gp_Dir(depth.direction.x, depth.direction.y, depth.direction.z));
+    BRepBuilderAPI_MakeFace face(plane, polygon.Wire(), true);
+    if (!face.IsDone() || !BRepCheck_Analyzer(face.Face()).IsValid()) {
+        projection_error("Building view depth plane is invalid");
+    }
+    return face.Face();
+}
+
 }  // namespace
 
 Boundary project_shape_view(const TopoDS_Shape& shape, BuildingViewKind kind,
@@ -343,57 +499,46 @@ Boundary project_building_view(const BuildingObject& object, BuildingViewKind ki
 
 bool shape_intersects_view_depth(const TopoDS_Shape& shape,
                                  const BuildingViewDepth& depth) {
-    const auto finite_vec3 = [](const Vec3& value) {
-        return std::isfinite(value.x) && std::isfinite(value.y) &&
-               std::isfinite(value.z);
-    };
-    if (!finite_vec3(depth.origin) || !finite_vec3(depth.direction)) {
-        throw std::invalid_argument("Building view depth contains a non-finite vector");
-    }
-    const auto direction_length = std::sqrt(
-        depth.direction.x * depth.direction.x +
-        depth.direction.y * depth.direction.y +
-        depth.direction.z * depth.direction.z);
-    if (!std::isfinite(direction_length) ||
-        std::abs(direction_length - 1.0) > 1e-9) {
-        throw std::invalid_argument("Building view depth direction must be unit length");
-    }
-    if ((!std::isfinite(depth.far_depth_m) && !std::isinf(depth.far_depth_m)) ||
-        depth.far_depth_m < 0.0) {
-        throw std::invalid_argument("Building view far depth must be nonnegative or infinity");
-    }
+    validate_depth(depth);
     if (shape.IsNull()) return false;
     if (std::isinf(depth.far_depth_m)) return true;
+    return depth_bounds(shape, depth).minimum <= depth.far_depth_m + tolerance;
+}
 
-    Bnd_Box box;
-    BRepBndLib::Add(shape, box);
-    if (box.IsVoid()) return false;
-    double xmin = 0.0;
-    double ymin = 0.0;
-    double zmin = 0.0;
-    double xmax = 0.0;
-    double ymax = 0.0;
-    double zmax = 0.0;
-    box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
-    for (const auto x : {xmin, xmax}) {
-        for (const auto y : {ymin, ymax}) {
-            for (const auto z : {zmin, zmax}) {
-                if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
-                    throw std::invalid_argument("Building view depth found a non-finite bound");
-                }
-                const auto dx = x - depth.origin.x;
-                const auto dy = y - depth.origin.y;
-                const auto dz = z - depth.origin.z;
-                const auto value = dx * depth.direction.x + dy * depth.direction.y +
-                                   dz * depth.direction.z;
-                if (!std::isfinite(value)) {
-                    throw std::invalid_argument("Building view depth exceeded numeric range");
-                }
-                if (value <= depth.far_depth_m + tolerance) return true;
-            }
+TopoDS_Shape clip_shape_to_view_depth(const TopoDS_Shape& shape,
+                                      const BuildingViewDepth& depth) {
+    validate_depth(depth);
+    if (shape.IsNull() || std::isinf(depth.far_depth_m)) return shape;
+    const auto bounds = depth_bounds(shape, depth);
+    if (!std::isfinite(bounds.minimum) || !std::isfinite(bounds.maximum)) return {};
+    if (bounds.minimum > depth.far_depth_m + tolerance) return {};
+    if (bounds.maximum <= depth.far_depth_m + tolerance) return shape;
+    try {
+        const auto plane = make_depth_plane(shape, depth);
+        const auto extent = std::max(1.0, bounds.maximum - bounds.minimum);
+        const auto reference = gp_Pnt(
+            depth.origin.x - depth.direction.x * extent,
+            depth.origin.y - depth.direction.y * extent,
+            depth.origin.z - depth.direction.z * extent);
+        BRepPrimAPI_MakeHalfSpace half_space(plane, reference);
+        const auto tool = half_space.Solid();
+        // A half-space is an intentionally unbounded solid; OCCT's generic
+        // validity analyzer reports it as invalid even though boolean
+        // operations accept it as a valid tool.
+        if (tool.IsNull()) {
+            projection_error("Building view far-depth half-space is invalid");
         }
+        BRepAlgoAPI_Common operation(shape, tool);
+        operation.Build();
+        if (!operation.IsDone() || operation.HasErrors() || operation.Shape().IsNull() ||
+            !BRepCheck_Analyzer(operation.Shape()).IsValid()) {
+            projection_error("Building view far-depth clipping failed");
+        }
+        return operation.Shape();
+    } catch (const Standard_Failure& error) {
+        throw std::invalid_argument(std::string("Building view far-depth clipping failed: ") +
+                                     (error.what() ? error.what() : "OCCT error"));
     }
-    return false;
 }
 
 }  // namespace sketch

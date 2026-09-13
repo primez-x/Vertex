@@ -17,8 +17,8 @@ intersect a solid fail closed with an error; the implementation never turns a
 pixel approximation into measurement geometry.
 
 This is the projection-engine checkpoint for coordinated views. It does not
-yet claim the complete production workflow: exact cut/far-depth clipping,
-material hatching, annotation overlays, sheet layout editing, and final
+yet claim the complete production workflow: material hatching, annotation
+overlays, sheet layout editing, and final
 production qualification remain open. The desktop Architectural tab now has a transient
 Plan/Elevation/Section selector. Non-plan views show derived wall, slab, and
 building-object edges on the canvas and route selected-workspace draft output
@@ -26,13 +26,14 @@ through that canvas; the section plane is the frame origin plane. Persisted
 coordinated-view frames and section cut depth now drive the selector when a
 matching typed sheet/view entity is present; the built-in 1.2 m frame remains a
 safe fallback. A conservative object-level far-depth filter now culls solids
-whose BRep bounding range lies wholly beyond the persisted limit; objects that
-cross the limit remain visible until a future exact clipping pass. Material
-hatching, annotation overlays, sheet layout editing, and final production
-qualification remain open.
+whose BRep bounding range lies wholly beyond the persisted limit. Objects that
+cross a finite far plane are clipped with an OCCT half-space before hidden-line
+or section projection; objects wholly before the plane reuse their source solid.
+Material hatching, annotation overlays, sheet layout editing, and final
+production qualification remain open.
 
 Focused coverage includes a rotated-frame elevation, a horizontal circular
 section that retains four analytic quarter arcs, a vertical rectangular
-section, invalid-frame rejection, a no-intersection diagnostic, and
-conservative far-depth culling. Existing plan projection coverage remains
-unchanged.
+section, invalid-frame rejection, a no-intersection diagnostic, far-depth
+culling, and exact volume reduction for a crossing solid. Existing plan
+projection coverage remains unchanged.

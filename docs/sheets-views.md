@@ -40,9 +40,9 @@ these are projection instructions, not computed model intersections. All kinds
 use the same frame contract; adapters choose the appropriate orientation. The
 desktop Architectural view settings command edits these presentation fields
 through typed Document history. The desktop renderer conservatively culls
-solids whose BRep bounding range lies wholly beyond far depth, while objects
-crossing the limit remain visible until exact clipping and output overlays are
-qualified.
+solids whose BRep bounding range lies wholly beyond far depth. Objects crossing
+the limit are clipped with an OCCT half-space before projection; output
+overlays and production qualification remain open.
 
 Sheets have explicit positive page dimensions in millimetres, unique sheet
 numbers, title-block metadata, revisions, callouts and schedule placements.

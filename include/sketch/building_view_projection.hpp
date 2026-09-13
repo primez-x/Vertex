@@ -19,11 +19,11 @@ struct BuildingViewFrame {
     Vec3 up{0.0, 1.0, 0.0};
 };
 
-// A conservative depth range used by view adapters before deriving linework.
-// The origin and direction use the same model-space convention as
-// BuildingViewFrame.  The filter only culls a shape whose conservative BRep
-// bounds lie beyond far_depth_m; it never clips a shape or changes its geometry.
-// Infinity keeps the helper useful for views that have no depth limit.
+// A depth range used by view adapters before deriving linework. The origin and
+// direction use the same model-space convention as BuildingViewFrame. The
+// bounds filter is conservative; clip_shape_to_view_depth performs the exact
+// far-plane operation for crossing solids. Infinity keeps the helper useful
+// for views that have no depth limit.
 struct BuildingViewDepth {
     Vec3 origin{};
     Vec3 direction{0.0, 0.0, -1.0};
@@ -51,8 +51,16 @@ enum class BuildingViewKind { plan, elevation, section };
 // Return whether any part of a derived solid can occur at or before the
 // requested far depth.  This is intentionally a conservative, object-level
 // test based on a conservative BRep bounding box: partially crossing objects
-// remain visible and are not silently clipped into approximate linework.
+// remain visible so callers can apply the exact clip below.
 [[nodiscard]] bool shape_intersects_view_depth(const TopoDS_Shape& shape,
                                                const BuildingViewDepth& depth);
+
+// Clip a derived solid to the finite near side of the requested far-depth
+// plane. Objects wholly before the plane are returned unchanged; objects
+// wholly beyond it return a null shape; crossing objects are intersected with
+// an OCCT half-space. The semantic source remains authoritative and is never
+// modified. Infinity returns the original shape.
+[[nodiscard]] TopoDS_Shape clip_shape_to_view_depth(const TopoDS_Shape& shape,
+                                                   const BuildingViewDepth& depth);
 
 }  // namespace sketch

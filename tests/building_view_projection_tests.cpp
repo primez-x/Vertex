@@ -239,6 +239,14 @@ void test_conservative_far_depth_filter() {
     const BuildingViewDepth boundary_depth{{0.0, 0.0, 0.0}, {0.0, -1.0, 0.0}, 3.6};
     require(sketch::shape_intersects_view_depth(far_shape, boundary_depth),
             "a shape crossing the far depth must remain visible for exact clipping");
+    const auto clipped = sketch::clip_shape_to_view_depth(far_shape, boundary_depth);
+    require(!clipped.IsNull(), "a crossing shape must produce a clipped solid");
+    const auto full_volume = sketch::solid_volume(far_shape);
+    const auto clipped_volume = sketch::solid_volume(clipped);
+    require(clipped_volume > 0.0 && clipped_volume < full_volume,
+            "far-depth clipping must retain only the near portion of a crossing solid");
+    require(sketch::clip_shape_to_view_depth(far_shape, clipped_depth).IsNull(),
+            "a wholly distant shape must clip to a null solid");
 
     rejected(
         [&] {

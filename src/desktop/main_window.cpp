@@ -15580,8 +15580,10 @@ private:
                         if (!model.visible()) continue;
                         const auto shape = make_terrain_surface(model);
                         if (!shape_intersects_view_depth(shape, depth)) continue;
+                        const auto clipped_shape = clip_shape_to_view_depth(shape, depth);
+                        if (clipped_shape.IsNull()) continue;
                         const auto projection = project_shape_view(
-                            shape, kind, frame);
+                            clipped_shape, kind, frame);
                         result.push_back(CanvasEntity{
                             id_from(id), QStringLiteral("terrain_surface"), projection, 0.0,
                             id_from(id) == m_selected_id});
@@ -15592,12 +15594,14 @@ private:
                         const auto decoded = decode_building_entity(resolved);
                         const auto shape = make_building_shape(decoded);
                         if (!shape_intersects_view_depth(shape, depth)) continue;
+                        const auto clipped_shape = clip_shape_to_view_depth(shape, depth);
+                        if (clipped_shape.IsNull()) continue;
                         const auto key = "view:" + std::to_string(static_cast<int>(kind)) +
                                          '\n' + frame_cache_key + '\n' + resolved.type +
                                          '\n' + resolved.properties.dump();
                         auto cached = m_plan_projection_cache.find(id);
                         if (cached == m_plan_projection_cache.end() || cached->second.first != key) {
-                            auto projection = project_shape_view(shape, kind, frame);
+                            auto projection = project_shape_view(clipped_shape, kind, frame);
                             cached = m_plan_projection_cache.insert_or_assign(
                                 id, std::make_pair(key, std::move(projection))).first;
                         }
@@ -15620,8 +15624,10 @@ private:
                         validate_wall_semantics(wall);
                         const auto shape = make_wall(wall);
                         if (!shape_intersects_view_depth(shape, depth)) continue;
+                        const auto clipped_shape = clip_shape_to_view_depth(shape, depth);
+                        if (clipped_shape.IsNull()) continue;
                         const auto projection = project_shape_view(
-                            shape, kind, frame);
+                            clipped_shape, kind, frame);
                         result.push_back(CanvasEntity{
                             id_from(id), QStringLiteral("wall"), projection, *thickness,
                             id_from(id) == m_selected_id});
@@ -15639,8 +15645,10 @@ private:
                         const auto shape = make_slab(Slab{id, *boundary, *holes, *thickness, *elevation,
                                                            read_slab_element_kind(resolved.properties)});
                         if (!shape_intersects_view_depth(shape, depth)) continue;
+                        const auto clipped_shape = clip_shape_to_view_depth(shape, depth);
+                        if (clipped_shape.IsNull()) continue;
                         const auto projection = project_shape_view(
-                            shape, kind, frame);
+                            clipped_shape, kind, frame);
                         result.push_back(CanvasEntity{
                             id_from(id), QStringLiteral("slab"), projection, *thickness,
                             id_from(id) == m_selected_id});

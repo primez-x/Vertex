@@ -642,9 +642,10 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   canvas views and routes its selected view through draft output; persisted
   cut/far-depth presentation now persists and is editable from the desktop view
   settings command. The renderer conservatively culls solids whose BRep bounds
-  lie wholly beyond the selected far depth and invalidates projection caches
-  when view frames or limits change; exact clipping, annotations/hatching,
-  complete sheet layout, and production print integration remain open.
+  lie wholly beyond the selected far depth, clips crossing solids with an OCCT
+  half-space, and invalidates projection caches when view frames or limits
+  change; annotations/hatching, complete sheet layout, and production print
+  integration remain open.
 - Release import inspection resolves 37 selected application/component
   binaries on this machine. The Qt dry-run exposed default plugin expansion;
   an explicit current-component allowlist and pinned archive-member hash
