@@ -152,11 +152,13 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
         auto* quick_access = window.findChild<QToolButton*>(QStringLiteral("quickAccess"));
         auto* quick_access_settings = window.findChild<QAction*>(QStringLiteral("quickAccessSettings"));
         auto* about = window.findChild<QAction*>(QStringLiteral("aboutAction"));
+        auto* assistance = window.findChild<QAction*>(QStringLiteral("assistanceAction"));
         auto* export_image = window.findChild<QAction*>(QStringLiteral("exportDraftImage"));
         auto* curved_wall_action = window.findChild<QAction*>(QStringLiteral("curvedWall"));
         auto* disto_action = window.findChild<QAction*>(QStringLiteral("distoImport"));
         require(settings && user_guide && quick_access && quick_access->menu() &&
                     quick_access_settings && about && about->text() == QStringLiteral("About") &&
+                    assistance && assistance->text() == QStringLiteral("Assistance…") &&
                     export_image && curved_wall_action && disto_action &&
                     !quick_access->accessibleName().isEmpty(),
                 "shortcut editor, quick-access menu, draft image export, DISTO input, curved-wall authoring, and local user guide must be discoverable");

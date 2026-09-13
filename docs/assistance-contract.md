@@ -1,4 +1,4 @@
-# Offline assistance
+# Assistance
 
 Vertex assistance is an optional, deterministic local feature. It is
 session-scoped and starts disabled. The current engine has no model weights,
@@ -29,7 +29,7 @@ serialized status is always `unverified`; confidence is a review hint, never a
 measurement certification. Resource paths are portable and are checked by the
 package loader before acceptance.
 
-The **Offline assistance** command is available from the More menu and command
+The **Assistance** command is available from the More menu and command
 palette. It lets the user enable the session, choose a producer (including
 connected-component edge tracing), inspect the unverified list, and accept one
 proposal at a time. Acceptance calls

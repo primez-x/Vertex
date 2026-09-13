@@ -14496,7 +14496,7 @@ public:
         QDialog dialog(owner);
         styleDialog(dialog);
         dialog.setObjectName(QStringLiteral("assistanceDialog"));
-        dialog.setWindowTitle(QStringLiteral("Offline assistance"));
+        dialog.setWindowTitle(QStringLiteral("Assistance"));
         dialog.setModal(true);
         dialog.resize(680, 500);
 
@@ -14738,7 +14738,7 @@ public:
              [this] { editRoomVolumeFromDialog(); }},
             {QStringLiteral("Edit reusable assemblies"),
              [this] { showAssemblies(); }},
-            {QStringLiteral("Offline assistance"), [this] { showAssistance(); }},
+            {QStringLiteral("Assistance"), [this] { showAssistance(); }},
             {QStringLiteral("Select tool"), [this] { setTool(CanvasTool::select); }},
             {QStringLiteral("Draw measurement boundary"), [this] { setTool(CanvasTool::boundary); }},
             {QStringLiteral("Define area before drawing"),
@@ -15909,7 +15909,8 @@ private:
         m_reference_grid_action->setObjectName(QStringLiteral("referenceGrids"));
         m_assembly_action = new QAction(QStringLiteral("Assemblies…"), owner);
         m_assembly_action->setObjectName(QStringLiteral("assemblyCatalog"));
-        m_assistance_action = new QAction(QStringLiteral("Offline assistance…"), owner);
+        m_assistance_action = new QAction(QStringLiteral("Assistance…"), owner);
+        m_assistance_action->setObjectName(QStringLiteral("assistanceAction"));
         m_calculation_profile_action = new QAction(QStringLiteral("Calculation profile…"), owner);
         m_calculation_profile_action->setObjectName(QStringLiteral("calculationProfile"));
         m_workspace_profiles_action = new QAction(QStringLiteral("Workspace profiles…"), owner);
@@ -20276,8 +20277,7 @@ private:
     void showAbout() {
         QMessageBox::information(
             owner, QStringLiteral("About"),
-            QStringLiteral("An offline Windows application for property measurement\n"
-                           "and architectural design."));
+            QStringLiteral("Vertex\nProperty measurement and architectural design."));
     }
 
     void setError(const QString& error) {
