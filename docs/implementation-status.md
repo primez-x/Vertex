@@ -20,7 +20,11 @@ architectural cut and projection line widths now flow into fixed paper-space
 strokes for section and elevation output, independent of viewport model scale.
 Coordinated views also persist canonical semantic object IDs; Document
 admission rejects missing referenced objects, while version-1 view payloads
-upgrade to the current model with an empty reference list.
+upgrade to the current model with an empty reference list. The Windows view
+settings editor now exposes those source IDs, accepts comma or semicolon
+separators, rejects duplicates before history mutation, and the architectural
+projection path filters referenced objects while preserving the shared retained
+geometry for other views.
 
 The requirement contract passes, while `python scripts/requirement_audit.py
 --release` still fails closed with 130 in-progress requirements. The corrected

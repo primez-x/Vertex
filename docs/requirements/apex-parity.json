@@ -1917,7 +1917,7 @@
         "tests/sheet_view_entity_codec_tests.cpp",
         "docs/sheets-views.md"
       ],
-      "implementation_note": "Immutable coordinated plan/elevation/section view references and frame validation persist through a typed Document entity, and new projects seed all three persisted frames. Supported semantic building objects now have analytical hidden-line plan/elevation and true solid-plane section projection tests. The Architectural selector consumes persisted frames when present, view presentation settings are editable through typed history, and the renderer applies conservative BRep-bounds far-depth culling with exact OCCT half-space clipping for solids that cross the finite limit, with cache invalidation when frame limits change. Shared object editing, renderer synchronization, and sheet layout remain open."
+      "implementation_note": "Immutable coordinated plan/elevation/section view references and frame validation persist through a typed Document entity, and new projects seed all three persisted frames. Supported semantic building objects now have analytical hidden-line plan/elevation and true solid-plane section projection tests. The Architectural selector consumes persisted frames when present, view presentation settings and source-object IDs are editable through typed history, and the renderer filters explicitly referenced objects while applying conservative BRep-bounds far-depth culling with exact OCCT half-space clipping for solids that cross the finite limit, with cache invalidation when frame limits change. Shared object editing, renderer synchronization, and sheet layout remain open."
     },
     {
       "id": "ARCH-VIEW-002",
@@ -2057,7 +2057,7 @@
         "src/core/typed_relationships.cpp",
         "docs/typed-relationships.md"
       ],
-    "implementation_note": "Typed stable references and cycle/ambiguity validation are present, and the Windows editor now exposes live relationship declarations through typed Document history. Coordinated view definitions now persist canonical semantic object IDs; Document admission rejects missing referenced objects and legacy view payloads upgrade with an empty reference list. View-object editing UI, controlled retargeting and full cross-view production evidence remain open."
+      "implementation_note": "Typed stable references and cycle/ambiguity validation are present, and the Windows editor now exposes live relationship declarations through typed Document history. Coordinated view definitions now persist canonical semantic object IDs; Document admission rejects missing referenced objects and legacy view payloads upgrade with an empty reference list. The Architectural view settings editor accepts and validates comma- or semicolon-separated source IDs, and projection filters those references while preserving the shared retained geometry for other views. Controlled retargeting and full cross-view production evidence remain open."
     },
     {
       "id": "ARCH-OUTPUT-001",

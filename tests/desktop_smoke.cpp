@@ -4016,6 +4016,45 @@ int main(int argc, char** argv) {
                      std::numbers::pi / 2.0) < 1e-9 &&
                 curved_wall_snapshot.extensions.at("curve_input").at("sweep") == "pi/2",
             "curved wall should retain its analytical sweep and source expression");
+    require(window.editArchitecturalViewPresentation(
+                QStringLiteral("view-plan"), QStringLiteral("1.5"), QStringLiteral("80"),
+                QStringLiteral("0.7"), QStringLiteral("0.25"), true,
+                QStringLiteral("concrete"), QStringLiteral("2"), QStringLiteral("fine"),
+                curved_wall_id + QStringLiteral(", ") + wall_id),
+            "architectural view source IDs should commit through typed Document history");
+    const auto referenced_view_model = sketch::decode_sheet_view_entity(
+        window.document().snapshot().entities().at("sheet-view-1"));
+    const auto referenced_view = std::find_if(
+        referenced_view_model.views().begin(), referenced_view_model.views().end(),
+        [](const auto& view) { return view.id == "view-plan"; });
+    std::vector<std::string> expected_view_object_ids{wall_id.toStdString(),
+                                                       curved_wall_id.toStdString()};
+    std::sort(expected_view_object_ids.begin(), expected_view_object_ids.end());
+    require(referenced_view != referenced_view_model.views().end() &&
+                referenced_view->object_ids == expected_view_object_ids,
+            "architectural view source IDs should persist in canonical sorted order");
+    auto* referenced_architectural_canvas = dynamic_cast<sketch::desktop::PlanCanvas*>(
+        window.findChild<QWidget*>(QStringLiteral("architecturalPlanCanvas")));
+    require(referenced_architectural_canvas != nullptr,
+            "architectural source filtering should expose the coordinated canvas");
+    const auto has_architectural_entity = [&](const QString& id) {
+        return std::find_if(referenced_architectural_canvas->entities().begin(),
+                            referenced_architectural_canvas->entities().end(),
+                            [&](const auto& entity) { return entity.id == id; }) !=
+               referenced_architectural_canvas->entities().end();
+    };
+    require(has_architectural_entity(wall_id) && has_architectural_entity(curved_wall_id) &&
+                !has_architectural_entity(boundary_id),
+            "architectural plan should render only the explicitly referenced source objects");
+    const auto revision_before_duplicate_view_ids = window.document().revision();
+    require(!window.editArchitecturalViewPresentation(
+                QStringLiteral("view-plan"), QStringLiteral("1.5"), QStringLiteral("80"),
+                QStringLiteral("0.7"), QStringLiteral("0.25"), true,
+                QStringLiteral("concrete"), QStringLiteral("2"), QStringLiteral("fine"),
+                wall_id + QStringLiteral(", ") + wall_id) &&
+                window.document().revision() == revision_before_duplicate_view_ids &&
+                window.lastError().contains(QStringLiteral("unique"), Qt::CaseInsensitive),
+            "duplicate architectural view source IDs should fail without mutation");
     require(window.selectEntity(wall_id), "created wall should be selectable");
     require(window.editSelectedClassification("party"),
             "wall classification should be editable from the inspector API");

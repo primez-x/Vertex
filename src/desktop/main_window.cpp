@@ -1669,6 +1669,7 @@ struct ArchitecturalViewContext {
     BuildingViewFrame frame;
     BuildingViewDepth depth;
     ViewPresentation presentation;
+    std::vector<std::string> object_ids;
 };
 
 ArchitecturalViewContext architectural_view_context(const DocumentSnapshot& snapshot,
@@ -1701,6 +1702,7 @@ ArchitecturalViewContext architectural_view_context(const DocumentSnapshot& snap
             result.depth = BuildingViewDepth{base.origin, base.direction,
                                              found->presentation.far_depth_m};
             result.presentation = found->presentation;
+            result.object_ids = found->object_ids;
             if (kind == BuildingViewKind::section) {
                 result.frame.origin.x += result.frame.direction.x *
                                          found->presentation.cut_depth_m;
@@ -2936,7 +2938,8 @@ public:
     [[nodiscard]] bool editArchitecturalViewPresentation(
         const QString& view_id, const QString& cut_depth_m, const QString& far_depth_m,
         const QString& cut_line_mm, const QString& projection_line_mm, bool hatch_enabled,
-        const QString& hatch_pattern, const QString& hatch_scale, const QString& detail) {
+        const QString& hatch_pattern, const QString& hatch_scale, const QString& detail,
+        const QString& object_ids_text) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
             return false;
@@ -2962,6 +2965,17 @@ public:
             else throw std::invalid_argument("View detail must be coarse, medium, or fine");
             const auto pattern = hatch_pattern.trimmed().toStdString();
             if (pattern.empty()) throw std::invalid_argument("Hatch pattern cannot be empty");
+            auto object_tokens = object_ids_text;
+            object_tokens.replace(QStringLiteral(";"), QStringLiteral(","));
+            std::vector<std::string> object_ids;
+            for (const auto& token : object_tokens.split(u',', Qt::SkipEmptyParts)) {
+                const auto trimmed = token.trimmed();
+                if (!trimmed.isEmpty()) object_ids.push_back(trimmed.toStdString());
+            }
+            std::sort(object_ids.begin(), object_ids.end());
+            if (std::adjacent_find(object_ids.begin(), object_ids.end()) != object_ids.end()) {
+                throw std::invalid_argument("View source object IDs must be unique");
+            }
             const auto source = authoringSnapshot();
             const Entity* view_entity = nullptr;
             std::optional<SheetViewModel> model;
@@ -2997,6 +3011,7 @@ public:
             replacement.presentation.hatch_pattern = pattern;
             replacement.presentation.hatch_scale = hatch_scale_value;
             replacement.presentation.detail = detail_value;
+            replacement.object_ids = std::move(object_ids);
             const auto updated_model = model->with_view(std::move(replacement));
             auto updated_entity = *view_entity;
             updated_entity.properties = make_sheet_view_entity(
@@ -12978,6 +12993,11 @@ public:
             auto* hatch_scale = new QLineEdit(number(found->presentation.hatch_scale), &dialog);
             auto* hatch = new QCheckBox(QStringLiteral("Enable material hatching"), &dialog);
             auto* detail = new QComboBox(&dialog);
+            auto* object_ids = new QLineEdit(&dialog);
+            QStringList object_id_values;
+            for (const auto& object_id : found->object_ids)
+                object_id_values.push_back(QString::fromStdString(object_id));
+            object_ids->setText(object_id_values.join(QStringLiteral(", ")));
             detail->addItems({QStringLiteral("Coarse"), QStringLiteral("Medium"), QStringLiteral("Fine")});
             detail->setCurrentIndex(static_cast<int>(found->presentation.detail));
             cut->setObjectName(QStringLiteral("viewCutDepth"));
@@ -12988,6 +13008,7 @@ public:
             hatch_scale->setObjectName(QStringLiteral("viewHatchScale"));
             hatch->setObjectName(QStringLiteral("viewHatchEnabled"));
             detail->setObjectName(QStringLiteral("viewDetail"));
+            object_ids->setObjectName(QStringLiteral("viewObjectIds"));
             hatch->setChecked(found->presentation.hatch_enabled);
             form->addRow(QStringLiteral("Cut depth (m)"), cut);
             form->addRow(QStringLiteral("Far depth (m)"), far);
@@ -12997,6 +13018,7 @@ public:
             form->addRow(QStringLiteral("Hatch scale"), hatch_scale);
             form->addRow(hatch);
             form->addRow(QStringLiteral("Detail"), detail);
+            form->addRow(QStringLiteral("Source object IDs"), object_ids);
             auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
             form->addRow(buttons);
             QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
@@ -13005,7 +13027,7 @@ public:
             (void)editArchitecturalViewPresentation(
                 QString::fromStdString(found->id), cut->text(), far->text(), cut_line->text(),
                 projection_line->text(), hatch->isChecked(), pattern->text(), hatch_scale->text(),
-                detail->currentText());
+                detail->currentText(), object_ids->text());
         } catch (const std::exception& error) {
             setError(QStringLiteral("Architectural view settings: %1")
                          .arg(QString::fromUtf8(error.what())));
@@ -16811,7 +16833,6 @@ private:
         // architectural presentations from the same snapshot so persisted
         // sheet viewports can render independently of the active workspace.
         std::array<std::vector<CanvasEntity>, 3> view_geometry;
-        view_geometry[architectural_view_index(BuildingViewKind::plan)] = all_geometry;
         const auto make_assembly_host_shape = [&](const std::string& host_id) -> TopoDS_Shape {
             const auto host = snapshot.entities().find(host_id);
             if (host == snapshot.entities().end()) {
@@ -16892,10 +16913,22 @@ private:
             return translated.Shape();
         };
         const auto build_architectural_geometry = [&](BuildingViewKind kind) {
-            if (kind == BuildingViewKind::plan) return all_geometry;
+            const auto view_context = architectural_view_context(snapshot, kind);
+            if (kind == BuildingViewKind::plan) {
+                if (view_context.object_ids.empty()) return all_geometry;
+                std::set<std::string, std::less<>> referenced(
+                    view_context.object_ids.begin(), view_context.object_ids.end());
+                std::vector<CanvasEntity> filtered;
+                filtered.reserve(all_geometry.size());
+                for (const auto& entity : all_geometry) {
+                    if (referenced.contains(entity.id.toStdString())) {
+                        filtered.push_back(entity);
+                    }
+                }
+                return filtered;
+            }
             std::vector<CanvasEntity> result;
             result.reserve(snapshot.entities().size());
-            const auto view_context = architectural_view_context(snapshot, kind);
             const auto& frame = view_context.frame;
             const auto& depth = view_context.depth;
             const auto decorate_projection = [&](CanvasEntity entity) {
@@ -16935,6 +16968,11 @@ private:
                 return key.str();
             }();
             for (const auto& [id, entity] : snapshot.entities()) {
+                if (!view_context.object_ids.empty() &&
+                    !std::binary_search(view_context.object_ids.begin(),
+                                        view_context.object_ids.end(), id)) {
+                    continue;
+                }
                 try {
                     if (entity.type == "terrain_surface") {
                         const auto model = TerrainSurface::from_json(
@@ -17059,6 +17097,15 @@ private:
                 }
             }
             for (const auto& assembly : assembly_previews) {
+                if (!view_context.object_ids.empty() &&
+                    !std::binary_search(view_context.object_ids.begin(),
+                                        view_context.object_ids.end(),
+                                        assembly.host_entity_id) &&
+                    !std::binary_search(view_context.object_ids.begin(),
+                                        view_context.object_ids.end(),
+                                        assembly.child_id)) {
+                    continue;
+                }
                 try {
                     const auto transformed = transform_assembly_shape(
                         make_assembly_host_shape(assembly.host_entity_id), assembly.placement);
@@ -17088,6 +17135,8 @@ private:
             }
             return result;
         };
+        view_geometry[architectural_view_index(BuildingViewKind::plan)] =
+            build_architectural_geometry(BuildingViewKind::plan);
         for (const auto kind : {BuildingViewKind::elevation, BuildingViewKind::section}) {
             view_geometry[architectural_view_index(kind)] = build_architectural_geometry(kind);
         }
@@ -19812,10 +19861,11 @@ QString MainWindow::outputSheetId() const {
 bool MainWindow::editArchitecturalViewPresentation(
     const QString& view_id, const QString& cut_depth_m, const QString& far_depth_m,
     const QString& cut_line_mm, const QString& projection_line_mm, bool hatch_enabled,
-    const QString& hatch_pattern, const QString& hatch_scale, const QString& detail) {
+    const QString& hatch_pattern, const QString& hatch_scale, const QString& detail,
+    const QString& object_ids) {
     return m_impl->editArchitecturalViewPresentation(
         view_id, cut_depth_m, far_depth_m, cut_line_mm, projection_line_mm, hatch_enabled,
-        hatch_pattern, hatch_scale, detail);
+        hatch_pattern, hatch_scale, detail, object_ids);
 }
 
 Workspace MainWindow::workspace() const noexcept {

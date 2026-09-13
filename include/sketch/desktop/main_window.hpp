@@ -129,7 +129,8 @@ public:
         bool hatch_enabled,
         const QString& hatch_pattern,
         const QString& hatch_scale,
-        const QString& detail);
+        const QString& detail,
+        const QString& object_ids = {});
 
     [[nodiscard]] Workspace workspace() const noexcept;
     void setWorkspace(Workspace workspace);
