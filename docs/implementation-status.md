@@ -82,6 +82,15 @@ the same revision-fenced history path.
 Schedules, richer room relationships, Apex compatibility, and production
 qualification remain open.
 
+Architectural schedules now include a dedicated read-only `building` row for
+each supported semantic building object. Columns, arbitrary-axis beams, stair
+flights, railings, and supported roof forms expose source dimensions and counts
+and carry a calculated canonical-solid volume with geometry provenance. Beam
+length is measured along its 3D axis, and visibility filtering applies before
+rows are generated. These rows use the same native solids as coordinated
+plan/elevation/section/3D views; schedule presentation, sheet/print integration,
+and production qualification remain open.
+
 The architectural object slice now accepts a true flat roof through the
 existing sloped-panel schema: zero rise and zero pitch produce a thickened
 planar solid, persist through the entity codec, and project through plan,

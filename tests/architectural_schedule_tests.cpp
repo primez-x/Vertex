@@ -264,6 +264,65 @@ void test_placed_assemblies_produce_read_only_quantity_rows() {
                          [](const auto& row) { return row.kind == ScheduleRowKind::assembly; }),
             "hidden assembly hosts should be omitted from scoped schedules");
 }
+
+void test_building_object_rows_expose_dimensions_and_solid_volume() {
+    auto column = encode_building_entity(
+        RectangularColumn{"column-1", {0.0, 0.0, 0.0}, 0.4, 0.5, 3.0, 0.25});
+    column.properties["mark"] = "C-1";
+    auto beam = encode_building_entity(
+        Beam{"beam-1", {0.0, 0.0, 2.4}, {5.0, 0.0, 2.4}, {0.0, 0.0, 1.0}, 0.3, 0.2});
+    beam.properties["mark"] = "B-1";
+    auto stair = encode_building_entity(
+        StairFlight{"stair-1", {0.0, 1.0, 0.0}, 0.0, 10, 2.5, 0.28, 1.1, std::nullopt});
+    stair.properties["mark"] = "S-1";
+    auto railing = encode_building_entity(
+        Railing{"rail-1", {0.0, 0.0, 0.0}, 0.0, 4.0, 1.0, 0.05, 1.0});
+    railing.properties["mark"] = "R-1";
+    const auto document = Document::create({column, beam, stair, railing});
+    const auto projection = build_architectural_schedules(document.snapshot());
+    require(projection.diagnostics.empty(),
+            "valid building-object schedule rows must not produce diagnostics");
+
+    const auto find = [&](const std::string& id) -> const ScheduleRow& {
+        const auto found = std::find_if(
+            projection.snapshot.rows.begin(), projection.snapshot.rows.end(),
+            [&](const auto& candidate) { return candidate.object_id == id; });
+        if (found == projection.snapshot.rows.end())
+            throw std::runtime_error("missing building-object schedule row");
+        return *found;
+    };
+    const auto& column_row = find("column-1");
+    require(column_row.kind == ScheduleRowKind::building &&
+                std::get<std::string>(column_row.cells.at("form").value) ==
+                    "rectangular_column" &&
+                std::get<ScheduleQuantity>(column_row.cells.at("width").value).value == 0.4,
+            "column schedule should expose its semantic form and dimensions");
+    require(!column_row.cells.at("volume").editable &&
+                std::abs(std::get<ScheduleQuantity>(column_row.cells.at("volume").value).value -
+                         0.6) < 1e-9 &&
+                column_row.cells.at("volume").sources ==
+                    std::vector<ScheduleSourceRef>{{"column-1", "geometry"}},
+            "column schedule volume should be read-only and geometry-backed");
+
+    const auto& beam_row = find("beam-1");
+    require(std::get<ScheduleQuantity>(beam_row.cells.at("length").value).value == 5.0 &&
+                std::abs(std::get<ScheduleQuantity>(beam_row.cells.at("volume").value).value -
+                         0.3) < 1e-9,
+            "beam schedule should expose length and derived volume");
+    require(find("stair-1").kind == ScheduleRowKind::building &&
+                find("rail-1").kind == ScheduleRowKind::building,
+            "all supported building object families should have schedule rows");
+
+    const auto visible = build_architectural_schedules(document.snapshot(), {"beam-1"});
+    require(std::any_of(visible.snapshot.rows.begin(), visible.snapshot.rows.end(),
+                        [](const auto& candidate) {
+                            return candidate.object_id == "beam-1" &&
+                                   candidate.kind == ScheduleRowKind::building;
+                        }) &&
+                std::none_of(visible.snapshot.rows.begin(), visible.snapshot.rows.end(),
+                             [](const auto& candidate) { return candidate.object_id == "column-1"; }),
+            "building schedule visibility should follow the shared source filter");
+}
 }
 int main() {
     try {
@@ -272,6 +331,7 @@ int main() {
         test_composite_wall_layers_produce_material_quantities();
         test_composite_slab_layers_produce_material_quantities();
         test_placed_assemblies_produce_read_only_quantity_rows();
+        test_building_object_rows_expose_dimensions_and_solid_volume();
         std::cout<<"architectural schedule tests passed\n";
         return 0;
     }

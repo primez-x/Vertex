@@ -1,7 +1,7 @@
 # Schedule model foundation
 
 `schedule_model.hpp` provides a storage-independent projection for door, window,
-room and material records (ARCH-SCH-001/002). Adapters supply stable object IDs,
+room, material, assembly, and building-object records (ARCH-SCH-001/002). Adapters supply stable object IDs,
 marks and typed properties. Values support text, Boolean flags, integer counts,
 scalar numbers, and SI length/area/volume quantities. Marks are unique within a
 row kind; object IDs are globally unique within a snapshot. Rows sort by object
@@ -44,6 +44,18 @@ every source has a valid quantity. A missing or invalid source volume keeps the
 count visible but omits the aggregate quantity and emits a diagnostic. Source
 rows remain available for per-object inspection and permitted edits, while sheet
 material placements include both source and summary rows.
+
+Architectural building objects also produce deterministic, read-only `building`
+rows. Columns, beams, stairs, railings, and supported roof forms expose their
+authored type, mark, canonical dimensions, counts, and angular properties where
+those fields exist on the source entity. Each row includes a calculated `volume`
+from the same native solid used by plan, section, elevation, and 3D projection;
+its provenance is the source entity's canonical `geometry` rather than a screen
+measurement. Beam length is derived from its full 3D axis, while roof opening
+counts and stair riser counts remain source-backed properties. The rows honor the
+active visible-entity filter and are intentionally edited through the
+architectural object inspector so schedule output cannot diverge from model
+geometry.
 
 `make_schedule_edit` returns a deterministic command description containing the
 source target, expected document revision, prior value and replacement. It

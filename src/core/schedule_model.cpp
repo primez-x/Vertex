@@ -35,7 +35,8 @@ ScheduleSnapshot build_schedule(const std::vector<ScheduleRecord>& records,
         switch (record.kind) {
         case ScheduleRowKind::door: case ScheduleRowKind::window:
         case ScheduleRowKind::room: case ScheduleRowKind::material:
-        case ScheduleRowKind::material_summary: case ScheduleRowKind::assembly: break;
+        case ScheduleRowKind::material_summary: case ScheduleRowKind::assembly:
+        case ScheduleRowKind::building: break;
         default: throw std::invalid_argument("Unknown schedule row kind");
         }
         if (record.object_id.empty() || !sources.emplace(record.object_id, &record).second)
@@ -66,7 +67,8 @@ ScheduleSnapshot build_schedule(const std::vector<ScheduleRecord>& records,
                 // map.  It remains provenance-only and therefore cannot be
                 // edited as a schedule cell.
                 const bool geometry_source = ref.property == "boundary" ||
-                                             ref.property == "holes";
+                                             ref.property == "holes" ||
+                                             ref.property == "geometry";
                 if (source == sources.end() || (ref.property != "mark" &&
                     !geometry_source && !source->second->properties.contains(ref.property)))
                     throw std::invalid_argument("Missing schedule source: " + ref.object_id + "." + ref.property);

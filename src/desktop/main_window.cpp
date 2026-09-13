@@ -1278,6 +1278,7 @@ QString schedule_kind_text(ScheduleRowKind kind) {
     case ScheduleRowKind::material: return QStringLiteral("Material");
     case ScheduleRowKind::material_summary: return QStringLiteral("Material summary");
     case ScheduleRowKind::assembly: return QStringLiteral("Assembly");
+    case ScheduleRowKind::building: return QStringLiteral("Building object");
     }
     return QStringLiteral("Unknown");
 }
@@ -11290,6 +11291,8 @@ public:
                 else if (schedule_name.contains(QStringLiteral("window"))) kind = ScheduleRowKind::window;
                 else if (schedule_name.contains(QStringLiteral("room"))) kind = ScheduleRowKind::room;
                 else if (schedule_name.contains(QStringLiteral("assembl"))) kind = ScheduleRowKind::assembly;
+                else if (schedule_name.contains(QStringLiteral("building")) ||
+                         schedule_name.contains(QStringLiteral("object"))) kind = ScheduleRowKind::building;
                 else if (schedule_name.contains(QStringLiteral("material"))) kind = ScheduleRowKind::material;
                 QString heading = schedule_name.isEmpty() ? QStringLiteral("SCHEDULE")
                                                             : schedule_name.toUpper() + QStringLiteral(" SCHEDULE");

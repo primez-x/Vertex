@@ -466,6 +466,123 @@ void append_assembly_rows(const DocumentSnapshot& document,
     }
 }
 
+void add_building_quantity(ScheduleRecord& record, const Entity& entity,
+                           std::string_view source_name, std::string_view cell_name,
+                           ScheduleUnit unit) {
+    const auto found = entity.properties.find(std::string(source_name));
+    if (found == entity.properties.end() || !found->is_number()) return;
+    const auto value = found->get<double>();
+    if (!std::isfinite(value)) return;
+    record.properties.emplace(std::string(cell_name), ScheduleQuantity{value, unit});
+}
+
+std::optional<std::string> building_text_field(const Entity& entity, std::string_view name) {
+    if (!entity.properties.is_object()) return std::nullopt;
+    const auto found = entity.properties.find(std::string(name));
+    if (found == entity.properties.end() || !found->is_string()) return std::nullopt;
+    const auto value = found->get<std::string>();
+    return value.empty() ? std::nullopt : std::optional<std::string>(value);
+}
+
+std::string building_mark_for(const Entity& entity, std::string_view prefix,
+                              std::vector<std::string>& diagnostics) {
+    if (const auto mark = building_text_field(entity, "mark")) return *mark;
+    diagnostics.push_back(entity.type + " " + entity.id +
+                          ": mark is absent; the stable entity ID is used as the deterministic mark");
+    return std::string(prefix) + entity.id;
+}
+
+void add_building_scalar(ScheduleRecord& record, const Entity& entity,
+                         std::string_view source_name, std::string_view cell_name) {
+    const auto found = entity.properties.find(std::string(source_name));
+    if (found == entity.properties.end() || !found->is_number()) return;
+    const auto value = found->get<double>();
+    if (std::isfinite(value)) record.properties.emplace(std::string(cell_name), value);
+}
+
+void append_building_rows(const DocumentSnapshot& document,
+                          DocumentScheduleProjection& projection,
+                          const std::set<std::string, std::less<>>* visible_entity_ids) {
+    std::vector<ScheduleRecord> records;
+    for (const auto& [id, entity] : document.entities()) {
+        if (!can_recognize_building_entity_type(entity.type) ||
+            (visible_entity_ids && !visible_entity_ids->contains(id))) {
+            continue;
+        }
+        try {
+            const auto object = decode_building_entity(entity);
+            ScheduleRecord record;
+            record.object_id = id;
+            record.kind = ScheduleRowKind::building;
+            record.mark = building_mark_for(entity, "B-", projection.diagnostics);
+            record.properties.emplace("type", entity.type);
+            if (const auto form = building_text_field(entity, "form"))
+                record.properties.emplace("form", *form);
+            add_building_quantity(record, entity, "width_m", "width", ScheduleUnit::metre);
+            add_building_quantity(record, entity, "depth_m", "depth", ScheduleUnit::metre);
+            add_building_quantity(record, entity, "height_m", "height", ScheduleUnit::metre);
+            add_building_quantity(record, entity, "radius_m", "radius", ScheduleUnit::metre);
+            add_building_quantity(record, entity, "length_m", "length", ScheduleUnit::metre);
+            add_building_quantity(record, entity, "run_m", "run", ScheduleUnit::metre);
+            add_building_quantity(record, entity, "span_m", "span", ScheduleUnit::metre);
+            add_building_quantity(record, entity, "rise_m", "rise", ScheduleUnit::metre);
+            add_building_quantity(record, entity, "overhang_m", "overhang", ScheduleUnit::metre);
+            add_building_quantity(record, entity, "thickness_m", "thickness", ScheduleUnit::metre);
+            add_building_quantity(record, entity, "going_m", "going", ScheduleUnit::metre);
+            add_building_quantity(record, entity, "post_spacing_m", "post_spacing", ScheduleUnit::metre);
+            add_building_scalar(record, entity, "pitch_rad", "pitch_radians");
+            add_building_scalar(record, entity, "rotation_rad", "rotation_radians");
+            add_building_scalar(record, entity, "orientation_rad", "orientation_radians");
+            if (const auto found = entity.properties.find("riser_count");
+                found != entity.properties.end() && found->is_number_integer()) {
+                record.properties.emplace("riser_count", found->get<std::int64_t>());
+            }
+            if (const auto found = entity.properties.find("roof_openings");
+                found != entity.properties.end() && found->is_array()) {
+                record.properties.emplace("opening_count",
+                                          static_cast<std::int64_t>(found->size()));
+            }
+            if (const auto* beam = std::get_if<Beam>(&object)) {
+                const auto dx = beam->end.x - beam->start.x;
+                const auto dy = beam->end.y - beam->start.y;
+                const auto dz = beam->end.z - beam->start.z;
+                const auto length = std::hypot(std::hypot(dx, dy), dz);
+                if (std::isfinite(length))
+                    record.properties.emplace("length", ScheduleQuantity{length, ScheduleUnit::metre});
+            }
+            const auto shape = make_building_shape(object);
+            const auto volume = solid_volume(shape);
+            if (!std::isfinite(volume) || volume <= 0.0)
+                throw std::invalid_argument("building solid volume must be positive and finite");
+            record.calculated.emplace("volume", ScheduleCalculation{
+                ScheduleQuantity{volume, ScheduleUnit::cubic_metre},
+                {{id, "geometry"}},
+                "Net volume calculated from the canonical building solid"});
+            records.push_back(std::move(record));
+        } catch (const Standard_Failure& error) {
+            projection.diagnostics.push_back(id + ": building schedule unavailable: " +
+                (error.what() ? error.what() : "solid construction failed"));
+        } catch (const std::exception& error) {
+            projection.diagnostics.push_back(id + ": building schedule unavailable: " + error.what());
+        }
+    }
+    if (records.empty()) return;
+    try {
+        auto rows = build_schedule(records, document.revision()).rows;
+        for (auto& row : rows) {
+            for (auto& [name, cell] : row.cells) {
+                cell.editable = false;
+                cell.explanation = name == "volume"
+                    ? "Derived from the canonical building solid"
+                    : "Authored building-object property; edit the object in the architectural workspace";
+            }
+            projection.snapshot.rows.push_back(std::move(row));
+        }
+    } catch (const std::exception& error) {
+        projection.diagnostics.push_back(std::string("building schedule rejected: ") + error.what());
+    }
+}
+
 DocumentScheduleProjection augment(const DocumentSnapshot& document, DocumentScheduleProjection projection,
                                    const std::set<std::string, std::less<>>* visible_entity_ids) {
     std::map<std::string, std::vector<const Entity*>, std::less<>> openings;
@@ -518,6 +635,7 @@ DocumentScheduleProjection augment(const DocumentSnapshot& document, DocumentSch
     }
     append_layer_material_rows(document, openings, projection, visible_entity_ids);
     append_assembly_rows(document, projection, visible_entity_ids);
+    append_building_rows(document, projection, visible_entity_ids);
     append_material_summaries(document, projection);
     std::sort(projection.diagnostics.begin(), projection.diagnostics.end());
     projection.diagnostics.erase(std::unique(projection.diagnostics.begin(), projection.diagnostics.end()),

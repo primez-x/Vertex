@@ -1693,14 +1693,16 @@
         "src/architecture/building_objects.cpp",
         "src/architecture/building_entity.cpp",
         "src/architecture/building_plan_projection.cpp",
+        "src/architecture/architectural_schedule.cpp",
         "src/desktop/building_object_dialog.cpp",
         "src/desktop/main_window.cpp",
         "tests/building_object_tests.cpp",
         "tests/building_object_dialog_tests.cpp",
         "tests/building_plan_projection_tests.cpp",
+        "tests/architectural_schedule_tests.cpp",
         "tests/desktop_smoke.cpp"
       ],
-      "implementation_note": "Rectangular/circular columns and arbitrary-axis beams have semantic solids, parameter editors, and exact top-down plan projections. Section display, schedules and production acceptance remain open."
+      "implementation_note": "Rectangular/circular columns and arbitrary-axis beams have semantic solids, parameter editors, exact top-down plan projections, and dedicated read-only architectural schedule rows with source dimensions and canonical solid volumes. Stairs, railings, and supported roof forms also emit building-object rows. Physical/production acceptance and complete sheet/output certification remain open."
     },
     {
       "id": "ARCH-MOD-005",
@@ -1959,7 +1961,7 @@
         "tests/schedule_model_tests.cpp",
         "docs/schedules.md"
       ],
-      "implementation_note": "Standalone typed records and a revision-bound Document-derived adapter now generate door/window, room, and material rows with stable marks, source-backed calculated cells and explicit diagnostics. Architectural room volumes derive net plan area from their boundary and holes and expose a read-only cubic volume from explicit height with geometry provenance. Active organization/design-phase masks filter source entities before projection, preserving derived material rows and suppressing hidden-source diagnostics. Architectural projections append deterministic read-only material-summary rows grouped by catalog/material identity or normalized explicit name, with aggregate counts, complete net-volume totals when every source is valid, and all contributing provenance. Composite wall and horizontal slab layers now contribute per-layer thickness, catalog/material identity, and net solid-volume rows from the same OCCT geometry. Schedule persistence and complete sheet/output integration remain open."
+      "implementation_note": "Standalone typed records and a revision-bound Document-derived adapter now generate door/window, room, and material rows with stable marks, source-backed calculated cells and explicit diagnostics. Architectural room volumes derive net plan area from their boundary and holes and expose a read-only cubic volume from explicit height with geometry provenance. Active organization/design-phase masks filter source entities before projection, preserving derived material rows and suppressing hidden-source diagnostics. Architectural projections append deterministic read-only material-summary rows grouped by catalog/material identity or normalized explicit name, with aggregate counts, complete net-volume totals when every source is valid, and all contributing provenance. Composite wall and horizontal slab layers now contribute per-layer thickness, catalog/material identity, and net solid-volume rows from the same OCCT geometry. Supported columns, beams, stairs, railings, and roof forms additionally emit read-only building-object rows with source dimensions and canonical-solid volume provenance. Schedule persistence and complete sheet/output integration remain open."
     },
     {
       "id": "ARCH-SCH-002",
