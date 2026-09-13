@@ -226,7 +226,11 @@ def _configuration_check(root):
     markers = ()
     if cmake.is_file():
         text = cmake.read_text(encoding="utf-8", errors="replace")
-        markers = ("production_acceptance_gate", "production_qualification_contract")
+        markers = (
+            "production_acceptance_gate",
+            "production_qualification_contract",
+            'set_tests_properties(production_acceptance_gate PROPERTIES LABELS "production" DISABLED TRUE)',
+        )
         missing.extend("CMakeLists.txt marker: " + marker for marker in markers if marker not in text)
     if missing:
         return _check("configuration", "blocked", "Build and gate configuration is incomplete",
