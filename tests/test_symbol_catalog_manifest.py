@@ -58,6 +58,7 @@ class SymbolCatalogManifestTests(unittest.TestCase):
         return {
             "schema_version": 1,
             "catalog_id": "vertex.symbol-catalog",
+            "catalog_revision": 1,
             "entry_count": len(entries),
             "family_count": len(family_counts),
             "category_counts": category_counts,
@@ -92,6 +93,12 @@ class SymbolCatalogManifestTests(unittest.TestCase):
         self.assertTrue(any("representative family" in error for error in report["errors"]))
 
     def test_duplicate_unsorted_and_out_of_bounds_entries_are_rejected(self):
+        manifest = self.make_manifest()
+        manifest["catalog_revision"] = True
+        report = validation.validate_manifest(manifest)
+        self.assertFalse(report["valid"])
+        self.assertTrue(any("catalog_revision" in error for error in report["errors"]))
+
         manifest = self.make_manifest()
         manifest["entries"][1] = copy.deepcopy(manifest["entries"][0])
         report = validation.validate_manifest(manifest)

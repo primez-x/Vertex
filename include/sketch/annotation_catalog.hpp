@@ -8,6 +8,12 @@
 
 namespace sketch {
 
+// Built-in symbol definitions are versioned independently from the annotation
+// entity schema.  A future catalog revision must provide an explicit migration
+// before an existing project can be opened, preventing silent reinterpretation
+// of saved symbol IDs.
+inline constexpr int kSymbolCatalogRevision = 1;
+
 // Presentation-only records; deliberately carry no analytical classification.
 struct AnnotationStyle {
     std::string font_family{"sans-serif"};

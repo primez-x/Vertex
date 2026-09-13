@@ -455,6 +455,7 @@ nlohmann::json encode_symbol_catalog_manifest(const std::vector<SymbolDefinition
     }
     return {{"schema_version", 1},
             {"catalog_id", "vertex.symbol-catalog"},
+            {"catalog_revision", kSymbolCatalogRevision},
             {"entry_count", catalog.size()},
             {"family_count", family_summary.size()},
             {"category_counts", category_counts},
@@ -467,8 +468,9 @@ std::vector<SymbolDefinition> filter_symbol_catalog(
     std::string_view category) {
     std::vector<SymbolDefinition> result;
     const auto folded_query = folded(query);
+    const auto folded_category = folded(category);
     for (const auto& symbol : catalog) {
-        if (!category.empty() && symbol.category != category) continue;
+        if (!folded_category.empty() && folded(symbol.category) != folded_category) continue;
         if (!folded_query.empty() && folded(symbol.id).find(folded_query) == std::string::npos &&
             folded(symbol.family).find(folded_query) == std::string::npos &&
             folded(symbol.category).find(folded_query) == std::string::npos) continue;
@@ -539,7 +541,8 @@ void validate_annotation_state(const AnnotationState& state, const std::vector<S
 
 json encode_annotation_state(const AnnotationState& state, const std::vector<SymbolDefinition>& catalog) {
     validate_annotation_state(state,catalog);
-    json j{{"version",1},{"labels",json::array()},{"symbols",json::array()},{"overrides",json::array()}};
+    json j{{"version",1},{"catalog_revision",kSymbolCatalogRevision},
+           {"labels",json::array()},{"symbols",json::array()},{"overrides",json::array()}};
     for (const auto& l : state.labels) j["labels"].push_back({{"id",l.id},{"template_id",l.template_id},{"content",l.content},
         {"style",encode_style(l.style)},{"placement",encode_placement(l.placement)},{"visible",l.visible}});
     for (const auto& s : state.symbols) j["symbols"].push_back({{"id",s.id},{"symbol_id",s.symbol_id},
@@ -552,6 +555,11 @@ json encode_annotation_state(const AnnotationState& state, const std::vector<Sym
 AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolDefinition>& catalog) {
     try {
         check(j.at("version").is_number_integer() && j.at("version") == 1, "Unsupported annotation version");
+        if (j.contains("catalog_revision")) {
+            check(j.at("catalog_revision").is_number_integer() &&
+                      j.at("catalog_revision") == kSymbolCatalogRevision,
+                  "Unsupported symbol catalog revision");
+        }
         for (const char* key : {"labels","symbols","overrides"})
             check(j.at(key).is_array() && j.at(key).size() <= 100000, "Invalid annotation collection");
         AnnotationState state;

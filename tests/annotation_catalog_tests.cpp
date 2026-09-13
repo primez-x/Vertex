@@ -43,6 +43,8 @@ int main() {
     require(families.size() == 52, "Every symbol family must have a stable identity");
     const auto plumbing = filter_symbol_catalog(catalog, "", "plumbing");
     require(plumbing.size() == 36, "Category filtering must return all plumbing variants");
+    require(filter_symbol_catalog(catalog, "", "PLUMBING").size() == plumbing.size(),
+            "Symbol category filtering must be case-insensitive for field use");
     const auto toilets = filter_symbol_catalog(catalog, "toilet");
     require(toilets.size() == 18, "Query filtering must match toilet families and variants");
     require(filter_symbol_catalog(catalog, "TOILET").size() == 18,
@@ -95,6 +97,8 @@ int main() {
     const auto manifest = encode_symbol_catalog_manifest(catalog);
     require(manifest.at("schema_version") == 1 && manifest.at("catalog_id") == "vertex.symbol-catalog",
             "Symbol catalog manifest must identify its schema");
+    require(manifest.at("catalog_revision") == kSymbolCatalogRevision,
+            "Symbol catalog manifest must identify its revision");
     require(manifest.at("entry_count") == catalog.size() && manifest.at("family_count") == families.size() &&
                 manifest.at("entries").size() == catalog.size(),
             "Symbol catalog manifest must enumerate every entry and family");
@@ -122,8 +126,17 @@ int main() {
     state.overrides.push_back({"area","area-1",{},false});
     state.overrides.push_back({"output_view","print-1",{},true});
     auto encoded = encode_annotation_state(state,catalog);
+    require(encoded.at("catalog_revision") == kSymbolCatalogRevision,
+            "Annotation state must pin the symbol catalog revision");
     const auto decoded = decode_annotation_state(nlohmann::json::parse(encoded.dump()),catalog);
     require(encode_annotation_state(decoded,catalog) == encoded,"JSON roundtrip loses edits");
+    auto legacy = encoded;
+    legacy.erase("catalog_revision");
+    require(encode_annotation_state(decode_annotation_state(legacy,catalog),catalog) == encoded,
+            "Legacy annotation state without a catalog revision must upgrade deterministically");
+    auto unsupported_revision = encoded;
+    unsupported_revision["catalog_revision"] = kSymbolCatalogRevision + 1;
+    rejected([&]{(void)decode_annotation_state(unsupported_revision,catalog);});
     require(labels.front().content == "Bedroom","Instance edits mutated library template");
     auto transformed = placed_symbol_preview(catalog.front(),state.symbols.front().placement);
     const auto local = catalog.front().preview.front().start;

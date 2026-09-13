@@ -25,6 +25,7 @@ def main():
         catalog = invoke("symbols")
         assert catalog["schema_version"] == 1
         assert catalog["catalog_id"] == "vertex.symbol-catalog"
+        assert catalog["catalog_revision"] == 1
         assert catalog["entry_count"] >= 200
         assert catalog["family_count"] >= 20
         assert {"fixtures", "furniture", "plumbing", "commercial"}.issubset(
@@ -39,6 +40,8 @@ def main():
         commercial = invoke("symbols", "", "commercial")
         assert commercial["filtered_entry_count"] == 36
         assert all(entry["category"] == "commercial" for entry in commercial["entries"])
+        upper_commercial = invoke("symbols", "", "COMMERCIAL")
+        assert upper_commercial["filtered_entry_count"] == commercial["filtered_entry_count"]
         created = invoke("new", project)
         inspected = invoke("inspect", project)
         assert inspected["document_id"] == created["document_id"]

@@ -347,9 +347,11 @@ semantic annotation/style records with a 468-entry parametric symbol catalog:
 52 stable families across plumbing, furniture, storage, fixtures, appliances,
 accessibility, lighting, doors/windows, structural/site, and light-commercial
 equipment, each with nine physical width/depth variants and validated scale
-limits. Family-specific appliance, storage, plumbing, furniture, and commercial
-motifs now remain distinguishable instead of relying on count-only generic
-geometry. Representative symbol resize/placement now has a desktop regression
+limits. Annotation state pins built-in catalog revision 1 and rejects
+unsupported revisions until an explicit migration is available. Family-specific
+appliance, storage, plumbing, furniture, and commercial motifs now remain
+distinguishable instead of relying on count-only generic geometry.
+Representative symbol resize/placement now has a desktop regression
 fixture and a multi-family scale/rotation geometry matrix, and resized symbols
 are covered by vector DXF output. Polished artwork,
 physical-footprint bounds, family-specific motifs, and case-insensitive

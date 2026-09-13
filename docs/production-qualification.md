@@ -138,9 +138,9 @@ Light-commercial OPS-QA-003 additionally requires `multiple_levels`, `assemblies
 `output`, and `fidelity`.
 
 The `symbol_library` observation must enumerate the shipped deterministic
-catalog and prove at least 200 usable entries across plumbing, furniture,
-fixtures, appliances, accessibility, lighting, doors/windows, structural/site,
-and commercial equipment. `symbol_resize` must place representative toilets,
+catalog, record its catalog revision, and prove at least 200 usable entries
+across plumbing, furniture, fixtures, appliances, accessibility, lighting,
+doors/windows, structural/site, and commercial equipment. `symbol_resize` must place representative toilets,
 beds, furniture, and commercial symbols at multiple scales and rotations while
 retaining their declared physical footprint and anchor through save/reopen.
 `symbol_output` must compare those same instances in print preview, PDF/SVG, and

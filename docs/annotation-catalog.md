@@ -35,8 +35,8 @@ declared evidence bindings and does not turn hashes or status text into an
 automatic visual certification.
 Each entry must expose physical width/depth metadata, a centre anchor, scale
 limits, and nonempty local preview strokes contained within its declared
-footprint. Symbol family/category search is case-insensitive while category
-selection remains exact. Placement subtracts the anchor,
+footprint. Symbol family/category search and category selection are
+case-insensitive. Placement subtracts the anchor,
 uniformly scales, rotates counterclockwise in radians, then translates in metres;
 the final acceptance fixtures must prove representative symbols can be resized
 and remain legible at print and export scales. Instance style and visibility stay
@@ -49,7 +49,7 @@ case-insensitive family alias (for example, `toilet`, `double-bed`, `sofa`, or
 nominal footprint and the explicit variant ID is stored in the project.
 
 The offline `property-cli symbols` command emits a deterministic version-1
-catalog manifest containing entry dimensions, anchors, scale limits, vector
+catalog manifest containing catalog revision 1, entry dimensions, anchors, scale limits, vector
 previews, family summaries, and category counts. It accepts an optional query
 and category (`property-cli symbols toilet` or `property-cli symbols "" commercial`)
 so release reviewers and downstream tooling can inspect the shipped library
@@ -64,10 +64,13 @@ Version-1 JSON roundtrips instance content, style, placement, visibility, and
 overrides. Decoding rejects malformed fields, unsupported versions, duplicate
 instance IDs/override targets, unknown symbols, invalid scales/colors, nonfinite
 coordinates, and excessive collection sizes. IDs are limited to 256 bytes and
-label content to 65,536 bytes. Decode is atomic and returns a new state. The
-catalog is supplied separately; instance JSON does not serialize custom catalog
-definitions. Unknown JSON fields are ignored and are not retained; this is not
-an opaque forward-compatible document envelope. The
+label content to 65,536 bytes. Annotation state records the built-in symbol
+catalog revision; legacy states without that field upgrade to revision 1, while
+an unsupported revision fails closed until an explicit migration is provided.
+Decode is atomic and returns a new state. The catalog is supplied separately;
+instance JSON does not serialize custom catalog definitions. Unknown JSON fields
+are ignored and are not retained; this is not an opaque forward-compatible
+document envelope. The
 `sketch.annotation_entity` Document codec wraps this state in a strict typed
 entity, uses the deterministic catalog, and is included in the new-project
 scaffold. Visible labels and symbol previews are projected into the shared

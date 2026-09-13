@@ -44,6 +44,8 @@ def validate_manifest(manifest):
         errors.append("schema_version: expected integer 1")
     if manifest.get("catalog_id") != "vertex.symbol-catalog":
         errors.append("catalog_id: expected vertex.symbol-catalog")
+    if type(manifest.get("catalog_revision")) is not int or manifest["catalog_revision"] != 1:
+        errors.append("catalog_revision: expected integer 1")
 
     query = manifest.get("query", "")
     category = manifest.get("category", "")
