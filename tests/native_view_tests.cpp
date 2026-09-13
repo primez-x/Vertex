@@ -374,8 +374,23 @@ int main(int argc,char** argv) {
                               Qt::LeftButton, Qt::ControlModifier);
                         mouse(view, QEvent::MouseMove, end, Qt::NoButton,
                               Qt::LeftButton, Qt::ControlModifier);
+                        const auto preview = capture(
+                            view, temporary.filePath(QString::fromStdString(entity.id) + "-translation-preview.png"));
+                        check(preview.image != frame.image,
+                              "Ctrl+left-drag must visibly preview the native translation");
                         mouse(view, QEvent::MouseButtonRelease, end, Qt::LeftButton,
                               Qt::NoButton, Qt::ControlModifier);
+                        // The Ctrl press also selects the object. Clear that
+                        // presentation highlight before comparing the restored
+                        // frame with the pre-drag capture.
+                        mouse(view, QEvent::MouseButtonPress, {2, 2}, Qt::LeftButton,
+                              Qt::LeftButton);
+                        mouse(view, QEvent::MouseButtonRelease, {2, 2}, Qt::LeftButton,
+                              Qt::NoButton);
+                        check(capture(view, temporary.filePath(QString::fromStdString(entity.id) +
+                                                               "-translation-reset.png"))
+                                  .image == frame.image,
+                              "Releasing a native translation must clear the presentation preview");
                         check(translated_id == QString::fromStdString(entity.id),
                               "Ctrl+left-drag must request translation of the selected architectural object");
                         check(std::isfinite(translated_x) && std::isfinite(translated_y) &&
