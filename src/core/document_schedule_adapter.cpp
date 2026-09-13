@@ -41,8 +41,7 @@ std::optional<double> finite_field(const Entity& entity, std::string_view name) 
     return std::isfinite(result) ? std::optional<double>(result) : std::nullopt;
 }
 
-std::optional<Boundary> boundary_field(const Entity& entity, std::string_view name) {
-    const auto* value = field(entity, name);
+std::optional<Boundary> boundary_from_json(const Json* value) {
     if (value == nullptr || !value->is_array()) return std::nullopt;
     Boundary result;
     try {
@@ -70,6 +69,10 @@ std::optional<Boundary> boundary_field(const Entity& entity, std::string_view na
         return std::nullopt;
     }
     return result;
+}
+
+std::optional<Boundary> boundary_field(const Entity& entity, std::string_view name) {
+    return boundary_from_json(field(entity, name));
 }
 
 std::string mark_for(const Entity& entity, std::string_view prefix,
@@ -140,15 +143,50 @@ void add_opening(const Entity& entity, std::vector<ScheduleRecord>& records,
 void add_room(const Entity& entity, std::vector<ScheduleRecord>& records,
               std::vector<std::string>& diagnostics) {
     const auto area = finite_field(entity, "area_m2");
-    const auto boundary = area ? std::optional<Boundary>{} : boundary_field(entity, "boundary");
-    double area_value = area.value_or(0.0);
-    if (!area && boundary) {
+    const auto boundary = boundary_field(entity, "boundary");
+    const bool use_stored_area = !boundary && area.has_value();
+    double area_value = use_stored_area ? *area : 0.0;
+    std::vector<Boundary> holes;
+    bool has_holes = false;
+    if (const auto* holes_value = field(entity, "holes")) {
+        has_holes = true;
+        if (!holes_value->is_array()) {
+            diagnostic(diagnostics, entity, "holes must be an array of segment arrays");
+            return;
+        }
+        holes.reserve(holes_value->size());
+        for (const auto& hole_value : *holes_value) {
+            const auto hole = boundary_from_json(&hole_value);
+            if (!hole) {
+                diagnostic(diagnostics, entity, "holes must contain valid segment arrays");
+                return;
+            }
+            holes.push_back(*hole);
+        }
+    }
+    std::vector<ScheduleSourceRef> area_sources;
+    if (boundary) {
         const auto issues = validate_boundary(*boundary);
         if (!issues.empty()) {
             diagnostic(diagnostics, entity, "boundary is invalid: " + issues.front().message);
             return;
         }
         area_value = std::abs(signed_area(*boundary));
+        area_sources.push_back({entity.id, "boundary"});
+        for (const auto& hole : holes) {
+            const auto hole_issues = validate_boundary(hole);
+            if (!hole_issues.empty()) {
+                diagnostic(diagnostics, entity, "hole is invalid: " + hole_issues.front().message);
+                return;
+            }
+            area_value -= std::abs(signed_area(hole));
+        }
+        if (has_holes) area_sources.push_back({entity.id, "holes"});
+    } else if (use_stored_area) {
+        area_sources.push_back({entity.id, "area_m2"});
+    } else if (has_holes) {
+        diagnostic(diagnostics, entity, "holes require a closed room boundary");
+        return;
     }
     if (!positive(area_value)) {
         diagnostic(diagnostics, entity, "area_m2 or a valid closed boundary is required");
@@ -158,15 +196,32 @@ void add_room(const Entity& entity, std::vector<ScheduleRecord>& records,
     record.object_id = entity.id;
     record.kind = ScheduleRowKind::room;
     record.mark = mark_for(entity, "R-", diagnostics);
-    if (area) record.properties.emplace("area_m2", ScheduleQuantity{*area, ScheduleUnit::square_metre});
+    if (use_stored_area) {
+        record.properties.emplace("area_m2", ScheduleQuantity{*area, ScheduleUnit::square_metre});
+    }
     if (const auto name = text_field(entity, "name")) record.properties.emplace("name", *name);
     if (const auto boundary_id = text_field(entity, "boundary_id"))
         record.properties.emplace("boundary_id", *boundary_id);
+    const auto height = finite_field(entity, "height_m");
+    if (field(entity, "height_m") != nullptr && (!height || !positive(*height))) {
+        diagnostic(diagnostics, entity, "height_m must be finite and positive");
+        return;
+    }
+    if (height) record.properties.emplace("height_m", ScheduleQuantity{*height, ScheduleUnit::metre});
     record.calculated.emplace("gross_area", ScheduleCalculation{
         ScheduleQuantity{area_value, ScheduleUnit::square_metre},
-        {{entity.id, area ? "area_m2" : "boundary"}},
-        area ? "Area from the document area_m2 property"
-             : "Area calculated from the closed room boundary"});
+        area_sources,
+        use_stored_area ? "Area from the document area_m2 property"
+             : (has_holes ? "Net plan area calculated from the closed room boundary and holes"
+                          : "Area calculated from the closed room boundary")});
+    if (height) {
+        auto volume_sources = area_sources;
+        volume_sources.push_back({entity.id, "height_m"});
+        record.calculated.emplace("volume", ScheduleCalculation{
+            ScheduleQuantity{area_value * *height, ScheduleUnit::cubic_metre},
+            std::move(volume_sources),
+            "Room volume calculated from net plan area multiplied by height"});
+    }
     records.push_back(std::move(record));
 }
 
@@ -299,9 +354,15 @@ DocumentScheduleProjection project_schedules(
             }
             if (row.kind != ScheduleRowKind::room) continue;
             const auto source_area = row.cells.find("area_m2");
-            if (source_area == row.cells.end()) continue;
-            source_area->second.editable = false;
-            source_area->second.explanation = "Stored room area from the document";
+            if (source_area != row.cells.end()) {
+                source_area->second.editable = false;
+                source_area->second.explanation = "Stored room area from the document";
+            }
+            const auto source_height = row.cells.find("height_m");
+            if (source_height != row.cells.end()) {
+                source_height->second.editable = false;
+                source_height->second.explanation = "Stored room height from the document";
+            }
         }
     } catch (const std::exception& error) {
         result.diagnostics.push_back(std::string("schedule projection rejected: ") + error.what());

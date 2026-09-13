@@ -62,6 +62,42 @@ void test_room_area_and_invalid_rows_are_explicit() {
             "invalid opening must be reported without a partial schedule row");
 }
 
+void test_room_volume_schedule_uses_analytical_boundary() {
+    using namespace sketch;
+    const nlohmann::json boundary = nlohmann::json::array({
+        {{"start", {0.0, 0.0}}, {"end", {4.0, 0.0}}, {"sweep_radians", 0.0}},
+        {{"start", {4.0, 0.0}}, {"end", {4.0, 3.0}}, {"sweep_radians", 0.0}},
+        {{"start", {4.0, 3.0}}, {"end", {0.0, 3.0}}, {"sweep_radians", 0.0}},
+        {{"start", {0.0, 3.0}}, {"end", {0.0, 0.0}}, {"sweep_radians", 0.0}},
+    });
+    const nlohmann::json hole = nlohmann::json::array({
+        {{"start", {1.0, 1.0}}, {"end", {2.0, 1.0}}, {"sweep_radians", 0.0}},
+        {{"start", {2.0, 1.0}}, {"end", {2.0, 2.0}}, {"sweep_radians", 0.0}},
+        {{"start", {2.0, 2.0}}, {"end", {1.0, 2.0}}, {"sweep_radians", 0.0}},
+        {{"start", {1.0, 2.0}}, {"end", {1.0, 1.0}}, {"sweep_radians", 0.0}},
+    });
+    const auto document = Document::create({
+        entity("room-volume", "room", {{"mark", "R1"}, {"boundary", boundary},
+            {"holes", nlohmann::json::array({hole})}, {"height_m", 2.4}, {"elevation_m", 0.0}}),
+    });
+    const auto projection = build_document_schedules(document.snapshot());
+    require(projection.diagnostics.empty() && projection.snapshot.rows.size() == 1,
+            "valid room volume must produce one complete schedule row");
+    const auto& row = projection.snapshot.rows.front();
+    require(std::get<ScheduleQuantity>(row.cells.at("gross_area").value).value == 11.0 &&
+                row.cells.at("gross_area").sources.size() == 2 &&
+                row.cells.at("gross_area").sources.at(1).property == "holes",
+            "room volume schedule area must subtract holes with explicit provenance");
+    require(std::get<ScheduleQuantity>(row.cells.at("height_m").value).value == 2.4 &&
+                !row.cells.at("height_m").editable &&
+                std::get<ScheduleQuantity>(row.cells.at("volume").value).value == 26.4 &&
+                row.cells.at("volume").sources.size() == 3 &&
+                std::any_of(row.cells.at("volume").sources.begin(),
+                            row.cells.at("volume").sources.end(),
+                            [](const auto& source) { return source.property == "height_m"; }),
+            "room volume schedule must expose a read-only calculated cubic quantity");
+}
+
 void test_edit_is_a_document_command_with_revision_and_undo_semantics() {
     using namespace sketch;
     auto document = Document::create({
@@ -180,6 +216,7 @@ int main() {
         test_revision_and_opening_schedule();
         test_assigned_material_schedule();
         test_room_area_and_invalid_rows_are_explicit();
+        test_room_volume_schedule_uses_analytical_boundary();
         test_edit_is_a_document_command_with_revision_and_undo_semantics();
         test_visibility_uses_source_entities_for_material_rows();
         std::cout << "document_schedule_adapter_tests passed\n";

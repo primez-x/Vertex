@@ -29,7 +29,11 @@ applied to source entities before projection, so visible material quantities
 remain present and hidden sources contribute neither rows nor diagnostics.
 The unfiltered adapter overload continues to project the whole document.
 Rooms with a stored area expose that measurement as read-only source provenance
-for their calculated gross area.
+for their calculated gross area. Architectural \`room\` volumes with explicit
+\`height_m\` derive net plan area from the boundary minus any \`holes\`, expose the
+stored height as a read-only metre quantity, and add a read-only cubic-metre
+\`volume\` calculation with boundary, hole, and height provenance. The schedule
+never invents a height for legacy plan-only room records.
 
 The architectural adapter augments assigned-material source rows with net solid
 volume and appends deterministic, read-only `material_summary` rows. Assignment

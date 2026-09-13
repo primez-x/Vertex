@@ -65,8 +65,10 @@ ScheduleSnapshot build_schedule(const std::vector<ScheduleRecord>& records,
                 // even when it is not duplicated into the tabular property
                 // map.  It remains provenance-only and therefore cannot be
                 // edited as a schedule cell.
+                const bool geometry_source = ref.property == "boundary" ||
+                                             ref.property == "holes";
                 if (source == sources.end() || (ref.property != "mark" &&
-                    ref.property != "boundary" && !source->second->properties.contains(ref.property)))
+                    !geometry_source && !source->second->properties.contains(ref.property)))
                     throw std::invalid_argument("Missing schedule source: " + ref.object_id + "." + ref.property);
             }
             auto refs = calculation.sources;
