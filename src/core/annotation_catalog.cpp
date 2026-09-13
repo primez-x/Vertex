@@ -555,11 +555,12 @@ json encode_annotation_state(const AnnotationState& state, const std::vector<Sym
 AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolDefinition>& catalog) {
     try {
         check(j.at("version").is_number_integer() && j.at("version") == 1, "Unsupported annotation version");
-        if (j.contains("catalog_revision")) {
-            check(j.at("catalog_revision").is_number_integer() &&
-                      j.at("catalog_revision") == kSymbolCatalogRevision,
-                  "Unsupported symbol catalog revision");
-        }
+        const auto catalog_revision = j.contains("catalog_revision")
+            ? j.at("catalog_revision")
+            : json(kLegacySymbolCatalogRevision);
+        check(catalog_revision.is_number_integer() &&
+                  catalog_revision == kSymbolCatalogRevision,
+              "Unsupported symbol catalog revision");
         for (const char* key : {"labels","symbols","overrides"})
             check(j.at(key).is_array() && j.at(key).size() <= 100000, "Invalid annotation collection");
         AnnotationState state;

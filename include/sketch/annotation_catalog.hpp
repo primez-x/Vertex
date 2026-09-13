@@ -13,6 +13,9 @@ namespace sketch {
 // before an existing project can be opened, preventing silent reinterpretation
 // of saved symbol IDs.
 inline constexpr int kSymbolCatalogRevision = 1;
+// States written before the revision field was introduced are explicitly
+// treated as revision 1; they must still pass the current-revision check.
+inline constexpr int kLegacySymbolCatalogRevision = 1;
 
 // Presentation-only records; deliberately carry no analytical classification.
 struct AnnotationStyle {
