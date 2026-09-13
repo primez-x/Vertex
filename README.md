@@ -62,7 +62,9 @@ The [project format](docs/project-format.md), [calculation contract](docs/calcul
 [workspace UI](docs/workspace-ui.md),
 [accepted production plan](docs/production-plan.md), and
 [implementation status](docs/implementation-status.md) distinguish implemented
-behavior from the remaining production acceptance requirements.
+behavior from the remaining production acceptance requirements. Run the
+[completion audit](docs/completion-audit.md) to produce the current
+source/test/package/runtime/compatibility checklist.
 
 The current navigator uses the project's actual buildings, floors and layers.
 Use Commands to add or rename these containers, then choose a Drawing layer

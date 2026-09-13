@@ -86,6 +86,13 @@ including the explicit OPS-QA-004 packaged/offline/assistance-disabled checks.
 Those tests validate the manifest shape and hash bindings only; they do not
 turn synthetic or development-host observations into production qualification.
 
+`scripts/completion_audit.py` now emits a deterministic checkpoint checklist
+covering the requirement ledger, documentation and build configuration, Debug
+and Release test logs, installed-runtime smoke, package manifests, Apex and
+integration evidence, and the production qualification manifest. Its strict
+mode remains fail-closed until the single production gate and every external
+evidence boundary pass.
+
 ## Current checkpoint (September 2026)
 
 The Windows desktop now uses the immutable save queue and owner-thread

@@ -552,6 +552,10 @@ if(BUILD_TESTING)
   # It remains fail-closed and never certifies runtime behavior by itself.
   add_test(NAME production_qualification_contract COMMAND "${Python3_EXECUTABLE}" -m unittest discover
     -s "${CMAKE_SOURCE_DIR}/tests" -p test_production_qualification.py)
+  # The checkpoint checklist is a report contract; it must not become a
+  # substitute for the explicitly disabled production acceptance gate.
+  add_test(NAME completion_audit_contract COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+    -s "${CMAKE_SOURCE_DIR}/tests" -p test_completion_audit.py)
   # Explicit production-acceptance gate: fails closed with --release and must be
   # run explicitly via a dedicated CI/lifecycle step.
   add_test(NAME production_acceptance_gate COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/requirement_audit.py" --release)

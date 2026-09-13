@@ -111,6 +111,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/completion-audit.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/constraint-authoring.md"
     },
     {
@@ -796,6 +800,10 @@
     {
       "category": "source",
       "path": "scripts/build.ps1"
+    },
+    {
+      "category": "source",
+      "path": "scripts/completion_audit.py"
     },
     {
       "category": "source",
@@ -1756,6 +1764,10 @@
     {
       "category": "source",
       "path": "tests/test_cli.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_completion_audit.py"
     },
     {
       "category": "source",

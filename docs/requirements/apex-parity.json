@@ -2665,6 +2665,9 @@
       "package": 9,
       "blocker": null,
       "implementation_sources": [
+        "scripts/completion_audit.py",
+        "tests/test_completion_audit.py",
+        "docs/completion-audit.md",
         "tests/project_store_tests.cpp"
       ],
       "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
@@ -2680,6 +2683,9 @@
       "package": 9,
       "blocker": null,
       "implementation_sources": [
+        "scripts/completion_audit.py",
+        "tests/test_completion_audit.py",
+        "docs/completion-audit.md",
         "scripts/production_qualification.py",
         "tests/test_production_qualification.py",
         "docs/production-qualification.md",
@@ -2698,6 +2704,9 @@
       "package": 9,
       "blocker": null,
       "implementation_sources": [
+        "scripts/completion_audit.py",
+        "tests/test_completion_audit.py",
+        "docs/completion-audit.md",
         "scripts/production_qualification.py",
         "tests/test_production_qualification.py",
         "docs/production-qualification.md",
@@ -2716,6 +2725,9 @@
       "package": 9,
       "blocker": null,
       "implementation_sources": [
+        "scripts/completion_audit.py",
+        "tests/test_completion_audit.py",
+        "docs/completion-audit.md",
         "scripts/production_qualification.py",
         "tests/test_production_qualification.py",
         "tests/desktop_smoke.cpp",
