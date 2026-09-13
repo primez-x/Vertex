@@ -12,6 +12,7 @@
 #include <AIS_InteractiveContext.hxx>
 #include <AIS_SelectionScheme.hxx>
 #include <AIS_Shape.hxx>
+#include <BRepBuilderAPI_Transform.hxx>
 #include <Aspect_DisplayConnection.hxx>
 #include <Aspect_Handle.hxx>
 #include <OpenGl_GraphicDriver.hxx>
@@ -21,6 +22,11 @@
 #include <V3d_View.hxx>
 #include <V3d_Viewer.hxx>
 #include <WNT_Window.hxx>
+#include <gp_Ax1.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Pnt.hxx>
+#include <gp_Trsf.hxx>
+#include <gp_Vec.hxx>
 
 #include <QApplication>
 #include <QByteArray>
@@ -44,6 +50,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -447,6 +454,166 @@ public:
                 append_unique(errors, entity.type + " '" + id + "': unknown OCCT failure");
                 remove_solid(id);
                 changed = true;
+            }
+        }
+
+        const auto make_assembly_host_shape = [&](const std::string& host_id) -> TopoDS_Shape {
+            const auto host = entities.find(host_id);
+            if (host == entities.end()) {
+                throw std::invalid_argument("assembly host is missing");
+            }
+            const auto& source = host->second;
+            const auto geometry_entity = resolve_vertical_placement(*snapshot, source);
+            if (can_recognize_building_entity_type(geometry_entity.type)) {
+                return make_building_shape(decode_building_entity(geometry_entity));
+            }
+            if (geometry_entity.type == "wall") {
+                Wall wall;
+                std::string error;
+                if (!read_document_wall(geometry_entity, openings_by_wall[host_id], wall, error)) {
+                    throw std::invalid_argument(error);
+                }
+                return make_wall(wall);
+            }
+            if (geometry_entity.type == "slab") {
+                Slab slab;
+                std::string error;
+                if (!read_document_slab(geometry_entity, slab, error)) {
+                    throw std::invalid_argument(error);
+                }
+                return make_slab(slab);
+            }
+            if (geometry_entity.type == "room") {
+                RoomVolume room;
+                std::string error;
+                if (!read_document_room(geometry_entity, room, error)) {
+                    throw std::invalid_argument(error);
+                }
+                return make_room_volume(room);
+            }
+            throw std::invalid_argument("assembly host has no native architectural solid");
+        };
+        const auto transform_assembly_shape = [](const TopoDS_Shape& source,
+                                                 const AssemblyPlacement& placement) {
+            if (source.IsNull()) throw std::invalid_argument("assembly host solid is empty");
+            if (!std::isfinite(placement.scale) || placement.scale <= 0.0 ||
+                !std::isfinite(placement.rotation_radians) ||
+                !std::isfinite(placement.translation_m.x) ||
+                !std::isfinite(placement.translation_m.y)) {
+                throw std::invalid_argument("assembly placement transform is invalid");
+            }
+            gp_Trsf scale;
+            scale.SetScale(gp_Pnt(0.0, 0.0, 0.0), placement.scale);
+            BRepBuilderAPI_Transform scaled(source, scale, true);
+            if (!scaled.IsDone() || scaled.Shape().IsNull()) {
+                throw std::invalid_argument("assembly scale transform failed");
+            }
+            gp_Trsf rotate;
+            rotate.SetRotation(gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0)),
+                               placement.rotation_radians);
+            BRepBuilderAPI_Transform rotated(scaled.Shape(), rotate, true);
+            if (!rotated.IsDone() || rotated.Shape().IsNull()) {
+                throw std::invalid_argument("assembly rotation transform failed");
+            }
+            gp_Trsf translate;
+            translate.SetTranslation(gp_Vec(placement.translation_m.x,
+                                             placement.translation_m.y, 0.0));
+            BRepBuilderAPI_Transform translated(rotated.Shape(), translate, true);
+            if (!translated.IsDone() || translated.Shape().IsNull()) {
+                throw std::invalid_argument("assembly translation transform failed");
+            }
+            return translated.Shape();
+        };
+
+        for (const auto& [catalog_id, catalog_entity] : entities) {
+            if (catalog_entity.type != "assembly_model" ||
+                !catalog_entity.properties.contains("model")) continue;
+            try {
+                const auto catalog = AssemblyModel::from_json(catalog_entity.properties.at("model"));
+                for (const auto& instance : catalog.instances()) {
+                    if (!instance.placement) continue;
+                    const auto child_id = catalog_id + ":instance:" + instance.id;
+                    const auto host = entities.find(instance.placement->host_entity_id);
+                    if (host == entities.end()) {
+                        append_unique(errors, "assembly instance '" + child_id +
+                                             "' references missing host '" +
+                                             instance.placement->host_entity_id + "'");
+                        continue;
+                    }
+                    const auto geometry_entity = resolve_vertical_placement(*snapshot, host->second);
+                    std::string content;
+                    content.reserve(catalog_entity.properties.dump().size() +
+                                    geometry_entity.properties.dump().size() + child_id.size() + 32);
+                    content.append(child_id);
+                    content.push_back('\0');
+                    append_entity_content(content, catalog_entity);
+                    append_entity_content(content, geometry_entity);
+                    if (geometry_entity.type == "wall") {
+                        for (const auto* opening : openings_by_wall[host->first]) {
+                            if (opening != nullptr) append_entity_content(content, *opening);
+                        }
+                    }
+                    std::optional<std::string> material_color;
+                    const auto resolved = catalog.resolve(instance.id);
+                    for (const auto& [slot, material_id] : resolved.materials) {
+                        (void)slot;
+                        const auto material = material_colors.find({catalog_id, material_id});
+                        if (material != material_colors.end()) {
+                            material_color = material->second;
+                            break;
+                        }
+                    }
+                    const auto cached = solids.find(child_id);
+                    const auto presentation_color = [&] {
+                        if (material_color) {
+                            const QColor color(QString::fromStdString(*material_color));
+                            if (color.isValid()) {
+                                return Quantity_Color(color.redF(), color.greenF(), color.blueF(),
+                                                       Quantity_TOC_sRGB);
+                            }
+                        }
+                        return Quantity_Color(0.63, 0.48, 0.78, Quantity_TOC_RGB);
+                    }();
+                    if (cached != solids.end() && cached->second.content == content) {
+                        if (cached->second.material_color != material_color) {
+                            cached->second.presentation->SetColor(presentation_color);
+                            context->Redisplay(cached->second.presentation, false);
+                            cached->second.material_color = material_color;
+                            changed = true;
+                        }
+                        const bool visible = !visible_ids || visible_ids->contains(child_id);
+                        if (visible != static_cast<bool>(context->IsDisplayed(cached->second.presentation))) {
+                            if (visible) context->Display(cached->second.presentation, false);
+                            else context->Erase(cached->second.presentation, false);
+                            changed = true;
+                        }
+                        supported_ids.insert(child_id);
+                        continue;
+                    }
+
+                    TopoDS_Shape shape = transform_assembly_shape(
+                        make_assembly_host_shape(instance.placement->host_entity_id),
+                        *instance.placement);
+                    if (shape.IsNull()) {
+                        append_unique(errors, "assembly instance '" + child_id + "' produced a null solid");
+                        remove_solid(child_id);
+                        changed = true;
+                        continue;
+                    }
+                    auto presentation = occ::handle<AIS_Shape>(new AIS_Shape(shape));
+                    presentation->SetColor(presentation_color);
+                    presentation->SetDisplayMode(AIS_Shaded);
+                    remove_solid(child_id);
+                    if (!visible_ids || visible_ids->contains(child_id)) context->Display(presentation, false);
+                    solids.emplace(child_id, CachedSolid{std::move(content), std::move(shape),
+                                                         presentation, material_color});
+                    supported_ids.insert(child_id);
+                    changed = true;
+                }
+            } catch (const std::exception& error) {
+                append_unique(errors, "assembly catalog '" + catalog_id + "': " + error.what());
+            } catch (...) {
+                append_unique(errors, "assembly catalog '" + catalog_id + "': unknown OCCT failure");
             }
         }
 

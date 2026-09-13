@@ -81,6 +81,11 @@ The current native solid contract covers:
   forms, straight beams, stair flights/landings, straight railings, sloped
   panels, gable roofs and hip roofs are rendered from their semantic
   parameters.
+* A placed assembly instance is a derived child presentation with the stable
+  ID `<catalog-id>:instance:<instance-id>`. Its host architectural solid is
+  transformed by the persisted placement (uniform scale, Z rotation, and XY
+  translation) before entering the same native display path. The host remains
+  authoritative; the catalog and host content jointly invalidate the cache.
 
 The wall/opening/slab/room parser accepts the corresponding unitless scalar spellings as a migration
 aid (`thickness`, `height`, `elevation`, `offset`, `width`, and `sill`) but
@@ -88,11 +93,13 @@ never supplies a missing value. A malformed required field removes that
 entity's stale presentation, records the reason in `lastError()`, and leaves
 `isReady()` false. OCCT solid construction errors follow the same path.
 
-Derived solids are cached per entity using exact canonical content equality for the
-entity ID, type, required bit, properties, extensions, and all hosted opening
-content. An unchanged entity reuses its existing `AIS_Shape` and camera state;
-an opening edit changes its host wall's cache key and rebuilds that wall. No
-hash collision can reuse a stale solid. Removed or
+Derived solids are cached per semantic entity using exact canonical content
+equality for the entity ID, type, required bit, properties, extensions, and all
+hosted opening content. Placed assembly children use a synthetic ID and a
+canonical key containing the catalog record, resolved host record, placement,
+and hosted openings. An unchanged entity reuses its existing `AIS_Shape` and
+camera state; an opening edit changes its host wall and any placed children
+cache keys. No hash collision can reuse a stale solid. Removed or
 type-changed entities have their old AIS object removed from the context.
 
 Known hierarchy and metadata entities (`property`, `building`, `floor`,
