@@ -266,8 +266,10 @@ void test_output_refreshes_current_document_head() {
     const auto receipt_json = nlohmann::json::parse(receipt_file.readAll().toStdString());
     require(receipt_json.at("schema") == "property-studio.print-receipt.v1" &&
                 receipt_json.at("verification") == "preview-driver-evidence-only" &&
-                receipt_json.at("physical_dpi").size() == 2,
-            "print receipt should record driver evidence separately from geometry");
+                receipt_json.at("physical_dpi").size() == 2 &&
+                receipt_json.at("output_fingerprint").at("digest_sha256").is_string() &&
+                receipt_json.at("output_fingerprint").at("manifest").is_object(),
+            "print receipt should bind driver evidence to the rendered output fingerprint");
     receipt_file.close();
 
     auto direct_invalid = direct.document().snapshot().entities().at(direct_wall.toStdString());

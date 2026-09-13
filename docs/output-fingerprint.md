@@ -6,7 +6,10 @@ to the dependency identities used to produce it. The implementation is in
 `src/core/output_fingerprint.cpp`. Draft PDF, draft SVG, and native 3D image
 exports now write an adjacent `<output>.fingerprint.json` manifest generated
 from the same document snapshot and view state used for rendering. Print
-preview remains transient and is still pending a printer-job receipt.
+preview runs the same fingerprint gate before opening and when it paints, and
+its local driver-evidence receipt carries the serialized output fingerprint
+used for that page. The receipt remains preview-driver evidence only; it does
+not claim that a physical print has been accepted.
 
 Native 3D image exports also carry the same visible draft/checkpoint stamp as
 the drawing outputs, including the active view-filter warning when applicable.

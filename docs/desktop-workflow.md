@@ -320,9 +320,9 @@ document geometry or measurement units.
 Draft PDF and SVG export use the same fit-to-content vector scene as the
 interactive preview and print callback. Draft PNG export rasterizes that same
 scene at a deterministic 1600 × 1200 canvas with an independent 144 DPI output
-profile. All three outputs carry the visible draft stamp and remain separate
-from the future authoritative fingerprint/currentness gate. Each output writes
-an adjacent fingerprint manifest. The workspace strip exposes Letter, Legal,
+profile. All three outputs carry the visible draft stamp. Each output writes an
+adjacent fingerprint manifest, and the same scene/currentness gate is evaluated
+before rendering. The workspace strip exposes Letter, Legal,
 Tabloid, A4, and A3 paper choices for PDF and print preview; SVG and PNG retain
 their deterministic 1600 × 1200 output target. Changing output presentation never
 changes document geometry or revision.
@@ -525,7 +525,9 @@ Draft PNG export uses the same scene and a fixed 1600 × 1200 raster target at
 complete output qualification remain open. PDF, SVG, PNG, and native 3D image
 exports write an adjacent output-fingerprint manifest covering the document
 head, page/filter view descriptor, linked processing roles, and running Windows
-executable. An active filter instead stamps `DRAFT — VIEW FILTER ACTIVE` and
+executable. Print preview runs the same gate before opening and in its paint
+callback; its local driver receipt includes the serialized fingerprint used for
+the page. An active filter instead stamps `DRAFT — VIEW FILTER ACTIVE` and
 explains that view filters do not change totals. Draft output does not mutate
 the document.
 

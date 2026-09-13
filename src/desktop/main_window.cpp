@@ -11728,6 +11728,10 @@ public:
     bool writePrintReceipt(const QPrinter& printer, const QRectF& page,
                            const DocumentSnapshot& snapshot) {
         try {
+            // Bind driver evidence to the exact validated scene that was
+            // painted. The receipt remains preview evidence, but it must not
+            // be separable from the document, sheet, and dependencies used.
+            const auto fingerprint = outputFingerprintForSnapshot(snapshot);
             const auto receipt_path = m_file_path.empty()
                 ? (std::filesystem::temp_directory_path() /
                    "property-studio-print-preview-receipt.json")
@@ -11747,6 +11751,7 @@ public:
                 {"rendered_page_px", {page.x(), page.y(), page.width(), page.height()}},
                 {"driver_page_mm", {page_mm.x(), page_mm.y(), page_mm.width(), page_mm.height()}},
                 {"driver_paper_mm", {paper_mm.x(), paper_mm.y(), paper_mm.width(), paper_mm.height()}},
+                {"output_fingerprint", serialize_output_fingerprint(fingerprint)},
                 {"verification", "preview-driver-evidence-only"},
             }.dump(2);
             QSaveFile file(QString::fromStdWString(receipt_path.wstring()));
@@ -12289,6 +12294,16 @@ public:
         refreshOutput();
         if (!m_plan_geometry_error.isEmpty()) {
             setError(QStringLiteral("Print preview blocked: %1").arg(m_plan_geometry_error));
+            return false;
+        }
+        // Run the same sheet/dependency gate before opening the asynchronous
+        // preview. The paint callback repeats it because the document may
+        // change while the dialog is open.
+        try {
+            (void)outputFingerprintForSnapshot(m_document->snapshot());
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Print preview blocked: %1")
+                         .arg(QString::fromUtf8(error.what())));
             return false;
         }
         auto* preview = new QPrintPreviewDialog(owner);
