@@ -70,6 +70,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QFontMetrics>
 #include <QGuiApplication>
 #include <QGroupBox>
 #include <QGridLayout>
@@ -7955,6 +7956,57 @@ public:
         }
     }
 
+    bool editSelectedWallLayers(const QString& layers_json,
+                                std::optional<Revision> expected_revision = std::nullopt) {
+        const auto revision = expected_revision.value_or(m_document->revision());
+        try {
+            const auto selected = selectedEntity();
+            if (!selected || selected->type != "wall") {
+                throw std::invalid_argument("Select a wall before editing its assembly layers.");
+            }
+            const auto thickness = read_finite_number(selected->properties, "thickness_m");
+            if (!thickness.has_value()) {
+                throw std::invalid_argument("Wall thickness_m is required before editing layers.");
+            }
+            const auto encoded = json::parse(layers_json.toUtf8().toStdString());
+            if (!encoded.is_array()) {
+                throw std::invalid_argument("Wall layers must be a JSON array.");
+            }
+            const auto layers = parse_wall_layers(encoded, *thickness);
+            auto candidate = *selected;
+            if (layers.empty()) {
+                candidate.properties.erase("layers");
+            } else {
+                candidate.properties["layers"] = wall_layers_json(layers);
+            }
+            const auto snapshot = m_document->snapshot();
+            std::vector<const Entity*> openings;
+            for (const auto& [id, entity] : snapshot.entities()) {
+                (void)id;
+                if (entity.type == "opening" &&
+                    entity.properties.value("wall_id", std::string{}) == selected->id) {
+                    openings.push_back(&entity);
+                }
+            }
+            Wall wall;
+            std::string diagnostic;
+            if (!read_document_wall(candidate, openings, wall, diagnostic)) {
+                throw std::invalid_argument(diagnostic);
+            }
+            validate_wall_semantics(wall);
+            (void)make_wall(wall);
+            if (!applyEntity(std::move(candidate), "edit wall assembly layers", revision)) {
+                return false;
+            }
+            m_selected_id = QString::fromStdString(selected->id);
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Wall assembly: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     QString commitBuildingObject(Entity candidate, std::uint64_t expected_revision,
                                  bool replace_selected) {
         try {
@@ -12913,6 +12965,7 @@ public:
             {QStringLiteral("Manage workspace profiles"), [this] { showWorkspaceProfiles(); }},
             {QStringLiteral("Named revisions and comparison"), [this] { showRevisionHistory(); }},
             {QStringLiteral("Transform selection"), [this] { showBoundaryTransformEditor(); }},
+            {QStringLiteral("Edit wall assembly layers"), [this] { showWallLayerEditor(); }},
             {QStringLiteral("Measurement workspace"), [this] { setWorkspace(Workspace::measurement); }},
             {QStringLiteral("Architectural workspace"), [this] { setWorkspace(Workspace::architectural); }},
             {QStringLiteral("Add labels and symbols"), [this] { showAnnotationEditor(); }},
@@ -13184,8 +13237,12 @@ private:
             return false;
         }
         try {
-            (void)make_wall(
-                Wall{wall_entity.id, *baseline, *thickness, *height, *elevation, openings});
+            Wall wall{wall_entity.id, *baseline, *thickness, *height, *elevation, openings};
+            if (const auto layers = wall_entity.properties.find("layers");
+                layers != wall_entity.properties.end()) {
+                wall.layers = parse_wall_layers(layers.value(), *thickness);
+            }
+            (void)make_wall(wall);
             return true;
         } catch (const std::exception& error) {
             setError(QStringLiteral("%1 rejected: %2")
@@ -14628,6 +14685,13 @@ private:
         inspector_layout->addWidget(m_edit_curve_button);
         QObject::connect(m_edit_curve_button, &QPushButton::clicked, owner,
                          [this] { showCurvedWallDialog(); });
+        m_edit_layers_button = new QPushButton(QStringLiteral("Edit assembly…"), inspector_body);
+        m_edit_layers_button->setObjectName(QStringLiteral("editWallLayers"));
+        m_edit_layers_button->setToolTip(QStringLiteral(
+            "Edit the selected wall's ordered material layers and thicknesses"));
+        inspector_layout->addWidget(m_edit_layers_button);
+        QObject::connect(m_edit_layers_button, &QPushButton::clicked, owner,
+                         [this] { showWallLayerEditor(); });
         m_roof_properties_group = new QGroupBox(QStringLiteral("Roof dimensions"), inspector_body);
         m_roof_properties_group->setObjectName(QStringLiteral("roofProperties"));
         auto* roof_properties_form = new QFormLayout(m_roof_properties_group);
@@ -15440,8 +15504,13 @@ private:
                     continue;
                 }
                 try {
-                    validate_wall_semantics(Wall{id, segments.front(), *thickness, *height,
-                                                 *elevation, openings_by_wall[id]});
+                    Wall wall{id, segments.front(), *thickness, *height,
+                              *elevation, openings_by_wall[id]};
+                    if (const auto layers = geometry_entity.properties.find("layers");
+                        layers != geometry_entity.properties.end()) {
+                        wall.layers = parse_wall_layers(*layers, *thickness);
+                    }
+                    validate_wall_semantics(wall);
                 } catch (const std::exception& error) {
                     append_geometry_error(QStringLiteral("Wall %1: %2")
                                               .arg(id_from(id), QString::fromUtf8(error.what())));
@@ -15619,8 +15688,12 @@ private:
                         if (!baseline || !thickness || !height || !elevation) {
                             throw std::invalid_argument("wall projection requires baseline, thickness, height, and elevation");
                         }
-                        const Wall wall{id, *baseline, *thickness, *height, *elevation,
-                                        openings_by_wall[id]};
+                        Wall wall{id, *baseline, *thickness, *height, *elevation,
+                                  openings_by_wall[id]};
+                        if (const auto layers = resolved.properties.find("layers");
+                            layers != resolved.properties.end()) {
+                            wall.layers = parse_wall_layers(*layers, *thickness);
+                        }
                         validate_wall_semantics(wall);
                         const auto shape = make_wall(wall);
                         if (!shape_intersects_view_depth(shape, depth)) continue;
@@ -16359,6 +16432,8 @@ private:
         }();
         m_edit_curve_button->setVisible(curved_wall);
         m_edit_curve_button->setEnabled(curved_wall && editable);
+        m_edit_layers_button->setVisible(wall);
+        m_edit_layers_button->setEnabled(wall && editable);
         const bool opening = entity.has_value() && entity->type == "opening";
         m_door_swing_button->setVisible(opening && entity->properties.value("opening_kind", std::string{}) == "door");
         m_door_swing_button->setEnabled(m_document->is_editable());
@@ -17469,6 +17544,91 @@ public:
         }
     }
 
+    void showWallLayerEditor() {
+        const auto selected = selectedEntity();
+        if (!selected || selected->type != "wall" || !m_document->is_editable()) {
+            setError(QStringLiteral("Select an editable wall before editing its assembly."));
+            return;
+        }
+        const auto thickness = read_finite_number(selected->properties, "thickness_m");
+        if (!thickness.has_value()) {
+            setError(QStringLiteral("Wall thickness_m is required before editing its assembly."));
+            return;
+        }
+        const auto context = captureModalContext();
+        QDialog dialog(owner);
+        styleDialog(dialog);
+        dialog.setObjectName(QStringLiteral("wallLayerDialog"));
+        dialog.setWindowTitle(QStringLiteral("Wall assembly"));
+        dialog.setModal(true);
+        dialog.resize(560, 400);
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* description = new QLabel(
+            QStringLiteral("Enter ordered layers from the negative to positive baseline normal. "
+                           "Thicknesses must sum to %1.").arg(format_length(*thickness, m_metric_units)),
+            &dialog);
+        description->setWordWrap(true);
+        layout->addWidget(description);
+        auto* editor = new QPlainTextEdit(&dialog);
+        editor->setObjectName(QStringLiteral("wallLayersJson"));
+        editor->setPlaceholderText(QStringLiteral(
+            "[{\"id\":\"outer\",\"thickness_m\":0.02}, ...]"));
+        editor->setTabStopDistance(4 * QFontMetrics(editor->font()).horizontalAdvance(QLatin1Char(' ')));
+        try {
+            if (const auto layers = selected->properties.find("layers");
+                layers != selected->properties.end()) {
+                editor->setPlainText(QString::fromStdString(layers.value().dump(2)));
+            } else {
+                editor->setPlainText(QStringLiteral("[]"));
+            }
+        } catch (const std::exception&) {
+            editor->setPlainText(QStringLiteral("[]"));
+        }
+        layout->addWidget(editor, 1);
+        auto* status = new QLabel(&dialog);
+        status->setObjectName(QStringLiteral("wallLayersStatus"));
+        status->setWordWrap(true);
+        layout->addWidget(status);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel, &dialog);
+        buttons->setObjectName(QStringLiteral("wallLayersButtons"));
+        layout->addWidget(buttons);
+        const auto validate = [&] {
+            try {
+                const auto encoded = json::parse(editor->toPlainText().toUtf8().toStdString());
+                const auto layers = parse_wall_layers(encoded, *thickness);
+                status->setText(layers.empty()
+                    ? QStringLiteral("Monolithic wall (no layers).")
+                    : QStringLiteral("%1 layers valid.").arg(layers.size()));
+                status->setStyleSheet(QString());
+                buttons->button(QDialogButtonBox::Apply)->setEnabled(true);
+            } catch (const std::exception& error) {
+                status->setText(QString::fromUtf8(error.what()));
+                status->setStyleSheet(QStringLiteral("color:#b42318;"));
+                buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+            }
+        };
+        QObject::connect(editor, &QPlainTextEdit::textChanged, &dialog, validate);
+        QObject::connect(buttons->button(QDialogButtonBox::Cancel), &QPushButton::clicked,
+                         &dialog, &QDialog::reject);
+        QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked,
+                         &dialog, [&] {
+                             if (!modalContextUnchanged(context)) {
+                                 status->setText(lastError());
+                                 buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+                                 return;
+                             }
+                             if (editSelectedWallLayers(editor->toPlainText(), context.revision)) {
+                                 dialog.accept();
+                             } else {
+                                 status->setText(lastError());
+                             }
+                         });
+        validate();
+        editor->setFocus();
+        dialog.exec();
+        refreshInspector();
+    }
+
 private:
     void showCurvedWallDialog() {
         if (!m_document->is_editable()) {
@@ -18051,6 +18211,7 @@ private:
     QToolButton* m_object_button{};
     QPushButton* m_edit_object_button{};
     QPushButton* m_edit_curve_button{};
+    QPushButton* m_edit_layers_button{};
     QPushButton* m_delete_annotation_button{};
     QGroupBox* m_annotation_group{};
     QLineEdit* m_annotation_content_edit{};
@@ -18351,6 +18512,11 @@ bool MainWindow::editSelectedCurvedWallFromConstruction(
     std::optional<Revision> revision) {
     return m_impl->editSelectedCurvedWallFromConstruction(
         start, end, std::move(construction), std::move(measure), revision);
+}
+
+bool MainWindow::editSelectedWallLayers(const QString& layers_json,
+                                        std::optional<Revision> revision) {
+    return m_impl->editSelectedWallLayers(layers_json, revision);
 }
 
 QString MainWindow::commitBuildingObject(Entity candidate, std::uint64_t expected_revision,

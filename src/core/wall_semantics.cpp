@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <nlohmann/json.hpp>
 #include <limits>
 #include <map>
 #include <numbers>
@@ -136,6 +137,75 @@ void require_finite_arc_strip(const Segment& baseline, const ArcData& arc, doubl
             }
         }
     }
+}
+
+bool valid_reference_id(std::string_view value) {
+    if (value.empty() || value.size() > 128) return false;
+    return std::all_of(value.begin(), value.end(), [](unsigned char character) {
+        return character != 0 &&
+               ((character >= 'a' && character <= 'z') ||
+                (character >= 'A' && character <= 'Z') ||
+                (character >= '0' && character <= '9') || character == '-' ||
+                character == '_' || character == '.' || character == ':');
+    });
+}
+
+void validate_layer_stack(const std::vector<WallLayer>& layers,
+                          std::optional<double> wall_thickness) {
+    if (layers.empty()) return;
+    if (layers.size() > 1024) reject("Wall layer count exceeds the supported limit");
+    std::set<std::string, std::less<>> layer_ids;
+    double total = 0.0;
+    for (const auto& layer : layers) {
+        if (!valid_reference_id(layer.id) || !layer_ids.insert(layer.id).second) {
+            reject("Wall layer IDs must be unique ASCII identifiers");
+        }
+        positive(layer.thickness, "Wall layer thickness must be positive");
+        if (!std::isfinite(total + layer.thickness)) {
+            reject("Wall layer thickness total exceeds the supported numeric range");
+        }
+        total += layer.thickness;
+        if (layer.material.has_value()) {
+            if (!valid_reference_id(layer.material->catalog_id) ||
+                !valid_reference_id(layer.material->material_id)) {
+                reject("Wall layer material references must be paired identifiers");
+            }
+        }
+    }
+    if (wall_thickness.has_value()) {
+        const auto tolerance_limit = std::max(tolerance, std::abs(*wall_thickness) * 1e-9);
+        if (!std::isfinite(*wall_thickness) ||
+            std::abs(total - *wall_thickness) > tolerance_limit) {
+            reject("Wall layer thicknesses must sum to the wall thickness");
+        }
+    }
+}
+
+std::string required_layer_string(const nlohmann::json& value,
+                                  const char* field) {
+    if (!value.is_object() || !value.contains(field) || !value.at(field).is_string()) {
+        throw std::invalid_argument(std::string("Wall layer ") + field +
+                                    " must be a non-empty string");
+    }
+    const auto result = value.at(field).get<std::string>();
+    if (result.empty()) {
+        throw std::invalid_argument(std::string("Wall layer ") + field +
+                                    " must be a non-empty string");
+    }
+    return result;
+}
+
+double required_layer_number(const nlohmann::json& value, const char* field) {
+    if (!value.is_object() || !value.contains(field) || !value.at(field).is_number()) {
+        throw std::invalid_argument(std::string("Wall layer ") + field +
+                                    " must be a finite number");
+    }
+    const auto result = value.at(field).get<double>();
+    if (!std::isfinite(result)) {
+        throw std::invalid_argument(std::string("Wall layer ") + field +
+                                    " must be a finite number");
+    }
+    return result;
 }
 
 class MaxSegmentTree {
@@ -374,6 +444,7 @@ double wall_baseline_length(const Segment& baseline) {
 void validate_wall_semantics(const Wall& wall) {
     positive(wall.thickness, "Wall thickness must be positive");
     positive(wall.height, "Wall height must be positive");
+    validate_layer_stack(wall.layers, wall.thickness);
     if (!std::isfinite(wall.elevation)) {
         reject("Wall elevation must be finite");
     }
@@ -437,6 +508,67 @@ void validate_wall_semantics(const Wall& wall) {
     if (openings_cover_wall(bounds, length, wall.height)) {
         reject("Openings remove the entire wall");
     }
+}
+
+std::vector<WallLayer> parse_wall_layers(const nlohmann::json& value,
+                                         double wall_thickness) {
+    if (!std::isfinite(wall_thickness) || wall_thickness <= tolerance) {
+        throw std::invalid_argument("Wall layer stack requires a positive wall thickness");
+    }
+    if (!value.is_array()) {
+        throw std::invalid_argument("Wall layers must be an array");
+    }
+    std::vector<WallLayer> result;
+    result.reserve(value.size());
+    for (const auto& entry : value) {
+        if (!entry.is_object() || (entry.size() != 2 && entry.size() != 3) ||
+            !entry.contains("id") || !entry.contains("thickness_m")) {
+            throw std::invalid_argument(
+                "Wall layer requires id, thickness_m, and optional material_assignment");
+        }
+        for (const auto& [key, unused] : entry.items()) {
+            (void)unused;
+            if (key != "id" && key != "thickness_m" && key != "material_assignment") {
+                throw std::invalid_argument("Wall layer contains an unknown field");
+            }
+        }
+        WallLayer layer;
+        layer.id = required_layer_string(entry, "id");
+        layer.thickness = required_layer_number(entry, "thickness_m");
+        if (entry.contains("material_assignment")) {
+            const auto& assignment = entry.at("material_assignment");
+            if (!assignment.is_object() || assignment.size() != 3 ||
+                !assignment.contains("version") || !assignment.contains("catalog_id") ||
+                !assignment.contains("material_id") ||
+                !assignment.at("version").is_number_integer() ||
+                assignment.at("version") != 1) {
+                throw std::invalid_argument(
+                    "Wall layer material_assignment must be version 1");
+            }
+            layer.material = WallLayerMaterial{
+                required_layer_string(assignment, "catalog_id"),
+                required_layer_string(assignment, "material_id")};
+        }
+        result.push_back(std::move(layer));
+    }
+    validate_layer_stack(result, wall_thickness);
+    return result;
+}
+
+nlohmann::json wall_layers_json(const std::vector<WallLayer>& layers) {
+    validate_layer_stack(layers, std::nullopt);
+    auto result = nlohmann::json::array();
+    for (const auto& layer : layers) {
+        nlohmann::json value{{"id", layer.id}, {"thickness_m", layer.thickness}};
+        if (layer.material.has_value()) {
+            value["material_assignment"] = {
+                {"version", 1},
+                {"catalog_id", layer.material->catalog_id},
+                {"material_id", layer.material->material_id}};
+        }
+        result.push_back(std::move(value));
+    }
+    return result;
 }
 
 }  // namespace sketch

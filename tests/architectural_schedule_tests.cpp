@@ -122,11 +122,62 @@ void test_explicit_material_grouping_is_stable_and_normalized() {
     require(!summary.cells.at("name").editable && !summary.cells.at("count").editable,
         "grouped material summary properties must remain read-only");
 }
+
+void test_composite_wall_layers_produce_material_quantities() {
+    auto catalog = Entity::create("assembly_model", {{"version", 1},
+        {"model", AssemblyModel::create({{"brick", "Brick"}, {"paint", "Paint"}}, {}, {}).to_json()}});
+    catalog.id = "catalog";
+    auto wall = Entity::create("wall", {{"baseline", {{"start", {0, 0}}, {"end", {10, 0}},
+                                                           {"sweep_radians", 0}}},
+        {"height_m", 3.0}, {"thickness_m", 0.20}, {"elevation_m", 0.0},
+        {"layers", Json::array({
+            Json{{"id", "outer"}, {"thickness_m", 0.02},
+                 {"material_assignment", {{"version", 1}, {"catalog_id", "catalog"},
+                                             {"material_id", "brick"}}}},
+            Json{{"id", "core"}, {"thickness_m", 0.16},
+                 {"material_assignment", {{"version", 1}, {"catalog_id", "catalog"},
+                                             {"material_id", "brick"}}}},
+            Json{{"id", "inner"}, {"thickness_m", 0.02},
+                 {"material_assignment", {{"version", 1}, {"catalog_id", "catalog"},
+                                             {"material_id", "paint"}}}},
+        })}});
+    wall.id = "layered-wall";
+    auto opening = Entity::create("opening", {{"wall_id", "layered-wall"},
+        {"opening_kind", "door"}, {"mark", "D-layered"}, {"offset_m", 2.0}, {"width_m", 1.0},
+        {"height_m", 2.0}, {"sill_m", 0.0}});
+    opening.id = "layered-door";
+    const auto document = Document::create({catalog, wall, opening});
+    const auto projection = build_architectural_schedules(document.snapshot());
+    require(projection.diagnostics.empty(), "valid layered material schedules must have no diagnostics");
+
+    const auto find_layer = [&](const std::string& layer_id) -> const ScheduleRow& {
+        const auto expected = "layered-wall:layer:" + layer_id + ":material";
+        const auto found = std::find_if(projection.snapshot.rows.begin(), projection.snapshot.rows.end(),
+            [&](const auto& value) { return value.object_id == expected; });
+        if (found == projection.snapshot.rows.end()) throw std::runtime_error("missing layer material row");
+        return *found;
+    };
+    const auto layer_volume = [&](const std::string& layer_id, double expected) {
+        const auto& cell = find_layer(layer_id).cells.at("volume");
+        const auto quantity = std::get<ScheduleQuantity>(cell.value);
+        require(quantity.unit == ScheduleUnit::cubic_metre &&
+                    std::abs(quantity.value - expected) < 1e-7 && !cell.editable,
+                "layer material volume must include the hosted opening cut");
+    };
+    layer_volume("outer", 0.56);
+    layer_volume("core", 4.48);
+    layer_volume("inner", 0.56);
+    const auto& summary = material_summary(projection);
+    require(std::get<std::int64_t>(summary.cells.at("count").value) == 2 &&
+                std::abs(std::get<ScheduleQuantity>(summary.cells.at("volume").value).value - 5.04) < 1e-7,
+            "layer material summary must aggregate net quantities by catalog material");
+}
 }
 int main() {
     try {
         test_net_volumes();
         test_explicit_material_grouping_is_stable_and_normalized();
+        test_composite_wall_layers_produce_material_quantities();
         std::cout<<"architectural schedule tests passed\n";
         return 0;
     }

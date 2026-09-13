@@ -248,6 +248,12 @@ public:
         QString construction,
         QString measure,
         std::optional<Revision> expected_revision = std::nullopt);
+    // Replaces the selected wall's optional composite layer stack. The JSON
+    // array follows the project-format contract; validation, material links,
+    // geometry previews, and undo all use the ordinary document command path.
+    [[nodiscard]] bool editSelectedWallLayers(
+        const QString& layers_json,
+        std::optional<Revision> expected_revision = std::nullopt);
     // The object dialog and smoke tests share this atomic, validated command.
     // A stale dialog revision cannot overwrite intervening document edits.
     [[nodiscard]] QString commitBuildingObject(

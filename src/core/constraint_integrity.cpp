@@ -64,6 +64,9 @@ Wall read_wall(const std::string& owner, const Entities& entities,
         number(properties.at("thickness_m"), "Wall thickness"),
         number(properties.at("height_m"), "Wall height"),
         number(properties.at("elevation_m"), "Wall elevation"), {}};
+    if (const auto layers = properties.find("layers"); layers != properties.end()) {
+        wall.layers = parse_wall_layers(layers.value(), wall.thickness);
+    }
     const auto hosted = openings_by_wall.find(owner);
     if (hosted != openings_by_wall.end()) {
         wall.openings.reserve(hosted->second.size());

@@ -1,4 +1,5 @@
 #include "sketch/architectural_schedule.hpp"
+#include "sketch/assembly_model.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/document_solid.hpp"
 
@@ -18,6 +19,7 @@ namespace sketch {
 namespace {
 
 constexpr std::string_view material_suffix = ":material";
+constexpr std::string_view layer_marker = ":layer:";
 
 struct MaterialGroup {
     std::string key;
@@ -64,6 +66,21 @@ void normalize_sources(std::vector<ScheduleSourceRef>& sources) {
     sources.erase(std::unique(sources.begin(), sources.end()), sources.end());
 }
 
+std::string material_source_id(std::string_view object_id) {
+    if (object_id.size() <= material_suffix.size() ||
+        !object_id.ends_with(material_suffix)) {
+        return {};
+    }
+    const auto stem = object_id.substr(0, object_id.size() - material_suffix.size());
+    const auto marker = stem.find(layer_marker);
+    return marker == std::string_view::npos ? std::string(stem) :
+                                                std::string(stem.substr(0, marker));
+}
+
+bool is_layer_material_row(const ScheduleRow& row) {
+    return row.cells.contains("layer_id") && row.kind == ScheduleRowKind::material;
+}
+
 void append_material_summaries(const DocumentSnapshot& document,
                                DocumentScheduleProjection& projection) {
     std::map<std::string, MaterialGroup, std::less<>> groups;
@@ -73,8 +90,7 @@ void append_material_summaries(const DocumentSnapshot& document,
             !row.object_id.ends_with(material_suffix)) {
             continue;
         }
-        const auto source_id = row.object_id.substr(
-            0, row.object_id.size() - material_suffix.size());
+        const auto source_id = material_source_id(row.object_id);
         const auto source = document.entities().find(source_id);
         const auto name_cell = row.cells.find("name");
         if (source == document.entities().end() || name_cell == row.cells.end() ||
@@ -86,7 +102,7 @@ void append_material_summaries(const DocumentSnapshot& document,
         const auto display_name = std::get<std::string>(name_cell->second.value);
         std::string group_key;
         const auto assignment = source->second.properties.find("material_assignment");
-        if (assignment != source->second.properties.end() && assignment->is_object()) {
+        if (!is_layer_material_row(row) && assignment != source->second.properties.end() && assignment->is_object()) {
             const auto catalog = assignment->find("catalog_id");
             const auto material = assignment->find("material_id");
             if (catalog != assignment->end() && material != assignment->end() &&
@@ -94,6 +110,19 @@ void append_material_summaries(const DocumentSnapshot& document,
                 !catalog->get<std::string>().empty() && !material->get<std::string>().empty()) {
                 group_key = "assigned\n" + catalog->get<std::string>() + "\n" +
                             material->get<std::string>();
+            }
+        }
+        if (group_key.empty()) {
+            const auto catalog = row.cells.find("catalog_id");
+            const auto material = row.cells.find("material_id");
+            if (catalog != row.cells.end() && material != row.cells.end() &&
+                std::holds_alternative<std::string>(catalog->second.value) &&
+                std::holds_alternative<std::string>(material->second.value)) {
+                const auto& catalog_id = std::get<std::string>(catalog->second.value);
+                const auto& material_id = std::get<std::string>(material->second.value);
+                if (!catalog_id.empty() && !material_id.empty()) {
+                    group_key = "assigned\n" + catalog_id + "\n" + material_id;
+                }
             }
         }
         if (group_key.empty()) {
@@ -163,8 +192,105 @@ void append_material_summaries(const DocumentSnapshot& document,
     }
 }
 
-DocumentScheduleProjection augment(const DocumentSnapshot& document, DocumentScheduleProjection projection) {
-    std::map<std::string, std::vector<const Entity*>> openings;
+void append_layer_material_rows(
+    const DocumentSnapshot& document,
+    const std::map<std::string, std::vector<const Entity*>, std::less<>>& openings,
+    DocumentScheduleProjection& projection,
+    const std::set<std::string, std::less<>>* visible_entity_ids) {
+    static const std::vector<const Entity*> no_openings;
+    std::map<std::string, AssemblyModel> catalogs;
+    for (const auto& [id, entity] : document.entities()) {
+        if (entity.type != "wall" ||
+            (visible_entity_ids && !visible_entity_ids->contains(id)) ||
+            !entity.properties.contains("layers")) {
+            continue;
+        }
+        try {
+            Wall wall;
+            std::string error;
+            const auto& wall_openings = openings.contains(id) ? openings.at(id) : no_openings;
+            if (!read_document_wall(entity, wall_openings, wall, error)) {
+                throw std::invalid_argument(error);
+            }
+            if (wall.layers.empty()) continue;
+            for (const auto& layer : wall.layers) {
+                if (!layer.material.has_value()) continue;
+                const auto& assignment = *layer.material;
+                if (!catalogs.contains(assignment.catalog_id)) {
+                    const auto catalog = document.entities().find(assignment.catalog_id);
+                    if (catalog == document.entities().end() || catalog->second.type != "assembly_model") {
+                        throw std::invalid_argument("layer material catalog is missing");
+                    }
+                    const auto model = catalog->second.properties.find("model");
+                    if (model == catalog->second.properties.end()) {
+                        throw std::invalid_argument("layer material catalog has no model");
+                    }
+                    catalogs.emplace(assignment.catalog_id, AssemblyModel::from_json(model.value()));
+                }
+                const auto& materials = catalogs.at(assignment.catalog_id).materials();
+                const auto material = std::find_if(materials.begin(), materials.end(),
+                    [&](const auto& candidate) { return candidate.id == assignment.material_id; });
+                if (material == materials.end()) {
+                    throw std::invalid_argument("layer material is missing from its catalog");
+                }
+
+                ScheduleRow row;
+                row.object_id = id + std::string(layer_marker) + layer.id +
+                                std::string(material_suffix);
+                row.mark = "M-" + id + "-" + layer.id;
+                row.kind = ScheduleRowKind::material;
+                const auto source_prefix = id + ":layers." + layer.id;
+                row.cells.emplace("name", ScheduleCell{
+                    material->name, false,
+                    {{id, source_prefix + ".material_assignment"},
+                     {assignment.catalog_id, "model"}},
+                    "Assigned material name for this wall layer"});
+                row.cells.emplace("count", ScheduleCell{
+                    std::int64_t{1}, false, {{id, source_prefix}},
+                    "One material layer instance"});
+                row.cells.emplace("layer_id", ScheduleCell{
+                    layer.id, false, {{id, "layers"}}, "Stable wall layer identity"});
+                row.cells.emplace("thickness", ScheduleCell{
+                    ScheduleQuantity{layer.thickness, ScheduleUnit::metre}, false,
+                    {{id, source_prefix + ".thickness_m"}}, "Authored layer thickness"});
+                row.cells.emplace("catalog_id", ScheduleCell{
+                    assignment.catalog_id, false,
+                    {{id, source_prefix + ".material_assignment"}},
+                    "Layer material catalog identity"});
+                row.cells.emplace("material_id", ScheduleCell{
+                    assignment.material_id, false,
+                    {{id, source_prefix + ".material_assignment"}},
+                    "Layer material identity"});
+
+                Wall homogeneous{id, wall.baseline, layer.thickness, wall.height,
+                                wall.elevation, wall.openings};
+                const auto shape = make_wall(homogeneous);
+                const auto volume = solid_volume(shape);
+                if (!std::isfinite(volume) || volume <= 0.0) {
+                    throw std::invalid_argument("layer solid volume must be positive and finite");
+                }
+                std::vector<ScheduleSourceRef> volume_sources{{id, "geometry"}};
+                for (const auto* opening : wall_openings) {
+                    volume_sources.push_back({opening->id, "geometry"});
+                }
+                row.cells.emplace("volume", ScheduleCell{
+                    ScheduleQuantity{volume, ScheduleUnit::cubic_metre}, false,
+                    std::move(volume_sources),
+                    "Net layer solid volume after hosted openings"});
+                projection.snapshot.rows.push_back(std::move(row));
+            }
+        } catch (const Standard_Failure& error) {
+            projection.diagnostics.push_back(id + ": layer material volume unavailable: " +
+                (error.what() ? error.what() : "solid construction failed"));
+        } catch (const std::exception& error) {
+            projection.diagnostics.push_back(id + ": layer material unavailable: " + error.what());
+        }
+    }
+}
+
+DocumentScheduleProjection augment(const DocumentSnapshot& document, DocumentScheduleProjection projection,
+                                   const std::set<std::string, std::less<>>* visible_entity_ids) {
+    std::map<std::string, std::vector<const Entity*>, std::less<>> openings;
     for (const auto& [id, entity] : document.entities()) {
         if (entity.type != "opening") continue;
         std::string host, error;
@@ -174,7 +300,8 @@ DocumentScheduleProjection augment(const DocumentSnapshot& document, DocumentSch
         if (row.kind != ScheduleRowKind::material) continue;
         if (row.object_id.size() <= material_suffix.size() ||
             !row.object_id.ends_with(material_suffix)) continue;
-        const auto id = row.object_id.substr(0, row.object_id.size() - material_suffix.size());
+        if (is_layer_material_row(row)) continue;
+        const auto id = material_source_id(row.object_id);
         const auto entity_it = document.entities().find(id);
         if (entity_it == document.entities().end()) {
             projection.diagnostics.push_back(id + ": material source entity was not found");
@@ -211,6 +338,7 @@ DocumentScheduleProjection augment(const DocumentSnapshot& document, DocumentSch
             projection.diagnostics.push_back(id + ": material volume unavailable: " + error.what());
         }
     }
+    append_layer_material_rows(document, openings, projection, visible_entity_ids);
     append_material_summaries(document, projection);
     std::sort(projection.diagnostics.begin(), projection.diagnostics.end());
     projection.diagnostics.erase(std::unique(projection.diagnostics.begin(), projection.diagnostics.end()),
@@ -220,10 +348,11 @@ DocumentScheduleProjection augment(const DocumentSnapshot& document, DocumentSch
 } // namespace
 
 DocumentScheduleProjection build_architectural_schedules(const DocumentSnapshot& document) {
-    return augment(document, build_document_schedules(document));
+    return augment(document, build_document_schedules(document), nullptr);
 }
 DocumentScheduleProjection build_architectural_schedules(const DocumentSnapshot& document,
     const std::set<std::string, std::less<>>& visible_entity_ids) {
-    return augment(document, build_document_schedules(document, visible_entity_ids));
+    return augment(document, build_document_schedules(document, visible_entity_ids),
+                   &visible_entity_ids);
 }
 } // namespace sketch

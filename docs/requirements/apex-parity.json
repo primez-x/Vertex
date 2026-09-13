@@ -1605,9 +1605,20 @@
       "package": 4,
       "blocker": null,
       "implementation_sources": [
-        "src/architecture/architecture.cpp"
+        "include/sketch/wall_semantics.hpp",
+        "src/core/wall_semantics.cpp",
+        "src/core/document.cpp",
+        "src/architecture/architecture.cpp",
+        "src/architecture/document_solid.cpp",
+        "src/architecture/architectural_schedule.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/wall_semantics_tests.cpp",
+        "tests/architecture_tests.cpp",
+        "tests/architectural_schedule_tests.cpp",
+        "tests/document_tests.cpp",
+        "docs/project-format.md"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "Straight and curved wall solids are implemented. Composite wall layers now use a typed versioned stack with contiguous compound geometry, opening cuts through every layer, document/catalog/material validation, native plan/elevation/section decoding, and per-layer schedule quantities. Windows exposes a revision-checked JSON layer editor with undo, redo, and save/reopen coverage; richer table/catalog authoring, sloped-wall workflow, joins, and production compatibility certification remain open."
     },
     {
       "id": "ARCH-MOD-002",

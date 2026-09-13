@@ -75,6 +75,9 @@ void validate_solids(const ConstraintAuthoringPreview& preview) {
         const auto& p = entity.properties;
         Wall wall{entity.id, baseline(entity), p.at("thickness_m").get<double>(),
                   p.at("height_m").get<double>(), p.at("elevation_m").get<double>(), {}};
+        if (const auto layers = p.find("layers"); layers != p.end()) {
+            wall.layers = parse_wall_layers(layers.value(), wall.thickness);
+        }
         for (const auto& [id, opening] : preview.candidate_entities()) {
             if (opening.type != "opening" || opening.properties.value("wall_id", std::string{}) != entity.id)
                 continue;

@@ -25,6 +25,7 @@
 #include <cmath>
 #include <numbers>
 #include <stdexcept>
+#include <utility>
 
 namespace sketch {
 namespace {
@@ -91,30 +92,42 @@ TopoDS_Shape extrude(const Boundary& boundary, double elevation, double height) 
     return prism.Shape();
 }
 
-Boundary strip(const Segment& baseline, double thickness) {
+Boundary strip_range(const Segment& baseline, double inner_offset, double outer_offset) {
+    if (!std::isfinite(inner_offset) || !std::isfinite(outer_offset) ||
+        !(outer_offset > inner_offset + tolerance)) {
+        throw std::invalid_argument("Wall layer offsets must form a positive range");
+    }
     if (baseline.sweep_radians == 0) {
         const double length = segment_length(baseline);
-        const double nx = -(baseline.end.y - baseline.start.y) * thickness / (2 * length);
-        const double ny = (baseline.end.x - baseline.start.x) * thickness / (2 * length);
-        const Vec2 a{baseline.start.x + nx, baseline.start.y + ny};
-        const Vec2 b{baseline.end.x + nx, baseline.end.y + ny};
-        const Vec2 c{baseline.end.x - nx, baseline.end.y - ny};
-        const Vec2 d{baseline.start.x - nx, baseline.start.y - ny};
+        const double normal_x = -(baseline.end.y - baseline.start.y) / length;
+        const double normal_y = (baseline.end.x - baseline.start.x) / length;
+        const Vec2 a{baseline.start.x + normal_x * outer_offset,
+                     baseline.start.y + normal_y * outer_offset};
+        const Vec2 b{baseline.end.x + normal_x * outer_offset,
+                     baseline.end.y + normal_y * outer_offset};
+        const Vec2 c{baseline.end.x + normal_x * inner_offset,
+                     baseline.end.y + normal_y * inner_offset};
+        const Vec2 d{baseline.start.x + normal_x * inner_offset,
+                     baseline.start.y + normal_y * inner_offset};
         return {{a, b, 0}, {b, c, 0}, {c, d, 0}, {d, a, 0}};
     }
     const auto origin = centre(baseline);
     const double radius = std::hypot(baseline.start.x - origin.x, baseline.start.y - origin.y);
-    if (thickness * 0.5 >= radius - tolerance) throw std::invalid_argument("Wall thickness crosses its arc centre");
+    if (radius + inner_offset <= tolerance) throw std::invalid_argument("Wall layer crosses its arc centre");
     const auto radial = [&](Vec2 point, double offset) -> Vec2 {
         const double scale = (radius + offset) / radius;
         return {origin.x + (point.x - origin.x) * scale, origin.y + (point.y - origin.y) * scale};
     };
-    const auto a = radial(baseline.start, thickness * 0.5);
-    const auto b = radial(baseline.end, thickness * 0.5);
-    const auto c = radial(baseline.end, -thickness * 0.5);
-    const auto d = radial(baseline.start, -thickness * 0.5);
+    const auto a = radial(baseline.start, outer_offset);
+    const auto b = radial(baseline.end, outer_offset);
+    const auto c = radial(baseline.end, inner_offset);
+    const auto d = radial(baseline.start, inner_offset);
     return {{a, b, baseline.sweep_radians}, {b, c, 0},
             {c, d, -baseline.sweep_radians}, {d, a, 0}};
+}
+
+Boundary strip(const Segment& baseline, double thickness) {
+    return strip_range(baseline, -thickness * 0.5, thickness * 0.5);
 }
 
 TopoDS_Shape cut(const TopoDS_Shape& base, const TopoDS_Shape& tool) {
@@ -186,17 +199,48 @@ TopoDS_Shape make_wall(const Wall& wall) {
     validate_wall_semantics(wall);
     const double length = segment_length(wall.baseline);
     try {
-        auto result = extrude(strip(wall.baseline, wall.thickness), wall.elevation, wall.height);
-        for (const auto& opening : wall.openings) {
-            const double from = opening.offset / length;
-            const double to = (opening.offset + opening.width) / length;
-            const Segment interval{point_at(wall.baseline, from), point_at(wall.baseline, to),
-                                   wall.baseline.sweep_radians * (to - from)};
-            const auto tool = extrude(strip(interval, wall.thickness), wall.elevation + opening.sill, opening.height);
-            result = cut(result, tool);
+        const auto cut_openings = [&](TopoDS_Shape result) {
+            for (const auto& opening : wall.openings) {
+                const double from = opening.offset / length;
+                const double to = (opening.offset + opening.width) / length;
+                const Segment interval{point_at(wall.baseline, from), point_at(wall.baseline, to),
+                                       wall.baseline.sweep_radians * (to - from)};
+                // Cut through the full wall stack so every layer keeps the
+                // same host-opening relationship.
+                const auto tool = extrude(
+                    strip_range(interval, -wall.thickness * 0.5,
+                                wall.thickness * 0.5),
+                    wall.elevation + opening.sill, opening.height);
+                result = cut(result, tool);
+            }
+            if (solid_volume(result) <= tolerance * tolerance * tolerance) {
+                throw std::invalid_argument("Openings remove the entire wall");
+            }
+            return result;
+        };
+
+        if (wall.layers.empty()) {
+            return cut_openings(extrude(strip(wall.baseline, wall.thickness),
+                                        wall.elevation, wall.height));
         }
-        if (solid_volume(result) <= tolerance * tolerance * tolerance) throw std::invalid_argument("Openings remove the entire wall");
-        return result;
+
+        TopoDS_Compound compound;
+        BRep_Builder builder;
+        builder.MakeCompound(compound);
+        double inner_offset = -wall.thickness * 0.5;
+        for (const auto& layer : wall.layers) {
+            const auto outer_offset = inner_offset + layer.thickness;
+            auto layer_shape = extrude(strip_range(wall.baseline, inner_offset, outer_offset),
+                                       wall.elevation, wall.height);
+            layer_shape = cut_openings(std::move(layer_shape));
+            builder.Add(compound, layer_shape);
+            inner_offset = outer_offset;
+        }
+        if (compound.IsNull() || !BRepCheck_Analyzer(compound).IsValid() ||
+            solid_volume(compound) <= tolerance * tolerance * tolerance) {
+            throw std::invalid_argument("Composite wall did not produce valid solids");
+        }
+        return compound;
     } catch (const Standard_Failure& error) {
         throw std::invalid_argument(std::string("Wall geometry failed: ") + error.what());
     }

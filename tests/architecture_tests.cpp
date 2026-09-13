@@ -41,8 +41,30 @@ int main() {
         Wall reverse_curve{"reverse", {{0, 2}, {2, 0}, -std::numbers::pi / 2}, 0.2, 3, 0, {}};
         near(solid_volume(make_wall(reverse_curve)), std::numbers::pi * 0.2 * 3, 1e-7,
              "Reversing a curved wall preserves its physical volume");
+        auto curved_composite = curved;
+        curved_composite.id = "curved-composite";
+        curved_composite.layers = {
+            {"outer", 0.03, std::nullopt},
+            {"core", 0.14, WallLayerMaterial{"catalog", "block"}},
+            {"inner", 0.03, std::nullopt},
+        };
+        curved_composite.openings.clear();
+        near(solid_volume(make_wall(curved_composite)), std::numbers::pi * 0.2 * 3, 1e-7,
+             "Curved composite wall layers retain exact annular volume");
         reverse_curve.thickness = 4;
         rejected([&] { (void)make_wall(reverse_curve); });
+
+        Wall composite{"composite-1", {{0, 0}, {4, 0}, 0}, 0.2, 3.0, 0.0, {}};
+        composite.layers = {
+            {"outer", 0.02, std::nullopt},
+            {"core", 0.16, WallLayerMaterial{"catalog", "brick"}},
+            {"inner", 0.02, WallLayerMaterial{"catalog", "plaster"}},
+        };
+        near(solid_volume(make_wall(composite)), 4.0 * 0.2 * 3.0, 1e-8,
+             "Composite wall layers retain total solid volume");
+        composite.openings.push_back({"door", 1.0, 1.0, 0.0, 2.0});
+        near(solid_volume(make_wall(composite)), 4.0 * 0.2 * 3.0 - 1.0 * 0.2 * 2.0, 1e-8,
+             "Composite wall openings cut every layer exactly once");
 
         Slab slab{"floor-1", {{{0, 0}, {4, 0}, 0}, {{4, 0}, {4, 3}, 0},
                              {{4, 3}, {0, 3}, 0}, {{0, 3}, {0, 0}, 0}}, {}, 0.25, -0.25};

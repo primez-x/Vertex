@@ -154,11 +154,28 @@ All geometry properties use metres and radians. A wall and opening can be repres
     },
     "thickness_m": 0.14,
     "height_m": 2.4,
-    "elevation_m": 0.0
+    "elevation_m": 0.0,
+    "layers": [
+      {"id": "outer", "thickness_m": 0.02},
+      {"id": "core", "thickness_m": 0.10,
+       "material_assignment": {"version": 1, "catalog_id": "assemblies", "material_id": "brick"}},
+      {"id": "inner", "thickness_m": 0.02}
+    ]
   },
   "extensions": {}
 }
 ```
+
+`properties.layers` is optional. When present it is an ordered, contiguous
+wall assembly from the negative to positive side of the wall baseline normal.
+Each layer has exactly `id` and `thickness_m`, plus an optional
+`material_assignment` object with exactly `version: 1`, `catalog_id`, and
+`material_id`. Layer IDs are stable document-local identifiers; thicknesses are
+positive metres and must sum to the parent `thickness_m` within the document
+precision tolerance. A layer material points to an `assembly_model` entity and
+its cataloged material. The same hosted opening geometry is cut through every
+layer, while the layer stack remains available for schedules and future
+assembly editing. An empty array is equivalent to a monolithic wall.
 
 ```json
 {

@@ -476,7 +476,14 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   derived sweep for save/reopen. Selecting an arc exposes the same compact
   editor for endpoint and defining-measure edits, with hosted-opening validation and
   undoable save/reopen coverage. Curved-wall joins, richer constraints, and
-  production compatibility certification remain open.
+  production compatibility certification remain open. Typed composite wall
+  layers now have a versioned JSON contract, document-boundary validation,
+  catalog/material reference checks, contiguous OCCT compound geometry, and
+  opening cuts applied to each layer; plan/elevation/section decoding preserves
+  the stack. Windows exposes a revision-checked JSON layer editor with undo,
+  redo, and save/reopen coverage, and schedules include per-layer material
+  quantities. A richer table/catalog authoring surface, sloped-wall workflow,
+  joins, and production compatibility certification remain open.
   Exact top-down projections also feed the shared plan/PDF renderer; failed
   projections block output. Hidden editor captures cover both display scales.
   Review added exact segment-set/circle-topology checks and exact quantity

@@ -14,6 +14,8 @@ namespace {
 using sketch::HostedOpening;
 using sketch::Segment;
 using sketch::Wall;
+using sketch::WallLayer;
+using sketch::WallLayerMaterial;
 
 void require(bool condition, std::string_view message) {
     if (!condition) {
@@ -37,7 +39,8 @@ void require_same(const Wall& actual, const Wall& expected) {
                 actual.baseline.end.y == expected.baseline.end.y &&
                 actual.baseline.sweep_radians == expected.baseline.sweep_radians &&
                 actual.thickness == expected.thickness && actual.height == expected.height &&
-                actual.elevation == expected.elevation && actual.openings.size() == expected.openings.size(),
+                actual.elevation == expected.elevation && actual.openings.size() == expected.openings.size() &&
+                actual.layers.size() == expected.layers.size(),
             "wall validation must not mutate scalar or baseline fields");
     for (std::size_t index = 0; index < actual.openings.size(); ++index) {
         const auto& left = actual.openings[index];
@@ -45,6 +48,10 @@ void require_same(const Wall& actual, const Wall& expected) {
         require(left.id == right.id && left.offset == right.offset && left.width == right.width &&
                     left.sill == right.sill && left.height == right.height,
                 "wall validation must not mutate hosted openings");
+    }
+    for (std::size_t index = 0; index < actual.layers.size(); ++index) {
+        require(actual.layers[index] == expected.layers[index],
+                "wall validation must not mutate composite layers");
     }
 }
 
@@ -208,6 +215,38 @@ void test_sweep_exact_coverage_and_event_order() {
     sketch::validate_wall_semantics(tolerated_overlap);
 }
 
+void test_composite_wall_layers_are_typed_and_lossless() {
+    auto wall = straight_wall();
+    wall.layers = {
+        WallLayer{"sheathing", 0.02, std::nullopt},
+        WallLayer{"core", 0.16, WallLayerMaterial{"catalog", "brick"}},
+        WallLayer{"finish", 0.02, WallLayerMaterial{"catalog", "paint"}},
+    };
+    const auto before = wall;
+    sketch::validate_wall_semantics(wall);
+    require_same(wall, before);
+
+    const auto encoded = sketch::wall_layers_json(wall.layers);
+    const auto decoded = sketch::parse_wall_layers(encoded, wall.thickness);
+    require(decoded == wall.layers, "composite wall layers must round-trip deterministically");
+    require(encoded.size() == 3 && encoded[1].at("material_assignment").at("material_id") == "brick",
+            "layer material references must remain explicit in project JSON");
+
+    auto invalid = wall;
+    invalid.layers[1].thickness += 0.01;
+    rejected([&] { sketch::validate_wall_semantics(invalid); },
+             "layer thicknesses that do not sum to the wall must be rejected");
+    invalid = wall;
+    invalid.layers[2].id = invalid.layers[0].id;
+    rejected([&] { sketch::validate_wall_semantics(invalid); },
+             "duplicate wall layer IDs must be rejected");
+
+    auto malformed = encoded;
+    malformed[0]["material_assignment"] = {{"version", 1}, {"catalog_id", "catalog"}};
+    rejected([&] { (void)sketch::parse_wall_layers(malformed, wall.thickness); },
+             "incomplete layer material assignments must be rejected");
+}
+
 }  // namespace
 
 int main() {
@@ -218,6 +257,7 @@ int main() {
         test_duplicate_and_out_of_bounds_openings();
         test_openings_cannot_remove_entire_wall();
         test_sweep_exact_coverage_and_event_order();
+        test_composite_wall_layers_are_typed_and_lossless();
         std::cout << "Wall semantic tests passed\n";
         return 0;
     } catch (const std::exception& error) {

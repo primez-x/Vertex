@@ -231,7 +231,7 @@ target_link_libraries(sketch_document_schedule_adapter PUBLIC sketch_door_operat
 add_library(sketch_boundary_receipts src/core/boundary_receipt.cpp)
 target_link_libraries(sketch_boundary_receipts PUBLIC sketch_precision sketch_json)
 add_library(sketch_wall_semantics src/core/wall_semantics.cpp)
-target_link_libraries(sketch_wall_semantics PUBLIC sketch_precision)
+target_link_libraries(sketch_wall_semantics PUBLIC sketch_precision sketch_json)
 add_library(sketch_boundary_authoring
   src/core/boundary_authoring_session.cpp
   src/core/boundary_authoring_recovery.cpp

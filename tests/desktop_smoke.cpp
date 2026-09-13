@@ -3846,6 +3846,22 @@ int main(int argc, char** argv) {
 
     require(window.undoCommand(), "wall property edit should be undoable");
     require(window.redoCommand(), "wall property edit should be redoable");
+    const auto layered_wall_json = QStringLiteral(
+        "[{\"id\":\"outer\",\"thickness_m\":0.02},"
+        "{\"id\":\"core\",\"thickness_m\":0.1124},"
+        "{\"id\":\"inner\",\"thickness_m\":0.02}]");
+    require(window.editSelectedWallLayers(layered_wall_json),
+            "wall assembly layers should be editable through the document command seam");
+    const auto layered_wall = window.document().snapshot().entities().at(wall_id.toStdString());
+    require(layered_wall.properties.at("layers").is_array() &&
+                layered_wall.properties.at("layers").size() == 3,
+            "wall assembly layers should persist in canonical project JSON");
+    require(window.undoCommand() &&
+                !window.document().snapshot().entities().at(wall_id.toStdString()).properties.contains("layers"),
+            "wall assembly layer edit should be undoable");
+    require(window.redoCommand() &&
+                window.document().snapshot().entities().at(wall_id.toStdString()).properties.contains("layers"),
+            "wall assembly layer edit should be redoable");
 
     // Hosted openings are separate semantic entities. The wall preview is
     // passed through the architecture kernel before the atomic document

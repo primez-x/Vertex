@@ -100,6 +100,10 @@ void validate_wall_host(const std::string& wall_id, const Entities& entities) {
             finite_number(entity.properties.at("elevation_m"), "Wall elevation"),
             {},
         };
+        if (const auto layers = entity.properties.find("layers");
+            layers != entity.properties.end()) {
+            wall.layers = parse_wall_layers(layers.value(), wall.thickness);
+        }
         for (const auto& [id, candidate] : entities) {
             if (candidate.type != "opening" || !candidate.properties.is_object()) {
                 continue;

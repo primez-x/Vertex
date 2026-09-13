@@ -146,6 +146,15 @@ bool read_document_wall(const Entity& entity, const std::vector<const Entity*>& 
         return false;
     }
 
+    if (const auto* layers = property(entity.properties, {"layers"})) {
+        try {
+            output.layers = parse_wall_layers(*layers, output.thickness);
+        } catch (const std::exception& exception) {
+            error = exception.what();
+            return false;
+        }
+    }
+
     output.openings.reserve(opening_entities.size());
     for (const auto* opening_entity : opening_entities) {
         if (opening_entity == nullptr || !opening_entity->properties.is_object()) {

@@ -1,5 +1,6 @@
 #include "sketch/document.hpp"
 #include "sketch/document_digest.hpp"
+#include "sketch/assembly_model.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
 #include "sketch/vertical_levels.hpp"
@@ -17,6 +18,7 @@
 namespace {
 
 using sketch::ApplyEntityChanges;
+using sketch::AssemblyModel;
 using sketch::Asset;
 using sketch::AssetChange;
 using sketch::Document;
@@ -456,6 +458,67 @@ void test_current_architecture_types_and_boundary_links_are_structurally_validat
             "an invalid slab element kind must not advance the revision");
 }
 
+void test_composite_wall_layers_are_validated_at_document_boundary() {
+    const auto layers = nlohmann::json::array({
+        nlohmann::json{{"id", "outer"}, {"thickness_m", 0.02}},
+        nlohmann::json{{"id", "core"}, {"thickness_m", 0.16},
+                       {"material_assignment", {{"version", 1},
+                                                   {"catalog_id", "catalog"},
+                                                   {"material_id", "brick"}}}},
+        nlohmann::json{{"id", "inner"}, {"thickness_m", 0.02}},
+    });
+    const auto catalog = entity(
+        "catalog", "assembly_model",
+        {{"version", 1}, {"model", AssemblyModel::create({{"brick", "Brick"}}, {}, {}).to_json()}});
+    auto document = Document::create({catalog, entity(
+        "wall-assembly", "wall", {{"thickness_m", 0.20}, {"layers", layers}})});
+    require(document.snapshot().entities().contains("wall-assembly"),
+            "a valid composite wall layer stack should be admitted by the document");
+    require_error(
+        [&] {
+            document.apply(ApplyEntityChanges{
+                .expected_revision = document.revision(),
+                .entity_changes = {EntityChange::erase("catalog")},
+            });
+        },
+        DocumentErrorCode::dangling_reference,
+        "a wall layer material must retain its catalog reference");
+
+    auto invalid = document.snapshot().entities().at("wall-assembly");
+    invalid.properties["layers"][1]["thickness_m"] = 0.15;
+    require_error(
+        [&] {
+            document.apply(ApplyEntityChanges{
+                .expected_revision = document.revision(),
+                .entity_changes = {EntityChange::upsert(std::move(invalid))},
+            });
+        },
+        DocumentErrorCode::invalid_entity,
+        "a composite wall whose layers do not sum to thickness must be rejected");
+    require(document.revision() == 0,
+            "invalid composite wall data must not advance the document revision");
+
+    auto missing_thickness = entity("wall-no-thickness", "wall", {{"layers", layers}});
+    require_error(
+        [&] {
+            (void)Document::create({std::move(missing_thickness)});
+        },
+        DocumentErrorCode::invalid_entity,
+        "a composite wall must declare thickness_m for layer validation");
+
+    auto unknown_material = document.snapshot().entities().at("wall-assembly");
+    unknown_material.properties["layers"][1]["material_assignment"]["material_id"] = "missing";
+    require_error(
+        [&] {
+            document.apply(ApplyEntityChanges{
+                .expected_revision = document.revision(),
+                .entity_changes = {EntityChange::upsert(std::move(unknown_material))},
+            });
+        },
+        DocumentErrorCode::dangling_reference,
+        "a wall layer material must exist in its catalog");
+}
+
 void test_embedded_architectural_models_are_validated_at_document_boundary() {
     const auto phases = sketch::ModelPhases::create({"wall-1", "railing-1"},
         {"wall-1", "railing-1"}, {}).to_json();
@@ -782,6 +845,7 @@ int main() {
         test_asset_references_are_structurally_validated_atomically();
         test_persisted_string_bounds_are_enforced_before_mutation();
         test_current_architecture_types_and_boundary_links_are_structurally_validated();
+        test_composite_wall_layers_are_validated_at_document_boundary();
         test_embedded_architectural_models_are_validated_at_document_boundary();
         test_command_preview_replays_history_without_mutating_source();
         test_command_preview_rejects_invalid_stale_and_read_only_sources();
