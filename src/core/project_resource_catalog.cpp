@@ -11,7 +11,6 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
-#include <array>
 #include <cctype>
 #include <fstream>
 #include <limits>
@@ -84,6 +83,19 @@ std::filesystem::path safe_relative_path(const Json& value, const std::string& f
                   text[1] == ':'),
             field + " must be relative");
     std::replace(text.begin(), text.end(), '\\', '/');
+    std::size_t segment_start = 0;
+    while (segment_start <= text.size()) {
+        const auto segment_end = text.find('/', segment_start);
+        const auto segment = text.substr(
+            segment_start, segment_end == std::string::npos
+                              ? std::string::npos : segment_end - segment_start);
+        require(!segment.empty() && segment != "." && segment != "..",
+                field + " contains a noncanonical path component");
+        require(segment.find(':') == std::string::npos,
+                field + " cannot contain an alternate data stream");
+        if (segment_end == std::string::npos) break;
+        segment_start = segment_end + 1;
+    }
     const auto path = std::filesystem::path(text).lexically_normal();
     require(!path.empty() && !path.has_root_path() && path != ".",
             field + " must be a normalized relative path");
@@ -259,6 +271,8 @@ ProjectResourceCatalog ProjectResourceCatalog::register_package(
     } catch (const Json::exception& error) {
         fail(std::string("project package manifest is malformed: ") + error.what());
     }
+    try {
+        return [&]() -> ProjectResourceCatalog {
     require(manifest.is_object(), "project package manifest must be an object");
     require(manifest.value("schema_version", 0) == 1 &&
                 manifest.value("manifest_version", 0) == 1 &&
@@ -367,6 +381,10 @@ ProjectResourceCatalog ProjectResourceCatalog::register_package(
                          std::tie(right_kind, right.name, right.relative_path);
               });
     return catalog;
+        }();
+    } catch (const Json::exception& error) {
+        fail(std::string("project package manifest has an invalid value: ") + error.what());
+    }
 }
 
 std::vector<ProjectResource> ProjectResourceCatalog::resources(ProjectResourceKind kind) const {

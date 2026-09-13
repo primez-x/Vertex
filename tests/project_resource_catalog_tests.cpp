@@ -169,6 +169,58 @@ void rejects_invalid_structured_resource() {
     require(rejected, "template resources must contain valid JSON");
 }
 
+void rejects_typed_manifest_and_ambiguous_paths() {
+    const auto root = temporary_root();
+    valid_package_fixture(root);
+    auto manifest = nlohmann::json::parse(
+        std::ifstream(root / "project-package-manifest.json", std::ios::binary), nullptr, true, true);
+    manifest["schema_version"] = "1";
+    std::ofstream(root / "project-package-manifest.json", std::ios::binary)
+        << manifest.dump(2) << '\n';
+    bool typed_rejected = false;
+    try { (void)ProjectResourceCatalog::register_package(root); }
+    catch (const std::invalid_argument&) { typed_rejected = true; }
+    require(typed_rejected, "typed manifest values must fail as validation errors");
+
+    valid_package_fixture(root);
+    manifest = nlohmann::json::parse(
+        std::ifstream(root / "project-package-manifest.json", std::ios::binary), nullptr, true, true);
+    manifest["resources"][0]["path"] = "templates/../templates/residential.json";
+    std::ofstream(root / "project-package-manifest.json", std::ios::binary)
+        << manifest.dump(2) << '\n';
+    bool traversal_rejected = false;
+    try { (void)ProjectResourceCatalog::register_package(root); }
+    catch (const std::invalid_argument&) { traversal_rejected = true; }
+    require(traversal_rejected, "noncanonical traversal paths must be rejected");
+
+    valid_package_fixture(root);
+    manifest = nlohmann::json::parse(
+        std::ifstream(root / "project-package-manifest.json", std::ios::binary), nullptr, true, true);
+    manifest["resources"][0]["path"] = "templates/residential.json:metadata";
+    std::ofstream(root / "project-package-manifest.json", std::ios::binary)
+        << manifest.dump(2) << '\n';
+    bool stream_rejected = false;
+    try { (void)ProjectResourceCatalog::register_package(root); }
+    catch (const std::invalid_argument&) { stream_rejected = true; }
+    std::filesystem::remove_all(root);
+    require(stream_rejected, "alternate data stream paths must be rejected");
+}
+
+void rejects_payload_changed_after_registration() {
+    const auto root = temporary_root();
+    valid_package_fixture(root);
+    bool rejected = false;
+    try {
+        const auto catalog = ProjectResourceCatalog::register_package(root);
+        write_bytes(root / "documentation/project-format.md", "changed after registration\n");
+        (void)catalog.read(ProjectResourceKind::documentation, "Project format");
+    } catch (const std::invalid_argument& error) {
+        rejected = std::string(error.what()).find("hash") != std::string::npos;
+    }
+    std::filesystem::remove_all(root);
+    require(rejected, "changed payloads must be rejected on catalog read");
+}
+
 }  // namespace
 
 int main() {
@@ -176,5 +228,7 @@ int main() {
     rejects_modified_payload();
     rejects_unsafe_or_ambiguous_manifest();
     rejects_invalid_structured_resource();
+    rejects_typed_manifest_and_ambiguous_paths();
+    rejects_payload_changed_after_registration();
     std::cout << "project_resource_catalog_tests passed\n";
 }
