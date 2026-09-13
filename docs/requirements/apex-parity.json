@@ -2108,7 +2108,7 @@
         "docs/sheets-views.md",
         "docs/desktop-workflow.md"
       ],
-      "implementation_note": "The deterministic desktop workflow fixture now creates semantic walls, hosted openings, slabs, and building objects; switches plan/elevation/section views; exercises schedules, remodeling alternatives, revisions, sheets, PDF/SVG/PNG export, and save/reopen from one project. This is development-host integration evidence. Explicit market-labeled residential and light-commercial production fixtures, physical print/output fidelity, and the production gate remain open."
+      "implementation_note": "The deterministic desktop workflow fixture now creates explicit residential and light-commercial subject fixtures with semantic walls, hosted openings, slabs, and building objects; switches plan/elevation/section views; exercises schedules, remodeling alternatives, revisions, sheets, PDF/SVG/PNG export, and save/reopen from one project. This is development-host integration evidence. Physical print/output fidelity and the production gate remain open."
     },
     {
       "id": "UX-WORK-001",
