@@ -1875,6 +1875,10 @@
     },
     {
       "category": "source",
+      "path": "tests/wall_join_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/wall_semantics_tests.cpp"
     },
     {
