@@ -7595,9 +7595,23 @@ public:
             }
             const auto catalog = default_symbol_catalog();
             const auto wanted = symbol_id.trimmed().toStdString();
-            const auto definition = std::find_if(
+            auto definition = std::find_if(
                 catalog.begin(), catalog.end(),
                 [&](const auto& candidate) { return candidate.id == wanted; });
+            if (definition == catalog.end()) {
+                // The library presents stable dimension variants, but the
+                // authoring command also accepts a family name as a concise
+                // user-facing alias. Resolve aliases to the deterministic
+                // nominal (100% width/depth) variant so placement remains
+                // reproducible and the stored symbol ID is still explicit.
+                const auto family = QString::fromStdString(wanted);
+                definition = std::find_if(
+                    catalog.begin(), catalog.end(), [&](const auto& candidate) {
+                        return QString::fromStdString(candidate.family)
+                                   .compare(family, Qt::CaseInsensitive) == 0 &&
+                               candidate.id.ends_with("-w2-d2");
+                    });
+            }
             if (definition == catalog.end()) {
                 throw std::invalid_argument("Unknown annotation symbol.");
             }

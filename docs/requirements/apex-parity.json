@@ -1264,7 +1264,7 @@
         "tests/annotation_entity_codec_tests.cpp",
         "docs/annotation-catalog.md"
       ],
-      "implementation_note": "Deterministic catalog generation currently produces 468 scaled symbol variants across plumbing, furniture, storage, fixtures, appliances, accessibility, lighting, doors/windows, structural/site, and light-commercial equipment with physical-footprint validation, family-specific vector motifs, placement metadata, and previews; typed Document persistence, shared vector preview rendering, catalog-backed authoring, case-insensitive category/query filtering, inspector placement/visibility edits, independent resize assertions, and resized DXF output coverage are integrated. A production-complete library still requires final artwork review and clean production save/print/export visual qualification."
+      "implementation_note": "Deterministic catalog generation currently produces 468 scaled symbol variants across plumbing, furniture, storage, fixtures, appliances, accessibility, lighting, doors/windows, structural/site, and light-commercial equipment with physical-footprint validation, family-specific vector motifs, placement metadata, and previews; typed Document persistence, shared vector preview rendering, catalog-backed authoring, case-insensitive category/query filtering, family aliases that resolve to explicit nominal variants, inspector placement/visibility edits, independent resize assertions, and resized DXF output coverage are integrated. A production-complete library still requires final artwork review and clean production save/print/export visual qualification."
     },
     {
       "id": "APX-TRACE-001",
@@ -2473,7 +2473,7 @@
         "src/core/ifc_project_exchange.cpp",
         "tests/ifc_project_exchange_tests.cpp"
       ],
-      "implementation_note": "A bounded IFC4 STEP project mapper now exports linear boundaries, wall axes, hosted opening products, wall void relationships, slab footprints and optional swept solids, and imports reliable product geometry with identifiable source metadata. Opening assembly parts, worker isolation, Reference View conformance, full types/properties/materials/relationship reconstruction, desktop source retention, and representative cross-application fixtures remain open."
+      "implementation_note": "A bounded IFC4 STEP project mapper now exports linear boundaries, wall axes, hosted opening products, wall void relationships, slab footprints and optional swept solids, and retains bounded native properties in a standard Pset_VertexExchange_v1 container. Import reconstructs typed straight walls, closed slabs, and rectangular hosted openings when dimensions, translation-only placement, metre units, and unambiguous void relationships are reliable; otherwise it returns identifiable boundary candidates with source-retention diagnostics. Opening assembly parts, worker isolation, Reference View conformance, full standardized types/properties/materials/relationship reconstruction, desktop source retention, and representative cross-application fixtures remain open."
     },
     {
       "id": "IO-DXF-001",

@@ -34,6 +34,11 @@ and remain legible at print and export scales. Instance style and visibility sta
 separately editable. Invisible instances retain geometry; callers decide whether
 to render them.
 
+Authoring accepts either a full variant ID (for example, `toilet-w1-d3`) or a
+case-insensitive family alias (for example, `toilet`, `double-bed`, `sofa`, or
+`checkout-counter`). Family aliases resolve to the deterministic `-w2-d2`
+nominal footprint and the explicit variant ID is stored in the project.
+
 Version-1 JSON roundtrips instance content, style, placement, visibility, and
 overrides. Decoding rejects malformed fields, unsupported versions, duplicate
 instance IDs/override targets, unknown symbols, invalid scales/colors, nonfinite

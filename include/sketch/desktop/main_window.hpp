@@ -453,6 +453,9 @@ public:
     [[nodiscard]] QString createAnnotationLabel(const QString& template_id,
                                                 const QString& content,
                                                 Vec2 position);
+    // `symbol_id` may be a full catalog variant ID or a case-insensitive
+    // family alias; aliases resolve to the deterministic nominal `-w2-d2`
+    // variant before the symbol instance is persisted.
     [[nodiscard]] QString createAnnotationSymbol(const QString& symbol_id,
                                                  Vec2 position);
     // Updates one persisted annotation child through the same typed Document

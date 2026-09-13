@@ -350,7 +350,9 @@ equipment, each with nine physical width/depth variants and validated scale
 limits. Representative symbol resize/placement now has a desktop regression
 fixture, and resized symbols are covered by vector DXF output. Polished artwork,
 physical-footprint bounds, family-specific motifs, and case-insensitive
-catalog search/filtering are now covered. Final print/export visual
+catalog search/filtering are now covered. Authoring also accepts a
+case-insensitive family alias and stores the resolved `-w2-d2` nominal variant
+explicitly. Final print/export visual
 qualification and artwork review remain production-gate work.
 Stored label and symbol stroke/fill colors, fill patterns, paper text height,
 bold/italic emphasis, and symbol stroke width now flow through the shared
@@ -903,11 +905,17 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
 - A bounded IFC4 STEP project mapper now exports deterministic owner/unit
   records, analytical linear boundaries, wall axes, hosted opening products and
   wall void relationships, slab footprints, and optional swept solids from
-  immutable snapshots; hosted opening sill/elevation is carried by a local
-  placement. Import walks the product
-  representation graph and reconstructs editable boundary candidates with
-  `extensions.ifc_source` record identities, placement translations, and
-  extrusion depth where representable. Unsupported products, properties,
+  immutable snapshots; product elevations are carried by local placements.
+  A standard IFC property-set container (`Pset_VertexExchange_v1`) retains
+  bounded native properties. Import recovers typed straight walls when their
+  dimensions are available, closed extruded slabs, and rectangular hosted
+  openings through unambiguous void relationships. Wall/slab elevations and
+  opening sill relative to the host survive translation-only placements.
+  Legacy axes without dimensions and unsupported geometry remain boundary
+  candidates. `extensions.ifc_source` retains record identity and arguments;
+  `extensions.ifc_vertex_properties` retains native metadata whose assembly,
+  material, and other semantics are only partially reconstructed. Non-metre
+  units, compound representations, and unsupported products, properties,
   materials, rotations, and relationships produce explicit source-retention
   diagnostics. IFC worker isolation, desktop transaction/source-asset wiring,
   Reference View conformance, and external interoperability fixtures remain

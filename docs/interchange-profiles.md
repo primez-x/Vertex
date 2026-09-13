@@ -188,11 +188,19 @@ parts, unsupported architectural entities, and other spatial
 relationships are diagnosed instead of silently flattened.
 
 Import accepts the same IFC4 STEP subset and walks product representation
-references to reconstruct editable boundary candidates for walls, slabs,
-roofs, spaces, openings, and proxies. Candidate entities retain the IFC record
-ID/type in `extensions.ifc_source`; placement translations and extrusion depth
-are preserved when representable. Rotated placements, opening host links,
-property sets, materials, and `IFCREL*` relationships remain explicit fidelity
-diagnostics, and `source_retention_required` tells the caller to retain the
-original bytes. The mapper is in-memory and does not claim IFC worker
-isolation, Reference View conformance, or external-application certification.
+references to reconstruct typed straight walls, closed slabs, and rectangular
+hosted openings when their geometry and dimensions are reliable; other
+products remain editable boundary candidates for walls, roofs, spaces,
+openings, and proxies. Exported walls, slabs, and openings carry a bounded
+`Pset_VertexExchange_v1` property payload so native dimensions, slab kind,
+opening kind, and other inspectable values can round-trip without pretending
+they are standardized IFC semantics. Candidate entities retain the IFC record
+ID/type and original arguments in `extensions.ifc_source`, while the decoded
+property payload is retained in `extensions.ifc_vertex_properties`. Translation-only
+placements preserve elevations and hosted openings recover host-relative sill,
+offset, and width when the void relationship is unique. Rotated placements,
+non-metre units, compound representations, opening assemblies, materials, and
+other `IFCREL*` relationships remain explicit fidelity diagnostics, and
+`source_retention_required` tells the caller to retain the original bytes. The
+mapper is in-memory and does not claim IFC worker isolation, Reference View
+conformance, or external-application certification.

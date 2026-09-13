@@ -50,11 +50,13 @@ struct IfcProjectImportResult {
     const DocumentSnapshot& document,
     const IfcExchangeLimits& limits = {});
 
-// Parses IFC4 STEP records in memory and reconstructs reliable product
-// footprints/axes as editable boundary candidates with source metadata. The
-// function never opens a path or mutates a Document. Malformed input throws
-// before returning any partial result; unsupported records produce stable
-// diagnostics and require source retention.
+// Parses IFC4 STEP records in memory and reconstructs reliable, typed native
+// walls, slabs, and rectangular hosted openings when the required geometry and
+// Vertex property-set metadata are present. Other reliable footprints remain
+// editable boundary candidates with source metadata. The function never opens
+// a path or mutates a Document. Malformed input throws before returning any
+// partial result; unsupported records produce stable diagnostics and require
+// source retention.
 [[nodiscard]] IfcProjectImportResult import_project_ifc(
     std::string_view bytes,
     const IfcExchangeLimits& limits = {});

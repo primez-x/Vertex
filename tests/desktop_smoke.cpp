@@ -3919,10 +3919,32 @@ int main(int argc, char** argv) {
         QStringLiteral("chair-w1-d1"), {2.0, 1.0});
     require(!label_id.isEmpty() && !symbol_id.isEmpty(),
             "annotation authoring should create a label and a symbol");
+    const auto toilet_id = window.createAnnotationSymbol(
+        QStringLiteral("toilet"), {6.0, 1.0});
+    const auto bed_id = window.createAnnotationSymbol(
+        QStringLiteral("double-bed"), {8.0, 1.0});
+    const auto sofa_id = window.createAnnotationSymbol(
+        QStringLiteral("sofa"), {10.0, 1.0});
+    const auto commercial_id = window.createAnnotationSymbol(
+        QStringLiteral("checkout-counter"), {12.0, 1.0});
+    require(!toilet_id.isEmpty() && !bed_id.isEmpty() && !sofa_id.isEmpty() &&
+                !commercial_id.isEmpty(),
+            "symbol family aliases should place canonical residential and commercial variants");
     auto annotation_state = decode_annotation_entity(
         window.document().snapshot().entities().at("annotations-1"));
-    require(annotation_state.labels.size() == 1 && annotation_state.symbols.size() == 1,
+    require(annotation_state.labels.size() == 1 && annotation_state.symbols.size() == 5,
             "annotation authoring should update the typed annotation entity");
+    const auto alias_symbol = [&](const QString& id, const char* family) {
+        const auto found = std::find_if(annotation_state.symbols.begin(), annotation_state.symbols.end(),
+            [&](const auto& value) { return value.id == id.toStdString(); });
+        require(found != annotation_state.symbols.end() && found->symbol_id.find(family) == 0 &&
+                    found->symbol_id.find("-w2-d2") != std::string::npos,
+                "symbol family aliases should resolve the canonical dimension variant");
+    };
+    alias_symbol(toilet_id, "toilet");
+    alias_symbol(bed_id, "double-bed");
+    alias_symbol(sofa_id, "sofa");
+    alias_symbol(commercial_id, "checkout-counter");
     require(window.editAnnotation(label_id, QStringLiteral("Primary bedroom suite"),
                                   QStringLiteral("3.25"), QStringLiteral("2.5"),
                                   QStringLiteral("30"), QStringLiteral("1.5"), true,
@@ -3998,13 +4020,13 @@ int main(int argc, char** argv) {
     require(window.deleteAnnotation(label_id), "annotation deletion should be undoable");
     annotation_state = decode_annotation_entity(
         window.document().snapshot().entities().at("annotations-1"));
-    require(annotation_state.labels.empty() && annotation_state.symbols.size() == 1,
+    require(annotation_state.labels.empty() && annotation_state.symbols.size() == 5,
             "annotation deletion should remove only the selected child");
     require(window.undoCommand() && window.redoCommand() && window.undoCommand(),
             "annotation deletion should participate in normal undo and redo");
     annotation_state = decode_annotation_entity(
         window.document().snapshot().entities().at("annotations-1"));
-    require(annotation_state.labels.size() == 1 && annotation_state.symbols.size() == 1,
+    require(annotation_state.labels.size() == 1 && annotation_state.symbols.size() == 5,
             "annotation undo should restore the persisted child");
 
     QTemporaryDir reference_directory;
