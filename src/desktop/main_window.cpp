@@ -7964,6 +7964,8 @@ public:
             switch (kind) {
             case AssistanceKind::tracing:
                 return suggest_tracing(raster, options);
+            case AssistanceKind::edge_tracing:
+                return suggest_edge_tracing(raster, options);
             case AssistanceKind::dimension_extraction:
                 return extract_dimensions(raster, options);
             case AssistanceKind::label_placement:
@@ -14398,6 +14400,8 @@ public:
         auto* kind = new QComboBox(&dialog);
         kind->addItem(QStringLiteral("Trace selected reference"),
                       static_cast<int>(AssistanceKind::tracing));
+        kind->addItem(QStringLiteral("Trace detected edges"),
+                      static_cast<int>(AssistanceKind::edge_tracing));
         kind->addItem(QStringLiteral("Extract explicit dimensions"),
                       static_cast<int>(AssistanceKind::dimension_extraction));
         kind->addItem(QStringLiteral("Place labels on named objects"),
@@ -14436,6 +14440,7 @@ public:
         const auto kind_name = [](AssistanceKind value) {
             switch (value) {
             case AssistanceKind::tracing: return QStringLiteral("tracing");
+            case AssistanceKind::edge_tracing: return QStringLiteral("edge tracing");
             case AssistanceKind::dimension_extraction: return QStringLiteral("dimensions");
             case AssistanceKind::label_placement: return QStringLiteral("labels");
             case AssistanceKind::natural_language: return QStringLiteral("command");

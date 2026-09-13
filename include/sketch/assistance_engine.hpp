@@ -43,6 +43,8 @@ void validate_assistance_raster(const AssistanceRaster&);
 // normal command dispatcher.
 [[nodiscard]] std::vector<AssistanceProposal> suggest_tracing(
     const AssistanceRaster&, AssistanceEngineOptions options = {});
+[[nodiscard]] std::vector<AssistanceProposal> suggest_edge_tracing(
+    const AssistanceRaster&, AssistanceEngineOptions options = {});
 [[nodiscard]] std::vector<AssistanceProposal> extract_dimensions(
     const AssistanceRaster&, AssistanceEngineOptions options = {},
     std::string target_boundary_id = {});

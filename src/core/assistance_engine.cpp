@@ -3,17 +3,20 @@
 #include "sketch/quantity.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
 #include <limits>
+#include <numbers>
 #include <regex>
 #include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 
 namespace sketch {
@@ -22,6 +25,7 @@ namespace {
 using Json = nlohmann::json;
 
 constexpr std::size_t maximum_raster_dimension = 8192;
+constexpr std::size_t maximum_edge_trace_pixels = 16 * 1024 * 1024;
 constexpr std::size_t maximum_dimension_proposals = 64;
 constexpr double minimum_metres_per_pixel = 1e-7;
 constexpr double maximum_metres_per_pixel = 1e3;
@@ -75,6 +79,139 @@ std::uint64_t fnv1a(std::string_view value) {
         hash *= 1099511628211ULL;
     }
     return hash;
+}
+
+struct TraceComponent {
+    struct Support {
+        double score{};
+        std::size_t index{};
+        bool present{};
+    };
+    std::size_t pixel_count{};
+    std::size_t min_x{};
+    std::size_t min_y{};
+    std::size_t max_x{};
+    std::size_t max_y{};
+    std::array<Support, 16> support{};
+};
+
+double cross_product(Vec2 origin, Vec2 first, Vec2 second) {
+    return (first.x - origin.x) * (second.y - origin.y) -
+           (first.y - origin.y) * (second.x - origin.x);
+}
+
+std::vector<Vec2> convex_hull(std::vector<Vec2> points) {
+    std::sort(points.begin(), points.end(), [](Vec2 first, Vec2 second) {
+        if (first.x != second.x) return first.x < second.x;
+        return first.y < second.y;
+    });
+    points.erase(std::unique(points.begin(), points.end(), [](Vec2 first, Vec2 second) {
+        return first.x == second.x && first.y == second.y;
+    }), points.end());
+    if (points.size() <= 2) return {};
+
+    std::vector<Vec2> hull;
+    hull.reserve(points.size() * 2);
+    for (const auto point : points) {
+        while (hull.size() >= 2 &&
+               cross_product(hull[hull.size() - 2], hull.back(), point) <= 0.0) {
+            hull.pop_back();
+        }
+        hull.push_back(point);
+    }
+    const auto lower_size = hull.size();
+    for (auto iterator = points.rbegin(); iterator != points.rend(); ++iterator) {
+        while (hull.size() > lower_size &&
+               cross_product(hull[hull.size() - 2], hull.back(), *iterator) <= 0.0) {
+            hull.pop_back();
+        }
+        hull.push_back(*iterator);
+    }
+    if (!hull.empty()) hull.pop_back();
+    return hull.size() >= 3 ? hull : std::vector<Vec2>{};
+}
+
+std::vector<TraceComponent> trace_components(const AssistanceRaster& raster, int threshold) {
+    const auto pixel_count = raster.width * raster.height;
+    std::vector<std::uint8_t> visited(pixel_count, 0);
+    std::vector<std::uint32_t> queue;
+    std::vector<TraceComponent> result;
+    const std::array<std::pair<int, int>, 8> neighbors{{
+        {-1, -1}, {0, -1}, {1, -1}, {-1, 0}, {1, 0}, {-1, 1}, {0, 1}, {1, 1}}};
+    const std::array<double, 16> direction_angles = [] {
+        std::array<double, 16> values{};
+        for (std::size_t index = 0; index < values.size(); ++index) {
+            values[index] = 2.0 * std::numbers::pi * static_cast<double>(index) /
+                            static_cast<double>(values.size());
+        }
+        return values;
+    }();
+
+    const auto dark = [&](std::size_t index) {
+        return static_cast<int>(raster.luminance[index]) <= threshold;
+    };
+    for (std::size_t y = 0; y < raster.height; ++y) {
+        for (std::size_t x = 0; x < raster.width; ++x) {
+            const auto first_index = y * raster.width + x;
+            if (visited[first_index] != 0 || !dark(first_index)) continue;
+            TraceComponent component;
+            component.min_x = component.max_x = x;
+            component.min_y = component.max_y = y;
+            queue.clear();
+            queue.push_back(static_cast<std::uint32_t>(first_index));
+            visited[first_index] = 1;
+            for (std::size_t cursor = 0; cursor < queue.size(); ++cursor) {
+                const auto index = static_cast<std::size_t>(queue[cursor]);
+                const auto current_x = index % raster.width;
+                const auto current_y = index / raster.width;
+                ++component.pixel_count;
+                component.min_x = std::min(component.min_x, current_x);
+                component.min_y = std::min(component.min_y, current_y);
+                component.max_x = std::max(component.max_x, current_x);
+                component.max_y = std::max(component.max_y, current_y);
+                for (std::size_t direction = 0; direction < direction_angles.size(); ++direction) {
+                    const auto angle = direction_angles[direction];
+                    const auto cosine = std::cos(angle);
+                    const auto sine = std::sin(angle);
+                    const auto score = static_cast<double>(current_x) * cosine +
+                                       static_cast<double>(current_y) * sine;
+                    auto& support = component.support[direction];
+                    if (!support.present || score > support.score) {
+                        support = {score, index, true};
+                    } else if (score == support.score) {
+                        // Keep a stable endpoint when a support direction runs
+                        // along a straight raster edge. The stored Y value is
+                        // the pixel index, so no floating-point tie is involved.
+                        if (index > support.index) {
+                            support = {score, index, true};
+                        }
+                    }
+                }
+                for (const auto [delta_x, delta_y] : neighbors) {
+                    const auto next_x = static_cast<std::ptrdiff_t>(current_x) + delta_x;
+                    const auto next_y = static_cast<std::ptrdiff_t>(current_y) + delta_y;
+                    if (next_x < 0 || next_y < 0 ||
+                        next_x >= static_cast<std::ptrdiff_t>(raster.width) ||
+                        next_y >= static_cast<std::ptrdiff_t>(raster.height)) {
+                        continue;
+                    }
+                    const auto next_index = static_cast<std::size_t>(next_y) * raster.width +
+                                            static_cast<std::size_t>(next_x);
+                    if (visited[next_index] == 0 && dark(next_index)) {
+                        visited[next_index] = 1;
+                        queue.push_back(static_cast<std::uint32_t>(next_index));
+                    }
+                }
+            }
+            result.push_back(std::move(component));
+        }
+    }
+    std::sort(result.begin(), result.end(), [](const TraceComponent& first,
+                                               const TraceComponent& second) {
+        return std::tie(first.min_y, first.min_x, first.max_y, first.max_x) <
+               std::tie(second.min_y, second.min_x, second.max_y, second.max_x);
+    });
+    return result;
 }
 
 std::string stable_id(std::string_view prefix, std::string_view material) {
@@ -295,7 +432,110 @@ std::vector<AssistanceProposal> suggest_tracing(const AssistanceRaster& raster,
           {"metres_per_pixel", options.metres_per_pixel},
           {"image_scale", options.image_scale},
           {"rotation_radians", options.rotation_radians},
-          {"origin_metres", point_json(options.origin_metres)}}})};
+           {"origin_metres", point_json(options.origin_metres)}}})};
+}
+
+std::vector<AssistanceProposal> suggest_edge_tracing(const AssistanceRaster& raster,
+                                                      AssistanceEngineOptions options) {
+    validate_assistance_raster(raster);
+    validate_options(options);
+    if (raster.width * raster.height > maximum_edge_trace_pixels) return {};
+
+    const auto [minimum, maximum] = std::minmax_element(raster.luminance.begin(),
+                                                         raster.luminance.end());
+    const auto range = static_cast<int>(*maximum) - static_cast<int>(*minimum);
+    if (range < 16) return {};
+    const auto threshold = static_cast<int>(*minimum) + std::max(8, range * 35 / 100);
+    std::size_t dark_count = 0;
+    for (const auto value : raster.luminance) {
+        if (static_cast<int>(value) <= threshold) ++dark_count;
+    }
+    if (dark_count < 4 || dark_count * 100 > raster.luminance.size() * 92) return {};
+    const auto components = trace_components(raster, threshold);
+    std::vector<AssistanceProposal> result;
+    result.reserve(std::min<std::size_t>(components.size(), 64));
+    const auto cosine = std::cos(options.rotation_radians);
+    const auto sine = std::sin(options.rotation_radians);
+    const auto transform = [&](Vec2 point, const TraceComponent& component) {
+        const auto scale = options.metres_per_pixel * options.image_scale;
+        const auto local_x = (point.x - static_cast<double>(component.min_x)) * scale;
+        const auto local_y = (point.y - static_cast<double>(component.min_y)) * scale;
+        const auto base_x = static_cast<double>(component.min_x) * scale;
+        const auto base_y = static_cast<double>(component.min_y) * scale;
+        return Vec2{
+            options.origin_metres.x + cosine * (base_x + local_x) - sine * (base_y + local_y),
+            options.origin_metres.y + sine * (base_x + local_x) + cosine * (base_y + local_y)};
+    };
+
+    for (std::size_t component_index = 0; component_index < components.size() &&
+                                          result.size() < 64; ++component_index) {
+        const auto& component = components[component_index];
+        if (component.pixel_count < 4 || component.min_x >= component.max_x ||
+            component.min_y >= component.max_y) {
+            continue;
+        }
+        // Tiny connected components are usually text specks or anti-aliasing
+        // noise. Keep the filter deterministic and proportional to the image.
+        const auto box_width = component.max_x - component.min_x + 1;
+        const auto box_height = component.max_y - component.min_y + 1;
+        if (box_width * box_height < 12) continue;
+
+        std::vector<Vec2> support_points;
+        support_points.reserve(component.support.size());
+        for (const auto& support : component.support) {
+            if (!support.present) continue;
+            const auto pixel_x = support.index % raster.width;
+            const auto pixel_y = support.index / raster.width;
+            support_points.push_back({static_cast<double>(pixel_x),
+                                      static_cast<double>(pixel_y)});
+        }
+        const auto hull = convex_hull(std::move(support_points));
+        if (hull.size() < 3 || std::abs(cross_product(hull[0], hull[1], hull[2])) <= 0.0) {
+            continue;
+        }
+
+        Json points = Json::array();
+        for (const auto point : hull) points.push_back(point_json(transform(point, component)));
+        const auto scale = options.metres_per_pixel * options.image_scale;
+        const auto width_metres = static_cast<double>(component.max_x - component.min_x) * scale;
+        const auto height_metres = static_cast<double>(component.max_y - component.min_y) * scale;
+        finite_positive(width_metres, "assistance edge trace width is not representable");
+        finite_positive(height_metres, "assistance edge trace height is not representable");
+        std::string material = raster.reference_id + ":" + std::to_string(component_index) + ":";
+        material += std::to_string(component.min_x) + ":" + std::to_string(component.min_y) + ":" +
+                    std::to_string(component.max_x) + ":" + std::to_string(component.max_y) + ":" +
+                    std::to_string(options.metres_per_pixel) + ":" +
+                    std::to_string(options.image_scale) + ":" +
+                    std::to_string(options.rotation_radians);
+        const auto id = stable_id("assist-edge-trace", material);
+        const auto normalized_x = static_cast<double>(component.min_x) /
+                                  static_cast<double>(raster.width);
+        const auto normalized_y = static_cast<double>(component.min_y) /
+                                  static_cast<double>(raster.height);
+        const auto normalized_width = static_cast<double>(box_width) /
+                                      static_cast<double>(raster.width);
+        const auto normalized_height = static_cast<double>(box_height) /
+                                       static_cast<double>(raster.height);
+        const auto confidence = std::clamp(0.60 + static_cast<double>(range) / 255.0 * 0.30,
+                                           0.60, 0.94);
+        result.push_back(proposal(
+            id, AssistanceKind::edge_tracing,
+            source_for(raster.reference_id, {}, normalized_x, normalized_y,
+                       normalized_width, normalized_height, confidence),
+            {"add_boundary", {id},
+             {{"boundary_id", id}, {"points", std::move(points)}, {"closed", true},
+              {"classification", "measurement"}, {"source", "deterministic-raster-contour-v1"},
+              {"trace_mode", "connected-components-v1"},
+              {"component_index", component_index},
+              {"component_pixels", component.pixel_count},
+              {"source_pixel_bounds", Json::array({component.min_x, component.min_y,
+                                                     component.max_x, component.max_y})},
+              {"metres_per_pixel", options.metres_per_pixel},
+              {"image_scale", options.image_scale},
+              {"rotation_radians", options.rotation_radians},
+              {"origin_metres", point_json(options.origin_metres)}}}));
+    }
+    return result;
 }
 
 std::vector<AssistanceProposal> extract_dimensions(const AssistanceRaster& raster,

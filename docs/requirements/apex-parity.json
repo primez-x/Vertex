@@ -2189,7 +2189,7 @@
         "docs/assistance-contract.md",
         "assets/assistance/deterministic-engine-v1.json"
       ],
-      "implementation_note": "Offline tracing now has a deterministic local raster engine, source bounds, explicit calibration and identified-boundary desktop dispatch; arbitrary-plan accuracy and production qualification remain open."
+      "implementation_note": "Offline tracing now has a deterministic local raster engine, source bounds, explicit calibration and identified-boundary desktop dispatch. The desktop also exposes connected-component edge tracing that emits one provisional convex contour per useful component with retained bounds and pixel provenance; arbitrary-plan accuracy and production qualification remain open."
     },
     {
       "id": "ASSIST-002",

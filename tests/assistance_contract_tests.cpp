@@ -24,7 +24,8 @@ int main() {
     sketch::testing::noninteractive_errors();
     try {
         auto p = fixture();
-        for (auto kind : {sketch::AssistanceKind::tracing,sketch::AssistanceKind::dimension_extraction,
+        for (auto kind : {sketch::AssistanceKind::tracing,sketch::AssistanceKind::edge_tracing,
+                          sketch::AssistanceKind::dimension_extraction,
                           sketch::AssistanceKind::label_placement,sketch::AssistanceKind::natural_language}) {
             p.kind = kind;
             const auto encoded = sketch::encode_assistance_proposal(p);

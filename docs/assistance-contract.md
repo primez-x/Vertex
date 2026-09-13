@@ -5,11 +5,16 @@ session-scoped and starts disabled. The current engine has no model weights,
 network client, account, activation check, or hosted service dependency.
 
 The engine accepts a bounded grayscale pixel buffer instead of a file path. It
-currently provides four proposal producers:
+currently provides five proposal producers:
 
 - **Tracing** finds a high-contrast dark-pixel envelope and proposes a closed
   analytical rectangle using the reference calibration. The source pixel
   bounds, calibration and confidence are retained in the proposal.
+- **Edge tracing** segments the thresholded raster into deterministic connected
+  components and proposes one convex analytical contour per useful component.
+  Each proposal records its component bounds, pixel count, calibration, and the
+  `connected-components-v1` trace mode. Small isolated raster specks are
+  ignored; the contour remains provisional until reviewed.
 - **Dimension extraction** recognizes explicit-unit text (`ft`, `in`, `m`,
   `cm`, and `mm`). Unqualified numbers are ignored. The original matched text,
   character offset, parsed exact quantity and confidence remain visible.
@@ -25,8 +30,9 @@ measurement certification. Resource paths are portable and are checked by the
 package loader before acceptance.
 
 The **Offline assistance** command is available from the More menu and command
-palette. It lets the user enable the session, choose a producer, inspect the
-unverified list, and accept one proposal at a time. Acceptance calls
+palette. It lets the user enable the session, choose a producer (including
+connected-component edge tracing), inspect the unverified list, and accept one
+proposal at a time. Acceptance calls
 `AssistanceSession::request_acceptance`, then dispatches through the ordinary
 document command path:
 
@@ -52,12 +58,13 @@ application; no third-party model license is introduced by this engine.
 
 `tests/assistance_contract_tests.cpp` covers the proposal envelope and strict
 acceptance rules. `tests/assistance_engine_tests.cpp` covers deterministic
-tracing, explicit-unit parsing, label placement, the language grammar and
-malformed inputs. `tests/assistance_workflow_tests.cpp` covers the Windows
-desktop integration, explicit acceptance, identified-boundary creation,
-legacy-boundary upgrade, undo and the disabled path.
+envelope and edge tracing, explicit-unit parsing, label placement, the language
+grammar and malformed inputs. `tests/assistance_workflow_tests.cpp` covers the
+Windows desktop integration, explicit acceptance, identified-boundary creation,
+connected-component tracing, legacy-boundary upgrade, undo and the disabled
+path.
 
 These deterministic fixtures establish the local runtime contract. They do not
-certify accuracy on arbitrary architectural plans, physical pen/DISTO input,
+certify contour accuracy on arbitrary architectural plans, physical pen/DISTO input,
 or Apex project semantics; those remain separate qualification evidence in the
 production acceptance ledger.

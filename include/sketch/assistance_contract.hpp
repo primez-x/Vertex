@@ -6,7 +6,13 @@
 
 namespace sketch {
 
-enum class AssistanceKind { tracing, dimension_extraction, label_placement, natural_language };
+enum class AssistanceKind {
+    tracing,
+    edge_tracing,
+    dimension_extraction,
+    label_placement,
+    natural_language
+};
 
 struct AssistanceResource {
     std::string id;

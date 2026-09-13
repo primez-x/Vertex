@@ -64,6 +64,38 @@ int main() {
         require(trace.source.reference_id == "reference-1", "trace source reference was lost");
         sketch::validate_assistance_proposal(trace);
 
+        auto components = raster;
+        components.width = 40;
+        components.height = 24;
+        components.luminance.assign(components.width * components.height, 255);
+        for (std::size_t y = 3; y <= 10; ++y) {
+            components.luminance[y * components.width + 2] = 0;
+            components.luminance[y * components.width + 14] = 0;
+            components.luminance[y * components.width + 24] = 0;
+            components.luminance[y * components.width + 36] = 0;
+        }
+        for (std::size_t x = 2; x <= 14; ++x) {
+            components.luminance[3 * components.width + x] = 0;
+            components.luminance[10 * components.width + x] = 0;
+        }
+        for (std::size_t x = 24; x <= 36; ++x) {
+            components.luminance[3 * components.width + x] = 0;
+            components.luminance[10 * components.width + x] = 0;
+        }
+        const auto first_edges = sketch::suggest_edge_tracing(components);
+        const auto second_edges = sketch::suggest_edge_tracing(components);
+        require(first_edges.size() == 2, "edge tracing should produce one proposal per component");
+        require(first_edges == second_edges, "edge tracing must be deterministic");
+        for (const auto& edge : first_edges) {
+            require(edge.kind == sketch::AssistanceKind::edge_tracing,
+                    "edge tracing kind was lost");
+            require(edge.preview.arguments.at("trace_mode") == "connected-components-v1",
+                    "edge tracing mode was not recorded");
+            require(edge.preview.arguments.at("points").size() >= 4,
+                    "edge tracing contour is incomplete");
+            sketch::validate_assistance_proposal(edge);
+        }
+
         const auto dimensions = sketch::extract_dimensions(raster);
         require(dimensions.size() == 2, "fixture should produce two dimension proposals");
         require(dimensions.front().preview.command_type == "add_dimension_suggestion",

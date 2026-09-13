@@ -19,6 +19,7 @@ void text(const std::string& value, std::size_t limit = 4096) {
 std::string kind_name(AssistanceKind kind) {
     switch (kind) {
     case AssistanceKind::tracing: return "tracing";
+    case AssistanceKind::edge_tracing: return "edge_tracing";
     case AssistanceKind::dimension_extraction: return "dimension_extraction";
     case AssistanceKind::label_placement: return "label_placement";
     case AssistanceKind::natural_language: return "natural_language";
@@ -114,7 +115,8 @@ AssistanceProposal decode_assistance_proposal(const Json& j) {
         p.id = j.at("id").get<std::string>(); p.producer = j.at("producer").get<std::string>();
         const auto name = j.at("kind").get<std::string>();
         bool found = false;
-        for (auto kind : {AssistanceKind::tracing, AssistanceKind::dimension_extraction,
+        for (auto kind : {AssistanceKind::tracing, AssistanceKind::edge_tracing,
+                          AssistanceKind::dimension_extraction,
                           AssistanceKind::label_placement, AssistanceKind::natural_language})
             if (kind_name(kind) == name) { p.kind = kind; found = true; }
         check(found, "Unknown assistance kind");

@@ -61,6 +61,12 @@ int main(int argc, char** argv) {
         const auto trace = window.suggestReferenceAssistance(reference_id, AssistanceKind::tracing);
         require(trace.size() == 1 && trace.front().preview.command_type == "add_boundary",
                 "desktop must expose deterministic trace suggestions");
+        const auto edge_trace = window.suggestReferenceAssistance(reference_id,
+                                                                   AssistanceKind::edge_tracing);
+        require(edge_trace.size() == 1 &&
+                    edge_trace.front().preview.arguments.at("trace_mode") ==
+                        "connected-components-v1",
+                "desktop must expose connected-component edge tracing");
         const auto revision_before_trace = window.document().revision();
         require(window.acceptAssistanceProposal(trace.front()),
                 "accepted trace must use the desktop command path");
@@ -77,6 +83,16 @@ int main(int argc, char** argv) {
         require(window.undoCommand() &&
                     !window.document().snapshot().entities().contains(trace_id),
                 "accepted trace must be undoable");
+        const auto edge_id = edge_trace.front().id;
+        const auto revision_before_edge_trace = window.document().revision();
+        require(window.acceptAssistanceProposal(edge_trace.front()),
+                "accepted edge trace must use the desktop command path");
+        require(window.document().revision() == revision_before_edge_trace + 1 &&
+                    window.document().snapshot().entities().contains(edge_id),
+                "accepted edge trace must create one identified boundary revision");
+        require(window.undoCommand() &&
+                    !window.document().snapshot().entities().contains(edge_id),
+                "accepted edge trace must be undoable");
 
         const auto natural = window.parseAssistanceCommand("label Entry at 1.25, 2.5");
         require(natural.size() == 1, "desktop must expose the local language grammar");
