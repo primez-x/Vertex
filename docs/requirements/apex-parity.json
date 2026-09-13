@@ -1873,7 +1873,7 @@
         "tests/sheet_view_entity_codec_tests.cpp",
         "docs/sheets-views.md"
       ],
-      "implementation_note": "Immutable coordinated plan/elevation/section view references and frame validation persist through a typed Document entity, and new projects seed all three persisted frames. Supported semantic building objects now have analytical hidden-line plan/elevation and true solid-plane section projection tests. The Architectural selector consumes persisted frames when present and view presentation settings are editable through typed history, while shared object editing, renderer synchronization, and sheet layout remain open."
+      "implementation_note": "Immutable coordinated plan/elevation/section view references and frame validation persist through a typed Document entity, and new projects seed all three persisted frames. Supported semantic building objects now have analytical hidden-line plan/elevation and true solid-plane section projection tests. The Architectural selector consumes persisted frames when present, view presentation settings are editable through typed history, and the renderer applies conservative BRep-bounds far-depth culling with cache invalidation when frame limits change. Exact clipping, shared object editing, renderer synchronization, and sheet layout remain open."
     },
     {
       "id": "ARCH-VIEW-002",
@@ -1900,7 +1900,7 @@
         "tests/sheet_view_entity_codec_tests.cpp",
         "docs/sheets-views.md"
       ],
-      "implementation_note": "Section presentation settings are validated and persist through the typed Document entity; analytical solid-plane section edges and persisted section cut-depth consumption are implemented for supported objects, and the desktop view settings command edits cut/far depth, line widths, hatching and detail through Document history. Far-depth filtering, line/hatch/annotation overlays and print fixtures remain open."
+      "implementation_note": "Section presentation settings are validated and persist through the typed Document entity; analytical solid-plane section edges and persisted section cut-depth consumption are implemented for supported objects, and the desktop view settings command edits cut/far depth, line widths, hatching and detail through Document history. A conservative object-level BRep-bounds far-depth filter now culls solids wholly beyond the selected limit while retaining objects that cross it for a future exact clipping pass. Line/hatch/annotation overlays and print fixtures remain open."
     },
     {
       "id": "ARCH-SCH-001",

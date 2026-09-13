@@ -5,6 +5,8 @@
 
 #include <TopoDS_Shape.hxx>
 
+#include <limits>
+
 namespace sketch {
 
 // A view frame uses model metres. direction points from the viewer toward the
@@ -15,6 +17,17 @@ struct BuildingViewFrame {
     Vec3 origin{};
     Vec3 direction{0.0, 0.0, -1.0};
     Vec3 up{0.0, 1.0, 0.0};
+};
+
+// A conservative depth range used by view adapters before deriving linework.
+// The origin and direction use the same model-space convention as
+// BuildingViewFrame.  The filter only culls a shape whose conservative BRep
+// bounds lie beyond far_depth_m; it never clips a shape or changes its geometry.
+// Infinity keeps the helper useful for views that have no depth limit.
+struct BuildingViewDepth {
+    Vec3 origin{};
+    Vec3 direction{0.0, 0.0, -1.0};
+    double far_depth_m{std::numeric_limits<double>::infinity()};
 };
 
 enum class BuildingViewKind { plan, elevation, section };
@@ -34,5 +47,12 @@ enum class BuildingViewKind { plan, elevation, section };
 [[nodiscard]] Boundary project_shape_view(const TopoDS_Shape& shape,
                                           BuildingViewKind kind,
                                           const BuildingViewFrame& frame = {});
+
+// Return whether any part of a derived solid can occur at or before the
+// requested far depth.  This is intentionally a conservative, object-level
+// test based on a conservative BRep bounding box: partially crossing objects
+// remain visible and are not silently clipped into approximate linework.
+[[nodiscard]] bool shape_intersects_view_depth(const TopoDS_Shape& shape,
+                                               const BuildingViewDepth& depth);
 
 }  // namespace sketch

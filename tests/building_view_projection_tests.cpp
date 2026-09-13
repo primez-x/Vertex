@@ -11,6 +11,7 @@
 namespace {
 
 using sketch::Boundary;
+using sketch::BuildingViewDepth;
 using sketch::BuildingViewFrame;
 using sketch::BuildingViewKind;
 using sketch::CircularColumn;
@@ -209,6 +210,50 @@ void test_terrain_shape_projects_in_all_views() {
     require(!section.empty(), "terrain shape must intersect a horizontal section");
 }
 
+void test_conservative_far_depth_filter() {
+    const RectangularColumn near_column{
+        .id = "near-depth-column",
+        .base_center = {0.0, -2.0, 0.0},
+        .width = 1.0,
+        .depth = 1.0,
+        .height = 2.0,
+        .rotation_radians = 0.0,
+    };
+    const auto near_shape = sketch::make_building_shape(near_column);
+    const BuildingViewDepth near_depth{{0.0, 0.0, 0.0}, {0.0, -1.0, 0.0}, 3.0};
+    require(sketch::shape_intersects_view_depth(near_shape, near_depth),
+            "a shape before the far depth must remain visible");
+
+    const RectangularColumn far_column{
+        .id = "far-depth-column",
+        .base_center = {0.0, -4.0, 0.0},
+        .width = 1.0,
+        .depth = 1.0,
+        .height = 2.0,
+        .rotation_radians = 0.0,
+    };
+    const auto far_shape = sketch::make_building_shape(far_column);
+    const BuildingViewDepth clipped_depth{{0.0, 0.0, 0.0}, {0.0, -1.0, 0.0}, 3.4};
+    require(!sketch::shape_intersects_view_depth(far_shape, clipped_depth),
+            "a shape entirely beyond the far depth must be culled");
+    const BuildingViewDepth boundary_depth{{0.0, 0.0, 0.0}, {0.0, -1.0, 0.0}, 3.6};
+    require(sketch::shape_intersects_view_depth(far_shape, boundary_depth),
+            "a shape crossing the far depth must remain visible for exact clipping");
+
+    rejected(
+        [&] {
+            (void)sketch::shape_intersects_view_depth(
+                near_shape, BuildingViewDepth{{}, {0.0, 0.0, 0.0}, 1.0});
+        },
+        "far-depth filtering must reject a non-unit direction");
+    rejected(
+        [&] {
+            (void)sketch::shape_intersects_view_depth(
+                near_shape, BuildingViewDepth{{}, {0.0, -1.0, 0.0}, -1.0});
+        },
+        "far-depth filtering must reject a negative limit");
+}
+
 }  // namespace
 
 void test_hip_roof_views() {
@@ -240,6 +285,7 @@ int main() {
         test_hip_roof_views();
         test_invalid_frame_and_missed_section_fail_closed();
         test_terrain_shape_projects_in_all_views();
+        test_conservative_far_depth_filter();
         std::cout << "Building view projection tests passed\n";
         return 0;
     } catch (const std::exception& error) {

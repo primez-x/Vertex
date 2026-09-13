@@ -2,6 +2,7 @@
 
 #include <BRepAlgoAPI_Section.hxx>
 #include <BRep_Builder.hxx>
+#include <BRepBndLib.hxx>
 #include <BRepLib.hxx>
 #include <BRep_Tool.hxx>
 #include <Geom2d_Circle.hxx>
@@ -17,6 +18,7 @@
 #include <HLRBRep_Algo.hxx>
 #include <HLRBRep_HLRToShape.hxx>
 #include <Standard_Failure.hxx>
+#include <Bnd_Box.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopLoc_Location.hxx>
 #include <TopoDS.hxx>
@@ -32,6 +34,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numbers>
 #include <stdexcept>
 #include <string>
@@ -336,6 +339,61 @@ Boundary project_shape_view(const TopoDS_Shape& shape, BuildingViewKind kind,
 Boundary project_building_view(const BuildingObject& object, BuildingViewKind kind,
                                const BuildingViewFrame& frame) {
     return project_shape_view(make_building_shape(object), kind, frame);
+}
+
+bool shape_intersects_view_depth(const TopoDS_Shape& shape,
+                                 const BuildingViewDepth& depth) {
+    const auto finite_vec3 = [](const Vec3& value) {
+        return std::isfinite(value.x) && std::isfinite(value.y) &&
+               std::isfinite(value.z);
+    };
+    if (!finite_vec3(depth.origin) || !finite_vec3(depth.direction)) {
+        throw std::invalid_argument("Building view depth contains a non-finite vector");
+    }
+    const auto direction_length = std::sqrt(
+        depth.direction.x * depth.direction.x +
+        depth.direction.y * depth.direction.y +
+        depth.direction.z * depth.direction.z);
+    if (!std::isfinite(direction_length) ||
+        std::abs(direction_length - 1.0) > 1e-9) {
+        throw std::invalid_argument("Building view depth direction must be unit length");
+    }
+    if ((!std::isfinite(depth.far_depth_m) && !std::isinf(depth.far_depth_m)) ||
+        depth.far_depth_m < 0.0) {
+        throw std::invalid_argument("Building view far depth must be nonnegative or infinity");
+    }
+    if (shape.IsNull()) return false;
+    if (std::isinf(depth.far_depth_m)) return true;
+
+    Bnd_Box box;
+    BRepBndLib::Add(shape, box);
+    if (box.IsVoid()) return false;
+    double xmin = 0.0;
+    double ymin = 0.0;
+    double zmin = 0.0;
+    double xmax = 0.0;
+    double ymax = 0.0;
+    double zmax = 0.0;
+    box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    for (const auto x : {xmin, xmax}) {
+        for (const auto y : {ymin, ymax}) {
+            for (const auto z : {zmin, zmax}) {
+                if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+                    throw std::invalid_argument("Building view depth found a non-finite bound");
+                }
+                const auto dx = x - depth.origin.x;
+                const auto dy = y - depth.origin.y;
+                const auto dz = z - depth.origin.z;
+                const auto value = dx * depth.direction.x + dy * depth.direction.y +
+                                   dz * depth.direction.z;
+                if (!std::isfinite(value)) {
+                    throw std::invalid_argument("Building view depth exceeded numeric range");
+                }
+                if (value <= depth.far_depth_m + tolerance) return true;
+            }
+        }
+    }
+    return false;
 }
 
 }  // namespace sketch

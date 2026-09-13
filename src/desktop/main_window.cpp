@@ -1427,9 +1427,18 @@ BuildingViewFrame architectural_view_frame(BuildingViewKind kind) {
     throw std::invalid_argument("unknown architectural view kind");
 }
 
-BuildingViewFrame architectural_view_frame(const DocumentSnapshot& snapshot,
-                                           BuildingViewKind kind) {
+struct ArchitecturalViewContext {
+    BuildingViewFrame frame;
+    BuildingViewDepth depth;
+};
+
+ArchitecturalViewContext architectural_view_context(const DocumentSnapshot& snapshot,
+                                                    BuildingViewKind kind) {
     const auto fallback = architectural_view_frame(kind);
+    ArchitecturalViewContext result{
+        fallback,
+        BuildingViewDepth{fallback.origin, fallback.direction,
+                          std::numeric_limits<double>::infinity()}};
     for (const auto& [id, entity] : snapshot.entities()) {
         (void)id;
         if (entity.type != kSheetViewEntityType) continue;
@@ -1444,23 +1453,34 @@ BuildingViewFrame architectural_view_frame(const DocumentSnapshot& snapshot,
                     return view.kind == expected;
                 });
             if (found == model.views().end()) continue;
-            BuildingViewFrame result{
+            const BuildingViewFrame base{
                 {found->origin_m[0], found->origin_m[1], found->origin_m[2]},
                 {found->direction[0], found->direction[1], found->direction[2]},
                 {found->up[0], found->up[1], found->up[2]}};
+            result.frame = base;
+            result.depth = BuildingViewDepth{base.origin, base.direction,
+                                             found->presentation.far_depth_m};
             if (kind == BuildingViewKind::section) {
-                result.origin.x += result.direction.x * found->presentation.cut_depth_m;
-                result.origin.y += result.direction.y * found->presentation.cut_depth_m;
-                result.origin.z += result.direction.z * found->presentation.cut_depth_m;
+                result.frame.origin.x += result.frame.direction.x *
+                                         found->presentation.cut_depth_m;
+                result.frame.origin.y += result.frame.direction.y *
+                                         found->presentation.cut_depth_m;
+                result.frame.origin.z += result.frame.direction.z *
+                                         found->presentation.cut_depth_m;
             }
             return result;
         } catch (const std::exception&) {
             // The typed Document boundary reports malformed sheet/view data;
             // a transient canvas still falls back to the safe default frame.
-            return fallback;
+            return result;
         }
     }
-    return fallback;
+    return result;
+}
+
+BuildingViewFrame architectural_view_frame(const DocumentSnapshot& snapshot,
+                                           BuildingViewKind kind) {
+    return architectural_view_context(snapshot, kind).frame;
 }
 
 const char* architectural_view_name(BuildingViewKind kind) {
@@ -15538,15 +15558,30 @@ private:
             if (kind == BuildingViewKind::plan) return all_geometry;
             std::vector<CanvasEntity> result;
             result.reserve(snapshot.entities().size());
-            const auto frame = architectural_view_frame(snapshot, kind);
+            const auto view_context = architectural_view_context(snapshot, kind);
+            const auto& frame = view_context.frame;
+            const auto& depth = view_context.depth;
+            const auto frame_cache_key = [&] {
+                std::ostringstream key;
+                key << std::setprecision(17)
+                    << frame.origin.x << ',' << frame.origin.y << ',' << frame.origin.z << ';'
+                    << frame.direction.x << ',' << frame.direction.y << ',' << frame.direction.z << ';'
+                    << frame.up.x << ',' << frame.up.y << ',' << frame.up.z << ';'
+                    << depth.origin.x << ',' << depth.origin.y << ',' << depth.origin.z << ';'
+                    << depth.direction.x << ',' << depth.direction.y << ',' << depth.direction.z << ';'
+                    << depth.far_depth_m;
+                return key.str();
+            }();
             for (const auto& [id, entity] : snapshot.entities()) {
                 try {
                     if (entity.type == "terrain_surface") {
                         const auto model = TerrainSurface::from_json(
                             entity.properties.at("model"));
                         if (!model.visible()) continue;
+                        const auto shape = make_terrain_surface(model);
+                        if (!shape_intersects_view_depth(shape, depth)) continue;
                         const auto projection = project_shape_view(
-                            make_terrain_surface(model), kind, frame);
+                            shape, kind, frame);
                         result.push_back(CanvasEntity{
                             id_from(id), QStringLiteral("terrain_surface"), projection, 0.0,
                             id_from(id) == m_selected_id});
@@ -15554,12 +15589,15 @@ private:
                     }
                     if (can_recognize_building_entity_type(entity.type)) {
                         const auto resolved = resolve_vertical_placement(snapshot, entity);
+                        const auto decoded = decode_building_entity(resolved);
+                        const auto shape = make_building_shape(decoded);
+                        if (!shape_intersects_view_depth(shape, depth)) continue;
                         const auto key = "view:" + std::to_string(static_cast<int>(kind)) +
-                                         '\n' + resolved.type + '\n' + resolved.properties.dump();
+                                         '\n' + frame_cache_key + '\n' + resolved.type +
+                                         '\n' + resolved.properties.dump();
                         auto cached = m_plan_projection_cache.find(id);
                         if (cached == m_plan_projection_cache.end() || cached->second.first != key) {
-                            auto projection = project_building_view(
-                                decode_building_entity(resolved), kind, frame);
+                            auto projection = project_shape_view(shape, kind, frame);
                             cached = m_plan_projection_cache.insert_or_assign(
                                 id, std::make_pair(key, std::move(projection))).first;
                         }
@@ -15580,8 +15618,10 @@ private:
                         const Wall wall{id, *baseline, *thickness, *height, *elevation,
                                         openings_by_wall[id]};
                         validate_wall_semantics(wall);
+                        const auto shape = make_wall(wall);
+                        if (!shape_intersects_view_depth(shape, depth)) continue;
                         const auto projection = project_shape_view(
-                            make_wall(wall), kind, frame);
+                            shape, kind, frame);
                         result.push_back(CanvasEntity{
                             id_from(id), QStringLiteral("wall"), projection, *thickness,
                             id_from(id) == m_selected_id});
@@ -15596,10 +15636,11 @@ private:
                         if (!boundary || !holes || !thickness || !elevation) {
                             throw std::invalid_argument("slab projection requires boundary, holes, thickness, and elevation");
                         }
+                        const auto shape = make_slab(Slab{id, *boundary, *holes, *thickness, *elevation,
+                                                           read_slab_element_kind(resolved.properties)});
+                        if (!shape_intersects_view_depth(shape, depth)) continue;
                         const auto projection = project_shape_view(
-                            make_slab(Slab{id, *boundary, *holes, *thickness, *elevation,
-                                            read_slab_element_kind(resolved.properties)}),
-                            kind, frame);
+                            shape, kind, frame);
                         result.push_back(CanvasEntity{
                             id_from(id), QStringLiteral("slab"), projection, *thickness,
                             id_from(id) == m_selected_id});
