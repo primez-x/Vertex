@@ -639,7 +639,7 @@
         "src/core/geometry.cpp",
         "tests/curve_construction_tests.cpp"
       ],
-      "implementation_note": "Analytical chord/angle, chord/height, chord/arc-length and start-tangent construction tested; full interactive curve editing remains open."
+      "implementation_note": "Analytical chord/angle, chord/height, chord/arc-length and start-tangent construction is tested; Windows now exposes interactive endpoint editing for angle, arc-length, and arc-height walls. Boundary curve authoring, joins, and complete parity qualification remain open."
     },
     {
       "id": "GEO-BASE-003",
@@ -963,7 +963,7 @@
         "tests/boundary_authoring_session_tests.cpp",
         "tests/calculation_tests.cpp"
       ],
-      "implementation_note": "Analytical chord, arc-length, arc-height, and angle construction is implemented with retained receipts and area/perimeter tests. Windows now exposes a bounded curved-wall authoring dialog/API that stores an analytical sweep and validates it through the wall kernel; selecting an arc exposes endpoint and sweep editing with hosted-opening validation, undo, save/reopen, and rendering smoke. Full curved-wall edit/render/save-reopen parity fixtures, joins, and production qualification remain open."
+      "implementation_note": "Analytical chord, arc-length, arc-height, and angle construction is implemented with retained receipts and area/perimeter tests. Windows now exposes a bounded curved-wall authoring/editing dialog and API for all three defining measures, stores the original input beside the derived analytical sweep, and validates hosted openings through the wall kernel. Full curved-wall edit/render/save-reopen parity fixtures, joins, and production qualification remain open."
     },
     {
       "id": "APX-EDIT-001",

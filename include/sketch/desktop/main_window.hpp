@@ -218,6 +218,19 @@ public:
         QString sweep,
         QString classification = QStringLiteral("interior"),
         std::optional<Revision> expected_revision = std::nullopt);
+    // Creates one analytical arc wall from a chord and a defining measure.
+    // `construction` accepts `angle`, `arc_length`, or `arc_height` (the
+    // endpoint chord is always the authoritative chord). Length and height
+    // expressions use the active unit system; a signed arc length selects
+    // clockwise orientation. The original defining expression is retained
+    // beside the derived sweep for inspection and migration.
+    [[nodiscard]] QString createCurvedWallFromConstruction(
+        Vec2 start,
+        Vec2 end,
+        QString construction,
+        QString measure,
+        QString classification = QStringLiteral("interior"),
+        std::optional<Revision> expected_revision = std::nullopt);
     // Replaces the selected analytical arc wall through the same validated,
     // revision-fenced command used by the curved-wall editor. Hosted openings
     // remain attached and are revalidated against the proposed baseline.
@@ -225,6 +238,15 @@ public:
         Vec2 start,
         Vec2 end,
         QString sweep,
+        std::optional<Revision> expected_revision = std::nullopt);
+    // Replaces the selected arc wall using the same angle, arc-length, or
+    // arc-height construction semantics as creation. Hosted openings are
+    // revalidated before the one revision-fenced command is committed.
+    [[nodiscard]] bool editSelectedCurvedWallFromConstruction(
+        Vec2 start,
+        Vec2 end,
+        QString construction,
+        QString measure,
         std::optional<Revision> expected_revision = std::nullopt);
     // The object dialog and smoke tests share this atomic, validated command.
     // A stale dialog revision cannot overwrite intervening document edits.

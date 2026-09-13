@@ -470,10 +470,11 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   hidden views track document changes. All six forms now have a parameter
   editor connected to revision-checked commands, undo/redo and save/reopen.
   Windows now also exposes **Draw curved wall** from More and command search.
-  The editor parses endpoint quantities and a signed angle, validates the
-  analytical arc through the shared wall kernel, and stores the source sweep
-  beside the wall for save/reopen. Selecting an arc exposes the same compact
-  editor for endpoint and sweep edits, with hosted-opening validation and
+  The editor parses endpoint quantities and exposes sweep-angle, arc-length,
+  and arc-height construction modes. Each mode validates the analytical arc
+  through the shared wall kernel and stores the defining measure beside the
+  derived sweep for save/reopen. Selecting an arc exposes the same compact
+  editor for endpoint and defining-measure edits, with hosted-opening validation and
   undoable save/reopen coverage. Curved-wall joins, richer constraints, and
   production compatibility certification remain open.
   Exact top-down projections also feed the shared plan/PDF renderer; failed

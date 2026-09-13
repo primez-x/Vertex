@@ -239,12 +239,17 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
             auto* start_y = dialog->findChild<QLineEdit*>(QStringLiteral("curvedWallStartY"));
             auto* end_x = dialog->findChild<QLineEdit*>(QStringLiteral("curvedWallEndX"));
             auto* end_y = dialog->findChild<QLineEdit*>(QStringLiteral("curvedWallEndY"));
+            auto* construction = dialog->findChild<QComboBox*>(QStringLiteral("curvedWallConstruction"));
             auto* sweep = dialog->findChild<QLineEdit*>(QStringLiteral("curvedWallSweep"));
+            auto* measure_label = dialog->findChild<QLabel*>(QStringLiteral("curvedWallMeasureLabel"));
             auto* classification = dialog->findChild<QLineEdit*>(QStringLiteral("curvedWallClassification"));
             auto* buttons = dialog->findChild<QDialogButtonBox*>(QStringLiteral("curvedWallButtons"));
             auto* status = dialog->findChild<QLabel*>(QStringLiteral("curvedWallStatus"));
-            require(start_x && start_y && end_x && end_y && sweep && classification && buttons && status,
-                    "curved-wall dialog must expose endpoint, sweep, classification and status controls");
+            require(start_x && start_y && end_x && end_y && construction &&
+                        construction->count() == 3 && construction->currentData() == QStringLiteral("angle") &&
+                        sweep && measure_label && measure_label->text() == QStringLiteral("Sweep angle") &&
+                        classification && buttons && status,
+                    "curved-wall dialog must expose endpoint, construction, measure, classification and status controls");
             start_x->setText(QStringLiteral("20 ft"));
             start_y->setText(QStringLiteral("10 ft"));
             end_x->setText(QStringLiteral("30 ft"));
@@ -295,6 +300,42 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
                          std::numbers::pi / 2.0) < 1e-9 &&
                     edited_curved_wall.extensions.at("curve_input").at("sweep") == "-90 deg",
                 "curved-wall edits must update analytical geometry and source input");
+
+        const auto arc_length_id = window.createCurvedWallFromConstruction(
+            {40, 10}, {41, 10}, QStringLiteral("arc_length"), QStringLiteral("5 ft"),
+            QStringLiteral("interior"));
+        require(!arc_length_id.isEmpty(), "arc-length curved walls must be authorable through the public command seam");
+        const auto arc_length_document = window.document().snapshot();
+        const auto& arc_length_wall = arc_length_document.entities().at(arc_length_id.toStdString());
+        require(arc_length_wall.extensions.contains("curve_input"), "arc-length wall must retain its curve receipt");
+        const auto& arc_length_input = arc_length_wall.extensions.at("curve_input");
+        require(arc_length_input.at("construction") == "arc_length" &&
+                    arc_length_input.at("measure") == "5 ft" &&
+                    arc_length_input.at("clockwise") == false &&
+                    std::abs(arc_length_wall.properties.at("baseline").at("sweep_radians").get<double>()) > 1e-7 &&
+                    std::abs(arc_length_wall.properties.at("baseline").at("sweep_radians").get<double>()) <
+                        2.0 * std::numbers::pi,
+                "arc-length construction must retain its defining measure and analytical sweep");
+        const auto clockwise_arc_length_id = window.createCurvedWallFromConstruction(
+            {50, 10}, {51, 10}, QStringLiteral("arc_length"), QStringLiteral("-5 ft"));
+        require(!clockwise_arc_length_id.isEmpty(), "signed arc length must select clockwise construction");
+        const auto clockwise_arc_length_document = window.document().snapshot();
+        const auto& clockwise_arc_length_wall =
+            clockwise_arc_length_document.entities().at(clockwise_arc_length_id.toStdString());
+        require(clockwise_arc_length_wall.extensions.contains("curve_input"), "clockwise arc-length wall must retain its curve receipt");
+        require(clockwise_arc_length_wall.extensions.at("curve_input").at("clockwise") == true &&
+                    clockwise_arc_length_wall.properties.at("baseline").at("sweep_radians").get<double>() < 0.0,
+                "negative arc length must retain clockwise orientation");
+        const auto arc_height_id = window.createCurvedWallFromConstruction(
+            {60, 10}, {64, 10}, QStringLiteral("arc_height"), QStringLiteral("1 ft"));
+        require(!arc_height_id.isEmpty(), "arc-height curved walls must be authorable through the public command seam");
+        const auto arc_height_document = window.document().snapshot();
+        const auto& arc_height_wall = arc_height_document.entities().at(arc_height_id.toStdString());
+        require(arc_height_wall.extensions.contains("curve_input"), "arc-height wall must retain its curve receipt");
+        require(arc_height_wall.extensions.at("curve_input").at("construction") == "arc_height" &&
+                    arc_height_wall.extensions.at("curve_input").at("measure") == "1 ft" &&
+                    arc_height_wall.properties.at("baseline").at("sweep_radians").get<double>() > 0.0,
+                "arc-height construction must retain its defining measure and signed sweep");
 
         const auto wall = window.createStraightWall({0, 0}, {4, 0});
         require(!wall.isEmpty() && window.selectEntity(wall), "keypad fixture wall must be selectable");

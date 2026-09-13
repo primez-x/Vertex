@@ -7725,6 +7725,15 @@ public:
     QString createCurvedWall(Vec2 start, Vec2 end, const QString& sweep_expression,
                              const QString& classification,
                              std::optional<Revision> expected_revision = std::nullopt) {
+        return createCurvedWallFromConstruction(start, end, QStringLiteral("angle"),
+                                                sweep_expression, classification,
+                                                expected_revision);
+    }
+
+    QString createCurvedWallFromConstruction(
+        Vec2 start, Vec2 end, const QString& construction, const QString& measure,
+        const QString& classification,
+        std::optional<Revision> expected_revision = std::nullopt) {
         const auto revision = expected_revision.value_or(m_document->revision());
         const auto drawing_context = requireDrawingContext();
         if (!drawing_context) return {};
@@ -7734,16 +7743,53 @@ public:
                 std::hypot(end.x - start.x, end.y - start.y) <= 1e-7) {
                 throw std::invalid_argument("Wall arc endpoints must be finite and distinct.");
             }
-            const auto expression = sweep_expression.trimmed();
+            const auto expression = measure.trimmed();
             if (expression.isEmpty()) {
-                throw std::invalid_argument("Wall arc sweep is required.");
+                throw std::invalid_argument("Wall arc defining measure is required.");
             }
-            const auto sweep = parse_angle(expression.toUtf8().toStdString());
-            if (!std::isfinite(sweep.radians) || std::abs(sweep.radians) <= 1e-7 ||
-                std::abs(sweep.radians) >= 2.0 * std::numbers::pi - 1e-9) {
-                throw std::invalid_argument("Wall arc sweep must be between zero and two pi.");
+            auto construction_key = construction.trimmed().toLower();
+            if (construction_key == QStringLiteral("sweep")) {
+                construction_key = QStringLiteral("angle");
             }
-            const Segment baseline{start, end, sweep.radians};
+            if (construction_key == QStringLiteral("arc-length") ||
+                construction_key == QStringLiteral("length")) {
+                construction_key = QStringLiteral("arc_length");
+            } else if (construction_key == QStringLiteral("arc-height") ||
+                       construction_key == QStringLiteral("height")) {
+                construction_key = QStringLiteral("arc_height");
+            }
+            if (construction_key != QStringLiteral("angle") &&
+                construction_key != QStringLiteral("arc_length") &&
+                construction_key != QStringLiteral("arc_height")) {
+                throw std::invalid_argument(
+                    "Wall arc construction must be angle, arc_length, or arc_height.");
+            }
+
+            Segment baseline;
+            std::string normalized_measure;
+            double stored_measure = 0.0;
+            bool clockwise = false;
+            if (construction_key == QStringLiteral("angle")) {
+                const auto angle = parse_angle(expression.toUtf8().toStdString());
+                baseline = arc_from_chord_angle(start, end, angle.radians);
+                normalized_measure = angle.normalized_expression;
+                stored_measure = angle.radians;
+            } else {
+                const auto quantity = parse_quantity(
+                    expression.toUtf8().toStdString(), m_metric_units ? Unit::metre : Unit::foot);
+                if (!std::isfinite(quantity.metres) || quantity.metres == 0.0) {
+                    throw std::invalid_argument("Wall arc measure must be finite and nonzero.");
+                }
+                stored_measure = quantity.metres;
+                normalized_measure = format_quantity(quantity, Unit::metre);
+                if (construction_key == QStringLiteral("arc_length")) {
+                    clockwise = quantity.metres < 0.0;
+                    baseline = arc_from_chord_arc_length(start, end,
+                                                         std::abs(quantity.metres), clockwise);
+                } else {
+                    baseline = arc_from_chord_height(start, end, quantity.metres);
+                }
+            }
             validate_wall_semantics(Wall{"", baseline, 0.14, 2.4384, 0.0, {}});
             const auto entity_id = new_id("wall");
             const auto id = id_from(entity_id);
@@ -7757,13 +7803,21 @@ public:
                                                            ? std::string("interior")
                                                            : classification.trimmed().toStdString()}};
             add_default_level_placement(properties, *drawing_context);
+            const auto derived_sweep = angle_from_radians(baseline.sweep_radians);
+            const auto source_sweep = construction_key == QStringLiteral("angle")
+                ? expression.toStdString() : derived_sweep.original_expression;
             const auto curve_input = json{
-                {"version", 1},
+                {"version", 2},
+                {"construction", construction_key.toStdString()},
+                {"measure", expression.toStdString()},
+                {"normalized_measure", normalized_measure},
+                {"measure_value", stored_measure},
+                {"clockwise", clockwise},
                 {"start", point_json(start)},
                 {"end", point_json(end)},
-                {"sweep", sweep.original_expression},
-                {"normalized_sweep", sweep.normalized_expression},
-                {"radians", sweep.radians},
+                {"sweep", source_sweep},
+                {"normalized_sweep", derived_sweep.normalized_expression},
+                {"radians", baseline.sweep_radians},
             };
             if (!applyEntity(Entity{entity_id, "wall", properties, false,
                                     json{{"curve_input", curve_input}}},
@@ -7781,6 +7835,13 @@ public:
 
     bool editSelectedCurvedWall(Vec2 start, Vec2 end, const QString& sweep_expression,
                                 std::optional<Revision> expected_revision = std::nullopt) {
+        return editSelectedCurvedWallFromConstruction(start, end, QStringLiteral("angle"),
+                                                       sweep_expression, expected_revision);
+    }
+
+    bool editSelectedCurvedWallFromConstruction(
+        Vec2 start, Vec2 end, const QString& construction, const QString& measure,
+        std::optional<Revision> expected_revision = std::nullopt) {
         const auto revision = expected_revision.value_or(m_document->revision());
         try {
             const auto selected = selectedEntity();
@@ -7794,24 +7855,61 @@ public:
                 std::hypot(end.x - start.x, end.y - start.y) <= 1e-7) {
                 throw std::invalid_argument("Wall arc endpoints must be finite and distinct.");
             }
-            const auto expression = sweep_expression.trimmed();
-            if (expression.isEmpty()) throw std::invalid_argument("Wall arc sweep is required.");
-            const auto sweep = parse_angle(expression.toUtf8().toStdString());
-            if (!std::isfinite(sweep.radians) || std::abs(sweep.radians) <= 1e-7 ||
-                std::abs(sweep.radians) >= 2.0 * std::numbers::pi - 1e-9) {
-                throw std::invalid_argument("Wall arc sweep must be between zero and two pi.");
+            const auto expression = measure.trimmed();
+            if (expression.isEmpty()) throw std::invalid_argument("Wall arc defining measure is required.");
+            auto construction_key = construction.trimmed().toLower();
+            if (construction_key == QStringLiteral("sweep")) construction_key = QStringLiteral("angle");
+            if (construction_key == QStringLiteral("arc-length") || construction_key == QStringLiteral("length"))
+                construction_key = QStringLiteral("arc_length");
+            else if (construction_key == QStringLiteral("arc-height") || construction_key == QStringLiteral("height"))
+                construction_key = QStringLiteral("arc_height");
+            if (construction_key != QStringLiteral("angle") &&
+                construction_key != QStringLiteral("arc_length") &&
+                construction_key != QStringLiteral("arc_height")) {
+                throw std::invalid_argument(
+                    "Wall arc construction must be angle, arc_length, or arc_height.");
             }
-            const Segment baseline{start, end, sweep.radians};
+            Segment baseline;
+            std::string normalized_measure;
+            double stored_measure = 0.0;
+            bool clockwise = false;
+            if (construction_key == QStringLiteral("angle")) {
+                const auto angle = parse_angle(expression.toUtf8().toStdString());
+                baseline = arc_from_chord_angle(start, end, angle.radians);
+                normalized_measure = angle.normalized_expression;
+                stored_measure = angle.radians;
+            } else {
+                const auto quantity = parse_quantity(
+                    expression.toUtf8().toStdString(), m_metric_units ? Unit::metre : Unit::foot);
+                if (!std::isfinite(quantity.metres) || quantity.metres == 0.0)
+                    throw std::invalid_argument("Wall arc measure must be finite and nonzero.");
+                stored_measure = quantity.metres;
+                normalized_measure = format_quantity(quantity, Unit::metre);
+                if (construction_key == QStringLiteral("arc_length")) {
+                    clockwise = quantity.metres < 0.0;
+                    baseline = arc_from_chord_arc_length(start, end,
+                                                         std::abs(quantity.metres), clockwise);
+                } else {
+                    baseline = arc_from_chord_height(start, end, quantity.metres);
+                }
+            }
             auto candidate = *selected;
             candidate.properties["baseline"] = segment_json(baseline);
             auto curve_input = candidate.extensions.value("curve_input", json::object());
             if (!curve_input.is_object()) curve_input = json::object();
-            curve_input["version"] = 1;
+            curve_input["version"] = 2;
+            curve_input["construction"] = construction_key.toStdString();
+            curve_input["measure"] = expression.toStdString();
+            curve_input["normalized_measure"] = normalized_measure;
+            curve_input["measure_value"] = stored_measure;
+            curve_input["clockwise"] = clockwise;
             curve_input["start"] = point_json(start);
             curve_input["end"] = point_json(end);
-            curve_input["sweep"] = sweep.original_expression;
-            curve_input["normalized_sweep"] = sweep.normalized_expression;
-            curve_input["radians"] = sweep.radians;
+            const auto derived_sweep = angle_from_radians(baseline.sweep_radians);
+            curve_input["sweep"] = construction_key == QStringLiteral("angle")
+                ? expression.toStdString() : derived_sweep.original_expression;
+            curve_input["normalized_sweep"] = derived_sweep.normalized_expression;
+            curve_input["radians"] = baseline.sweep_radians;
             candidate.extensions["curve_input"] = std::move(curve_input);
 
             const auto snapshot = m_document->snapshot();
@@ -13876,7 +13974,7 @@ private:
         auto* curved_wall_action = more_menu->addAction(QStringLiteral("Draw curved wall…"));
         curved_wall_action->setObjectName(QStringLiteral("curvedWall"));
         curved_wall_action->setToolTip(QStringLiteral(
-            "Create an analytical circular wall from two endpoints and a signed sweep"));
+            "Create an analytical circular wall from two endpoints using an angle, arc length, or arc height"));
         QObject::connect(curved_wall_action, &QAction::triggered, owner,
                          [this] { showCurvedWallDialog(); });
         auto* export_image_action = more_menu->addAction(QStringLiteral("Export draft image…"));
@@ -14506,7 +14604,7 @@ private:
         m_edit_curve_button = new QPushButton(QStringLiteral("Edit curve…"), inspector_body);
         m_edit_curve_button->setObjectName(QStringLiteral("editCurvedWall"));
         m_edit_curve_button->setToolTip(QStringLiteral(
-            "Edit the selected wall's analytical endpoints and signed sweep"));
+            "Edit the selected wall's analytical endpoints and defining angle, arc length, or arc height"));
         inspector_layout->addWidget(m_edit_curve_button);
         QObject::connect(m_edit_curve_button, &QPushButton::clicked, owner,
                          [this] { showCurvedWallDialog(); });
@@ -17358,9 +17456,10 @@ private:
         auto* help = new QLabel(
             editing
                 ? QStringLiteral("Edit the selected analytical circular wall. Change its model-space "
-                                 "endpoints or signed sweep, then apply the validated result.")
+                                 "endpoints or defining angle, arc length, or arc height, then apply the validated result.")
                 : QStringLiteral("Create an analytical circular wall from two model-space endpoints. "
-                                 "Use a signed sweep such as 90 deg or pi/2; positive values turn counter-clockwise."),
+                                 "Choose a sweep angle, arc length, or arc height; signed angles and heights follow the chord orientation, "
+                                 "and a signed arc length selects clockwise orientation."),
             &dialog);
         help->setObjectName(QStringLiteral("curvedWallHelp"));
         help->setWordWrap(true);
@@ -17378,6 +17477,7 @@ private:
         const auto y_text = format_length(start.y, m_metric_units);
         const auto end_x_text = format_length(end.x, m_metric_units);
         const auto end_y_text = format_length(end.y, m_metric_units);
+        auto initial_construction = QStringLiteral("angle");
         auto initial_sweep = QStringLiteral("90 deg");
         auto initial_classification = QStringLiteral("interior");
         if (editing) {
@@ -17389,11 +17489,27 @@ private:
                     initial_classification = QString::fromStdString(*classification);
                 try {
                     const auto& source = selected->extensions.at("curve_input");
+                    if (source.is_object() && source.contains("construction") &&
+                        source.at("construction").is_string()) {
+                        const auto construction = QString::fromStdString(
+                            source.at("construction").get<std::string>()).trimmed().toLower();
+                        if (construction == QStringLiteral("angle") ||
+                            construction == QStringLiteral("arc_length") ||
+                            construction == QStringLiteral("arc_height")) {
+                            initial_construction = construction;
+                        }
+                    }
+                    if (source.is_object() && source.contains("measure") &&
+                        source.at("measure").is_string() &&
+                        !source.at("measure").get<std::string>().empty()) {
+                        initial_sweep = QString::fromStdString(source.at("measure").get<std::string>());
+                    }
                     const auto source_sweep = source.at("sweep");
                     if (source.is_object() && source_sweep.is_string() &&
                         !source_sweep.get<std::string>().empty()) {
                         const auto parsed = parse_angle(source_sweep.get<std::string>());
-                        if (parsed.radians == existing_baseline->sweep_radians)
+                        if (initial_construction == QStringLiteral("angle") &&
+                            parsed.radians == existing_baseline->sweep_radians)
                             initial_sweep = QString::fromStdString(source_sweep.get<std::string>());
                     }
                 } catch (const std::exception&) {
@@ -17418,10 +17534,22 @@ private:
         end_y->setObjectName(QStringLiteral("curvedWallEndY"));
         end_y->setText(end_y_text);
         end_y->setToolTip(QStringLiteral("End point Y in the active units"));
+        auto* construction = new QComboBox(&dialog);
+        construction->setObjectName(QStringLiteral("curvedWallConstruction"));
+        construction->setAccessibleName(QStringLiteral("Curve construction"));
+        construction->addItem(QStringLiteral("Sweep angle"), QStringLiteral("angle"));
+        construction->addItem(QStringLiteral("Arc length"), QStringLiteral("arc_length"));
+        construction->addItem(QStringLiteral("Arc height"), QStringLiteral("arc_height"));
+        const auto initial_construction_index = construction->findData(initial_construction);
+        construction->setCurrentIndex(initial_construction_index < 0 ? 0 : initial_construction_index);
+        construction->setToolTip(QStringLiteral(
+            "Choose the analytical definition for the endpoint chord"));
         auto* sweep = new QLineEdit(&dialog);
         sweep->setObjectName(QStringLiteral("curvedWallSweep"));
         sweep->setText(initial_sweep);
-        sweep->setToolTip(QStringLiteral("Signed sweep angle, for example 90 deg, -45 deg, or pi/2"));
+        sweep->setToolTip(QStringLiteral(
+            "Angle accepts signed degrees/radians; length uses a signed value for clockwise; "
+            "height uses a signed chord offset"));
         auto* classification = new QLineEdit(&dialog);
         classification->setObjectName(QStringLiteral("curvedWallClassification"));
         classification->setText(initial_classification);
@@ -17430,16 +17558,34 @@ private:
         form->addRow(QStringLiteral("Start Y"), start_y);
         form->addRow(QStringLiteral("End X"), end_x);
         form->addRow(QStringLiteral("End Y"), end_y);
-        form->addRow(QStringLiteral("Sweep"), sweep);
+        auto* measure_label = new QLabel(&dialog);
+        measure_label->setObjectName(QStringLiteral("curvedWallMeasureLabel"));
+        measure_label->setBuddy(sweep);
+        form->addRow(QStringLiteral("Construction"), construction);
+        form->addRow(measure_label, sweep);
         form->addRow(QStringLiteral("Classification"), classification);
         layout->addLayout(form);
+
+        const auto refresh_measure_label = [construction, measure_label, sweep] {
+            const auto kind = construction->currentData().toString();
+            const auto is_angle = kind == QStringLiteral("angle");
+            measure_label->setText(is_angle ? QStringLiteral("Sweep angle") :
+                kind == QStringLiteral("arc_length") ? QStringLiteral("Arc length")
+                                                       : QStringLiteral("Arc height"));
+            sweep->setPlaceholderText(is_angle ? QStringLiteral("90 deg or pi/2") :
+                kind == QStringLiteral("arc_length") ? QStringLiteral("12 ft or -12 ft")
+                                                       : QStringLiteral("2 ft or -2 ft"));
+        };
+        QObject::connect(construction, &QComboBox::currentIndexChanged, &dialog,
+                         [refresh_measure_label] { refresh_measure_label(); });
+        refresh_measure_label();
 
         auto* status = new QLabel(&dialog);
         status->setObjectName(QStringLiteral("curvedWallStatus"));
         status->setWordWrap(true);
         status->setText(editing
             ? QStringLiteral("The current wall and hosted openings are revalidated before the edit is saved.")
-            : QStringLiteral("The endpoints and sweep are validated before the wall is added."));
+            : QStringLiteral("The endpoints and selected analytical measure are validated before the wall is added."));
         layout->addWidget(status);
 
         auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel, &dialog);
@@ -17471,15 +17617,18 @@ private:
                                      read_coordinate(end_x, "End X"),
                                      read_coordinate(end_y, "End Y")};
                                  if (sweep->text().trimmed().isEmpty())
-                                     throw std::invalid_argument("Sweep is required.");
+                                     throw std::invalid_argument("Curve measure is required.");
+                                 const auto construction_key = construction->currentData().toString();
                                  if (editing) {
-                                     if (!editSelectedCurvedWall(first, second, sweep->text(),
-                                                                  context.revision)) {
+                                     if (!editSelectedCurvedWallFromConstruction(
+                                             first, second, construction_key, sweep->text(),
+                                             context.revision)) {
                                          status->setText(lastError());
                                          return;
                                      }
                                  } else {
-                                     const auto id = createCurvedWall(first, second, sweep->text(),
+                                     const auto id = createCurvedWallFromConstruction(
+                                         first, second, construction_key, sweep->text(),
                                          classification->text(), context.revision);
                                      if (id.isEmpty()) {
                                          status->setText(lastError());
@@ -18135,9 +18284,24 @@ QString MainWindow::createCurvedWall(Vec2 start, Vec2 end, QString sweep,
     return m_impl->createCurvedWall(start, end, std::move(sweep), std::move(classification), revision);
 }
 
+QString MainWindow::createCurvedWallFromConstruction(
+    Vec2 start, Vec2 end, QString construction, QString measure,
+    QString classification, std::optional<Revision> revision) {
+    return m_impl->createCurvedWallFromConstruction(
+        start, end, std::move(construction), std::move(measure),
+        std::move(classification), revision);
+}
+
 bool MainWindow::editSelectedCurvedWall(Vec2 start, Vec2 end, QString sweep,
                                         std::optional<Revision> revision) {
     return m_impl->editSelectedCurvedWall(start, end, std::move(sweep), revision);
+}
+
+bool MainWindow::editSelectedCurvedWallFromConstruction(
+    Vec2 start, Vec2 end, QString construction, QString measure,
+    std::optional<Revision> revision) {
+    return m_impl->editSelectedCurvedWallFromConstruction(
+        start, end, std::move(construction), std::move(measure), revision);
 }
 
 QString MainWindow::commitBuildingObject(Entity candidate, std::uint64_t expected_revision,
