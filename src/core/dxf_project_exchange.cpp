@@ -255,6 +255,19 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
             diagnostic(result.diagnostics, entity.id, entity.type, "wall_baseline_not_representable");
             return;
         }
+        // DXF project mapping carries the analytical wall baseline only. The
+        // 3D wall envelope, vertical slope, and layer/material stack have no
+        // representation in this bounded 2D exchange profile, so make that
+        // loss visible in the fidelity report.
+        if (entity.properties.contains("thickness_m") ||
+            entity.properties.contains("thickness") ||
+            entity.properties.contains("height_m") ||
+            entity.properties.contains("elevation_m") ||
+            entity.properties.contains("slope_rise_m") ||
+            entity.properties.contains("layers")) {
+            diagnostic(result.diagnostics, entity.id, entity.type,
+                       "wall_3d_semantics_not_representable");
+        }
         add_segment_as_dxf(result.drawing, *baseline, layer, result.diagnostics,
                            entity.id, entity.type);
         return;
@@ -265,6 +278,17 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
         if (!boundary) {
             diagnostic(result.diagnostics, entity.id, entity.type, "slab_boundary_not_representable");
             return;
+        }
+        // The footprint and explicit hole loops are representable. Thickness,
+        // elevation, kind, and material layers are native 3D semantics and
+        // must remain visible as a fidelity limitation instead of vanishing.
+        if (entity.properties.contains("thickness_m") ||
+            entity.properties.contains("thickness") ||
+            entity.properties.contains("elevation_m") ||
+            entity.properties.contains("element_kind") ||
+            entity.properties.contains("layers")) {
+            diagnostic(result.diagnostics, entity.id, entity.type,
+                       "slab_3d_semantics_not_representable");
         }
         add_boundary_as_dxf(result.drawing, *boundary, layer, result.diagnostics,
                             entity.id, entity.type);

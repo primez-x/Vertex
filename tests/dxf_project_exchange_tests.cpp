@@ -64,6 +64,12 @@ void run() {
     check(exported.drawing.lines.size() >= 1, "wall geometry must export");
     check(exported.drawing.labels.size() == 1, "annotation label must export");
     check(exported.drawing.dimensions.size() == 1, "identified dimension must export");
+    check(std::any_of(exported.diagnostics.begin(), exported.diagnostics.end(), [](const auto& item) {
+        return item.source_id == "wall-1" && item.code == "wall_3d_semantics_not_representable";
+    }), "wall 3D semantics must be explicit in the DXF fidelity report");
+    check(std::any_of(exported.diagnostics.begin(), exported.diagnostics.end(), [](const auto& item) {
+        return item.source_id == "slab-1" && item.code == "slab_3d_semantics_not_representable";
+    }), "slab 3D semantics must be explicit in the DXF fidelity report");
 
     const auto bytes = export_dxf_ascii(exported.drawing);
     const auto imported = import_project_dxf(bytes);

@@ -132,8 +132,10 @@ slab footprints/holes, native labels, symbols, and resolvable boundary
 dimensions into the shared `DxfDrawing` model. SI metres are declared with
 `$INSUNITS = 6`; layer names are resolved through the native layer graph when
 available. Curved boundary edges stay analytical bulges, while positive
-single arcs on wall baselines stay ARC records. The function never mutates the
-source document or opens a path.
+single arcs on wall baselines stay ARC records. Wall envelopes and slab
+thickness/elevation/kind data have no DXF representation and are emitted as
+fidelity diagnostics. The function never mutates the source document or opens
+a path.
 
 Only segment-length dimensions map to DXF's bounded linear `DIMENSION` record.
 Angle and area dimensions remain native-only and produce an explicit
