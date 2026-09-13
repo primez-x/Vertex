@@ -3,7 +3,7 @@
 ## Latest integrated checkpoint
 
 At the current integrated checkpoint, the Release and Debug desktop builds and
-CTest matrices completed with 144 runnable tests passing in each configuration
+CTest matrices completed with 145 runnable tests passing in each configuration
 (the production acceptance test is
 intentionally disabled and the AppContainer runtime test is skipped when the host is already
 inside a parent Job Object). The focused Debug and Release architectural
