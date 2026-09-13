@@ -640,9 +640,11 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   curves or missed section planes fail closed. Focused Debug coverage passes;
   the Architectural tab now switches between transient plan/elevation/section
   canvas views and routes its selected view through draft output; persisted
-  cut-depth presentation now persists and is editable from the desktop view
-  settings command; annotations/hatching, complete sheet layout, and production
-  print integration remain open.
+  cut/far-depth presentation now persists and is editable from the desktop view
+  settings command. The renderer conservatively culls solids whose BRep bounds
+  lie wholly beyond the selected far depth and invalidates projection caches
+  when view frames or limits change; exact clipping, annotations/hatching,
+  complete sheet layout, and production print integration remain open.
 - Release import inspection resolves 37 selected application/component
   binaries on this machine. The Qt dry-run exposed default plugin expansion;
   an explicit current-component allowlist and pinned archive-member hash
