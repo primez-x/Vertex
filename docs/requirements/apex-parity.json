@@ -295,9 +295,12 @@
       "package": 3,
       "blocker": null,
       "implementation_sources": [
-        "src/core/project_store.cpp"
+        "include/sketch/project_store.hpp",
+        "src/core/project_store.cpp",
+        "tests/project_store_tests.cpp",
+        "docs/project-format.md"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "ProjectStore saves immutable snapshots through validated staging and publication. Project-store fixtures cover exact-revision snapshot saves, post-snapshot edits that do not leak into saved bytes, compare-and-swap destination checks, verified backups, external-change rejection, injected pre-publication rollback, and staging-handle/path tamper resistance. Clean-machine storage-fault evidence and the production gate remain open."
     },
     {
       "id": "CORE-DOC-004",
@@ -387,9 +390,12 @@
       "package": 3,
       "blocker": null,
       "implementation_sources": [
-        "src/core/project_store.cpp"
+        "include/sketch/project_store.hpp",
+        "src/core/project_store.cpp",
+        "tests/project_store_tests.cpp",
+        "docs/project-format.md"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "Versioned project load/save preserves opaque unknown data, reopens unknown required entities read-only, rejects downgraded or unsupported markers before acceptance, and refuses document-only writes over future recovery archives. Project-store fixtures retain exact source bytes while exercising v1-v6 markers, authoring receipts, future schemas, and rollback boundaries; a complete migration matrix and the production gate remain open."
     },
     {
       "id": "CORE-DOC-009",
@@ -2088,9 +2094,21 @@
         "include/sketch/architectural_workflow_contract.hpp",
         "src/core/architectural_workflow_contract.cpp",
         "tests/architectural_workflow_contract_tests.cpp",
-        "docs/architectural-workflow-contract.md"
+        "include/sketch/architectural_document_adapter.hpp",
+        "src/core/architectural_document_adapter.cpp",
+        "src/desktop/main_window.cpp",
+        "src/desktop/plan_canvas.cpp",
+        "src/architecture/architectural_schedule.cpp",
+        "src/core/sheet_view_model.cpp",
+        "tests/architectural_document_adapter_tests.cpp",
+        "tests/architectural_schedule_tests.cpp",
+        "tests/sheet_view_model_tests.cpp",
+        "tests/desktop_smoke.cpp",
+        "docs/architectural-workflow-contract.md",
+        "docs/sheets-views.md",
+        "docs/desktop-workflow.md"
       ],
-      "implementation_note": "Coordinated plan/elevation/section/3D/schedule output requirements are scoped to model and sheet revisions; actual projection/render/layout/export and end-to-end residential/light-commercial deliverables remain open."
+      "implementation_note": "The deterministic desktop workflow fixture now creates semantic walls, hosted openings, slabs, and building objects; switches plan/elevation/section views; exercises schedules, remodeling alternatives, revisions, sheets, PDF/SVG/PNG export, and save/reopen from one project. This is development-host integration evidence. Explicit market-labeled residential and light-commercial production fixtures, physical print/output fidelity, and the production gate remain open."
     },
     {
       "id": "UX-WORK-001",
@@ -2381,9 +2399,16 @@
       "package": 3,
       "blocker": null,
       "implementation_sources": [
-        "src/core/project_store.cpp"
+        "include/sketch/project_store.hpp",
+        "src/core/project_store.cpp",
+        "include/sketch/project_ownership.hpp",
+        "src/core/project_ownership.cpp",
+        "tests/project_ownership_tests.cpp",
+        "tests/project_ownership_process_tests.cpp",
+        "tests/desktop_smoke.cpp",
+        "docs/project-format.md"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "Project ownership uses normalized path and file identity leases, detects external content changes, and exposes explicit second-open behavior. Unit, cross-process, and desktop fixtures cover contention, Windows path casing, external edits, read-only second opens, and save/reopen behavior. Clean-machine lifetime, hostile writer races, and the production gate remain open."
     },
     {
       "id": "REC-005",
@@ -2396,9 +2421,16 @@
       "package": 8,
       "blocker": null,
       "implementation_sources": [
-        "src/core/project_store.cpp"
+        "include/sketch/project_store.hpp",
+        "src/core/project_store.cpp",
+        "tests/project_store_tests.cpp",
+        "tests/recovery_ledger_tests.cpp",
+        "tests/recovery_discovery_tests.cpp",
+        "tests/desktop_workspace_recovery_tests.cpp",
+        "docs/recovery-ledger.md",
+        "docs/recovery-discovery.md"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "Project-store and recovery fixtures cover staged transaction faults, serialization and replacement failures, damaged assets, unsupported schemas, recovery-ledger handling, stale-candidate discovery, and cleanup of residual files while preserving the last valid destination. Disk-exhaustion, power-loss, and complete production failure-injection evidence remain open."
     },
     {
       "id": "IO-IFC-001",

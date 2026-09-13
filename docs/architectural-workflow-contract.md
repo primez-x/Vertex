@@ -22,11 +22,18 @@ The transaction descriptor keeps property payloads as transport-friendly text. T
 
 Output contracts scope plans, elevations, sections, 3D views and schedules to known architectural IDs and sheets under one explicit model revision and issue revision. Each sheet must have requirements. A package can intentionally request only some output kinds; it does not certify a complete permit set. Outputs and identity sets serialize canonically; transaction operation order is retained. JSON export is a deterministic descriptor, with no import or persistence codec yet.
 
-Still open: property/type schema enforcement; reuse of SheetViewModel and
-schedule generation adapters; projection, rendering, layout and export; output
-revision freshness checks; and end-to-end residential and light-commercial
-fixtures. Architectural inspector property edits and the semantic object
-transform dialog now route through the adapter and preserve typed JSON values
-in ordinary Document history. The adapter's semantic building transforms and
-wall hosted-object policy are covered by atomic preview/history tests;
-generated deliverable correctness remains a separate acceptance requirement.
+The Windows desktop integration fixture now exercises the contract against one
+editable project: semantic walls, hosted openings, slabs, and building objects
+are projected into plan/elevation/section views, scheduled, placed on sheets,
+issued with revisions and callouts, exported to PDF/SVG/PNG, and saved and
+reopened. This proves the development-host command and renderer path, while
+remaining separate from production market fixtures and physical output review.
+
+Still open: property/type schema enforcement; output revision freshness checks;
+complete residential and light-commercial fixture provenance; physical printer
+calibration and output fidelity; full 3D authoring/gizmos; and production
+qualification. Architectural inspector property edits and the semantic object
+transform dialog route through the adapter and preserve typed JSON values in
+ordinary Document history. The adapter's semantic building transforms and wall
+hosted-object policy are covered by atomic preview/history tests; generated
+deliverable correctness remains a separate acceptance requirement.
