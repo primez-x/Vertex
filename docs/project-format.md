@@ -214,6 +214,15 @@ the authoritative sum of the layer solids.
 Entered unit text and exact quantity fields are separate semantic properties; display units do
 not change the metre geometry.
 
+An architectural room volume uses a `room` entity with `boundary` (or the
+migration-compatible `segments`) and an optional `holes` array of boundary arrays.
+It requires positive `height_m` and finite `elevation_m`; all values are stored in
+metres. The same analytical room volume is used by plan, elevation, section,
+native 3D, and quantity consumers. `room_boundary` remains a separate 2D
+appraisal/space boundary type. A legacy `room` row without height or elevation
+can still be displayed as a plan boundary, but solid-driven views report the
+missing volume fields instead of inventing a default height.
+
 Floors may carry an optional version-1 `vertical_level_binding` object with exactly
 `graph_id` and `level_id` (plus `version: 1`). `graph_id` resolves to a `vertical_levels`
 entity and `level_id` resolves inside that graph. The Document validator admits the binding

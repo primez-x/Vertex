@@ -1,7 +1,8 @@
 # Analytical architectural projections
 
 `project_building_view` derives architectural presentation geometry from the
-same semantic building objects that produce the OCCT solids. The companion
+same semantic building objects that produce the OCCT solids. Room volumes use
+the same boundary, hole, height, and elevation model as native 3D. The companion
 `project_shape_view` accepts a validated derived wall or slab shape so hosted
 openings and slab holes use the same projection path. Both APIs accept a
 validated model frame in metres: `direction` points from the viewer toward the
@@ -20,8 +21,9 @@ This is the projection-engine checkpoint for coordinated views. It does not
 yet claim the complete production workflow: material hatching, annotation
 overlays, sheet layout editing, and final
 production qualification remain open. The desktop Architectural tab now has a transient
-Plan/Elevation/Section selector. Non-plan views show derived wall, slab, and
-building-object edges on the canvas and route selected-workspace draft output
+Plan/Elevation/Section selector. Non-plan views show derived wall, slab,
+room-volume, and building-object edges on the canvas and route selected-workspace
+draft output
 through that canvas; the section plane is the frame origin plane. Persisted
 coordinated-view frames and section cut depth now drive the selector when a
 matching typed sheet/view entity is present; the built-in 1.2 m frame remains a

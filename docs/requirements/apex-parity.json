@@ -1666,9 +1666,18 @@
       "package": 4,
       "blocker": null,
       "implementation_sources": [
-        "src/architecture/architecture.cpp"
+        "src/architecture/architecture.cpp",
+        "include/sketch/document_solid.hpp",
+        "src/architecture/document_solid.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/architecture_tests.cpp",
+        "tests/building_entity_tests.cpp",
+        "tests/desktop_smoke.cpp",
+        "docs/project-format.md",
+        "docs/native-3d-view.md",
+        "docs/architectural-projections.md"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "Floors, ceilings, foundations, and generic slabs already share validated boundary, holes, elevation, level placement, material, and quantity geometry. Architectural room volumes now add an explicit boundary, optional holes, positive height, and elevation model through the same native/projection path. Broader catalog authoring, schedules, Apex compatibility, and the complete acceptance statement remain open."
     },
     {
       "id": "ARCH-MOD-004",
@@ -1817,7 +1826,7 @@
       "tests/desktop_smoke.cpp",
       "docs/desktop-workflow.md"
     ],
-    "implementation_note": "Room, appraisal-boundary, and architectural-wall references have separate kinds with independent/follows/derived-from relations and graph validation. A typed room_relationships Document entity and Windows editor now persist and validate declarations through undoable history; selected closed geometry can be copied into a distinct named room_boundary entity; a detached proposal engine validates rigid target-first propagation and multi-driver agreement without mutation; a revision-bound Document adapter commits identified and receipt-backed boundary changes atomically with dependent dimensions and digest/stale checks; the Windows editor provides a visible canvas preview and confirmation step. Controlled retargeting and production evidence remain open."
+    "implementation_note": "Room, appraisal-boundary, and architectural-wall references have separate kinds with independent/follows/derived-from relations and graph validation. A typed room_relationships Document entity and Windows editor now persist and validate declarations through undoable history; selected closed geometry can be copied into a distinct named room_boundary entity; architectural room volumes add explicit boundary, hole, height, and elevation semantics while remaining separate from room_boundary; a detached proposal engine validates rigid target-first propagation and multi-driver agreement without mutation; a revision-bound Document adapter commits identified and receipt-backed boundary changes atomically with dependent dimensions and digest/stale checks; the Windows editor provides a visible canvas preview and confirmation step. Controlled retargeting and production evidence remain open."
     },
     {
       "id": "ARCH-MOD-010",
@@ -1870,7 +1879,7 @@
         "src/desktop/main_window.cpp",
         "tests/native_view_tests.cpp"
       ],
-      "implementation_note": "Native solids, selection, linked inspector edits and navigation are implemented; full 3D authoring/gizmos and remaining object types remain open."
+      "implementation_note": "Native solids, selection, linked inspector edits and navigation are implemented. Architectural room volumes now create validated OCCT solids from the shared boundary/height/elevation model and use the same geometry in plan, elevation, section, and native 3D. Full 3D authoring/gizmos, remaining object types, and production evidence remain open."
     },
     {
       "id": "ARCH-VIEW-001",

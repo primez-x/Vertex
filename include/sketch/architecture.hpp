@@ -32,10 +32,24 @@ struct Slab {
     std::vector<SlabLayer> layers;
 };
 
+// A room volume is a semantic architectural enclosure.  It deliberately
+// remains separate from appraisal/measurement boundaries: the boundary and
+// optional holes define the plan footprint, while height and elevation define
+// the derived 3D volume.  Materials and room classification remain properties
+// of the owning document entity rather than of this geometry kernel value.
+struct RoomVolume {
+    std::string id;
+    Boundary boundary;
+    std::vector<Boundary> holes;
+    double height{};
+    double elevation{};
+};
+
 // Shapes are derived caches. Persist semantic parameters, never replace the
 // authoritative wall/boundary/host relationships with these solids.
 [[nodiscard]] TopoDS_Shape make_wall(const Wall& wall);
 [[nodiscard]] TopoDS_Shape make_slab(const Slab& slab);
+[[nodiscard]] TopoDS_Shape make_room_volume(const RoomVolume& room);
 // Build a derived triangulated terrain surface from the validated local TIN
 // model. The result is a displayable compound of real OCCT faces; the
 // semantic points/triangles remain authoritative in the document.

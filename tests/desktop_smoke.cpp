@@ -622,6 +622,40 @@ void test_room_boundary_from_existing_geometry() {
             "branched existing walls must fail without duplicating or mutating geometry");
 }
 
+void test_room_volume_authoring_workflow() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    const Boundary boundary = {
+        {{0.0, 0.0}, {4.0, 0.0}, 0.0},
+        {{4.0, 0.0}, {4.0, 3.0}, 0.0},
+        {{4.0, 3.0}, {0.0, 3.0}, 0.0},
+        {{0.0, 3.0}, {0.0, 0.0}, 0.0},
+    };
+    const auto source_id = window.createRoomBoundary(boundary, QStringLiteral("Living room"));
+    require(!source_id.isEmpty() && window.selectEntity(source_id),
+            "room volume fixture must create and select a closed source boundary");
+    const auto before = window.document().revision();
+    const auto room_id = window.createRoomVolumeFromSelectedBoundary(
+        QStringLiteral("2.4 m"), QStringLiteral("0 m"));
+    require(!room_id.isEmpty() && window.document().revision() == before + 1,
+            "room volume authoring must publish one undoable command");
+
+    const auto snapshot = window.document().snapshot();
+    const auto room = snapshot.entities().find(room_id.toStdString());
+    require(room != snapshot.entities().end() && room->second.type == "room" &&
+                room->second.properties.at("height_m") == 2.4 &&
+                room->second.properties.at("elevation_m") == 0.0 &&
+                room->second.properties.at("holes").is_array() &&
+                room->second.properties.at("holes").empty() &&
+                room->second.properties.at("boundary").is_array(),
+            "room volume must persist explicit height, elevation, holes, and analytical boundary");
+    require(window.undoCommand() &&
+                !window.document().snapshot().entities().contains(room_id.toStdString()) &&
+                window.redoCommand() &&
+                window.document().snapshot().entities().contains(room_id.toStdString()),
+            "room volume authoring must participate in undo and redo");
+}
+
 void test_selection_clipboard_workflow() {
     using namespace sketch;
     desktop::MainWindow window;
@@ -3456,6 +3490,7 @@ int main(int argc, char** argv) {
     test_external_project_change_blocks_save();
     test_workspace_profiles();
     test_room_boundary_from_existing_geometry();
+    test_room_volume_authoring_workflow();
     test_selection_clipboard_workflow();
     test_wall_transform_workflow(field_ui_capture_directory);
     test_sloped_wall_workflow();

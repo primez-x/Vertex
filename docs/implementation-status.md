@@ -69,6 +69,16 @@ per-layer material schedule quantities. This closes the bounded semantic
 floor-system slice while richer catalog authoring, broader schedule presentation,
 and Apex compatibility certification remain open.
 
+Architectural rooms now have a distinct volume path. A `room` entity authored
+from a closed boundary stores its analytical boundary, optional holes, explicit
+`height_m`, and `elevation_m`; the shared room-volume kernel produces the native
+solid and the same geometry is projected in plan, elevation, section, and the
+desktop architectural workspace. `room_boundary` remains a 2D appraisal/space
+boundary. Legacy `room` records that omit height or elevation remain visible in
+plan but report an explicit incomplete-volume diagnostic in native 3D and other
+solid-driven views. Schedules, richer room relationships, Apex compatibility,
+and production qualification remain open.
+
 The architectural object slice now accepts a true flat roof through the
 existing sloped-panel schema: zero rise and zero pitch produce a thickened
 planar solid, persist through the entity codec, and project through plan,

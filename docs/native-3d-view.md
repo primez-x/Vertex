@@ -72,13 +72,17 @@ The current native solid contract covers:
   `make_wall`; they do not create a second independent presentation.
 * A `slab` entity requires a `boundary` segment array, a `holes` array of
   segment arrays, `thickness_m`, and `elevation_m`.
+* A `room` entity requires a `boundary` (or migration-compatible `segments`)
+  segment array, optional `holes`, positive `height_m`, and finite
+  `elevation_m`. The room-volume kernel creates a native solid from these
+  fields; it is separate from the plan-only `room_boundary` entity.
 * `column`, `beam`, `stair`, `railing` and `roof` entities use the strict,
   versioned [building entity format](building-entity-format.md). Both column
   forms, straight beams, stair flights/landings, straight railings, sloped
   panels, gable roofs and hip roofs are rendered from their semantic
   parameters.
 
-The wall/opening/slab parser accepts the corresponding unitless scalar spellings as a migration
+The wall/opening/slab/room parser accepts the corresponding unitless scalar spellings as a migration
 aid (`thickness`, `height`, `elevation`, `offset`, `width`, and `sill`) but
 never supplies a missing value. A malformed required field removes that
 entity's stale presentation, records the reason in `lastError()`, and leaves
@@ -96,9 +100,10 @@ Known hierarchy and metadata entities (`property`, `building`, `floor`,
 `dimension`) are intentionally ignored by this solid view. Plan-only boundary
 entities (`boundary`, `measurement_boundary`, and `room_boundary`) are also
 ignored because they are intentionally 2D appraisal or annotation geometry.
-Architectural geometry without a native solid yet (`room`,
-unsupported entities, and unhosted openings) remains visible as an explicit
-pending warning. A warning is also a non-authoritative state: `isReady()` is
+Architectural geometry without a native solid yet (unsupported entities and
+unhosted openings) remains visible as an explicit pending warning. A room with
+missing or malformed volume fields is reported as an explicit geometry error.
+A warning is also a non-authoritative state: `isReady()` is
 false until the complete snapshot has no pending geometry or parse errors.
 
 ## Native link requirements
@@ -192,7 +197,7 @@ After the desktop target has been wired to the control:
 7. Call `exportViewImage("viewer-smoke.png")` and confirm the PNG contains the
    rendered OCCT framebuffer. Try an invalid extension/path and confirm the
    method returns `false` with an explicit error instead of a blank success.
-8. Add an unsupported roof form, room, or malformed wall field. Confirm the explicit pending or
+8. Add an unsupported roof form, an incomplete room volume, or malformed wall field. Confirm the explicit pending or
    geometry error overlay appears, `onError` is called, and `isReady()` becomes
    false. No placeholder solid should appear. Add a plan-only boundary or
    annotation and confirm it does not produce a missing-3D warning.

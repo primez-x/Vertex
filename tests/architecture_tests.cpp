@@ -89,6 +89,17 @@ int main() {
         near(solid_volume(make_slab(slab)), 3.0, 1e-8, "Slab volume");
         slab.element_kind = SlabElementKind::floor;
         near(solid_volume(make_slab(slab)), 3.0, 1e-8, "Floor element preserves slab geometry");
+
+        RoomVolume room{"room-volume-1", slab.boundary, {}, 2.4, 0.0};
+        near(solid_volume(make_room_volume(room)), 28.8, 1e-8,
+             "Room volume extrudes its analytical boundary");
+        room.holes.push_back({{{1, 1}, {2, 1}, 0}, {{2, 1}, {2, 2}, 0},
+                              {{2, 2}, {1, 2}, 0}, {{1, 2}, {1, 1}, 0}});
+        near(solid_volume(make_room_volume(room)), 26.4, 1e-8,
+             "Room volume subtracts its analytical holes");
+        auto invalid_room = room;
+        invalid_room.height = 0.0;
+        rejected([&] { (void)make_room_volume(invalid_room); });
         auto invalid_kind_slab = slab;
         invalid_kind_slab.element_kind = static_cast<SlabElementKind>(99);
         rejected([&] { (void)make_slab(invalid_kind_slab); });

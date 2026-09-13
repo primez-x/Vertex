@@ -7812,6 +7812,96 @@ public:
         return m_selected_id;
     }
 
+    QString createRoomVolumeFromSelectedBoundary(
+        const QString& height_expression, const QString& elevation_expression,
+        std::optional<Revision> expected_revision = std::nullopt) {
+        const auto revision = expected_revision.value_or(m_document->revision());
+        const auto entity = selectedEntity();
+        if (!entity.has_value() || !is_closed_boundary_entity(entity->type)) {
+            setError(QStringLiteral("Select a closed boundary before creating a room volume."));
+            return {};
+        }
+        const auto organization = organize_project(m_document->snapshot());
+        const auto source_context = organization.drawing_context(entity->id);
+        const auto active_context = organization.drawing_context(m_active_layer_id.toStdString());
+        if (!source_context || !active_context || *source_context != *active_context) {
+            setError(QStringLiteral("Choose the selected boundary's drawing layer before creating its room volume."));
+            return {};
+        }
+        const auto boundary = read_boundary(entity->properties);
+        if (boundary.empty()) {
+            setError(QStringLiteral("The selected boundary has no valid segments."));
+            return {};
+        }
+        return createRoomVolumeFromBoundary(boundary, height_expression,
+                                            elevation_expression, {}, revision);
+    }
+
+    QString createRoomVolumeFromBoundary(
+        const Boundary& boundary, const QString& height_expression,
+        const QString& elevation_expression, std::vector<Boundary> holes = {},
+        std::optional<Revision> expected_revision = std::nullopt) {
+        const auto revision = expected_revision.value_or(m_document->revision());
+        const auto drawing_context = requireDrawingContext();
+        if (!drawing_context) return {};
+        const auto diagnostics = validate_boundary(boundary);
+        if (!diagnostics.empty()) {
+            setError(QStringLiteral("Room volume boundary rejected: %1").arg(
+                QString::fromStdString(diagnostics.front().message)));
+            return {};
+        }
+        for (const auto& hole : holes) {
+            const auto hole_diagnostics = validate_boundary(hole);
+            if (!hole_diagnostics.empty()) {
+                setError(QStringLiteral("Room volume opening rejected: %1").arg(
+                    QString::fromStdString(hole_diagnostics.front().message)));
+                return {};
+            }
+        }
+        try {
+            const auto unit = m_metric_units ? Unit::metre : Unit::foot;
+            const auto height = parse_quantity(height_expression.toStdString(), unit).metres;
+            const auto elevation = parse_quantity(elevation_expression.toStdString(), unit).metres;
+            if (!std::isfinite(height) || height <= 1e-7) {
+                setError(QStringLiteral("Room height must be greater than zero."));
+                return {};
+            }
+            if (!std::isfinite(elevation)) {
+                setError(QStringLiteral("Room elevation must be finite."));
+                return {};
+            }
+            const auto entity_id = new_id("room");
+            const RoomVolume preview{entity_id, boundary, holes, height, elevation};
+            try {
+                (void)make_room_volume(preview);
+            } catch (const std::exception& error) {
+                setError(QStringLiteral("Room volume preview rejected: %1")
+                             .arg(QString::fromUtf8(error.what())));
+                return {};
+            }
+            json holes_json = json::array();
+            for (const auto& hole : holes) holes_json.push_back(boundary_json(hole));
+            auto properties = json{{"floor_id", drawing_context->floor_id},
+                                   {"layer_id", drawing_context->layer_id},
+                                   {"boundary", boundary_json(boundary)},
+                                   {"holes", std::move(holes_json)},
+                                   {"height_m", height},
+                                   {"elevation_m", elevation},
+                                   {"classification", "room"}};
+            add_default_level_placement(properties, *drawing_context);
+            if (!applyEntity(Entity{entity_id, "room", properties, false, json::object()},
+                             "create room volume", revision)) {
+                return {};
+            }
+            m_selected_id = id_from(entity_id);
+            refresh();
+            return m_selected_id;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Room volume: %1").arg(QString::fromUtf8(error.what())));
+            return {};
+        }
+    }
+
     QString createRoomBoundaryFromExistingGeometry(const QString& classification,
                                                    std::optional<Revision> expected_revision = std::nullopt) {
         const auto revision = expected_revision.value_or(m_document->revision());
@@ -8025,6 +8115,27 @@ public:
         if (!accepted || classification.trimmed().isEmpty()) return;
         if (!modalContextUnchanged(context)) return;
         (void)createRoomBoundaryFromExistingGeometry(classification.trimmed(), context.revision);
+    }
+
+    void createRoomVolumeFromDialog() {
+        const auto context = captureModalContext();
+        const auto selected = selectedEntity();
+        if (!selected || !is_closed_boundary_entity(selected->type)) {
+            setError(QStringLiteral("Select a closed boundary before creating a room volume."));
+            return;
+        }
+        bool accepted = false;
+        const auto height = QInputDialog::getText(
+            owner, QStringLiteral("Create room volume"), QStringLiteral("Room height:"),
+            QLineEdit::Normal, m_metric_units ? QStringLiteral("2.4 m")
+                                               : QStringLiteral("8 ft"), &accepted);
+        if (!accepted) return;
+        const auto elevation = QInputDialog::getText(
+            owner, QStringLiteral("Create room volume"), QStringLiteral("Base elevation:"),
+            QLineEdit::Normal, m_metric_units ? QStringLiteral("0 m")
+                                               : QStringLiteral("0 ft"), &accepted);
+        if (!accepted || !modalContextUnchanged(context)) return;
+        (void)createRoomVolumeFromSelectedBoundary(height, elevation, context.revision);
     }
 
     QString createStraightWall(Vec2 start, Vec2 end, const QString& classification,
@@ -13665,6 +13776,8 @@ public:
              [this] { showVerticalLevels(); }},
             {QStringLiteral("Create room boundary from selected geometry"),
              [this] { createRoomBoundaryFromSelection(); }},
+            {QStringLiteral("Create room volume from selected boundary"),
+             [this] { createRoomVolumeFromDialog(); }},
             {QStringLiteral("Edit reusable assemblies"),
              [this] { showAssemblies(); }},
             {QStringLiteral("Offline assistance"), [this] { showAssistance(); }},
@@ -16551,6 +16664,24 @@ private:
                         result.push_back(decorate_projection(CanvasEntity{
                             id_from(id), QStringLiteral("slab"), projection, *thickness,
                             id_from(id) == m_selected_id}));
+                        continue;
+                    }
+                    if (entity.type == "room") {
+                        const auto resolved = resolve_vertical_placement(snapshot, entity);
+                        RoomVolume room;
+                        std::string room_error;
+                        if (!read_document_room(resolved, room, room_error)) {
+                            throw std::invalid_argument(room_error);
+                        }
+                        const auto shape = make_room_volume(room);
+                        if (!shape_intersects_view_depth(shape, depth)) continue;
+                        const auto clipped_shape = clip_shape_to_view_depth(shape, depth);
+                        if (clipped_shape.IsNull()) continue;
+                        const auto projection = project_shape_view(
+                            clipped_shape, kind, frame);
+                        result.push_back(decorate_projection(CanvasEntity{
+                            id_from(id), QStringLiteral("room"), projection, 0.0,
+                            id_from(id) == m_selected_id}));
                     }
                 } catch (const std::exception& error) {
                     if (kind == m_architectural_view_kind) {
@@ -19353,6 +19484,19 @@ QString MainWindow::createRoomBoundary(const Boundary& boundary, QString classif
 QString MainWindow::createRoomBoundaryFromExistingGeometry(QString classification,
                                                            std::optional<Revision> revision) {
     return m_impl->createRoomBoundaryFromExistingGeometry(classification, revision);
+}
+
+QString MainWindow::createRoomVolumeFromSelectedBoundary(
+    QString height, QString elevation, std::optional<Revision> revision) {
+    return m_impl->createRoomVolumeFromSelectedBoundary(std::move(height), std::move(elevation),
+                                                        revision);
+}
+
+QString MainWindow::createRoomVolumeFromBoundary(
+    const Boundary& boundary, QString height, QString elevation,
+    std::vector<Boundary> holes, std::optional<Revision> revision) {
+    return m_impl->createRoomVolumeFromBoundary(boundary, std::move(height), std::move(elevation),
+                                                std::move(holes), revision);
 }
 
 QStringList MainWindow::detectRoomBoundariesFromExistingWalls(

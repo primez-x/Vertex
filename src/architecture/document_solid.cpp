@@ -243,6 +243,50 @@ bool read_document_slab(const Entity& entity, Slab& output, std::string& error) 
     return true;
 }
 
+bool read_document_room(const Entity& entity, RoomVolume& output, std::string& error) {
+    if (!entity.properties.is_object()) {
+        error = "properties must be an object";
+        return false;
+    }
+
+    RoomVolume candidate;
+    candidate.id = entity.id;
+    const auto* boundary = property(entity.properties, {"boundary", "segments"});
+    if (boundary == nullptr ||
+        !required_boundary(*boundary, candidate.boundary, "boundary", error)) {
+        return false;
+    }
+    if (const auto* holes = property(entity.properties, {"holes"})) {
+        if (!holes->is_array()) {
+            error = "holes must be an array of segment arrays";
+            return false;
+        }
+        candidate.holes.reserve(holes->size());
+        for (std::size_t index = 0; index < holes->size(); ++index) {
+            Boundary hole;
+            if (!required_boundary((*holes)[index], hole,
+                                   "holes[" + std::to_string(index) + "]", error)) {
+                return false;
+            }
+            candidate.holes.push_back(std::move(hole));
+        }
+    }
+    if (!required_number(entity.properties, {"height_m", "height"}, candidate.height,
+                         "height_m", error) ||
+        !required_number(entity.properties, {"elevation_m", "elevation"}, candidate.elevation,
+                         "elevation_m", error)) {
+        return false;
+    }
+    try {
+        (void)make_room_volume(candidate);
+    } catch (const std::exception& exception) {
+        error = exception.what();
+        return false;
+    }
+    output = std::move(candidate);
+    return true;
+}
+
 bool read_document_wall_id(const Entity& entity, std::string& wall_id, std::string& error) {
     if (!entity.properties.is_object()) {
         error = "properties must be an object";

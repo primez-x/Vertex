@@ -196,6 +196,20 @@ public:
     [[nodiscard]] QString createRoomBoundaryFromExistingGeometry(
         QString classification = QStringLiteral("room"),
         std::optional<Revision> expected_revision = std::nullopt);
+    // Creates a true architectural room volume from a closed analytical
+    // boundary.  The room remains a distinct semantic entity from appraisal
+    // measurement boundaries while exposing explicit height/elevation for
+    // coordinated elevation, section, native 3D, and quantity output.
+    [[nodiscard]] QString createRoomVolumeFromSelectedBoundary(
+        QString height,
+        QString elevation,
+        std::optional<Revision> expected_revision = std::nullopt);
+    [[nodiscard]] QString createRoomVolumeFromBoundary(
+        const Boundary& boundary,
+        QString height,
+        QString elevation,
+        std::vector<Boundary> holes = {},
+        std::optional<Revision> expected_revision = std::nullopt);
     // Detects all simple bounded faces in the selected wall's floor/layer
     // graph and creates one independent room boundary per face in one atomic
     // Document command. Open wall stubs are ignored; invalid segment graphs

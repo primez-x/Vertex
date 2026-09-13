@@ -109,8 +109,12 @@ bool is_ignored_hierarchy_type(std::string_view type) {
 }
 
 bool is_pending_geometry_type(std::string_view type) {
-    static constexpr std::string_view pending[] = {"room"};
-    return std::find(std::begin(pending), std::end(pending), type) != std::end(pending);
+    // Architectural rooms now have a native semantic volume when their
+    // explicit boundary, height, and elevation fields are present.  Keep this
+    // helper for future bounded geometry types without treating rooms as a
+    // permanent placeholder category.
+    (void)type;
+    return false;
 }
 
 struct NativeInputPoint {
@@ -320,7 +324,8 @@ public:
         const bool had_solids = !solids.empty();
         bool changed = false;
         for (const auto& [id, entity] : entities) {
-            if (entity.type != "wall" && entity.type != "slab" && entity.type != "terrain_surface" &&
+            if (entity.type != "wall" && entity.type != "slab" && entity.type != "room" &&
+                entity.type != "terrain_surface" &&
                 !can_recognize_building_entity_type(entity.type)) {
                 if (entity.type == "opening") {
                     continue;
@@ -407,6 +412,15 @@ public:
                 } else if (geometry_entity.type == "terrain_surface") {
                     shape = make_terrain_surface(
                         TerrainSurface::from_json(geometry_entity.properties.at("model")));
+                } else if (geometry_entity.type == "room") {
+                    RoomVolume room;
+                    if (!read_document_room(geometry_entity, room, parse_error)) {
+                        append_unique(errors, "room '" + id + "': " + parse_error);
+                        remove_solid(id);
+                        changed = true;
+                        continue;
+                    }
+                    shape = make_room_volume(room);
                 } else {
                     shape = make_building_shape(decode_building_entity(geometry_entity));
                 }

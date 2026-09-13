@@ -1,5 +1,6 @@
 #include "sketch/architecture.hpp"
 #include "sketch/building_entity.hpp"
+#include "sketch/document_solid.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -348,6 +349,34 @@ void test_roof_opening_schema() {
     require(rejected, "version one cannot silently accept opening geometry");
 }
 
+void test_room_volume_document_decoder_uses_shared_kernel() {
+    using namespace sketch;
+    const auto boundary = nlohmann::json::array({
+        {{"start", {0.0, 0.0}}, {"end", {4.0, 0.0}}, {"sweep_radians", 0.0}},
+        {{"start", {4.0, 0.0}}, {"end", {4.0, 3.0}}, {"sweep_radians", 0.0}},
+        {{"start", {4.0, 3.0}}, {"end", {0.0, 3.0}}, {"sweep_radians", 0.0}},
+        {{"start", {0.0, 3.0}}, {"end", {0.0, 0.0}}, {"sweep_radians", 0.0}},
+    });
+    const Entity entity{
+        "room-document", "room",
+        {{"boundary", boundary}, {"holes", nlohmann::json::array()},
+         {"height_m", 2.4}, {"elevation_m", 0.0}},
+        false, nlohmann::json::object()};
+    RoomVolume decoded;
+    std::string error;
+    require(read_document_room(entity, decoded, error),
+            "valid room volume must decode at the document boundary");
+    near(solid_volume(make_room_volume(decoded)), 28.8, 1e-8,
+         "decoded room volume must use the shared solid kernel");
+
+    auto invalid_properties = entity.properties;
+    invalid_properties["height_m"] = 0.0;
+    const Entity invalid{"room-document-invalid", "room", invalid_properties,
+                         false, nlohmann::json::object()};
+    require(!read_document_room(invalid, decoded, error),
+            "non-positive room height must fail closed at the document boundary");
+}
+
 int main() {
     try {
         test_all_forms_roundtrip_to_canonical_entities();
@@ -355,6 +384,7 @@ int main() {
         test_unknown_versions_forms_and_metadata_are_handled_strictly();
         test_integer_stairs_optional_landing_and_geometry_validation();
         test_empty_object_id_uses_entity_factory_id();
+        test_room_volume_document_decoder_uses_shared_kernel();
         test_roof_opening_schema();
         std::cout << "Building entity codec tests passed\n";
         return 0;

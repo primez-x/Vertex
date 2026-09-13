@@ -391,6 +391,18 @@ TopoDS_Shape make_slab(const Slab& slab) {
     }
 }
 
+TopoDS_Shape make_room_volume(const RoomVolume& room) {
+    // Reuse the slab boolean/validation path so room footprints, analytical
+    // arcs, holes, tolerances, and exact volume accounting cannot drift from
+    // the horizontal-assembly implementation.  The semantic room type stays
+    // distinct at the document boundary; only the derived solid is shared.
+    if (!std::isfinite(room.height) || room.height <= tolerance) {
+        throw std::invalid_argument("Room height must be positive");
+    }
+    return make_slab(Slab{room.id, room.boundary, room.holes, room.height,
+                          room.elevation, SlabElementKind::slab, {}});
+}
+
 TopoDS_Shape make_terrain_surface(const TerrainSurface& surface) {
     try {
         const auto& points = surface.points();
