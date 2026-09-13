@@ -43,9 +43,16 @@ public:
     // pending-geometry messages when the viewport cannot claim an authoritative
     // representation of the complete snapshot.
     std::function<void(QString)> onEntitySelected;
+    // Ctrl+left-drag requests a translation of a native architectural object.
+    // The callback reports the stable entity ID and a world-space delta in
+    // metres. The desktop shell owns the authoritative document transaction;
+    // this view only previews the derived presentation and emits the request.
+    std::function<void(QString, double, double, double)> onEntityTranslationRequested;
     std::function<void(QString)> onError;
 
     void setEntitySelectedCallback(std::function<void(QString)> callback);
+    void setEntityTranslationRequestedCallback(
+        std::function<void(QString, double, double, double)> callback);
     void setErrorCallback(std::function<void(QString)> callback);
 
 protected:

@@ -37,6 +37,20 @@ left click selects the first AIS object under the pointer. The selected object
 is mapped back to the stable document entity ID and delivered through
 `onEntitySelected`. A click on empty space delivers an empty `QString`, which
 lets the inspector clear its selection.
+
+Ctrl+left-drag directly translates a native architectural object. The press
+selects a supported column, beam, stair, railing, or roof, converts the cursor
+to the current view projection plane, and previews the world-space movement on
+the derived AIS presentation. Release clears the preview and emits one
+`onEntityTranslationRequested` callback with the stable entity ID and the
+finite X/Y/Z delta in metres. The desktop shell commits that request through
+the existing typed architectural transform transaction, so the document gets
+one normal undo/redo entry and the viewport is rebuilt from the authoritative
+snapshot. Walls, slabs, rooms, and placed assembly children remain selectable
+but are not moved by this gesture until their dedicated semantic transform
+contracts are available; a drag never mutates a presentation without a
+successful document command.
+
 Placed assembly children report their synthetic child ID; the desktop shell
 resolves that ID back to the persisted host before updating the inspector, so
 native picking never creates a second authoritative object.
@@ -202,12 +216,15 @@ After the desktop target has been wired to the control:
    aligned with the rendered model.
 5. Left-click a wall or slab and confirm the inspector receives its stable
    entity ID; click empty space and confirm the inspector clears selection.
-6. Add a hosted opening or edit a wall scalar. Confirm the wall presentation
+6. In the architectural workspace, Ctrl+left-drag a column or roof. Confirm
+   the solid follows the pointer as a preview, release commits one semantic
+   translation, and undo/redo restores the prior presentation.
+7. Add a hosted opening or edit a wall scalar. Confirm the wall presentation
    updates while the camera remains where the user left it.
-7. Call `exportViewImage("viewer-smoke.png")` and confirm the PNG contains the
+8. Call `exportViewImage("viewer-smoke.png")` and confirm the PNG contains the
    rendered OCCT framebuffer. Try an invalid extension/path and confirm the
    method returns `false` with an explicit error instead of a blank success.
-8. Add an unsupported roof form, an incomplete room volume, or malformed wall field. Confirm the explicit pending or
+9. Add an unsupported roof form, an incomplete room volume, or malformed wall field. Confirm the explicit pending or
    geometry error overlay appears, `onError` is called, and `isReady()` becomes
    false. No placeholder solid should appear. Add a plan-only boundary or
    annotation and confirm it does not produce a missing-3D warning.

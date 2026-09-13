@@ -80,7 +80,10 @@ no CRT dialog in the captured run. The current Release PE inspection covers 44
 component binaries with no unresolved static imports; the staged offline bundle
 verified 558 declared files, installed 55 runtime files into a task-owned
 temporary directory, and passed the installed-runtime smoke for both workspaces
-with exit code 0. These are internal development and runtime checks; Apex native
+with exit code 0. The native 3D viewport now supports Ctrl+left-drag previews
+and one-command world-space translation requests for supported architectural
+objects, committed by the desktop shell through the existing typed history.
+These are internal development and runtime checks; Apex native
 fixtures, physical input, clean-machine/offline installer qualification, and
 production evidence remain open. The distribution handoff now also emits a
 deterministic SPDX 2.3 SBOM from the hash-checked inventory;

@@ -16372,6 +16372,17 @@ private:
             m_nativeModelView = new visualization::NativeModelView(architectural_splitter);
             m_nativeModelView->setEntitySelectedCallback(
                 [this](QString id) { selectEntity(id); });
+            m_nativeModelView->setEntityTranslationRequestedCallback(
+                [this](QString id, double x, double y, double z) {
+                    if (!selectEntity(id)) {
+                        return;
+                    }
+                    const auto metres = [](double value) {
+                        return QString::number(value, 'g', 15) + QStringLiteral(" m");
+                    };
+                    (void)transformSelectedArchitecturalObject(
+                        {}, metres(x), metres(y), metres(z), {}, false);
+                });
             m_nativeModelView->setErrorCallback([this](QString error) {
                 setError(QStringLiteral("3D view: %1").arg(error));
             });

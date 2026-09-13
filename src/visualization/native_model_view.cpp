@@ -191,6 +191,14 @@ public:
     QPointF left_press;
     bool left_pressed{};
     bool left_moved{};
+    bool left_translate{};
+    std::optional<std::string> translation_entity_id;
+    struct WorldPoint {
+        double x{};
+        double y{};
+        double z{};
+    };
+    std::optional<WorldPoint> translation_start;
 
     explicit Impl(NativeModelView* widget) : owner(widget) {}
 
@@ -727,9 +735,89 @@ public:
         }
     }
 
-    void select_at(const NativeInputPoint point) {
-        if (!native_ready || context.IsNull() || view.IsNull()) {
+    template <typename PresentationHandle>
+    QString entity_id_for_presentation(const PresentationHandle& selected) const {
+        if (selected.IsNull()) {
+            return {};
+        }
+        for (const auto& [id, solid] : solids) {
+            if (solid.presentation == selected) {
+                return QString::fromStdString(id);
+            }
+        }
+        return {};
+    }
+
+    bool supports_direct_translation(const QString& id) const {
+        if (!snapshot.has_value() || id.isEmpty()) {
+            return false;
+        }
+        const auto found = snapshot->entities().find(id.toStdString());
+        return found != snapshot->entities().end() &&
+               can_recognize_building_entity_type(found->second.type);
+    }
+
+    std::optional<WorldPoint> world_point(const NativeInputPoint point) const {
+        if (!native_ready || view.IsNull()) {
+            return std::nullopt;
+        }
+        try {
+            WorldPoint result;
+            view->Convert(point.x, point.y, result.x, result.y, result.z);
+            if (!std::isfinite(result.x) || !std::isfinite(result.y) ||
+                !std::isfinite(result.z)) {
+                return std::nullopt;
+            }
+            return result;
+        } catch (const Standard_Failure&) {
+            return std::nullopt;
+        } catch (const std::exception&) {
+            return std::nullopt;
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
+
+    void clear_translation_preview() {
+        if (translation_entity_id.has_value()) {
+            const auto found = solids.find(*translation_entity_id);
+            if (found != solids.end() && !found->second.presentation.IsNull()) {
+                found->second.presentation->ResetTransformation();
+                if (native_ready && !context.IsNull()) {
+                    context->Redisplay(found->second.presentation, false);
+                }
+            }
+        }
+    }
+
+    void preview_translation(const WorldPoint& current) {
+        if (!translation_entity_id.has_value() || !translation_start.has_value()) {
             return;
+        }
+        const auto found = solids.find(*translation_entity_id);
+        if (found == solids.end() || found->second.presentation.IsNull()) {
+            return;
+        }
+        const auto dx = current.x - translation_start->x;
+        const auto dy = current.y - translation_start->y;
+        const auto dz = current.z - translation_start->z;
+        if (!std::isfinite(dx) || !std::isfinite(dy) || !std::isfinite(dz)) {
+            return;
+        }
+        gp_Trsf transform;
+        transform.SetTranslation(gp_Vec(dx, dy, dz));
+        found->second.presentation->SetLocalTransformation(transform);
+        if (native_ready && !context.IsNull()) {
+            context->Redisplay(found->second.presentation, false);
+        }
+        if (native_ready && !viewer.IsNull()) {
+            viewer->RedrawImmediate();
+        }
+    }
+
+    QString select_at(const NativeInputPoint point) {
+        if (!native_ready || context.IsNull() || view.IsNull()) {
+            return {};
         }
         const auto x = point.x;
         const auto y = point.y;
@@ -737,19 +825,12 @@ public:
         context->ClearSelected(false);
         context->SelectDetected(AIS_SelectionScheme_Replace);
         const auto selected = context->FirstSelectedObject();
-        QString selected_id;
-        if (!selected.IsNull()) {
-            for (const auto& [id, solid] : solids) {
-                if (solid.presentation == selected) {
-                    selected_id = QString::fromStdString(id);
-                    break;
-                }
-            }
-        }
+        const auto selected_id = entity_id_for_presentation(selected);
         if (owner->onEntitySelected) {
             owner->onEntitySelected(selected_id);
         }
         viewer->Redraw();
+        return selected_id;
     }
 
     bool export_view_image(const QString& path) {
@@ -871,6 +952,11 @@ void NativeModelView::setEntitySelectedCallback(std::function<void(QString)> cal
     onEntitySelected = std::move(callback);
 }
 
+void NativeModelView::setEntityTranslationRequestedCallback(
+    std::function<void(QString, double, double, double)> callback) {
+    onEntityTranslationRequested = std::move(callback);
+}
+
 void NativeModelView::setErrorCallback(std::function<void(QString)> callback) {
     onError = std::move(callback);
 }
@@ -926,7 +1012,21 @@ void NativeModelView::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
         m_impl->left_pressed = true;
         m_impl->left_moved = false;
+        m_impl->left_translate = event->modifiers().testFlag(Qt::ControlModifier);
+        m_impl->translation_entity_id.reset();
+        m_impl->translation_start.reset();
         m_impl->left_press = logical_point;
+        if (m_impl->left_translate) {
+            // Select immediately so the drag has a stable semantic target and
+            // the inspector follows the object before the first preview.
+            const auto selected_id = m_impl->select_at(point);
+            if (m_impl->supports_direct_translation(selected_id)) {
+                if (const auto start = m_impl->world_point(point)) {
+                    m_impl->translation_entity_id = selected_id.toStdString();
+                    m_impl->translation_start = *start;
+                }
+            }
+        }
         event->accept();
         return;
     }
@@ -958,6 +1058,12 @@ void NativeModelView::mouseMoveEvent(QMouseEvent* event) {
         if (delta.manhattanLength() >= QApplication::startDragDistance()) {
             m_impl->left_moved = true;
         }
+        if (m_impl->left_translate && m_impl->left_moved &&
+            m_impl->translation_entity_id.has_value()) {
+            if (const auto current = m_impl->world_point(point)) {
+                m_impl->preview_translation(*current);
+            }
+        }
         if (!m_impl->context.IsNull()) {
             m_impl->context->MoveTo(point.x, point.y, m_impl->view, false);
             m_impl->viewer->RedrawImmediate();
@@ -982,9 +1088,36 @@ void NativeModelView::mouseReleaseEvent(QMouseEvent* event) {
     }
     if (event->button() == Qt::LeftButton && m_impl->left_pressed) {
         const auto was_click = !m_impl->left_moved;
+        const auto was_translation = m_impl->left_translate && !was_click &&
+                                     m_impl->translation_entity_id.has_value() &&
+                                     m_impl->translation_start.has_value();
+        std::optional<NativeModelView::Impl::WorldPoint> end_world;
+        if (was_translation) {
+            end_world = m_impl->world_point(point);
+        }
+        const auto translation_id = m_impl->translation_entity_id;
+        const auto translation_start = m_impl->translation_start;
+        m_impl->clear_translation_preview();
         m_impl->left_pressed = false;
         m_impl->left_moved = false;
+        m_impl->left_translate = false;
+        m_impl->translation_entity_id.reset();
+        m_impl->translation_start.reset();
+        if (was_translation && end_world.has_value() && translation_id.has_value() &&
+            translation_start.has_value()) {
+            const auto dx = end_world->x - translation_start->x;
+            const auto dy = end_world->y - translation_start->y;
+            const auto dz = end_world->z - translation_start->z;
+            constexpr double epsilon = 1.0e-9;
+            if (std::isfinite(dx) && std::isfinite(dy) && std::isfinite(dz) &&
+                (std::abs(dx) > epsilon || std::abs(dy) > epsilon || std::abs(dz) > epsilon) &&
+                onEntityTranslationRequested) {
+                onEntityTranslationRequested(QString::fromStdString(*translation_id), dx, dy, dz);
+            }
+        }
         if (was_click) {
+            // Ctrl+click already selected the target on press; selecting again
+            // keeps ordinary click semantics for non-architectural solids.
             m_impl->select_at(point);
         }
         event->accept();

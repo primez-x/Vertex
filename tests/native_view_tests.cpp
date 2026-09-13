@@ -67,8 +67,9 @@ Frame capture(sketch::visualization::NativeModelView& view, const QString& path)
     return {image,QRect(QPoint(left,top),QPoint(right,bottom)),QPointF(sx/count,sy/count)};
 }
 void mouse(sketch::visualization::NativeModelView& view,QEvent::Type type,QPointF p,
-           Qt::MouseButton button,Qt::MouseButtons buttons) {
-    QMouseEvent event(type,p,view.mapToGlobal(p.toPoint()),button,buttons,Qt::NoModifier);
+           Qt::MouseButton button,Qt::MouseButtons buttons,
+           Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+    QMouseEvent event(type,p,view.mapToGlobal(p.toPoint()),button,buttons,modifiers);
     QApplication::sendEvent(&view,&event);
 }
 }
@@ -355,6 +356,36 @@ int main(int argc,char** argv) {
                     view.fitAll();
                     auto frame=capture(view,temporary.filePath(QString::fromStdString(entity.id)+".png"));
                     check(!frame.bounds.isEmpty(),"Every supported form must render a solid");
+                    if (entity.type == "column") {
+                        QString translated_id;
+                        double translated_x = 0.0;
+                        double translated_y = 0.0;
+                        double translated_z = 0.0;
+                        view.onEntityTranslationRequested =
+                            [&](QString id, double x, double y, double z) {
+                                translated_id = std::move(id);
+                                translated_x = x;
+                                translated_y = y;
+                                translated_z = z;
+                            };
+                        const auto start = frame.centre / view.devicePixelRatioF();
+                        const auto end = start + QPointF(18.0, 12.0);
+                        mouse(view, QEvent::MouseButtonPress, start, Qt::LeftButton,
+                              Qt::LeftButton, Qt::ControlModifier);
+                        mouse(view, QEvent::MouseMove, end, Qt::NoButton,
+                              Qt::LeftButton, Qt::ControlModifier);
+                        mouse(view, QEvent::MouseButtonRelease, end, Qt::LeftButton,
+                              Qt::NoButton, Qt::ControlModifier);
+                        check(translated_id == QString::fromStdString(entity.id),
+                              "Ctrl+left-drag must request translation of the selected architectural object");
+                        check(std::isfinite(translated_x) && std::isfinite(translated_y) &&
+                                  std::isfinite(translated_z) &&
+                                  (std::abs(translated_x) > 1.0e-9 ||
+                                   std::abs(translated_y) > 1.0e-9 ||
+                                   std::abs(translated_z) > 1.0e-9),
+                              "Native translation request must contain a finite world-space delta");
+                        view.onEntityTranslationRequested = {};
+                    }
                     entity.properties["form"]="unsupported-future-form";
                     view.hide();
                     model.apply(sketch::ApplyEntityChanges{model.revision(),
