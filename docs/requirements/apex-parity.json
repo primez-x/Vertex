@@ -1197,7 +1197,7 @@
         "tests/boundary_dimension_tests.cpp",
         "tests/boundary_workflow_tests.cpp"
       ],
-      "implementation_note": "Segment-length dimensions have stable references and an inspector for position, paper text height, color, bold/italic, rotation, and visibility. Version 2 presentation survives save/reopen, undo/redo, and boundary transforms. Shared canvas/sheet rendering preserves paper text size across model output scales and fitted previews, with pixel/DPI and rotated-hit tests. Straight segment dimensions now regenerate matching extension and dimension linework from the stable source edge in both canvases and shared output. True arc/angle/area dimension construction and complete Apex workflow/output qualification remain open."
+      "implementation_note": "Segment-length dimensions have stable references and an inspector for position, paper text height, color, bold/italic, rotation, and visibility. Version 2 presentation survives save/reopen, undo/redo, and boundary transforms. Shared canvas/sheet rendering preserves paper text size across model output scales and fitted previews, with pixel/DPI and rotated-hit tests. Straight segment dimensions now regenerate matching extension and dimension linework from the stable source edge in both canvases and shared output; curved segment dimensions use a true offset analytical arc with radial extension lines. Angle/area dimension construction and complete Apex workflow/output qualification remain open."
     },
     {
       "id": "APX-ANNO-003",

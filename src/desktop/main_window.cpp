@@ -676,30 +676,65 @@ std::optional<Vec2> point_at_segment(const Segment& segment, double fraction) {
 // Build the retained linework for a segment dimension. The analytical
 // dimension value remains the stable BoundaryDimension record; this overlay
 // is only presentation geometry and is regenerated from the current source
-// segment on every refresh. Curved dimensions keep their label until a true
-// arc dimension renderer is available rather than showing a misleading chord.
+// segment on every refresh. Curved dimensions use an offset analytical arc
+// with radial extension lines, so the displayed linework has the same sweep
+// and true arc-length geometry as the source.
 std::optional<Boundary> dimension_overlay(const Segment& source, Vec2 text_position) {
-    if (source.sweep_radians != 0.0) return std::nullopt;
     const auto dx = source.end.x - source.start.x;
     const auto dy = source.end.y - source.start.y;
     const auto length = std::hypot(dx, dy);
     if (!(length > 1e-7) || !std::isfinite(length)) return std::nullopt;
-    const Vec2 tangent{dx / length, dy / length};
-    const Vec2 normal{-tangent.y, tangent.x};
     const Vec2 midpoint{(source.start.x + source.end.x) * 0.5,
                         (source.start.y + source.end.y) * 0.5};
-    const auto offset = (text_position.x - midpoint.x) * normal.x +
-                        (text_position.y - midpoint.y) * normal.y;
-    if (!std::isfinite(offset)) return std::nullopt;
-    const Vec2 center{midpoint.x + normal.x * offset,
-                      midpoint.y + normal.y * offset};
-    const Vec2 half{tangent.x * length * 0.5, tangent.y * length * 0.5};
-    const Vec2 dimension_start{center.x - half.x, center.y - half.y};
-    const Vec2 dimension_end{center.x + half.x, center.y + half.y};
+    if (source.sweep_radians == 0.0) {
+        const Vec2 tangent{dx / length, dy / length};
+        const Vec2 normal{-tangent.y, tangent.x};
+        const auto offset = (text_position.x - midpoint.x) * normal.x +
+                            (text_position.y - midpoint.y) * normal.y;
+        if (!std::isfinite(offset)) return std::nullopt;
+        const Vec2 center{midpoint.x + normal.x * offset,
+                          midpoint.y + normal.y * offset};
+        const Vec2 half{tangent.x * length * 0.5, tangent.y * length * 0.5};
+        const Vec2 dimension_start{center.x - half.x, center.y - half.y};
+        const Vec2 dimension_end{center.x + half.x, center.y + half.y};
+        return Boundary{
+            Segment{source.start, dimension_start, 0.0},
+            Segment{source.end, dimension_end, 0.0},
+            Segment{dimension_start, dimension_end, 0.0},
+        };
+    }
+
+    const auto half_sweep = source.sweep_radians * 0.5;
+    const auto tangent = std::tan(half_sweep);
+    const auto sine = std::sin(std::abs(half_sweep));
+    if (!std::isfinite(tangent) || tangent == 0.0 || !std::isfinite(sine) || sine == 0.0) {
+        return std::nullopt;
+    }
+    const Vec2 center{midpoint.x - dy / length * (length / (2.0 * tangent)),
+                      midpoint.y + dx / length * (length / (2.0 * tangent))};
+    const auto source_radius = std::hypot(source.start.x - center.x,
+                                          source.start.y - center.y);
+    const auto requested_radius = std::hypot(text_position.x - center.x,
+                                              text_position.y - center.y);
+    if (!(source_radius > 1e-7) || !std::isfinite(source_radius) ||
+        !std::isfinite(requested_radius)) {
+        return std::nullopt;
+    }
+    const auto dimension_radius = requested_radius > 1e-7
+                                      ? requested_radius
+                                      : source_radius + std::max(0.25, source_radius * 0.1);
+    const auto start_angle = std::atan2(source.start.y - center.y,
+                                        source.start.x - center.x);
+    const Vec2 dimension_start{center.x + dimension_radius * std::cos(start_angle),
+                               center.y + dimension_radius * std::sin(start_angle)};
+    const Vec2 dimension_end{center.x + dimension_radius *
+                                                std::cos(start_angle + source.sweep_radians),
+                             center.y + dimension_radius *
+                                                std::sin(start_angle + source.sweep_radians)};
     return Boundary{
         Segment{source.start, dimension_start, 0.0},
         Segment{source.end, dimension_end, 0.0},
-        Segment{dimension_start, dimension_end, 0.0},
+        Segment{dimension_start, dimension_end, source.sweep_radians},
     };
 }
 

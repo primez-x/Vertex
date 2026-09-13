@@ -536,9 +536,10 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   kinds and boundary owners remain read-only without skipping other supported
   validation. The codec and document tests pass in both v18 configurations.
   Dimension labels, styles, authoring, and retained straight-segment extension/
-  dimension linework now render from the current stable source edge; true arc
-  dimension construction and complete Apex workflow/output qualification remain
-  required.
+  dimension linework now render from the current stable source edge; curved
+  dimensions use a true offset analytical arc with radial extension lines.
+  Angle/area dimension construction and complete Apex workflow/output
+  qualification remain required.
 - Storage format v2 protects identified boundaries across the entire retained
   history, including an anonymous head reached by undo. Legacy-only v1 files
   still load. The retained v16 CLI rejects three actual v2 fixtures; the current
