@@ -1804,7 +1804,7 @@
         "tests/desktop_smoke.cpp",
         "docs/assemblies.md"
       ],
-      "implementation_note": "Reusable assembly types, instance overrides, materials, quantities, immutable snapshots, and update previews are implemented. The Windows Assembly catalog now creates and persists typed type/instance records, supports rename/add/remove through Document history, edits local materials plus typed property/material-slot/quantity declarations and per-instance overrides, and blocks dangling type deletion. Assembly schema v3 adds validated host placement transforms; the plan canvas renders transformed host linework and architectural schedules expose resolved quantities and placement provenance. Independent assembly profiles, cross-view placement projection, nested assemblies, and production qualification remain open."
+      "implementation_note": "Reusable assembly types, instance overrides, materials, quantities, immutable snapshots, and update previews are implemented. The Windows Assembly catalog now creates and persists typed type/instance records, supports rename/add/remove through Document history, edits local materials plus typed property/material-slot/quantity declarations and per-instance overrides, and blocks dangling type deletion. Assembly schema v3 adds validated host placement transforms; placed instances now use transformed host solids through the shared plan, elevation, and section projection adapters, while architectural schedules expose resolved quantities and placement provenance. Independent assembly profiles, nested assemblies, and production qualification remain open."
     },
     {
       "id": "ARCH-MOD-009",

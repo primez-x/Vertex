@@ -124,6 +124,11 @@
 #include <QUuid>
 #include <QUrl>
 
+#include <BRepBuilderAPI_Transform.hxx>
+#include <gp_Ax1.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Trsf.hxx>
+
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -16683,6 +16688,14 @@ private:
             const auto key = entity.id.toStdString();
             if (!host_geometry.contains(key)) host_geometry.emplace(key, entity);
         }
+        struct AssemblyPreview {
+            std::string child_id;
+            std::string host_entity_id;
+            AssemblyPlacement placement;
+            double thickness_metres{};
+            std::optional<QColor> fill_color;
+        };
+        std::vector<AssemblyPreview> assembly_previews;
         std::vector<std::pair<std::string, std::string>> assembly_child_hosts;
         for (const auto& [catalog_id, catalog_entity] : snapshot.entities()) {
             if (catalog_entity.type != "assembly_model" ||
@@ -16701,6 +16714,7 @@ private:
                                                                  *instance.placement);
                     if (segments.empty()) continue;
                     const auto child_id = catalog_id + ":instance:" + instance.id;
+                    std::optional<QColor> fill_color;
                     CanvasEntity preview{id_from(child_id), QStringLiteral("assembly_instance"),
                                          std::move(segments),
                                          host->second.thickness_metres * instance.placement->scale,
@@ -16713,6 +16727,7 @@ private:
                         if (material != model.materials().end() && material->color_srgb) {
                             const QColor color(QString::fromStdString(*material->color_srgb));
                             if (color.isValid()) {
+                                fill_color = color;
                                 preview.filled = true;
                                 preview.hatch_pattern = QStringLiteral("solid");
                                 preview.hatch_scale = 1.0;
@@ -16722,6 +16737,10 @@ private:
                         }
                     }
                     all_geometry.push_back(std::move(preview));
+                    assembly_previews.push_back({child_id, instance.placement->host_entity_id,
+                                                 *instance.placement,
+                                                 host->second.thickness_metres * instance.placement->scale,
+                                                 std::move(fill_color)});
                     assembly_child_hosts.emplace_back(child_id, instance.placement->host_entity_id);
                 }
             } catch (const std::exception& error) {
@@ -16734,6 +16753,85 @@ private:
         // sheet viewports can render independently of the active workspace.
         std::array<std::vector<CanvasEntity>, 3> view_geometry;
         view_geometry[architectural_view_index(BuildingViewKind::plan)] = all_geometry;
+        const auto make_assembly_host_shape = [&](const std::string& host_id) -> TopoDS_Shape {
+            const auto host = snapshot.entities().find(host_id);
+            if (host == snapshot.entities().end()) {
+                throw std::invalid_argument("assembly host is missing");
+            }
+            const auto& source = host->second;
+            const bool resolves_levels = source.type == "wall" || source.type == "slab" ||
+                source.type == "room" || can_recognize_building_entity_type(source.type);
+            const auto resolved = resolves_levels
+                ? std::optional<Entity>{resolve_vertical_placement(snapshot, source)}
+                : std::nullopt;
+            const auto& entity = resolved ? *resolved : source;
+            if (can_recognize_building_entity_type(entity.type)) {
+                return make_building_shape(decode_building_entity(entity));
+            }
+            if (entity.type == "wall") {
+                std::vector<const Entity*> openings;
+                for (const auto& [id, candidate] : snapshot.entities()) {
+                    (void)id;
+                    if (candidate.type != "opening" ||
+                        candidate.properties.value("wall_id", std::string{}) != host_id) continue;
+                    openings.push_back(&candidate);
+                }
+                Wall wall;
+                std::string error;
+                if (!read_document_wall(entity, openings, wall, error)) {
+                    throw std::invalid_argument(error);
+                }
+                return make_wall(wall);
+            }
+            if (entity.type == "slab") {
+                Slab slab;
+                std::string error;
+                if (!read_document_slab(entity, slab, error)) {
+                    throw std::invalid_argument(error);
+                }
+                return make_slab(slab);
+            }
+            if (entity.type == "room") {
+                RoomVolume room;
+                std::string error;
+                if (!read_document_room(entity, room, error)) {
+                    throw std::invalid_argument(error);
+                }
+                return make_room_volume(room);
+            }
+            throw std::invalid_argument("assembly host does not have a projected architectural solid");
+        };
+        const auto transform_assembly_shape = [](const TopoDS_Shape& source,
+                                                 const AssemblyPlacement& placement) {
+            if (source.IsNull()) throw std::invalid_argument("assembly host solid is empty");
+            if (!std::isfinite(placement.scale) || placement.scale <= 0.0 ||
+                !std::isfinite(placement.rotation_radians) ||
+                !std::isfinite(placement.translation_m.x) ||
+                !std::isfinite(placement.translation_m.y)) {
+                throw std::invalid_argument("assembly placement transform is invalid");
+            }
+            gp_Trsf scale;
+            scale.SetScale(gp_Pnt(0.0, 0.0, 0.0), placement.scale);
+            BRepBuilderAPI_Transform scaled(source, scale, true);
+            if (!scaled.IsDone() || scaled.Shape().IsNull()) {
+                throw std::invalid_argument("assembly scale transform failed");
+            }
+            gp_Trsf rotate;
+            rotate.SetRotation(gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0)),
+                               placement.rotation_radians);
+            BRepBuilderAPI_Transform rotated(scaled.Shape(), rotate, true);
+            if (!rotated.IsDone() || rotated.Shape().IsNull()) {
+                throw std::invalid_argument("assembly rotation transform failed");
+            }
+            gp_Trsf translate;
+            translate.SetTranslation(gp_Vec(placement.translation_m.x,
+                                             placement.translation_m.y, 0.0));
+            BRepBuilderAPI_Transform translated(rotated.Shape(), translate, true);
+            if (!translated.IsDone() || translated.Shape().IsNull()) {
+                throw std::invalid_argument("assembly translation transform failed");
+            }
+            return translated.Shape();
+        };
         const auto build_architectural_geometry = [&](BuildingViewKind kind) {
             if (kind == BuildingViewKind::plan) return all_geometry;
             std::vector<CanvasEntity> result;
@@ -16886,6 +16984,34 @@ private:
                             .arg(kind == BuildingViewKind::elevation
                                      ? QStringLiteral("Elevation") : QStringLiteral("Section"),
                                  id_from(id), QString::fromUtf8(error.what())));
+                    }
+                }
+            }
+            for (const auto& assembly : assembly_previews) {
+                try {
+                    const auto transformed = transform_assembly_shape(
+                        make_assembly_host_shape(assembly.host_entity_id), assembly.placement);
+                    if (!shape_intersects_view_depth(transformed, depth)) continue;
+                    const auto clipped_shape = clip_shape_to_view_depth(transformed, depth);
+                    if (clipped_shape.IsNull()) continue;
+                    auto projection = project_shape_view(clipped_shape, kind, frame);
+                    auto entity = decorate_projection(CanvasEntity{
+                        id_from(assembly.child_id), QStringLiteral("assembly_instance"),
+                        std::move(projection), assembly.thickness_metres,
+                        id_from(assembly.child_id) == m_selected_id});
+                    if (assembly.fill_color) {
+                        entity.filled = true;
+                        entity.hatch_pattern = QStringLiteral("solid");
+                        entity.hatch_scale = 1.0;
+                        entity.fill_color = *assembly.fill_color;
+                    }
+                    result.push_back(std::move(entity));
+                } catch (const std::exception& error) {
+                    if (kind == m_architectural_view_kind) {
+                        append_geometry_error(QStringLiteral("%1 assembly %2: %3")
+                            .arg(kind == BuildingViewKind::elevation
+                                     ? QStringLiteral("Elevation") : QStringLiteral("Section"),
+                                 id_from(assembly.child_id), QString::fromUtf8(error.what())));
                     }
                 }
             }

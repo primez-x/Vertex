@@ -3188,6 +3188,28 @@ void test_assembly_placement_plan_preview() {
                 std::abs(found->segments.front().end.y - 12.0) < 1e-8 &&
                 found->filled && found->fill_color == QColor("#d08030"),
             "assembly placement should apply its transform and material appearance");
+
+    auto* architectural_view = window.findChild<QComboBox*>(QStringLiteral("architecturalView"));
+    auto* architectural_canvas = dynamic_cast<desktop::PlanCanvas*>(
+        window.findChild<QWidget*>(QStringLiteral("architecturalPlanCanvas")));
+    require(architectural_view && architectural_canvas,
+            "assembly placement fixture should expose coordinated architectural views");
+    const auto has_assembly_instance = [&] {
+        return std::find_if(architectural_canvas->entities().begin(),
+                            architectural_canvas->entities().end(),
+                            [](const auto& entity) {
+                                return entity.id == QStringLiteral("assembly-catalog:instance:lintel-1");
+                            }) != architectural_canvas->entities().end();
+    };
+    architectural_view->setCurrentText(QStringLiteral("Elevation"));
+    QApplication::processEvents();
+    require(has_assembly_instance(),
+            "placed assembly should project through the coordinated elevation view");
+    architectural_view->setCurrentIndex(2);
+    QApplication::processEvents();
+    require(has_assembly_instance(),
+            "placed assembly should project through the coordinated section view");
+    architectural_view->setCurrentIndex(0);
 }
 
 void test_vertical_levels_workflow() {

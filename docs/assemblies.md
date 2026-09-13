@@ -108,9 +108,11 @@ Assembly geometry bindings and placement, composite material takeoff, nested
 Placed assembly instances now have a read-only Assembly schedule row exposing
 the resolved type, host, transform, material slots, and declared quantities
 (including count, length/area/volume, and mass units). Scoped schedules follow
-the placed host's visibility. The initial geometric binding is a plan-preview
-copy of host linework; independent assembly profiles, elevation/section
-projection, nested assemblies, composite material takeoff, material physical
-properties, and publication workflows remain open. Semantic snapshot
+the placed host's visibility. The geometric binding is a deterministic
+transformed copy of the host solid. Placed instances now project through the
+same plan, elevation, and section view adapters as their host, while retaining
+the host as the source of truth. Independent assembly profiles, nested
+assemblies, composite material takeoff, material physical properties, and
+publication workflows remain open. Semantic snapshot
 restoration plus the desktop history checks do not establish full production
 assembly qualification.
