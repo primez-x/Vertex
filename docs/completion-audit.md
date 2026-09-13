@@ -21,7 +21,8 @@ The report includes these checks:
 - Debug and Release CTest terminal logs
 - the Release PE import report and direct application network-import audit
 - the tracked source ownership boundary and third-party provenance manifest
-- the newest installed-runtime report, including clean-machine, network,
+- the newest installed-runtime report (from either the historical `current`
+  layout or a task-owned smoke run), including clean-machine, network,
   registry-isolation, and production-qualification flags
 - offline package manifests and SBOM inputs
 - Apex/native compatibility, caller, and device evidence status

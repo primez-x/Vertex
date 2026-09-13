@@ -160,9 +160,24 @@ def test_log_status(path: pathlib.Path):
 
 
 def _latest_runtime_report(root: pathlib.Path):
-    candidates = sorted((root / "artifacts/installed-runtime/current").glob(
-        "run-*/report.json"))
-    return candidates[-1] if candidates else None
+    installed_root = root / "artifacts/installed-runtime"
+    # Keep the historical `current/run-*` layout, but also discover reports
+    # written directly by a task-owned install/smoke invocation.  Selecting by
+    # filesystem mtime prevents a newer report from being hidden merely because
+    # its directory name uses a different staging convention.
+    candidates = list((installed_root / "current").glob("run-*/report.json"))
+    candidates.extend(installed_root.glob("run-*/report.json"))
+    if not candidates:
+        return None
+
+    def sort_key(path: pathlib.Path):
+        try:
+            modified = path.stat().st_mtime_ns
+        except OSError:
+            modified = -1
+        return modified, path.as_posix()
+
+    return max(candidates, key=sort_key)
 
 
 def _offline_static_check(root: pathlib.Path):

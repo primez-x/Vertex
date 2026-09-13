@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import pathlib
 import tempfile
 import unittest
@@ -55,6 +56,20 @@ class CompletionAuditTests(unittest.TestCase):
             self.assertEqual(audit.test_log_status(log)["status"], "pass")
             log.write_text("Test Passed.\nTest Failed.\nEnd testing: now\n", encoding="utf-8")
             self.assertEqual(audit.test_log_status(log)["status"], "blocked")
+
+    def test_latest_runtime_report_discovers_task_owned_reports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            legacy = root / "artifacts/installed-runtime/current/run-legacy/report.json"
+            current = root / "artifacts/installed-runtime/run-task-owned/report.json"
+            legacy.parent.mkdir(parents=True)
+            current.parent.mkdir(parents=True)
+            legacy.write_text("{}", encoding="utf-8")
+            current.write_text("{}", encoding="utf-8")
+            os.utime(legacy, (100, 100))
+            os.utime(current, (200, 200))
+
+            self.assertEqual(audit._latest_runtime_report(root), current)
 
 
 if __name__ == "__main__":
