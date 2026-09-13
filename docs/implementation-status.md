@@ -237,6 +237,10 @@ delta length and angle. The readout is deliberately absent in selection mode
 and is excluded from fitted/exported scenes, so it does not consume workspace
 area or become document output. Physical-input, DPI, and full accessibility
 qualification remain open.
+Quantity entry now has an explicit imperial/metric equivalence fixture: a
+feet-and-fractional-inch value, metres, and centimetres resolve to the same
+exact metre rational while each original expression and entered unit remains
+available for inspection.
 
 Drawing-sheet lifecycle is now integrated at the desktop boundary: the sheet
 settings workflow can add a validated page with coordinated viewports, remove a
