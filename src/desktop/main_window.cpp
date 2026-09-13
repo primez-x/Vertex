@@ -3459,22 +3459,226 @@ public:
         std::size_t added_assets = 0;
         std::size_t removed_assets = 0;
         std::size_t changed_assets = 0;
+        std::size_t semantic_changes = 0;
+        std::size_t geometric_changes = 0;
+        std::size_t calculation_changes = 0;
+        std::size_t presentation_changes = 0;
+        std::vector<std::string> details;
     };
+
+    enum class RevisionChangeCategory { semantic, geometric, calculation, presentation };
+
+    static const char* revision_change_category_name(RevisionChangeCategory category) {
+        switch (category) {
+        case RevisionChangeCategory::semantic: return "semantic";
+        case RevisionChangeCategory::geometric: return "geometric";
+        case RevisionChangeCategory::calculation: return "calculation";
+        case RevisionChangeCategory::presentation: return "presentation";
+        }
+        return "semantic";
+    }
+
+    static RevisionChangeCategory classify_revision_path(std::string_view entity_type,
+                                                         std::string_view path) {
+        const auto contains = [path](std::initializer_list<std::string_view> tokens) {
+            return std::any_of(tokens.begin(), tokens.end(), [path](const auto token) {
+                return path.find(token) != std::string_view::npos;
+            });
+        };
+        // Annotation and dimension placement/style is presentation state even
+        // when the field names contain ordinary geometric words such as x/y or
+        // rotation.  Keep this test before the broad geometric vocabulary.
+        if (entity_type == "annotation_state" || entity_type == "dimension") {
+            if (contains({"color", "fill", "visible", "visibility", "style", "font",
+                          "bold", "italic", "text_height", "stroke", "position", "rotation",
+                          "scale"})) {
+                return RevisionChangeCategory::presentation;
+            }
+        }
+        if (contains({"classification", "factor", "deduction", "calculation", "area_attributes",
+                      "scope", "display_unit", "decimal_places", "rounding"})) {
+            return RevisionChangeCategory::calculation;
+        }
+        if (contains({"color", "fill", "visible", "visibility", "style", "font", "bold",
+                      "italic", "text_height", "stroke", "hatch", "line_width", "title_block",
+                      "issue_date", "paper", "presentation", "detail"})) {
+            return RevisionChangeCategory::presentation;
+        }
+        if (contains({"boundary", "segment", "vertex", "point", "start", "end", "sweep",
+                      "arc", "rise", "run", "span", "width", "depth", "radius", "height",
+                      "elevation", "thickness", "origin", "direction", "up", "coordinate",
+                      "transform", "geometry", "bounds", "viewport", "position", "x", "y", "z"})) {
+            return RevisionChangeCategory::geometric;
+        }
+        return RevisionChangeCategory::semantic;
+    }
+
+    static RevisionChangeCategory classify_revision_entity_type(std::string_view entity_type) {
+        if (entity_type == kAnnotationEntityType || entity_type == "dimension") {
+            return RevisionChangeCategory::presentation;
+        }
+        if (entity_type == "boundary" || entity_type == "measurement_boundary" ||
+            entity_type == "room_boundary" || entity_type == "wall" || entity_type == "opening" ||
+            entity_type == "room" || entity_type == "slab" || entity_type == "roof" ||
+            entity_type == "stair" || entity_type == "railing" || entity_type == "column" ||
+            entity_type == "beam" || entity_type == "terrain_surface") {
+            return RevisionChangeCategory::geometric;
+        }
+        if (entity_type == "property") return RevisionChangeCategory::calculation;
+        return RevisionChangeCategory::semantic;
+    }
+
+    static void collect_revision_json_differences(const json& older, const json& newer,
+                                                   std::string path, std::string_view entity_type,
+                                                   std::set<RevisionChangeCategory>& categories,
+                                                   std::set<std::string, std::less<>>& paths) {
+        const auto record = [&](std::string_view candidate) {
+            categories.insert(classify_revision_path(entity_type, candidate));
+            if (paths.size() < 12) paths.insert(std::string(candidate));
+        };
+        if (older.type() != newer.type()) {
+            record(path);
+            return;
+        }
+        if (older.is_object()) {
+            std::set<std::string, std::less<>> keys;
+            for (const auto& [key, value] : older.items()) {
+                (void)value;
+                keys.insert(key);
+            }
+            for (const auto& [key, value] : newer.items()) {
+                (void)value;
+                keys.insert(key);
+            }
+            for (const auto& key : keys) {
+                const auto prior = older.find(key);
+                const auto next = newer.find(key);
+                const auto child_path = path.empty() ? key : path + "." + key;
+                if (prior == older.end() || next == newer.end()) {
+                    record(child_path);
+                } else {
+                    collect_revision_json_differences(prior.value(), next.value(), child_path,
+                                                       entity_type, categories, paths);
+                }
+            }
+            return;
+        }
+        if (older.is_array()) {
+            if (older.size() != newer.size()) record(path + "[size]");
+            const auto count = std::min(older.size(), newer.size());
+            for (std::size_t index = 0; index < count; ++index) {
+                collect_revision_json_differences(
+                    older.at(index), newer.at(index),
+                    path + "[" + std::to_string(index) + "]", entity_type, categories, paths);
+            }
+            return;
+        }
+        if (older != newer) record(path);
+    }
+
+    static void add_revision_categories(RevisionDiffSummary& result,
+                                        const std::set<RevisionChangeCategory>& categories) {
+        for (const auto category : categories) {
+            switch (category) {
+            case RevisionChangeCategory::semantic: ++result.semantic_changes; break;
+            case RevisionChangeCategory::geometric: ++result.geometric_changes; break;
+            case RevisionChangeCategory::calculation: ++result.calculation_changes; break;
+            case RevisionChangeCategory::presentation: ++result.presentation_changes; break;
+            }
+        }
+    }
 
     static RevisionDiffSummary compareRevisions(const DocumentSnapshot& older,
                                                 const DocumentSnapshot& newer) {
         RevisionDiffSummary result;
-        const auto count_entities = [](const auto& before, const auto& after,
-                                       std::size_t& added, std::size_t& removed,
-                                       std::size_t& changed) {
+        const auto count_entities = [&result](const auto& before, const auto& after,
+                                              std::size_t& added, std::size_t& removed,
+                                              std::size_t& changed) {
             for (const auto& [id, value] : after) {
                 const auto found = before.find(id);
-                if (found == before.end()) ++added;
-                else if (!(found->second == value)) ++changed;
+                if (found == before.end()) {
+                    ++added;
+                    std::set<RevisionChangeCategory> categories{
+                        RevisionChangeCategory::semantic};
+                    if constexpr (std::is_same_v<std::decay_t<decltype(value)>, Asset>) {
+                        if (value.media_type.rfind("image/", 0) == 0) {
+                            categories.insert(RevisionChangeCategory::presentation);
+                        }
+                    } else {
+                        categories.insert(classify_revision_entity_type(value.type));
+                        if (value.type == kAnnotationEntityType || value.type == "dimension") {
+                            categories.insert(RevisionChangeCategory::presentation);
+                        }
+                    }
+                    add_revision_categories(result, categories);
+                    if (result.details.size() < 128) {
+                        result.details.push_back("+ " + id + " [" +
+                                                revision_change_category_name(*categories.begin()) + "]");
+                    }
+                } else if (!(found->second == value)) {
+                    ++changed;
+                    std::set<RevisionChangeCategory> categories;
+                    std::set<std::string, std::less<>> paths;
+                    if constexpr (std::is_same_v<std::decay_t<decltype(value)>, Asset>) {
+                        categories.insert(value.media_type.rfind("image/", 0) == 0
+                                              ? RevisionChangeCategory::presentation
+                                              : RevisionChangeCategory::semantic);
+                        if (found->second.media_type != value.media_type) {
+                            categories.insert(RevisionChangeCategory::semantic);
+                        }
+                    } else {
+                        if (found->second.type != value.type ||
+                            found->second.required != value.required ||
+                            found->second.extensions != value.extensions) {
+                            categories.insert(RevisionChangeCategory::semantic);
+                        }
+                        collect_revision_json_differences(found->second.properties,
+                                                           value.properties, "properties",
+                                                           value.type, categories, paths);
+                        collect_revision_json_differences(found->second.extensions,
+                                                           value.extensions, "extensions",
+                                                           value.type, categories, paths);
+                    }
+                    if (categories.empty()) categories.insert(RevisionChangeCategory::semantic);
+                    add_revision_categories(result, categories);
+                    if (result.details.size() < 128) {
+                        std::string detail = "~ " + id + " [";
+                        bool first = true;
+                        for (const auto category : categories) {
+                            if (!first) detail += ", ";
+                            detail += revision_change_category_name(category);
+                            first = false;
+                        }
+                        detail += "]";
+                        if (!paths.empty()) {
+                            detail += " ";
+                            detail += *paths.begin();
+                            if (paths.size() > 1) detail += " …";
+                        }
+                        result.details.push_back(std::move(detail));
+                    }
+                }
             }
             for (const auto& [id, value] : before) {
-                (void)value;
-                if (!after.contains(id)) ++removed;
+                if (after.contains(id)) continue;
+                ++removed;
+                std::set<RevisionChangeCategory> categories{
+                    RevisionChangeCategory::semantic};
+                if constexpr (std::is_same_v<std::decay_t<decltype(value)>, Asset>) {
+                    if (value.media_type.rfind("image/", 0) == 0) {
+                        categories.insert(RevisionChangeCategory::presentation);
+                    }
+                } else {
+                    categories.insert(classify_revision_entity_type(value.type));
+                    if (value.type == kAnnotationEntityType || value.type == "dimension") {
+                        categories.insert(RevisionChangeCategory::presentation);
+                    }
+                }
+                add_revision_categories(result, categories);
+                if (result.details.size() < 128) {
+                    result.details.push_back("- " + id + " [" +
+                                            revision_change_category_name(*categories.begin()) + "]");
+                }
             }
         };
         count_entities(older.entities(), newer.entities(), result.added_entities,
@@ -3618,11 +3822,26 @@ public:
                 auto historical = Document::fork_at_revision(source, revision);
                 const auto older = historical.snapshot();
                 const auto diff = compareRevisions(older, source);
+                QString detail_text;
+                if (diff.details.empty()) {
+                    detail_text = QStringLiteral("No semantic records changed.");
+                } else {
+                    detail_text = QStringLiteral("Details:\n");
+                    for (const auto& detail : diff.details) {
+                        detail_text += QStringLiteral("• ") + QString::fromStdString(detail) +
+                                       QLatin1Char('\n');
+                    }
+                    if (diff.details.size() == 128) {
+                        detail_text += QStringLiteral("• Further changes omitted from this view.\n");
+                    }
+                }
                 comparison->setPlainText(
                     QStringLiteral("%1\n\nNamed revision: %2\nCurrent revision: %3\n\n"
                                    "Entities added: %4\nEntities removed: %5\nEntities changed: %6\n"
                                    "Assets added: %7\nAssets removed: %8\nAssets changed: %9\n\n"
-                                   "The original revision remains immutable.\n")
+                                   "Semantic changes: %10\nGeometric changes: %11\n"
+                                   "Calculation changes: %12\nPresentation changes: %13\n\n"
+                                   "%14\nThe original revision remains immutable.\n")
                         .arg(name_text)
                         .arg(revision)
                         .arg(source.revision())
@@ -3631,7 +3850,12 @@ public:
                         .arg(diff.changed_entities)
                         .arg(diff.added_assets)
                         .arg(diff.removed_assets)
-                        .arg(diff.changed_assets));
+                        .arg(diff.changed_assets)
+                        .arg(diff.semantic_changes)
+                        .arg(diff.geometric_changes)
+                        .arg(diff.calculation_changes)
+                        .arg(diff.presentation_changes)
+                        .arg(detail_text));
                 status->setText(QStringLiteral("Comparison generated without changing the document."));
             } catch (const std::exception& error) {
                 status->setText(QStringLiteral("Compare revisions: %1").arg(QString::fromUtf8(error.what())));

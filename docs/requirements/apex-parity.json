@@ -251,7 +251,7 @@
         "tests/desktop_smoke.cpp",
         "docs/desktop-workflow.md"
       ],
-      "implementation_note": "The Document NameRevision command is now surfaced in a local desktop editor with ordered listing, read-only entity/asset comparison, and guarded restore-as-new-project copies that preserve the open document. Geometric/calculation/presentation diff detail and production fixtures remain open."
+      "implementation_note": "The Document NameRevision command is surfaced in a local desktop editor with ordered listing, read-only entity/asset comparison, categorized semantic/geometric/calculation/presentation change counts, bounded changed-property details, and guarded restore-as-new-project copies that preserve the open document. Production fixtures and independent restore/output qualification remain open."
     },
     {
       "id": "CORE-DOC-002",

@@ -3,7 +3,7 @@
 ## Latest integrated checkpoint
 
 At the current integrated checkpoint, the Release desktop build and CTest matrix
-completed with 134 executed tests passing (the production acceptance test is
+completed with 135 executed tests passing (the production acceptance test is
 intentionally disabled and the AppContainer runtime test is skipped when the host is already
 inside a parent Job Object). The focused Debug and Release architectural
 schedule tests and the focused Debug canvas test also pass. Print preview now
@@ -41,6 +41,11 @@ templates, profiles, and documentation with a package manifest. It publishes
 through a private staging directory and rejects unsafe or modified payloads.
 Cross-machine fingerprint equivalence and reusable template consumption remain
 production qualification work.
+
+Named revision comparison now reports semantic, geometric, calculation, and
+presentation change counts with bounded changed-property details. The report
+remains a read-only view over a retained historical prefix; restore continues
+to write a separate project copy.
 
 The requirement contract passes, while `python scripts/requirement_audit.py
 --release` still fails closed with 130 in-progress requirements. The corrected

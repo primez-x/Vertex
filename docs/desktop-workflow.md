@@ -360,8 +360,10 @@ palette. It records a user-provided name at the current Document revision
 through the normal undoable `NameRevision` command, so names are portable in
 `.bldproj` files and survive save/reopen. The editor lists named revisions in
 document order and compares any selected revision with the current head by
-counting added, removed, and changed entities and assets. Comparison is
-read-only and does not alter the current selection or history.
+counting added, removed, and changed entities and assets. The report also
+classifies changed records as semantic, geometric, calculation, or
+presentation changes and lists the first changed property paths for review.
+Comparison is read-only and does not alter the current selection or history.
 
 **Restore as new project** reconstructs the selected retained history prefix,
 marks that copy clean, and writes it to a new `.bldproj` destination. It never

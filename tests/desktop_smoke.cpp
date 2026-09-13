@@ -1345,8 +1345,10 @@ void test_named_revisions() {
                 "later edits must remain available after naming a revision");
         compare->click();
         require(comparison->toPlainText().contains(QStringLiteral("Entities added: 1")) &&
+                    comparison->toPlainText().contains(QStringLiteral("Geometric changes: 1")) &&
+                    comparison->toPlainText().contains(QStringLiteral("Details:")) &&
                     status->text().contains(QStringLiteral("without changing"), Qt::CaseInsensitive),
-                "comparison must report later semantic changes without mutating the document");
+                "comparison must report categorized later changes without mutating the document");
         dialog->reject();
     });
     action->trigger();
