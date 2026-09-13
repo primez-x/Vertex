@@ -1201,6 +1201,8 @@
         "src/core/annotation_entity_codec.cpp",
         "tests/annotation_catalog_tests.cpp",
         "tests/annotation_entity_codec_tests.cpp",
+        "tests/desktop_smoke.cpp",
+        "tests/dxf_project_exchange_tests.cpp",
         "docs/annotation-catalog.md"
       ],
       "implementation_note": "Editable label templates, per-instance content/style/placement/visibility, filtering, strict serialization, typed Document admission, save/reopen, and desktop commands for template-backed creation plus text/placement/visibility editing are implemented. The Windows inspector also edits font family, paper text height, stroke/fill colors, bold, and italic flags for labels and symbols through the normal typed history command; output lifecycle and broader style/fill qualification remain open."

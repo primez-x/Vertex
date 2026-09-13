@@ -3976,6 +3976,24 @@ int main(int argc, char** argv) {
     require(rendered_symbol != annotation_canvas->entities().end() &&
                 !rendered_symbol->segments.empty(),
             "resized symbols must reach the shared canvas renderer");
+    QTemporaryDir symbol_output_directory;
+    require(symbol_output_directory.isValid(), "symbol output fixture needs a temporary directory");
+    const auto symbol_pdf = symbol_output_directory.filePath(QStringLiteral("symbols.pdf"));
+    const auto symbol_svg = symbol_output_directory.filePath(QStringLiteral("symbols.svg"));
+    const auto symbol_png = symbol_output_directory.filePath(QStringLiteral("symbols.png"));
+    require(window.exportDraftPdf(symbol_pdf) && window.exportDraftSvg(symbol_svg) &&
+                window.exportDraftImage(symbol_png),
+            "residential symbol instances must use all shared output paths");
+    QFile symbol_svg_file(symbol_svg);
+    require(symbol_svg_file.open(QIODevice::ReadOnly | QIODevice::Text),
+            "symbol SVG output should be readable");
+    const auto symbol_svg_text = QString::fromUtf8(symbol_svg_file.readAll());
+    require(symbol_svg_text.contains(QStringLiteral("stroke")) &&
+                QFileInfo(symbol_pdf).size() > 0 && QFileInfo(symbol_png).size() > 0 &&
+                QFileInfo::exists(symbol_pdf + QStringLiteral(".fingerprint.json")) &&
+                QFileInfo::exists(symbol_svg + QStringLiteral(".fingerprint.json")) &&
+                QFileInfo::exists(symbol_png + QStringLiteral(".fingerprint.json")),
+            "resized symbols must survive PDF, SVG, and image output with fingerprints");
     require(window.selectEntity(label_id), "a persisted annotation child should be selectable");
     require(window.deleteAnnotation(label_id), "annotation deletion should be undoable");
     annotation_state = decode_annotation_entity(
