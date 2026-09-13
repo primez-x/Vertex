@@ -3,7 +3,7 @@
 ## Latest integrated checkpoint
 
 At the current integrated checkpoint, the Release desktop build and CTest matrix
-completed with 136 executed tests passing (the production acceptance test is
+completed with 140 executed tests passing (the production acceptance test is
 intentionally disabled and the AppContainer runtime test is skipped when the host is already
 inside a parent Job Object). The focused Debug and Release architectural
 schedule tests and the focused Debug canvas test also pass. Print preview now
