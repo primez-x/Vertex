@@ -320,6 +320,22 @@ public:
             }
         }
 
+        // A valid wall_join owns the 3D presentation of its source walls.
+        // Keep the source entities authoritative in the document, but avoid
+        // displaying the same wall twice when the fused join is present.
+        std::map<std::string, std::string, std::less<>> joined_wall_owner;
+        for (const auto& [id, entity] : entities) {
+            if (entity.type != "wall_join") continue;
+            try {
+                const auto join = parse_wall_join(entity.properties, id);
+                for (const auto& wall_id : join.wall_ids) {
+                    joined_wall_owner.emplace(wall_id, id);
+                }
+            } catch (const std::exception& error) {
+                append_unique(pending, "wall join '" + id + "': " + error.what());
+            }
+        }
+
         std::map<std::string, std::vector<const Entity*>, std::less<>> openings_by_wall;
         for (const auto& [id, entity] : entities) {
             if (entity.type != "opening") {
@@ -340,8 +356,13 @@ public:
         const bool had_solids = !solids.empty();
         bool changed = false;
         for (const auto& [id, entity] : entities) {
+            if (entity.type == "wall" && joined_wall_owner.contains(id)) {
+                remove_solid(id);
+                changed = true;
+                continue;
+            }
             if (entity.type != "wall" && entity.type != "slab" && entity.type != "room" &&
-                entity.type != "terrain_surface" &&
+                entity.type != "terrain_surface" && entity.type != "wall_join" &&
                 !can_recognize_building_entity_type(entity.type)) {
                 if (entity.type == "opening") {
                     continue;
@@ -371,6 +392,22 @@ public:
                                     ? openings_by_wall[id]
                                     : std::vector<const Entity*>{};
             auto content = entity_content(geometry_entity, hosted);
+            if (geometry_entity.type == "wall_join") {
+                try {
+                    const auto join = parse_wall_join(geometry_entity.properties, id);
+                    for (const auto& wall_id : join.wall_ids) {
+                        const auto source = entities.find(wall_id);
+                        if (source != entities.end()) {
+                            append_entity_content(content, source->second);
+                            for (const auto* opening : openings_by_wall[wall_id]) {
+                                if (opening != nullptr) append_entity_content(content, *opening);
+                            }
+                        }
+                    }
+                } catch (const std::exception& error) {
+                    append_unique(errors, "wall join '" + id + "': " + error.what());
+                }
+            }
             std::optional<std::string> material_color;
             if (geometry_entity.properties.contains("material_assignment")) {
                 const auto& assignment = geometry_entity.properties.at("material_assignment");
@@ -416,6 +453,26 @@ public:
                         continue;
                     }
                     shape = make_wall(wall);
+                } else if (geometry_entity.type == "wall_join") {
+                    const auto join = parse_wall_join(geometry_entity.properties, id);
+                    std::vector<Wall> source_walls;
+                    source_walls.reserve(join.wall_ids.size());
+                    for (const auto& wall_id : join.wall_ids) {
+                        const auto source = entities.find(wall_id);
+                        if (source == entities.end() || source->second.type != "wall") {
+                            throw std::invalid_argument("wall join source wall is missing: " + wall_id);
+                        }
+                        const auto resolved_source = resolve_vertical_placement(*snapshot,
+                                                                                 source->second);
+                        Wall wall;
+                        std::string error;
+                        if (!read_document_wall(resolved_source, openings_by_wall[wall_id],
+                                                wall, error)) {
+                            throw std::invalid_argument(error);
+                        }
+                        source_walls.push_back(std::move(wall));
+                    }
+                    shape = make_wall_join(join, source_walls);
                 } else if (geometry_entity.type == "slab") {
                     Slab slab;
                     if (!read_document_slab(geometry_entity, slab, parse_error)) {

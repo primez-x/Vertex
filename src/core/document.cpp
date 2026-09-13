@@ -325,6 +325,14 @@ void validate_entity(const Entity& entity) {
                            "wall slope_rise_m must be a finite number");
         }
     }
+    if (entity.type == "wall_join") {
+        try {
+            (void)parse_wall_join(entity.properties, entity.id);
+        } catch (const std::exception& error) {
+            document_error(DocumentErrorCode::invalid_entity,
+                           std::string("invalid wall join entity: ") + error.what());
+        }
+    }
     const auto validate_embedded_model = [&](auto decoder, std::string_view name) {
         if (!entity.properties.contains("model")) {
             document_error(DocumentErrorCode::invalid_entity,
@@ -686,6 +694,29 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
                                "invalid floor vertical level binding " + id + ": " + error.what());
             }
         }
+        if (entity.type == "wall_join") {
+            try {
+                const auto join = parse_wall_join(entity.properties, entity.id);
+                for (const auto& wall_id : join.wall_ids) {
+                    const auto wall = entities.find(wall_id);
+                    if (wall == entities.end()) {
+                        // The canonical reference pass above reports the
+                        // missing wall; keep this semantic pass deterministic.
+                        continue;
+                    }
+                    if (wall->second.type != "wall") {
+                        document_error(DocumentErrorCode::invalid_entity,
+                                       "wall join " + id + " references " + wall_id +
+                                       " with type " + wall->second.type + ", expected wall");
+                    }
+                }
+            } catch (const DocumentError&) {
+                throw;
+            } catch (const std::exception& error) {
+                document_error(DocumentErrorCode::invalid_entity,
+                               "invalid wall join references " + id + ": " + error.what());
+            }
+        }
         if (const auto connection = stair_connection_reference(entity)) {
             const auto graph = entities.find(connection->graph_entity_id);
             if (graph == entities.end()) {
@@ -734,6 +765,21 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
             } catch (const std::exception& error) {
                 document_error(DocumentErrorCode::invalid_entity,
                                "invalid stair level_connection " + id + ": " + error.what());
+            }
+        }
+    }
+    {
+        std::map<std::string, std::string, std::less<>> wall_join_owners;
+        for (const auto& [id, entity] : entities) {
+            if (entity.type != "wall_join") continue;
+            const auto join = parse_wall_join(entity.properties, id);
+            for (const auto& wall_id : join.wall_ids) {
+                const auto [owner, inserted] = wall_join_owners.emplace(wall_id, id);
+                if (!inserted) {
+                    document_error(DocumentErrorCode::invalid_entity,
+                                   "wall " + wall_id + " belongs to multiple wall joins: " +
+                                   owner->second + " and " + id);
+                }
             }
         }
     }
@@ -872,10 +918,10 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
                         document_error(DocumentErrorCode::dangling_reference,
                                        "model phases " + id + " references missing entity " + member_id);
                     }
-                    static constexpr std::array<std::string_view, 15> model_roles{
+                    static constexpr std::array<std::string_view, 16> model_roles{
                         "building", "floor", "wall", "opening", "room", "room_boundary",
                         "slab", "roof", "stair", "railing", "column", "beam", "assembly_model",
-                        "boundary", "measurement_boundary"};
+                        "boundary", "measurement_boundary", "wall_join"};
                     const auto& type = entities.at(member_id).type;
                     if (std::find(model_roles.begin(), model_roles.end(), type) == model_roles.end()) {
                         document_error(DocumentErrorCode::invalid_entity,
@@ -1092,7 +1138,7 @@ std::string sha256_hex(std::span<const std::byte> bytes) {
 }
 
 bool is_known_entity_type(std::string_view type) noexcept {
-    static constexpr std::array<std::string_view, 33> known{
+    static constexpr std::array<std::string_view, 34> known{
         "property",             "building", "floor",  "layer", "boundary",
         "measurement_boundary", "room_boundary", "wall", "opening", "room",
         "slab",                 "roof",     "stair",  "railing", "column", "beam",
@@ -1100,7 +1146,7 @@ bool is_known_entity_type(std::string_view type) noexcept {
         "sheet_view_model",    "annotation_state", "reference_asset",
         "assembly_model",      "model_phases", "room_relationships", "vertical_levels",
         "reference_grid", "terrain_surface", "dxf_source", "ifc_source",
-        "georeferencing"};
+        "georeferencing", "wall_join"};
     return std::find(known.begin(), known.end(), type) != known.end();
 }
 

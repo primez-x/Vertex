@@ -600,4 +600,77 @@ nlohmann::json wall_layers_json(const std::vector<WallLayer>& layers) {
     return result;
 }
 
+void validate_wall_join_semantics(const WallJoin& join) {
+    if (!valid_reference_id(join.id)) {
+        reject("Wall join ID must be a non-empty ASCII identifier");
+    }
+    if (join.style != WallJoinStyle::fused) {
+        reject("Wall join style is unsupported");
+    }
+    if (join.wall_ids.size() < 2 || join.wall_ids.size() > 32) {
+        reject("Wall joins require between two and thirty-two walls");
+    }
+    std::set<std::string, std::less<>> ids;
+    for (const auto& wall_id : join.wall_ids) {
+        if (!valid_reference_id(wall_id) || !ids.insert(wall_id).second) {
+            reject("Wall join wall IDs must be unique ASCII identifiers");
+        }
+    }
+}
+
+std::string_view wall_join_style_name(WallJoinStyle style) noexcept {
+    switch (style) {
+    case WallJoinStyle::fused:
+        return "fused";
+    }
+    return "invalid";
+}
+
+std::optional<WallJoinStyle> parse_wall_join_style(std::string_view value) noexcept {
+    if (value == "fused") return WallJoinStyle::fused;
+    return std::nullopt;
+}
+
+WallJoin parse_wall_join(const nlohmann::json& value, std::string_view id) {
+    WallJoin result;
+    result.id = std::string(id);
+    if (!value.is_object() || value.size() != 3 || !value.contains("version") ||
+        !value.contains("style") || !value.contains("wall_ids")) {
+        throw std::invalid_argument(
+            "Wall join properties must contain exactly version, style, and wall_ids");
+    }
+    const auto& version = value.at("version");
+    if ((!version.is_number_integer() && !version.is_number_unsigned()) || version != 1) {
+        throw std::invalid_argument("Wall join version must be 1");
+    }
+    const auto& style = value.at("style");
+    if (!style.is_string()) {
+        throw std::invalid_argument("Wall join style must be a string");
+    }
+    const auto parsed_style = parse_wall_join_style(style.get<std::string>());
+    if (!parsed_style.has_value()) {
+        throw std::invalid_argument("Wall join style is unsupported");
+    }
+    result.style = *parsed_style;
+    const auto& wall_ids = value.at("wall_ids");
+    if (!wall_ids.is_array()) {
+        throw std::invalid_argument("Wall join wall_ids must be an array");
+    }
+    result.wall_ids.reserve(wall_ids.size());
+    for (const auto& wall_id : wall_ids) {
+        if (!wall_id.is_string()) {
+            throw std::invalid_argument("Wall join wall_ids must contain strings");
+        }
+        result.wall_ids.push_back(wall_id.get<std::string>());
+    }
+    validate_wall_join_semantics(result);
+    return result;
+}
+
+nlohmann::json wall_join_json(const WallJoin& join) {
+    validate_wall_join_semantics(join);
+    return { {"version", 1}, {"style", wall_join_style_name(join.style)},
+             {"wall_ids", join.wall_ids} };
+}
+
 }  // namespace sketch

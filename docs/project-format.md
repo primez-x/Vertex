@@ -137,7 +137,7 @@ and a JSON `extensions` object. IDs are document identity and are never derived 
 The v1 known types are:
 
 `property`, `building`, `floor`, `layer`, `boundary`, `measurement_boundary`, `room_boundary`,
-`wall`, `opening`, `room`, `slab`, `roof`, `stair`, `railing`, `column`, `beam`, `label`, `sheet`, `view`,
+`wall`, `wall_join`, `opening`, `room`, `slab`, `roof`, `stair`, `railing`, `column`, `beam`, `label`, `sheet`, `view`,
 `constraint`, `reference_grid`, `terrain_surface`, `dxf_source`, and `ifc_source`.
 
 All geometry properties use metres and radians. A wall and opening can be represented as:
@@ -183,6 +183,17 @@ An optional signed `slope_rise_m` changes the wall-top height linearly from
 the baseline start to its end while keeping the bottom at `elevation_m`;
 `height_m` is the start height. Nonzero sloped walls currently require a
 straight baseline, and hosted openings must fit below the local sloped top.
+
+A `wall_join` is a version-1 architectural relationship that preserves the
+source wall entities while providing one derived fused solid for coordinated
+views. Its properties contain exactly `version: 1`, `style: "fused"`, and a
+`wall_ids` array of two to thirty-two unique wall IDs. Every referenced wall
+must exist and be a `wall`; one wall may not belong to more than one join. The
+native geometry builder additionally requires every member to share a
+connected endpoint with another member and to have overlapping vertical
+extents. The fused shape is a derived cache: source wall dimensions, hosted
+openings, classifications, and schedule quantities remain authoritative and
+are never replaced by the join record.
 
 ```json
 {

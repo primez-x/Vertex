@@ -39,6 +39,14 @@ active-pen presses route through the same pressure-independent pointer path as
 mouse input, preserving snapping, focus, selection, and ordinary document
 history; physical-device qualification and richer multi-touch gestures remain
 open.
+Version-1 `wall_join` entities now preserve source wall identities and hosted
+openings while validating member references and unique ownership at the
+Document boundary. The architecture kernel validates endpoint connectivity and
+fuses the source wall solids into one OCCT union, and the native 3D view
+displays that union once while retaining the source walls for schedules and
+edits. Codec, document-reference, geometry, and native build coverage pass in
+the current Debug and Release builds; miter-specific profiles, curved-top
+sloped joins, and production qualification remain open.
 The tracked source boundary is now explicit in
 `third_party/source-provenance.json`: a fail-closed audit assigns every tracked
 path to first-party source, third-party provenance, or an excluded generated

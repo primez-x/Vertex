@@ -2,6 +2,7 @@
 
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
 #include <BRep_Builder.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
@@ -22,9 +23,13 @@
 #include <gp_Vec.hxx>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <numbers>
+#include <map>
+#include <set>
 #include <stdexcept>
+#include <span>
 #include <utility>
 
 namespace sketch {
@@ -229,6 +234,38 @@ double common_volume(const TopoDS_Shape& a, const TopoDS_Shape& b) {
     if (!operation.IsDone() || operation.HasErrors()) throw std::invalid_argument("Solid containment is unresolved");
     return solid_volume(operation.Shape());
 }
+
+double endpoint_distance(const Vec2& first, const Vec2& second) {
+    const auto distance = std::hypot(first.x - second.x, first.y - second.y);
+    if (!std::isfinite(distance)) {
+        throw std::invalid_argument("Wall join endpoint distance exceeds the supported range");
+    }
+    return distance;
+}
+
+bool vertical_intersection(const Wall& first, const Wall& second) {
+    const auto first_bottom = first.elevation;
+    const auto first_top = first.elevation +
+                           std::max(first.height,
+                                    first.height + first.slope_rise.value_or(0.0));
+    const auto second_bottom = second.elevation;
+    const auto second_top = second.elevation +
+                            std::max(second.height,
+                                     second.height + second.slope_rise.value_or(0.0));
+    if (!std::isfinite(first_top) || !std::isfinite(second_top)) return false;
+    return std::max(first_bottom, second_bottom) <=
+           std::min(first_top, second_top) + tolerance;
+}
+
+TopoDS_Shape fuse_wall_shapes(const TopoDS_Shape& first, const TopoDS_Shape& second) {
+    BRepAlgoAPI_Fuse operation(first, second);
+    operation.Build();
+    if (!operation.IsDone() || operation.HasErrors() || operation.Shape().IsNull() ||
+        !BRepCheck_Analyzer(operation.Shape()).IsValid()) {
+        throw std::invalid_argument("Wall join boolean union did not produce a valid solid");
+    }
+    return operation.Shape();
+}
 }
 
 double solid_volume(const TopoDS_Shape& shape) {
@@ -328,6 +365,69 @@ TopoDS_Shape make_wall(const Wall& wall) {
         return compound;
     } catch (const Standard_Failure& error) {
         throw std::invalid_argument(std::string("Wall geometry failed: ") + error.what());
+    }
+}
+
+TopoDS_Shape make_wall_join(const WallJoin& join, std::span<const Wall> walls) {
+    validate_wall_join_semantics(join);
+    if (walls.size() != join.wall_ids.size()) {
+        throw std::invalid_argument("Wall join source wall count does not match wall_ids");
+    }
+
+    std::map<std::string_view, const Wall*> available;
+    for (const auto& wall : walls) {
+        if (!available.emplace(wall.id, &wall).second) {
+            throw std::invalid_argument("Wall join source wall IDs must be unique");
+        }
+    }
+    std::vector<const Wall*> resolved;
+    resolved.reserve(join.wall_ids.size());
+    for (const auto& wall_id : join.wall_ids) {
+        const auto found = available.find(wall_id);
+        if (found == available.end()) {
+            throw std::invalid_argument("Wall join source wall is missing: " + wall_id);
+        }
+        resolved.push_back(found->second);
+    }
+
+    for (const auto* wall : resolved) validate_wall_semantics(*wall);
+    std::vector<bool> connected(resolved.size(), false);
+    for (std::size_t first = 0; first < resolved.size(); ++first) {
+        for (std::size_t second = first + 1; second < resolved.size(); ++second) {
+            const auto& left = *resolved[first];
+            const auto& right = *resolved[second];
+            const std::array<Vec2, 2> left_endpoints{left.baseline.start, left.baseline.end};
+            const std::array<Vec2, 2> right_endpoints{right.baseline.start, right.baseline.end};
+            bool touches = false;
+            for (const auto& left_endpoint : left_endpoints) {
+                for (const auto& right_endpoint : right_endpoints) {
+                    if (endpoint_distance(left_endpoint, right_endpoint) <= tolerance) {
+                        touches = true;
+                    }
+                }
+            }
+            if (touches && vertical_intersection(left, right)) {
+                connected[first] = true;
+                connected[second] = true;
+            }
+        }
+    }
+    if (std::find(connected.begin(), connected.end(), false) != connected.end()) {
+        throw std::invalid_argument("Wall join walls must share connected endpoints");
+    }
+
+    try {
+        auto result = make_wall(*resolved.front());
+        for (std::size_t index = 1; index < resolved.size(); ++index) {
+            result = fuse_wall_shapes(result, make_wall(*resolved[index]));
+        }
+        if (result.IsNull() || !BRepCheck_Analyzer(result).IsValid() ||
+            solid_volume(result) <= tolerance * tolerance * tolerance) {
+            throw std::invalid_argument("Wall join produced an empty solid");
+        }
+        return result;
+    } catch (const Standard_Failure& error) {
+        throw std::invalid_argument(std::string("Wall join geometry failed: ") + error.what());
     }
 }
 

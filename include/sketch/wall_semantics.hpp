@@ -51,10 +51,36 @@ struct Wall {
     std::optional<double> slope_rise;
 };
 
+// A wall join is a first-class architectural relationship.  The v1 fused
+// style keeps each wall's semantic identity and hosted openings while the
+// derived geometry is represented by one boolean union for coordinated
+// views.  Wall joins are deliberately separate from measurement boundaries.
+enum class WallJoinStyle { fused };
+
+struct WallJoin {
+    std::string id;
+    std::vector<std::string> wall_ids;
+    WallJoinStyle style{WallJoinStyle::fused};
+
+    bool operator==(const WallJoin&) const = default;
+};
+
 // Validate the shared semantic contract used by document editing and solid
 // construction. The function throws std::invalid_argument on invalid input
 // and never modifies the supplied wall.
 void validate_wall_semantics(const Wall& wall);
+
+// Validate a detached wall-join value without resolving its wall IDs.  The
+// document layer performs target existence/type checks; geometry builders
+// additionally require endpoint connectivity before fusing the solids.
+void validate_wall_join_semantics(const WallJoin& join);
+
+[[nodiscard]] std::string_view wall_join_style_name(WallJoinStyle style) noexcept;
+[[nodiscard]] std::optional<WallJoinStyle>
+parse_wall_join_style(std::string_view value) noexcept;
+[[nodiscard]] WallJoin parse_wall_join(const nlohmann::json& value,
+                                       std::string_view id);
+[[nodiscard]] nlohmann::json wall_join_json(const WallJoin& join);
 
 // Validate and decode the optional persisted wall-layer array. The JSON form
 // is versioned at the containing project format boundary by the wall schema;
