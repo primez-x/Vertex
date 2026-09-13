@@ -296,6 +296,28 @@ std::optional<std::string> annotation_parent_for_child(const DocumentSnapshot& s
     return std::nullopt;
 }
 
+std::optional<std::string> assembly_host_for_child(const DocumentSnapshot& snapshot,
+                                                    std::string_view child_id) {
+    for (const auto& [catalog_id, catalog_entity] : snapshot.entities()) {
+        if (catalog_entity.type != "assembly_model" ||
+            !catalog_entity.properties.contains("model")) continue;
+        const std::string prefix = catalog_id + ":instance:";
+        if (!child_id.starts_with(prefix)) continue;
+        try {
+            const auto model = AssemblyModel::from_json(catalog_entity.properties.at("model"));
+            const auto instance_id = std::string(child_id.substr(prefix.size()));
+            const auto instance = std::find_if(model.instances().begin(), model.instances().end(),
+                [&](const auto& candidate) { return candidate.id == instance_id; });
+            if (instance != model.instances().end() && instance->placement)
+                return instance->placement->host_entity_id;
+        } catch (const std::exception&) {
+            // A malformed catalog remains diagnosable through normal document
+            // validation; selection should simply fail closed for its child.
+        }
+    }
+    return std::nullopt;
+}
+
 std::vector<Entity> clipboard_entities_for_selection(const DocumentSnapshot& snapshot,
                                                       std::string_view selected_id) {
     std::string root_id(selected_id);
@@ -9155,8 +9177,9 @@ public:
             return true;
         }
         const auto snapshot = m_document->snapshot();
+        QString selection_id = entity_id;
         bool annotation_child = false;
-        if (!has_entity(*m_document, entity_id)) {
+        if (!has_entity(*m_document, selection_id)) {
             for (const auto& [id, entity] : snapshot.entities()) {
                 (void)id;
                 if (entity.type != kAnnotationEntityType) continue;
@@ -9164,10 +9187,10 @@ public:
                     const auto state = decode_annotation_entity(entity);
                     annotation_child = std::any_of(
                         state.labels.begin(), state.labels.end(), [&](const auto& label) {
-                            return label.id == entity_id.toStdString();
+                            return label.id == selection_id.toStdString();
                         }) || std::any_of(
                         state.symbols.begin(), state.symbols.end(), [&](const auto& symbol) {
-                            return symbol.id == entity_id.toStdString();
+                            return symbol.id == selection_id.toStdString();
                         });
                 } catch (const std::exception&) {
                     annotation_child = false;
@@ -9175,20 +9198,25 @@ public:
                 if (annotation_child) break;
             }
         }
-        if (!has_entity(*m_document, entity_id) && !annotation_child) {
+        if (!has_entity(*m_document, selection_id) && !annotation_child) {
+            if (const auto host = assembly_host_for_child(snapshot, selection_id.toStdString())) {
+                selection_id = id_from(*host);
+            }
+        }
+        if (!has_entity(*m_document, selection_id) && !annotation_child) {
             setError(QStringLiteral("No entity named %1 exists in this document.").arg(entity_id));
             return false;
         }
-        m_selected_id = entity_id;
+        m_selected_id = selection_id;
         const auto organization = organize_project(snapshot);
         if (annotation_child) {
             refresh();
             return true;
         }
-        if (const auto context = organization.drawing_context(entity_id.toStdString())) {
+        if (const auto context = organization.drawing_context(selection_id.toStdString())) {
             m_active_layer_id = id_from(context->layer_id);
         } else {
-            const auto& node = organization.nodes.at(entity_id.toStdString());
+            const auto& node = organization.nodes.at(selection_id.toStdString());
             if (node.type == "property" || node.type == "building" || node.type == "floor") {
                 m_active_layer_id.clear();
                 for (const auto& [id, candidate] : organization.nodes) {

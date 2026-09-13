@@ -37,6 +37,9 @@ left click selects the first AIS object under the pointer. The selected object
 is mapped back to the stable document entity ID and delivered through
 `onEntitySelected`. A click on empty space delivers an empty `QString`, which
 lets the inspector clear its selection.
+Placed assembly children report their synthetic child ID; the desktop shell
+resolves that ID back to the persisted host before updating the inspector, so
+native picking never creates a second authoritative object.
 
 Qt mouse positions are widget-local logical coordinates with a top-left origin.
 Before calling OCCT, the view multiplies them by the widget's
