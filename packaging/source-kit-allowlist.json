@@ -659,6 +659,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/slab_semantics.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/survey_contract.hpp"
     },
     {
@@ -1152,6 +1156,10 @@
     {
       "category": "source",
       "path": "src/core/sheet_view_model.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/slab_semantics.cpp"
     },
     {
       "category": "source",
@@ -1676,6 +1684,10 @@
     {
       "category": "source",
       "path": "tests/sheet_view_model_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/slab_semantics_tests.cpp"
     },
     {
       "category": "source",

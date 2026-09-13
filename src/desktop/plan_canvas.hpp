@@ -31,6 +31,13 @@ struct CanvasEntity {
     Boundary segments;
     double thickness_metres{0.08};
     bool selected{false};
+    // Optional section/material presentation. These values are deliberately
+    // retained on the canvas value rather than inferred from pixels so screen,
+    // print, and export rendering share the same persisted view settings.
+    bool filled{false};
+    QString hatch_pattern{QStringLiteral("none")};
+    double hatch_scale{1.0};
+    QColor fill_color{};
 };
 
 // A retained document annotation. Unlike BoundaryDraftPreview, labels are

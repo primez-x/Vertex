@@ -4080,13 +4080,16 @@ int main(int argc, char** argv) {
     }
     require(std::abs(elevation_min_y) < 1e-7 && std::abs(elevation_max_y - 3.0) < 1e-7,
             "architectural elevation must preserve the column height");
-    architectural_view->setCurrentText(QStringLiteral("Section @ 1.2 m"));
+    architectural_view->setCurrentIndex(2);
     const auto section_column = std::find_if(architectural->entities().begin(),
                                              architectural->entities().end(),
         [&](const auto& entity) { return entity.id == column_id; });
     require(section_column != architectural->entities().end() &&
                 section_column->segments.size() == 4,
             "architectural section should intersect the same column with four edges");
+    require(section_column->filled && section_column->hatch_pattern == QStringLiteral("solid") &&
+                std::abs(section_column->hatch_scale - 1.0) < 1e-12,
+            "architectural section projections should carry persisted material hatching metadata");
     architectural_view->setCurrentText(QStringLiteral("Plan"));
     auto edited_column = column;
     edited_column.properties["height_m"] = 3.5;

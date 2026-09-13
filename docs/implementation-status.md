@@ -535,7 +535,10 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   retargeting or deletion when an edge is retired. Unknown dimension versions,
   kinds and boundary owners remain read-only without skipping other supported
   validation. The codec and document tests pass in both v18 configurations.
-  Dimension rendering, styles and the authoring workflow remain required.
+  Dimension labels, styles, authoring, and retained straight-segment extension/
+  dimension linework now render from the current stable source edge; true arc
+  dimension construction and complete Apex workflow/output qualification remain
+  required.
 - Storage format v2 protects identified boundaries across the entire retained
   history, including an anonymous head reached by undo. Legacy-only v1 files
   still load. The retained v16 CLI rejects three actual v2 fixtures; the current
@@ -657,8 +660,10 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   settings command. The renderer conservatively culls solids whose BRep bounds
   lie wholly beyond the selected far depth, clips crossing solids with an OCCT
   half-space, and invalidates projection caches when view frames or limits
-  change; annotations/hatching, complete sheet layout, and production print
-  integration remain open.
+  change; section projections now carry the persisted hatch enablement, pattern,
+  and scale into the retained canvas and draft output renderer, with fills only
+  applied to ordered closed paths. Complete section annotation/detail overlays,
+  sheet layout, and production print qualification remain open.
 - Release import inspection resolves 37 selected application/component
   binaries on this machine. The Qt dry-run exposed default plugin expansion;
   an explicit current-component allowlist and pinned archive-member hash

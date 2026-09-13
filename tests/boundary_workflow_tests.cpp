@@ -320,6 +320,15 @@ void require_both_canvas_labels(MainWindow& window, std::size_t count) {
             "committed dimension labels must appear in both workspace canvases");
     require(label_texts(*measurement) == label_texts(*architectural),
             "both workspace canvases must display the same dimension label values");
+    const auto dimension_line_count = [](const PlanCanvas& value) {
+        return static_cast<std::size_t>(std::count_if(
+            value.entities().begin(), value.entities().end(), [](const auto& entity) {
+                return entity.type == QStringLiteral("dimension_line");
+            }));
+    };
+    require(dimension_line_count(*measurement) == count &&
+                dimension_line_count(*architectural) == count,
+            "committed straight dimensions must carry matching extension and dimension linework");
 }
 
 void test_draw_first_events_commit_receipts_labels_and_visibility() {

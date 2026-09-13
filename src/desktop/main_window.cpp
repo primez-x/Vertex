@@ -673,6 +673,36 @@ std::optional<Vec2> point_at_segment(const Segment& segment, double fraction) {
     return Vec2{center.x + radius * std::cos(angle), center.y + radius * std::sin(angle)};
 }
 
+// Build the retained linework for a segment dimension. The analytical
+// dimension value remains the stable BoundaryDimension record; this overlay
+// is only presentation geometry and is regenerated from the current source
+// segment on every refresh. Curved dimensions keep their label until a true
+// arc dimension renderer is available rather than showing a misleading chord.
+std::optional<Boundary> dimension_overlay(const Segment& source, Vec2 text_position) {
+    if (source.sweep_radians != 0.0) return std::nullopt;
+    const auto dx = source.end.x - source.start.x;
+    const auto dy = source.end.y - source.start.y;
+    const auto length = std::hypot(dx, dy);
+    if (!(length > 1e-7) || !std::isfinite(length)) return std::nullopt;
+    const Vec2 tangent{dx / length, dy / length};
+    const Vec2 normal{-tangent.y, tangent.x};
+    const Vec2 midpoint{(source.start.x + source.end.x) * 0.5,
+                        (source.start.y + source.end.y) * 0.5};
+    const auto offset = (text_position.x - midpoint.x) * normal.x +
+                        (text_position.y - midpoint.y) * normal.y;
+    if (!std::isfinite(offset)) return std::nullopt;
+    const Vec2 center{midpoint.x + normal.x * offset,
+                      midpoint.y + normal.y * offset};
+    const Vec2 half{tangent.x * length * 0.5, tangent.y * length * 0.5};
+    const Vec2 dimension_start{center.x - half.x, center.y - half.y};
+    const Vec2 dimension_end{center.x + half.x, center.y + half.y};
+    return Boundary{
+        Segment{source.start, dimension_start, 0.0},
+        Segment{source.end, dimension_end, 0.0},
+        Segment{dimension_start, dimension_end, 0.0},
+    };
+}
+
 Boundary wall_segments_without_openings(const Segment& baseline,
                                          const std::vector<HostedOpening>& openings) {
     if (openings.empty()) {
@@ -1431,6 +1461,7 @@ BuildingViewFrame architectural_view_frame(BuildingViewKind kind) {
 struct ArchitecturalViewContext {
     BuildingViewFrame frame;
     BuildingViewDepth depth;
+    ViewPresentation presentation;
 };
 
 ArchitecturalViewContext architectural_view_context(const DocumentSnapshot& snapshot,
@@ -1439,7 +1470,8 @@ ArchitecturalViewContext architectural_view_context(const DocumentSnapshot& snap
     ArchitecturalViewContext result{
         fallback,
         BuildingViewDepth{fallback.origin, fallback.direction,
-                          std::numeric_limits<double>::infinity()}};
+                          std::numeric_limits<double>::infinity()},
+        ViewPresentation{}};
     for (const auto& [id, entity] : snapshot.entities()) {
         (void)id;
         if (entity.type != kSheetViewEntityType) continue;
@@ -1461,6 +1493,7 @@ ArchitecturalViewContext architectural_view_context(const DocumentSnapshot& snap
             result.frame = base;
             result.depth = BuildingViewDepth{base.origin, base.direction,
                                              found->presentation.far_depth_m};
+            result.presentation = found->presentation;
             if (kind == BuildingViewKind::section) {
                 result.frame.origin.x += result.frame.direction.x *
                                          found->presentation.cut_depth_m;
@@ -15627,6 +15660,12 @@ private:
                         label.italic = presentation.italic;
                         label.rotation_radians = presentation.rotation_radians;
                     }
+                    if (const auto overlay = dimension_overlay(resolved.segment,
+                                                               dimension.text_position)) {
+                        all_geometry.push_back(CanvasEntity{
+                            id_from(id), QStringLiteral("dimension_line"), *overlay, 0.0,
+                            id_from(id) == m_selected_id});
+                    }
                     all_labels.push_back(std::move(label));
                 } catch (const std::exception& error) {
                     append_geometry_error(QStringLiteral("Dimension %1: %2")
@@ -15826,6 +15865,19 @@ private:
             const auto view_context = architectural_view_context(snapshot, kind);
             const auto& frame = view_context.frame;
             const auto& depth = view_context.depth;
+            const auto decorate_projection = [&](CanvasEntity entity) {
+                // Section hatching is a view presentation value. Keep it on
+                // the retained canvas entity so interactive, print, and image
+                // output all consume the same projected path and pattern.
+                if (kind == BuildingViewKind::section &&
+                    view_context.presentation.hatch_enabled) {
+                    entity.filled = true;
+                    entity.hatch_pattern = QString::fromStdString(
+                        view_context.presentation.hatch_pattern);
+                    entity.hatch_scale = view_context.presentation.hatch_scale;
+                }
+                return entity;
+            };
             const auto frame_cache_key = [&] {
                 std::ostringstream key;
                 key << std::setprecision(17)
@@ -15849,9 +15901,9 @@ private:
                         if (clipped_shape.IsNull()) continue;
                         const auto projection = project_shape_view(
                             clipped_shape, kind, frame);
-                        result.push_back(CanvasEntity{
+                        result.push_back(decorate_projection(CanvasEntity{
                             id_from(id), QStringLiteral("terrain_surface"), projection, 0.0,
-                            id_from(id) == m_selected_id});
+                            id_from(id) == m_selected_id}));
                         continue;
                     }
                     if (can_recognize_building_entity_type(entity.type)) {
@@ -15870,9 +15922,9 @@ private:
                             cached = m_plan_projection_cache.insert_or_assign(
                                 id, std::make_pair(key, std::move(projection))).first;
                         }
-                        result.push_back(CanvasEntity{
+                        result.push_back(decorate_projection(CanvasEntity{
                             id_from(id), QString::fromStdString(entity.type),
-                            cached->second.second, 0.0, id_from(id) == m_selected_id});
+                            cached->second.second, 0.0, id_from(id) == m_selected_id}));
                         continue;
                     }
                     if (entity.type == "wall") {
@@ -15904,9 +15956,9 @@ private:
                         if (clipped_shape.IsNull()) continue;
                         const auto projection = project_shape_view(
                             clipped_shape, kind, frame);
-                        result.push_back(CanvasEntity{
+                        result.push_back(decorate_projection(CanvasEntity{
                             id_from(id), QStringLiteral("wall"), projection, *thickness,
-                            id_from(id) == m_selected_id});
+                            id_from(id) == m_selected_id}));
                         continue;
                     }
                     if (entity.type == "slab") {
@@ -15930,9 +15982,9 @@ private:
                         if (clipped_shape.IsNull()) continue;
                         const auto projection = project_shape_view(
                             clipped_shape, kind, frame);
-                        result.push_back(CanvasEntity{
+                        result.push_back(decorate_projection(CanvasEntity{
                             id_from(id), QStringLiteral("slab"), projection, *thickness,
-                            id_from(id) == m_selected_id});
+                            id_from(id) == m_selected_id}));
                     }
                 } catch (const std::exception& error) {
                     if (kind == m_architectural_view_kind) {

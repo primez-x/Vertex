@@ -65,6 +65,12 @@ atomic, and participate in normal save/reopen and undo/redo. Boundary transforms
 carry the presentation unchanged while moving the label with its source edge.
 
 Both workspace canvases and the shared sheet-output renderer honor presentation.
+Straight segment dimensions also regenerate a retained dimension line with two
+extension lines from the referenced edge to the label offset. The linework is
+derived from the same stable source segment on every refresh, so moving or
+transforming the boundary cannot leave stale pixel geometry behind. Curved
+dimensions continue to render their analytical label while awaiting a true arc
+dimension construction.
 Hidden dimensions retain their semantic references and remain editable through
 selection in the project navigator. Paper text height uses the rendering
 device's logical DPI, or the explicit fitted sheet paper scale in previews,
@@ -73,6 +79,6 @@ retain their existing model-space behavior. Global visibility filters still
 apply. The shown value is derived from the referenced geometry in the selected
 workspace units, not user-entered replacement measurement text.
 
-Dimension-line/extension-line tools, additional dimension kinds, and full Apex
-workflow/output qualification remain open. These capabilities do not certify
-the complete dimensioning requirement.
+Additional interactive dimension-line tools, true arc/angle/area dimension
+kinds, and full Apex workflow/output qualification remain open. These
+capabilities do not certify the complete dimensioning requirement.

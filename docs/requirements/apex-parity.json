@@ -1197,7 +1197,7 @@
         "tests/boundary_dimension_tests.cpp",
         "tests/boundary_workflow_tests.cpp"
       ],
-      "implementation_note": "Segment-length dimensions have stable references and an inspector for position, paper text height, color, bold/italic, rotation, and visibility. Version 2 presentation survives save/reopen, undo/redo, and boundary transforms. Shared canvas/sheet rendering preserves paper text size across model output scales and fitted previews, with pixel/DPI and rotated-hit tests. Dimension and extension lines, additional dimension kinds, and complete Apex workflow/output qualification remain open."
+      "implementation_note": "Segment-length dimensions have stable references and an inspector for position, paper text height, color, bold/italic, rotation, and visibility. Version 2 presentation survives save/reopen, undo/redo, and boundary transforms. Shared canvas/sheet rendering preserves paper text size across model output scales and fitted previews, with pixel/DPI and rotated-hit tests. Straight segment dimensions now regenerate matching extension and dimension linework from the stable source edge in both canvases and shared output. True arc/angle/area dimension construction and complete Apex workflow/output qualification remain open."
     },
     {
       "id": "APX-ANNO-003",
@@ -1924,7 +1924,7 @@
         "tests/sheet_view_entity_codec_tests.cpp",
         "docs/sheets-views.md"
       ],
-      "implementation_note": "Section presentation settings are validated and persist through the typed Document entity; analytical solid-plane section edges and persisted section cut-depth consumption are implemented for supported objects, and the desktop view settings command edits cut/far depth, line widths, hatching and detail through Document history. A conservative object-level BRep-bounds far-depth filter culls solids wholly beyond the selected limit, while crossing solids are clipped with an exact OCCT half-space before projection. Line/hatch/annotation overlays and print fixtures remain open."
+      "implementation_note": "Section presentation settings are validated and persist through the typed Document entity; analytical solid-plane section edges and persisted section cut-depth consumption are implemented for supported objects, and the desktop view settings command edits cut/far depth, line widths, hatching and detail through Document history. A conservative object-level BRep-bounds far-depth filter culls solids wholly beyond the selected limit, while crossing solids are clipped with an exact OCCT half-space before projection. Enabled section projections now carry the persisted hatch pattern and scale into the retained canvas and draft output renderer, with fills limited to ordered closed paths. Complete section annotation/detail overlays, sheet layout, print fixtures, and production qualification remain open."
     },
     {
       "id": "ARCH-SCH-001",

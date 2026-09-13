@@ -169,7 +169,77 @@ QColor color_for(const CanvasEntity& entity) {
     if (entity.type == QStringLiteral("terrain_surface")) {
         return QColor(119, 164, 113);
     }
+    if (entity.type == QStringLiteral("dimension_line")) {
+        return QColor(196, 203, 214);
+    }
     return QColor(182, 191, 205);
+}
+
+Qt::BrushStyle hatch_style(QString pattern) {
+    pattern = pattern.trimmed().toLower();
+    if (pattern.isEmpty() || pattern == QStringLiteral("none")) {
+        return Qt::NoBrush;
+    }
+    if (pattern == QStringLiteral("solid") || pattern == QStringLiteral("filled")) {
+        return Qt::SolidPattern;
+    }
+    if (pattern == QStringLiteral("horizontal") || pattern == QStringLiteral("hor")) {
+        return Qt::HorPattern;
+    }
+    if (pattern == QStringLiteral("vertical") || pattern == QStringLiteral("vert")) {
+        return Qt::VerPattern;
+    }
+    if (pattern == QStringLiteral("cross")) {
+        return Qt::CrossPattern;
+    }
+    if (pattern == QStringLiteral("diagonal") || pattern == QStringLiteral("diag") ||
+        pattern == QStringLiteral("backward_diagonal")) {
+        return Qt::BDiagPattern;
+    }
+    if (pattern == QStringLiteral("forward_diagonal")) {
+        return Qt::FDiagPattern;
+    }
+    if (pattern == QStringLiteral("diagonal_cross") || pattern == QStringLiteral("diagcross")) {
+        return Qt::DiagCrossPattern;
+    }
+    if (pattern == QStringLiteral("dots") || pattern == QStringLiteral("concrete")) {
+        return Qt::Dense4Pattern;
+    }
+    if (pattern == QStringLiteral("dense")) {
+        return Qt::Dense6Pattern;
+    }
+    // ViewPresentation deliberately accepts user-defined identifier names.
+    // An unknown name still renders deterministically while remaining visible
+    // in the persisted document for a future catalog entry.
+    return Qt::BDiagPattern;
+}
+
+std::optional<QPainterPath> closed_entity_path(const CanvasEntity& entity) {
+    if (entity.segments.size() < 3) return std::nullopt;
+    constexpr double endpoint_tolerance = 1e-7;
+    const auto& first = entity.segments.front();
+    QPainterPath path;
+    path.moveTo(first.start.x, first.start.y);
+    auto previous = first.start;
+    for (const auto& segment : entity.segments) {
+        if (distance(previous, segment.start) > endpoint_tolerance) {
+            return std::nullopt;
+        }
+        if (segment.sweep_radians == 0.0) {
+            path.lineTo(segment.end.x, segment.end.y);
+        } else {
+            const auto arc = arc_info(segment);
+            if (!arc.has_value()) return std::nullopt;
+            const QRectF bounds(arc->center.x - arc->radius, arc->center.y - arc->radius,
+                               arc->radius * 2.0, arc->radius * 2.0);
+            path.arcTo(bounds, -arc->start_angle * 180.0 / pi,
+                       -segment.sweep_radians * 180.0 / pi);
+        }
+        previous = segment.end;
+    }
+    if (distance(previous, first.start) > endpoint_tolerance) return std::nullopt;
+    path.closeSubpath();
+    return path;
 }
 
 }  // namespace
@@ -1118,7 +1188,32 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
         pen.setWidthF(output ? painter.device()->logicalDpiX() * 0.25 / 25.4
                              : entity.selected ? 3.0 : 1.5);
     }
+    if (entity.filled) {
+        if (const auto fill_path = closed_entity_path(entity)) {
+            const auto style = hatch_style(entity.hatch_pattern);
+            if (style != Qt::NoBrush) {
+                auto fill_color = output
+                                      ? (background.lightnessF() > 0.5 ? QColor(25, 25, 25)
+                                                                         : QColor(235, 235, 235))
+                                      : entity.fill_color.isValid() ? entity.fill_color : color;
+                fill_color.setAlpha(output ? 64 : 48);
+                QBrush brush(fill_color, style);
+                const auto scale = std::isfinite(entity.hatch_scale) && entity.hatch_scale > 0.0
+                                        ? std::clamp(entity.hatch_scale, 0.1, 10.0)
+                                        : 1.0;
+                QTransform brush_transform;
+                brush_transform.scale(scale, scale);
+                brush.setTransform(brush_transform);
+                painter.save();
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(brush);
+                painter.drawPath(*fill_path);
+                painter.restore();
+            }
+        }
+    }
     painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
     QPainterPath path;
     for (const auto& segment : entity.segments) {
         // Start each semantic segment independently. This preserves opening

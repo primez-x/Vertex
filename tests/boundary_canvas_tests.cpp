@@ -723,6 +723,50 @@ void test_reference_grid_labels_render_in_screen_and_output() {
             "reference-grid labels must be present in fit-to-content output");
 }
 
+void test_closed_entity_hatching_and_open_path_safety() {
+    PlanCanvas canvas;
+    canvas.resize(640, 480);
+    canvas.setGridEnabled(false);
+    canvas.setOverviewMapEnabled(false);
+
+    CanvasEntity square{
+        QStringLiteral("section-cut"),
+        QStringLiteral("slab"),
+        Boundary{
+            Segment{{-2.0, -2.0}, {2.0, -2.0}, 0.0},
+            Segment{{2.0, -2.0}, {2.0, 2.0}, 0.0},
+            Segment{{2.0, 2.0}, {-2.0, 2.0}, 0.0},
+            Segment{{-2.0, 2.0}, {-2.0, -2.0}, 0.0},
+        },
+    };
+    canvas.setEntities({square});
+    canvas.fitView();
+    const auto outline = render(canvas, true);
+
+    square.filled = true;
+    square.hatch_pattern = QStringLiteral("cross");
+    square.hatch_scale = 1.5;
+    canvas.setEntities({square});
+    const auto hatched = render(canvas, true);
+    require(differing_pixels(outline, hatched, QRect(150, 100, 340, 280)) > 20,
+            "closed section paths must render the selected hatch pattern");
+
+    square.hatch_pattern = QStringLiteral("solid");
+    canvas.setEntities({square});
+    const auto filled = render(canvas, true);
+    require(differing_pixels(outline, filled, QRect(150, 100, 340, 280)) > 100,
+            "solid section presentation must fill the closed projected path");
+
+    square.segments.pop_back();
+    canvas.setEntities({square});
+    const auto open_filled = render(canvas, true);
+    square.filled = false;
+    canvas.setEntities({square});
+    const auto open_outline = render(canvas, true);
+    require(images_equal(open_filled, open_outline),
+            "open or split paths must never receive a misleading material fill");
+}
+
 int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QApplication application(argc, argv);
@@ -744,6 +788,7 @@ int main(int argc, char** argv) {
         test_arc_render_orientation();
         test_analytic_arc_fit_bounds();
         test_reference_grid_labels_render_in_screen_and_output();
+        test_closed_entity_hatching_and_open_path_safety();
         test_paper_label_style_and_hit_testing();
         std::cout << "Boundary canvas tests passed\n";
         return 0;
