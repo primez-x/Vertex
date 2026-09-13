@@ -3,8 +3,9 @@
 `stage_offline_bundle.py` composes the reviewed runtime inventory, portable
 package allowlist, and source-kit manifest into a deterministic directory that
 can be carried to an offline Windows machine. The result is an installer
-bundle with a PowerShell copy step; it is not a signed MSI, EXE installer, or
-production release.
+bundle with a PowerShell copy step. The script supports explicit `Install`,
+`Repair`, and `Uninstall` actions, but the bundle is still not a signed MSI,
+EXE installer, or production release.
 
 Prepare the app-local runtime from the licensed SDK's x64 CRT directory using
 `scripts/prepare_msvc_runtime.py --crt-dir <SDK-CRT-directory> --version 14.44.35211.0
@@ -64,7 +65,7 @@ that already exists is rejected. The output contains:
 | `metadata/portable-package-manifest.json` | Lower-level runtime staging record. |
 | `runtime-manifest.json` | The subset copied to an installation directory. |
 | `offline-bundle-manifest.json` | Bundle file hashes, license inventory, dependency closure, system boundaries, and explicit qualification flags. |
-| `install-offline-bundle.ps1` | Offline installer script. |
+| `install-offline-bundle.ps1` | Offline installer script with `Install`, `Repair`, and `Uninstall` actions. |
 | `verify-offline-bundle.ps1` | Self-contained PowerShell hash and size verifier. |
 
 Verify the carried bundle before installation:
@@ -94,6 +95,27 @@ pwsh -NoProfile -NonInteractive `
   -ManifestName runtime-manifest.json
 ```
 
+Repair and uninstall are guarded operations against that same runtime marker.
+Repair requires an existing destination containing the expected runtime
+manifest and verifier, then replaces the payload through the same staged,
+verified publication path. It does not trust the damaged installed payload.
+Uninstall requires the marker and a passing installed-byte verification before
+removing the directory; an unmarked or tampered directory is left untouched.
+Both operations reject bundle-child paths, reparse-point chains, and unsafe
+destinations, and neither action contacts a network service:
+
+```powershell
+pwsh -NoProfile -NonInteractive `
+  -File .\artifacts\packages\property-studio-offline\install-offline-bundle.ps1 `
+  -InstallRoot 'C:\Program Files\Property Studio' `
+  -Action Repair
+
+pwsh -NoProfile -NonInteractive `
+  -File .\artifacts\packages\property-studio-offline\install-offline-bundle.ps1 `
+  -InstallRoot 'C:\Program Files\Property Studio' `
+  -Action Uninstall
+```
+
 Run a hidden installed-runtime smoke check after the installed-byte verifier:
 
 ```powershell
@@ -115,7 +137,8 @@ The check does not disable networking or isolate the Windows registry.
 The bundle and runtime manifests keep `audit_status: "incomplete"`,
 `installer_qualified: false`, and `offline_qualified: false`. Passing staging
 or verification proves that the named bytes are present and match their
-recorded hashes. It does not prove a signed installer, clean-machine
+recorded hashes; the local repair/uninstall tests prove only the guarded
+development-host behavior described above. It does not prove a signed installer, clean-machine
 installation, Windows runtime availability, complete dynamic-load coverage,
 network-denied application behavior, license clearance, corresponding-source
 completeness, or commercial redistributability. Those remain separate

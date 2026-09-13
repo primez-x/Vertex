@@ -60,7 +60,10 @@ usable without a service; Apex standard-profile fixtures and production
 calculation certification remain open.
 
 The requirement contract passes, while `python scripts/requirement_audit.py
---release` still fails closed with 130 in-progress requirements. The corrected
+--release` still fails closed with 130 in-progress requirements. The offline
+bundle installer now has guarded Install, Repair, and Uninstall actions with
+transactional publish and installed-marker verification; clean-machine
+installer qualification is still open. The corrected
 native model-view runtime probe exits with `ready=true exported=true error=` and
 no CRT dialog in the captured run. These are internal development and runtime
 checks; Apex native fixtures, physical input, clean-machine/offline installer

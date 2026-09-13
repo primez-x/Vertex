@@ -1,7 +1,10 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [string]$InstallRoot
+    [string]$InstallRoot,
+
+    [ValidateSet('Install', 'Repair', 'Uninstall')]
+    [string]$Action = 'Install'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -57,6 +60,55 @@ function Resolve-SafeChildPath([string]$RootPath, [string]$RelativePath, [string
     return $candidate
 }
 
+function Resolve-InstallRoot([string]$SourceRoot, [string]$RequestedRoot) {
+    try {
+        $resolved = [IO.Path]::GetFullPath($RequestedRoot)
+    } catch {
+        Fail 'install root could not be resolved'
+    }
+    if ([string]::IsNullOrWhiteSpace($resolved) -or
+        $resolved.Equals($SourceRoot, [StringComparison]::OrdinalIgnoreCase) -or
+        $resolved.StartsWith($SourceRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        Fail 'install root cannot be the bundle directory or one of its children'
+    }
+    $parent = Split-Path -Path $resolved -Parent
+    $leaf = Split-Path -Path $resolved -Leaf
+    if ([string]::IsNullOrWhiteSpace($parent) -or [string]::IsNullOrWhiteSpace($leaf)) {
+        Fail 'install root must name a directory below an existing parent'
+    }
+    if (-not (Test-Path -LiteralPath $parent)) {
+        if ($Action -eq 'Uninstall') {
+            Fail 'install root does not exist'
+        }
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    Assert-NoReparseChain $parent $parent 'install parent'
+    return @{ Root = $resolved; Parent = $parent; Leaf = $leaf }
+}
+
+function Assert-RuntimeInstall([string]$RootPath, [string]$ManifestName) {
+    $manifestPath = Resolve-SafeChildPath $RootPath $ManifestName 'installed runtime manifest path'
+    $verifierPath = Resolve-SafeChildPath $RootPath 'verify-offline-bundle.ps1' 'installed verifier path'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $verifierPath -PathType Leaf)) {
+        Fail 'install root is not a Property Studio offline runtime'
+    }
+    try {
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    } catch {
+        Fail 'installed runtime manifest could not be read'
+    }
+    if ($manifest.manifest_kind -ne 'runtime' -or $manifest.audit_status -ne 'incomplete') {
+        Fail 'installed runtime manifest is unsupported'
+    }
+    foreach ($candidate in @(Get-ChildItem -LiteralPath $RootPath -Recurse -Force -ErrorAction Stop)) {
+        if (($candidate.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            Fail "installed runtime contains a symlink or junction: $($candidate.FullName)"
+        }
+    }
+    return @{ ManifestPath = $manifestPath; VerifierPath = $verifierPath }
+}
+
 try {
     $sourceRoot = [IO.Path]::GetFullPath($PSScriptRoot)
     $sourceVerifier = Join-Path $sourceRoot 'verify-offline-bundle.ps1'
@@ -80,20 +132,10 @@ try {
         Fail 'runtime manifest is unsupported'
     }
 
-    $targetRoot = [IO.Path]::GetFullPath($InstallRoot)
-    if ($targetRoot.Equals($sourceRoot, [StringComparison]::OrdinalIgnoreCase) -or
-        $targetRoot.StartsWith($sourceRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
-        Fail 'install root cannot be the bundle directory or one of its children'
-    }
-    $targetParent = Split-Path -Path $targetRoot -Parent
-    $targetLeaf = Split-Path -Path $targetRoot -Leaf
-    if ([string]::IsNullOrWhiteSpace($targetParent) -or [string]::IsNullOrWhiteSpace($targetLeaf)) {
-        Fail 'install root must name a directory below an existing parent'
-    }
-    if (-not (Test-Path -LiteralPath $targetParent)) {
-        New-Item -ItemType Directory -Path $targetParent -Force | Out-Null
-    }
-    Assert-NoReparseChain $targetParent $targetParent 'install parent'
+    $target = Resolve-InstallRoot $sourceRoot $InstallRoot
+    $targetRoot = $target.Root
+    $targetParent = $target.Parent
+    $targetLeaf = $target.Leaf
 
     $targetInitiallyExists = Test-Path -LiteralPath $targetRoot
     if ($targetInitiallyExists) {
@@ -104,9 +146,36 @@ try {
         if (($targetItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
             Fail 'install root cannot be a symlink or junction'
         }
-        if (@(Get-ChildItem -LiteralPath $targetRoot -Force).Count -ne 0) {
+        if ($Action -eq 'Install' -and @(Get-ChildItem -LiteralPath $targetRoot -Force).Count -ne 0) {
             Fail 'install root must be missing or empty'
         }
+    }
+
+    if ($Action -eq 'Uninstall') {
+        if (-not $targetInitiallyExists) {
+            Fail 'install root does not exist'
+        }
+        $installed = Assert-RuntimeInstall $targetRoot $runtimeManifestName
+        & $installed.VerifierPath -Root $targetRoot -ManifestName $runtimeManifestName
+        if ($LASTEXITCODE -ne 0) {
+            Fail 'installed runtime verification failed; refusing to remove it'
+        }
+        Remove-Item -LiteralPath $targetRoot -Recurse -Force
+        if (Test-Path -LiteralPath $targetRoot) {
+            Fail 'install root could not be removed'
+        }
+        Write-Output ("Removed the verified Property Studio runtime from {0}." -f $targetRoot)
+        exit 0
+    }
+
+    if ($Action -eq 'Repair') {
+        if (-not $targetInitiallyExists) {
+            Fail 'repair target does not exist'
+        }
+        # A repair may replace damaged payload bytes, but it must still prove
+        # that the destination is an installation of this runtime family
+        # before moving it aside.
+        [void](Assert-RuntimeInstall $targetRoot $runtimeManifestName)
     }
 
     $installToken = [Guid]::NewGuid().ToString('N')
@@ -175,7 +244,8 @@ try {
     if (Test-Path -LiteralPath $backupRoot) {
         Remove-Item -LiteralPath $backupRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
-    Write-Output ("Installed {0} runtime files to {1}; qualification remains incomplete." -f @($runtimeManifest.files).Count, $targetRoot)
+    $verb = if ($Action -eq 'Repair') { 'Repaired' } else { 'Installed' }
+    Write-Output ("{0} {1} runtime files to {2}; qualification remains incomplete." -f $verb, @($runtimeManifest.files).Count, $targetRoot)
     exit 0
 } catch {
     Write-Error $_.Exception.Message

@@ -152,10 +152,13 @@
       "implementation_sources": [
         "include/sketch/offline_policy.hpp",
         "scripts/stage_portable_package.py",
+        "scripts/install-offline-bundle.ps1",
         "tests/test_stage_portable_package.py",
-        "docs/dependencies/portable-package.md"
+        "tests/test_stage_offline_bundle.py",
+        "docs/dependencies/portable-package.md",
+        "docs/dependencies/offline-installer.md"
       ],
-      "implementation_note": "Runtime independence policy and portable staging are implemented; the portable package now carries a local user guide and PROJ resources, and a task-owned install plus installed-runtime smoke pass on the development host. Installer creation and clean-machine offline qualification remain open."
+      "implementation_note": "Runtime independence policy and portable staging are implemented; the portable package now carries a local user guide and PROJ resources, and a task-owned install plus installed-runtime smoke pass on the development host. The offline bundle installer now supports guarded transactional Install, Repair, and Uninstall actions with marker and hash verification. Clean-machine offline qualification remains open."
     },
     {
       "id": "CORE-OWN-001",
@@ -2742,7 +2745,7 @@
         "tests/test_stage_portable_package.py",
         "docs/dependencies/portable-package.md"
       ],
-      "implementation_note": "Portable staging now verifies explicit inventory hashes, allowlists, path safety, and emits an integrity manifest; installer creation, signing, clean-machine/offline qualification, and package certification remain open."
+      "implementation_note": "Portable staging now verifies explicit inventory hashes, allowlists, path safety, and emits an integrity manifest; the offline bundle installer provides guarded transactional Install, Repair, and Uninstall actions with fail-closed marker/hash checks. Signing, clean-machine/offline qualification, and package certification remain open."
     },
     {
       "id": "OPS-PACK-002",

@@ -386,12 +386,87 @@ class StageOfflineBundleTests(unittest.TestCase):
         self.assertEqual((target / "bin" / "property-studio.exe").read_bytes(), b"application")
         self.assertFalse(any(path.name.startswith(".installed.") for path in target.parent.iterdir()))
 
+    def test_powershell_installer_repairs_a_modified_runtime(self):
+        pwsh = shutil.which("pwsh")
+        if pwsh is None:
+            self.skipTest("PowerShell is unavailable")
+        fixture = self.fixture()
+        self.addCleanup(fixture[0].cleanup)
+        _, root, inventory, source_kit, allowlist, *_ = fixture
+        stage.stage_bundle(inventory, allowlist, source_kit, root, root / "out", "repair")
+        bundle = root / "out" / "repair"
+        target = root / "installed"
+        install = subprocess.run(
+            [pwsh, "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+             str(bundle / "install-offline-bundle.ps1"), "-InstallRoot", str(target)],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(install.returncode, 0, install.stderr)
+        (target / "bin" / "property-studio.exe").write_bytes(b"tampered")
+        repaired = subprocess.run(
+            [pwsh, "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+             str(bundle / "install-offline-bundle.ps1"), "-InstallRoot", str(target),
+             "-Action", "Repair"],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(repaired.returncode, 0, repaired.stderr)
+        self.assertEqual((target / "bin" / "property-studio.exe").read_bytes(), b"application")
+        self.assertFalse(any(path.name.startswith(".installed.") for path in target.parent.iterdir()))
+
+    def test_powershell_installer_uninstalls_only_a_marked_runtime(self):
+        pwsh = shutil.which("pwsh")
+        if pwsh is None:
+            self.skipTest("PowerShell is unavailable")
+        fixture = self.fixture()
+        self.addCleanup(fixture[0].cleanup)
+        _, root, inventory, source_kit, allowlist, *_ = fixture
+        stage.stage_bundle(inventory, allowlist, source_kit, root, root / "out", "uninstall")
+        bundle = root / "out" / "uninstall"
+        target = root / "installed"
+        installed = subprocess.run(
+            [pwsh, "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+             str(bundle / "install-offline-bundle.ps1"), "-InstallRoot", str(target)],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        removed = subprocess.run(
+            [pwsh, "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+             str(bundle / "install-offline-bundle.ps1"), "-InstallRoot", str(target),
+             "-Action", "Uninstall"],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(removed.returncode, 0, removed.stderr)
+        self.assertFalse(target.exists())
+
+    def test_powershell_uninstall_rejects_an_unmarked_directory(self):
+        pwsh = shutil.which("pwsh")
+        if pwsh is None:
+            self.skipTest("PowerShell is unavailable")
+        fixture = self.fixture()
+        self.addCleanup(fixture[0].cleanup)
+        _, root, inventory, source_kit, allowlist, *_ = fixture
+        stage.stage_bundle(inventory, allowlist, source_kit, root, root / "out", "uninstall-reject")
+        bundle = root / "out" / "uninstall-reject"
+        target = root / "unrelated"
+        target.mkdir()
+        (target / "data.txt").write_text("keep", encoding="utf-8")
+        rejected = subprocess.run(
+            [pwsh, "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+             str(bundle / "install-offline-bundle.ps1"), "-InstallRoot", str(target),
+             "-Action", "Uninstall"],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertEqual((target / "data.txt").read_text(encoding="utf-8"), "keep")
+
     def test_powershell_installer_uses_transactional_publish(self):
         fixture = self.fixture()
         self.addCleanup(fixture[0].cleanup)
         _, root, inventory, source_kit, allowlist, *_ = fixture
         stage.stage_bundle(inventory, allowlist, source_kit, root, root / "out", "transaction")
         installer = (root / "out" / "transaction" / "install-offline-bundle.ps1").read_text(encoding="utf-8")
+        self.assertIn("ValidateSet('Install', 'Repair', 'Uninstall')", installer)
+        self.assertIn("Uninstall", installer)
         self.assertIn("$stagingRoot", installer)
         self.assertIn("Move-Item -LiteralPath $stagingRoot", installer)
         self.assertIn("$backupRoot", installer)
