@@ -444,7 +444,7 @@ if(SKETCH_BUILD_DESKTOP)
     add_executable(native_view_tests tests/native_view_tests.cpp)
     target_link_libraries(native_view_tests PRIVATE sketch_visualization sketch_constraint_authoring)
     add_executable(desktop_smoke tests/desktop_smoke.cpp)
-    target_link_libraries(desktop_smoke PRIVATE sketch_desktop)
+    target_link_libraries(desktop_smoke PRIVATE sketch_desktop sketch_product_scope)
     qt_add_resources(desktop_smoke desktop_smoke_test_fonts PREFIX "/fonts" BASE assets/fonts
       FILES assets/fonts/Inter.ttf)
     add_executable(project_resource_desktop_tests tests/project_resource_desktop_tests.cpp)

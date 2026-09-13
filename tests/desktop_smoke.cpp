@@ -17,6 +17,7 @@
 #include "sketch/field_adapter_contract.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/georeferencing_entity_codec.hpp"
+#include "sketch/product_scope.hpp"
 #include "sketch/desktop/building_object_dialog.hpp"
 #include "support/noninteractive_errors.hpp"
 #include "../src/desktop/plan_canvas.hpp"
@@ -3551,6 +3552,117 @@ void test_calculation_deduction_workflow() {
             "undoing a phase selection should restore the baseline calculation");
 }
 
+void test_market_scoped_architectural_workflow() {
+    using namespace sketch;
+    const auto scope = ProductScopeProfile::production_scope();
+    scope.validate();
+    for (const auto market : {ScopeMarket::residential, ScopeMarket::light_commercial}) {
+        const auto market_name = QString::fromStdString(scope_market_name(market));
+        QTemporaryDir directory;
+        require(directory.isValid(), "market workflow fixture needs a temporary directory");
+        desktop::MainWindow window;
+        require(window.selectEntity(QStringLiteral("property-1")) &&
+                    window.editProjectSubject(
+                        market == ScopeMarket::residential ? QStringLiteral("Residential remodel")
+                                                           : QStringLiteral("Light-commercial remodel"),
+                        QStringLiteral("1 Example Way"),
+                        QStringLiteral("fixture-%1").arg(market_name),
+                        QStringLiteral("{\"market\":\"%1\",\"fixture\":\"integrated-architecture-v1\"}")
+                            .arg(market_name)),
+                "market fixture must persist its scoped subject metadata");
+
+        const auto baseline_wall = window.createStraightWall(
+            {0.0, 0.0}, {8.0, 0.0}, QStringLiteral("exterior"));
+        const auto proposed_wall = window.createStraightWall(
+            {0.0, 3.0}, {8.0, 3.0}, QStringLiteral("interior"));
+        const auto room = window.createRoomBoundary(
+            {{{{0.25, 0.25}, {7.75, 0.25}, 0.0},
+             {{7.75, 0.25}, {7.75, 2.75}, 0.0},
+             {{7.75, 2.75}, {0.25, 2.75}, 0.0},
+             {{0.25, 2.75}, {0.25, 0.25}, 0.0}}},
+            market_name + QStringLiteral(" room"));
+        require(!baseline_wall.isEmpty() && !proposed_wall.isEmpty() && !room.isEmpty(),
+                "market fixture must author baseline, proposed, and room geometry");
+
+        auto column = encode_building_entity(
+            RectangularColumn{"market-column", {2.0, 1.5, 0.0}, 0.3, 0.3, 3.0, 0.0},
+            {{"market_fixture", market_name.toStdString()}});
+        column.properties["material_name"] = "Concrete";
+        column.properties["volume_m3"] = 0.27;
+        const auto column_id = window.commitBuildingObject(column, window.document().revision());
+        require(!column_id.isEmpty(), "market fixture must author a semantic building object");
+
+        const auto phases = ModelPhases::create(
+            {baseline_wall.toStdString(), proposed_wall.toStdString(), room.toStdString(),
+             column_id.toStdString()},
+            {baseline_wall.toStdString(), room.toStdString(), column_id.toStdString()},
+            {{"option-" + market_name.toStdString(), "Open plan option", {},
+              {proposed_wall.toStdString()}}});
+        auto phase_entity = Entity::create("model_phases", {{"model", phases.to_json()}});
+        phase_entity.id = "market-phases-" + market_name.toStdString();
+        window.document().apply(ApplyEntityChanges{
+            .expected_revision = window.document().revision(),
+            .entity_changes = {EntityChange::upsert(std::move(phase_entity))},
+            .message = "add market workflow alternative",
+        });
+        require(window.selectEntity(column_id) &&
+                    window.selectRemodelingAlternative(
+                        QStringLiteral("option-%1").arg(market_name)),
+                "market fixture must select its remodeling alternative");
+        require(window.activeRemodelingAlternative() ==
+                    QStringLiteral("option-%1").arg(market_name) &&
+                    window.entityVisible(proposed_wall),
+                "market fixture alternative must expose proposed geometry");
+        require(window.editArchitecturalViewPresentation(
+                    QStringLiteral("view-plan"), QStringLiteral("1.5"), QStringLiteral("80"),
+                    QStringLiteral("0.7"), QStringLiteral("0.25"), true,
+                    QStringLiteral("concrete"), QStringLiteral("2"), QStringLiteral("fine"),
+                    baseline_wall + QStringLiteral(",") + proposed_wall + QStringLiteral(",") + column_id),
+                "market fixture must bind shared architectural sources to its plan view");
+        require(window.editSheetMetadata(
+                    QStringLiteral("sheet-1"),
+                    market == ScopeMarket::residential ? QStringLiteral("R-101")
+                                                       : QStringLiteral("C-101"),
+                    market_name + QStringLiteral(" remodel"), QStringLiteral("Coordination set"),
+                    QStringLiteral("Field designer"), QStringLiteral("2026-09-13")),
+                "market fixture must issue a coordinated drawing sheet");
+        const auto revision_id = window.addSheetRevision(
+            QStringLiteral("sheet-1"), QStringLiteral("2026-09-13"),
+            QStringLiteral("Internal market fixture"));
+        require(!revision_id.isEmpty(), "market fixture must retain an issued sheet revision");
+        const auto schedule = window.scheduleSnapshot();
+        require(std::any_of(schedule.snapshot.rows.begin(), schedule.snapshot.rows.end(),
+                            [&](const auto& row) {
+                                return row.object_id == column_id.toStdString();
+                            }),
+                "market fixture must expose its building object in the shared schedule");
+
+        const auto stem = market_name + QStringLiteral("-workflow");
+        const auto project = directory.filePath(stem + QStringLiteral(".bldproj"));
+        const auto pdf = directory.filePath(stem + QStringLiteral(".pdf"));
+        const auto svg = directory.filePath(stem + QStringLiteral(".svg"));
+        const auto png = directory.filePath(stem + QStringLiteral(".png"));
+        require(window.saveProjectAs(project) && window.exportDraftPdf(pdf) &&
+                    window.exportDraftSvg(svg) && window.exportDraftImage(png),
+                "market fixture must save and export its coordinated deliverables");
+        require(std::filesystem::file_size(project.toStdWString()) > 0 &&
+                    std::filesystem::file_size(pdf.toStdWString()) > 0 &&
+                    std::filesystem::file_size(svg.toStdWString()) > 0 &&
+                    std::filesystem::file_size(png.toStdWString()) > 0,
+                "market fixture deliverables must be nonempty");
+        require(window.openProject(project), "market fixture must reopen through ProjectStore");
+        const auto reopened = window.document().snapshot();
+        require(reopened.entities().at("property-1").properties.at("subject")
+                        .at("attributes").at("market") == market_name.toStdString() &&
+                    reopened.entities().contains(baseline_wall.toStdString()) &&
+                    reopened.entities().contains(proposed_wall.toStdString()) &&
+                    reopened.entities().contains(column_id.toStdString()) &&
+                    window.activeRemodelingAlternative() ==
+                        QStringLiteral("option-%1").arg(market_name),
+                "market fixture must preserve scope, alternatives, and semantic objects after reopen");
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -3596,6 +3708,7 @@ int main(int argc, char** argv) {
     test_material_color_catalog(field_ui_capture_directory);
     test_hosted_opening_editor(field_ui_capture_directory);
     test_calculation_deduction_workflow();
+    test_market_scoped_architectural_workflow();
     test_contextual_building_dimension_inspector(field_ui_capture_directory);
     test_contextual_roof_dimension_inspector();
     test_hip_roof_authoring(field_ui_capture_directory);

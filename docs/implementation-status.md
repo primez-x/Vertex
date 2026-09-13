@@ -897,9 +897,11 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   rotation, XYZ translation, clone, and apply/cancel history behavior on
   recognized architectural objects. Architectural transaction and output descriptors cover create, select,
   property edit, transform, duplicate/delete intent and coordinated
-  plan/elevation/section/3D/schedule issue requirements. Live Document history,
-  projection/render/export, and complete residential/light-commercial output
-  remain integration work.
+  plan/elevation/section/3D/schedule issue requirements. The deterministic
+  desktop smoke fixture now drives one residential and one light-commercial
+  subject through semantic authoring, remodeling comparison, schedules, sheet
+  revisions, PDF/SVG/PNG output, and save/reopen. Market-specific production
+  fixtures, physical output fidelity, and external qualification remain open.
 
 ## Verification boundary
 
