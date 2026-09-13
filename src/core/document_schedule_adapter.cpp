@@ -228,6 +228,7 @@ void add_room(const Entity& entity, std::vector<ScheduleRecord>& records,
 void add_material(const Entity& entity, const DocumentSnapshot& document,
                   std::map<std::string, AssemblyModel>& catalogs, std::vector<ScheduleRecord>& records,
                   std::vector<std::string>& diagnostics) {
+    try {
     if (entity.properties.contains("material_assignment")) {
         const auto* assignment = field(entity, "material_assignment");
         if (assignment == nullptr || !assignment->is_object()) {
@@ -299,6 +300,10 @@ void add_material(const Entity& entity, const DocumentSnapshot& document,
     record.properties.emplace("volume", ScheduleQuantity{*volume, ScheduleUnit::cubic_metre});
     add_surface_kind(entity, record);
     records.push_back(std::move(record));
+    } catch (const std::exception& error) {
+        diagnostic(diagnostics, entity,
+                   std::string("material assignment is invalid: ") + error.what());
+    }
 }
 
 DocumentScheduleProjection project_schedules(
