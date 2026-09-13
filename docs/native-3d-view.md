@@ -39,17 +39,17 @@ is mapped back to the stable document entity ID and delivered through
 lets the inspector clear its selection.
 
 Ctrl+left-drag directly translates a native architectural object. The press
-selects a supported column, beam, stair, railing, or roof, converts the cursor
-to the current view projection plane, and previews the world-space movement on
-the derived AIS presentation. Release clears the preview and emits one
+selects a supported wall, slab, room, column, beam, stair, railing, or roof,
+converts the cursor to the current view projection plane, and previews the
+world-space movement on the derived AIS presentation. Release clears the preview and emits one
 `onEntityTranslationRequested` callback with the stable entity ID and the
 finite X/Y/Z delta in metres. The desktop shell commits that request through
 the existing typed architectural transform transaction, so the document gets
 one normal undo/redo entry and the viewport is rebuilt from the authoritative
-snapshot. Walls, slabs, rooms, and placed assembly children remain selectable
-but are not moved by this gesture until their dedicated semantic transform
-contracts are available; a drag never mutates a presentation without a
-successful document command.
+snapshot. Hosted openings follow their wall's canonical baseline and local
+dimensions. A drag never mutates a presentation without a successful document
+command; placed assembly children remain selectable but continue to resolve to
+their persisted host rather than becoming independent transform targets.
 
 Placed assembly children report their synthetic child ID; the desktop shell
 resolves that ID back to the persisted host before updating the inspector, so
@@ -216,7 +216,8 @@ After the desktop target has been wired to the control:
    aligned with the rendered model.
 5. Left-click a wall or slab and confirm the inspector receives its stable
    entity ID; click empty space and confirm the inspector clears selection.
-6. In the architectural workspace, Ctrl+left-drag a column or roof. Confirm
+6. In the architectural workspace, Ctrl+left-drag a wall, slab, room, column,
+   or roof. Confirm
    the solid follows the pointer as a preview, release commits one semantic
    translation, and undo/redo restores the prior presentation.
 7. Add a hosted opening or edit a wall scalar. Confirm the wall presentation

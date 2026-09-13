@@ -1,6 +1,8 @@
 #include "sketch/architectural_document_adapter.hpp"
+#include "sketch/architecture.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/document_digest.hpp"
+#include "sketch/document_solid.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/model_phases.hpp"
@@ -18,6 +20,20 @@ template <typename F>
 void rejects(F&& function) {
     try { function(); } catch (const std::exception&) { return; }
     throw std::runtime_error("invalid architectural adapter operation accepted");
+}
+
+nlohmann::json segment_json(double x0, double y0, double x1, double y1,
+                            double sweep = 0.0) {
+    return { {"start", {x0, y0}}, {"end", {x1, y1}}, {"sweep_radians", sweep} };
+}
+
+nlohmann::json rectangle_json(double width, double height) {
+    return nlohmann::json::array({
+        segment_json(0.0, 0.0, width, 0.0),
+        segment_json(width, 0.0, width, height),
+        segment_json(width, height, 0.0, height),
+        segment_json(0.0, height, 0.0, 0.0),
+    });
 }
 }
 
@@ -104,6 +120,114 @@ void test_building_transform_updates_canonical_geometry() {
             "architectural transform redo must restore canonical geometry");
 }
 
+void test_shared_solid_transforms_update_canonical_geometry() {
+    using namespace sketch;
+
+    auto wall = Entity::create("wall", {
+        {"baseline", segment_json(0.0, 0.0, 4.0, 0.0)},
+        {"thickness_m", 0.2}, {"height_m", 3.0}, {"elevation_m", 0.5},
+    });
+    wall.id = "wall-solid-transform";
+    auto opening = Entity::create("opening", {
+        {"wall_id", wall.id}, {"opening_kind", "door"},
+        {"offset_m", 1.0}, {"width_m", 0.9}, {"sill_m", 0.1}, {"height_m", 2.0},
+    });
+    opening.id = "opening-solid-transform";
+    Document wall_document = Document::create({wall, opening});
+    ArchitecturalOperation wall_move{ArchitecturalAction::transform, wall.id};
+    wall_move.transform = ArchitecturalTransform{1.0, 2.0, 0.5,
+                                                 std::numbers::pi / 2.0, 2.0};
+    const auto wall_transaction = ArchitecturalTransaction::create(
+        "transform-wall-solid", "r0", {wall.id, opening.id}, {wall_move},
+        "Transform wall solid");
+    const auto wall_preview = preview_architectural_transaction(
+        wall_document.snapshot(), wall_transaction);
+    const auto& transformed_wall = wall_preview.entities().at(wall.id);
+    const auto& transformed_opening = wall_preview.entities().at(opening.id);
+    require(std::abs(transformed_wall.properties.at("baseline").at("start").at(0).get<double>() - 1.0) < 1e-9 &&
+                std::abs(transformed_wall.properties.at("baseline").at("start").at(1).get<double>() - 2.0) < 1e-9 &&
+                std::abs(transformed_wall.properties.at("baseline").at("end").at(0).get<double>() - 1.0) < 1e-9 &&
+                std::abs(transformed_wall.properties.at("baseline").at("end").at(1).get<double>() - 10.0) < 1e-9 &&
+                std::abs(transformed_wall.properties.at("thickness_m").get<double>() - 0.4) < 1e-9 &&
+                std::abs(transformed_wall.properties.at("height_m").get<double>() - 6.0) < 1e-9 &&
+                std::abs(transformed_wall.properties.at("elevation_m").get<double>() - 1.5) < 1e-9,
+            "wall transform must update its canonical baseline and dimensions");
+    require(std::abs(transformed_opening.properties.at("offset_m").get<double>() - 2.0) < 1e-9 &&
+                std::abs(transformed_opening.properties.at("width_m").get<double>() - 1.8) < 1e-9 &&
+                std::abs(transformed_opening.properties.at("sill_m").get<double>() - 0.2) < 1e-9 &&
+                std::abs(transformed_opening.properties.at("height_m").get<double>() - 4.0) < 1e-9,
+            "wall transform must scale hosted opening dimensions");
+    Wall decoded_wall;
+    std::string error;
+    require(read_document_wall(transformed_wall, {&transformed_opening}, decoded_wall, error),
+            "transformed wall must remain decodable");
+    require(std::abs(solid_volume(make_wall(decoded_wall)) - 16.32) < 1e-8,
+            "transformed wall solid must preserve exact hosted-opening volume");
+    require(wall_document.snapshot().entities().at(wall.id) == wall &&
+                wall_document.snapshot().entities().at(opening.id) == opening,
+            "wall transform preview must not mutate its source");
+    apply_architectural_transaction(wall_document, wall_transaction, wall_document.revision());
+    wall_document.undo(wall_document.revision());
+    require(wall_document.snapshot().entities().at(wall.id) == wall &&
+                wall_document.snapshot().entities().at(opening.id) == opening,
+            "wall transform undo must restore the host and its opening");
+    wall_document.redo(wall_document.revision());
+    require(std::abs(wall_document.snapshot().entities().at(wall.id).properties
+                         .at("baseline").at("end").at(1).get<double>() - 10.0) < 1e-9 &&
+                std::abs(wall_document.snapshot().entities().at(opening.id).properties
+                         .at("width_m").get<double>() - 1.8) < 1e-9,
+            "wall transform redo must restore canonical host and opening geometry");
+
+    auto slab = Entity::create("slab", {
+        {"boundary", rectangle_json(4.0, 3.0)},
+        {"holes", nlohmann::json::array()}, {"thickness_m", 0.25}, {"elevation_m", -0.25},
+    });
+    slab.id = "slab-solid-transform";
+    Document slab_document = Document::create({slab});
+    ArchitecturalOperation slab_move{ArchitecturalAction::transform, slab.id};
+    slab_move.transform = ArchitecturalTransform{-1.0, 2.0, 1.0, 0.0, 2.0};
+    const auto slab_transaction = ArchitecturalTransaction::create(
+        "transform-slab-solid", "r0", {slab.id}, {slab_move}, "Transform slab solid");
+    const auto slab_preview = preview_architectural_transaction(
+        slab_document.snapshot(), slab_transaction);
+    Slab decoded_slab;
+    require(read_document_slab(slab_preview.entities().at(slab.id), decoded_slab, error),
+            "transformed slab must remain decodable");
+    require(std::abs(decoded_slab.boundary.front().start.x + 1.0) < 1e-9 &&
+                std::abs(decoded_slab.boundary.front().start.y - 2.0) < 1e-9 &&
+                std::abs(decoded_slab.boundary.front().end.x - 7.0) < 1e-9 &&
+                std::abs(decoded_slab.boundary.front().end.y - 2.0) < 1e-9 &&
+                std::abs(decoded_slab.thickness - 0.5) < 1e-9 &&
+                std::abs(decoded_slab.elevation - 0.5) < 1e-9 &&
+                std::abs(solid_volume(make_slab(decoded_slab)) - 24.0) < 1e-8,
+            "slab transform must update footprint, thickness, elevation, and solid volume");
+
+    auto room = Entity::create("room", {
+        {"boundary", rectangle_json(4.0, 3.0)},
+        {"holes", nlohmann::json::array()}, {"height_m", 2.4}, {"elevation_m", 0.0},
+    });
+    room.id = "room-solid-transform";
+    Document room_document = Document::create({room});
+    ArchitecturalOperation room_move{ArchitecturalAction::transform, room.id};
+    room_move.transform = ArchitecturalTransform{2.0, 3.0, 0.5,
+                                                 std::numbers::pi / 2.0, 1.5};
+    const auto room_transaction = ArchitecturalTransaction::create(
+        "transform-room-solid", "r0", {room.id}, {room_move}, "Transform room solid");
+    const auto room_preview = preview_architectural_transaction(
+        room_document.snapshot(), room_transaction);
+    RoomVolume decoded_room;
+    require(read_document_room(room_preview.entities().at(room.id), decoded_room, error),
+            "transformed room must remain decodable");
+    require(std::abs(decoded_room.boundary.front().start.x - 2.0) < 1e-9 &&
+                std::abs(decoded_room.boundary.front().start.y - 3.0) < 1e-9 &&
+                std::abs(decoded_room.boundary.front().end.x - 2.0) < 1e-9 &&
+                std::abs(decoded_room.boundary.front().end.y - 9.0) < 1e-9 &&
+                std::abs(decoded_room.height - 3.6) < 1e-9 &&
+                std::abs(decoded_room.elevation - 0.5) < 1e-9 &&
+                std::abs(solid_volume(make_room_volume(decoded_room)) - 97.2) < 1e-8,
+            "room transform must update footprint, height, elevation, and solid volume");
+}
+
 void test_connected_stair_transform_preserves_links_and_rejects_scale() {
     using namespace sketch;
     auto graph = Entity::create("vertical_levels", {
@@ -181,6 +305,7 @@ int main() {
     try {
         test_material_assignments();
         test_building_transform_updates_canonical_geometry();
+        test_shared_solid_transforms_update_canonical_geometry();
         test_connected_stair_transform_preserves_links_and_rejects_scale();
         test_wall_duplicate_and_delete_manage_hosted_openings();
         using namespace sketch;

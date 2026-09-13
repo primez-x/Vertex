@@ -127,6 +127,41 @@ int main(int argc,char** argv) {
                 check(first.bounds.left()>2 && first.bounds.right()<first.image.width()-3
                       &&first.bounds.top()>2 && first.bounds.bottom()<first.image.height()-3,
                       "Fit must leave all geometry inside the native frame");
+                QString translated_wall_id;
+                double translated_wall_x = 0.0;
+                double translated_wall_y = 0.0;
+                double translated_wall_z = 0.0;
+                view.onEntityTranslationRequested =
+                    [&](QString id, double x, double y, double z) {
+                        translated_wall_id = std::move(id);
+                        translated_wall_x = x;
+                        translated_wall_y = y;
+                        translated_wall_z = z;
+                    };
+                const auto wall_drag_start = first.centre / view.devicePixelRatioF();
+                const auto wall_drag_end = wall_drag_start + QPointF(16.0, 10.0);
+                mouse(view, QEvent::MouseButtonPress, wall_drag_start, Qt::LeftButton,
+                      Qt::LeftButton, Qt::ControlModifier);
+                mouse(view, QEvent::MouseMove, wall_drag_end, Qt::NoButton,
+                      Qt::LeftButton, Qt::ControlModifier);
+                check(capture(view, temporary.filePath("wall-translation-preview.png")).image !=
+                          first.image,
+                      "Ctrl+left-drag must preview a shared wall-solid translation");
+                mouse(view, QEvent::MouseButtonRelease, wall_drag_end, Qt::LeftButton,
+                      Qt::NoButton, Qt::ControlModifier);
+                mouse(view, QEvent::MouseButtonPress, {2, 2}, Qt::LeftButton,
+                      Qt::LeftButton);
+                mouse(view, QEvent::MouseButtonRelease, {2, 2}, Qt::LeftButton,
+                      Qt::NoButton);
+                check(capture(view, temporary.filePath("wall-translation-reset.png")).image ==
+                          first.image && translated_wall_id == wall_id &&
+                          std::isfinite(translated_wall_x) && std::isfinite(translated_wall_y) &&
+                          std::isfinite(translated_wall_z) &&
+                          (std::abs(translated_wall_x) > 1.0e-9 ||
+                           std::abs(translated_wall_y) > 1.0e-9 ||
+                           std::abs(translated_wall_z) > 1.0e-9),
+                      "shared wall-solid translation must emit one finite semantic request");
+                view.onEntityTranslationRequested = {};
                 // Choose a solid interior pixel away from the symmetrical centre;
                 // an erroneous y flip must not still pass the picking test.
                 QPoint native_pick;

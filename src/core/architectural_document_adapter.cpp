@@ -1,6 +1,9 @@
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/building_entity.hpp"
+#include "sketch/document_solid.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/slab_semantics.hpp"
+#include "sketch/wall_semantics.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -173,6 +176,236 @@ BuildingObject transform_building_object(BuildingObject object,
         std::move(object));
 }
 
+Vec2 transform_plan_point(const Vec2& point, const ArchitecturalTransform& transform) {
+    const auto cosine = std::cos(transform.rotation_z_radians);
+    const auto sine = std::sin(transform.rotation_z_radians);
+    const auto scaled_x = point.x * transform.scale;
+    const auto scaled_y = point.y * transform.scale;
+    const Vec2 result{cosine * scaled_x - sine * scaled_y + transform.x,
+                      sine * scaled_x + cosine * scaled_y + transform.y};
+    if (!std::isfinite(result.x) || !std::isfinite(result.y)) {
+        throw std::invalid_argument("Architectural plan transform exceeds the supported range");
+    }
+    return result;
+}
+
+Segment transform_plan_segment(Segment segment, const ArchitecturalTransform& transform) {
+    segment.start = transform_plan_point(segment.start, transform);
+    segment.end = transform_plan_point(segment.end, transform);
+    // A positive uniform scale and a proper Z rotation preserve the signed
+    // sweep of a circular arc.  Keeping the defining sweep avoids replacing
+    // analytical curves with sampled screen geometry.
+    return segment;
+}
+
+Boundary transform_plan_boundary(const Boundary& boundary,
+                                 const ArchitecturalTransform& transform) {
+    Boundary result;
+    result.reserve(boundary.size());
+    for (const auto& segment : boundary) {
+        result.push_back(transform_plan_segment(segment, transform));
+    }
+    return result;
+}
+
+nlohmann::json point_json(const Vec2& point) {
+    return nlohmann::json::array({point.x, point.y});
+}
+
+nlohmann::json segment_json(const Segment& segment) {
+    return { {"start", point_json(segment.start)},
+             {"end", point_json(segment.end)},
+             {"sweep_radians", segment.sweep_radians} };
+}
+
+void update_segment_geometry(nlohmann::json& target, const Segment& segment) {
+    const auto encoded = segment_json(segment);
+    if (!target.is_object()) {
+        target = encoded;
+        return;
+    }
+    target["start"] = encoded.at("start");
+    target["end"] = encoded.at("end");
+    target["sweep_radians"] = encoded.at("sweep_radians");
+}
+
+nlohmann::json updated_boundary_geometry(const nlohmann::json& original,
+                                         const Boundary& boundary) {
+    auto result = nlohmann::json::array();
+    for (std::size_t index = 0; index < boundary.size(); ++index) {
+        nlohmann::json segment = nlohmann::json::object();
+        if (original.is_array() && index < original.size()) segment = original.at(index);
+        update_segment_geometry(segment, boundary.at(index));
+        result.push_back(std::move(segment));
+    }
+    return result;
+}
+
+void scale_property(nlohmann::json& properties, const char* canonical,
+                    const char* legacy, double scale) {
+    const auto update = [&](const char* key) {
+        const auto found = properties.find(key);
+        if (found == properties.end()) return;
+        if (!found->is_number()) {
+            throw std::invalid_argument(std::string("Architectural property ") + key +
+                                        " must be numeric");
+        }
+        const auto value = found->get<double>() * scale;
+        if (!std::isfinite(value)) {
+            throw std::invalid_argument(std::string("Architectural property ") + key +
+                                        " exceeds the supported range");
+        }
+        properties[key] = value;
+    };
+    update(canonical);
+    if (legacy != nullptr) update(legacy);
+}
+
+Entity transform_wall_entity(EntityState& entities, const Entity& source,
+                             const ArchitecturalTransform& transform) {
+    std::vector<const Entity*> openings;
+    for (const auto& id : hosted_opening_ids(entities, source.id)) {
+        const auto found = entities.find(id);
+        if (found != entities.end()) openings.push_back(&found->second);
+    }
+    Wall wall;
+    std::string error;
+    if (!read_document_wall(source, openings, wall, error)) {
+        throw std::invalid_argument(error);
+    }
+    wall.baseline = transform_plan_segment(wall.baseline, transform);
+    wall.thickness *= transform.scale;
+    wall.height *= transform.scale;
+    wall.elevation = wall.elevation * transform.scale + transform.z;
+    if (wall.slope_rise.has_value()) *wall.slope_rise *= transform.scale;
+    for (auto& layer : wall.layers) layer.thickness *= transform.scale;
+    validate_wall_semantics(wall);
+
+    Entity result = source;
+    update_segment_geometry(result.properties["baseline"], wall.baseline);
+    result.properties["thickness_m"] = wall.thickness;
+    if (result.properties.contains("thickness")) result.properties["thickness"] = wall.thickness;
+    result.properties["height_m"] = wall.height;
+    if (result.properties.contains("height")) result.properties["height"] = wall.height;
+    result.properties["elevation_m"] = wall.elevation;
+    if (result.properties.contains("elevation")) result.properties["elevation"] = wall.elevation;
+    if (wall.slope_rise.has_value()) result.properties["slope_rise_m"] = *wall.slope_rise;
+    else result.properties.erase("slope_rise_m");
+    if (result.properties.contains("slope_rise")) {
+        if (wall.slope_rise.has_value()) result.properties["slope_rise"] = *wall.slope_rise;
+        else result.properties.erase("slope_rise");
+    }
+    if (result.properties.contains("layers")) result.properties["layers"] = wall_layers_json(wall.layers);
+    result.properties.erase("transform");
+
+    for (const auto& opening_id : hosted_opening_ids(entities, source.id)) {
+        // The returned wall owns the opening's local station and dimensions;
+        // translation and rotation act on the host baseline, while a positive
+        // uniform scale updates all station/height quantities.
+        auto& opening = entities.at(opening_id);
+        scale_property(opening.properties, "offset_m", "offset", transform.scale);
+        scale_property(opening.properties, "width_m", "width", transform.scale);
+        scale_property(opening.properties, "sill_m", "sill", transform.scale);
+        scale_property(opening.properties, "height_m", "height", transform.scale);
+    }
+    return result;
+}
+
+Entity transform_slab_entity(const Entity& source, const ArchitecturalTransform& transform) {
+    Slab slab;
+    std::string error;
+    if (!read_document_slab(source, slab, error)) throw std::invalid_argument(error);
+    slab.boundary = transform_plan_boundary(slab.boundary, transform);
+    for (auto& hole : slab.holes) hole = transform_plan_boundary(hole, transform);
+    slab.thickness *= transform.scale;
+    slab.elevation = slab.elevation * transform.scale + transform.z;
+    for (auto& layer : slab.layers) layer.thickness *= transform.scale;
+    (void)make_slab(slab);
+
+    Entity result = source;
+    result.properties["boundary"] = updated_boundary_geometry(
+        source.properties.at("boundary"), slab.boundary);
+    if (result.properties.contains("holes")) {
+        auto holes = nlohmann::json::array();
+        const auto& source_holes = source.properties.at("holes");
+        for (std::size_t index = 0; index < slab.holes.size(); ++index) {
+            const auto original = source_holes.is_array() && index < source_holes.size()
+                                      ? source_holes.at(index)
+                                      : nlohmann::json::array();
+            holes.push_back(updated_boundary_geometry(original, slab.holes.at(index)));
+        }
+        result.properties["holes"] = std::move(holes);
+    }
+    result.properties["thickness_m"] = slab.thickness;
+    if (result.properties.contains("thickness")) result.properties["thickness"] = slab.thickness;
+    result.properties["elevation_m"] = slab.elevation;
+    if (result.properties.contains("elevation")) result.properties["elevation"] = slab.elevation;
+    if (result.properties.contains("layers")) result.properties["layers"] = slab_layers_json(slab.layers);
+    result.properties.erase("transform");
+    return result;
+}
+
+Entity transform_room_entity(const Entity& source, const ArchitecturalTransform& transform) {
+    RoomVolume room;
+    std::string error;
+    if (!read_document_room(source, room, error)) throw std::invalid_argument(error);
+    room.boundary = transform_plan_boundary(room.boundary, transform);
+    for (auto& hole : room.holes) hole = transform_plan_boundary(hole, transform);
+    room.height *= transform.scale;
+    room.elevation = room.elevation * transform.scale + transform.z;
+    (void)make_room_volume(room);
+    Entity result = source;
+    if (result.properties.contains("boundary")) {
+        result.properties["boundary"] = updated_boundary_geometry(
+            source.properties.at("boundary"), room.boundary);
+    }
+    if (result.properties.contains("segments")) {
+        result.properties["segments"] = updated_boundary_geometry(
+            source.properties.at("segments"), room.boundary);
+    }
+    if (result.properties.contains("holes")) {
+        auto holes = nlohmann::json::array();
+        const auto& source_holes = source.properties.at("holes");
+        for (std::size_t index = 0; index < room.holes.size(); ++index) {
+            const auto original = source_holes.is_array() && index < source_holes.size()
+                                      ? source_holes.at(index)
+                                      : nlohmann::json::array();
+            holes.push_back(updated_boundary_geometry(original, room.holes.at(index)));
+        }
+        result.properties["holes"] = std::move(holes);
+    }
+    result.properties["height_m"] = room.height;
+    if (result.properties.contains("height")) result.properties["height"] = room.height;
+    result.properties["elevation_m"] = room.elevation;
+    if (result.properties.contains("elevation")) result.properties["elevation"] = room.elevation;
+    result.properties.erase("transform");
+    return result;
+}
+
+std::optional<Entity> try_transform_shared_solid(EntityState& entities,
+                                                 const Entity& source,
+                                                 const ArchitecturalTransform& transform) {
+    // Incomplete generic architectural descriptors are still allowed to carry
+    // a transport-level transform for compatibility with the existing
+    // transaction contract. Once a canonical footprint is present, malformed
+    // data fails closed instead of silently accepting a stale marker.
+    if (source.type == "wall") {
+        if (!source.properties.contains("baseline")) return std::nullopt;
+        return transform_wall_entity(entities, source, transform);
+    }
+    if (source.type == "slab") {
+        if (!source.properties.contains("boundary")) return std::nullopt;
+        return transform_slab_entity(source, transform);
+    }
+    if (source.type == "room") {
+        if (!source.properties.contains("boundary") && !source.properties.contains("segments")) {
+            return std::nullopt;
+        }
+        return transform_room_entity(source, transform);
+    }
+    return std::nullopt;
+}
+
 Entity transform_building_entity(const Entity& source,
                                  const ArchitecturalTransform& transform) {
     if (source.type == "stair" && source.properties.contains("level_connection") &&
@@ -234,9 +467,12 @@ EntityState apply_operations(const DocumentSnapshot& source,
                 throw std::invalid_argument("architectural transform target is missing");
             if (can_recognize_building_entity_type(found->second.type)) {
                 found->second = transform_building_entity(found->second, *operation.transform);
+            } else if (const auto transformed =
+                           try_transform_shared_solid(entities, found->second, *operation.transform)) {
+                found->second = *transformed;
             } else {
-                // Generic architectural entities retain the descriptor until
-                // their semantic adapter supplies a concrete transform.
+                // Generic entities without a canonical solid descriptor retain
+                // the transport marker for compatibility with older records.
                 found->second.properties["transform"] = transform_json(*operation.transform);
             }
             break;

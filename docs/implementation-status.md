@@ -88,6 +88,9 @@ temporary directory, and passed the installed-runtime smoke for both workspaces
 with exit code 0. The native 3D viewport now supports Ctrl+left-drag previews
 and one-command world-space translation requests for supported architectural
 objects, committed by the desktop shell through the existing typed history.
+Walls, slabs, and rooms now use canonical shared-solid transforms, including
+hosted-opening dimensions and solid-kernel validation, alongside the dedicated
+building-object forms.
 These are internal development and runtime checks; Apex native
 fixtures, physical input, clean-machine/offline installer qualification, and
 production evidence remain open. The distribution handoff now also emits a
@@ -907,7 +910,8 @@ All 130 requirements in `requirements/apex-parity.json` remain mandatory.
   replace the contract's authoritative affine mapping, import Apex files, or
   replace the required specialist-module fixtures.
 - The architectural transaction adapter now applies type-aware transforms to
-  canonical building entities and carries hosted wall openings through
+  canonical building entities and shared wall/slab/room solids, carrying
+  hosted wall openings through
   duplicate and delete commands, preserving unrelated metadata and ordinary
   undo/redo. The Windows editor exposes a compact preview dialog for scale,
   rotation, XYZ translation, clone, and apply/cancel history behavior on

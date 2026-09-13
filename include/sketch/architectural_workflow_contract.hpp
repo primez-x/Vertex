@@ -4,10 +4,16 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace sketch {
 enum class ArchitecturalAction { create, select, property_edit, transform, duplicate, erase };
+// Entity types with canonical geometry that can be transformed through the
+// architectural transaction adapter.  This includes the shared wall/slab/
+// room solids as well as the dedicated building-object forms.
+[[nodiscard]] bool can_transform_architectural_entity_type(
+    std::string_view type) noexcept;
 // Intent in model metres/radians, uniform positive scale; execution is adapter-owned.
 struct ArchitecturalTransform {
     double x{}, y{}, z{}, rotation_z_radians{}, scale{1};

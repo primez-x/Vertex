@@ -14,6 +14,12 @@ template<class F> void rejects(F fn) {
 int main() {
     try {
         using namespace sketch;
+        check(can_transform_architectural_entity_type("wall") &&
+                  can_transform_architectural_entity_type("slab") &&
+                  can_transform_architectural_entity_type("room") &&
+                  can_transform_architectural_entity_type("column") &&
+                  can_transform_architectural_entity_type("roof") &&
+                  !can_transform_architectural_entity_type("annotation"));
         const ArchitecturalOperation create{ArchitecturalAction::create, "wall-b", "wall", {}, {{"height", "3m"}}};
         const ArchitecturalOperation select{ArchitecturalAction::select, "wall-b"};
         const ArchitecturalOperation edit{ArchitecturalAction::property_edit, "wall-b", {}, {}, {{"height", "4m"}}};

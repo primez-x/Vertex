@@ -1,6 +1,7 @@
 #include "sketch/visualization/native_model_view.hpp"
 
 #include "sketch/architecture.hpp"
+#include "sketch/architectural_workflow_contract.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/document.hpp"
@@ -754,7 +755,7 @@ public:
         }
         const auto found = snapshot->entities().find(id.toStdString());
         return found != snapshot->entities().end() &&
-               can_recognize_building_entity_type(found->second.type);
+               can_transform_architectural_entity_type(found->second.type);
     }
 
     std::optional<WorldPoint> world_point(const NativeInputPoint point) const {

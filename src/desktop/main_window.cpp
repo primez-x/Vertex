@@ -2318,9 +2318,9 @@ public:
         const QString& rotation_degrees, const QString& offset_x,
         const QString& offset_y, const QString& offset_z,
         const QString& uniform_scale, bool clone) const {
-        if (!can_recognize_building_entity_type(original.type)) {
+        if (!can_transform_architectural_entity_type(original.type)) {
             throw std::invalid_argument(
-                "Select a column, beam, stair, or roof before transforming an architectural object.");
+                "Select an editable architectural object before transforming it.");
         }
         const auto parse_degrees = [](const QString& text) {
             if (text.trimmed().isEmpty()) return 0.0;
@@ -2387,7 +2387,7 @@ public:
             const auto source = authoringSnapshot();
             const auto found = source.entities().find(m_selected_id.toStdString());
             if (found == source.entities().end()) {
-                throw std::invalid_argument("Select a column, beam, stair, or roof first.");
+                throw std::invalid_argument("Select an editable architectural object first.");
             }
             const auto [transaction, root] = makeArchitecturalObjectTransformTransaction(
                 source, found->second, rotation_degrees, offset_x, offset_y, offset_z,
@@ -4186,8 +4186,8 @@ public:
         const auto context = captureModalContext();
         const auto source = authoringSnapshot();
         const auto original = selectedEntity();
-        if (!original || !can_recognize_building_entity_type(original->type)) {
-            setError(QStringLiteral("Select a column, beam, stair, or roof first."));
+        if (!original || !can_transform_architectural_entity_type(original->type)) {
+            setError(QStringLiteral("Select an editable architectural object first."));
             return;
         }
 
@@ -4287,7 +4287,8 @@ public:
 
     void showBoundaryTransformEditor() {
         const auto original = selectedEntity();
-        if (original && can_recognize_building_entity_type(original->type)) {
+        if (original && (can_recognize_building_entity_type(original->type) ||
+                         original->type == "slab" || original->type == "room")) {
             showArchitecturalObjectTransformEditor();
             return;
         }

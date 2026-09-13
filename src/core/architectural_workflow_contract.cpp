@@ -44,6 +44,13 @@ const char* name(ArchitecturalOutputKind kind) {
     throw std::invalid_argument("unknown architectural output kind");
 }
 }
+
+bool can_transform_architectural_entity_type(std::string_view type) noexcept {
+    return type == "wall" || type == "slab" || type == "room" ||
+           type == "column" || type == "beam" || type == "stair" ||
+           type == "railing" || type == "roof";
+}
+
 ArchitecturalTransaction ArchitecturalTransaction::create(std::string id, std::string base_revision,
     std::vector<std::string> existing_ids, std::vector<ArchitecturalOperation> operations,
     std::string undo_label) {
