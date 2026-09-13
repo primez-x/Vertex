@@ -715,6 +715,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/vertical_level_document_adapter.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/vertical_levels.hpp"
     },
     {
@@ -1248,6 +1252,10 @@
     {
       "category": "source",
       "path": "src/core/typed_relationships.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/vertical_level_document_adapter.cpp"
     },
     {
       "category": "source",
