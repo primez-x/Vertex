@@ -59,6 +59,22 @@ int main() {
                 "Catalog must be deterministic");
         require(!placed_symbol_preview(catalog[i],{}).empty(),"Every catalog entry must produce preview strokes");
     }
+    const auto manifest = encode_symbol_catalog_manifest(catalog);
+    require(manifest.at("schema_version") == 1 && manifest.at("catalog_id") == "vertex.symbol-catalog",
+            "Symbol catalog manifest must identify its schema");
+    require(manifest.at("entry_count") == catalog.size() && manifest.at("family_count") == families.size() &&
+                manifest.at("entries").size() == catalog.size(),
+            "Symbol catalog manifest must enumerate every entry and family");
+    require(manifest.at("category_counts").at("fixtures") == 63 &&
+                manifest.at("category_counts").at("commercial") == 36,
+            "Symbol catalog manifest must retain category coverage");
+    require(manifest.at("families").at(0).at("id") == "accessible-shower" &&
+                manifest.at("families").at(0).at("variant_count") == 9,
+            "Symbol catalog manifest families must be stable and sorted");
+    require(manifest == encode_symbol_catalog_manifest(repeated),
+            "Symbol catalog manifest must be deterministic");
+    require(manifest.at("entries").at(0).at("preview").size() >= 5,
+            "Symbol catalog manifest must retain vector previews");
     auto labels = default_label_templates();
     require(filter_label_templates(labels,"room","rooms").size() >= 2,"Label filtering failed");
     require(filter_label_templates(labels,"","missing").empty(),"Category filtering failed");

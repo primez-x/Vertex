@@ -22,6 +22,23 @@ def main():
             if (result.returncode == 0) != success:
                 raise AssertionError(f"Unexpected exit {result.returncode}: {result.stdout} {result.stderr}")
             return json.loads(result.stdout) if success else result
+        catalog = invoke("symbols")
+        assert catalog["schema_version"] == 1
+        assert catalog["catalog_id"] == "vertex.symbol-catalog"
+        assert catalog["entry_count"] >= 200
+        assert catalog["family_count"] >= 20
+        assert {"fixtures", "furniture", "plumbing", "commercial"}.issubset(
+            catalog["category_counts"]
+        )
+        assert any(entry["family"] == "toilet" and entry["width_metres"] > 0
+                   for entry in catalog["entries"])
+        toilets = invoke("symbols", "toilet")
+        assert toilets["filtered_entry_count"] == 18
+        assert all(entry["family"] in {"toilet", "accessible-toilet"}
+                   for entry in toilets["entries"])
+        commercial = invoke("symbols", "", "commercial")
+        assert commercial["filtered_entry_count"] == 36
+        assert all(entry["category"] == "commercial" for entry in commercial["entries"])
         created = invoke("new", project)
         inspected = invoke("inspect", project)
         assert inspected["document_id"] == created["document_id"]

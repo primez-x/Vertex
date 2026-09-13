@@ -1,4 +1,5 @@
 #include "sketch/document.hpp"
+#include "sketch/annotation_catalog.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/project_exchange.hpp"
 #include "sketch/project_resource_catalog.hpp"
@@ -12,6 +13,7 @@
 #include <Windows.h>
 
 #include <filesystem>
+#include <cwchar>
 #include <iostream>
 #include <map>
 #include <string>
@@ -21,6 +23,20 @@ using Json = nlohmann::json;
 std::string utf8(const std::filesystem::path& path) {
     const auto value = path.u8string();
     return {value.begin(), value.end()};
+}
+
+std::string utf8_text(const wchar_t* value) {
+    if (value == nullptr || *value == L'\0') return {};
+    const auto length = static_cast<int>(wcslen(value));
+    const auto required = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, length,
+                                              nullptr, 0, nullptr, nullptr);
+    if (required <= 0) throw std::runtime_error("could not convert command text to UTF-8");
+    std::string result(static_cast<std::size_t>(required), '\0');
+    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, length, result.data(),
+                            required, nullptr, nullptr) != required) {
+        throw std::runtime_error("could not convert command text to UTF-8");
+    }
+    return result;
 }
 
 Json describe(const sketch::DocumentSnapshot& snapshot) {
@@ -38,14 +54,35 @@ Json describe(const sketch::DocumentSnapshot& snapshot) {
 
 
 int run(int argc, wchar_t** argv) {
-    if (argc < 3) {
+    const auto usage = [] {
         std::cerr << "Usage: property-cli <new|inspect|validate> <project.bldproj>\n"
                   << "       property-cli extract <project.bldproj> <new-directory>\n"
                   << "       property-cli migrate <project.bldproj> <new-project.bldproj>\n"
-                  << "       property-cli resources <project-package-directory>\n";
+                  << "       property-cli resources <project-package-directory>\n"
+                  << "       property-cli symbols [query] [category]\n";
+    };
+    if (argc < 2) {
+        usage();
         return 2;
     }
     const std::wstring command(argv[1]);
+    if (command == L"symbols" && argc >= 2 && argc <= 4) {
+        const auto catalog = sketch::default_symbol_catalog();
+        const auto query = argc >= 3 ? utf8_text(argv[2]) : std::string{};
+        const auto category = argc == 4 ? utf8_text(argv[3]) : std::string{};
+        const auto filtered = sketch::filter_symbol_catalog(catalog, query, category);
+        auto manifest = sketch::encode_symbol_catalog_manifest(filtered);
+        manifest["query"] = query;
+        manifest["category"] = category;
+        manifest["catalog_entry_count"] = catalog.size();
+        manifest["filtered_entry_count"] = filtered.size();
+        std::cout << manifest.dump(2) << '\n';
+        return 0;
+    }
+    if (argc < 3) {
+        usage();
+        return 2;
+    }
     const std::filesystem::path file(argv[2]);
     if (command == L"new" && argc == 3) {
         auto document = sketch::Document::create();

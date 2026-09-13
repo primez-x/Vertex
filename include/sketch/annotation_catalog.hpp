@@ -77,6 +77,12 @@ struct AnnotationState {
 
 [[nodiscard]] std::vector<LabelTemplate> default_label_templates();
 [[nodiscard]] std::vector<SymbolDefinition> default_symbol_catalog();
+// Return a deterministic, self-describing JSON manifest for offline review and
+// tooling.  The manifest contains every validated entry, family/category
+// summary, physical footprint, scale limits, anchor, and local vector preview;
+// it never depends on a service or a project instance.
+[[nodiscard]] nlohmann::json encode_symbol_catalog_manifest(
+    const std::vector<SymbolDefinition>&);
 // Empty query/category match all; query matching is case-insensitive and covers
 // stable ID, family, and category without mutating the catalog records.
 [[nodiscard]] std::vector<SymbolDefinition> filter_symbol_catalog(

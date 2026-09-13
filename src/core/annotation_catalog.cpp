@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cmath>
 #include <initializer_list>
+#include <map>
 #include <numbers>
 #include <set>
 #include <stdexcept>
@@ -275,6 +276,60 @@ std::vector<SymbolDefinition> default_symbol_catalog() {
         result.push_back(std::move(s));
     }
     return result;
+}
+
+nlohmann::json encode_symbol_catalog_manifest(const std::vector<SymbolDefinition>& catalog) {
+    validate_symbol_catalog(catalog);
+
+    std::vector<const SymbolDefinition*> entries;
+    entries.reserve(catalog.size());
+    for (const auto& definition : catalog) entries.push_back(&definition);
+    std::sort(entries.begin(), entries.end(), [](const auto* left, const auto* right) {
+        return left->id < right->id;
+    });
+
+    std::map<std::string, std::size_t> category_counts;
+    std::map<std::string, std::pair<std::string, std::size_t>> family_summary;
+    nlohmann::json encoded_entries = nlohmann::json::array();
+    for (const auto* definition : entries) {
+        ++category_counts[definition->category];
+        auto [family, inserted] = family_summary.emplace(
+            definition->family, std::make_pair(definition->category, std::size_t{0}));
+        if (!inserted && family->second.first != definition->category) {
+            throw std::invalid_argument("Symbol family cannot span categories");
+        }
+        ++family->second.second;
+
+        nlohmann::json preview = nlohmann::json::array();
+        for (const auto& stroke : definition->preview) {
+            preview.push_back({{"start", {{"x", stroke.start.x}, {"y", stroke.start.y}}},
+                               {"end", {{"x", stroke.end.x}, {"y", stroke.end.y}}}});
+        }
+        encoded_entries.push_back({
+            {"id", definition->id},
+            {"family", definition->family},
+            {"category", definition->category},
+            {"width_metres", definition->width_metres},
+            {"depth_metres", definition->depth_metres},
+            {"anchor", {{"x", definition->anchor.x}, {"y", definition->anchor.y}}},
+            {"minimum_scale", definition->minimum_scale},
+            {"maximum_scale", definition->maximum_scale},
+            {"preview", std::move(preview)},
+        });
+    }
+
+    nlohmann::json encoded_families = nlohmann::json::array();
+    for (const auto& [family, summary] : family_summary) {
+        encoded_families.push_back({{"id", family}, {"category", summary.first},
+                                    {"variant_count", summary.second}});
+    }
+    return {{"schema_version", 1},
+            {"catalog_id", "vertex.symbol-catalog"},
+            {"entry_count", catalog.size()},
+            {"family_count", family_summary.size()},
+            {"category_counts", category_counts},
+            {"families", std::move(encoded_families)},
+            {"entries", std::move(encoded_entries)}};
 }
 
 std::vector<SymbolDefinition> filter_symbol_catalog(
