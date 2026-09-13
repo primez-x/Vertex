@@ -1076,6 +1076,7 @@ if(BUILD_TESTING)
   # the developer's desktop. Object linkage retains the initializer even when
   # a test has no explicit reference to the policy helper.
   add_library(sketch_test_process_policy OBJECT tests/support/test_process_policy.cpp)
+  target_include_directories(sketch_test_process_policy PRIVATE include)
   get_property(SKETCH_LOCAL_TARGETS DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
   foreach(target IN LISTS SKETCH_LOCAL_TARGETS)
     if(target MATCHES "(_tests$|^desktop_smoke$|^error_policy_probe$)")

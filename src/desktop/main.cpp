@@ -1,5 +1,5 @@
 #include "sketch/desktop/main_window.hpp"
-#include "../../tests/support/noninteractive_errors.hpp"
+#include "sketch/noninteractive_errors.hpp"
 
 #include <QApplication>
 #include <QDebug>
@@ -165,7 +165,7 @@ bool seed_smoke_reference(sketch::desktop::MainWindow& window) {
 int main(int argc, char** argv) {
     for (int index = 1; index < argc; ++index) {
         if (std::strcmp(argv[index], "--smoke") == 0) {
-            sketch::testing::noninteractive_errors();
+            sketch::runtime::configure_noninteractive_errors();
             break;
         }
     }

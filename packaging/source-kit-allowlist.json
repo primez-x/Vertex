@@ -283,6 +283,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/repository-handoff.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/apex-parity.json"
     },
     {
