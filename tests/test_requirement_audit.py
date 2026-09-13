@@ -166,6 +166,17 @@ class RequirementAuditCliTests(unittest.TestCase):
         self.assertEqual(self.run_audit("--contract"), 0)
         self.assertEqual(self.run_audit("--release"), 2)
 
+    def test_schema_contract_does_not_read_release_evidence(self):
+        self.write_contract()
+        self.evidence_path.write_text("unfinished evidence", encoding="utf-8")
+        self.assertEqual(self.run_audit("--contract"), 0)
+
+    def test_contract_and_release_modes_cannot_be_combined(self):
+        self.write_contract()
+        with self.assertRaises(SystemExit) as raised:
+            self.run_audit("--contract", "--release")
+        self.assertEqual(raised.exception.code, 2)
+
     def test_release_mode_reports_pass_when_evidence_is_current(self):
         requirements = self.write_contract(implementation_status="verified")
         self.assertEqual(requirements["implementation_status"], "verified")

@@ -90,6 +90,12 @@ that implementation or production evidence is complete. The `--release`
 command evaluates the single production acceptance gate and fails while any
 requirement lacks current passing evidence.
 
+CTest runs `requirement_schema_contract` in ordinary matrices. The separate
+`production_acceptance_gate` is disabled there; run the `--release` command
+explicitly for release qualification. Contract mode does not read acceptance
+evidence, and `--contract --json` reports `release_evaluated: false` without
+production acceptance fields. `--contract` and `--release` are mutually exclusive.
+
 The root implementation/audit tooling may add stricter checks, fixture links,
 license scans, and status evidence. Those checks must preserve the contracts
 above, especially semantic authority, typed links, immutable save snapshots,

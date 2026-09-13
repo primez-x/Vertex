@@ -113,17 +113,29 @@ def release_gaps(ledger, gates, evidence, root):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--release", action="store_true", help="Fail unless every requirement has passing, unchanged acceptance evidence")
-    parser.add_argument("--contract", action="store_true",
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--release", action="store_true", help="Fail unless every requirement has passing, unchanged acceptance evidence")
+    mode.add_argument("--contract", action="store_true",
                         help="Validate the requirement and gate schema without evaluating release acceptance")
     parser.add_argument("--json", action="store_true", help="Print the complete machine-readable report")
     args = parser.parse_args()
     directory = ROOT / "docs/requirements"
     ledger = json.loads((directory / "apex-parity.json").read_text(encoding="utf-8"))
     gates = json.loads((directory / "production-gates.json").read_text(encoding="utf-8"))
+    errors = validate_contract(ledger, gates)
+    if args.contract:
+        if args.json:
+            print(json.dumps({"contract_errors": errors,
+                              "requirement_count": len(ledger["requirements"]),
+                              "required_gate_count": len(gates["gates"]),
+                              "release_evaluated": False}, indent=2))
+        else:
+            print(f"Requirement contract: {'PASS' if not errors else f'BLOCKED ({len(errors)} errors)'}")
+            for error in errors:
+                print(error)
+        return 1 if errors else 0
     evidence_path = directory / "acceptance-evidence.json"
     evidence = json.loads(evidence_path.read_text(encoding="utf-8")) if evidence_path.exists() else {}
-    errors = validate_contract(ledger, gates)
     gaps = release_gaps(ledger, gates, evidence, ROOT)
     counts = dict(collections.Counter(row["implementation_status"] for row in ledger["requirements"]))
     report = {"contract_errors": errors, "requirement_count": len(ledger["requirements"]),
@@ -132,10 +144,6 @@ def main():
               "production_accepted": not gaps, "release_gaps": gaps}
     if args.json:
         print(json.dumps(report, indent=2))
-    elif args.contract:
-        print(f"Requirement contract: {'PASS' if not errors else f'BLOCKED ({len(errors)} errors)'}")
-        for error in errors:
-            print(error)
     else:
         print(f"{report['requirement_count']} requirements; {report['required_gate_count']} mandatory gates; {counts}")
         print("Production acceptance: " + ("PASS" if not gaps else f"BLOCKED ({len(gaps)} gaps)"))
