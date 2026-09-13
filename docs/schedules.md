@@ -55,7 +55,9 @@ measurement. Beam length is derived from its full 3D axis, while roof opening
 counts and stair riser counts remain source-backed properties. The rows honor the
 active visible-entity filter and are intentionally edited through the
 architectural object inspector so schedule output cannot diverge from model
-geometry.
+geometry. New projects include a `building-objects` sheet placement beside the
+default door schedule, so architectural quantities are visible in draft output
+without additional sheet setup.
 
 `make_schedule_edit` returns a deterministic command description containing the
 source target, expected document revision, prior value and replacement. It

@@ -4362,10 +4362,12 @@ int main(int argc, char** argv) {
     require(svg_output.open(QIODevice::ReadOnly | QIODevice::Text),
             "draft SVG should be readable for schedule placement verification");
     const auto svg_text = svg_output.readAll();
-    require(svg_text.contains("DOORS SCHEDULE") && svg_text.contains("ELEVATION") &&
+    require(svg_text.contains("DOORS SCHEDULE") &&
+                svg_text.contains("BUILDING-OBJECTS SCHEDULE") &&
+                svg_text.contains("ELEVATION") &&
                 svg_text.contains("SECTION") && svg_text.contains("Issued set") &&
                 svg_text.contains("Section A / A101"),
-            "draft SVG should render schedules, coordinated captions, revisions and callouts");
+            "draft SVG should render building schedules, coordinated captions, revisions and callouts");
     svg_output.close();
     const auto svg_fingerprint_path = std::filesystem::path(svg_path.wstring() + L".fingerprint.json");
     require(std::filesystem::file_size(svg_fingerprint_path) > 0,

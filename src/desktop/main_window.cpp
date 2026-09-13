@@ -423,9 +423,11 @@ SheetViewModel default_sheet_view_model() {
     sheet.viewports.push_back({"viewport-elevation", "view-elevation", {10.0, 120.0, 195.0, 90.0}, 100.0});
     sheet.viewports.push_back({"viewport-section", "view-section", {215.0, 120.0, 195.0, 90.0}, 100.0});
     sheet.schedules.push_back({"schedule-doors", "doors", {10.0, 220.0, 190.0, 45.0}});
+    sheet.schedules.push_back({"schedule-objects", "building-objects",
+                               {215.0, 220.0, 195.0, 45.0}});
     return SheetViewModel::create({std::move(section_view), std::move(plan_view),
                                    std::move(elevation_view)}, {std::move(sheet)},
-                                  {"doors", "windows", "rooms", "materials"});
+                                  {"doors", "windows", "rooms", "materials", "building-objects"});
 }
 
 json point_json(Vec2 point) {
