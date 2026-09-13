@@ -7,11 +7,14 @@
 #include <QImage>
 #include <QPainter>
 #include <QTemporaryDir>
+#include <nlohmann/json.hpp>
 
 #include <cmath>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -36,6 +39,7 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
         using namespace sketch;
+        using json = nlohmann::json;
         desktop::MainWindow window;
         require(!window.assistanceEnabled(), "assistance must start disabled");
         require(window.suggestLabelAssistance().empty(),
@@ -58,9 +62,59 @@ int main(int argc, char** argv) {
             QString::fromStdWString(image_path.wstring()));
         require(!reference_id.isEmpty(), "reference fixture must import");
         require(window.selectEntity(reference_id), "reference fixture must be selected");
+        const auto require_calibration_error = [&] {
+            const auto revision = window.document().revision();
+            for (const auto kind : {AssistanceKind::tracing, AssistanceKind::edge_tracing,
+                                    AssistanceKind::dimension_extraction}) {
+                window.setAssistanceEnabled(false);
+                window.setAssistanceEnabled(true);
+                require(window.suggestReferenceAssistance(reference_id, kind).empty(),
+                        "uncalibrated or invalid reference must not generate trace suggestions");
+                require(window.lastError().contains("Calibrate", Qt::CaseInsensitive),
+                        "rejected trace must explain that reference calibration is required");
+            }
+            require(window.document().revision() == revision,
+                    "rejected trace suggestions must not change the document");
+        };
+        require_calibration_error();
+        require(window.calibrateReference(reference_id, "0", "0", "40", "0", "4 m"),
+                "reference fixture must calibrate from a known distance");
+        const auto calibrated = window.document().snapshot().entities().at(reference_id.toStdString());
+        const auto replace_reference = [&](Entity replacement) {
+            window.document().apply(ApplyEntityChanges{window.document().revision(),
+                {EntityChange::upsert(std::move(replacement))}, {}, "Set calibration fixture"});
+        };
+        for (const auto* field : {"calibration_first_source", "calibration_second_source",
+                                  "calibration_known_distance", "metres_per_source_unit"}) {
+            auto invalid = calibrated;
+            invalid.properties.erase(field);
+            replace_reference(std::move(invalid));
+            require_calibration_error();
+        }
+        for (const auto& [field, value] : std::vector<std::pair<std::string, json>>{
+                 {"calibration_first_source", json::array({"bad", 0})},
+                 {"calibration_second_source", json::array({0, 0})},
+                 {"calibration_second_source", json::array({1e-310, 0})},
+                 {"calibration_first_source", json::array({-1.7e308, -1.7e308})},
+                 {"calibration_known_distance", "not a distance"},
+                 {"calibration_known_distance", "0 m"},
+                 {"calibration_known_distance", "-4 m"},
+                 {"metres_per_source_unit", 0},
+                 {"metres_per_source_unit", -1},
+                 {"metres_per_source_unit", "0.1"},
+                 {"metres_per_source_unit", 0.01}}) {
+            auto invalid = calibrated;
+            invalid.properties[field] = value;
+            replace_reference(std::move(invalid));
+            require_calibration_error();
+        }
+        replace_reference(calibrated);
         const auto trace = window.suggestReferenceAssistance(reference_id, AssistanceKind::tracing);
         require(trace.size() == 1 && trace.front().preview.command_type == "add_boundary",
                 "desktop must expose deterministic trace suggestions");
+        require(std::abs(trace.front().preview.arguments.at("metres_per_pixel").get<double>() -
+                         0.1) < 1e-12,
+                "trace suggestions must use the known-distance calibration");
         const auto edge_trace = window.suggestReferenceAssistance(reference_id,
                                                                    AssistanceKind::edge_tracing);
         require(edge_trace.size() == 1 &&

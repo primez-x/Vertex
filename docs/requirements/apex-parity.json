@@ -1310,7 +1310,7 @@
         "tests/reference_asset_tests.cpp",
         "docs/reference-assets.md"
       ],
-      "implementation_note": "Calibration stores known source distance, unit, scale, and provenance with deterministic validation; the desktop exposes and persists metres-per-source-pixel calibration through the reference inspector and a typed known-distance dialog, and selected PDF previews use the same transform. The Trace selected reference workflow is covered by the desktop smoke path; calibrated production fixtures remain open."
+      "implementation_note": "Calibration stores known source distance, unit, scale, and provenance with deterministic validation; the desktop exposes and persists metres-per-source-pixel calibration through the reference inspector and a typed known-distance dialog, and selected PDF previews use the same transform. Automated reference assistance now fails closed until two finite distinct source points, a positive known distance, and a matching finite derived scale are present; the display fallback remains limited to underlays and manual tracing. The Trace selected reference workflow is covered by desktop tests, while calibrated production fixtures and complete Apex fidelity remain open."
     },
     {
       "id": "APX-TRACE-003",

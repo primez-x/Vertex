@@ -43,6 +43,15 @@ document command path:
 - workspace-language commands change presentation state without changing
   geometry.
 
+Reference-based assistance requires explicit calibration before generating any
+proposal. The reference must retain two finite, distinct source points and a
+finite positive known distance; their derived metres per source unit must be
+finite, positive, and agree with the stored calibration. Missing, malformed,
+or inconsistent calibration produces a request to calibrate the reference and
+no proposal or document change. The display-only default scale remains
+available for visual underlays and manual tracing; it does not authorize
+automated measurements.
+
 All document mutations run through `Document::preview_command`, the normal
 revision check, and the normal undo/redo transaction. Disabled assistance,
 unaccepted proposals, missing resources, malformed payloads, read-only
@@ -61,8 +70,8 @@ acceptance rules. `tests/assistance_engine_tests.cpp` covers deterministic
 envelope and edge tracing, explicit-unit parsing, label placement, the language
 grammar and malformed inputs. `tests/assistance_workflow_tests.cpp` covers the
 Windows desktop integration, explicit acceptance, identified-boundary creation,
-connected-component tracing, legacy-boundary upgrade, undo and the disabled
-path.
+connected-component tracing, the calibration provenance gate, legacy-boundary
+upgrade, undo and the disabled path.
 
 These deterministic fixtures establish the local runtime contract. They do not
 certify contour accuracy on arbitrary architectural plans, physical pen/DISTO input,

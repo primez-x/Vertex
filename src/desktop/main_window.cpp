@@ -8070,8 +8070,40 @@ public:
             const auto raster = decodeAssistanceReference(reference_id);
             const auto snapshot = authoringSnapshot();
             const auto reference = snapshot.entities().find(reference_id.trimmed().toStdString());
-            const auto calibration = reference == snapshot.entities().end()
-                ? 0.01 : read_number(reference->second.properties, "metres_per_source_unit", 0.01);
+            const auto calibration = [&]() -> double {
+                try {
+                    if (reference == snapshot.entities().end() ||
+                        reference->second.type != "reference_asset") {
+                        throw std::invalid_argument("Reference image was not found.");
+                    }
+                    const auto& properties = reference->second.properties;
+                    const auto first = read_point(properties.at("calibration_first_source"));
+                    const auto second = read_point(properties.at("calibration_second_source"));
+                    const auto& known_text = properties.at("calibration_known_distance");
+                    const auto& stored_value = properties.at("metres_per_source_unit");
+                    if (!first || !second || !known_text.is_string() || !stored_value.is_number()) {
+                        throw std::invalid_argument("Calibration provenance is invalid.");
+                    }
+                    const auto known = parse_quantity(known_text.get<std::string>(), Unit::metre);
+                    const auto distance = std::hypot(second->x - first->x, second->y - first->y);
+                    const auto stored = stored_value.get<double>();
+                    if (!(distance > 0.0) || !std::isfinite(distance) ||
+                        !(known.metres > 0.0) || !std::isfinite(known.metres) ||
+                        !(stored > 0.0) || !std::isfinite(stored)) {
+                        throw std::invalid_argument("Calibration distances are invalid.");
+                    }
+                    const auto derived = known.metres / distance;
+                    if (!(derived > 0.0) || !std::isfinite(derived) ||
+                        std::abs(stored - derived) > 1e-9 * std::max(stored, derived)) {
+                        throw std::invalid_argument("Calibration scale is invalid or inconsistent.");
+                    }
+                    return derived;
+                } catch (const std::exception&) {
+                    throw std::invalid_argument(
+                        "Calibrate the selected reference using two source points and a known "
+                        "distance before generating assistance. Its calibration is missing or invalid.");
+                }
+            }();
             const auto origin = reference == snapshot.entities().end()
                 ? Vec2{} : read_point(reference->second.properties.value("position_m", json{})).value_or(Vec2{});
             const auto rotation = reference == snapshot.entities().end()
