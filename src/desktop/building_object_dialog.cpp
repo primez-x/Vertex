@@ -561,6 +561,7 @@ private:
         dirty.clear();
         parsed_quantities.clear();
         landing_check = nullptr;
+        level_connection_check = nullptr;
         derived_pitch = nullptr;
         if (form_page != nullptr) {
             form_stack->removeWidget(form_page);
@@ -631,6 +632,38 @@ private:
                              });
             fields.at("buildingObjectLandingDepth")->setEnabled(false);
             fields.at("buildingObjectLandingThickness")->setEnabled(false);
+
+            level_connection_check = new QCheckBox(
+                QStringLiteral("Connect to floor-to-floor levels"), form_page);
+            level_connection_check->setObjectName(
+                QStringLiteral("buildingObjectLevelConnectionEnabled"));
+            layout->addRow(QString(), level_connection_check);
+            add_identifier_field(layout, QStringLiteral("Level graph"),
+                                 "buildingObjectLevelGraph");
+            add_identifier_field(layout, QStringLiteral("Floor-to-floor link"),
+                                 "buildingObjectLevelLink");
+            add_identifier_field(layout, QStringLiteral("Lower level"),
+                                 "buildingObjectLowerLevel");
+            add_identifier_field(layout, QStringLiteral("Upper level"),
+                                 "buildingObjectUpperLevel");
+            QObject::connect(level_connection_check, &QCheckBox::toggled, owner,
+                             [this](bool enabled) {
+                                 if (!loading) {
+                                     dirty["buildingObjectLevelConnectionEnabled"] = true;
+                                 }
+                                 for (const auto* name : {"buildingObjectLevelGraph",
+                                                          "buildingObjectLevelLink",
+                                                          "buildingObjectLowerLevel",
+                                                          "buildingObjectUpperLevel"}) {
+                                     if (fields.contains(name)) {
+                                         fields.at(name)->setEnabled(enabled);
+                                     }
+                                 }
+                             });
+            for (const auto* name : {"buildingObjectLevelGraph", "buildingObjectLevelLink",
+                                     "buildingObjectLowerLevel", "buildingObjectUpperLevel"}) {
+                fields.at(name)->setEnabled(false);
+            }
         } else if (form == "straight_railing") {
             add_coordinate_fields(layout, "Base", "buildingObjectBaseX",
                                   "buildingObjectBaseY", "buildingObjectBaseZ", {});
@@ -895,6 +928,24 @@ private:
                                has_landing ? value.top_landing->depth : 1.2);
                     set_length("buildingObjectLandingThickness",
                                has_landing ? value.top_landing->thickness : 0.15);
+                    const bool has_level_connection = value.level_connection.has_value();
+                    level_connection_check->setChecked(has_level_connection);
+                    set_text("buildingObjectLevelGraph",
+                             has_level_connection
+                                 ? qt_string(value.level_connection->graph_entity_id)
+                                 : QString());
+                    set_text("buildingObjectLevelLink",
+                             has_level_connection
+                                 ? qt_string(value.level_connection->link_id)
+                                 : QString());
+                    set_text("buildingObjectLowerLevel",
+                             has_level_connection
+                                 ? qt_string(value.level_connection->lower_level_id)
+                                 : QString());
+                    set_text("buildingObjectUpperLevel",
+                             has_level_connection
+                                 ? qt_string(value.level_connection->upper_level_id)
+                                 : QString());
                 } else if constexpr (std::is_same_v<Object, Railing>) {
                     set_coordinate("buildingObjectBaseX", "buildingObjectBaseY",
                                    "buildingObjectBaseZ", value.base_position);
@@ -930,6 +981,13 @@ private:
             const auto enabled = landing_check->isChecked();
             fields.at("buildingObjectLandingDepth")->setEnabled(enabled);
             fields.at("buildingObjectLandingThickness")->setEnabled(enabled);
+        }
+        if (level_connection_check != nullptr) {
+            const auto enabled = level_connection_check->isChecked();
+            for (const auto* name : {"buildingObjectLevelGraph", "buildingObjectLevelLink",
+                                     "buildingObjectLowerLevel", "buildingObjectUpperLevel"}) {
+                fields.at(name)->setEnabled(enabled);
+            }
         }
     }
 
@@ -1014,6 +1072,21 @@ private:
         edit->setMinimumWidth(0);
         edit->setText(QString::number(static_cast<qulonglong>(default_value)));
         edit->setPlaceholderText(QStringLiteral("1–10000"));
+        fields.emplace(name, edit);
+        QObject::connect(edit, &QLineEdit::textChanged, owner,
+                         [this, name](const QString&) {
+                             if (!loading) {
+                                 dirty[name] = true;
+                             }
+                         });
+        layout->addRow(std::move(label), edit);
+    }
+
+    void add_identifier_field(QFormLayout* layout, QString label, const char* name) {
+        auto* edit = new QLineEdit(form_page);
+        edit->setObjectName(QString::fromLatin1(name));
+        edit->setMinimumWidth(0);
+        edit->setPlaceholderText(QStringLiteral("stable ID"));
         fields.emplace(name, edit);
         QObject::connect(edit, &QLineEdit::textChanged, owner,
                          [this, name](const QString&) {
@@ -1189,6 +1262,76 @@ private:
         return StairLanding{*depth, *thickness};
     }
 
+    std::optional<std::string> read_identifier(const char* name, QString label,
+                                               std::string fallback) {
+        if (original_entity.has_value() && !dirty.contains(name)) {
+            return fallback;
+        }
+        const auto found = fields.find(name);
+        if (found == fields.end()) {
+            fail(QStringLiteral("%1 is unavailable.").arg(label));
+            return std::nullopt;
+        }
+        const auto value = found->second->text().trimmed().toUtf8().toStdString();
+        if (value.empty() || value.size() > 256 || value.find('\0') != std::string::npos) {
+            fail(QStringLiteral("%1 must be a non-empty stable ID.").arg(label));
+            return std::nullopt;
+        }
+        return value;
+    }
+
+    std::optional<StairLevelConnection> read_level_connection(
+        const StairFlight* fallback) {
+        if (level_connection_check == nullptr) {
+            fail(QStringLiteral("Stair level connection control is unavailable."));
+            return std::nullopt;
+        }
+        if (!level_connection_check->isChecked()) {
+            return std::nullopt;
+        }
+        if (original_entity.has_value() &&
+            !dirty.contains("buildingObjectLevelConnectionEnabled") &&
+            !dirty.contains("buildingObjectLevelGraph") &&
+            !dirty.contains("buildingObjectLevelLink") &&
+            !dirty.contains("buildingObjectLowerLevel") &&
+            !dirty.contains("buildingObjectUpperLevel")) {
+            if (fallback != nullptr && fallback->level_connection.has_value()) {
+                return fallback->level_connection;
+            }
+            fail(QStringLiteral("Level connection IDs are required."));
+            return std::nullopt;
+        }
+        const auto graph = read_identifier("buildingObjectLevelGraph",
+                                           QStringLiteral("Level graph"),
+                                           fallback != nullptr && fallback->level_connection
+                                               ? fallback->level_connection->graph_entity_id
+                                               : std::string());
+        const auto link = read_identifier("buildingObjectLevelLink",
+                                          QStringLiteral("Floor-to-floor link"),
+                                          fallback != nullptr && fallback->level_connection
+                                              ? fallback->level_connection->link_id
+                                              : std::string());
+        const auto lower = read_identifier("buildingObjectLowerLevel",
+                                           QStringLiteral("Lower level"),
+                                           fallback != nullptr && fallback->level_connection
+                                               ? fallback->level_connection->lower_level_id
+                                               : std::string());
+        const auto upper = read_identifier("buildingObjectUpperLevel",
+                                           QStringLiteral("Upper level"),
+                                           fallback != nullptr && fallback->level_connection
+                                               ? fallback->level_connection->upper_level_id
+                                               : std::string());
+        if (!graph.has_value() || !link.has_value() || !lower.has_value() ||
+            !upper.has_value()) {
+            return std::nullopt;
+        }
+        if (*lower == *upper) {
+            fail(QStringLiteral("Lower and upper levels must differ."));
+            return std::nullopt;
+        }
+        return StairLevelConnection{*graph, *link, *lower, *upper};
+    }
+
     std::optional<BuildingObject> read_object() {
         const auto form = form_string(form_combo->currentData().toString());
         if (form == "rectangular_column") {
@@ -1274,6 +1417,7 @@ private:
             const auto width = read_length("buildingObjectWidth", QStringLiteral("Width"), true,
                                            fallback != nullptr ? fallback->width : 1.2);
             const auto landing = read_landing(fallback);
+            const auto level_connection = read_level_connection(fallback);
             if (!base.has_value() || !orientation.has_value() || !risers.has_value() ||
                 !total_rise.has_value() || !going.has_value() || !width.has_value()) {
                 return std::nullopt;
@@ -1281,9 +1425,13 @@ private:
             if (landing_check->isChecked() && !landing.has_value()) {
                 return std::nullopt;
             }
+            if (level_connection_check->isChecked() && !level_connection.has_value()) {
+                return std::nullopt;
+            }
             return StairFlight{
                 original_entity.has_value() ? original_entity->id : std::string{},
-                *base, *orientation, *risers, *total_rise, *going, *width, landing};
+                *base, *orientation, *risers, *total_rise, *going, *width, landing,
+                level_connection};
         }
         if (form == "straight_railing") {
             const auto* fallback = original_as<Railing>();
@@ -1483,6 +1631,7 @@ private:
     QDialogButtonBox* buttons{};
     QPushButton* submit_button{};
     QCheckBox* landing_check{};
+    QCheckBox* level_connection_check{};
     std::map<std::string, QLineEdit*, std::less<>> fields;
     std::map<std::string, std::string, std::less<>> quantity_pointers;
     std::map<std::string, json, std::less<>> original_quantity_entries;

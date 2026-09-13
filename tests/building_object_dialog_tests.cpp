@@ -208,6 +208,24 @@ void test_all_forms_submit_to_entities() {
 
     {
         BuildingObjectDialog dialog(std::nullopt, true);
+        select_form(dialog, "straight_stair_flight");
+        check(dialog, "buildingObjectLevelConnectionEnabled").setChecked(true);
+        set_field(dialog, "buildingObjectLevelGraph", "levels-1");
+        set_field(dialog, "buildingObjectLevelLink", "ground-first");
+        set_field(dialog, "buildingObjectLowerLevel", "ground");
+        set_field(dialog, "buildingObjectUpperLevel", "first");
+        require(dialog.submit(), "connected stairs should submit");
+        const auto candidate = dialog.candidate();
+        require(candidate.has_value() &&
+                    candidate->properties.at("level_connection").at("graph_id") ==
+                        "levels-1" &&
+                    candidate->properties.at("level_connection").at("link_id") ==
+                        "ground-first",
+                "stair level connection controls should emit canonical IDs");
+    }
+
+    {
+        BuildingObjectDialog dialog(std::nullopt, true);
         select_form(dialog, "sloped_roof_panel");
         set_field(dialog, "buildingObjectRun", "4 m");
         set_field(dialog, "buildingObjectSpan", "3 m");

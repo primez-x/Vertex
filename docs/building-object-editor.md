@@ -97,6 +97,9 @@ then locate its controls without depending on a page implementation:
 | Stair risers, rise, going | `buildingObjectRiserCount`, `buildingObjectTotalRise`, `buildingObjectGoing` |
 | Top landing toggle | `buildingObjectLandingEnabled` |
 | Top landing depth/thickness | `buildingObjectLandingDepth`, `buildingObjectLandingThickness` |
+| Stair level connection toggle | `buildingObjectLevelConnectionEnabled` |
+| Stair graph/link IDs | `buildingObjectLevelGraph`, `buildingObjectLevelLink` |
+| Stair lower/upper level IDs | `buildingObjectLowerLevel`, `buildingObjectUpperLevel` |
 | Roof run/span/rise | `buildingObjectRun`, `buildingObjectSpan`, `buildingObjectRise` |
 | Gable length | `buildingObjectLength` |
 | Railing length and post spacing | `buildingObjectLength`, `buildingObjectPostSpacing` |
@@ -166,10 +169,18 @@ rewrite untouched high-precision coordinates, angles, vectors, or roof pitch.
 The resulting candidate is still only a value; the caller owns the expected
 revision and atomic `Document` command.
 
+The stair form can optionally bind a flight to a retained vertical-level graph
+by entering the graph, floor-to-floor link, and lower/upper level IDs.  The
+Document command resolves and validates those IDs, checks the link endpoints
+and total rise, and rejects disconnected or inconsistent connections without
+changing history.  Rotation and translation remain available; a uniform
+scale of a connected stair is rejected so the graph height cannot silently
+drift from the authored flight.
+
 The dialog is a bounded authoring surface.  The railing form currently models
 a straight top rail and endpoint/interior posts as one validated solid; it does
-not yet provide baluster profiles, curved runs, stair hosting, level
-connections, or code/load checks.  It does not provide structural,
+not yet provide baluster profiles, curved runs, stair hosting, or code/load
+checks.  It does not provide structural,
 code-compliance, material assembly, multi-flight stair, or production-complete
 roof design checks beyond the existing solid builders.  The test executable
 uses Qt's noninteractive error guard and keeps normal runs headless.  For

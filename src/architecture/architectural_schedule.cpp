@@ -4,6 +4,7 @@
 #include "sketch/document_solid.hpp"
 
 #include <Standard_Failure.hxx>
+#include <array>
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -541,6 +542,24 @@ void append_building_rows(const DocumentSnapshot& document,
                 found != entity.properties.end() && found->is_array()) {
                 record.properties.emplace("opening_count",
                                           static_cast<std::int64_t>(found->size()));
+            }
+            if (const auto found = entity.properties.find("level_connection");
+                found != entity.properties.end() && found->is_object()) {
+                static constexpr std::array<std::pair<std::string_view, std::string_view>, 4>
+                    connection_fields{{
+                        {"graph_id", "level_graph_id"},
+                        {"link_id", "level_link_id"},
+                        {"lower_level_id", "lower_level_id"},
+                        {"upper_level_id", "upper_level_id"},
+                    }};
+                for (const auto [source_name, cell_name] : connection_fields) {
+                    const auto value = found->find(std::string(source_name));
+                    if (value != found->end() && value->is_string() &&
+                        !value->get<std::string>().empty()) {
+                        record.properties.emplace(std::string(cell_name),
+                                                  value->get<std::string>());
+                    }
+                }
             }
             if (const auto* beam = std::get_if<Beam>(&object)) {
                 const auto dx = beam->end.x - beam->start.x;

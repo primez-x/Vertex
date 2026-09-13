@@ -62,6 +62,19 @@ struct StairLanding {
     double thickness{};
 };
 
+// A stair level connection binds the lower and upper ends of a flight to one
+// validated vertical-level graph.  The graph and link IDs are Document-owned;
+// level IDs are resolved inside that graph at the Document validation boundary.
+// This is persisted authoring data.  Geometry remains derived from the stair
+// dimensions, and a connection never rewrites the stair's base coordinates.
+struct StairLevelConnection {
+    std::string graph_entity_id;
+    std::string link_id;
+    std::string lower_level_id;
+    std::string upper_level_id;
+    bool operator==(const StairLevelConnection&) const = default;
+};
+
 struct StairFlight {
     std::string id;
     Vec3 base_position{};
@@ -71,6 +84,7 @@ struct StairFlight {
     double going{};
     double width{};
     std::optional<StairLanding> top_landing;
+    std::optional<StairLevelConnection> level_connection;
 };
 
 [[nodiscard]] TopoDS_Shape make_stair_flight(const StairFlight& flight);

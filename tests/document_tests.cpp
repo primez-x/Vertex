@@ -645,6 +645,77 @@ void test_embedded_architectural_models_are_validated_at_document_boundary() {
         DocumentErrorCode::invalid_entity,
         "only floor entities may carry a vertical level binding");
 
+    const auto stair_properties = nlohmann::json{
+        {"version", 1},
+        {"form", "straight_stair_flight"},
+        {"base_position_m", {0.0, 0.0, 0.0}},
+        {"orientation_rad", 0.0},
+        {"riser_count", 6},
+        {"total_rise_m", 3.0},
+        {"going_m", 0.25},
+        {"width_m", 1.1},
+        {"top_landing", nullptr},
+        {"level_connection", {
+            {"version", 1}, {"graph_id", "levels-1"},
+            {"link_id", "ground-first"}, {"lower_level_id", "ground"},
+            {"upper_level_id", "first"},
+        }},
+    };
+    auto connected_stair = entity("stair-connected", "stair", stair_properties);
+    auto stair_document = Document::create({
+        entity("levels-1", "vertical_levels",
+               {{"model", nlohmann::json::parse(levels.serialize())}}),
+        connected_stair,
+    });
+    require(stair_document.snapshot().entities().at("stair-connected").properties
+                .at("level_connection").at("link_id") == "ground-first",
+            "a stair level connection should be admitted against its graph link");
+    const auto stair_revision = stair_document.revision();
+    auto mismatched_rise = connected_stair;
+    mismatched_rise.properties["total_rise_m"] = 2.5;
+    require_error(
+        [&] {
+            stair_document.apply(ApplyEntityChanges{
+                .expected_revision = stair_revision,
+                .entity_changes = {EntityChange::upsert(std::move(mismatched_rise))},
+            });
+        },
+        DocumentErrorCode::invalid_entity,
+        "a connected stair must match the graph floor-to-floor height");
+    require(stair_document.revision() == stair_revision,
+            "a rejected stair level-height change must not advance history");
+
+    auto missing_link = connected_stair;
+    missing_link.properties["level_connection"]["link_id"] = "missing-link";
+    require_error(
+        [&] {
+            (void)Document::create({
+                entity("levels-1", "vertical_levels",
+                       {{"model", nlohmann::json::parse(levels.serialize())}}),
+                std::move(missing_link),
+            });
+        },
+        DocumentErrorCode::dangling_reference,
+        "a stair level connection must reject an unknown graph link");
+
+    const auto disconnected_levels = sketch::VerticalLevelGraph(
+        {{"ground", 0}, {"first", 3}},
+        {{"ground-first", "ground", "first", sketch::RelationshipState::disconnected, 3.0}});
+    require_error(
+        [&] {
+            (void)Document::create({
+                entity("levels-disconnected", "vertical_levels",
+                       {{"model", nlohmann::json::parse(disconnected_levels.serialize())}}),
+                entity("stair-disconnected", "stair", [&] {
+                    auto value = stair_properties;
+                    value["level_connection"]["graph_id"] = "levels-disconnected";
+                    return value;
+                }()),
+            });
+        },
+        DocumentErrorCode::invalid_entity,
+        "a stair level connection must reject a disconnected graph link");
+
     auto grid_document = Document::create({
         entity("grid-1", "reference_grid",
                {{"model", sketch::ReferenceGridModel{}.to_json()}}),

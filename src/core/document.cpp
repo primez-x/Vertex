@@ -152,6 +152,67 @@ void validate_json_object(const nlohmann::json& value, DocumentErrorCode error_c
     }
 }
 
+struct StairConnectionReference {
+    std::string graph_entity_id;
+    std::string link_id;
+    std::string lower_level_id;
+    std::string upper_level_id;
+};
+
+std::optional<StairConnectionReference> stair_connection_reference(const Entity& entity) {
+    const auto found = entity.properties.find("level_connection");
+    if (found == entity.properties.end()) {
+        return std::nullopt;
+    }
+    if (entity.type != "stair") {
+        document_error(DocumentErrorCode::invalid_entity,
+                       "level_connection requires a stair entity");
+    }
+    const auto& value = found.value();
+    if (!value.is_object() || value.size() != 5 ||
+        !value.contains("version") || !value.contains("graph_id") ||
+        !value.contains("link_id") || !value.contains("lower_level_id") ||
+        !value.contains("upper_level_id")) {
+        document_error(DocumentErrorCode::invalid_entity,
+                       "stair level_connection must contain exactly version, graph_id, link_id, lower_level_id, and upper_level_id");
+    }
+    const auto& version = value.at("version");
+    if ((!version.is_number_integer() && !version.is_number_unsigned()) || version != 1) {
+        document_error(DocumentErrorCode::invalid_entity,
+                       "stair level_connection version must be 1");
+    }
+    const auto read_id = [&](std::string_view key, std::size_t maximum) {
+        const auto& candidate = value.at(std::string(key));
+        if (!candidate.is_string()) {
+            document_error(DocumentErrorCode::invalid_entity,
+                           "stair level_connection " + std::string(key) + " must be a string");
+        }
+        const auto result = candidate.get<std::string>();
+        if (result.empty() || result.size() > maximum ||
+            !is_valid_utf8_without_nul(result)) {
+            document_error(DocumentErrorCode::invalid_entity,
+                           "stair level_connection " + std::string(key) + " is invalid");
+        }
+        return result;
+    };
+    const auto graph_entity_id = read_id("graph_id", kMaximumIdBytes);
+    if (!is_valid_identifier(graph_entity_id)) {
+        document_error(DocumentErrorCode::invalid_entity,
+                       "stair level_connection graph_id is not a valid entity ID");
+    }
+    StairConnectionReference result{
+        graph_entity_id,
+        read_id("link_id", 256),
+        read_id("lower_level_id", 256),
+        read_id("upper_level_id", 256),
+    };
+    if (result.lower_level_id == result.upper_level_id) {
+        document_error(DocumentErrorCode::invalid_entity,
+                       "stair level_connection lower and upper levels must differ");
+    }
+    return result;
+}
+
 void validate_entity(const Entity& entity) {
     if (!is_valid_identifier(entity.id)) {
         document_error(DocumentErrorCode::invalid_entity, "entity id is empty or invalid");
@@ -198,6 +259,7 @@ void validate_entity(const Entity& entity) {
                            std::string("invalid georeferencing entity: ") + error.what());
         }
     }
+    (void)stair_connection_reference(entity);
     if (entity.properties.contains("vertical_level_binding")) {
         if (entity.type != "floor") {
             document_error(DocumentErrorCode::invalid_entity,
@@ -375,6 +437,10 @@ std::optional<std::optional<std::string_view>> reference_type_for_key(std::strin
 void collect_references(const Entity& entity, std::vector<EntityReference>& references) {
     if (!is_known_entity_type(entity.type)) {
         return;
+    }
+    if (const auto connection = stair_connection_reference(entity)) {
+        references.push_back({connection->graph_entity_id, "vertical_levels",
+                              EntityReference::Target::entity});
     }
     if (entity.type == "wall" && entity.properties.contains("layers")) {
         const auto thickness = entity.properties.find("thickness_m");
@@ -597,6 +663,56 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
             } catch (const std::exception& error) {
                 document_error(DocumentErrorCode::invalid_entity,
                                "invalid floor vertical level binding " + id + ": " + error.what());
+            }
+        }
+        if (const auto connection = stair_connection_reference(entity)) {
+            const auto graph = entities.find(connection->graph_entity_id);
+            if (graph == entities.end()) {
+                // The canonical reference pass above reports the missing graph.
+                continue;
+            }
+            if (graph->second.type != "vertical_levels") {
+                document_error(DocumentErrorCode::invalid_entity,
+                               "stair " + id + " level_connection graph is not a vertical_levels entity");
+            }
+            try {
+                const auto model = VerticalLevelGraph::from_json(
+                    graph->second.properties.at("model"));
+                const auto link = std::find_if(model.links().begin(), model.links().end(),
+                    [&](const auto& candidate) { return candidate.id == connection->link_id; });
+                if (link == model.links().end()) {
+                    document_error(DocumentErrorCode::dangling_reference,
+                                   "stair " + id + " level_connection references missing link " +
+                                       connection->link_id);
+                }
+                if (link->lower_level_id != connection->lower_level_id ||
+                    link->upper_level_id != connection->upper_level_id) {
+                    document_error(DocumentErrorCode::invalid_entity,
+                                   "stair " + id + " level_connection endpoint IDs do not match its graph link");
+                }
+                if (link->state == RelationshipState::disconnected) {
+                    document_error(DocumentErrorCode::invalid_entity,
+                                   "stair " + id + " level_connection cannot use a disconnected graph link");
+                }
+                const auto rise = entity.properties.find("total_rise_m");
+                if (rise != entity.properties.end()) {
+                    if (!rise->is_number() || !std::isfinite(rise->get<double>()) ||
+                        rise->get<double>() <= 0.0) {
+                        document_error(DocumentErrorCode::invalid_entity,
+                                       "stair " + id + " total_rise_m must be finite and positive");
+                    }
+                    const auto expected = model.floor_to_floor_height(connection->link_id);
+                    if (std::abs(rise->get<double>() - expected) >
+                        VerticalLevelGraph::height_tolerance_m) {
+                        document_error(DocumentErrorCode::invalid_entity,
+                                       "stair " + id + " total_rise_m does not match its connected floor-to-floor height");
+                    }
+                }
+            } catch (const DocumentError&) {
+                throw;
+            } catch (const std::exception& error) {
+                document_error(DocumentErrorCode::invalid_entity,
+                               "invalid stair level_connection " + id + ": " + error.what());
             }
         }
     }

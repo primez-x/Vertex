@@ -147,6 +147,49 @@ std::optional<StairLanding> landing_field(const Json& properties) {
     };
 }
 
+void validate_reference_id(std::string_view id, std::string_view context) {
+    if (id.empty() || id.size() > 256 || id.find('\0') != std::string_view::npos) {
+        invalid(std::string(context) + " is empty or invalid");
+    }
+    try {
+        // JSON's UTF-8 validation keeps level/link identifiers portable while
+        // allowing the same non-ASCII IDs accepted by VerticalLevelGraph.
+        (void)Json(std::string(id)).dump();
+    } catch (const Json::exception&) {
+        invalid(std::string(context) + " is not valid UTF-8");
+    }
+}
+
+std::string required_reference_id(const Json& value, std::string_view key) {
+    const auto result = string_field(required_field(value, key), key);
+    validate_reference_id(result, key);
+    return result;
+}
+
+std::optional<StairLevelConnection> level_connection_field(const Json& properties) {
+    const auto found = properties.find("level_connection");
+    if (found == properties.end()) {
+        return std::nullopt;
+    }
+    require_object(*found, "Building entity level_connection");
+    const auto& value = *found;
+    const auto& version = required_field(value, "version");
+    if ((!version.is_number_integer() && !version.is_number_unsigned()) ||
+        version != 1) {
+        invalid("Building entity level_connection version must be 1");
+    }
+    StairLevelConnection result{
+        .graph_entity_id = required_reference_id(value, "graph_id"),
+        .link_id = required_reference_id(value, "link_id"),
+        .lower_level_id = required_reference_id(value, "lower_level_id"),
+        .upper_level_id = required_reference_id(value, "upper_level_id"),
+    };
+    if (result.lower_level_id == result.upper_level_id) {
+        invalid("Building entity level_connection lower and upper levels must differ");
+    }
+    return result;
+}
+
 Json vec3_json(const Vec3& value) {
     Json result = Json::array();
     result.push_back(value.x);
@@ -217,6 +260,23 @@ Entity encode_one(const StairFlight& object, const Json& metadata) {
         };
     } else {
         properties["top_landing"] = nullptr;
+    }
+    if (object.level_connection.has_value()) {
+        const auto& connection = *object.level_connection;
+        validate_id(connection.graph_entity_id, "Stair level graph entity ID");
+        validate_reference_id(connection.link_id, "Stair level link ID");
+        validate_reference_id(connection.lower_level_id, "Stair lower level ID");
+        validate_reference_id(connection.upper_level_id, "Stair upper level ID");
+        if (connection.lower_level_id == connection.upper_level_id) {
+            invalid("Stair level connection lower and upper levels must differ");
+        }
+        properties["level_connection"] = {
+            {"version", 1},
+            {"graph_id", connection.graph_entity_id},
+            {"link_id", connection.link_id},
+            {"lower_level_id", connection.lower_level_id},
+            {"upper_level_id", connection.upper_level_id},
+        };
     }
     return create_entity("stair", object, std::move(properties), metadata);
 }
@@ -355,6 +415,7 @@ BuildingObject decode_stair(const Entity& entity, const Json& properties,
         .going = required_number(properties, "going_m"),
         .width = required_number(properties, "width_m"),
         .top_landing = landing_field(properties),
+        .level_connection = level_connection_field(properties),
     };
 }
 

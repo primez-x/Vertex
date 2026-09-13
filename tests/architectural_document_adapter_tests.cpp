@@ -4,7 +4,9 @@
 #include "sketch/project_store.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/vertical_levels.hpp"
 
+#include <cmath>
 #include <filesystem>
 #include <iostream>
 #include <numbers>
@@ -102,6 +104,43 @@ void test_building_transform_updates_canonical_geometry() {
             "architectural transform redo must restore canonical geometry");
 }
 
+void test_connected_stair_transform_preserves_links_and_rejects_scale() {
+    using namespace sketch;
+    auto graph = Entity::create("vertical_levels", {
+        {"model", nlohmann::json::parse(
+            VerticalLevelGraph({{"ground", 0.0}, {"first", 3.0}},
+                               {{"ground-first", "ground", "first"}})
+                .serialize())},
+    });
+    graph.id = "levels-1";
+    auto stair = encode_building_entity(StairFlight{
+        "stair-connected", {1.0, 2.0, 0.0}, 0.0, 6, 3.0, 0.25, 1.1,
+        std::nullopt,
+        StairLevelConnection{"levels-1", "ground-first", "ground", "first"}});
+    Document document = Document::create({graph, stair});
+
+    ArchitecturalOperation scale{ArchitecturalAction::transform, stair.id};
+    scale.transform = ArchitecturalTransform{0.0, 0.0, 0.0, 0.0, 2.0};
+    const auto scale_transaction = ArchitecturalTransaction::create(
+        "scale-connected-stair", "r0", {stair.id}, {scale}, "Scale connected stair");
+    rejects([&] { (void)preview_architectural_transaction(document.snapshot(), scale_transaction); });
+    require(document.revision() == 0,
+            "a rejected connected-stair scale must not mutate the document");
+
+    ArchitecturalOperation move{ArchitecturalAction::transform, stair.id};
+    move.transform = ArchitecturalTransform{2.0, -1.0, 0.5, 0.25, 1.0};
+    const auto move_transaction = ArchitecturalTransaction::create(
+        "move-connected-stair", "r0", {stair.id}, {move}, "Move connected stair");
+    const auto preview = preview_architectural_transaction(document.snapshot(), move_transaction);
+    const auto moved = std::get<StairFlight>(decode_building_entity(
+        preview.entities().at(stair.id)));
+    require(moved.level_connection.has_value() &&
+                *moved.level_connection == StairLevelConnection{
+                    "levels-1", "ground-first", "ground", "first"} &&
+                std::abs(moved.base_position.z - 0.5) < 1e-9,
+            "translation and rotation must preserve a connected stair link");
+}
+
 void test_wall_duplicate_and_delete_manage_hosted_openings() {
     using namespace sketch;
     auto wall = Entity::create("wall", {{"height_m", 3.0}, {"thickness_m", 0.2}});
@@ -142,6 +181,7 @@ int main() {
     try {
         test_material_assignments();
         test_building_transform_updates_canonical_geometry();
+        test_connected_stair_transform_preserves_links_and_rejects_scale();
         test_wall_duplicate_and_delete_manage_hosted_openings();
         using namespace sketch;
         auto wall = Entity::create("wall", {{"height_m", 3.0}});

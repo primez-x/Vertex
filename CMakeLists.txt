@@ -1062,10 +1062,11 @@ if(BUILD_TESTING)
   get_property(SKETCH_LOCAL_TESTS DIRECTORY PROPERTY TESTS)
   set_tests_properties(${SKETCH_LOCAL_TESTS} PROPERTIES TIMEOUT 60)
   if(SKETCH_BUILD_DESKTOP)
-    # The comprehensive desktop workflow exercises both workspaces, output,
-    # recovery and architectural forms in one hidden process. Keep the
-    # ordinary 60-second guard for focused tests, but give this end-to-end
-    # scenario enough time to finish on the supported Windows reference host.
-    set_tests_properties(desktop_workflow PROPERTIES TIMEOUT 360)
+    # The comprehensive desktop workflows exercise both workspaces, output,
+    # recovery and architectural forms in hidden processes. Keep the ordinary
+    # 60-second guard for focused tests, but give these end-to-end scenarios
+    # enough time to finish on the supported Windows reference host, including
+    # the slower Debug runtime.
+    set_tests_properties(desktop_workflow desktop_workspace_recovery PROPERTIES TIMEOUT 360)
   endif()
 endif()

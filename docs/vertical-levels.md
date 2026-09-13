@@ -77,6 +77,19 @@ source coordinates for imported or explicitly fixed objects. Invalid placement
 records, missing bindings, and unsupported object coordinates fail closed with
 an actionable geometry diagnostic.
 
+## Stair connections
+
+A canonical `stair` entity may carry a version-1 `level_connection` object with
+`graph_id`, `link_id`, `lower_level_id`, and `upper_level_id`. The graph ID is
+resolved to a `vertical_levels` entity and the link endpoints must match the
+named levels exactly. A disconnected link cannot host a stair connection, and
+the stair's `total_rise_m` must equal the link's validated floor-to-floor
+height within `1e-9` metres. This check runs during every Document create,
+edit, save, and reopen path, so a stale level edit cannot silently leave a
+flight at the wrong height. Moving or rotating a connected stair preserves the
+relationship; uniform scaling is rejected by the architectural transform
+adapter because the graph height would otherwise become inconsistent.
+
 The Windows Architectural workspace exposes **Levels and floor-to-floor links**
 from the More menu and command palette. The editor creates or edits level IDs
 and metre elevations, adds validated connected links, and can freeze or

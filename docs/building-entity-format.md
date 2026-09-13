@@ -68,7 +68,25 @@ beam uses `start_m`, `end_m`, `up_dir` (a dimensionless direction), `width_m`,
 and `depth_m`.  A stair flight uses `base_position_m`, `orientation_rad`,
 integer `riser_count`, `total_rise_m`, `going_m`, `width_m`, and a required
 `top_landing` key.  `top_landing` is either `null` or an object containing
-`depth_m` and `thickness_m`.
+`depth_m` and `thickness_m`.  A flight may also carry an optional
+`level_connection` object:
+
+```json
+{
+  "version": 1,
+  "graph_id": "vertical-levels-1",
+  "link_id": "ground-first",
+  "lower_level_id": "ground",
+  "upper_level_id": "first"
+}
+```
+
+The graph ID resolves to a `vertical_levels` entity.  The link and its lower
+and upper level IDs must agree exactly, the link cannot be disconnected, and
+`total_rise_m` must match its validated floor-to-floor height within the
+documented tolerance.  Rotation and translation preserve this relationship;
+uniform scaling is rejected until the connected level graph is edited as a
+matching operation.
 
 A straight railing uses `base_position_m`, `orientation_rad`, `length_m`,
 `height_m`, `thickness_m`, and `post_spacing_m`.  Its builder places endpoint
@@ -112,9 +130,9 @@ the entity's version, form, or geometry is malformed.  Decode success is a
 separate, stricter operation.  Unknown types, versions, and forms fail with
 `std::invalid_argument` and an explanatory message.
 
-The codec does not expand the generic document validator's semantic model,
-does not claim production-complete stair or roof authoring, and does not
-replace command atomicity, stable links, persistence, material assemblies, or
-regulatory/structural checks. All eight current forms have parameter editors;
-the codec remains usable independently of the UI and supplies the geometry
-and field contract to every caller.
+The codec does not claim production-complete stair or roof authoring, and does
+not replace command atomicity, stable links, persistence, material assemblies,
+or regulatory/structural checks. All eight current forms have parameter
+editors; the codec remains usable independently of the UI and supplies the
+geometry and field contract to every caller. The document validator additionally
+resolves stair level connections against the retained vertical-level graph.

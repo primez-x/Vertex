@@ -301,6 +301,38 @@ void test_integer_stairs_optional_landing_and_geometry_validation() {
     rejected([&] { (void)decode_building_entity(malformed_landing); },
              "landing must be null or an object");
 
+    auto connected = encode_building_entity(StairFlight{
+        .id = "stair-connected",
+        .base_position = {},
+        .orientation_radians = 0.0,
+        .riser_count = 6,
+        .total_rise = 3.0,
+        .going = 0.25,
+        .width = 1.1,
+        .top_landing = std::nullopt,
+        .level_connection = StairLevelConnection{
+            .graph_entity_id = "levels-1",
+            .link_id = "ground-first",
+            .lower_level_id = "ground",
+            .upper_level_id = "first",
+        },
+    });
+    const auto connected_decoded = std::get<StairFlight>(decode_building_entity(connected));
+    require(connected_decoded.level_connection.has_value() &&
+                *connected_decoded.level_connection == StairLevelConnection{
+                    "levels-1", "ground-first", "ground", "first"},
+            "stair level connection must roundtrip through the building codec");
+    require(connected.properties.at("level_connection") == nlohmann::json{
+                {"version", 1}, {"graph_id", "levels-1"},
+                {"link_id", "ground-first"}, {"lower_level_id", "ground"},
+                {"upper_level_id", "first"}},
+            "stair level connection must use the documented canonical JSON shape");
+    auto malformed_connection = connected;
+    malformed_connection.properties["level_connection"]["upper_level_id"] =
+        "ground";
+    rejected([&] { (void)decode_building_entity(malformed_connection); },
+             "stair level connection must reject identical endpoints");
+
     auto invalid_pitch = encode_building_entity(SlopedRoofPanel{
         .id = "roof-invalid",
         .base_position = {},

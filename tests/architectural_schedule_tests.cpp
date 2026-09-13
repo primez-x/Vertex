@@ -2,6 +2,7 @@
 #include "sketch/assembly_model.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/geometry.hpp"
+#include "sketch/vertical_levels.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -322,6 +323,34 @@ void test_building_object_rows_expose_dimensions_and_solid_volume() {
                 std::none_of(visible.snapshot.rows.begin(), visible.snapshot.rows.end(),
                              [](const auto& candidate) { return candidate.object_id == "column-1"; }),
             "building schedule visibility should follow the shared source filter");
+
+    const auto levels = VerticalLevelGraph({{"ground", 0.0}, {"first", 3.0}},
+                                           {{"ground-first", "ground", "first"}});
+    auto connected_stair = encode_building_entity(StairFlight{
+        "stair-connected", {0.0, 0.0, 0.0}, 0.0, 6, 3.0, 0.25, 1.1,
+        std::nullopt,
+        StairLevelConnection{"levels-1", "ground-first", "ground", "first"}});
+    connected_stair.properties["mark"] = "S-2";
+    auto graph_entity = Entity::create(
+        "vertical_levels", {{"model", Json::parse(levels.serialize())}});
+    graph_entity.id = "levels-1";
+    const auto connected_document = Document::create({graph_entity, connected_stair});
+    const auto connected_projection = build_architectural_schedules(
+        connected_document.snapshot());
+    const auto connected_row = std::find_if(
+        connected_projection.snapshot.rows.begin(), connected_projection.snapshot.rows.end(),
+        [](const auto& candidate) { return candidate.object_id == "stair-connected"; });
+    require(connected_row != connected_projection.snapshot.rows.end() &&
+                std::get<std::string>(connected_row->cells.at("level_graph_id").value) ==
+                    "levels-1" &&
+                std::get<std::string>(connected_row->cells.at("level_link_id").value) ==
+                    "ground-first" &&
+                std::get<std::string>(connected_row->cells.at("lower_level_id").value) ==
+                    "ground" &&
+                std::get<std::string>(connected_row->cells.at("upper_level_id").value) ==
+                    "first" &&
+                !connected_row->cells.at("level_link_id").editable,
+            "building schedule should expose connected stair level provenance");
 }
 }
 int main() {

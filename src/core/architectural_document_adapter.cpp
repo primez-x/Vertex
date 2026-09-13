@@ -175,6 +175,14 @@ BuildingObject transform_building_object(BuildingObject object,
 
 Entity transform_building_entity(const Entity& source,
                                  const ArchitecturalTransform& transform) {
+    if (source.type == "stair" && source.properties.contains("level_connection") &&
+        std::abs(transform.scale - 1.0) > 1e-9) {
+        // A connected stair's total rise is tied to the graph's floor-to-floor
+        // height.  Scaling only the stair would silently break that relation;
+        // edit the level graph (or disconnect the stair) before changing size.
+        throw std::invalid_argument(
+            "Cannot uniformly scale a stair with a level connection; edit the connected levels first");
+    }
     const auto transformed = transform_building_object(decode_building_entity(source), transform);
     const auto canonical = encode_building_entity(transformed, source.extensions);
     Entity result = source;

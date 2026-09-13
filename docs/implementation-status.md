@@ -106,8 +106,14 @@ The same slice now includes a straight railing object: a validated semantic
 record produces one OCCT compound with a top rail, endpoint posts, and bounded
 interior post spacing.  Railing create/edit/transform, plan/elevation/section
 projection, native 3D rendering, quantity receipts, and save/reopen paths use
-the shared document command and codec.  Curved or baluster profiles, stair
-hosting, coordinated propagation, and production compatibility certification remain
+the shared document command and codec.  Stairs may now carry a versioned
+graph/link/lower-level/upper-level connection.  Document admission resolves
+the retained vertical-level graph, verifies link endpoints and total rise, and
+rejects disconnected or inconsistent links; the dialog exposes the IDs and
+connected-stair transforms preserve translation/rotation while rejecting
+uniform scale.  Architectural building schedules include the connection
+provenance as read-only cells.  Curved or baluster profiles, stair hosting,
+coordinated propagation, and production compatibility certification remain
 open requirements.
 Interactive plan canvases now include a model-space overview map with viewport
 framing and click-to-recenter navigation. Workspace profiles persist map

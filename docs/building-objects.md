@@ -41,7 +41,10 @@ The optional `top_landing` is a real slab beginning at the end of the flight.
 Its lower face is `total_rise - thickness` and its upper face is exactly the
 finished flight elevation, so its added volume is
 `width * depth * thickness`.  Landing thickness cannot extend below the
-flight base.
+flight base.  A stair may optionally carry a level connection that names a
+validated vertical-level graph, floor-to-floor link, and matching lower and
+upper levels.  The connection is document-resolved and does not alter the
+derived solid; a connected stair's total rise must agree with the graph link.
 
 `make_railing` makes a straight, horizontal railing from a shared square
 section.  `base_position` is the lower endpoint of the railing line;
