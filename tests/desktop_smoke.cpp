@@ -14,6 +14,7 @@
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/quantity.hpp"
+#include "sketch/field_adapter_contract.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/georeferencing_entity_codec.hpp"
 #include "sketch/desktop/building_object_dialog.hpp"
@@ -137,10 +138,11 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
         auto* quick_access_settings = window.findChild<QAction*>(QStringLiteral("quickAccessSettings"));
         auto* export_image = window.findChild<QAction*>(QStringLiteral("exportDraftImage"));
         auto* curved_wall_action = window.findChild<QAction*>(QStringLiteral("curvedWall"));
+        auto* disto_action = window.findChild<QAction*>(QStringLiteral("distoImport"));
         require(settings && user_guide && quick_access && quick_access->menu() &&
-                    quick_access_settings && export_image && curved_wall_action &&
+                    quick_access_settings && export_image && curved_wall_action && disto_action &&
                     !quick_access->accessibleName().isEmpty(),
-                "shortcut editor, quick-access menu, draft image export, curved-wall authoring, and local user guide must be discoverable");
+                "shortcut editor, quick-access menu, draft image export, DISTO input, curved-wall authoring, and local user guide must be discoverable");
         const auto* copy = window.findChild<QAction*>(QStringLiteral("copySelection"));
         const auto* cut = window.findChild<QAction*>(QStringLiteral("cutSelection"));
         const auto* paste = window.findChild<QAction*>(QStringLiteral("pasteSelection"));
@@ -151,6 +153,16 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
                     cut->shortcut() == QKeySequence::Cut && paste->shortcut() == QKeySequence::Paste &&
                     remove->shortcut() == QKeySequence::Delete && insert_vertex && redefine,
                 "clipboard, delete, and boundary editing commands must be discoverable");
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = window.findChild<QDialog*>(QStringLiteral("distoImportDialog"));
+            require(dialog, "DISTO import dialog must open from its discoverable action");
+            require(dialog->findChild<QPlainTextEdit*>(QStringLiteral("distoPayload")) &&
+                        dialog->findChild<QPushButton*>(QStringLiteral("loadDistoJson")) &&
+                        dialog->findChild<QPushButton*>(QStringLiteral("applyDistoReading")),
+                    "DISTO import dialog must expose local payload and apply controls");
+            dialog->reject();
+        });
+        disto_action->trigger();
         QTimer::singleShot(0, &window, [&] {
             auto* dialog = window.findChild<QDialog*>(QStringLiteral("keyboardShortcutDialog"));
             require(dialog, "shortcut editor must open");
@@ -4056,6 +4068,39 @@ int main(int argc, char** argv) {
                 window.lastError().contains(QStringLiteral("unique"), Qt::CaseInsensitive),
             "duplicate architectural view source IDs should fail without mutation");
     require(window.selectEntity(wall_id), "created wall should be selectable");
+    const sketch::DistoMeasurementRecord disto_height{
+        {1, 0}, "desktop-reading-1", "wall.height", 2.8, "m",
+        "2026-09-13T12:34:56Z", "synthetic-disto", "fixture-1",
+        "offline-json", "desktop smoke fixture"};
+    const auto disto_revision = window.document().revision();
+    require(window.importDistoMeasurement(
+                QString::fromStdString(sketch::disto_measurement_json(disto_height))) &&
+                window.document().revision() == disto_revision + 2,
+            "a local DISTO reading should update the selected field and retain a separate provenance command");
+    const auto disto_snapshot = window.document().snapshot();
+    const auto& disto_wall = disto_snapshot.entities().at(wall_id.toStdString());
+    require(disto_wall.properties.at("height_m") == 2.8 &&
+                disto_wall.extensions.at("disto_measurements").at("version") == 1 &&
+                disto_wall.extensions.at("disto_measurements").at("fields").at("wall.height")
+                        .at("reading_id") == "desktop-reading-1" &&
+                disto_wall.extensions.at("disto_measurements").at("fields").at("wall.height")
+                        .at("unit") == "m",
+            "DISTO import should retain the selected value, original unit, reading identity, and provenance");
+    const auto disto_duplicate_revision = window.document().revision();
+    require(!window.importDistoMeasurement(
+                QString::fromStdString(sketch::disto_measurement_json(disto_height))) &&
+                window.document().revision() == disto_duplicate_revision &&
+                window.lastError().contains(QStringLiteral("already has"), Qt::CaseInsensitive),
+            "a second DISTO reading for an occupied field must fail without mutation");
+    const sketch::DistoMeasurementRecord wrong_target{
+        {1, 0}, "desktop-reading-2", "slab.thickness", 0.1, "m",
+        "2026-09-13T12:35:56Z", "synthetic-disto", "fixture-1",
+        "offline-json", "desktop smoke fixture"};
+    const auto wrong_target_revision = window.document().revision();
+    require(!window.importDistoMeasurement(
+                QString::fromStdString(sketch::disto_measurement_json(wrong_target))) &&
+                window.document().revision() == wrong_target_revision,
+            "a DISTO target for another entity type must fail without mutation");
     require(window.editSelectedClassification("party"),
             "wall classification should be editable from the inspector API");
     require(window.editSelectedHeight("8 ft"),

@@ -386,6 +386,10 @@ public:
     [[nodiscard]] bool editSelectedElevation(const QString& expression);
     [[nodiscard]] bool editSelectedThickness(const QString& expression);
     [[nodiscard]] bool editSelectedFactor(const QString& expression);
+    // Applies a validated local DISTO reading to the explicitly selected
+    // compatible field. The reading's original unit and capture provenance
+    // are retained in the selected entity's extension metadata.
+    [[nodiscard]] bool importDistoMeasurement(const QString& payload);
     // Edits only the dimension's placement and presentation, preserving its
     // stable source target. X/Y use the current input units unless suffixed.
     [[nodiscard]] bool editBoundaryDimension(const QString& id, const QString& x,
@@ -526,6 +530,7 @@ public:
 
     void showCommandPalette();
     void showQuickAccessSettings();
+    void showDistoImport();
     void showAnnotationEditor();
     void showReferenceImport();
     void showReferenceCalibration();

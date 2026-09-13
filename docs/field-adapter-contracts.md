@@ -7,6 +7,26 @@ network, process launch or third-party application calls occur. Production
 adapters, their caller protocols and representative compatibility fixtures remain
 to be discovered and implemented.
 
+## Desktop local reading path
+
+The Windows desktop exposes **Import DISTO reading…** from the overflow menu,
+command palette, and quick access. It accepts a version 1.0 JSON envelope from a
+local file or clipboard paste and requires an explicitly selected compatible
+field. The current supported targets are wall length/height/thickness/elevation,
+opening width/height, slab thickness/elevation, and room height/elevation. The
+existing typed editor validates the proposed dimension before the reading is
+accepted; a second reading cannot replace an occupied field silently.
+
+Accepted readings are retained under the selected entity's opaque extension as
+`disto_measurements.version = 1` with a `fields` object keyed by the declared
+target field. Each value is the original validated envelope, including reading
+ID, value, unit, capture time, model, firmware, transport, and provenance. The
+geometry edit and provenance retention are separate ordinary history entries so
+either step can be undone and the project remains inspectable offline. This is a
+local adapter boundary, not a claim of Bluetooth or vendor compatibility; exact
+DISTO hardware/firmware and any future transport session still require fixture
+qualification.
+
 ## DISTO reading envelope, protocol 1.0
 
 Each record requires an explicit target field, unique reading identifier supplied

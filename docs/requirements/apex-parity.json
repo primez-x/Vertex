@@ -1432,9 +1432,12 @@
         "include/sketch/field_adapter_contract.hpp",
         "src/core/field_adapter_contract.cpp",
         "tests/field_adapter_contract_tests.cpp",
-        "docs/field-adapter-contracts.md"
+        "docs/field-adapter-contracts.md",
+        "include/sketch/desktop/main_window.hpp",
+        "src/desktop/main_window.cpp",
+        "tests/desktop_smoke.cpp"
       ],
-      "implementation_note": "Offline DISTO reading/assignment and provenance contracts are implemented; exact model/firmware/transport, device adapter, and hardware fixture evidence remain required."
+      "implementation_note": "Offline DISTO reading/assignment and provenance contracts are implemented. The Windows desktop now accepts a local version-1 JSON envelope for an explicitly selected wall, opening, slab, or room dimension, validates it through the existing typed editor, persists the original unit and capture metadata, and rejects occupied fields without mutation. Exact model/firmware/transport, Bluetooth session behavior, and hardware fixture evidence remain required."
     },
     {
       "id": "APX-SPEC-001",

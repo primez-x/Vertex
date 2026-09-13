@@ -36,6 +36,7 @@
 #include "sketch/recovery_copy_record.hpp"
 #include "sketch/recovery_discovery.hpp"
 #include "sketch/offline_policy.hpp"
+#include "sketch/field_adapter_contract.hpp"
 #include "sketch/workspace_accessibility.hpp"
 #include "sketch/workspace_save_coordinator.hpp"
 #include "sketch/workspace_save_queue.hpp"
@@ -10877,6 +10878,103 @@ public:
         }
     }
 
+    bool importDistoMeasurement(const QString& payload) {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        try {
+            const auto record = parse_disto_measurement_json(payload.toUtf8().toStdString());
+            const auto selected = selectedEntity();
+            if (!selected.has_value()) {
+                throw std::invalid_argument("Select the entity that owns the DISTO field first.");
+            }
+            const auto target = QString::fromStdString(record.target_field);
+            const auto expression = QString::number(record.value, 'g', 17) +
+                                    QStringLiteral(" ") + QString::fromStdString(record.unit);
+            const auto target_is = [&](const char* value) {
+                return record.target_field == value;
+            };
+            const auto type_is = [&](const char* value) {
+                return selected->type == value;
+            };
+            const auto target_supported =
+                (target_is("wall.length") && type_is("wall")) ||
+                (target_is("opening.width") && type_is("opening")) ||
+                (target_is("wall.height") && type_is("wall")) ||
+                (target_is("opening.height") && type_is("opening")) ||
+                (target_is("wall.thickness") && type_is("wall")) ||
+                (target_is("slab.thickness") && type_is("slab")) ||
+                (target_is("wall.elevation") && type_is("wall")) ||
+                (target_is("slab.elevation") && type_is("slab")) ||
+                (target_is("room.height") && type_is("room")) ||
+                (target_is("room.elevation") && type_is("room"));
+            if (!target_supported) {
+                throw std::invalid_argument(
+                    "DISTO target '" + record.target_field +
+                    "' is not compatible with the selected entity.");
+            }
+            const auto ensure_available = [&](const Entity& entity) {
+                const auto prior = entity.extensions.find("disto_measurements");
+                if (prior == entity.extensions.end()) return;
+                if (!prior->is_object() || prior->value("version", 0) != 1 ||
+                    !prior->contains("fields") || !prior->at("fields").is_object()) {
+                    throw std::invalid_argument(
+                        "The selected entity has malformed DISTO provenance metadata.");
+                }
+                if (prior->at("fields").contains(record.target_field)) {
+                    throw std::invalid_argument(
+                        "The selected field already has a DISTO reading; clear it before importing another.");
+                }
+            };
+            ensure_available(*selected);
+
+            bool edited = false;
+            if (target_is("wall.length") || target_is("opening.width")) {
+                edited = editSelectedLength(expression);
+            } else if (target_is("wall.height") || target_is("opening.height") ||
+                       target_is("room.height")) {
+                edited = editSelectedHeight(expression);
+            } else if (target_is("wall.thickness") || target_is("slab.thickness")) {
+                edited = editSelectedThickness(expression);
+            } else {
+                edited = editSelectedElevation(expression);
+            }
+            if (!edited) return false;
+
+            const auto current = selectedEntity();
+            if (!current.has_value() || current->id != selected->id) {
+                throw std::invalid_argument(
+                    "The selected entity changed while applying the DISTO reading.");
+            }
+            ensure_available(*current);
+            auto updated = *current;
+            auto provenance = updated.extensions.find("disto_measurements");
+            if (provenance == updated.extensions.end()) {
+                updated.extensions["disto_measurements"] =
+                    json{{"version", 1}, {"fields", json::object()}};
+                provenance = updated.extensions.find("disto_measurements");
+            }
+            provenance->at("fields")[record.target_field] =
+                json::parse(disto_measurement_json(record));
+
+            const auto source = authoringSnapshot();
+            const ApplyEntityChanges command{
+                source.revision(),
+                {EntityChange::upsert(std::move(updated))},
+                {},
+                "Import DISTO measurement"};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("DISTO import: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     bool editSelectedHeight(const QString& expression) {
         return editSelectedQuantity(expression, "height_m", "height", "edit wall height");
     }
@@ -13564,6 +13662,7 @@ public:
         add(QStringLiteral("measurement"), m_measurement_action);
         add(QStringLiteral("architectural"), m_architectural_action);
         add(QStringLiteral("commands"), m_palette_action);
+        add(QStringLiteral("disto-import"), m_disto_action);
         add(QStringLiteral("annotations"), m_annotation_action);
         add(QStringLiteral("reference"), m_reference_action);
         add(QStringLiteral("schedules"), m_schedule_action);
@@ -13772,6 +13871,73 @@ public:
         if (dialog.exec() == QDialog::Accepted && wall_length) showConstraintEditor(input->text());
     }
 
+    void showDistoImport() {
+        QDialog dialog(owner);
+        styleDialog(dialog);
+        dialog.setObjectName(QStringLiteral("distoImportDialog"));
+        dialog.setWindowTitle(QStringLiteral("Import DISTO reading"));
+        dialog.setModal(true);
+        dialog.resize(640, 460);
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* description = new QLabel(
+            QStringLiteral("Paste a version 1.0 local DISTO adapter envelope, or load one from a file. "
+                           "The selected entity and explicit target field control where the reading is applied."),
+            &dialog);
+        description->setWordWrap(true);
+        layout->addWidget(description);
+        auto* selection = new QLabel(&dialog);
+        selection->setObjectName(QStringLiteral("distoSelection"));
+        selection->setText(m_selected_id.isEmpty()
+                               ? QStringLiteral("No entity selected")
+                               : QStringLiteral("Selected entity: %1").arg(m_selected_id));
+        selection->setWordWrap(true);
+        layout->addWidget(selection);
+        auto* payload = new QPlainTextEdit(&dialog);
+        payload->setObjectName(QStringLiteral("distoPayload"));
+        payload->setAccessibleName(QStringLiteral("DISTO measurement JSON"));
+        payload->setPlaceholderText(QStringLiteral(
+            "{\"protocol_version\":{\"major\":1,\"minor\":0},...}"));
+        payload->setTabChangesFocus(true);
+        layout->addWidget(payload, 1);
+        auto* file_row = new QHBoxLayout;
+        auto* load = new QPushButton(QStringLiteral("Load JSON file…"), &dialog);
+        load->setObjectName(QStringLiteral("loadDistoJson"));
+        file_row->addWidget(load);
+        file_row->addStretch(1);
+        layout->addLayout(file_row);
+        auto* status = new QLabel(&dialog);
+        status->setObjectName(QStringLiteral("distoImportStatus"));
+        status->setWordWrap(true);
+        layout->addWidget(status);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel,
+                                             &dialog);
+        buttons->button(QDialogButtonBox::Apply)->setText(QStringLiteral("Apply reading"));
+        buttons->button(QDialogButtonBox::Apply)->setObjectName(QStringLiteral("applyDistoReading"));
+        layout->addWidget(buttons);
+        QObject::connect(load, &QPushButton::clicked, &dialog, [&] {
+            const auto path = QFileDialog::getOpenFileName(
+                &dialog, QStringLiteral("Load DISTO reading"), {},
+                QStringLiteral("JSON files (*.json *.disto);;All files (*.*)"));
+            if (path.isEmpty()) return;
+            QFile file(path);
+            if (!file.open(QIODevice::ReadOnly) || file.size() > 1024 * 1024) {
+                status->setText(QStringLiteral("The DISTO file could not be read or is larger than 1 MiB."));
+                return;
+            }
+            payload->setPlainText(QString::fromUtf8(file.readAll()));
+            status->setText(QStringLiteral("Loaded locally. Review the target field before applying."));
+        });
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, [&] {
+            if (importDistoMeasurement(payload->toPlainText())) {
+                dialog.accept();
+            } else {
+                status->setText(lastError());
+            }
+        });
+        dialog.exec();
+    }
+
     void showAssistance() {
         QDialog dialog(owner);
         styleDialog(dialog);
@@ -13940,6 +14106,7 @@ public:
             {QStringLiteral("Customize keyboard shortcuts"), [this] { showShortcutSettings(); }},
             {QStringLiteral("Customize quick access"), [this] { showQuickAccessSettings(); }},
             {QStringLiteral("Measurement keypad"), [this] { showMeasurementKeypad(); }},
+            {QStringLiteral("Import DISTO reading"), [this] { showDistoImport(); }},
             {QStringLiteral("New project"), [this] { createNewProject(); }},
             {QStringLiteral("Open project"), [this] { openFromDialog(); }},
             {QStringLiteral("Save project"), [this] { saveProject(); }},
@@ -15112,6 +15279,12 @@ private:
         georeferencing_action->setObjectName(QStringLiteral("georeferencingWorkflow"));
         QObject::connect(georeferencing_action, &QAction::triggered, owner,
                          [this] { showGeoreferencing(); });
+        m_disto_action = more_menu->addAction(QStringLiteral("Import DISTO reading…"));
+        m_disto_action->setObjectName(QStringLiteral("distoImport"));
+        m_disto_action->setToolTip(QStringLiteral(
+            "Apply a local DISTO adapter reading to the explicitly selected field"));
+        QObject::connect(m_disto_action, &QAction::triggered, owner,
+                         [this] { showDistoImport(); });
         auto* curved_wall_action = more_menu->addAction(QStringLiteral("Draw curved wall…"));
         curved_wall_action->setObjectName(QStringLiteral("curvedWall"));
         curved_wall_action->setToolTip(QStringLiteral(
@@ -19732,6 +19905,7 @@ private:
     QAction* m_measurement_action{};
     QAction* m_architectural_action{};
     QAction* m_palette_action{};
+    QAction* m_disto_action{};
     QAction* m_copy_action{};
     QAction* m_cut_action{};
     QAction* m_paste_action{};
@@ -20154,6 +20328,10 @@ bool MainWindow::editSelectedFactor(const QString& expression) {
     return m_impl->editSelectedFactor(expression);
 }
 
+bool MainWindow::importDistoMeasurement(const QString& payload) {
+    return m_impl->importDistoMeasurement(payload);
+}
+
 bool MainWindow::editBoundaryDimension(const QString& id, const QString& x,
     const QString& y, const QString& height_mm, const QString& color,
     bool bold, bool italic, bool visible, const QString& rotation_degrees) {
@@ -20375,6 +20553,10 @@ void MainWindow::showCommandPalette() {
 
 void MainWindow::showQuickAccessSettings() {
     m_impl->showQuickAccessSettings();
+}
+
+void MainWindow::showDistoImport() {
+    m_impl->showDistoImport();
 }
 
 void MainWindow::showConstraintEditor() {
