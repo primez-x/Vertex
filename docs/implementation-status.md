@@ -54,6 +54,12 @@ OCCT union without replacing roof parameters, openings, or quantities; codec,
 document, and solid regression coverage is included in the next Debug/Release
 matrix. Roof material propagation, mitered/curved roof junctions, and
 production qualification remain open.
+Wall and roof unions are displayed only while the join and all source members
+are visible. A partial mask or hidden join displays the individually visible
+sources; restoring the mask restores fusion without modifying document history.
+Deterministic policy tests and native framebuffer comparisons against source-only
+scenes cover these transitions, including masks hiding every member; focused
+Debug/Release checks pass, with the native geometry scenario verified at DPR 1.
 Hosted openings now carry an optional strict version-1 opening assembly profile
 with shared native geometry for jambs, heads, sills, leaves, sash bars, glazing,
 and handed door motion. New openings receive a deterministic door/window default;

@@ -269,6 +269,72 @@ int main(int argc,char** argv) {
                     check(capture(partial, temporary.filePath("partial-restored.png")).image == all.image,
                           "Removing a partial mask must restore both solids without moving the camera");
                 }
+                for (const std::string kind : {"wall", "roof"}) {
+                    auto member_a = unchanged_source.entities().at(wall_id.toStdString());
+                    member_a.id = "join-member-a";
+                    auto member_b = member_a;
+                    member_b.id = "join-member-b";
+                    member_b.properties["baseline"]["start"] = {3.0, 0.0};
+                    member_b.properties["baseline"]["end"] = {3.0, 4.0};
+                    if (kind == "roof") {
+                        member_a = sketch::encode_building_entity(sketch::SlopedRoofPanel{
+                            member_a.id, {0.0, 0.0, 0.0}, 0.0, 2.0, 4.0,
+                            0.0, 0.0, 0.0, 0.2, {}});
+                        member_b = sketch::encode_building_entity(sketch::SlopedRoofPanel{
+                            member_b.id, {1.9, 0.0, 0.0}, 0.0, 2.0, 4.0,
+                            0.0, 0.0, 0.0, 0.2, {}});
+                    }
+                    const sketch::Entity join{"native-join", kind + "_join",
+                        {{"version", 1}, {"style", "fused"},
+                         {kind + "_ids", {member_a.id, member_b.id}}}, false,
+                        nlohmann::json::object()};
+                    const auto joined = sketch::Document::create({member_a, member_b, join});
+                    const auto separate = sketch::Document::create({member_a, member_b});
+                    const auto joined_source = joined.snapshot();
+                    sketch::visualization::NativeModelView joined_view;
+                    joined_view.setAttribute(Qt::WA_DontShowOnScreen, true);
+                    joined_view.setAttribute(Qt::WA_ShowWithoutActivating, true);
+                    joined_view.resize(view.size());
+                    joined_view.setSnapshot(joined_source);
+                    joined_view.show();
+                    application.processEvents();
+                    joined_view.fitAll();
+                    const auto path = [&](const char* suffix) {
+                        return temporary.filePath(QString::fromStdString(kind) + suffix);
+                    };
+                    const auto fused = capture(joined_view, path("-join-all.png"));
+                    joined_view.setSnapshot(joined_source,
+                        sketch::visualization::NativeModelView::VisibleEntityIds{join.id, member_a.id});
+                    const auto partial_join = capture(joined_view, path("-join-partial.png"));
+                    check(partial_join.image != fused.image,
+                          "A hidden join member must disappear from the native framebuffer");
+                    joined_view.setSnapshot(separate.snapshot(),
+                        sketch::visualization::NativeModelView::VisibleEntityIds{member_a.id});
+                    check(capture(joined_view, path("-join-reference.png")).image == partial_join.image,
+                          "A partially visible join must exactly match its visible source geometry");
+                    joined_view.setSnapshot(joined_source,
+                        sketch::visualization::NativeModelView::VisibleEntityIds{member_a.id, member_b.id});
+                    const auto hidden_join = capture(joined_view, path("-join-hidden.png"));
+                    joined_view.setSnapshot(separate.snapshot());
+                    check(capture(joined_view, path("-join-sources.png")).image == hidden_join.image,
+                          "A hidden join must preserve both visible source solids");
+                    joined_view.setSnapshot(joined_source,
+                        sketch::visualization::NativeModelView::VisibleEntityIds{join.id});
+                    check(joined_view.exportViewImage(path("-join-members-hidden.png")) &&
+                              QImage(path("-join-members-hidden.png")) == hidden,
+                          "A visible join must not leak geometry when all members are hidden");
+                    joined_view.setSnapshot(joined_source,
+                        sketch::visualization::NativeModelView::VisibleEntityIds{});
+                    check(joined_view.exportViewImage(path("-join-all-hidden.png")) &&
+                              QImage(path("-join-all-hidden.png")) == hidden,
+                          "An empty mask must erase every join and source presentation");
+                    joined_view.setSnapshot(joined_source);
+                    check(capture(joined_view, path("-join-restored.png")).image == fused.image,
+                          "Removing join masks must restore the fused framebuffer and camera");
+                    check(joined.snapshot().entities() == joined_source.entities() &&
+                              joined.revision() == joined_source.revision(),
+                          "Native join masks must not edit their source document");
+                }
                 sketch::PersistentConstraint horizontal;
                 horizontal.id = "native-horizontal";
                 horizontal.relation = sketch::ConstraintRelationKind::horizontal;

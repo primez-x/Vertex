@@ -6,6 +6,7 @@
 #include "sketch/building_entity.hpp"
 #include "sketch/document.hpp"
 #include "sketch/project_organization.hpp"
+#include "sketch/project_visibility.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/opening_assembly.hpp"
 #include "sketch/terrain_surface.hpp"
@@ -321,36 +322,11 @@ public:
             }
         }
 
-        // A valid wall_join owns the 3D presentation of its source walls.
-        // Keep the source entities authoritative in the document, but avoid
-        // displaying the same wall twice when the fused join is present.
-        std::map<std::string, std::string, std::less<>> joined_wall_owner;
-        for (const auto& [id, entity] : entities) {
-            if (entity.type != "wall_join") continue;
-            try {
-                const auto join = parse_wall_join(entity.properties, id);
-                for (const auto& wall_id : join.wall_ids) {
-                    joined_wall_owner.emplace(wall_id, id);
-                }
-            } catch (const std::exception& error) {
-                append_unique(pending, "wall join '" + id + "': " + error.what());
-            }
-        }
-        // A valid roof_join owns the 3D presentation of its source roofs.
-        // Keep the source entities available for schedules and edits while
-        // presenting the derived union only once.
-        std::map<std::string, std::string, std::less<>> joined_roof_owner;
-        for (const auto& [id, entity] : entities) {
-            if (entity.type != "roof_join") continue;
-            try {
-                const auto join = parse_roof_join(entity.properties, id);
-                for (const auto& roof_id : join.roof_ids) {
-                    joined_roof_owner.emplace(roof_id, id);
-                }
-            } catch (const std::exception& error) {
-                append_unique(pending, "roof join '" + id + "': " + error.what());
-            }
-        }
+        // A fused join replaces its sources only while the join and every
+        // member are visible. Re-derive on each mask transition; source entities
+        // and document history remain authoritative and unchanged.
+        const auto join_presentation_ids = derived_join_presentation_entities(
+            *snapshot, visible_ids ? *visible_ids : visible_project_entities(*snapshot, {}));
 
         std::map<std::string, std::vector<const Entity*>, std::less<>> openings_by_wall;
         for (const auto& [id, entity] : entities) {
@@ -372,12 +348,12 @@ public:
         const bool had_solids = !solids.empty();
         bool changed = false;
         for (const auto& [id, entity] : entities) {
-            if (entity.type == "wall" && joined_wall_owner.contains(id)) {
-                remove_solid(id);
-                changed = true;
-                continue;
-            }
-            if (entity.type == "roof" && joined_roof_owner.contains(id)) {
+            // Suppress visible members owned by a fused join. Hidden members
+            // still pass through geometry validation below; their cached AIS
+            // shapes are erased using join_presentation_ids, never displayed.
+            if ((entity.type == "wall" || entity.type == "roof") &&
+                (!visible_ids || visible_ids->contains(id)) &&
+                !join_presentation_ids.contains(id)) {
                 remove_solid(id);
                 changed = true;
                 continue;
@@ -567,7 +543,7 @@ public:
                     cached->second.material_color = material_color;
                     changed = true;
                 }
-                const bool visible = !visible_ids || visible_ids->contains(id);
+                const bool visible = join_presentation_ids.contains(id);
                 if (visible != static_cast<bool>(context->IsDisplayed(cached->second.presentation))) {
                     if (visible) context->Display(cached->second.presentation, false);
                     else context->Erase(cached->second.presentation, false);
@@ -659,7 +635,7 @@ public:
                 presentation->SetDisplayMode(AIS_Shaded);
 
                 remove_solid(id);
-                if (!visible_ids || visible_ids->contains(id)) context->Display(presentation, false);
+                if (join_presentation_ids.contains(id)) context->Display(presentation, false);
                 solids.emplace(id, CachedSolid{std::move(content), std::move(shape), presentation, material_color});
                 changed = true;
             } catch (const std::exception& error) {

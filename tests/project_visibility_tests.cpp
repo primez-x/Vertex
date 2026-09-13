@@ -154,6 +154,64 @@ void test_stale_filters_and_snapshot_determinism() {
             "visibility derivation must not mutate the original snapshot or document history");
 }
 
+void test_join_presentation_visibility_transitions() {
+    for (const std::string kind : {"wall", "roof"}) {
+        auto document = sketch::Document::create({
+            entity("site", "property"),
+            entity("building", "building", {{"property_id", "site"}}),
+            entity("floor", "floor", {{"building_id", "building"}}),
+            entity("layer-a", "layer", {{"floor_id", "floor"}}),
+            entity("layer-b", "layer", {{"floor_id", "floor"}}),
+            entity("member-a", kind, {{"layer_id", "layer-a"}}),
+            entity("member-b", kind, {{"layer_id", "layer-b"}}),
+            entity("join", kind + "_join", {{"version", 1}, {"style", "fused"},
+                   {kind + "_ids", {"member-a", "member-b"}}}),
+        });
+        const auto before = document.snapshot();
+        const auto all = sketch::visible_project_entities(before, {});
+        const auto fused = sketch::derived_join_presentation_entities(before, all);
+        require(fused.contains("join") && !fused.contains("member-a") &&
+                    !fused.contains("member-b"),
+                "all visible join members must be replaced by one fused presentation");
+
+        ProjectViewFilter filter;
+        filter.hidden_layer_ids.insert("layer-b");
+        const auto one_hidden = sketch::visible_project_entities(before, filter);
+        const auto individual = sketch::derived_join_presentation_entities(before, one_hidden);
+        require(individual.contains("member-a") && !individual.contains("member-b") &&
+                    !individual.contains("join"),
+                "a hidden member must disable fusion and preserve the visible member");
+
+        auto join_hidden = all;
+        join_hidden.erase("join");
+        const auto sources = sketch::derived_join_presentation_entities(before, join_hidden);
+        require(sources.contains("member-a") && sources.contains("member-b") &&
+                    !sources.contains("join"),
+                "a hidden join must not suppress its visible source members");
+
+        filter.hidden_layer_ids.insert("layer-a");
+        const auto hidden_members = sketch::derived_join_presentation_entities(
+            before, sketch::visible_project_entities(before, filter));
+        require(!hidden_members.contains("join") && !hidden_members.contains("member-a") &&
+                    !hidden_members.contains("member-b"),
+                "all hidden members must not leak through a visible join");
+        require(sketch::derived_join_presentation_entities(before, {}).empty(),
+                "an empty visibility mask must display no join or sources");
+        require(sketch::derived_join_presentation_entities(before, all) == fused &&
+                    sketch::derived_join_presentation_entities(before, one_hidden) == individual,
+                "mask transitions must deterministically restore fused and individual presentation");
+
+        const auto after = document.snapshot();
+        require(after.document_id() == before.document_id() &&
+                    after.revision() == before.revision() &&
+                    after.saved_revision_optional() == before.saved_revision_optional() &&
+                    after.entities() == before.entities() && after.assets() == before.assets() &&
+                    after.history().size() == before.history().size() &&
+                    after.named_revisions() == before.named_revisions(),
+                "join presentation must leave the source snapshot and document history unchanged");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -162,6 +220,7 @@ int main() {
         test_default_visibility_and_hierarchy_masks();
         test_host_and_unresolved_contexts_remain_visible();
         test_stale_filters_and_snapshot_determinism();
+        test_join_presentation_visibility_transitions();
         std::cout << "Project visibility tests passed\n";
         return 0;
     } catch (const std::exception& error) {

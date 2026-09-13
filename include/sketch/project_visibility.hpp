@@ -22,4 +22,10 @@ struct ProjectViewFilter {
 [[nodiscard]] std::set<std::string, std::less<>> visible_project_entities(
     const DocumentSnapshot& snapshot, const ProjectViewFilter& filter);
 
+// Use a fused wall/roof join only when it and every source member are visible.
+// Otherwise retain individually visible members. This is presentation-only.
+[[nodiscard]] std::set<std::string, std::less<>> derived_join_presentation_entities(
+    const DocumentSnapshot& snapshot,
+    const std::set<std::string, std::less<>>& visible_ids);
+
 }  // namespace sketch
