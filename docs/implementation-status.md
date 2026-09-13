@@ -199,8 +199,10 @@ independent assembly profiles, Apex compatibility, and production acceptance
 evidence remain open.
 
 The current foundation also has a strict typed annotation Document entity and
-semantic annotation/style records with a 216-entry parametric symbol catalog,
-coordinated view/sheet records with
+semantic annotation/style records with a 216-entry parametric symbol catalog.
+Stored label and symbol stroke/fill colors, fill patterns, paper text height,
+bold/italic emphasis, and symbol stroke width now flow through the shared
+interactive and fitted/output canvas renderer. Coordinated view/sheet records with
 section presentation settings and independent page scales, and a fail-closed
 import-worker policy covering sandbox attestations, hostile inputs, resource
 limits, and offline PROJ declarations. These APIs are tested in isolation, and

@@ -1221,7 +1221,7 @@
         "tests/annotation_entity_codec_tests.cpp",
         "docs/annotation-catalog.md"
       ],
-      "implementation_note": "Presentation styles, fills, visibility, and target overrides are validated separately from analytical geometry; typed Document persistence, shared vector rendering, undoable child deletion, and annotation inspector visibility/placement edits are integrated, while UI font/color style editing and output-view style integration remain open."
+      "implementation_note": "Presentation styles, fills, visibility, and target overrides are validated separately from analytical geometry; typed Document persistence, shared vector rendering, undoable child deletion, annotation inspector visibility/placement edits, and stored label/symbol color, fill, emphasis, text-height, and stroke-width rendering are integrated, while visibility/override inspectors, polished assets, and production visual QA remain open."
     },
     {
       "id": "APX-SYM-001",

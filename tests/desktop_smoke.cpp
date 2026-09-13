@@ -3692,6 +3692,18 @@ int main(int argc, char** argv) {
                 annotation_state.labels.front().style.bold && annotation_state.labels.front().style.italic &&
                 annotation_state.labels.front().visible,
             "annotation editing should persist text, style, position, scale, and visibility");
+    auto* annotation_canvas = dynamic_cast<sketch::desktop::PlanCanvas*>(
+        window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    require(annotation_canvas != nullptr, "annotation style smoke needs the measurement canvas");
+    const auto rendered_label = std::find_if(
+        annotation_canvas->labels().begin(), annotation_canvas->labels().end(),
+        [&](const auto& value) { return value.id == label_id; });
+    require(rendered_label != annotation_canvas->labels().end() &&
+                rendered_label->color == QColor(QStringLiteral("#112233")) &&
+                rendered_label->fill_color == QColor(QStringLiteral("#445566")) &&
+                rendered_label->bold && rendered_label->italic &&
+                std::abs(rendered_label->text_height_metres - 0.006) < 1e-12,
+            "annotation style must reach the shared canvas renderer");
     require(window.selectEntity(label_id), "a persisted annotation child should be selectable");
     require(window.deleteAnnotation(label_id), "annotation deletion should be undoable");
     annotation_state = decode_annotation_entity(

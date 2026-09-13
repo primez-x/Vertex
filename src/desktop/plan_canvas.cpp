@@ -1175,12 +1175,16 @@ void PlanCanvas::drawCursorReadout(QPainter& painter, const QRectF& viewport,
 
 void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool output,
                            QColor background) const {
-    const auto color = output ? (background.lightnessF() > 0.5 ? QColor(25, 25, 25)
-                                                                : QColor(235, 235, 235))
-                              : color_for(entity);
+    const auto default_color = output
+        ? (background.lightnessF() > 0.5 ? QColor(25, 25, 25) : QColor(235, 235, 235))
+        : color_for(entity);
+    const auto color = entity.stroke_color.isValid() ? entity.stroke_color : default_color;
     QPen pen(color, 0.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
     if (entity.type == QStringLiteral("wall")) {
         pen.setWidthF(std::max(entity.thickness_metres, 0.04));
+    } else if (entity.stroke_width_metres > 0.0 &&
+               std::isfinite(entity.stroke_width_metres)) {
+        pen.setWidthF(entity.stroke_width_metres);
     } else {
         // Boundary line weight is a presentation size, never a model-space
         // wall thickness. Printed output uses a quarter-millimetre stroke.
@@ -1192,10 +1196,12 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
         if (const auto fill_path = closed_entity_path(entity)) {
             const auto style = hatch_style(entity.hatch_pattern);
             if (style != Qt::NoBrush) {
-                auto fill_color = output
-                                      ? (background.lightnessF() > 0.5 ? QColor(25, 25, 25)
-                                                                         : QColor(235, 235, 235))
-                                      : entity.fill_color.isValid() ? entity.fill_color : color;
+                auto fill_color = entity.fill_color.isValid()
+                                      ? entity.fill_color
+                                      : output
+                                          ? (background.lightnessF() > 0.5 ? QColor(25, 25, 25)
+                                                                             : QColor(235, 235, 235))
+                                          : color;
                 fill_color.setAlpha(output ? 64 : 48);
                 QBrush brush(fill_color, style);
                 const auto scale = std::isfinite(entity.hatch_scale) && entity.hatch_scale > 0.0
@@ -1298,7 +1304,19 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
             : background.lightnessF() > 0.5
                 ? QColor(255, 255, 255, 238)
                 : QColor(20, 25, 34, 225);
-        painter.setBrush(label_background);
+        const auto label_fill_style = label.fill_color.isValid()
+            ? hatch_style(label.fill_pattern)
+            : Qt::NoBrush;
+        const auto custom_fill = label.fill_color.isValid() &&
+                                 label_fill_style != Qt::NoBrush;
+        auto brush = QBrush(custom_fill ? label.fill_color : label_background,
+                            custom_fill ? label_fill_style : Qt::SolidPattern);
+        if (custom_fill) {
+            auto fill = label.fill_color;
+            fill.setAlpha(output ? 220 : 238);
+            brush.setColor(fill);
+        }
+        painter.setBrush(brush);
         painter.drawRoundedRect(bounds, 3.0, 3.0);
         painter.setPen(label.color.isValid() ? label.color
                        : output ? (background.lightnessF() > 0.5 ? QColor(25, 25, 25)

@@ -16677,12 +16677,18 @@ private:
                 for (const auto& label : state.labels) {
                     if (!label.visible) continue;
                     annotation_child_ids.push_back(label.id);
-                    all_labels.push_back({id_from(label.id), label.placement.position,
-                                          QString::fromStdString(label.content),
-                                          id_from(label.id) == m_selected_id,
-                                          label.placement.rotation_radians,
-                                          label.placement.scale,
-                                          label.style.text_height_metres});
+                    CanvasLabel canvas_label{id_from(label.id), label.placement.position,
+                                             QString::fromStdString(label.content),
+                                             id_from(label.id) == m_selected_id,
+                                             label.placement.rotation_radians,
+                                             label.placement.scale,
+                                             label.style.text_height_metres};
+                    canvas_label.color = QColor(QString::fromStdString(label.style.stroke_color));
+                    canvas_label.bold = label.style.bold;
+                    canvas_label.italic = label.style.italic;
+                    canvas_label.fill_color = QColor(QString::fromStdString(label.style.fill_color));
+                    canvas_label.fill_pattern = QString::fromStdString(label.style.fill_pattern);
+                    all_labels.push_back(std::move(canvas_label));
                 }
                 for (const auto& symbol : state.symbols) {
                     if (!symbol.visible) continue;
@@ -16698,9 +16704,19 @@ private:
                         preview.push_back({stroke.start, stroke.end, 0.0});
                     }
                     annotation_child_ids.push_back(symbol.id);
-                    all_geometry.push_back({id_from(symbol.id), QStringLiteral("symbol"),
-                                            std::move(preview), 0.0,
-                                            id_from(symbol.id) == m_selected_id});
+                    CanvasEntity canvas_symbol{id_from(symbol.id), QStringLiteral("symbol"),
+                                               std::move(preview), 0.0,
+                                               id_from(symbol.id) == m_selected_id};
+                    canvas_symbol.stroke_color =
+                        QColor(QString::fromStdString(symbol.style.stroke_color));
+                    canvas_symbol.stroke_width_metres = symbol.style.stroke_width_metres;
+                    canvas_symbol.fill_color =
+                        QColor(QString::fromStdString(symbol.style.fill_color));
+                    canvas_symbol.hatch_pattern =
+                        QString::fromStdString(symbol.style.fill_pattern);
+                    canvas_symbol.filled = symbol.style.fill_pattern != "none" &&
+                                           canvas_symbol.fill_color.isValid();
+                    all_geometry.push_back(std::move(canvas_symbol));
                 }
             } catch (const std::exception& error) {
                 append_geometry_error(QStringLiteral("Annotations %1: %2")

@@ -38,6 +38,10 @@ struct CanvasEntity {
     QString hatch_pattern{QStringLiteral("none")};
     double hatch_scale{1.0};
     QColor fill_color{};
+    // Optional presentation overrides from semantic annotation/style records.
+    // An invalid color or non-positive width keeps the canvas default.
+    QColor stroke_color{};
+    double stroke_width_metres{};
 };
 
 // A retained document annotation. Unlike BoundaryDraftPreview, labels are
@@ -59,6 +63,11 @@ struct CanvasLabel {
     QColor color{}; // Invalid retains the canvas/output theme color.
     bool bold{};
     bool italic{};
+    // Optional semantic annotation fill. `none` keeps the normal readable
+    // canvas label background while other patterns are rendered consistently
+    // in interactive and fitted/output scenes.
+    QColor fill_color{};
+    QString fill_pattern{QStringLiteral("none")};
 };
 
 // A raster underlay is a retained presentation value sourced from a

@@ -40,10 +40,13 @@ child IDs, deletion is undoable, and the inspector edits label text or either
 annotation kind's position, rotation, scale, and visibility through typed
 history.
 
+Stored stroke/fill colors, fill patterns, paper-independent text height,
+bold/italic emphasis, and symbol stroke width now flow into the same renderer
+for interactive views and fitted sheet/export scenes.
+
 This is a bounded semantic and authoring slice for APX-ANNO-001, APX-ANNO-003
-and APX-SYM-001, **not completed parity**. Font/color/style editing,
-visibility/override inspectors, polished assets, and production visual QA
-remain open.
+and APX-SYM-001, **not completed parity**. Visibility/override inspectors,
+polished assets, and production visual QA remain open.
 Headless tests check every catalog preview, instance edits and JSON roundtrip,
 typed Document admission, save/reopen, filtering, placement mathematics,
 deterministic IDs, and malformed-data rejection.
