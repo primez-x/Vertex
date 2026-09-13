@@ -12,8 +12,8 @@ import sys
 CORE = ("create", "measure", "editable_3d", "edit", "calculate", "revise", "save_reopen", "recovery", "print", "export")
 ASSERTIONS = ("semantic", "calculation", "output", "recovery", "fidelity")
 PRODUCTION = {
-    "OPS-QA-002": tuple(dict.fromkeys(CORE + ("architectural_authoring", "plans", "elevations", "sections", "schedules", "alternatives", "revisions", "sheets") + ASSERTIONS)),
-    "OPS-QA-003": tuple(dict.fromkeys(CORE + ("multiple_levels", "assemblies", "structural_objects", "schedules", "quantities", "sheets", "coordinated_views") + ASSERTIONS)),
+    "OPS-QA-002": tuple(dict.fromkeys(CORE + ("architectural_authoring", "plans", "elevations", "sections", "schedules", "alternatives", "revisions", "sheets", "symbol_library", "symbol_resize", "symbol_output") + ASSERTIONS)),
+    "OPS-QA-003": tuple(dict.fromkeys(CORE + ("multiple_levels", "assemblies", "structural_objects", "schedules", "quantities", "sheets", "coordinated_views", "symbol_library", "symbol_resize", "symbol_output") + ASSERTIONS)),
     # This is the packaged clean-offline end-to-end workflow. Keep the
     # environmental and deterministic-mode assertions explicit so a generic
     # desktop smoke run cannot masquerade as this production boundary.

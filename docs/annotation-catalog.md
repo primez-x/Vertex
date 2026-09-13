@@ -21,6 +21,9 @@ entries are a working schematic foundation, not the final production artwork.
 The production release criterion expands this catalog across plumbing, furniture,
 fixtures, appliances, accessibility, lighting, doors/windows, structural/site,
 and light-commercial equipment, while retaining at least 200 validated entries.
+The production qualification validator enforces this requirement in both the
+residential and light-commercial runs through mandatory `symbol_library`,
+`symbol_resize`, and `symbol_output` observations.
 Each entry must expose physical width/depth metadata, a centre anchor, scale
 limits, and nonempty local preview strokes contained within its declared
 footprint. Symbol family/category search is case-insensitive while category

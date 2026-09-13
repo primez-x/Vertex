@@ -195,6 +195,17 @@ class QualificationTests(unittest.TestCase):
             target["observations"].pop(name)
             self.assertFalse(qa.validate_and_build(manifest, root=self.root)["contract_valid"], name)
 
+    def test_symbol_library_observations_are_mandatory_for_production_workspaces(self):
+        required = {"symbol_library", "symbol_resize", "symbol_output"}
+        for requirement in ("OPS-QA-002", "OPS-QA-003"):
+            self.assertTrue(required.issubset(set(qa.PRODUCTION[requirement])))
+            manifest = copy.deepcopy(self.manifest)
+            run = next(item for item in manifest["runs"] if item["requirement"] == requirement)
+            for name in required:
+                run["observations"].pop(name, None)
+            report = qa.validate_and_build(manifest, root=self.root)
+            self.assertFalse(report["contract_valid"], (requirement, report["errors"]))
+
     def test_failure_and_blocked_observations_prevent_complete_evidence(self):
         self.declare_real_role_artifacts()
         for status in ("fail", "blocked", "not_run"):
