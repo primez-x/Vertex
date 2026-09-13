@@ -861,4 +861,90 @@ std::vector<BoundaryDiagnostic> validate_boundary(const Boundary& boundary,
     return diagnostics;
 }
 
+std::optional<std::string> validate_boundary_holes(
+    const Boundary& outer, const std::vector<Boundary>& holes, double tolerance_metres) {
+    // Reuse the same analytical intersection predicates as boundary validation;
+    // no tessellation is involved in either topology or the eventual quantities.
+    try {
+        if (const auto issues = validate_boundary(outer, tolerance_metres); !issues.empty())
+            return "outer boundary is invalid: " + issues.front().message;
+        for (std::size_t index = 0; index < holes.size(); ++index) {
+            if (const auto issues = validate_boundary(holes[index], tolerance_metres); !issues.empty())
+                return "hole " + std::to_string(index + 1) + " is invalid: " + issues.front().message;
+        }
+        const auto boundaries_meet = [&](const Boundary& first, const Boundary& second) {
+            for (const auto& left : first) {
+                for (const auto& right : second) {
+                    if (intersect_segments(left, right, tolerance_metres).kind != IntersectionKind::none)
+                        return true;
+                }
+            }
+            return false;
+        };
+        // After excluding boundary intersections, one point locates the complete
+        // connected hole. Split arcs at their Y extrema to count horizontal-ray
+        // crossings on monotonic pieces, with half-open endpoint ownership.
+        const auto contains = [](const Boundary& boundary, Vec2 point) {
+            int winding = 0;
+            const auto crossing = [&](Vec2 start, Vec2 end, const auto& crossing_x) {
+                const bool upward = start.y <= point.y && end.y > point.y;
+                const bool downward = end.y <= point.y && start.y > point.y;
+                if ((upward || downward) && crossing_x() > point.x)
+                    winding += upward ? 1 : -1;
+            };
+            for (const auto& segment : boundary) {
+                if (segment.sweep_radians == 0.0) {
+                    crossing(segment.start, segment.end, [&] {
+                        const auto fraction = (point.y - segment.start.y) / (segment.end.y - segment.start.y);
+                        const auto x = segment.start.x + fraction * (segment.end.x - segment.start.x);
+                        if (!std::isfinite(x)) throw std::invalid_argument("unrepresentable ray crossing");
+                        return x;
+                    });
+                    continue;
+                }
+                const auto arc = arc_geometry(segment);
+                std::vector<double> cuts{0.0, 1.0};
+                for (const double angle : {std::numbers::pi / 2.0, 3.0 * std::numbers::pi / 2.0}) {
+                    const auto travel = arc.sweep > 0.0 ? positive_angle(angle - arc.start_angle)
+                                                        : positive_angle(arc.start_angle - angle);
+                    const auto parameter = travel / std::abs(arc.sweep);
+                    if (parameter > 0.0 && parameter < 1.0) cuts.push_back(parameter);
+                }
+                std::sort(cuts.begin(), cuts.end());
+                for (std::size_t index = 1; index < cuts.size(); ++index) {
+                    const auto start = cuts[index - 1] == 0.0 ? segment.start : point_at(arc, cuts[index - 1]);
+                    const auto end = cuts[index] == 1.0 ? segment.end : point_at(arc, cuts[index]);
+                    crossing(start, end, [&] {
+                        const auto dy = point.y - arc.center.y;
+                        // Factored form avoids cancellation close to an extremum.
+                        const auto dx = std::sqrt(std::max(0.0, (arc.radius - std::abs(dy)) *
+                                                                       (arc.radius + std::abs(dy))));
+                        const auto middle_angle = arc.start_angle + arc.sweep *
+                            std::midpoint(cuts[index - 1], cuts[index]);
+                        const auto x = arc.center.x + std::copysign(dx, std::cos(middle_angle));
+                        if (!std::isfinite(x)) throw std::invalid_argument("unrepresentable arc ray crossing");
+                        return x;
+                    });
+                }
+            }
+            return winding != 0;
+        };
+        for (std::size_t index = 0; index < holes.size(); ++index) {
+            const auto label = "hole " + std::to_string(index + 1);
+            if (boundaries_meet(outer, holes[index]) || !contains(outer, holes[index].front().start))
+                return label + " must be strictly inside the outer boundary without contact";
+            for (std::size_t previous = 0; previous < index; ++previous) {
+                if (boundaries_meet(holes[previous], holes[index]) ||
+                    contains(holes[previous], holes[index].front().start) ||
+                    contains(holes[index], holes[previous].front().start))
+                    return "holes " + std::to_string(previous + 1) + " and " +
+                        std::to_string(index + 1) + " must be disjoint without contact or nesting";
+            }
+        }
+    } catch (const std::exception&) {
+        return "hole topology is numerically indeterminate";
+    }
+    return std::nullopt;
+}
+
 }  // namespace sketch

@@ -105,4 +105,12 @@ struct BoundaryDiagnostic {
     const Boundary& boundary,
     double tolerance_metres = default_geometry_tolerance_metres);
 
+// Checks individually valid closed boundaries, strict hole containment, and
+// pairwise disjoint hole interiors and boundaries using analytical lines/arcs.
+// Boundary contact within tolerance, nesting, and indeterminate geometry fail
+// closed. Returns the first deterministic error, or no error for valid topology.
+[[nodiscard]] std::optional<std::string> validate_boundary_holes(
+    const Boundary& outer, const std::vector<Boundary>& holes,
+    double tolerance_metres = default_geometry_tolerance_metres);
+
 }  // namespace sketch

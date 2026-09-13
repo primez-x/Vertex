@@ -187,6 +187,10 @@ void add_room(const Entity& entity, std::vector<ScheduleRecord>& records,
             holes.push_back(*hole);
         }
     }
+    if (!boundary && !holes.empty()) {
+        diagnostic(diagnostics, entity, "holes require a closed room boundary");
+        return;
+    }
     std::vector<ScheduleSourceRef> area_sources;
     if (boundary) {
         const auto issues = validate_boundary(*boundary);
@@ -194,14 +198,15 @@ void add_room(const Entity& entity, std::vector<ScheduleRecord>& records,
             diagnostic(diagnostics, entity, "boundary is invalid: " + issues.front().message);
             return;
         }
+        if (!holes.empty()) {
+            if (const auto topology_error = validate_boundary_holes(*boundary, holes)) {
+                diagnostic(diagnostics, entity, "invalid hole topology: " + *topology_error);
+                return;
+            }
+        }
         area_value = std::abs(signed_area(*boundary));
         area_sources.push_back({entity.id, "boundary"});
         for (const auto& hole : holes) {
-            const auto hole_issues = validate_boundary(hole);
-            if (!hole_issues.empty()) {
-                diagnostic(diagnostics, entity, "hole is invalid: " + hole_issues.front().message);
-                return;
-            }
             area_value -= std::abs(signed_area(hole));
         }
         if (has_holes) area_sources.push_back({entity.id, "holes"});

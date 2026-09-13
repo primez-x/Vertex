@@ -2,7 +2,9 @@
 #include "sketch/assembly_model.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <iostream>
+#include <numbers>
 #include <stdexcept>
 #include <string_view>
 
@@ -96,6 +98,112 @@ void test_room_volume_schedule_uses_analytical_boundary() {
                             row.cells.at("volume").sources.end(),
                             [](const auto& source) { return source.property == "height_m"; }),
             "room volume schedule must expose a read-only calculated cubic quantity");
+}
+
+nlohmann::json rectangle(double x, double y, double width, double height) {
+    return nlohmann::json::array({
+        {{"start", {x, y}}, {"end", {x + width, y}}, {"sweep_radians", 0.0}},
+        {{"start", {x + width, y}}, {"end", {x + width, y + height}}, {"sweep_radians", 0.0}},
+        {{"start", {x + width, y + height}}, {"end", {x, y + height}}, {"sweep_radians", 0.0}},
+        {{"start", {x, y + height}}, {"end", {x, y}}, {"sweep_radians", 0.0}},
+    });
+}
+
+void test_room_rejects_invalid_hole_topology() {
+    using namespace sketch;
+    const auto interior = rectangle(1.0, 1.0, 1.0, 1.0);
+    const std::vector<nlohmann::json> invalid_holes{
+        nlohmann::json::array({rectangle(5.0, 1.0, 1.0, 1.0)}),
+        nlohmann::json::array({interior, interior}),
+        nlohmann::json::array({interior, rectangle(1.5, 1.5, 1.0, 1.0)}),
+        nlohmann::json::array({rectangle(0.0, 1.0, 1.0, 1.0)}),
+        nlohmann::json::array({rectangle(3.5, 1.0, 1.0, 1.0)}),
+        nlohmann::json::array({interior, rectangle(1.2, 1.2, 0.2, 0.2)}),
+        nlohmann::json::array({interior, rectangle(2.0, 1.0, 1.0, 1.0)}),
+    };
+    for (const auto& holes : invalid_holes) {
+        const auto document = Document::create({entity("invalid-room", "room", {
+            {"mark", "R1"}, {"boundary", rectangle(0.0, 0.0, 4.0, 3.0)},
+            {"holes", holes}, {"height_m", 2.4}})});
+        const auto projection = build_document_schedules(document.snapshot());
+        require(projection.snapshot.rows.empty(),
+                "invalid room hole topology must not produce a partial area or volume row");
+        require(projection.diagnostics.size() == 1 &&
+                    projection.diagnostics.front().starts_with("room invalid-room: invalid hole topology: "),
+                "invalid hole topology must name the room in one explicit diagnostic");
+        require(projection.diagnostics == build_document_schedules(document.snapshot()).diagnostics,
+                "invalid room hole diagnostics must be deterministic");
+    }
+}
+
+void test_room_accepts_disjoint_and_curved_holes() {
+    using namespace sketch;
+    const auto circle = nlohmann::json::array({
+        {{"start", {2.5, 1.5}}, {"end", {3.5, 1.5}}, {"sweep_radians", std::numbers::pi}},
+        {{"start", {3.5, 1.5}}, {"end", {2.5, 1.5}}, {"sweep_radians", std::numbers::pi}},
+    });
+    const auto document = Document::create({entity("valid-room", "room", {
+        {"mark", "R1"}, {"boundary", rectangle(0.0, 0.0, 4.0, 3.0)},
+        {"holes", nlohmann::json::array({rectangle(0.5, 1.0, 1.0, 1.0), circle})},
+        {"height_m", 2.4}})});
+    const auto projection = build_document_schedules(document.snapshot());
+    require(projection.diagnostics.empty() && projection.snapshot.rows.size() == 1,
+            "disjoint interior straight and curved holes must retain a complete room row");
+    const auto& cells = projection.snapshot.rows.front().cells;
+    const double expected_area = 11.0 - std::numbers::pi / 4.0;
+    require(std::abs(std::get<ScheduleQuantity>(cells.at("gross_area").value).value - expected_area) < 1e-10 &&
+                std::abs(std::get<ScheduleQuantity>(cells.at("volume").value).value - expected_area * 2.4) < 1e-10,
+            "valid curved holes must preserve analytical area and volume");
+}
+
+void test_room_holes_require_boundary_even_with_stored_area() {
+    using namespace sketch;
+    const auto document = Document::create({entity("stored-room", "room", {
+        {"mark", "R1"}, {"area_m2", 12.0}, {"height_m", 2.4},
+        {"holes", nlohmann::json::array({rectangle(1.0, 1.0, 1.0, 1.0)})}})});
+    const auto projection = build_document_schedules(document.snapshot());
+    require(projection.snapshot.rows.empty() && projection.diagnostics.size() == 1 &&
+                projection.diagnostics.front() == "room stored-room: holes require a closed room boundary",
+            "stored room area must not bypass hole topology validation");
+}
+
+void test_curved_outer_and_hole_contact() {
+    using namespace sketch;
+    const auto circle = [](double x, double y, double radius, bool clockwise = false) {
+        const double sweep = clockwise ? -std::numbers::pi : std::numbers::pi;
+        return nlohmann::json::array({
+            {{"start", {x - radius, y}}, {"end", {x + radius, y}}, {"sweep_radians", sweep}},
+            {{"start", {x + radius, y}}, {"end", {x - radius, y}}, {"sweep_radians", sweep}},
+        });
+    };
+    for (bool clockwise : {false, true}) {
+        // A straight and a curved hole are both strictly inside the circular
+        // outer loop; the same checks must work for either loop orientation.
+        const auto project = [&](const nlohmann::json& holes) {
+            const auto document = Document::create({entity("round-room", "room", {
+                {"mark", "R1"}, {"boundary", circle(0.0, 0.0, 3.0, clockwise)},
+                {"holes", holes}, {"height_m", 2.4}})});
+            return build_document_schedules(document.snapshot());
+        };
+        const auto valid = project(nlohmann::json::array({rectangle(-1.0, -0.5, 0.5, 1.0),
+                                                       circle(1.0, 0.0, 0.4, clockwise)}));
+        require(valid.diagnostics.empty() && valid.snapshot.rows.size() == 1,
+                "curved outer containment must accept disjoint holes in either orientation");
+        for (const auto& holes : std::vector<nlohmann::json>{
+                 nlohmann::json::array({circle(2.0, 0.0, 1.0, clockwise)}), // arc/arc tangent
+                 nlohmann::json::array({rectangle(2.5, 2.5, 0.2, 0.2)}), // outside circle, inside its bounds
+                 nlohmann::json::array({circle(0.0, 0.0, 1.0, clockwise), circle(0.0, 0.0, 0.4)}),
+                 nlohmann::json::array({circle(-0.5, 0.0, 0.5), circle(0.5, 0.0, 0.5)})}) {
+            const auto invalid = project(holes);
+            require(invalid.snapshot.rows.empty() && invalid.diagnostics.size() == 1,
+                    "curved containment, nesting, or tangent contact must reject the whole room row");
+        }
+    }
+    const auto document = Document::create({entity("line-tangent-room", "room", {
+        {"mark", "R1"}, {"boundary", rectangle(0.0, 0.0, 4.0, 3.0)},
+        {"holes", nlohmann::json::array({circle(1.0, 1.0, 1.0)})}})});
+    require(build_document_schedules(document.snapshot()).snapshot.rows.empty(),
+            "arc/line tangency must reject the whole room row");
 }
 
 void test_edit_is_a_document_command_with_revision_and_undo_semantics() {
@@ -217,6 +325,10 @@ int main() {
         test_assigned_material_schedule();
         test_room_area_and_invalid_rows_are_explicit();
         test_room_volume_schedule_uses_analytical_boundary();
+        test_room_rejects_invalid_hole_topology();
+        test_room_accepts_disjoint_and_curved_holes();
+        test_room_holes_require_boundary_even_with_stored_area();
+        test_curved_outer_and_hole_contact();
         test_edit_is_a_document_command_with_revision_and_undo_semantics();
         test_visibility_uses_source_entities_for_material_rows();
         std::cout << "document_schedule_adapter_tests passed\n";

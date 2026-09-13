@@ -651,9 +651,10 @@
       "package": 4,
       "blocker": null,
       "implementation_sources": [
+        "include/sketch/geometry.hpp",
         "src/core/geometry.cpp"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "Analytical line and circular-arc geometry, closure, winding, intersections, tangency, and boundary validation are implemented. Room-hole topology now validates each hole plus strict containment, disjoint interiors, and no contact or nesting analytically, rejecting indeterminate cases closed; independent high-precision fixture parity, broader topology workflows, and the production gate remain open."
     },
     {
       "id": "GEO-BASE-002",
@@ -1129,7 +1130,7 @@
         "tests/desktop_smoke.cpp",
         "docs/desktop-workflow.md"
       ],
-      "implementation_note": "Analytical calculation, union subtraction, and deterministic endpoint-graph face detection are implemented. The desktop command creates independent room boundaries for all simple bounded faces in one guarded Document transaction; nested-hole semantics, same-floor production fixtures, and complete Apex workflows remain open."
+      "implementation_note": "Analytical calculation, union subtraction, deterministic endpoint-graph face detection, and explicit room-hole deductions are implemented. The desktop command creates independent room boundaries for all simple bounded faces in one guarded Document transaction; schedule generation now rejects outside, crossing, touching, overlapping, duplicate, nested, or numerically indeterminate holes and preserves analytical quantities for valid disjoint curved or straight holes. Same-floor production fixtures, compatibility evidence, and complete Apex workflows remain open."
     },
     {
       "id": "APX-AREA-002",
@@ -2018,7 +2019,7 @@
         "tests/schedule_model_tests.cpp",
         "docs/schedules.md"
       ],
-      "implementation_note": "Standalone typed records and a revision-bound Document-derived adapter now generate door/window, room, and material rows with stable marks, source-backed calculated cells and explicit diagnostics. Architectural room volumes derive net plan area from their boundary and holes and expose a read-only cubic volume from explicit height with geometry provenance. Active organization/design-phase masks filter source entities before projection, preserving derived material rows and suppressing hidden-source diagnostics. Architectural projections append deterministic read-only material-summary rows grouped by catalog/material identity or normalized explicit name, with aggregate counts, complete net-volume totals when every source is valid, and all contributing provenance. Composite wall and horizontal slab layers now contribute per-layer thickness, catalog/material identity, and net solid-volume rows from the same OCCT geometry. Placed assembly instances emit one read-only material row per resolved catalog slot and promote explicit cubic-metre volume/net_volume quantities into grouped summaries. Supported columns, beams, stairs, railings, and roof forms additionally emit read-only building-object rows with source dimensions and canonical-solid volume provenance. Schedule persistence and complete sheet/output integration remain open."
+      "implementation_note": "Standalone typed records and a revision-bound Document-derived adapter now generate door/window, room, and material rows with stable marks, source-backed calculated cells and explicit diagnostics. Architectural room volumes derive net plan area from their boundary and holes and expose a read-only cubic volume from explicit height with geometry provenance; analytical hole-topology validation rejects outside, crossing, touching, overlapping, duplicate, nested, or indeterminate holes as a complete-row error while retaining valid disjoint curved and straight deductions. Active organization/design-phase masks filter source entities before projection, preserving derived material rows and suppressing hidden-source diagnostics. Architectural projections append deterministic read-only material-summary rows grouped by catalog/material identity or normalized explicit name, with aggregate counts, complete net-volume totals when every source is valid, and all contributing provenance. Composite wall and horizontal slab layers now contribute per-layer thickness, catalog/material identity, and net solid-volume rows from the same OCCT geometry. Placed assembly instances emit one read-only material row per resolved catalog slot and promote explicit cubic-metre volume/net_volume quantities into grouped summaries. Supported columns, beams, stairs, railings, and roof forms additionally emit read-only building-object rows with source dimensions and canonical-solid volume provenance. Schedule persistence and complete sheet/output integration remain open."
     },
     {
       "id": "ARCH-SCH-002",

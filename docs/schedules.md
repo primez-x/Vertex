@@ -35,6 +35,15 @@ stored height as a read-only metre quantity, and add a read-only cubic-metre
 \`volume\` calculation with boundary, hole, and height provenance. The schedule
 never invents a height for legacy plan-only room records.
 
+Room holes must be individually valid closed boundaries strictly inside the
+outer boundary, with disjoint interiors and no boundary contact or nesting.
+The dependency-free geometry validator checks lines and circular arcs
+analytically at the default local tolerance of `1e-7` metres. Outside, crossing,
+touching, overlapping, duplicate, nested, or numerically indeterminate holes
+reject the complete room row with a deterministic diagnostic naming the room
+and invalid hole topology. No hole is ignored or partially deducted. Valid
+disjoint holes retain their analytical area and volume, including curved holes.
+
 The architectural adapter augments assigned-material source rows with net solid
 volume and appends deterministic, read-only `material_summary` rows. Assignment
 groups use the catalog/material identity; explicit material rows use a normalized
