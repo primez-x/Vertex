@@ -132,7 +132,9 @@ architectural profiles, validates the SQLite project container, and binds both
 hashes into the run report. Source and reopened screenshot/native-3D artifacts
 now use separate paths; project and native-3D hashes form the stable
 round-trip check while screenshot hash differences remain visible as
-presentation-state diagnostics. Each process also receives an explicit
+presentation-state diagnostics; the latest neutral-state packaged run matched
+all project, screenshot, and native-3D hashes across all three profiles. Each
+process also receives an explicit
 assistance-disabled flag enforced by the desktop shell; the commercial seed
 records its market and places a catalog-backed checkout counter. This remains
 developer-machine smoke evidence rather than clean-machine or production

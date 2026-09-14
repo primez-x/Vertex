@@ -182,6 +182,8 @@ process results, explicit assistance-disabled mode, screenshots, and native 3D
 output in its report. Source and reopened captures use distinct artifact paths;
 the report compares project and native 3D hashes as the stable round-trip gate
 and retains screenshot hash differences as presentation-state diagnostics.
+The latest neutral-state packaged run matched all project, screenshot, and
+native 3D hashes for the three captured profiles.
 Those files
 can be retained as candidate artifacts when a qualified operator performs the
 real production workflow; the report still records developer-machine limits
