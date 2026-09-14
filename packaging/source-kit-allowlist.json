@@ -691,6 +691,14 @@
     },
     {
       "category": "docs",
+      "path": "docs/requirements/evidence/ops-qa-002.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/ops-qa-003.json"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/evidence/rec-001.json"
     },
     {

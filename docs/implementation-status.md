@@ -10,17 +10,17 @@ clean-machine and network-denied qualification, accessibility captures,
 package handoff qualification, and the final dependency-license review.
 
 The latest private `Vertex` checkpoint is published to the private `origin/main`
-repository. Its deterministic offline bundle contains 727 declared files and
-its source-kit manifest contains 641 allowlisted files. These counts describe the current local evidence and
+repository. Its deterministic offline bundle contains 729 declared files and
+its source-kit manifest contains 643 allowlisted files. These counts describe the current local evidence and
 packaging checkpoint; they do not certify a production release.
 
 ## Latest integrated checkpoint
 
 At the current integrated checkpoint, the Release and Debug desktop builds and
-CTest matrices completed with 149 tests passing in each configuration
-(the production acceptance test is
-intentionally disabled and the AppContainer runtime test is skipped when the host is already
-inside a parent Job Object). The focused Debug and Release architectural
+CTest matrices list 149 tests in each configuration: 148 runnable tests pass,
+the production acceptance test is intentionally disabled, and the AppContainer
+runtime test is explicitly skipped when the host is already inside a parent Job
+Object. The focused Debug and Release architectural
 schedule tests and the focused Debug canvas test also pass. Print preview now
 runs the same scene/fingerprint gate before opening and records the serialized
 output fingerprint with local driver evidence. Assembly instances
@@ -732,8 +732,8 @@ draft recovery and receipt-preserving geometry edits remain required.
 The full production goal is active. The repository is an internal development
 checkpoint and does not yet satisfy the production replacement contract.
 All 130 requirements in `requirements/apex-parity.json` remain mandatory.
-The latest full Debug and Release CTest runs each recorded 149 passing tests;
-the production acceptance test remains intentionally disabled until the
+The latest full Debug and Release CTest runs each recorded 149 listed tests,
+with 148 runnable tests passing; the production acceptance test remains intentionally disabled until the
 qualification manifest is complete, and the Windows AppContainer worker
 fixture remains skipped when the host test process is already inside a parent
 Job Object. The analytical fixture audit now passes in both configurations.
