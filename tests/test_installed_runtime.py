@@ -137,8 +137,10 @@ class InstalledRuntimeTests(unittest.TestCase):
                     Path("installed/bin/property-studio.exe"), "architectural",
                     Path("evidence"), {"PATH": "Windows"}, declared, records,
                     project_output=Path("evidence/source.bldproj"),
-                    project_input=Path("evidence/original.bldproj"))
+                    project_input=Path("evidence/original.bldproj"),
+                    market="light-commercial")
         self.assertTrue(result["passed"], result["errors"])
+        self.assertEqual(result["market"], "light-commercial")
         self.assertEqual(len(result["screenshots"]), 2)
         project.assert_called_once_with(Path("evidence/source.bldproj"))
         self.assertEqual(launch.call_args.kwargs["creationflags"], 0x08000000)
@@ -148,6 +150,8 @@ class InstalledRuntimeTests(unittest.TestCase):
         self.assertIn("--smoke-project-output", launch.call_args.args[0])
         self.assertIn("--smoke-project-input", launch.call_args.args[0])
         self.assertIn("--smoke-assistance-disabled", launch.call_args.args[0])
+        self.assertIn("--smoke-market", launch.call_args.args[0])
+        self.assertIn("light-commercial", launch.call_args.args[0])
         self.assertTrue(result["assistance_disabled_requested"])
         monitor.assert_called_once_with(12345)
         monitor.return_value.close.assert_called_once()
@@ -171,6 +175,12 @@ class InstalledRuntimeTests(unittest.TestCase):
         child.kill.assert_called_once()
         child.wait.assert_called_once_with(timeout=2.0)
         monitor.return_value.snapshot.assert_not_called()
+
+    def test_smoke_market_is_bounded(self):
+        with self.assertRaisesRegex(ValueError, "unsupported smoke market"):
+            runtime.run_workspace(Path("installed/bin/property-studio.exe"), "architectural",
+                                  Path("evidence"), {}, self.declarations(), {},
+                                  market="industrial")
 
     def test_failure_still_writes_report_without_launching(self):
         with tempfile.TemporaryDirectory() as temporary:

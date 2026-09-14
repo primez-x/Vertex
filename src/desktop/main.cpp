@@ -51,6 +51,14 @@ QString smoke_project_input_path(const QStringList& arguments) {
     return {};
 }
 
+QString smoke_market(const QStringList& arguments) {
+    const auto index = arguments.indexOf(QStringLiteral("--smoke-market"));
+    if (index >= 0 && index + 1 < arguments.size() && !arguments.at(index + 1).isEmpty()) {
+        return arguments.at(index + 1).trimmed().toLower();
+    }
+    return QStringLiteral("residential");
+}
+
 bool architectural_smoke(const QStringList& arguments) {
     const auto index = arguments.indexOf(QStringLiteral("--smoke-workspace"));
     if (index < 0 || index + 1 >= arguments.size()) {
@@ -111,7 +119,19 @@ bool loadBundledFont(const QApplication& application) {
     return false;
 }
 
-bool seed_smoke_document(sketch::desktop::MainWindow& window, bool architectural) {
+bool seed_smoke_document(sketch::desktop::MainWindow& window, bool architectural,
+                         const QString& market) {
+    const auto commercial = market == QStringLiteral("light-commercial");
+    if (!window.selectEntity(QStringLiteral("property-1")) ||
+        !window.editProjectSubject(
+            commercial ? QStringLiteral("Light-commercial smoke")
+                       : QStringLiteral("Residential smoke"),
+            QStringLiteral("1 Vertex Way"),
+            QStringLiteral("installed-runtime-%1").arg(market),
+            QStringLiteral("{\"market\":\"%1\",\"fixture\":\"installed-runtime-v1\"}")
+                .arg(market))) {
+        return false;
+    }
     if (architectural) {
         const auto wall_id = window.createStraightWall(
             {0.0, 0.0}, {12.0, 0.0}, QStringLiteral("exterior"));
@@ -126,15 +146,21 @@ bool seed_smoke_document(sketch::desktop::MainWindow& window, bool architectural
                 .isEmpty()) {
             return false;
         }
-        return !window.createSlabFromBoundary(
+        const auto slab_id = window.createSlabFromBoundary(
                          sketch::Boundary{
                              {{0.0, 0.0}, {12.0, 0.0}, 0.0},
                              {{12.0, 0.0}, {12.0, 8.0}, 0.0},
                              {{12.0, 8.0}, {0.0, 8.0}, 0.0},
                              {{0.0, 8.0}, {0.0, 0.0}, 0.0},
                          },
-                         QStringLiteral("6 in"), QStringLiteral("0 in"))
-                         .isEmpty();
+                         QStringLiteral("6 in"), QStringLiteral("0 in"));
+        if (slab_id.isEmpty()) return false;
+        if (commercial &&
+            window.createAnnotationSymbol(QStringLiteral("checkout-counter"), {6.0, 4.0})
+                .isEmpty()) {
+            return false;
+        }
+        return true;
     }
     const auto boundary_id = window.createBoundary(sketch::Boundary{
         {{0.0, 0.0}, {12.0, 0.0}, 0.0},
@@ -192,8 +218,14 @@ int main(int argc, char** argv) {
     const auto font_loaded = loadBundledFont(application);
     const auto smoke = application.arguments().contains(QStringLiteral("--smoke"));
     const auto architectural = architectural_smoke(application.arguments());
+    const auto market = smoke_market(application.arguments());
     if (smoke && !smoke_workspace_is_valid(application.arguments())) {
         qCritical() << "Vertex: --smoke-workspace must be measurement or architectural";
+        return 2;
+    }
+    if (smoke && market != QStringLiteral("residential") &&
+        market != QStringLiteral("light-commercial")) {
+        qCritical() << "Vertex: --smoke-market must be residential or light-commercial";
         return 2;
     }
     if (!font_loaded) {
@@ -218,7 +250,7 @@ int main(int argc, char** argv) {
         }
         const auto project_input = smoke_project_input_path(application.arguments());
         if (project_input.isEmpty()) {
-            if (!seed_smoke_document(window, architectural)) {
+            if (!seed_smoke_document(window, architectural, market)) {
                 return 2;
             }
         } else if (!window.openProject(project_input)) {

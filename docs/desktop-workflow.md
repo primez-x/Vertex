@@ -575,6 +575,7 @@ property-studio.exe --smoke --smoke-output C:\path\desktop-smoke.png --smoke-siz
 property-studio.exe --smoke --smoke-workspace architectural --smoke-output C:\path\architectural.png --smoke-3d-output C:\path\model.png
 property-studio.exe --smoke --smoke-assistance-disabled --smoke-workspace measurement --smoke-project-output C:\path\measurement-source.bldproj
 property-studio.exe --smoke --smoke-assistance-disabled --smoke-workspace measurement --smoke-project-input C:\path\measurement-source.bldproj --smoke-project-output C:\path\measurement-reopened.bldproj
+property-studio.exe --smoke --smoke-assistance-disabled --smoke-market light-commercial --smoke-workspace architectural --smoke-output C:\path\commercial.png --smoke-3d-output C:\path\commercial-model.png
 ```
 
 `--smoke` creates a representative 12 m × 8 m boundary and two interior walls
@@ -593,6 +594,9 @@ deterministic save/reopen pair for runtime evidence. Existing output files are
 never overwritten by the project store. `--smoke-assistance-disabled` forces
 the optional local assistance state off and fails the process if the state
 cannot be enforced; the installed-runtime harness records this explicit mode.
+`--smoke-market` accepts `residential` or `light-commercial` and writes the
+selected market into subject metadata; the commercial architectural seed also
+places a catalog-backed checkout-counter symbol.
 
 The architectural UI capture is taken after the dedicated native 3D export and
 temporarily collapses the native child surface because `QWidget::grab()` cannot

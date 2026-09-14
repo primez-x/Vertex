@@ -6,6 +6,9 @@ isolation, registry-isolation, or production qualification test. No SDK paths
 are added and no app is launched merely by importing this module. Each
 workspace is exercised through a save/reopen pair so the evidence directory
 contains the source and reopened .bldproj artifacts as well as screenshots.
+The architectural workspace is captured once for each supported market profile
+(residential and light-commercial); the measurement workspace uses the
+residential profile.
 """
 
 from __future__ import annotations
@@ -227,21 +230,25 @@ class BoundedCapture:
 
 def run_workspace(executable: Path, workspace: str, run_root: Path, env: dict,
                   declared: dict[str, set[str]], records: dict[str, dict], *,
+                  market: str = "residential",
                   project_output: Path | None = None,
                   project_input: Path | None = None) -> dict:
-    image = run_root / f"{workspace}.png"
+    if market not in {"residential", "light-commercial"}:
+        raise ValueError(f"unsupported smoke market: {market}")
+    image = run_root / f"{workspace}-{market}.png"
     outputs = [image]
-    args = [str(executable), "--smoke", "--smoke-assistance-disabled",
+    args = [str(executable), "--smoke", "--smoke-assistance-disabled", "--smoke-market", market,
             "--smoke-workspace", workspace, "--smoke-output", str(image)]
     if workspace == "architectural":
-        model = run_root / "architectural-model.png"
+        model = run_root / f"{workspace}-{market}-model.png"
         outputs.append(model)
         args.extend(["--smoke-3d-output", str(model)])
     if project_input is not None:
         args.extend(["--smoke-project-input", str(project_input)])
     if project_output is not None:
         args.extend(["--smoke-project-output", str(project_output)])
-    result = {"workspace": workspace, "arguments": args, "timeout_seconds": TIMEOUT_SECONDS,
+    result = {"workspace": workspace, "market": market, "arguments": args,
+              "timeout_seconds": TIMEOUT_SECONDS,
               "module_poll_interval_seconds": 0.02, "errors": [], "screenshots": [],
               "timed_out": False, "module_samples": 0, "module_sample_errors": [],
               "assistance_disabled_requested": True}
@@ -366,21 +373,25 @@ def main(argv: list[str] | None = None) -> int:
         report["environment"] = limits
         report["cwd"] = str(executable.parent)
         for workspace in ("measurement", "architectural"):
-            source_project = run_root / f"{workspace}-source.bldproj"
-            reopened_project = run_root / f"{workspace}-reopened.bldproj"
-            source_run = run_workspace(executable, workspace, run_root, env, declared, records,
-                                       project_output=source_project)
-            report["runs"].append(source_run)
-            reopened_run = run_workspace(executable, workspace, run_root, env, declared, records,
-                                         project_input=source_project,
-                                         project_output=reopened_project)
-            report["runs"].append(reopened_run)
-            report.setdefault("projects", []).append({
-                "workspace": workspace,
-                "source": source_run.get("project"),
-                "reopened": reopened_run.get("project"),
-                "reopen_process_exit_code": reopened_run.get("exit_code"),
-            })
+            markets = ("residential", "light-commercial") if workspace == "architectural" else ("residential",)
+            for market in markets:
+                stem = f"{workspace}-{market}"
+                source_project = run_root / f"{stem}-source.bldproj"
+                reopened_project = run_root / f"{stem}-reopened.bldproj"
+                source_run = run_workspace(executable, workspace, run_root, env, declared, records,
+                                           market=market, project_output=source_project)
+                report["runs"].append(source_run)
+                reopened_run = run_workspace(executable, workspace, run_root, env, declared, records,
+                                             market=market, project_input=source_project,
+                                             project_output=reopened_project)
+                report["runs"].append(reopened_run)
+                report.setdefault("projects", []).append({
+                    "workspace": workspace,
+                    "market": market,
+                    "source": source_run.get("project"),
+                    "reopened": reopened_run.get("project"),
+                    "reopen_process_exit_code": reopened_run.get("exit_code"),
+                })
         report["passed"] = all(run["passed"] for run in report["runs"])
     except Exception as error:
         report["errors"].append(f"{type(error).__name__}: {error}")
