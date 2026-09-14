@@ -117,6 +117,108 @@ class CompletionAuditTests(unittest.TestCase):
 
             self.assertEqual(audit._latest_runtime_report(root), current)
 
+    def test_qa_fixture_coverage_requires_passing_fixtures_in_both_configs(self):
+        required_tests = sorted({
+            test_name
+            for rule in audit.QA_FIXTURE_RULES
+            for test_name in rule["tests"]
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source_files = sorted({
+                source
+                for rule in audit.QA_FIXTURE_RULES
+                for source in rule["sources"]
+            })
+            for source in source_files:
+                path = root / source
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(
+                    "\n".join(
+                        anchor
+                        for rule in audit.QA_FIXTURE_RULES
+                        if source in rule["sources"]
+                        for anchor in rule["anchors"]
+                    ) + "\n",
+                    encoding="utf-8",
+                )
+            for configuration in ("windows-debug", "windows-release"):
+                build = root / "build" / configuration
+                build.mkdir(parents=True)
+                inventory = [
+                    f"# Source directory: {root}",
+                    f"# Build directory: {build}",
+                ]
+                for test_name in required_tests:
+                    inventory.append(
+                        f'add_test([=[{test_name}]=] "{build}/{test_name}.exe")'
+                    )
+                (build / "CTestTestfile.cmake").write_text(
+                    "\n".join(inventory) + "\n", encoding="utf-8"
+                )
+                log = ["Start testing: now"]
+                for index, test_name in enumerate(required_tests, 1):
+                    log.extend([
+                        f"{index}/{len(required_tests)} Testing: {test_name}",
+                        f"{index}/{len(required_tests)} Test: {test_name}",
+                        f'Command: "{build}/{test_name}.exe"',
+                        f"Directory: {build}",
+                        "Test Passed.",
+                    ])
+                log.append("End testing: now")
+                (build / "Testing" / "Temporary").mkdir(parents=True)
+                (build / "Testing" / "Temporary" / "LastTest.log").write_text(
+                    "\n".join(log) + "\n", encoding="utf-8"
+                )
+
+            result = audit.qa_fixture_coverage_check(root)
+            self.assertEqual(result["status"], "pass")
+            self.assertIn("geometry", result["summary"])
+            self.assertIn("windows-debug", result["evidence"][0])
+
+    def test_qa_fixture_coverage_fails_closed_when_a_required_fixture_is_skipped(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            for rule in audit.QA_FIXTURE_RULES:
+                for source in rule["sources"]:
+                    path = root / source
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text("\n".join(rule["anchors"]) + "\n", encoding="utf-8")
+            required_tests = sorted({
+                test_name
+                for rule in audit.QA_FIXTURE_RULES
+                for test_name in rule["tests"]
+            })
+            for configuration in ("windows-debug", "windows-release"):
+                build = root / "build" / configuration
+                build.mkdir(parents=True)
+                inventory = [f"# Source directory: {root}", f"# Build directory: {build}"]
+                for test_name in required_tests:
+                    inventory.append(
+                        f'add_test([=[{test_name}]=] "{build}/{test_name}.exe")'
+                    )
+                (build / "CTestTestfile.cmake").write_text(
+                    "\n".join(inventory) + "\n", encoding="utf-8"
+                )
+                log = ["Start testing: now"]
+                for index, test_name in enumerate(required_tests, 1):
+                    log.extend([
+                        f"{index}/{len(required_tests)} Testing: {test_name}",
+                        f"{index}/{len(required_tests)} Test: {test_name}",
+                        f'Command: "{build}/{test_name}.exe"',
+                        f"Directory: {build}",
+                        "Test Skipped." if test_name == required_tests[0] else "Test Passed.",
+                    ])
+                log.append("End testing: now")
+                (build / "Testing" / "Temporary").mkdir(parents=True)
+                (build / "Testing" / "Temporary" / "LastTest.log").write_text(
+                    "\n".join(log) + "\n", encoding="utf-8"
+                )
+
+            result = audit.qa_fixture_coverage_check(root)
+            self.assertEqual(result["status"], "partial")
+            self.assertTrue(any("skipped" in detail for detail in result["details"]))
+
 
 if __name__ == "__main__":
     unittest.main()

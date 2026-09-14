@@ -67,6 +67,51 @@ COMPATIBILITY_REQUIREMENTS = {
     "APX-INPUT-002",
 }
 
+# Independent analytical fixtures required by OPS-QA-001.  These are kept as
+# named CTest families rather than inferred from a total test count so a
+# focused run cannot accidentally look like full coverage.  The source
+# anchors are deliberately broad, stable behavior names; this check proves
+# fixture presence and execution, while semantic and visual qualification
+# remains a separate production gate.
+QA_FIXTURE_RULES = (
+    {
+        "id": "geometry",
+        "tests": ("geometry", "geometry_operations"),
+        "sources": ("tests/geometry_tests.cpp",),
+        "anchors": ("signed_area", "overlap", "tangent"),
+    },
+    {
+        "id": "curves",
+        "tests": ("curve_construction",),
+        "sources": ("tests/curve_construction_tests.cpp",),
+        "anchors": ("arc_from_chord_arc_length", "arc_from_start_tangent", "tangent"),
+    },
+    {
+        "id": "calculations_and_units",
+        "tests": ("calculations", "quantity"),
+        "sources": ("tests/calculation_tests.cpp", "tests/quantity_tests.cpp"),
+        "anchors": ("calculate_areas", "parse_quantity", "round", "overlap", "winding"),
+    },
+    {
+        "id": "topology",
+        "tests": ("architecture", "room_relationship_geometry", "slab_semantics"),
+        "sources": ("tests/architecture_tests.cpp",),
+        "anchors": ("holes", "overlap", "volume"),
+    },
+    {
+        "id": "constraints",
+        "tests": ("constraints", "constraint_authoring", "constraint_integrity"),
+        "sources": ("tests/constraints_tests.cpp",),
+        "anchors": ("degrees_of_freedom", "redundan", "conflict", "winding"),
+    },
+    {
+        "id": "persistence",
+        "tests": ("project_storage", "project_exchange", "project_archive"),
+        "sources": ("tests/project_store_tests.cpp",),
+        "anchors": ("ProjectStore", "reopen", "recovery"),
+    },
+)
+
 
 def _load_json(path: pathlib.Path):
     def unique(pairs):
@@ -292,6 +337,113 @@ def test_log_status(path: pathlib.Path, source_root: pathlib.Path | None = None)
     passed = sum(record["status"] == "passed" for record in blocks)
     return _check("test_matrix", "pass", f"CTest log records {passed} passing test entries",
                   evidence=(str(path),))
+
+
+def _qa_fixture_config(root: pathlib.Path, configuration: str):
+    """Inspect one configuration for the named OPS-QA-001 fixture families."""
+
+    build = root / "build" / configuration
+    inventory_path = build / "CTestTestfile.cmake"
+    log_path = build / "Testing/Temporary/LastTest.log"
+    evidence = (_relative(inventory_path, root), _relative(log_path, root))
+    inventory, errors = _ctest_inventory(build)
+    if inventory is None:
+        return "missing", evidence, [f"{configuration}: {detail}" for detail in errors]
+    if not log_path.is_file():
+        return "missing", evidence, [f"{configuration}: CTest log is missing"]
+    try:
+        log_text = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as error:
+        return "blocked", evidence, [f"{configuration}: CTest log could not be read: {error}"]
+    if "End testing:" not in log_text:
+        return "partial", evidence, [f"{configuration}: CTest log is incomplete"]
+
+    blocks = _test_log_blocks(log_text)
+    by_name = collections.defaultdict(list)
+    for block in blocks:
+        by_name[block["name"]].append(block)
+    details = []
+    severity = "pass"
+
+    def record(level, detail):
+        nonlocal severity
+        details.append(f"{configuration}: {detail}")
+        if level == "blocked" or (level == "partial" and severity == "pass"):
+            severity = level
+        elif level == "blocked":
+            severity = "blocked"
+
+    for rule in QA_FIXTURE_RULES:
+        source_text = []
+        for source in rule["sources"]:
+            path = root / source
+            if not path.is_file() or path.stat().st_size == 0:
+                record("partial", f"{rule['id']}: source is missing or empty: {source}")
+                continue
+            evidence = evidence + (_relative(path, root),)
+            try:
+                source_text.append(path.read_text(encoding="utf-8", errors="replace"))
+            except OSError as error:
+                record("blocked", f"{rule['id']}: source could not be read: {source}: {error}")
+        combined_source = "\n".join(source_text).casefold()
+        for anchor in rule["anchors"]:
+            if anchor.casefold() not in combined_source:
+                record("partial", f"{rule['id']}: source anchor is missing: {anchor}")
+        for test_name in rule["tests"]:
+            properties = inventory["tests"].get(test_name)
+            if properties is None:
+                record("partial", f"{rule['id']}: fixture is absent from CTest inventory: {test_name}")
+                continue
+            if properties["disabled"]:
+                record("partial", f"{rule['id']}: fixture is disabled: {test_name}")
+            if properties["skip_return_code"]:
+                record("partial", f"{rule['id']}: fixture allows skip return code: {test_name}")
+            records = by_name.get(test_name, [])
+            if not records:
+                record("partial", f"{rule['id']}: fixture was not executed: {test_name}")
+                continue
+            if len(records) != 1:
+                record("blocked", f"{rule['id']}: fixture has {len(records)} log entries: {test_name}")
+                continue
+            status = records[0]["status"]
+            if status == "failed":
+                record("blocked", f"{rule['id']}: fixture failed: {test_name}")
+            elif status == "incomplete":
+                record("blocked", f"{rule['id']}: fixture result is incomplete: {test_name}")
+            elif status == "skipped":
+                record("partial", f"{rule['id']}: fixture was skipped: {test_name}")
+    return severity, evidence, details
+
+
+def qa_fixture_coverage_check(root: pathlib.Path | str = ROOT):
+    """Prove the required independent analytical fixture families ran twice.
+
+    This is intentionally narrower than production qualification: it checks
+    named fixture sources and passing Debug/Release CTest records, but does
+    not claim Apex fidelity, clean-machine behavior, or physical output.
+    """
+
+    root = pathlib.Path(root).resolve()
+    statuses, evidence, details = [], [], []
+    for configuration in ("windows-debug", "windows-release"):
+        status, config_evidence, config_details = _qa_fixture_config(root, configuration)
+        statuses.append(status)
+        evidence.extend(config_evidence)
+        details.extend(config_details)
+    if "blocked" in statuses:
+        status = "blocked"
+        summary = "Independent analytical fixture coverage contains a failing or invalid run"
+    elif "partial" in statuses:
+        status = "partial"
+        summary = "Independent analytical fixture coverage is incomplete"
+    elif "missing" in statuses:
+        status = "missing"
+        summary = "Independent analytical fixture coverage is missing"
+    else:
+        status = "pass"
+        summary = "Independent analytical fixtures passed in geometry, curves, calculations_and_units, topology, constraints, and persistence"
+    return _check("qa_fixture_coverage", status, summary,
+                  evidence=sorted(set(evidence)), details=details)
 
 
 def _latest_runtime_report(root: pathlib.Path):
@@ -520,6 +672,8 @@ def build_report(root: pathlib.Path | str = ROOT):
     else:
         checks.append(_check("test_matrix", "missing", "No complete Debug and Release CTest evidence is available",
                              evidence=log_evidence, details=log_blockers))
+
+    checks.append(qa_fixture_coverage_check(root))
 
     runtime_path = _latest_runtime_report(root)
     if runtime_path is None:

@@ -22,6 +22,10 @@ The report includes these checks:
   `CTestTestfile.cmake`; focused runs, disabled tests, skip-return fixtures,
   missing or duplicate test records, wrong execution directories, and failed
   entries remain partial or blocked evidence rather than a passing matrix
+- named independent analytical fixtures for lines, arcs, holes, overlaps,
+  winding, tangency, units, area calculations, constraints, and persistence;
+  each required family must be present in the generated inventory and pass in
+  both Debug and Release
 - the Release PE import report and direct application network-import audit
 - the tracked source ownership boundary and third-party provenance manifest
 - the newest installed-runtime report (from either the historical `current`
@@ -42,3 +46,9 @@ The audit does not authenticate operators, inspect semantic or visual fidelity,
 prove that a process actually produced a file, or certify a third-party
 integration. Those remain independent acceptance activities recorded in the
 qualification and compatibility evidence contracts.
+
+The `qa_fixture_coverage` check is deliberately narrower than production
+qualification. A pass proves that the named analytical fixture families have
+source anchors and passing Debug/Release CTest records. It does not prove Apex
+format fidelity, clean-machine behavior, physical print review, or third-party
+integration behavior.

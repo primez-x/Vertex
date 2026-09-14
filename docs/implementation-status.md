@@ -147,6 +147,13 @@ integration evidence, and the production qualification manifest. Its strict
 mode remains fail-closed until the single production gate and every external
 evidence boundary pass.
 
+The checklist now includes a separate `qa_fixture_coverage` result for
+OPS-QA-001. It requires the named independent geometry, curve, calculation,
+topology, constraint, and persistence fixture families to be present in both
+generated CTest inventories and to pass in both Debug and Release logs. This
+records analytical fixture coverage without treating it as Apex compatibility,
+clean-machine, physical-device, or production certification evidence.
+
 The Release PE import report now also has a dedicated offline static audit.
 Application entry points are checked for direct WinHTTP, WinINet, Winsock,
 DNS, URL, and Qt Network imports; transitive imports carried by third-party
