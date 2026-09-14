@@ -5158,6 +5158,34 @@ int main(int argc, char** argv) {
             "schedule placement edit must persist its page bounds");
     require(window.undoCommand() && window.redoCommand(),
             "schedule placement edit must participate in normal document history");
+    require(window.editSheetSchedulePlacement(QStringLiteral("sheet-1"),
+                                              QStringLiteral("schedule-objects"),
+                                              QStringLiteral("215"), QStringLiteral("220"),
+                                              QStringLiteral("195"), QStringLiteral("20")),
+            "undersized schedule placement must remain editable for output overflow coverage");
+    require(window.exportDraftSvg(svg_path_qstring),
+            "undersized schedule placement should still produce an inspectable SVG");
+    QFile undersized_schedule_svg(svg_path_qstring);
+    require(undersized_schedule_svg.open(QIODevice::ReadOnly | QIODevice::Text),
+            "undersized schedule SVG should be readable");
+    const auto undersized_schedule_text = undersized_schedule_svg.readAll();
+    require(undersized_schedule_text.contains("additional rows - enlarge schedule"),
+            "undersized schedule output must identify omitted rows and request a larger placement");
+    undersized_schedule_svg.close();
+    require(window.editSheetSchedulePlacement(QStringLiteral("sheet-1"),
+                                              QStringLiteral("schedule-objects"),
+                                              QStringLiteral("215"), QStringLiteral("220"),
+                                              QStringLiteral("195"), QStringLiteral("70")),
+            "schedule placement should accept a height large enough for all fixture rows");
+    require(window.exportDraftSvg(svg_path_qstring),
+            "adequately sized schedule placement should export through the shared SVG path");
+    QFile adequate_schedule_svg(svg_path_qstring);
+    require(adequate_schedule_svg.open(QIODevice::ReadOnly | QIODevice::Text),
+            "adequately sized schedule SVG should be readable");
+    const auto adequate_schedule_text = adequate_schedule_svg.readAll();
+    require(!adequate_schedule_text.contains("additional rows - enlarge schedule"),
+            "adequately sized schedule output must not report a false overflow");
+    adequate_schedule_svg.close();
     const auto revision_id = window.addSheetRevision(QStringLiteral("sheet-1"),
                                                      QStringLiteral("2026-09-12"),
                                                      QStringLiteral("Permit set"));

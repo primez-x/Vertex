@@ -559,6 +559,13 @@ a page uses the typed graph validator and is undoable. The selected page in
 that dialog is the page rendered by draft PDF, SVG, PNG, and print, and its identity
 is bound into the adjacent output fingerprint.
 
+Schedule placements are capacity-aware in every shared output path. When a
+placement cannot show all revision-bound rows, the renderer reserves a final
+warning row with the omitted count and asks the user to enlarge the placement;
+when the body has no row capacity, the same notice is appended to the schedule
+heading. Rows are never silently discarded, and an adequately sized placement
+does not emit a false overflow warning.
+
 The executable supports:
 
 ```text

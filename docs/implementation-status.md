@@ -19,6 +19,11 @@ cursor readouts, draft previews, tool instructions, overview maps, and selected
 interactive colors are excluded before the viewport is painted. Persisted
 architectural cut and projection line widths now flow into fixed paper-space
 strokes for section and elevation output, independent of viewport model scale.
+Schedule placements now report omitted rows in shared PDF/SVG/PNG/print output:
+the renderer reserves a warning row when space permits and annotates the heading
+when a placement has no body-row capacity, so persisted schedule data is never
+silently truncated. Desktop workflow coverage verifies both undersized and
+adequately sized placements.
 Coordinated views also persist canonical semantic object IDs; Document
 admission rejects missing referenced objects, while version-1 view payloads
 upgrade to the current model with an empty reference list. The Windows view

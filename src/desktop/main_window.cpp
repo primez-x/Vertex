@@ -12322,13 +12322,28 @@ public:
                 painter.setPen(QColor(35, 41, 48));
                 painter.setFont(QFont(QStringLiteral("Inter"),
                                       std::max(6, static_cast<int>(8.0 * paper_scale))));
-                painter.drawText(QRectF(schedule_rect.left() + 4.0 * paper_scale,
-                                        schedule_rect.top(), schedule_rect.width() - 8.0 * paper_scale,
-                                        header_height), Qt::AlignLeft | Qt::AlignVCenter, heading);
                 const auto row_height = std::max(10.0, 14.0 * paper_scale);
                 const auto available_rows = std::max(0, static_cast<int>(
                     std::floor((schedule_rect.height() - header_height) / row_height)));
-                for (int index = 0; index < available_rows; ++index) {
+                const auto schedule_overflow = !rows.empty() &&
+                    rows.size() > static_cast<std::size_t>(available_rows);
+                const auto data_rows = schedule_overflow
+                    ? std::max(0, available_rows - 1) : available_rows;
+                const auto omitted_rows = schedule_overflow
+                    ? static_cast<int>(rows.size()) - data_rows : 0;
+                const auto overflow_message = QStringLiteral("%1 additional rows - enlarge schedule")
+                    .arg(omitted_rows);
+                if (schedule_overflow && available_rows == 0)
+                    heading += QStringLiteral("  •  ") + overflow_message;
+                const auto header_text_height = std::max(1.0,
+                    std::min(header_height, schedule_rect.height()));
+                const auto header_alignment = schedule_rect.height() < header_height
+                    ? Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap
+                    : Qt::AlignLeft | Qt::AlignVCenter;
+                painter.drawText(QRectF(schedule_rect.left() + 4.0 * paper_scale,
+                                        schedule_rect.top(), schedule_rect.width() - 8.0 * paper_scale,
+                                        header_text_height), header_alignment, heading);
+                for (int index = 0; index < data_rows; ++index) {
                     const QRectF row_rect(schedule_rect.left(), schedule_rect.top() + header_height +
                                                static_cast<double>(index) * row_height,
                                            schedule_rect.width(), row_height);
@@ -12353,6 +12368,22 @@ public:
                     painter.drawText(row_rect.adjusted(4.0 * paper_scale, 0.0,
                                                        -4.0 * paper_scale, 0.0),
                                      Qt::AlignLeft | Qt::AlignVCenter, text);
+                }
+                if (schedule_overflow && available_rows > 0) {
+                    const QRectF overflow_rect(schedule_rect.left(),
+                                               schedule_rect.top() + header_height +
+                                                   static_cast<double>(data_rows) * row_height,
+                                               schedule_rect.width(), row_height);
+                    painter.fillRect(overflow_rect, QColor(255, 248, 230));
+                    painter.setPen(QPen(QColor(151, 94, 18),
+                                        std::max(1.0, paper_scale * 0.35)));
+                    painter.drawLine(overflow_rect.bottomLeft(), overflow_rect.bottomRight());
+                    painter.setFont(QFont(QStringLiteral("Inter"),
+                                          std::max(6, static_cast<int>(7.0 * paper_scale))));
+                    painter.drawText(overflow_rect.adjusted(4.0 * paper_scale, 0.0,
+                                                             -4.0 * paper_scale, 0.0),
+                                     Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap,
+                                     overflow_message);
                 }
                 painter.restore();
             }
