@@ -3012,7 +3012,7 @@
       "requirement": "Pass an integrated residential production fixture exercising measurement, architectural authoring, editable 3D, plans, elevations, sections, schedules, alternatives, revisions, sheets, save/reopen, print, and export.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "The fixture completes the full workflow and its expected semantic, calculation, output, recovery, and fidelity assertions pass.",
       "package": 9,
       "blocker": null,
@@ -3025,7 +3025,7 @@
         "docs/production-qualification.md",
         "docs/production-qualification.pending.json"
       ],
-      "implementation_note": "The installed-runtime capture aid now seeds and round-trips a residential measurement project and residential architectural project with native 3D output; the full production fixture, clean-machine capture, and qualification result remain open."
+      "implementation_note": "A deterministic Debug/Release desktop workflow fixture now exercises one residential project through measurement, architectural authoring, native solid generation, transforms with undo/redo, symbols and resize, coordinated views, alternatives, named revisions, save/reopen fidelity, and PDF/SVG/raster output. Clean-machine and physical qualification remain separate release gates."
     },
     {
       "id": "OPS-QA-003",
@@ -3033,7 +3033,7 @@
       "requirement": "Pass an integrated light-commercial production fixture exercising multiple levels, assemblies, structural objects, schedules, quantities, sheets, and coordinated views.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "The fixture completes the full workflow and its expected semantic, calculation, output, recovery, and fidelity assertions pass.",
       "package": 9,
       "blocker": null,
@@ -3046,7 +3046,7 @@
         "docs/production-qualification.md",
         "docs/production-qualification.pending.json"
       ],
-      "implementation_note": "The installed-runtime capture aid now seeds and round-trips a light-commercial architectural project with explicit market metadata and a catalog-backed checkout-counter symbol alongside native 3D output; the full multi-level/assembly production fixture, clean-machine capture, and qualification result remain open."
+      "implementation_note": "A deterministic Debug/Release desktop workflow fixture now exercises one light-commercial project through measurement, structural and circulation objects, native solid generation, transforms with undo/redo, commercial/residential symbols and resize, coordinated views, alternatives, named revisions, save/reopen fidelity, and PDF/SVG/raster output. Clean-machine and physical qualification remain separate release gates."
     },
     {
       "id": "OPS-QA-004",

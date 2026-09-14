@@ -1,5 +1,5 @@
 {
-  "acceptance": "Assembly catalogs retain separate type and instance properties, material slots, quantity definitions, placements, overrides, and deterministic schedule behavior.",
+  "acceptance": "The light-commercial production fixture completes measurement, multiple architectural object families, native solid generation, coordinated views, alternatives, schedules, sheets, commercial symbols, resizing, save/reopen, recovery history, and local output.",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -14,14 +14,6 @@
         "size": 125609
       },
       "tests": [
-        {
-          "name": "assembly_model",
-          "status": "passed"
-        },
-        {
-          "name": "architectural_schedule",
-          "status": "passed"
-        },
         {
           "name": "desktop_workflow",
           "status": "passed"
@@ -42,49 +34,33 @@
       },
       "tests": [
         {
-          "name": "assembly_model",
-          "status": "passed"
-        },
-        {
-          "name": "architectural_schedule",
-          "status": "passed"
-        },
-        {
           "name": "desktop_workflow",
           "status": "passed"
         }
       ]
     }
   ],
-  "qualification_boundary": "This evidence covers local reusable assembly semantics and catalog editing. A complete production library, native Apex parity, and commercial project qualification remain open.",
-  "requirement_id": "ARCH-MOD-008",
+  "qualification_boundary": "This evidence covers the deterministic light-commercial end-to-end fixture in Debug and Release, including structural objects, commercial symbols, coordinated views, and local output. It does not certify native Apex files, physical devices, clean-machine networking denial, or the unified production gate.",
+  "requirement_id": "OPS-QA-003",
   "result": "pass",
   "schema_version": 1,
   "source_anchors": [
-    "AssemblyModel",
-    "AssemblyType",
-    "AssemblyMaterial",
-    "AssemblyInstance",
-    "quantity",
-    "material",
-    "placement"
+    "production fixture",
+    "light-commercial",
+    "Workspace::architectural",
+    "createRoomVolumeFromBoundary",
+    "native solids",
+    "Beam",
+    "StairFlight",
+    "checkout-counter",
+    "symbol catalog",
+    "named recoverable revision",
+    "saveProjectAs",
+    "openProject",
+    "exportDraftPdf",
+    "exportDraftSvg"
   ],
   "source_files": [
-    {
-      "path": "include/sketch/assembly_model.hpp",
-      "sha256": "2fc695efaee377c5d53b6a9bdfddb405ca53b9ecd6b6153b2248e18956457cf6",
-      "size": 4200
-    },
-    {
-      "path": "src/core/assembly_model.cpp",
-      "sha256": "f5d9b8d2af1e939370d606dcd26d5e2912ef13b25f3b9a471476cbc5115965ca",
-      "size": 13843
-    },
-    {
-      "path": "tests/assembly_model_tests.cpp",
-      "sha256": "ae8e1fba3315a37c7e79619a36b083264cb853db2ebe4b96c8507a7be9ba9a88",
-      "size": 8232
-    },
     {
       "path": "include/sketch/desktop/main_window.hpp",
       "sha256": "0acf0194cb15c22dda4f09e2415af17dc115b3a374fe2bec22cf4ff07806b92b",
@@ -96,20 +72,33 @@
       "size": 1240133
     },
     {
+      "path": "include/sketch/building_entity.hpp",
+      "sha256": "45062e4e419256fef8f16c2fb6693fc2969f2783df3d1255e5baf3e8472640cf",
+      "size": 2026
+    },
+    {
+      "path": "src/core/architectural_document_adapter.cpp",
+      "sha256": "a5d1711dbc489eaee8b216faf72d63b0072a995efcee6c798d28b1c63b7b6782",
+      "size": 28769
+    },
+    {
       "path": "tests/desktop_smoke.cpp",
       "sha256": "15f981ac032b95e686f30679c60e9a2efaa53e1f48e0d8215f5c4cb4dedddc07",
       "size": 387896
     },
     {
-      "path": "docs/assemblies.md",
-      "sha256": "63a7f6d146756f5d44dc7e79e6815be3b6b9e7a445370a71c5ccad2ce373e7ad",
-      "size": 8288
+      "path": "docs/production-plan.md",
+      "sha256": "49a628ccebfcbe438be7eadac0075922df6ee793f4420219c2bd79fc3367b7a8",
+      "size": 11540
+    },
+    {
+      "path": "docs/desktop-workflow.md",
+      "sha256": "3de1796c3b8131e5d0e1abc9dfabaf834e424a3b85622e7b517dc88806630b0d",
+      "size": 39626
     }
   ],
   "source_tree_sha256": "0c8b0399770598ac08c032b9b19d0acd2b5354f2d05cddab52e8972b381d8e8f",
   "tests": [
-    "assembly_model",
-    "architectural_schedule",
     "desktop_workflow"
   ]
 }

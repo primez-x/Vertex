@@ -1145,6 +1145,10 @@ if(BUILD_TESTING)
     # 60-second guard for focused tests, but give these end-to-end scenarios
     # enough time to finish on the supported Windows reference host, including
     # the slower Debug runtime.
-    set_tests_properties(desktop_workflow desktop_workspace_recovery PROPERTIES TIMEOUT 360)
+    # The full desktop workflow includes native-solid and multi-page output
+    # checks. Debug builds are intentionally slower on the reference host;
+    # keep the test deterministic instead of letting a valid fixture race a
+    # fragile six-minute timeout.
+    set_tests_properties(desktop_workflow desktop_workspace_recovery PROPERTIES TIMEOUT 600)
   endif()
 endif()

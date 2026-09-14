@@ -3917,6 +3917,25 @@ void test_market_scoped_architectural_workflow() {
                             .arg(market_name)),
                 "market fixture must persist its scoped subject metadata");
 
+        // Keep the measurement path in the same project as the architectural
+        // path.  This is the end-to-end production fixture boundary: a field
+        // sketch is created, inspected, and then carried into the richer
+        // model workspace without changing its semantic role.
+        window.setWorkspace(desktop::Workspace::measurement);
+        const Boundary measured_boundary{{{{0.0, 0.0}, {8.0, 0.0}, 0.0},
+                                          {{8.0, 0.0}, {8.0, 6.0}, 0.0},
+                                          {{8.0, 6.0}, {0.0, 6.0}, 0.0},
+                                          {{0.0, 6.0}, {0.0, 0.0}, 0.0}}};
+        const auto measured_id = window.createBoundary(measured_boundary,
+                                                        QStringLiteral("living"));
+        require(!measured_id.isEmpty() && window.selectEntity(measured_id),
+                "production fixture must create a classified measurement boundary");
+        QApplication::processEvents();
+        auto* measured_area = window.findChild<QLabel*>(QStringLiteral("calculationBaseArea"));
+        require(measured_area != nullptr && !measured_area->text().contains(QStringLiteral("—")),
+                "production fixture must expose a calculated measurement result");
+        window.setWorkspace(desktop::Workspace::architectural);
+
         const auto baseline_wall = window.createStraightWall(
             {0.0, 0.0}, {8.0, 0.0}, QStringLiteral("exterior"));
         const auto proposed_wall = window.createStraightWall(
@@ -3930,6 +3949,15 @@ void test_market_scoped_architectural_workflow() {
         require(!baseline_wall.isEmpty() && !proposed_wall.isEmpty() && !room.isEmpty(),
                 "market fixture must author baseline, proposed, and room geometry");
 
+        const Boundary volume_boundary{{{{0.5, 0.5}, {3.5, 0.5}, 0.0},
+                                        {{3.5, 0.5}, {3.5, 2.5}, 0.0},
+                                        {{3.5, 2.5}, {0.5, 2.5}, 0.0},
+                                        {{0.5, 2.5}, {0.5, 0.5}, 0.0}}};
+        const auto room_volume = window.createRoomVolumeFromBoundary(
+            volume_boundary, QStringLiteral("2.8 m"), QStringLiteral("0 m"));
+        require(!room_volume.isEmpty(),
+                "production fixture must author an editable architectural room volume");
+
         auto column = encode_building_entity(
             RectangularColumn{"market-column", {2.0, 1.5, 0.0}, 0.3, 0.3, 3.0, 0.0},
             {{"market_fixture", market_name.toStdString()}});
@@ -3938,10 +3966,57 @@ void test_market_scoped_architectural_workflow() {
         const auto column_id = window.commitBuildingObject(column, window.document().revision());
         require(!column_id.isEmpty(), "market fixture must author a semantic building object");
 
+        const auto beam_id = window.commitBuildingObject(
+            encode_building_entity(
+                Beam{"market-beam", {0.5, 4.0, 2.4}, {6.5, 4.0, 2.4},
+                     {0.0, 0.0, 1.0}, 0.2, 0.3}),
+            window.document().revision());
+        const auto stair_id = window.commitBuildingObject(
+            encode_building_entity(
+                StairFlight{"market-stair", {4.5, 0.5, 0.0}, 0.0, 4, 0.8, 0.25,
+                             1.0, StairLanding{0.6, 0.15}}),
+            window.document().revision());
+        require(!beam_id.isEmpty() && !stair_id.isEmpty(),
+                "production fixture must author structural and circulation objects");
+        for (const auto& id : {column_id, beam_id, stair_id}) {
+            const auto entity = window.document().snapshot().entities().at(id.toStdString());
+            require(!make_building_shape(decode_building_entity(entity)).IsNull(),
+                    "production fixture architectural objects must produce native solids");
+        }
+        require(window.selectEntity(column_id) &&
+                    window.transformSelectedArchitecturalObject(QStringLiteral("15"),
+                        QStringLiteral("1 ft"), QStringLiteral("0 ft"), QStringLiteral("0 ft"),
+                        QStringLiteral("1.1"), false),
+                "production fixture must edit an architectural object through the 3D transform path");
+        require(window.undoCommand() && window.redoCommand(),
+                "production fixture architectural edits must recover through undo and redo");
+
+        const auto toilet_id = window.createAnnotationSymbol(QStringLiteral("toilet"), {1.0, 1.0});
+        const auto bed_id = window.createAnnotationSymbol(QStringLiteral("double-bed"), {2.5, 1.0});
+        const auto sofa_id = window.createAnnotationSymbol(QStringLiteral("sofa"), {5.0, 1.0});
+        const auto commercial_id = window.createAnnotationSymbol(QStringLiteral("checkout-counter"), {6.5, 1.0});
+        require(!toilet_id.isEmpty() && !bed_id.isEmpty() && !sofa_id.isEmpty() &&
+                    !commercial_id.isEmpty(),
+                "production fixture must resolve the residential and commercial symbol families");
+        require(window.editAnnotation(toilet_id, {}, QStringLiteral("1.25"), QStringLiteral("1.1"),
+                                      QStringLiteral("10"), QStringLiteral("1.8"), true),
+                "production fixture must resize and rotate a catalog symbol");
+        const auto annotation_state = decode_annotation_entity(
+            window.document().snapshot().entities().at("annotations-1"));
+        require(annotation_state.symbols.size() >= 4 &&
+                    std::any_of(annotation_state.symbols.begin(), annotation_state.symbols.end(),
+                        [&](const auto& symbol) {
+                            return symbol.id == toilet_id.toStdString() &&
+                                std::abs(symbol.placement.scale - 1.8) < 1e-9;
+                        }),
+                "production fixture must persist symbol catalog placement and scale");
+
         const auto phases = ModelPhases::create(
             {baseline_wall.toStdString(), proposed_wall.toStdString(), room.toStdString(),
-             column_id.toStdString()},
-            {baseline_wall.toStdString(), room.toStdString(), column_id.toStdString()},
+             room_volume.toStdString(), column_id.toStdString(), beam_id.toStdString(),
+             stair_id.toStdString()},
+            {baseline_wall.toStdString(), room.toStdString(), room_volume.toStdString(),
+             column_id.toStdString(), beam_id.toStdString(), stair_id.toStdString()},
             {{"option-" + market_name.toStdString(), "Open plan option", {},
               {proposed_wall.toStdString()}}});
         auto phase_entity = Entity::create("model_phases", {{"model", phases.to_json()}});
@@ -3959,12 +4034,19 @@ void test_market_scoped_architectural_workflow() {
                     QStringLiteral("option-%1").arg(market_name) &&
                     window.entityVisible(proposed_wall),
                 "market fixture alternative must expose proposed geometry");
-        require(window.editArchitecturalViewPresentation(
-                    QStringLiteral("view-plan"), QStringLiteral("1.5"), QStringLiteral("80"),
-                    QStringLiteral("0.7"), QStringLiteral("0.25"), true,
-                    QStringLiteral("concrete"), QStringLiteral("2"), QStringLiteral("fine"),
-                    baseline_wall + QStringLiteral(",") + proposed_wall + QStringLiteral(",") + column_id),
-                "market fixture must bind shared architectural sources to its plan view");
+        const auto view_sources = measured_id + QStringLiteral(",") + baseline_wall +
+            QStringLiteral(",") + proposed_wall + QStringLiteral(",") + room_volume +
+            QStringLiteral(",") + column_id + QStringLiteral(",") + beam_id +
+            QStringLiteral(",") + stair_id;
+        for (const auto& view_id : {QStringLiteral("view-plan"), QStringLiteral("view-elevation"),
+                                    QStringLiteral("view-section")}) {
+            require(window.editArchitecturalViewPresentation(
+                        view_id, QStringLiteral("1.5"), QStringLiteral("80"),
+                        QStringLiteral("0.7"), QStringLiteral("0.25"), true,
+                        QStringLiteral("concrete"), QStringLiteral("2"), QStringLiteral("fine"),
+                        view_sources),
+                    "production fixture must bind plan, elevation, and section sources");
+        }
         require(window.editSheetMetadata(
                     QStringLiteral("sheet-1"),
                     market == ScopeMarket::residential ? QStringLiteral("R-101")
@@ -3976,6 +4058,11 @@ void test_market_scoped_architectural_workflow() {
             QStringLiteral("sheet-1"), QStringLiteral("2026-09-13"),
             QStringLiteral("Internal market fixture"));
         require(!revision_id.isEmpty(), "market fixture must retain an issued sheet revision");
+        window.document().apply(NameRevision{window.document().revision(),
+                                             "Production fixture checkpoint"});
+        require(window.document().snapshot().named_revisions().contains(
+                    "Production fixture checkpoint"),
+                "production fixture must retain a named recoverable revision");
         const auto schedule = window.scheduleSnapshot();
         require(std::any_of(schedule.snapshot.rows.begin(), schedule.snapshot.rows.end(),
                             [&](const auto& row) {
@@ -3991,6 +4078,8 @@ void test_market_scoped_architectural_workflow() {
         require(window.saveProjectAs(project) && window.exportDraftPdf(pdf) &&
                     window.exportDraftSvg(svg) && window.exportDraftImage(png),
                 "market fixture must save and export its coordinated deliverables");
+        const auto project_hash = ProjectStore::file_sha256(
+            std::filesystem::path(project.toStdWString()));
         require(std::filesystem::file_size(project.toStdWString()) > 0 &&
                     std::filesystem::file_size(pdf.toStdWString()) > 0 &&
                     std::filesystem::file_size(svg.toStdWString()) > 0 &&
@@ -3998,11 +4087,19 @@ void test_market_scoped_architectural_workflow() {
                 "market fixture deliverables must be nonempty");
         require(window.openProject(project), "market fixture must reopen through ProjectStore");
         const auto reopened = window.document().snapshot();
+        require(ProjectStore::file_sha256(std::filesystem::path(project.toStdWString())) ==
+                    project_hash,
+                "production fixture reopen must preserve the saved project bytes");
         require(reopened.entities().at("property-1").properties.at("subject")
                         .at("attributes").at("market") == market_name.toStdString() &&
                     reopened.entities().contains(baseline_wall.toStdString()) &&
                     reopened.entities().contains(proposed_wall.toStdString()) &&
+                    reopened.entities().contains(room_volume.toStdString()) &&
                     reopened.entities().contains(column_id.toStdString()) &&
+                    reopened.entities().contains(beam_id.toStdString()) &&
+                    reopened.entities().contains(stair_id.toStdString()) &&
+                    reopened.entities().at("annotations-1").properties.at("state")
+                        .at("symbols").size() >= 4 &&
                     window.activeRemodelingAlternative() ==
                         QStringLiteral("option-%1").arg(market_name),
                 "market fixture must preserve scope, alternatives, and semantic objects after reopen");

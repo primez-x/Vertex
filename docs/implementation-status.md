@@ -2,9 +2,9 @@
 
 ## Current evidence snapshot (2026-09-14)
 
-The requirement ledger contains 130 mandatory requirements. **112 are locally
-verified (86.2%) and 18 remain in progress.** The unified production gate is
-still blocked by 19 items: the unresolved native Apex and external-integration
+The requirement ledger contains 130 mandatory requirements. **114 are locally
+verified (87.7%) and 16 remain in progress.** The unified production gate is
+still blocked by 17 items: the unresolved native Apex and external-integration
 fixtures, physical device checks, reference-hardware performance runs,
 clean-machine and network-denied qualification, accessibility captures,
 package handoff qualification, and the final dependency-license review.
@@ -137,7 +137,7 @@ usable without a service; Apex standard-profile fixtures and production
 calculation certification remain open.
 
 The requirement contract passes, while `python scripts/requirement_audit.py
---release` still fails closed with 18 in-progress requirements. The offline
+--release` still fails closed with 16 in-progress requirements. The offline
 bundle installer now has guarded Install, Repair, and Uninstall actions with
 transactional publish and installed-marker verification; clean-machine
 installer qualification is still open. The corrected

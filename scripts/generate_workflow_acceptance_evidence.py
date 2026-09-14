@@ -1964,6 +1964,82 @@ WORKFLOW_RULES.update({
         "tests": ("import_worker_policy", "georeferencing_runtime"),
         "qualification_boundary": "This evidence covers local PROJ policy and resource validation. Externally monitored network-denied worker execution remains open.",
     },
+    "OPS-QA-002": {
+        "acceptance": (
+            "The residential production fixture completes measurement, architectural authoring, "
+            "editable native solids, coordinated views, alternatives, schedules, sheets, symbol "
+            "resizing, save/reopen, recovery history, and PDF/SVG/raster output with stable semantic state."
+        ),
+        "sources": (
+            "include/sketch/desktop/main_window.hpp",
+            "src/desktop/main_window.cpp",
+            "include/sketch/building_entity.hpp",
+            "src/core/architectural_document_adapter.cpp",
+            "tests/desktop_smoke.cpp",
+            "docs/production-plan.md",
+            "docs/desktop-workflow.md",
+        ),
+        "anchors": (
+            "production fixture",
+            "Workspace::measurement",
+            "calculationBaseArea",
+            "createRoomVolumeFromBoundary",
+            "native solids",
+            "transformSelectedArchitecturalObject",
+            "symbol catalog",
+            "named recoverable revision",
+            "saveProjectAs",
+            "openProject",
+            "exportDraftPdf",
+            "exportDraftSvg",
+        ),
+        "tests": ("desktop_workflow",),
+        "qualification_boundary": (
+            "This evidence covers the deterministic residential end-to-end fixture in Debug and "
+            "Release, including shared measurement/architectural semantics and local output. It "
+            "does not certify native Apex files, physical devices, clean-machine networking denial, "
+            "or the unified production gate."
+        ),
+    },
+    "OPS-QA-003": {
+        "acceptance": (
+            "The light-commercial production fixture completes measurement, multiple architectural "
+            "object families, native solid generation, coordinated views, alternatives, schedules, "
+            "sheets, commercial symbols, resizing, save/reopen, recovery history, and local output."
+        ),
+        "sources": (
+            "include/sketch/desktop/main_window.hpp",
+            "src/desktop/main_window.cpp",
+            "include/sketch/building_entity.hpp",
+            "src/core/architectural_document_adapter.cpp",
+            "tests/desktop_smoke.cpp",
+            "docs/production-plan.md",
+            "docs/desktop-workflow.md",
+        ),
+        "anchors": (
+            "production fixture",
+            "light-commercial",
+            "Workspace::architectural",
+            "createRoomVolumeFromBoundary",
+            "native solids",
+            "Beam",
+            "StairFlight",
+            "checkout-counter",
+            "symbol catalog",
+            "named recoverable revision",
+            "saveProjectAs",
+            "openProject",
+            "exportDraftPdf",
+            "exportDraftSvg",
+        ),
+        "tests": ("desktop_workflow",),
+        "qualification_boundary": (
+            "This evidence covers the deterministic light-commercial end-to-end fixture in Debug "
+            "and Release, including structural objects, commercial symbols, coordinated views, and "
+            "local output. It does not certify native Apex files, physical devices, clean-machine "
+            "networking denial, or the unified production gate."
+        ),
+    },
 })
 
 
