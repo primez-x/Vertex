@@ -1,0 +1,153 @@
+{
+  "acceptance": "Beam and column fixtures create validated semantic solids, project into plan, expose editable properties, and contribute source-backed schedule quantities through save/reopen.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "building_objects",
+          "status": "passed"
+        },
+        {
+          "name": "building_entities",
+          "status": "passed"
+        },
+        {
+          "name": "building_plan_projection",
+          "status": "passed"
+        },
+        {
+          "name": "architectural_schedule",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "building_objects",
+          "status": "passed"
+        },
+        {
+          "name": "building_entities",
+          "status": "passed"
+        },
+        {
+          "name": "building_plan_projection",
+          "status": "passed"
+        },
+        {
+          "name": "architectural_schedule",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers local beam/column authoring, projection, schedules, and history. Complete commercial detailing, physical output, and production qualification remain open.",
+  "requirement_id": "ARCH-MOD-004",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "RectangularColumn",
+    "CircularColumn",
+    "Beam",
+    "make_beam",
+    "building",
+    "schedule",
+    "volume"
+  ],
+  "source_files": [
+    {
+      "path": "src/architecture/building_objects.cpp",
+      "sha256": "66393d54344cf210a10ef388e40ec9b8eb849b51f0d95a623e77c6239cadf884",
+      "size": 31145
+    },
+    {
+      "path": "src/architecture/building_entity.cpp",
+      "sha256": "d1b4195bfeedc8ff78e6b9d54d18bfa93f804199ec9b79568cade825d36cf5e9",
+      "size": 23396
+    },
+    {
+      "path": "src/architecture/building_plan_projection.cpp",
+      "sha256": "aa58b24f8e7d3a801d98e01d12df753eb15a4342a249a473bcfe36d7e36b0e9a",
+      "size": 10755
+    },
+    {
+      "path": "src/architecture/architectural_schedule.cpp",
+      "sha256": "b3358d21127863b5536ce18cafb9bebbf363843c415a4a775540abe4fccc9e0c",
+      "size": 40539
+    },
+    {
+      "path": "src/desktop/building_object_dialog.cpp",
+      "sha256": "f12f16207654173c9c2795f8f051993331a4e80991e05419bf93298ed11dd196",
+      "size": 79837
+    },
+    {
+      "path": "src/desktop/main_window.cpp",
+      "sha256": "944a00fc2959043c1f5b3b2ebfa50f287421a0338ee6908d6e926bf429f32223",
+      "size": 1240133
+    },
+    {
+      "path": "tests/building_object_tests.cpp",
+      "sha256": "ba8402a23134d36fe9e6529ac9baa8e1fc63b47f31daae8d9754d8b7c7e78f1c",
+      "size": 19284
+    },
+    {
+      "path": "tests/building_object_dialog_tests.cpp",
+      "sha256": "52c54b875c23bb307e40459e9179bfe47262597719d0ff5c72ac5aabc9255327",
+      "size": 32538
+    },
+    {
+      "path": "tests/building_plan_projection_tests.cpp",
+      "sha256": "bab58286c5779e6f3bbacac035ac51dc204d537683386241d7bf06d36fb76b49",
+      "size": 27918
+    },
+    {
+      "path": "tests/architectural_schedule_tests.cpp",
+      "sha256": "4288419266482d4016fb241128b8e50b9d39c75b1a41cef0a1daa463aeb68b4c",
+      "size": 24928
+    },
+    {
+      "path": "tests/desktop_smoke.cpp",
+      "sha256": "3d4ca2bcaf7e0cc91019e52bf599882ecd11061f4e502e272614b694816d5abe",
+      "size": 381257
+    }
+  ],
+  "source_tree_sha256": "085ae56428e369fd82fe2631d21b001a94da9efb0cc3f510218fd33d5ae53df8",
+  "tests": [
+    "building_objects",
+    "building_entities",
+    "building_plan_projection",
+    "architectural_schedule",
+    "desktop_workflow"
+  ]
+}

@@ -1588,14 +1588,16 @@
       "requirement": "Provide a searchable command palette, customizable quick-access commands, shortcut editing, and view tabs.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Every exposed command is searchable, can be bound where supported, reports conflicts, and remains available from keyboard and pointer paths.",
       "package": 5,
       "blocker": null,
       "implementation_sources": [
-        "src/desktop/main_window.cpp"
+        "src/desktop/main_window.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "The desktop exposes a searchable command palette, a compact Quick access menu, and a locally persisted checklist editor for supported commands. Invalid settings fail closed to bounded defaults; full command coverage, physical shortcut verification, and production acceptance remain open."
+      "implementation_note": "The desktop exposes a searchable command palette, a compact Quick access menu, and a locally persisted checklist editor for supported commands. Invalid settings fail closed to bounded defaults; full command coverage, physical shortcut verification, and production acceptance remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-INPUT-001",
@@ -1642,7 +1644,7 @@
       "requirement": "Provide survey and metes-and-bounds workflows with traverse geometry, acreage calculation, closure diagnostics, and output.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Survey fixtures import or enter bearings/distances, report closure and acreage, preserve traverse provenance, and export the declared result.",
       "package": 6,
       "blocker": null,
@@ -1650,9 +1652,11 @@
         "include/sketch/survey_contract.hpp",
         "src/core/survey_contract.cpp",
         "tests/survey_contract_tests.cpp",
-        "docs/survey-georeferencing-contracts.md"
+        "docs/survey-georeferencing-contracts.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Survey traverse legs, closure diagnostics, simple-polygon area, acreage, and provenance are implemented. The desktop supports decimal and degrees:minutes:seconds entry, calculation, report export/reopen with recomputation, and insertion of closed traverses as undoable project boundaries retaining original source metadata. Desktop tests cover stale-context rejection, save/reopen, history, and shared SVG output. Updating existing traverses from calls, Apex survey exchange, legal-survey behavior, and production fixtures remain open."
+      "implementation_note": "Survey traverse legs, closure diagnostics, simple-polygon area, acreage, and provenance are implemented. The desktop supports decimal and degrees:minutes:seconds entry, calculation, report export/reopen with recomputation, and insertion of closed traverses as undoable project boundaries retaining original source metadata. Desktop tests cover stale-context rejection, save/reopen, history, and shared SVG output. Updating existing traverses from calls, Apex survey exchange, legal-survey behavior, and production fixtures remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-SPEC-002",
@@ -1660,7 +1664,7 @@
       "requirement": "Provide the Pro georeferencing workflow with explicit coordinate reference, control points, residuals, and offline resources.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "A georeferencing fixture records control points and residuals, applies the selected transform, and reopens without a network request.",
       "package": 6,
       "blocker": null,
@@ -1676,9 +1680,11 @@
         "include/sketch/georeferencing_runtime.hpp",
         "src/core/georeferencing_runtime.cpp",
         "tests/georeferencing_runtime_tests.cpp",
-        "docs/survey-georeferencing-contracts.md"
+        "docs/survey-georeferencing-contracts.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Explicit projected-metre CRS, affine transform, control-point residuals, and offline resource declarations are validated. Version-1 JSON is strict and derived residuals are recomputed; a typed georeferencing Document entity survives save/reopen. The Windows editor supports persisted CRS/transform/control-point/resource entry, residual and sample-transform feedback, and normal Document history with desktop smoke coverage. The runtime verifies contained resources and hashes, binds the local proj.db, disables networking, validates both CRS declarations, and exercises an identity operation. Apex module behavior, transform comparison, and production fixtures remain open."
+      "implementation_note": "Explicit projected-metre CRS, affine transform, control-point residuals, and offline resource declarations are validated. Version-1 JSON is strict and derived residuals are recomputed; a typed georeferencing Document entity survives save/reopen. The Windows editor supports persisted CRS/transform/control-point/resource entry, residual and sample-transform feedback, and normal Document history with desktop smoke coverage. The runtime verifies contained resources and hashes, binds the local proj.db, disables networking, validates both CRS declarations, and exercises an identity operation. Apex module behavior, transform comparison, and production fixtures remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-INT-001",
@@ -1815,7 +1821,7 @@
       "requirement": "Author straight, curved, sloped, and composite walls with joins, thickness, materials, and stable semantic identity.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Wall fixtures create and edit each type in plan, elevation, section, and 3D while preserving joins, quantities, and links.",
       "package": 4,
       "blocker": null,
@@ -1834,9 +1840,11 @@
         "tests/desktop_smoke.cpp",
         "tests/architectural_schedule_tests.cpp",
         "tests/document_tests.cpp",
-        "docs/project-format.md"
+        "docs/project-format.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Straight and curved wall solids are implemented. Composite wall layers now use a typed versioned stack with contiguous compound geometry, opening cuts through every layer, document/catalog/material validation, native plan/elevation/section decoding, and per-layer schedule quantities. Windows exposes a revision-checked JSON layer editor with undo, redo, and save/reopen coverage. Straight sloped walls use an exact level-bottom wedge, local opening-fit validation, shared plan/elevation/3D decoding, and signed-rise creation/editing. Version-1 fused wall joins now preserve source identities, validate member references and duplicate ownership at the document boundary, enforce connected endpoint membership in the shared solid builder, and render one derived OCCT union in the native 3D view only when the join and all source members are visible; partial masks retain individually visible members without mutating the document. Richer table/catalog authoring, curved-top sloped walls, miter-specific join profiles, and production compatibility certification remain open."
+      "implementation_note": "Straight and curved wall solids are implemented. Composite wall layers now use a typed versioned stack with contiguous compound geometry, opening cuts through every layer, document/catalog/material validation, native plan/elevation/section decoding, and per-layer schedule quantities. Windows exposes a revision-checked JSON layer editor with undo, redo, and save/reopen coverage. Straight sloped walls use an exact level-bottom wedge, local opening-fit validation, shared plan/elevation/3D decoding, and signed-rise creation/editing. Version-1 fused wall joins now preserve source identities, validate member references and duplicate ownership at the document boundary, enforce connected endpoint membership in the shared solid builder, and render one derived OCCT union in the native 3D view only when the join and all source members are visible; partial masks retain individually visible members without mutating the document. Richer table/catalog authoring, curved-top sloped walls, miter-specific join profiles, and production compatibility certification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "ARCH-MOD-002",
@@ -1844,7 +1852,7 @@
       "requirement": "Author hosted doors, windows, and openings with type/instance properties and wall relationships.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Opening fixtures host, move, resize, replace, schedule, and export without losing wall geometry or handedness data.",
       "package": 4,
       "blocker": null,
@@ -1859,9 +1867,11 @@
         "src/desktop/main_window.cpp",
         "tests/desktop_smoke.cpp",
         "tests/modal_authoring_tests.cpp",
-        "docs/hosted-openings.md"
+        "docs/hosted-openings.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Hosted door/window cuts now use a single dimension editor with live unrolled elevation preview, complete host-opening semantic validation, revision/context fencing, and one-command undo/redo. Optional versioned handing and swing now drive creation, inspector edits, analytic plan leaf/arc geometry, and schedule cells, with save/reopen and geometry tests. Newly authored openings receive a strict version-1 opening_assembly profile; the shared OCCT kernel derives frame, leaf/sash, and glazing solids under the stable opening ID while preserving the authoritative wall cut, dimensions, and handedness. Legacy openings remain valid without the optional profile. The opening inspector now edits frame width/depth, panel or sash depth, glazing depth, and signed inset through one revision-checked command with preview and undo/redo coverage. Native DXF/IFC assembly export and complete export acceptance remain open."
+      "implementation_note": "Hosted door/window cuts now use a single dimension editor with live unrolled elevation preview, complete host-opening semantic validation, revision/context fencing, and one-command undo/redo. Optional versioned handing and swing now drive creation, inspector edits, analytic plan leaf/arc geometry, and schedule cells, with save/reopen and geometry tests. Newly authored openings receive a strict version-1 opening_assembly profile; the shared OCCT kernel derives frame, leaf/sash, and glazing solids under the stable opening ID while preserving the authoritative wall cut, dimensions, and handedness. Legacy openings remain valid without the optional profile. The opening inspector now edits frame width/depth, panel or sash depth, glazing depth, and signed inset through one revision-checked command with preview and undo/redo coverage. Native DXF/IFC assembly export and complete export acceptance remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "ARCH-MOD-003",
@@ -1869,7 +1879,7 @@
       "requirement": "Author floors, ceilings, foundations, and their materials, levels, boundaries, and quantities.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Floor-system fixtures appear correctly in plans, sections, elevations, and 3D and contribute the declared schedule quantities.",
       "package": 4,
       "blocker": null,
@@ -1883,9 +1893,11 @@
         "tests/desktop_smoke.cpp",
         "docs/project-format.md",
         "docs/native-3d-view.md",
-        "docs/architectural-projections.md"
+        "docs/architectural-projections.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Floors, ceilings, foundations, and generic slabs already share validated boundary, holes, elevation, level placement, material, and quantity geometry. Architectural room volumes now add an explicit boundary, optional holes, positive height, and elevation model through the same native/projection path. Broader catalog authoring, schedules, Apex compatibility, and the complete acceptance statement remain open."
+      "implementation_note": "Floors, ceilings, foundations, and generic slabs already share validated boundary, holes, elevation, level placement, material, and quantity geometry. Architectural room volumes now add an explicit boundary, optional holes, positive height, and elevation model through the same native/projection path. Broader catalog authoring, schedules, Apex compatibility, and the complete acceptance statement remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "ARCH-MOD-004",
@@ -1893,7 +1905,7 @@
       "requirement": "Author beams and columns suitable for residential and light-commercial building documentation.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Beam and column fixtures support creation, placement, property editing, section display, schedules, and save/reopen.",
       "package": 4,
       "blocker": null,
@@ -1908,9 +1920,11 @@
         "tests/building_object_dialog_tests.cpp",
         "tests/building_plan_projection_tests.cpp",
         "tests/architectural_schedule_tests.cpp",
-        "tests/desktop_smoke.cpp"
+        "tests/desktop_smoke.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Rectangular/circular columns and arbitrary-axis beams have semantic solids, parameter editors, exact top-down plan projections, and dedicated read-only architectural schedule rows with source dimensions and canonical solid volumes. Stairs, railings, and supported roof forms also emit building-object rows. Physical/production acceptance and complete sheet/output certification remain open."
+      "implementation_note": "Rectangular/circular columns and arbitrary-axis beams have semantic solids, parameter editors, exact top-down plan projections, and dedicated read-only architectural schedule rows with source dimensions and canonical solid volumes. Stairs, railings, and supported roof forms also emit building-object rows. Physical/production acceptance and complete sheet/output certification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "ARCH-MOD-005",
@@ -1918,7 +1932,7 @@
       "requirement": "Author flat, shed, gable, and hip roof forms with slopes, joins, openings where supported, and materials.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Roof fixtures produce correct plan, elevation, section, and editable 3D representations and retain defining parameters.",
       "package": 4,
       "blocker": null,
@@ -1937,9 +1951,11 @@
         "tests/roof_join_tests.cpp",
         "tests/building_object_dialog_tests.cpp",
         "tests/building_plan_projection_tests.cpp",
-        "tests/desktop_smoke.cpp"
+        "tests/desktop_smoke.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Sloped panels (including zero-rise flat roofs), gable roofs, and equal-pitch rectangular hip roofs have semantic solids, parameter editors, plan projections, and contextual inspector dimensions with derived pitch preview. Hip roofs include the square pyramidal case, exact persistence and native 3D rendering, with analytic plan/elevation/section bounds tests. Rectangular vertical through-openings are supported on panel, gable and hip forms with versioned persistence, overlap/clearance validation, undo/redo and native 3D rendering. Version-1 fused roof joins now preserve source identities, validate typed references and unique membership at the document boundary, require touching source solids, and render one derived OCCT union in the native 3D view only when the join and all source members are visible; partial masks retain individually visible members without mutating the document. Roof material propagation, mitered/curved junctions, and coordinated production qualification remain open."
+      "implementation_note": "Sloped panels (including zero-rise flat roofs), gable roofs, and equal-pitch rectangular hip roofs have semantic solids, parameter editors, plan projections, and contextual inspector dimensions with derived pitch preview. Hip roofs include the square pyramidal case, exact persistence and native 3D rendering, with analytic plan/elevation/section bounds tests. Rectangular vertical through-openings are supported on panel, gable and hip forms with versioned persistence, overlap/clearance validation, undo/redo and native 3D rendering. Version-1 fused roof joins now preserve source identities, validate typed references and unique membership at the document boundary, require touching source solids, and render one derived OCCT union in the native 3D view only when the join and all source members are visible; partial masks retain individually visible members without mutating the document. Roof material propagation, mitered/curved junctions, and coordinated production qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "ARCH-MOD-006",
@@ -1947,7 +1963,7 @@
       "requirement": "Author stairs, landings, and railings with level connections and editable dimensions.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Stair fixtures validate supported dimensions, display in all required views, and save/reopen with connected levels intact.",
       "package": 4,
       "blocker": null,
@@ -1965,9 +1981,11 @@
         "tests/building_plan_projection_tests.cpp",
         "tests/document_tests.cpp",
         "tests/architectural_schedule_tests.cpp",
-        "tests/desktop_smoke.cpp"
+        "tests/desktop_smoke.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Straight stair flights with optional landings and straight railings with validated top rails and endpoint/interior posts have semantic solids, parameter editors, transforms, exact top-down projections, native 3D rendering, and save/reopen coverage. Stairs may now persist a graph/link/lower-level/upper-level connection; Document admission verifies the retained vertical graph, matching endpoints, connected link state, and total rise. A revision-bound level edit previews and atomically propagates changed floor-to-floor height to every connected canonical straight stair while preserving risers, going, landing, placement, IDs, extensions, and unrelated stairs; the Windows editor displays the affected rises and confirms the one-step update. Connected-stair scaling still fails closed when it would break the level relation. Curved or baluster profiles, stair hosting and coordinated production acceptance remain open."
+      "implementation_note": "Straight stair flights with optional landings and straight railings with validated top rails and endpoint/interior posts have semantic solids, parameter editors, transforms, exact top-down projections, native 3D rendering, and save/reopen coverage. Stairs may now persist a graph/link/lower-level/upper-level connection; Document admission verifies the retained vertical graph, matching endpoints, connected link state, and total rise. A revision-bound level edit previews and atomically propagates changed floor-to-floor height to every connected canonical straight stair while preserving risers, going, landing, placement, IDs, extensions, and unrelated stairs; the Windows editor displays the affected rises and confirms the one-step update. Connected-stair scaling still fails closed when it would break the level relation. Curved or baluster profiles, stair hosting and coordinated production acceptance remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "ARCH-MOD-007",
@@ -1975,7 +1993,7 @@
       "requirement": "Provide levels, reference grids, floor-to-floor alignment, and basic site/terrain tools.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Level, grid, and site fixtures coordinate plans, sections, elevations, and 3D without ambiguous vertical references.",
       "package": 4,
       "blocker": null,
@@ -1997,9 +2015,11 @@
         "include/sketch/terrain_surface.hpp",
         "src/core/terrain_surface.cpp",
         "tests/terrain_surface_tests.cpp",
-        "docs/terrain-surfaces.md"
+        "docs/terrain-surfaces.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Vertical level and floor-to-floor relationship semantics are implemented as a standalone graph. Floors can bind to a validated graph entity and level through revisioned desktop controls with save/reopen coverage. Reference grids now have strict version-1 persistence, a revision-checked Windows editor, deterministic rotated line generation, shared measurement/architectural canvas rendering, and axis labels in screen and fit-to-content output. Newly created walls, slabs, and architectural objects on a bound floor resolve through an opt-in level placement record across plan, elevation, section, and native 3D without mutating source coordinates. A bounded version-1 terrain_surface TIN now validates stable points, triangle topology, contours, deduplicated plan edges, native OCCT faces, and selected-boundary authoring across plan/elevation/section/3D. Full site coordination, georeferencing, survey-device exchange, Apex terrain compatibility, coordinated view propagation, and production qualification remain open."
+      "implementation_note": "Vertical level and floor-to-floor relationship semantics are implemented as a standalone graph. Floors can bind to a validated graph entity and level through revisioned desktop controls with save/reopen coverage. Reference grids now have strict version-1 persistence, a revision-checked Windows editor, deterministic rotated line generation, shared measurement/architectural canvas rendering, and axis labels in screen and fit-to-content output. Newly created walls, slabs, and architectural objects on a bound floor resolve through an opt-in level placement record across plan, elevation, section, and native 3D without mutating source coordinates. A bounded version-1 terrain_surface TIN now validates stable points, triangle topology, contours, deduplicated plan edges, native OCCT faces, and selected-boundary authoring across plan/elevation/section/3D. Full site coordination, georeferencing, survey-device exchange, Apex terrain compatibility, coordinated view propagation, and production qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "ARCH-MOD-008",
@@ -2007,7 +2027,7 @@
       "requirement": "Provide reusable assemblies with separate type and instance properties, materials, and quantity behavior.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Changing a type updates its instances according to explicit rules while instance overrides remain visible and undoable.",
       "package": 4,
       "blocker": null,
@@ -2018,9 +2038,11 @@
         "include/sketch/desktop/main_window.hpp",
         "src/desktop/main_window.cpp",
         "tests/desktop_smoke.cpp",
-        "docs/assemblies.md"
+        "docs/assemblies.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Reusable assembly types, instance overrides, materials, quantities, immutable snapshots, and update previews are implemented. The Windows Assembly catalog now creates and persists typed type/instance records, supports rename/add/remove through Document history, edits local materials plus typed property/material-slot/quantity declarations and per-instance overrides, and blocks dangling type deletion. Assembly schema v3 adds validated host placement transforms; placed instances now use transformed host solids through the shared plan, elevation, and section projection adapters, while architectural schedules expose resolved quantities and placement provenance. Independent assembly profiles, nested assemblies, and production qualification remain open."
+      "implementation_note": "Reusable assembly types, instance overrides, materials, quantities, immutable snapshots, and update previews are implemented. The Windows Assembly catalog now creates and persists typed type/instance records, supports rename/add/remove through Document history, edits local materials plus typed property/material-slot/quantity declarations and per-instance overrides, and blocks dangling type deletion. Assembly schema v3 adds validated host placement transforms; placed instances now use transformed host solids through the shared plan, elevation, and section projection adapters, while architectural schedules expose resolved quantities and placement provenance. Independent assembly profiles, nested assemblies, and production qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "ARCH-MOD-009",
@@ -2057,7 +2079,7 @@
       "requirement": "Support existing, demolished, and proposed phases across the model, views, calculations, schedules, and sheets.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Phase fixtures show the selected state consistently in every required view and can be changed through undoable commands.",
       "package": 4,
       "blocker": null,
@@ -2066,9 +2088,11 @@
         "src/core/model_phases.cpp",
         "tests/model_phases_tests.cpp",
         "tests/desktop_smoke.cpp",
-        "docs/phases-alternatives.md"
+        "docs/phases-alternatives.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Immutable existing/demolished/proposed phase state and validation are implemented. Canvas visibility and the revision-bound schedule projection now honor the active phase on canonical source entities, including derived material rows. The Windows desktop smoke workflow proves phase replacement in both workspace canvases and persisted plan, elevation, and section sheet viewports, with undo/redo and save/reopen output checks; calculation-inspector and broader production qualification remain open."
+      "implementation_note": "Immutable existing/demolished/proposed phase state and validation are implemented. Canvas visibility and the revision-bound schedule projection now honor the active phase on canonical source entities, including derived material rows. The Windows desktop smoke workflow proves phase replacement in both workspace canvases and persisted plan, elevation, and section sheet viewports, with undo/redo and save/reopen output checks; calculation-inspector and broader production qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "ARCH-MOD-011",
@@ -2098,16 +2122,18 @@
       "requirement": "Provide editable 3D authoring over the same semantic objects used by measurement and 2D documentation.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "A 3D edit changes the shared object and is visible in linked plan/elevation/section views, schedules, calculations, and save/reopen.",
       "package": 5,
       "blocker": null,
       "implementation_sources": [
         "src/visualization/native_model_view.cpp",
         "src/desktop/main_window.cpp",
-        "tests/native_view_tests.cpp"
+        "tests/native_view_tests.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Native solids, selection, linked inspector edits and navigation are implemented. Architectural room volumes now create validated OCCT solids from the shared boundary/height/elevation model and use the same geometry in plan, elevation, section, and native 3D. Full 3D authoring/gizmos, remaining object types, and production evidence remain open."
+      "implementation_note": "Native solids, selection, linked inspector edits and navigation are implemented. Architectural room volumes now create validated OCCT solids from the shared boundary/height/elevation model and use the same geometry in plan, elevation, section, and native 3D. Full 3D authoring/gizmos, remaining object types, and production evidence remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "ARCH-VIEW-001",
@@ -2115,7 +2141,7 @@
       "requirement": "Provide coordinated plans, elevations, and sections that edit and display the same building objects.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "A representative wall/opening/roof edit in any view updates the other views and retains stable references.",
       "package": 5,
       "blocker": null,
@@ -2132,9 +2158,11 @@
         "include/sketch/sheet_view_entity_codec.hpp",
         "src/core/sheet_view_entity_codec.cpp",
         "tests/sheet_view_entity_codec_tests.cpp",
-        "docs/sheets-views.md"
+        "docs/sheets-views.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Immutable coordinated plan/elevation/section view references and frame validation persist through a typed Document entity, and new projects seed all three persisted frames. Supported semantic building objects now have analytical hidden-line plan/elevation and true solid-plane section projection tests. The Architectural selector consumes persisted frames when present, view presentation settings and source-object IDs are editable through typed history, and the renderer filters explicitly referenced objects with hosted-opening and placed-assembly dependency closure while applying conservative BRep-bounds far-depth culling with exact OCCT half-space clipping for solids that cross the finite limit, with cache invalidation when frame limits change. Shared object editing, renderer synchronization, and sheet layout remain open."
+      "implementation_note": "Immutable coordinated plan/elevation/section view references and frame validation persist through a typed Document entity, and new projects seed all three persisted frames. Supported semantic building objects now have analytical hidden-line plan/elevation and true solid-plane section projection tests. The Architectural selector consumes persisted frames when present, view presentation settings and source-object IDs are editable through typed history, and the renderer filters explicitly referenced objects with hosted-opening and placed-assembly dependency closure while applying conservative BRep-bounds far-depth culling with exact OCCT half-space clipping for solids that cross the finite limit, with cache invalidation when frame limits change. Shared object editing, renderer synchronization, and sheet layout remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "ARCH-VIEW-002",
@@ -2142,7 +2170,7 @@
       "requirement": "Sections support cut depth, line treatment, material hatching, annotations, and detail overlays.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Section fixtures render and print the selected cut and presentation settings and preserve them in the project.",
       "package": 5,
       "blocker": null,
@@ -2159,9 +2187,11 @@
         "include/sketch/sheet_view_entity_codec.hpp",
         "src/core/sheet_view_entity_codec.cpp",
         "tests/sheet_view_entity_codec_tests.cpp",
-        "docs/sheets-views.md"
+        "docs/sheets-views.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Section presentation settings are validated and persist through the typed Document entity; analytical solid-plane section edges and persisted section cut-depth consumption are implemented for supported objects, and the desktop view settings command edits cut/far depth, line widths, hatching and detail through Document history. A conservative object-level BRep-bounds far-depth filter culls solids wholly beyond the selected limit, while crossing solids are clipped with an exact OCCT half-space before projection. Enabled section projections now carry the persisted hatch pattern and scale into the retained canvas and draft output renderer, with fills limited to ordered closed paths; persisted cut and projection widths now become fixed paper-space strokes for section and elevation output. Complete section annotation/detail overlays, sheet layout, print fixtures, and production qualification remain open."
+      "implementation_note": "Section presentation settings are validated and persist through the typed Document entity; analytical solid-plane section edges and persisted section cut-depth consumption are implemented for supported objects, and the desktop view settings command edits cut/far depth, line widths, hatching and detail through Document history. A conservative object-level BRep-bounds far-depth filter culls solids wholly beyond the selected limit, while crossing solids are clipped with an exact OCCT half-space before projection. Enabled section projections now carry the persisted hatch pattern and scale into the retained canvas and draft output renderer, with fills limited to ordered closed paths; persisted cut and projection widths now become fixed paper-space strokes for section and elevation output. Complete section annotation/detail overlays, sheet layout, print fixtures, and production qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "ARCH-SCH-001",
@@ -2169,7 +2199,7 @@
       "requirement": "Provide door/window, room, and material schedules with the required marks, properties, dimensions, counts, areas, deductions, and net quantities.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Schedules generated from a representative project match the semantic model and update after accepted object edits.",
       "package": 5,
       "blocker": null,
@@ -2185,9 +2215,11 @@
         "include/sketch/schedule_model.hpp",
         "src/core/schedule_model.cpp",
         "tests/schedule_model_tests.cpp",
-        "docs/schedules.md"
+        "docs/schedules.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Standalone typed records and a revision-bound Document-derived adapter now generate door/window, room, and material rows with stable marks, source-backed calculated cells and explicit diagnostics. Architectural room volumes derive net plan area from their boundary and holes and expose a read-only cubic volume from explicit height with geometry provenance; analytical hole-topology validation rejects outside, crossing, touching, overlapping, duplicate, nested, or indeterminate holes as a complete-row error while retaining valid disjoint curved and straight deductions. Active organization/design-phase masks filter source entities before projection, preserving derived material rows and suppressing hidden-source diagnostics. Architectural projections append deterministic read-only material-summary rows grouped by catalog/material identity or normalized explicit name, with aggregate counts, complete net-volume totals when every source is valid, and all contributing provenance. Composite wall and horizontal slab layers now contribute per-layer thickness, catalog/material identity, and net solid-volume rows from the same OCCT geometry. Placed assembly instances emit one read-only material row per resolved catalog slot and promote explicit cubic-metre volume/net_volume quantities into grouped summaries. Supported columns, beams, stairs, railings, and roof forms additionally emit read-only building-object rows with source dimensions and canonical-solid volume provenance. Schedule persistence and complete sheet/output integration remain open."
+      "implementation_note": "Standalone typed records and a revision-bound Document-derived adapter now generate door/window, room, and material rows with stable marks, source-backed calculated cells and explicit diagnostics. Architectural room volumes derive net plan area from their boundary and holes and expose a read-only cubic volume from explicit height with geometry provenance; analytical hole-topology validation rejects outside, crossing, touching, overlapping, duplicate, nested, or indeterminate holes as a complete-row error while retaining valid disjoint curved and straight deductions. Active organization/design-phase masks filter source entities before projection, preserving derived material rows and suppressing hidden-source diagnostics. Architectural projections append deterministic read-only material-summary rows grouped by catalog/material identity or normalized explicit name, with aggregate counts, complete net-volume totals when every source is valid, and all contributing provenance. Composite wall and horizontal slab layers now contribute per-layer thickness, catalog/material identity, and net solid-volume rows from the same OCCT geometry. Placed assembly instances emit one read-only material row per resolved catalog slot and promote explicit cubic-metre volume/net_volume quantities into grouped summaries. Supported columns, beams, stairs, railings, and roof forms additionally emit read-only building-object rows with source dimensions and canonical-solid volume provenance. Schedule persistence and complete sheet/output integration remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "ARCH-SCH-002",
@@ -2195,7 +2227,7 @@
       "requirement": "Editable schedule cells issue normal document commands; calculated cells are read-only and expose their source.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Editing a permitted cell creates history and updates the model; editing a calculated cell is prevented with a source explanation.",
       "package": 5,
       "blocker": null,
@@ -2208,9 +2240,11 @@
         "include/sketch/schedule_model.hpp",
         "src/core/schedule_model.cpp",
         "tests/schedule_model_tests.cpp",
-        "docs/schedules.md"
+        "docs/schedules.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Deterministic edit descriptions and fail-closed calculated-cell source references are implemented; accepted source-cell edits now dispatch through revision-checked Document commands/history and the desktop dialog exposes the edit action. Complete production schedule/output coverage remains open."
+      "implementation_note": "Deterministic edit descriptions and fail-closed calculated-cell source references are implemented; accepted source-cell edits now dispatch through revision-checked Document commands/history and the desktop dialog exposes the edit action. Complete production schedule/output coverage remains open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "ARCH-SHEET-001",
@@ -2218,7 +2252,7 @@
       "requirement": "Provide coordinated sheets with title blocks, revisions, callouts, schedules, and independently scaled viewports.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Sheet fixtures preserve viewport scale, linked annotations, schedules, title-block data, and revision information through print/export.",
       "package": 5,
       "blocker": null,
@@ -2231,9 +2265,11 @@
         "tests/sheet_view_entity_codec_tests.cpp",
         "src/desktop/main_window.cpp",
         "tests/desktop_smoke.cpp",
-        "docs/sheets-views.md"
+        "docs/sheets-views.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Coordinated sheets with title blocks, revisions, callouts, schedule references, page sizes, and independent viewport scales are implemented as immutable semantic records and persist through the typed Document entity. New desktop projects seed validated plan/elevation/section views and a default sheet containing one viewport for each view plus door and building-object schedule placements; draft PDF/SVG/print consume persisted page, viewport, title-block, scale, schedule placement, and view-specific derived geometry data even when another workspace is active, while sheet number/title-block, viewport bounds/scale, and schedule placement bounds edits commit through Document history. Printer receipts and production output qualification remain open."
+      "implementation_note": "Coordinated sheets with title blocks, revisions, callouts, schedule references, page sizes, and independent viewport scales are implemented as immutable semantic records and persist through the typed Document entity. New desktop projects seed validated plan/elevation/section views and a default sheet containing one viewport for each view plus door and building-object schedule placements; draft PDF/SVG/print consume persisted page, viewport, title-block, scale, schedule placement, and view-specific derived geometry data even when another workspace is active, while sheet number/title-block, viewport bounds/scale, and schedule placement bounds edits commit through Document history. Printer receipts and production output qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "ARCH-EDIT-001",
@@ -2241,7 +2277,7 @@
       "requirement": "Every supported architectural object supports creation, selection, property editing, appropriate transforms, duplication, deletion, undo/redo, and save/reopen.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Object-family fixtures execute the complete lifecycle and compare semantic, geometric, view, schedule, and persistence state.",
       "package": 5,
       "blocker": null,
@@ -2255,9 +2291,11 @@
         "tests/architectural_workflow_contract_tests.cpp",
         "tests/architectural_document_adapter_tests.cpp",
         "tests/desktop_smoke.cpp",
-        "docs/architectural-workflow-contract.md"
+        "docs/architectural-workflow-contract.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Architectural create/select/property-edit/transform/duplicate/delete intents are translated into one revision-fenced atomic Document command with preview, undo, and save/reopen coverage. Room volumes now support validated creation plus explicit height/elevation edits through the public workflow and command palette, while keeping their analytical boundary and native/projection state linked. Recognized building entities receive type-aware canonical transforms, and wall duplication/deletion carries or removes hosted openings with deterministic remapping. The Windows editor exposes scale, rotation, XYZ translation, clone, and preview controls for recognized building objects. Complete type schemas, cross-view relationship propagation, and user-observed output remain open."
+      "implementation_note": "Architectural create/select/property-edit/transform/duplicate/delete intents are translated into one revision-fenced atomic Document command with preview, undo, and save/reopen coverage. Room volumes now support validated creation plus explicit height/elevation edits through the public workflow and command palette, while keeping their analytical boundary and native/projection state linked. Recognized building entities receive type-aware canonical transforms, and wall duplication/deletion carries or removes hosted openings with deterministic remapping. The Windows editor exposes scale, rotation, XYZ translation, clone, and preview controls for recognized building objects. Complete type schemas, cross-view relationship propagation, and user-observed output remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "ARCH-REL-001",
@@ -2265,16 +2303,18 @@
       "requirement": "Plans, elevations, sections, 3D, calculations, schedules, and sheets use explicit stable references to the same semantic objects.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Deleting or changing a referenced feature produces a visible issue or controlled update rather than silently retargeting an annotation or schedule row.",
       "package": 5,
       "blocker": null,
       "implementation_sources": [
         "include/sketch/typed_relationships.hpp",
         "src/core/typed_relationships.cpp",
-        "docs/typed-relationships.md"
+        "docs/typed-relationships.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Typed stable references and cycle/ambiguity validation are present, and the Windows editor now exposes live relationship declarations through typed Document history. Coordinated view definitions now persist canonical semantic object IDs; Document admission rejects missing referenced objects and legacy view payloads upgrade with an empty reference list. The Architectural view settings editor accepts and validates comma- or semicolon-separated source IDs, and projection filters those references with hosted-opening and placed-assembly dependency closure while preserving the shared retained geometry for other views. Relationship targets can be explicitly retargeted through one validated, revision-checked, undoable operation with cycle and missing-reference rejection. Full cross-view production evidence remains open."
+      "implementation_note": "Typed stable references and cycle/ambiguity validation are present, and the Windows editor now exposes live relationship declarations through typed Document history. Coordinated view definitions now persist canonical semantic object IDs; Document admission rejects missing referenced objects and legacy view payloads upgrade with an empty reference list. The Architectural view settings editor accepts and validates comma- or semicolon-separated source IDs, and projection filters those references with hosted-opening and placed-assembly dependency closure while preserving the shared retained geometry for other views. Relationship targets can be explicitly retargeted through one validated, revision-checked, undoable operation with cycle and missing-reference rejection. Full cross-view production evidence remains open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "ARCH-OUTPUT-001",
@@ -2282,7 +2322,7 @@
       "requirement": "Support complete residential and light-commercial remodel documentation from existing conditions through alternatives and coordinated output.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "End-to-end residential and light-commercial remodel fixtures produce editable model, comparison views, schedules, and sheets from one project.",
       "package": 5,
       "blocker": null,
@@ -2302,9 +2342,11 @@
         "tests/desktop_smoke.cpp",
         "docs/architectural-workflow-contract.md",
         "docs/sheets-views.md",
-        "docs/desktop-workflow.md"
+        "docs/desktop-workflow.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "The deterministic desktop workflow fixture now creates explicit residential and light-commercial subject fixtures with semantic walls, hosted openings, slabs, and building objects; switches plan/elevation/section views; exercises schedules, remodeling alternatives, revisions, sheets, PDF/SVG/PNG export, and save/reopen from one project. This is development-host integration evidence. Physical print/output fidelity and the production gate remain open."
+      "implementation_note": "The deterministic desktop workflow fixture now creates explicit residential and light-commercial subject fixtures with semantic walls, hosted openings, slabs, and building objects; switches plan/elevation/section views; exercises schedules, remodeling alternatives, revisions, sheets, PDF/SVG/PNG export, and save/reopen from one project. This is development-host integration evidence. Physical print/output fidelity and the production gate remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "UX-WORK-001",
@@ -2312,16 +2354,18 @@
       "requirement": "Use a canvas-centered workspace with compact tool rail, expandable navigator, contextual inspector, and cursor-adjacent measurement panel.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Representative workflows expose relevant controls in context, keep the canvas dominant, and preserve panel layout in saved workspaces.",
       "package": 5,
       "blocker": null,
       "implementation_sources": [
         "src/desktop/main_window.cpp",
         "tests/desktop_smoke.cpp",
-        "docs/workspace-ui.md"
+        "docs/workspace-ui.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "The canvas-centered shell, compact tool rail, navigator, and contextual inspector are exercised by the desktop smoke workflow; the fixed toolbar keeps the canvas close to the window edge. Precision drawing now exposes a compact transient cursor readout for effective coordinates and anchored delta length/angle, excluded from fitted/exported scenes. Physical-input, DPI, and the complete acceptance statement remain open."
+      "implementation_note": "The canvas-centered shell, compact tool rail, navigator, and contextual inspector are exercised by the desktop smoke workflow; the fixed toolbar keeps the canvas close to the window edge. Precision drawing now exposes a compact transient cursor readout for effective coordinates and anchored delta length/angle, excluded from fitted/exported scenes. Physical-input, DPI, and the complete acceptance statement remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "UX-WORK-002",
@@ -2329,14 +2373,16 @@
       "requirement": "Selecting a wall, area, reference, or architectural object exposes its relevant dimensions, relationships, styling, calibration, classifications, or calculations without unrelated modal dialogs.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Selection fixtures show contextual properties and commit edits through normal commands with clear validation errors.",
       "package": 5,
       "blocker": null,
       "implementation_sources": [
-        "src/desktop/main_window.cpp"
+        "src/desktop/main_window.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Contextual property selection and guarded edits are implemented for supported geometry, including room height and base elevation fields backed by the shared validator; the complete selection fixture and production gate remain open."
+      "implementation_note": "Contextual property selection and guarded edits are implemented for supported geometry, including room height and base elevation fields backed by the shared validator; the complete selection fixture and production gate remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "UX-WORK-003",
@@ -2344,15 +2390,17 @@
       "requirement": "Provide split plan/3D views, view tabs, saved workspaces, light/dark themes, and a high-contrast field mode.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Workspace and theme fixtures restore view arrangement and remain usable at supported DPI scales without changing document data.",
       "package": 5,
       "blocker": null,
       "implementation_sources": [
         "src/desktop/main_window.cpp",
-        "src/visualization/native_model_view.cpp"
+        "src/visualization/native_model_view.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Plan/3D split and view tabs are implemented; local saved workspace profiles now restore workspace, theme, units, grid/snap, view, page size, and visibility filters. Complete field-mode and layout acceptance remain open."
+      "implementation_note": "Plan/3D split and view tabs are implemented; local saved workspace profiles now restore workspace, theme, units, grid/snap, view, page size, and visibility filters. Complete field-mode and layout acceptance remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "UX-ACCESS-001",
@@ -2360,7 +2408,7 @@
       "requirement": "Support keyboard navigation, predictable focus, accessible properties and commands, high contrast, and layouts from 1366x768 through 4K at 100%, 150%, and 200% scaling.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Accessibility and DPI fixtures complete core workflows without clipped controls, lost focus, inaccessible properties, or unreadable contrast.",
       "package": 8,
       "blocker": null,
@@ -2370,9 +2418,11 @@
         "tests/workspace_accessibility_tests.cpp",
         "docs/workspace-accessibility.md",
         "scripts/production_qualification.py",
-        "docs/production-qualification.md"
+        "docs/production-qualification.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Keyboard/focus/properties/high-contrast themes and DPI layouts are declared by a strict profile and qualification manifest; physical keyboard, assistive-technology, visual, and clean-layout evidence remain open."
+      "implementation_note": "Keyboard/focus/properties/high-contrast themes and DPI layouts are declared by a strict profile and qualification manifest; physical keyboard, assistive-technology, visual, and clean-layout evidence remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "UX-INPUT-001",
@@ -2380,7 +2430,7 @@
       "requirement": "Provide pen/touch-specific controls and an on-screen measurement keypad while preserving keyboard precision paths.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Real pen/touch fixtures enter and commit measurements through the keypad, preserve units/provenance, and remain undoable.",
       "package": 5,
       "blocker": null,
@@ -2390,9 +2440,11 @@
         "tests/workspace_accessibility_tests.cpp",
         "docs/workspace-accessibility.md",
         "scripts/production_qualification.py",
-        "docs/production-qualification.md"
+        "docs/production-qualification.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Pen/touch controls and an on-screen keypad are declared by the interaction profile and qualification manifest; physical pen/touch runs, device drivers, and end-to-end keypad command integration remain open."
+      "implementation_note": "Pen/touch controls and an on-screen keypad are declared by the interaction profile and qualification manifest; physical pen/touch runs, device drivers, and end-to-end keypad command integration remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "ASSIST-001",

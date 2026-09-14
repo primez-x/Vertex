@@ -1,0 +1,130 @@
+{
+  "acceptance": "Door/window, room, material, assembly, and building schedule fixtures expose marks, dimensions, counts, areas, deductions, net quantities, and source references.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "document_schedule_adapter",
+          "status": "passed"
+        },
+        {
+          "name": "architectural_schedule",
+          "status": "passed"
+        },
+        {
+          "name": "schedule_model",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "document_schedule_adapter",
+          "status": "passed"
+        },
+        {
+          "name": "architectural_schedule",
+          "status": "passed"
+        },
+        {
+          "name": "schedule_model",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers deterministic schedule projection and source-backed quantities. Complete market-specific schedules, native Apex fidelity, and production issue-set qualification remain open.",
+  "requirement_id": "ARCH-SCH-001",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "ScheduleRowKind",
+    "build_architectural_schedules",
+    "material_summary",
+    "deduction",
+    "net",
+    "quantity",
+    "source"
+  ],
+  "source_files": [
+    {
+      "path": "include/sketch/document_schedule_adapter.hpp",
+      "sha256": "9782a62f03cf3178a1fd8d3d3ff21077b159ede2eabc03e5d0f8c05bf34cc505",
+      "size": 1511
+    },
+    {
+      "path": "src/core/document_schedule_adapter.cpp",
+      "sha256": "2ec85cd959d79a6766820ee1abea010f79c8b40f437d3f68696c0af0929f0192",
+      "size": 24367
+    },
+    {
+      "path": "include/sketch/architectural_schedule.hpp",
+      "sha256": "1f3c053a33bc17d8ac8f9ab26c5a8638fc76c4c7b82720dce1eb235f62f6efe4",
+      "size": 547
+    },
+    {
+      "path": "src/architecture/architectural_schedule.cpp",
+      "sha256": "b3358d21127863b5536ce18cafb9bebbf363843c415a4a775540abe4fccc9e0c",
+      "size": 40539
+    },
+    {
+      "path": "tests/document_schedule_adapter_tests.cpp",
+      "sha256": "07ffad823fa066ec313c703a75b1fc23fab94a3af1f48227f10043a219a98574",
+      "size": 20306
+    },
+    {
+      "path": "tests/architectural_schedule_tests.cpp",
+      "sha256": "4288419266482d4016fb241128b8e50b9d39c75b1a41cef0a1daa463aeb68b4c",
+      "size": 24928
+    },
+    {
+      "path": "include/sketch/schedule_model.hpp",
+      "sha256": "904a4498060b97419a01dde395fdf7e10c2fba2760ed1b70097fd97a1becad4a",
+      "size": 3060
+    },
+    {
+      "path": "src/core/schedule_model.cpp",
+      "sha256": "4b367cb8e42ba6b607a504749ce43ca6ac7d57ff615b12b7d3d6b53aac8612e6",
+      "size": 6343
+    },
+    {
+      "path": "tests/schedule_model_tests.cpp",
+      "sha256": "7c797dc091bffbced4753cd5e7039af5433ef268cf4350a559013b1832f15c33",
+      "size": 4396
+    },
+    {
+      "path": "docs/schedules.md",
+      "sha256": "2550bb63751477deee3af1af4c9538d43ece314284bb6dcbf49f31809ff1a22a",
+      "size": 6441
+    }
+  ],
+  "source_tree_sha256": "085ae56428e369fd82fe2631d21b001a94da9efb0cc3f510218fd33d5ae53df8",
+  "tests": [
+    "document_schedule_adapter",
+    "architectural_schedule",
+    "schedule_model"
+  ]
+}

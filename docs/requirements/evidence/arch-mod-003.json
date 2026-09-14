@@ -1,0 +1,139 @@
+{
+  "acceptance": "Floor, ceiling, foundation, slab, and room-volume fixtures retain validated boundaries, holes, levels, materials, elevations, and calculated quantities through plan and 3D decoding.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "architecture",
+          "status": "passed"
+        },
+        {
+          "name": "building_entities",
+          "status": "passed"
+        },
+        {
+          "name": "building_plan_projection",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "architecture",
+          "status": "passed"
+        },
+        {
+          "name": "building_entities",
+          "status": "passed"
+        },
+        {
+          "name": "building_plan_projection",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers local floor-system and room-volume semantics. Broader catalog authoring, native Apex compatibility, and complete production output certification remain open.",
+  "requirement_id": "ARCH-MOD-003",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "Slab",
+    "read_document_slab",
+    "RoomVolume",
+    "holes",
+    "elevation",
+    "material",
+    "quantity"
+  ],
+  "source_files": [
+    {
+      "path": "src/architecture/architecture.cpp",
+      "sha256": "b3daf993f54593fba9d10d8fe8a1fa09c838efeb0bab89572bd84bf3d043af1f",
+      "size": 38852
+    },
+    {
+      "path": "include/sketch/document_solid.hpp",
+      "sha256": "72b90159f2a5889a96f0644a85ecbe95eeee2a2c0f3fbeb90bd95afba4fd7914",
+      "size": 1066
+    },
+    {
+      "path": "src/architecture/document_solid.cpp",
+      "sha256": "fc6efbcd099d767c1ebc7bd316117a1ddb4bd3e21187300883a193b461d2e379",
+      "size": 11243
+    },
+    {
+      "path": "src/desktop/main_window.cpp",
+      "sha256": "944a00fc2959043c1f5b3b2ebfa50f287421a0338ee6908d6e926bf429f32223",
+      "size": 1240133
+    },
+    {
+      "path": "tests/architecture_tests.cpp",
+      "sha256": "3298f0e58e91d3b11084c74c3c715bee4e76cf55e03b0148ab60bb0c733f28da",
+      "size": 7608
+    },
+    {
+      "path": "tests/building_entity_tests.cpp",
+      "sha256": "d5e04f8a2737a3cf804f6779ca88467f50766ca62b8e6e35f5ebbbc7737d34d8",
+      "size": 18061
+    },
+    {
+      "path": "tests/desktop_smoke.cpp",
+      "sha256": "3d4ca2bcaf7e0cc91019e52bf599882ecd11061f4e502e272614b694816d5abe",
+      "size": 381257
+    },
+    {
+      "path": "docs/project-format.md",
+      "sha256": "396fbfd62b5c7da9701520773efc097753ac2a34666ede9dd41d045e12f8dbb3",
+      "size": 34904
+    },
+    {
+      "path": "docs/native-3d-view.md",
+      "sha256": "e26211aaa88f991bc72980a168c02467f30ae990b0541cdec9ae9076e2ecc6b2",
+      "size": 15108
+    },
+    {
+      "path": "docs/architectural-projections.md",
+      "sha256": "34d8f92fad84c034171fb53c6c4c6b5ab4dcd33f5485bd234c0e40ace16928ce",
+      "size": 2631
+    }
+  ],
+  "source_tree_sha256": "085ae56428e369fd82fe2631d21b001a94da9efb0cc3f510218fd33d5ae53df8",
+  "tests": [
+    "architecture",
+    "building_entities",
+    "building_plan_projection",
+    "desktop_workflow"
+  ]
+}

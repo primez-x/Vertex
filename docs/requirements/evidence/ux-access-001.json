@@ -1,0 +1,101 @@
+{
+  "acceptance": "The accessibility profile validates keyboard navigation, predictable focus, accessible properties, high contrast, themes, and declared 100%, 150%, and 200% layouts.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "workspace_accessibility",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "workspace_accessibility",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers the local accessibility contract and declared layouts. Physical screen-reader, keyboard-only, DPI, and assistive-technology qualification remain open.",
+  "requirement_id": "UX-ACCESS-001",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "keyboard_navigation",
+    "predictable_focus",
+    "accessible_properties",
+    "high_contrast",
+    "DpiLayoutQualification",
+    "150",
+    "200"
+  ],
+  "source_files": [
+    {
+      "path": "include/sketch/workspace_accessibility.hpp",
+      "sha256": "0f697b2463e63502a07883531e3e7630a4fad8982df956ffb8760c7abc7e18b4",
+      "size": 1237
+    },
+    {
+      "path": "src/core/workspace_accessibility.cpp",
+      "sha256": "861d03b3342fd22b301e0db0af13f63b1aed4fa9dc4acd5be6de6344636ce504",
+      "size": 6195
+    },
+    {
+      "path": "tests/workspace_accessibility_tests.cpp",
+      "sha256": "4792cb887f5768f9ae7608fa2547c0aa0ebf46a79b539648d28c27cacaaa1fa4",
+      "size": 1620
+    },
+    {
+      "path": "docs/workspace-accessibility.md",
+      "sha256": "0a185e86dfed223af21cc7ced8a5b0a95d78e2d7aace74194a45636a097ed05c",
+      "size": 6166
+    },
+    {
+      "path": "scripts/production_qualification.py",
+      "sha256": "784bec43006f661f9607fd15c9fdaf23c5f0e3bfd68974c571c9636944afc934",
+      "size": 14648
+    },
+    {
+      "path": "docs/production-qualification.md",
+      "sha256": "1cc0bcfedcdeb785e90125797a9b06376fe6530b9903120b75fa7557fe94dbad",
+      "size": 11144
+    }
+  ],
+  "source_tree_sha256": "085ae56428e369fd82fe2631d21b001a94da9efb0cc3f510218fd33d5ae53df8",
+  "tests": [
+    "workspace_accessibility",
+    "desktop_workflow"
+  ]
+}

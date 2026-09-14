@@ -1,0 +1,115 @@
+{
+  "acceptance": "Assembly catalogs retain separate type and instance properties, material slots, quantity definitions, placements, overrides, and deterministic schedule behavior.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "assembly_model",
+          "status": "passed"
+        },
+        {
+          "name": "architectural_schedule",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "assembly_model",
+          "status": "passed"
+        },
+        {
+          "name": "architectural_schedule",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers local reusable assembly semantics and catalog editing. A complete production library, native Apex parity, and commercial project qualification remain open.",
+  "requirement_id": "ARCH-MOD-008",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "AssemblyModel",
+    "AssemblyType",
+    "AssemblyMaterial",
+    "AssemblyInstance",
+    "quantity",
+    "material",
+    "placement"
+  ],
+  "source_files": [
+    {
+      "path": "include/sketch/assembly_model.hpp",
+      "sha256": "2fc695efaee377c5d53b6a9bdfddb405ca53b9ecd6b6153b2248e18956457cf6",
+      "size": 4200
+    },
+    {
+      "path": "src/core/assembly_model.cpp",
+      "sha256": "f5d9b8d2af1e939370d606dcd26d5e2912ef13b25f3b9a471476cbc5115965ca",
+      "size": 13843
+    },
+    {
+      "path": "tests/assembly_model_tests.cpp",
+      "sha256": "ae8e1fba3315a37c7e79619a36b083264cb853db2ebe4b96c8507a7be9ba9a88",
+      "size": 8232
+    },
+    {
+      "path": "include/sketch/desktop/main_window.hpp",
+      "sha256": "0acf0194cb15c22dda4f09e2415af17dc115b3a374fe2bec22cf4ff07806b92b",
+      "size": 34261
+    },
+    {
+      "path": "src/desktop/main_window.cpp",
+      "sha256": "944a00fc2959043c1f5b3b2ebfa50f287421a0338ee6908d6e926bf429f32223",
+      "size": 1240133
+    },
+    {
+      "path": "tests/desktop_smoke.cpp",
+      "sha256": "3d4ca2bcaf7e0cc91019e52bf599882ecd11061f4e502e272614b694816d5abe",
+      "size": 381257
+    },
+    {
+      "path": "docs/assemblies.md",
+      "sha256": "63a7f6d146756f5d44dc7e79e6815be3b6b9e7a445370a71c5ccad2ce373e7ad",
+      "size": 8288
+    }
+  ],
+  "source_tree_sha256": "085ae56428e369fd82fe2631d21b001a94da9efb0cc3f510218fd33d5ae53df8",
+  "tests": [
+    "assembly_model",
+    "architectural_schedule",
+    "desktop_workflow"
+  ]
+}

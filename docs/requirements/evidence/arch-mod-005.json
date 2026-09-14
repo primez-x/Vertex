@@ -1,0 +1,164 @@
+{
+  "acceptance": "Flat, sloped, gable, and hip roof fixtures retain defining pitch, joins, openings, materials, semantic identity, and plan/elevation/section projections.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "building_objects",
+          "status": "passed"
+        },
+        {
+          "name": "roof_join",
+          "status": "passed"
+        },
+        {
+          "name": "building_plan_projection",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "building_objects",
+          "status": "passed"
+        },
+        {
+          "name": "roof_join",
+          "status": "passed"
+        },
+        {
+          "name": "building_plan_projection",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers supported local roof forms, cuts, joins, and projections. Unsupported roof variants, physical output, native Apex fidelity, and production acceptance remain open.",
+  "requirement_id": "ARCH-MOD-005",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "SlopedRoofPanel",
+    "GableRoof",
+    "HipRoof",
+    "RoofOpening",
+    "cut_roof_openings",
+    "roof_join",
+    "pitch"
+  ],
+  "source_files": [
+    {
+      "path": "include/sketch/roof_join_semantics.hpp",
+      "sha256": "83b674fa1bcd3e0c95f92b58ba8b26baefa8cc04800acdf1f7001bd45f0fb191",
+      "size": 1041
+    },
+    {
+      "path": "src/core/roof_join_semantics.cpp",
+      "sha256": "73e3abf57d0df63b92f917d28f1a80a1b11921c818e9348b9cf3bdff49ac4641",
+      "size": 3313
+    },
+    {
+      "path": "src/core/document.cpp",
+      "sha256": "0d3a341f1171975a7389c4d4bbad4e0abae4a4f8c7b3c44924e0c3b4d4563a0a",
+      "size": 110624
+    },
+    {
+      "path": "src/architecture/architecture.cpp",
+      "sha256": "b3daf993f54593fba9d10d8fe8a1fa09c838efeb0bab89572bd84bf3d043af1f",
+      "size": 38852
+    },
+    {
+      "path": "src/visualization/native_model_view.cpp",
+      "sha256": "d83f3074100eb6e6d23032d20371936e32e84b8965eb2c4267b044d298874c7d",
+      "size": 59752
+    },
+    {
+      "path": "src/architecture/building_objects.cpp",
+      "sha256": "66393d54344cf210a10ef388e40ec9b8eb849b51f0d95a623e77c6239cadf884",
+      "size": 31145
+    },
+    {
+      "path": "src/architecture/building_entity.cpp",
+      "sha256": "d1b4195bfeedc8ff78e6b9d54d18bfa93f804199ec9b79568cade825d36cf5e9",
+      "size": 23396
+    },
+    {
+      "path": "src/architecture/building_plan_projection.cpp",
+      "sha256": "aa58b24f8e7d3a801d98e01d12df753eb15a4342a249a473bcfe36d7e36b0e9a",
+      "size": 10755
+    },
+    {
+      "path": "src/desktop/building_object_dialog.cpp",
+      "sha256": "f12f16207654173c9c2795f8f051993331a4e80991e05419bf93298ed11dd196",
+      "size": 79837
+    },
+    {
+      "path": "src/desktop/main_window.cpp",
+      "sha256": "944a00fc2959043c1f5b3b2ebfa50f287421a0338ee6908d6e926bf429f32223",
+      "size": 1240133
+    },
+    {
+      "path": "tests/building_object_tests.cpp",
+      "sha256": "ba8402a23134d36fe9e6529ac9baa8e1fc63b47f31daae8d9754d8b7c7e78f1c",
+      "size": 19284
+    },
+    {
+      "path": "tests/roof_join_tests.cpp",
+      "sha256": "3aa1fc5c073d2f2407e1e0dead55e1305b62a4f6b1dfe7e3a2edf06027a5c6ce",
+      "size": 5140
+    },
+    {
+      "path": "tests/building_object_dialog_tests.cpp",
+      "sha256": "52c54b875c23bb307e40459e9179bfe47262597719d0ff5c72ac5aabc9255327",
+      "size": 32538
+    },
+    {
+      "path": "tests/building_plan_projection_tests.cpp",
+      "sha256": "bab58286c5779e6f3bbacac035ac51dc204d537683386241d7bf06d36fb76b49",
+      "size": 27918
+    },
+    {
+      "path": "tests/desktop_smoke.cpp",
+      "sha256": "3d4ca2bcaf7e0cc91019e52bf599882ecd11061f4e502e272614b694816d5abe",
+      "size": 381257
+    }
+  ],
+  "source_tree_sha256": "085ae56428e369fd82fe2631d21b001a94da9efb0cc3f510218fd33d5ae53df8",
+  "tests": [
+    "building_objects",
+    "roof_join",
+    "building_plan_projection",
+    "desktop_workflow"
+  ]
+}

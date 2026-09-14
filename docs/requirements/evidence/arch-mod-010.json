@@ -1,0 +1,101 @@
+{
+  "acceptance": "Existing, demolished, and proposed phases remain explicit, selectable, comparable, and persist through shared document history and coordinated workspace visibility.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "model_phases",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "model_phases",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers deterministic phase semantics and local workspace switching. Full coordinated issue-set output, native Apex compatibility, and production acceptance remain open.",
+  "requirement_id": "ARCH-MOD-010",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "ModelPhase",
+    "existing",
+    "demolished",
+    "proposed",
+    "active_alternative",
+    "compare",
+    "undo"
+  ],
+  "source_files": [
+    {
+      "path": "include/sketch/model_phases.hpp",
+      "sha256": "64487916cdc47f9e8fe240cd34e8c9efe985b71111f69b67aeda70bff62c3739",
+      "size": 3044
+    },
+    {
+      "path": "src/core/model_phases.cpp",
+      "sha256": "54f952b1e5fd4391f61f44c8d0a0817d4fdfead0fa59d8ac4a56bc0561a07db5",
+      "size": 8320
+    },
+    {
+      "path": "src/desktop/main_window.cpp",
+      "sha256": "944a00fc2959043c1f5b3b2ebfa50f287421a0338ee6908d6e926bf429f32223",
+      "size": 1240133
+    },
+    {
+      "path": "tests/model_phases_tests.cpp",
+      "sha256": "c9e040c0f44fcb9f2351676ad6cabb8a2255a0045fc12e820d7f1ef9e5887697",
+      "size": 6233
+    },
+    {
+      "path": "tests/desktop_smoke.cpp",
+      "sha256": "3d4ca2bcaf7e0cc91019e52bf599882ecd11061f4e502e272614b694816d5abe",
+      "size": 381257
+    },
+    {
+      "path": "docs/phases-alternatives.md",
+      "sha256": "1c3e09a1ac8e706cb9ecf2639dbf590ee87425862b8d0fc69f4484e079e9ae3e",
+      "size": 4333
+    }
+  ],
+  "source_tree_sha256": "085ae56428e369fd82fe2631d21b001a94da9efb0cc3f510218fd33d5ae53df8",
+  "tests": [
+    "model_phases",
+    "desktop_workflow"
+  ]
+}

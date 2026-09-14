@@ -1647,6 +1647,196 @@ WORKFLOW_RULES.update({
 })
 
 
+# The architectural, workspace, and specialized deterministic contracts below
+# have complete Debug/Release fixtures.  They certify the implemented local
+# behavior while keeping physical-device, native-Apex, printer, and clean-
+# machine qualification as explicit release boundaries.
+WORKFLOW_RULES.update({
+    "APX-UI-003": {
+        "acceptance": "Commands are searchable, quick-access actions and shortcut bindings are editable and persisted locally, and Measurement and Architectural tabs remain available.",
+        "sources": ("src/desktop/main_window.cpp", "tests/desktop_smoke.cpp", "docs/workspace-ui.md", "docs/workspace-accessibility.md"),
+        "anchors": ("showCommandPalette", "quickAccess", "keyboardShortcut", "workspaceTabs", "Customize", "shortcut"),
+        "tests": ("desktop_workflow", "workspace_navigation"),
+        "qualification_boundary": "This evidence covers local command discovery, shortcut persistence, quick access, and workspace tabs. Physical keyboard coverage and the unified production gate remain open.",
+    },
+    "APX-SPEC-001": {
+        "acceptance": "Survey fixtures enter bearings and distances, report closure and acreage, preserve traverse provenance, and add a closed traverse to the document through an undoable command.",
+        "sources": ("include/sketch/survey_contract.hpp", "src/core/survey_contract.cpp", "tests/survey_contract_tests.cpp", "src/desktop/main_window.cpp", "tests/desktop_smoke.cpp", "docs/survey-georeferencing-contracts.md"),
+        "anchors": ("Survey", "traverse", "acreage", "closure", "provenance", "bearing"),
+        "tests": ("survey_contract", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers deterministic local survey entry, closure, acreage, provenance, and desktop insertion. Legal-survey behavior, Apex exchange, and production qualification remain open.",
+    },
+    "APX-SPEC-002": {
+        "acceptance": "Georeferencing fixtures validate an explicit CRS, control points, affine transform, residuals, contained resources, and save/reopen behavior without network access.",
+        "sources": ("include/sketch/georeferencing_contract.hpp", "src/core/georeferencing_contract.cpp", "include/sketch/georeferencing_entity_codec.hpp", "src/core/georeferencing_entity_codec.cpp", "include/sketch/georeferencing_runtime.hpp", "src/core/georeferencing_runtime.cpp", "tests/georeferencing_contract_tests.cpp", "tests/georeferencing_entity_codec_tests.cpp", "tests/georeferencing_runtime_tests.cpp", "src/desktop/main_window.cpp", "tests/desktop_smoke.cpp", "docs/survey-georeferencing-contracts.md"),
+        "anchors": ("Georeferencing", "CRS", "control", "residual", "affine", "offline", "resource"),
+        "tests": ("georeferencing_contract", "georeferencing_entity_codec", "georeferencing_runtime", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers the typed offline georeferencing contract and development-host workflow. A production resource inventory, external CRS review, and network-monitored qualification remain open.",
+    },
+    "ARCH-MOD-001": {
+        "acceptance": "Wall fixtures author straight, curved, sloped, and layered walls with hosted openings, materials, joins, and stable semantic identity across the shared document path.",
+        "sources": ("include/sketch/wall_semantics.hpp", "src/core/wall_semantics.cpp", "src/core/document.cpp", "src/architecture/architecture.cpp", "src/architecture/document_solid.cpp", "src/architecture/architectural_schedule.cpp", "src/desktop/main_window.cpp", "src/desktop/plan_canvas.cpp", "tests/wall_semantics_tests.cpp", "tests/architecture_tests.cpp", "tests/wall_join_tests.cpp", "tests/desktop_smoke.cpp", "tests/architectural_schedule_tests.cpp", "tests/document_tests.cpp", "docs/project-format.md"),
+        "anchors": ("struct Wall", "HostedOpening", "WallLayer", "validate_wall_semantics", "slope_rise", "material", "join"),
+        "tests": ("wall_semantics", "architecture", "wall_join", "document_commands", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers the local wall semantic and solid/projection paths. Complete material libraries, physical output, native Apex parity, and production acceptance remain open.",
+    },
+    "ARCH-MOD-002": {
+        "acceptance": "Hosted door and window fixtures validate host relationships, edit dimensions and handing, derive analytic presentation geometry, and preserve the opening graph through document history.",
+        "sources": ("src/architecture/architecture.cpp", "include/sketch/opening_assembly.hpp", "src/core/opening_assembly.cpp", "src/desktop/hosted_opening_dialog.cpp", "src/core/door_operation.cpp", "tests/door_operation_tests.cpp", "tests/opening_assembly_tests.cpp", "src/desktop/main_window.cpp", "tests/desktop_smoke.cpp", "tests/modal_authoring_tests.cpp", "docs/hosted-openings.md"),
+        "anchors": ("OpeningAssembly", "validate_opening_assembly", "HostedOpeningDialog", "DoorOperation", "wall_id", "swing", "opening"),
+        "tests": ("opening_assembly", "door_operation", "modal_authoring", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers typed hosted openings and local editing. Complete catalog coverage, physical hardware, native Apex fidelity, and production sheet qualification remain open.",
+    },
+    "ARCH-MOD-003": {
+        "acceptance": "Floor, ceiling, foundation, slab, and room-volume fixtures retain validated boundaries, holes, levels, materials, elevations, and calculated quantities through plan and 3D decoding.",
+        "sources": ("src/architecture/architecture.cpp", "include/sketch/document_solid.hpp", "src/architecture/document_solid.cpp", "src/desktop/main_window.cpp", "tests/architecture_tests.cpp", "tests/building_entity_tests.cpp", "tests/desktop_smoke.cpp", "docs/project-format.md", "docs/native-3d-view.md", "docs/architectural-projections.md"),
+        "anchors": ("Slab", "read_document_slab", "RoomVolume", "holes", "elevation", "material", "quantity"),
+        "tests": ("architecture", "building_entities", "building_plan_projection", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers local floor-system and room-volume semantics. Broader catalog authoring, native Apex compatibility, and complete production output certification remain open.",
+    },
+    "ARCH-MOD-004": {
+        "acceptance": "Beam and column fixtures create validated semantic solids, project into plan, expose editable properties, and contribute source-backed schedule quantities through save/reopen.",
+        "sources": ("src/architecture/building_objects.cpp", "src/architecture/building_entity.cpp", "src/architecture/building_plan_projection.cpp", "src/architecture/architectural_schedule.cpp", "src/desktop/building_object_dialog.cpp", "src/desktop/main_window.cpp", "tests/building_object_tests.cpp", "tests/building_object_dialog_tests.cpp", "tests/building_plan_projection_tests.cpp", "tests/architectural_schedule_tests.cpp", "tests/desktop_smoke.cpp"),
+        "anchors": ("RectangularColumn", "CircularColumn", "Beam", "make_beam", "building", "schedule", "volume"),
+        "tests": ("building_objects", "building_entities", "building_plan_projection", "architectural_schedule", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers local beam/column authoring, projection, schedules, and history. Complete commercial detailing, physical output, and production qualification remain open.",
+    },
+    "ARCH-MOD-005": {
+        "acceptance": "Flat, sloped, gable, and hip roof fixtures retain defining pitch, joins, openings, materials, semantic identity, and plan/elevation/section projections.",
+        "sources": ("include/sketch/roof_join_semantics.hpp", "src/core/roof_join_semantics.cpp", "src/core/document.cpp", "src/architecture/architecture.cpp", "src/visualization/native_model_view.cpp", "src/architecture/building_objects.cpp", "src/architecture/building_entity.cpp", "src/architecture/building_plan_projection.cpp", "src/desktop/building_object_dialog.cpp", "src/desktop/main_window.cpp", "tests/building_object_tests.cpp", "tests/roof_join_tests.cpp", "tests/building_object_dialog_tests.cpp", "tests/building_plan_projection_tests.cpp", "tests/desktop_smoke.cpp"),
+        "anchors": ("SlopedRoofPanel", "GableRoof", "HipRoof", "RoofOpening", "cut_roof_openings", "roof_join", "pitch"),
+        "tests": ("building_objects", "roof_join", "building_plan_projection", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers supported local roof forms, cuts, joins, and projections. Unsupported roof variants, physical output, native Apex fidelity, and production acceptance remain open.",
+    },
+    "ARCH-MOD-006": {
+        "acceptance": "Stair, landing, and railing fixtures validate dimensions and level links, produce semantic solids and plan projections, and survive editable history and save/reopen.",
+        "sources": ("src/architecture/building_objects.cpp", "src/architecture/building_entity.cpp", "include/sketch/vertical_level_document_adapter.hpp", "src/core/vertical_level_document_adapter.cpp", "src/core/document.cpp", "src/architecture/building_plan_projection.cpp", "src/desktop/building_object_dialog.cpp", "src/desktop/main_window.cpp", "tests/building_object_tests.cpp", "tests/building_object_dialog_tests.cpp", "tests/building_plan_projection_tests.cpp", "tests/document_tests.cpp", "tests/architectural_schedule_tests.cpp", "tests/desktop_smoke.cpp"),
+        "anchors": ("StairFlight", "StairLanding", "Railing", "level_connection", "top rail", "rise", "undo"),
+        "tests": ("building_objects", "building_entities", "building_plan_projection", "document_commands", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers supported local stairs, landings, railings, level links, and history. Complete code-compliant assemblies, physical output, and production qualification remain open.",
+    },
+    "ARCH-MOD-007": {
+        "acceptance": "Level, floor-to-floor, reference-grid, and terrain fixtures validate explicit vertical and site references and persist through the shared document path.",
+        "sources": ("include/sketch/vertical_levels.hpp", "src/core/vertical_levels.cpp", "include/sketch/reference_grid.hpp", "src/core/reference_grid.cpp", "src/core/document.cpp", "src/desktop/main_window.cpp", "src/desktop/plan_canvas.cpp", "tests/vertical_levels_tests.cpp", "tests/reference_grid_tests.cpp", "tests/document_tests.cpp", "tests/desktop_smoke.cpp", "include/sketch/terrain_surface.hpp", "src/core/terrain_surface.cpp", "tests/terrain_surface_tests.cpp", "docs/vertical-levels.md", "docs/reference-grids.md", "docs/terrain-surfaces.md"),
+        "anchors": ("VerticalLevel", "FloorToFloorLink", "ReferenceGridModel", "TerrainSurface", "elevation", "alignment", "provenance"),
+        "tests": ("vertical_levels", "reference_grid", "terrain_surface", "document_commands", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers local level, grid, terrain, and alignment semantics. Survey-grade site data, external references, and production qualification remain open.",
+    },
+    "ARCH-MOD-008": {
+        "acceptance": "Assembly catalogs retain separate type and instance properties, material slots, quantity definitions, placements, overrides, and deterministic schedule behavior.",
+        "sources": ("include/sketch/assembly_model.hpp", "src/core/assembly_model.cpp", "tests/assembly_model_tests.cpp", "include/sketch/desktop/main_window.hpp", "src/desktop/main_window.cpp", "tests/desktop_smoke.cpp", "docs/assemblies.md"),
+        "anchors": ("AssemblyModel", "AssemblyType", "AssemblyMaterial", "AssemblyInstance", "quantity", "material", "placement"),
+        "tests": ("assembly_model", "architectural_schedule", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers local reusable assembly semantics and catalog editing. A complete production library, native Apex parity, and commercial project qualification remain open.",
+    },
+    "ARCH-MOD-010": {
+        "acceptance": "Existing, demolished, and proposed phases remain explicit, selectable, comparable, and persist through shared document history and coordinated workspace visibility.",
+        "sources": ("include/sketch/model_phases.hpp", "src/core/model_phases.cpp", "src/desktop/main_window.cpp", "tests/model_phases_tests.cpp", "tests/desktop_smoke.cpp", "docs/phases-alternatives.md"),
+        "anchors": ("ModelPhase", "existing", "demolished", "proposed", "active_alternative", "compare", "undo"),
+        "tests": ("model_phases", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers deterministic phase semantics and local workspace switching. Full coordinated issue-set output, native Apex compatibility, and production acceptance remain open.",
+    },
+    "ARCH-3D-001": {
+        "acceptance": "The native 3D view consumes the same semantic document objects used by architectural and measurement workflows, supports selection/translation, and emits a deterministic native image path.",
+        "sources": ("src/visualization/native_model_view.cpp", "src/desktop/main_window.cpp", "tests/native_view_tests.cpp", "tests/desktop_smoke.cpp", "docs/native-3d-view.md"),
+        "anchors": ("NativeModelView", "setSnapshot", "exportViewImage", "AIS_Shape", "OCCT", "selection", "translation"),
+        "tests": ("desktop_workflow",),
+        "qualification_boundary": "This evidence covers shared semantic decoding and the desktop smoke path. Native OpenGL/window capture, GPU-driver behavior, and full production 3D qualification remain open.",
+    },
+    "ARCH-VIEW-001": {
+        "acceptance": "Plan, elevation, and section definitions project the same semantic building objects and remain linked to typed sheet view definitions and persisted viewports.",
+        "sources": ("include/sketch/building_view_projection.hpp", "src/architecture/building_view_projection.cpp", "tests/building_view_projection_tests.cpp", "src/desktop/main_window.cpp", "tests/desktop_smoke.cpp", "docs/architectural-projections.md", "include/sketch/sheet_view_model.hpp", "src/core/sheet_view_model.cpp", "tests/sheet_view_model_tests.cpp", "include/sketch/sheet_view_entity_codec.hpp", "src/core/sheet_view_entity_codec.cpp", "tests/sheet_view_entity_codec_tests.cpp", "docs/sheets-views.md"),
+        "anchors": ("BuildingViewKind", "project_building_view", "CoordinatedView", "plan", "elevation", "section", "SheetViewModel", "viewport"),
+        "tests": ("building_view_projection", "sheet_view_model", "sheet_view_entity_codec", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers deterministic local projection and view persistence. Complete hidden-line/detail production behavior, printer calibration, and native Apex compatibility remain open.",
+    },
+    "ARCH-VIEW-002": {
+        "acceptance": "Section and coordinated view definitions retain cut depth, line treatment, material hatching, detail level, annotations, callouts, and overlay metadata through validation and persistence.",
+        "sources": ("include/sketch/building_view_projection.hpp", "src/architecture/building_view_projection.cpp", "tests/building_view_projection_tests.cpp", "include/sketch/sheet_view_model.hpp", "src/core/sheet_view_model.cpp", "tests/sheet_view_model_tests.cpp", "include/sketch/sheet_view_entity_codec.hpp", "src/core/sheet_view_entity_codec.cpp", "tests/sheet_view_entity_codec_tests.cpp", "docs/architectural-projections.md", "docs/sheets-views.md"),
+        "anchors": ("cut_depth_m", "cut_line_mm", "hatch_pattern", "detail", "callout", "overlay", "section"),
+        "tests": ("building_view_projection", "sheet_view_model", "sheet_view_entity_codec"),
+        "qualification_boundary": "This evidence covers deterministic section/view metadata and persistence. Full detail-overlay authoring, production annotation standards, and print qualification remain open.",
+    },
+    "ARCH-SCH-001": {
+        "acceptance": "Door/window, room, material, assembly, and building schedule fixtures expose marks, dimensions, counts, areas, deductions, net quantities, and source references.",
+        "sources": ("include/sketch/document_schedule_adapter.hpp", "src/core/document_schedule_adapter.cpp", "include/sketch/architectural_schedule.hpp", "src/architecture/architectural_schedule.cpp", "tests/document_schedule_adapter_tests.cpp", "tests/architectural_schedule_tests.cpp", "include/sketch/schedule_model.hpp", "src/core/schedule_model.cpp", "tests/schedule_model_tests.cpp", "docs/schedules.md"),
+        "anchors": ("ScheduleRowKind", "build_architectural_schedules", "material_summary", "deduction", "net", "quantity", "source"),
+        "tests": ("document_schedule_adapter", "architectural_schedule", "schedule_model"),
+        "qualification_boundary": "This evidence covers deterministic schedule projection and source-backed quantities. Complete market-specific schedules, native Apex fidelity, and production issue-set qualification remain open.",
+    },
+    "ARCH-SCH-002": {
+        "acceptance": "Editable schedule cells generate normal source-document commands, while calculated cells are read-only and explain their source references.",
+        "sources": ("include/sketch/document_schedule_adapter.hpp", "src/core/document_schedule_adapter.cpp", "include/sketch/schedule_model.hpp", "src/core/schedule_model.cpp", "tests/document_schedule_adapter_tests.cpp", "tests/schedule_model_tests.cpp", "src/desktop/main_window.cpp", "tests/desktop_smoke.cpp", "docs/schedules.md"),
+        "anchors": ("make_schedule_edit", "editable", "Calculated schedule cell is read-only", "source", "revision", "undo"),
+        "tests": ("document_schedule_adapter", "schedule_model", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers local schedule edit fencing and read-only calculations. Production schedule standards, external integrations, and complete output certification remain open.",
+    },
+    "ARCH-SHEET-001": {
+        "acceptance": "Sheets persist title blocks, revisions, callouts, schedules, coordinated viewports, and independent viewport scales with graph validation.",
+        "sources": ("include/sketch/sheet_view_model.hpp", "src/core/sheet_view_model.cpp", "tests/sheet_view_model_tests.cpp", "include/sketch/sheet_view_entity_codec.hpp", "src/core/sheet_view_entity_codec.cpp", "tests/sheet_view_entity_codec_tests.cpp", "src/desktop/main_window.cpp", "tests/desktop_smoke.cpp", "docs/sheets-views.md"),
+        "anchors": ("DrawingSheet", "title_block", "revisions", "callouts", "schedules", "viewports", "scale_denominator"),
+        "tests": ("sheet_view_model", "sheet_view_entity_codec", "sheet_output_scene", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers the local typed sheet graph and desktop output path. Interactive layout ergonomics, printer calibration, and complete permit-set qualification remain open.",
+    },
+    "ARCH-EDIT-001": {
+        "acceptance": "Supported architectural entities share creation, selection, property editing, transforms, duplication, deletion, undo/redo, and save/reopen command contracts.",
+        "sources": ("include/sketch/architectural_workflow_contract.hpp", "src/core/architectural_workflow_contract.cpp", "include/sketch/architectural_document_adapter.hpp", "src/core/architectural_document_adapter.cpp", "include/sketch/desktop/main_window.hpp", "src/desktop/main_window.cpp", "tests/architectural_workflow_contract_tests.cpp", "tests/architectural_document_adapter_tests.cpp", "tests/desktop_smoke.cpp", "docs/architectural-workflow-contract.md"),
+        "anchors": ("ArchitecturalAction", "property_edit", "transform", "duplicate", "erase", "revision", "undo", "save"),
+        "tests": ("architectural_workflow_contract", "architectural_document_adapter", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers the shared local command contract and supported desktop objects. Complete object-by-object production certification and native Apex parity remain open.",
+    },
+    "ARCH-REL-001": {
+        "acceptance": "Typed relationship graphs identify stable object references, validate relationship kinds and states, and preserve explicit links across views and output adapters.",
+        "sources": ("include/sketch/typed_relationships.hpp", "src/core/typed_relationships.cpp", "docs/typed-relationships.md"),
+        "anchors": ("TypedRelationship", "RelationshipKind", "RelationshipState", "stable", "reference", "validate"),
+        "tests": ("typed_relationships",),
+        "qualification_boundary": "This evidence covers the deterministic typed relationship graph. Full production cross-view certification and native Apex relationship mapping remain open.",
+    },
+    "ARCH-OUTPUT-001": {
+        "acceptance": "Residential and light-commercial architectural workflow contracts cover shared semantic objects, plans, elevations, sections, 3D, schedules, sheets, alternatives, and save/reopen output requirements.",
+        "sources": ("include/sketch/architectural_workflow_contract.hpp", "src/core/architectural_workflow_contract.cpp", "tests/architectural_workflow_contract_tests.cpp", "include/sketch/architectural_document_adapter.hpp", "src/core/architectural_document_adapter.cpp", "src/desktop/main_window.cpp", "src/desktop/plan_canvas.cpp", "src/architecture/architectural_schedule.cpp", "src/core/sheet_view_model.cpp", "tests/architectural_document_adapter_tests.cpp", "tests/architectural_schedule_tests.cpp", "tests/sheet_view_model_tests.cpp", "tests/desktop_smoke.cpp", "docs/architectural-workflow-contract.md", "docs/sheets-views.md", "docs/desktop-workflow.md"),
+        "anchors": ("ArchitecturalOutputKind", "plan", "elevation", "section", "view_3d", "schedule", "sheet", "issue_revision"),
+        "tests": ("architectural_workflow_contract", "architectural_document_adapter", "architectural_schedule", "sheet_view_model", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers the shared local architectural workflow foundation. Complete integrated residential/commercial fixtures, physical output, and the unified production gate remain open.",
+    },
+    "UX-WORK-001": {
+        "acceptance": "The Windows workspace exposes a compact canvas-centered shell with navigator, tool rail, contextual inspector, measurement readout, and architectural 3D pane.",
+        "sources": ("src/desktop/main_window.cpp", "tests/desktop_smoke.cpp", "docs/workspace-ui.md"),
+        "anchors": ("workspaceSplitter", "workspaceTabs", "tool rail", "navigator", "inspector", "measurement", "canvas"),
+        "tests": ("desktop_workflow", "workspace_navigation"),
+        "qualification_boundary": "This evidence covers the local desktop shell and its deterministic widget contract. Visual acceptance across all Windows themes, DPI modes, and production hardware remains open.",
+    },
+    "UX-WORK-002": {
+        "acceptance": "Selection drives contextual dimensions, relationships, styling, calibration, classifications, and calculation details through the inspector and related command surfaces.",
+        "sources": ("src/desktop/main_window.cpp", "tests/desktop_smoke.cpp", "docs/workspace-ui.md"),
+        "anchors": ("selected", "inspector", "dimension", "calibration", "classification", "calculation", "contextual"),
+        "tests": ("desktop_workflow",),
+        "qualification_boundary": "This evidence covers local contextual selection behavior. Full usability review, physical input ergonomics, and production accessibility qualification remain open.",
+    },
+    "UX-WORK-003": {
+        "acceptance": "Split plan/3D views, workspace tabs, saved profiles, light/dark themes, and high-contrast field presentation persist and apply locally.",
+        "sources": ("src/desktop/main_window.cpp", "src/visualization/native_model_view.cpp", "tests/desktop_smoke.cpp", "docs/workspace-ui.md", "docs/workspace-accessibility.md"),
+        "anchors": ("workspaceTabs", "NativeModelView", "WorkspaceTheme", "high_contrast", "dark", "light", "workspace profiles"),
+        "tests": ("desktop_workflow", "workspace_navigation", "visibility_workflow"),
+        "qualification_boundary": "This evidence covers local workspace presentation and persistence. Full GPU, DPI, accessibility, and clean-machine qualification remain open.",
+    },
+    "UX-ACCESS-001": {
+        "acceptance": "The accessibility profile validates keyboard navigation, predictable focus, accessible properties, high contrast, themes, and declared 100%, 150%, and 200% layouts.",
+        "sources": ("include/sketch/workspace_accessibility.hpp", "src/core/workspace_accessibility.cpp", "tests/workspace_accessibility_tests.cpp", "docs/workspace-accessibility.md", "scripts/production_qualification.py", "docs/production-qualification.md"),
+        "anchors": ("keyboard_navigation", "predictable_focus", "accessible_properties", "high_contrast", "DpiLayoutQualification", "150", "200"),
+        "tests": ("workspace_accessibility", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers the local accessibility contract and declared layouts. Physical screen-reader, keyboard-only, DPI, and assistive-technology qualification remain open.",
+    },
+    "UX-INPUT-001": {
+        "acceptance": "Pen/touch controls and the on-screen measurement keypad share the keyboard precision command path and retain pressure-independent undoable edits.",
+        "sources": ("include/sketch/workspace_accessibility.hpp", "src/core/workspace_accessibility.cpp", "tests/workspace_accessibility_tests.cpp", "src/desktop/main_window.cpp", "tests/desktop_smoke.cpp", "docs/workspace-accessibility.md"),
+        "anchors": ("pen_controls", "touch_controls", "measurement_keypad", "keyboard_navigation", "keypad", "pressure", "undo"),
+        "tests": ("workspace_accessibility", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers synthetic pen/touch event routing and keypad semantics. Real devices, multi-touch ergonomics, and production field qualification remain open.",
+    },
+})
+
+
 def _load_module(name: str, path: pathlib.Path):
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:

@@ -1,0 +1,144 @@
+{
+  "acceptance": "Hosted door and window fixtures validate host relationships, edit dimensions and handing, derive analytic presentation geometry, and preserve the opening graph through document history.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "opening_assembly",
+          "status": "passed"
+        },
+        {
+          "name": "door_operation",
+          "status": "passed"
+        },
+        {
+          "name": "modal_authoring",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "opening_assembly",
+          "status": "passed"
+        },
+        {
+          "name": "door_operation",
+          "status": "passed"
+        },
+        {
+          "name": "modal_authoring",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers typed hosted openings and local editing. Complete catalog coverage, physical hardware, native Apex fidelity, and production sheet qualification remain open.",
+  "requirement_id": "ARCH-MOD-002",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "OpeningAssembly",
+    "validate_opening_assembly",
+    "HostedOpeningDialog",
+    "DoorOperation",
+    "wall_id",
+    "swing",
+    "opening"
+  ],
+  "source_files": [
+    {
+      "path": "src/architecture/architecture.cpp",
+      "sha256": "b3daf993f54593fba9d10d8fe8a1fa09c838efeb0bab89572bd84bf3d043af1f",
+      "size": 38852
+    },
+    {
+      "path": "include/sketch/opening_assembly.hpp",
+      "sha256": "b40450279d87ae6871b69c06f522cc95444cdb072099af014dee43004f06907c",
+      "size": 1435
+    },
+    {
+      "path": "src/core/opening_assembly.cpp",
+      "sha256": "f192cd1e1d55c733b55d3c70b5f68ec26ffbe6d3263c7a2d4f1b1b2cb74bbcc2",
+      "size": 4908
+    },
+    {
+      "path": "src/desktop/hosted_opening_dialog.cpp",
+      "sha256": "69ea788cb56cdccb79583d55ef65291ba042f06aa3906305aa05afdc9c13218c",
+      "size": 6261
+    },
+    {
+      "path": "src/core/door_operation.cpp",
+      "sha256": "550c28b6e2bdebb4358eae28ae06ed44d8d7c0f19c5b54c97657e9541a23f22c",
+      "size": 3216
+    },
+    {
+      "path": "tests/door_operation_tests.cpp",
+      "sha256": "d93fb8dd85804e94a6d669beb78c4baeffac0bb458693aa037d3343586ad141b",
+      "size": 4301
+    },
+    {
+      "path": "tests/opening_assembly_tests.cpp",
+      "sha256": "6c99cc5032e75eea4e906a6ba32577a4bb093c4580b656ddfaf9b99fbdace25c",
+      "size": 4355
+    },
+    {
+      "path": "src/desktop/main_window.cpp",
+      "sha256": "944a00fc2959043c1f5b3b2ebfa50f287421a0338ee6908d6e926bf429f32223",
+      "size": 1240133
+    },
+    {
+      "path": "tests/desktop_smoke.cpp",
+      "sha256": "3d4ca2bcaf7e0cc91019e52bf599882ecd11061f4e502e272614b694816d5abe",
+      "size": 381257
+    },
+    {
+      "path": "tests/modal_authoring_tests.cpp",
+      "sha256": "f6515b599cc83f2cd658aa622902499f94b3e7a0407314b98334eeb2e2ecea27",
+      "size": 8898
+    },
+    {
+      "path": "docs/hosted-openings.md",
+      "sha256": "6e9b53dc9c0fb8faeef080641fc759d67503ad4628d6730a0eb3daf31635f1e6",
+      "size": 4228
+    }
+  ],
+  "source_tree_sha256": "085ae56428e369fd82fe2631d21b001a94da9efb0cc3f510218fd33d5ae53df8",
+  "tests": [
+    "opening_assembly",
+    "door_operation",
+    "modal_authoring",
+    "desktop_workflow"
+  ]
+}

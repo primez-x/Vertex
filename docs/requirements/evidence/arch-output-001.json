@@ -1,0 +1,179 @@
+{
+  "acceptance": "Residential and light-commercial architectural workflow contracts cover shared semantic objects, plans, elevations, sections, 3D, schedules, sheets, alternatives, and save/reopen output requirements.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "architectural_workflow_contract",
+          "status": "passed"
+        },
+        {
+          "name": "architectural_document_adapter",
+          "status": "passed"
+        },
+        {
+          "name": "architectural_schedule",
+          "status": "passed"
+        },
+        {
+          "name": "sheet_view_model",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "architectural_workflow_contract",
+          "status": "passed"
+        },
+        {
+          "name": "architectural_document_adapter",
+          "status": "passed"
+        },
+        {
+          "name": "architectural_schedule",
+          "status": "passed"
+        },
+        {
+          "name": "sheet_view_model",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers the shared local architectural workflow foundation. Complete integrated residential/commercial fixtures, physical output, and the unified production gate remain open.",
+  "requirement_id": "ARCH-OUTPUT-001",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "ArchitecturalOutputKind",
+    "plan",
+    "elevation",
+    "section",
+    "view_3d",
+    "schedule",
+    "sheet",
+    "issue_revision"
+  ],
+  "source_files": [
+    {
+      "path": "include/sketch/architectural_workflow_contract.hpp",
+      "sha256": "400da221ca35e29c37af4e5e4b56d8580c2c1578efb32bf601fa1072305cc698",
+      "size": 3238
+    },
+    {
+      "path": "src/core/architectural_workflow_contract.cpp",
+      "sha256": "c8133657aad050d4a23d7e80f65ab6677827f2edca4576169f84021aa74fb4d8",
+      "size": 8492
+    },
+    {
+      "path": "tests/architectural_workflow_contract_tests.cpp",
+      "sha256": "77632cecc82e879e337feb5b2b3eec09664230280f1c4740445f41c302698c47",
+      "size": 6917
+    },
+    {
+      "path": "include/sketch/architectural_document_adapter.hpp",
+      "sha256": "7330fa6d78083138a7472e67d6d196631eefb5e7885aab8e20786b0f53ba4584",
+      "size": 1742
+    },
+    {
+      "path": "src/core/architectural_document_adapter.cpp",
+      "sha256": "a5d1711dbc489eaee8b216faf72d63b0072a995efcee6c798d28b1c63b7b6782",
+      "size": 28769
+    },
+    {
+      "path": "src/desktop/main_window.cpp",
+      "sha256": "944a00fc2959043c1f5b3b2ebfa50f287421a0338ee6908d6e926bf429f32223",
+      "size": 1240133
+    },
+    {
+      "path": "src/desktop/plan_canvas.cpp",
+      "sha256": "8200a8c4e6d753e12d00253b9baed280360b6e1cf5ec42a752a45f2784b2fa47",
+      "size": 62610
+    },
+    {
+      "path": "src/architecture/architectural_schedule.cpp",
+      "sha256": "b3358d21127863b5536ce18cafb9bebbf363843c415a4a775540abe4fccc9e0c",
+      "size": 40539
+    },
+    {
+      "path": "src/core/sheet_view_model.cpp",
+      "sha256": "115728b137b8794afe9bf2f8e585d72b869aecd661ea6e4b58133e7b8ba5d031",
+      "size": 18833
+    },
+    {
+      "path": "tests/architectural_document_adapter_tests.cpp",
+      "sha256": "86144e35a7389352ff8ecb5d1ae0aa6c3855388cdae49774cdf477dce102a648",
+      "size": 26612
+    },
+    {
+      "path": "tests/architectural_schedule_tests.cpp",
+      "sha256": "4288419266482d4016fb241128b8e50b9d39c75b1a41cef0a1daa463aeb68b4c",
+      "size": 24928
+    },
+    {
+      "path": "tests/sheet_view_model_tests.cpp",
+      "sha256": "099839ba75c1821a6f0501f72596fd352cf0fd4c4a4d0a333492409eeec83437",
+      "size": 14994
+    },
+    {
+      "path": "tests/desktop_smoke.cpp",
+      "sha256": "3d4ca2bcaf7e0cc91019e52bf599882ecd11061f4e502e272614b694816d5abe",
+      "size": 381257
+    },
+    {
+      "path": "docs/architectural-workflow-contract.md",
+      "sha256": "4f1cffadff23ed3c5b9431af79fcc74834461fbd51d7aa0c6f9ccf5eeb2ce5ea",
+      "size": 4049
+    },
+    {
+      "path": "docs/sheets-views.md",
+      "sha256": "4f634540a015cc5d3259f70137ccc9f4ec616d9efc261cfe68c07954d7d6f002",
+      "size": 6543
+    },
+    {
+      "path": "docs/desktop-workflow.md",
+      "sha256": "3de1796c3b8131e5d0e1abc9dfabaf834e424a3b85622e7b517dc88806630b0d",
+      "size": 39626
+    }
+  ],
+  "source_tree_sha256": "085ae56428e369fd82fe2631d21b001a94da9efb0cc3f510218fd33d5ae53df8",
+  "tests": [
+    "architectural_workflow_contract",
+    "architectural_document_adapter",
+    "architectural_schedule",
+    "sheet_view_model",
+    "desktop_workflow"
+  ]
+}

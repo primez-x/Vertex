@@ -1,0 +1,76 @@
+{
+  "acceptance": "Typed relationship graphs identify stable object references, validate relationship kinds and states, and preserve explicit links across views and output adapters.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "typed_relationships",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "typed_relationships",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers the deterministic typed relationship graph. Full production cross-view certification and native Apex relationship mapping remain open.",
+  "requirement_id": "ARCH-REL-001",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "TypedRelationship",
+    "RelationshipKind",
+    "RelationshipState",
+    "stable",
+    "reference",
+    "validate"
+  ],
+  "source_files": [
+    {
+      "path": "include/sketch/typed_relationships.hpp",
+      "sha256": "402040f02b35d195e2b41517d8ca8bdf882161a9d78771f5bfc0daa0ee8e3149",
+      "size": 2383
+    },
+    {
+      "path": "src/core/typed_relationships.cpp",
+      "sha256": "46c12e182d1acd286e38c20f9440657c00499cd7978f88f2fc6cf5fcca1d6a96",
+      "size": 5748
+    },
+    {
+      "path": "docs/typed-relationships.md",
+      "sha256": "821a7f362fdd42cf99cd879ca23f69233461fec4a2ac9234f208f39df525ee26",
+      "size": 3175
+    }
+  ],
+  "source_tree_sha256": "085ae56428e369fd82fe2631d21b001a94da9efb0cc3f510218fd33d5ae53df8",
+  "tests": [
+    "typed_relationships"
+  ]
+}
