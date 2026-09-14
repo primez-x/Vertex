@@ -606,6 +606,10 @@ if(BUILD_TESTING)
   # substitute for the explicitly disabled production acceptance gate.
   add_test(NAME completion_audit_contract COMMAND "${Python3_EXECUTABLE}" -m unittest discover
     -s "${CMAKE_SOURCE_DIR}/tests" -p test_completion_audit.py)
+  # Hash-bound architecture workflow evidence is generated from the same
+  # source and CTest records used by the release audit.
+  add_test(NAME workflow_acceptance_evidence_contract COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+    -s "${CMAKE_SOURCE_DIR}/tests" -p test_workflow_acceptance_evidence.py)
   # Explicit production-acceptance gate: fails closed with --release and must be
   # run explicitly via a dedicated CI/lifecycle step.
   add_test(NAME production_acceptance_gate COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/requirement_audit.py" --release)

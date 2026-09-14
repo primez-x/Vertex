@@ -1,0 +1,102 @@
+import importlib.util
+import pathlib
+import tempfile
+import unittest
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "scripts" / "generate_workflow_acceptance_evidence.py"
+
+
+def load_generator():
+    spec = importlib.util.spec_from_file_location("workflow_acceptance_evidence", SCRIPT)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"could not load {SCRIPT}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class WorkflowAcceptanceEvidenceTests(unittest.TestCase):
+    def test_build_evidence_records_both_configurations_and_workflows(self):
+        generator = load_generator()
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source_anchors = {}
+            for rule in generator.WORKFLOW_RULES.values():
+                for relative in rule["sources"]:
+                    source_anchors.setdefault(relative, set()).update(rule["anchors"])
+            for relative, anchors in source_anchors.items():
+                source = root / relative
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text("\n".join(sorted(anchors)) + "\n", encoding="utf-8")
+            for configuration in ("windows-debug", "windows-release"):
+                build = root / "build" / configuration
+                build.mkdir(parents=True)
+                tests = sorted({
+                    test_name
+                    for rule in generator.WORKFLOW_RULES.values()
+                    for test_name in rule["tests"]
+                })
+                inventory = [f"# Source directory: {root}", f"# Build directory: {build}"]
+                inventory.extend(
+                    f'add_test([=[{test_name}]=] "{build}/{test_name}.exe")'
+                    for test_name in tests
+                )
+                (build / "CTestTestfile.cmake").write_text(
+                    "\n".join(inventory) + "\n", encoding="utf-8"
+                )
+                log = ["Start testing: now"]
+                for index, test_name in enumerate(tests, 1):
+                    log.extend([
+                        f"{index}/{len(tests)} Testing: {test_name}",
+                        f"{index}/{len(tests)} Test: {test_name}",
+                        f'Command: "{build}/{test_name}.exe"',
+                        f"Directory: {build}",
+                        "Test Passed.",
+                    ])
+                log.append("End testing: now")
+                temporary = build / "Testing" / "Temporary"
+                temporary.mkdir(parents=True)
+                (temporary / "LastTest.log").write_text(
+                    "\n".join(log) + "\n", encoding="utf-8"
+                )
+
+            evidence = generator.build_evidence(root)
+            self.assertEqual(set(evidence), {"ARCH-MOD-009", "ARCH-MOD-011"})
+            for requirement_id, record in evidence.items():
+                self.assertEqual(record["result"], "pass")
+                self.assertEqual(len(record["ctest"]), 2)
+                self.assertEqual(record["requirement_id"], requirement_id)
+                self.assertTrue(record["source_files"])
+
+    def test_build_evidence_rejects_missing_workflow_test(self):
+        generator = load_generator()
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source_anchors = {}
+            for rule in generator.WORKFLOW_RULES.values():
+                for relative in rule["sources"]:
+                    source_anchors.setdefault(relative, set()).update(rule["anchors"])
+            for relative, anchors in source_anchors.items():
+                source = root / relative
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text("\n".join(sorted(anchors)) + "\n", encoding="utf-8")
+            for configuration in ("windows-debug", "windows-release"):
+                build = root / "build" / configuration
+                build.mkdir(parents=True)
+                (build / "CTestTestfile.cmake").write_text(
+                    f"# Source directory: {root}\n# Build directory: {build}\n",
+                    encoding="utf-8",
+                )
+                temporary = build / "Testing" / "Temporary"
+                temporary.mkdir(parents=True)
+                (temporary / "LastTest.log").write_text(
+                    "Start testing: now\nEnd testing: now\n", encoding="utf-8"
+                )
+            with self.assertRaises(RuntimeError):
+                generator.build_evidence(root)
+
+
+if __name__ == "__main__":
+    unittest.main()

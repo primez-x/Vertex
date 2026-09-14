@@ -291,11 +291,19 @@
     },
     {
       "category": "docs",
-      "path": "docs/requirements/evidence/ops-qa-001.json"
+      "path": "docs/requirements/apex-parity.json"
     },
     {
       "category": "docs",
-      "path": "docs/requirements/apex-parity.json"
+      "path": "docs/requirements/evidence/arch-mod-009.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/arch-mod-011.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/ops-qa-001.json"
     },
     {
       "category": "docs",
@@ -852,6 +860,10 @@
     {
       "category": "source",
       "path": "scripts/generate_analytical_fixture_evidence.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/generate_workflow_acceptance_evidence.py"
     },
     {
       "category": "source",
@@ -1936,6 +1948,10 @@
     {
       "category": "source",
       "path": "tests/test_windows_script_compatibility.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_workflow_acceptance_evidence.py"
     },
     {
       "category": "source",

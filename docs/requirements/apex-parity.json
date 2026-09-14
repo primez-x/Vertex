@@ -581,15 +581,15 @@
         "tests/interchange_profile_tests.cpp",
         "include/sketch/dxf_project_exchange.hpp",
         "src/core/dxf_project_exchange.cpp",
-    "tests/dxf_project_exchange_tests.cpp",
-    "tests/dxf_desktop_workflow_tests.cpp",
-    "include/sketch/ifc_project_exchange.hpp",
-    "src/core/ifc_project_exchange.cpp",
-    "tests/ifc_project_exchange_tests.cpp",
-    "tests/ifc_desktop_workflow_tests.cpp",
-    "docs/interchange-profiles.md"
-  ],
-  "implementation_note": "Fail-closed IFC/DXF/PDF/PROJ worker declarations and attestations are implemented; deterministic native IFC and DXF project-mapping slices now have core and desktop transaction tests, while real worker binaries, broker/runtime enforcement, active worker isolation, and representative cross-application fixtures remain open."
+        "tests/dxf_project_exchange_tests.cpp",
+        "tests/dxf_desktop_workflow_tests.cpp",
+        "include/sketch/ifc_project_exchange.hpp",
+        "src/core/ifc_project_exchange.cpp",
+        "tests/ifc_project_exchange_tests.cpp",
+        "tests/ifc_desktop_workflow_tests.cpp",
+        "docs/interchange-profiles.md"
+      ],
+      "implementation_note": "Fail-closed IFC/DXF/PDF/PROJ worker declarations and attestations are implemented; deterministic native IFC and DXF project-mapping slices now have core and desktop transaction tests, while real worker binaries, broker/runtime enforcement, active worker isolation, and representative cross-application fixtures remain open."
     },
     {
       "id": "COMP-IO-002",
@@ -1873,7 +1873,7 @@
       "requirement": "Model rooms and architectural boundaries separately from appraisal measurement boundaries, with explicit relationships where desired.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "A room can relate to, follow, or remain independent from a measurement boundary without silently conflating classifications or geometry.",
       "package": 4,
       "blocker": null,
@@ -1888,11 +1888,13 @@
         "tests/room_relationship_geometry_tests.cpp",
         "tests/room_relationship_geometry_commit_tests.cpp",
         "docs/room-relationships.md",
-      "src/desktop/main_window.cpp",
-      "tests/desktop_smoke.cpp",
-      "docs/desktop-workflow.md"
-    ],
-    "implementation_note": "Room, appraisal-boundary, and architectural-wall references have separate kinds with independent/follows/derived-from relations and graph validation. A typed room_relationships Document entity and Windows editor now persist and validate declarations through undoable history; selected closed geometry can be copied into a distinct named room_boundary entity; architectural room volumes add explicit boundary, hole, height, and elevation semantics while remaining separate from room_boundary; a detached proposal engine validates rigid target-first propagation and multi-driver agreement without mutation; a revision-bound Document adapter commits identified and receipt-backed boundary changes atomically with dependent dimensions and digest/stale checks; the Windows editor provides a visible canvas preview and confirmation step. Controlled retargeting now replaces one declared target through a validated, revision-checked, undoable operation, rejects missing targets, no-op edits, wrong relation kinds, and cycles, and preserves geometry until propagation is separately confirmed. Production evidence remains open."
+        "src/desktop/main_window.cpp",
+        "tests/desktop_smoke.cpp",
+        "docs/desktop-workflow.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
+      ],
+      "implementation_note": "Room, appraisal-boundary, and architectural-wall references have separate kinds with independent/follows/derived-from relations and graph validation. A typed room_relationships Document entity and Windows editor now persist and validate declarations through undoable history; selected closed geometry can be copied into a distinct named room_boundary entity; architectural room volumes add explicit boundary, hole, height, and elevation semantics while remaining separate from room_boundary; a detached proposal engine validates rigid target-first propagation and multi-driver agreement without mutation; a revision-bound Document adapter commits identified and receipt-backed boundary changes atomically with dependent dimensions and digest/stale checks; the Windows editor provides a visible canvas preview and confirmation step. Controlled retargeting replaces one declared target through a validated, revision-checked, undoable operation, rejects missing targets, no-op edits, wrong relation kinds, and cycles, and preserves geometry until propagation is separately confirmed. Current Debug/Release workflow evidence covers relation creation, independent semantics, retarget geometry preservation, undo/redo, propagation, and save/reopen; imported Apex and production compatibility evidence remain open."
     },
     {
       "id": "ARCH-MOD-010",
@@ -1919,7 +1921,7 @@
       "requirement": "Support mutually exclusive remodeling alternatives over a shared existing model with clear comparison state.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Alternative fixtures switch, compare, save, and print without contaminating one another or changing the shared existing state.",
       "package": 4,
       "blocker": null,
@@ -1929,9 +1931,11 @@
         "src/desktop/main_window.cpp",
         "tests/model_phases_tests.cpp",
         "tests/desktop_smoke.cpp",
-        "docs/phases-alternatives.md"
+        "docs/phases-alternatives.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Mutually exclusive remodeling alternatives over a shared baseline and deterministic comparison state are implemented; the Windows manager now exposes a read-only baseline-versus-alternative comparison list with stable controls. The Windows desktop smoke workflow proves coordinated plan, elevation, and section output, undo/redo restoration, and alternative save/reopen output stability. Imported Apex projects, physical printing, and broader production qualification remain open."
+      "implementation_note": "Mutually exclusive remodeling alternatives over a shared baseline and deterministic comparison state are implemented; the Windows manager exposes a read-only baseline-versus-alternative comparison list with stable controls. Current Debug/Release workflow evidence covers coordinated plan, elevation, and section output, undo/redo restoration, comparison isolation, and alternative save/reopen output stability. Imported Apex projects, physical printing, and broader production qualification remain open."
     },
     {
       "id": "ARCH-3D-001",
@@ -2350,7 +2354,7 @@
       ],
       "implementation_note": "The deterministic engine declares portable resource paths and private-source provenance, and its fixture is allowlisted; package hash/license audit and clean-machine qualification remain open."
     },
-  {
+    {
       "id": "REC-001",
       "area": "recovery",
       "requirement": "Provide local autosave, recoverable history, and crash/power-loss recovery with explicit edited, autosaved, and saved states.",

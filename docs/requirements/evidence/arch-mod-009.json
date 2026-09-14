@@ -1,0 +1,154 @@
+{
+  "acceptance": "A room can relate to, follow, or remain independent from a measurement boundary without silently conflating classifications or geometry.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ed70f8658699eb2386a9ae034b72c1fbf88fdb514ac5a96b7594d591f0779730",
+        "size": 137626
+      },
+      "tests": [
+        {
+          "name": "room_relationships",
+          "status": "passed"
+        },
+        {
+          "name": "room_relationship_geometry",
+          "status": "passed"
+        },
+        {
+          "name": "room_relationship_geometry_commit",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "6fafe7930f2c101cc24cec7dbb75d93cd6410784c56548b9f303a6da5b4f6d67",
+        "size": 138163
+      },
+      "tests": [
+        {
+          "name": "room_relationships",
+          "status": "passed"
+        },
+        {
+          "name": "room_relationship_geometry",
+          "status": "passed"
+        },
+        {
+          "name": "room_relationship_geometry_commit",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers deterministic relationship semantics, controlled retargeting, geometry propagation, and the Windows workflow on the development host. It does not certify imported Apex files, physical devices, printing, or the unified release gate.",
+  "requirement_id": "ARCH-MOD-009",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "RoomRelationshipSnapshot",
+    "room_boundary",
+    "appraisal_measurement_boundary",
+    "retarget",
+    "propagation",
+    "independent",
+    "undo"
+  ],
+  "source_files": [
+    {
+      "path": "include/sketch/room_relationships.hpp",
+      "sha256": "c0884cdf880e2bfb4de0826e5ea821ed912979c02e902d7bbcdef8e54c4995ef",
+      "size": 2221
+    },
+    {
+      "path": "src/core/room_relationships.cpp",
+      "sha256": "09f2446d5621ec7c3eb65a0b723859f73ac3a63c3a0cc0a6481a95e37c78ca56",
+      "size": 9709
+    },
+    {
+      "path": "include/sketch/room_relationship_geometry.hpp",
+      "sha256": "9b819b6b5e8108accbb091dbfaf9ee378b6e0fa43eaf4717416f300f0c81d671",
+      "size": 1906
+    },
+    {
+      "path": "src/core/room_relationship_geometry.cpp",
+      "sha256": "37bd1732f2bf03d3aec2e3f63f5782c3b2e4401c7da97363e00914b82a238c00",
+      "size": 17716
+    },
+    {
+      "path": "include/sketch/room_relationship_geometry_commit.hpp",
+      "sha256": "4b5d07466cabbe46e09d4d0de6f60e24558c947560cbdbec770e4cf3ec89100e",
+      "size": 4349
+    },
+    {
+      "path": "src/core/room_relationship_geometry_commit.cpp",
+      "sha256": "0131669d4b85d756616b32c5f62f0f7d64ff0fd0cb596bd27eaf48103b244ca0",
+      "size": 15631
+    },
+    {
+      "path": "tests/room_relationships_tests.cpp",
+      "sha256": "1ada8c2b49198efac43884eaeea502b957fb4d661f8380577794b07cbc9fab61",
+      "size": 6916
+    },
+    {
+      "path": "tests/room_relationship_geometry_tests.cpp",
+      "sha256": "77bc3016e804ab7717c394912cc11473faa606845c8e9c8442647f02c2ddca20",
+      "size": 10594
+    },
+    {
+      "path": "tests/room_relationship_geometry_commit_tests.cpp",
+      "sha256": "37471cad5ae914a67e6d4a38586a18dea587b0ff9f84e6654cb967248c9a3055",
+      "size": 11300
+    },
+    {
+      "path": "docs/room-relationships.md",
+      "sha256": "36aaa32cf44ae9acf532394b6583fbffd9084fa4ee91b8d805087b273c0a7fe4",
+      "size": 5243
+    },
+    {
+      "path": "src/desktop/main_window.cpp",
+      "sha256": "944a00fc2959043c1f5b3b2ebfa50f287421a0338ee6908d6e926bf429f32223",
+      "size": 1240133
+    },
+    {
+      "path": "tests/desktop_smoke.cpp",
+      "sha256": "3d4ca2bcaf7e0cc91019e52bf599882ecd11061f4e502e272614b694816d5abe",
+      "size": 381257
+    },
+    {
+      "path": "docs/desktop-workflow.md",
+      "sha256": "3de1796c3b8131e5d0e1abc9dfabaf834e424a3b85622e7b517dc88806630b0d",
+      "size": 39626
+    }
+  ],
+  "source_tree_sha256": "333cbbcedfa4a862be162f1143f66452054331c4931811f5ca59d5147b9cc92c",
+  "tests": [
+    "room_relationships",
+    "room_relationship_geometry",
+    "room_relationship_geometry_commit",
+    "desktop_workflow"
+  ]
+}

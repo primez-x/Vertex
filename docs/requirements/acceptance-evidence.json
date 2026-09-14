@@ -1,12 +1,32 @@
 {
+  "ARCH-MOD-009": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/arch-mod-009.json",
+        "sha256": "85369d29f77da134e827d556e00a886d527769d3df625faa273cdb4fa1bbb874"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "333cbbcedfa4a862be162f1143f66452054331c4931811f5ca59d5147b9cc92c"
+  },
+  "ARCH-MOD-011": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/arch-mod-011.json",
+        "sha256": "0a8b256c4bc2513844ae06c83d846b004da2fdfb2f10d543bcc6a3a6743e10be"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "333cbbcedfa4a862be162f1143f66452054331c4931811f5ca59d5147b9cc92c"
+  },
   "OPS-QA-001": {
     "artifacts": [
       {
         "path": "docs/requirements/evidence/ops-qa-001.json",
-        "sha256": "cf754bcf6648a316bcc857673fb42516bbf22a3745d8e068e97972a72067bf54"
+        "sha256": "5f7cc7e62c7ee4e9fb78f8e64aed7992d377d490a859dda6cb9e6f03a45b9abb"
       }
     ],
     "result": "pass",
-    "source_tree_sha256": "ec49b8c5cd6b90bf00e5cb8d67d07393fc6e79548bb2d0d8ac62710a8cf5b8c4"
+    "source_tree_sha256": "333cbbcedfa4a862be162f1143f66452054331c4931811f5ca59d5147b9cc92c"
   }
 }
