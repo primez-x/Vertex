@@ -132,6 +132,25 @@ rounding never changes these stored values.
 
 ## Document contract
 
+### Typed command envelopes
+
+Application edits cross the workspace boundary as a version-1 JSON command
+envelope. `sketch::command_to_json` and `sketch::command_from_json` preserve
+the command kind, expected revision, entity and asset changes, quantities,
+metadata, and boundary transforms. Known envelopes reject unknown fields,
+unsupported versions, invalid identifiers, non-finite coordinates, malformed
+asset hex, and asset digest mismatches before a command can be applied.
+
+The supported `kind` values are `apply_entity_changes`, `name_revision`,
+`translate_boundary`, and `transform_boundary`. An apply envelope contains
+typed `entity_changes` and `asset_changes`; an upsert carries the complete
+entity or asset payload and an erase carries its stable ID. Assets use a
+lowercase `bytes_hex` representation and retain their SHA-256. Translation
+and transform envelopes carry explicit finite `offset`, `pivot`, rotation, and
+reflection fields. `ProjectWorkspace::prepare` round-trips each command
+through this codec on an isolated immutable fork before staging one document
+revision, so one accepted compound operation has one undoable history entry.
+
 Every semantic entity has a stable ID, a type, a JSON `properties` object, a `required` flag,
 and a JSON `extensions` object. IDs are document identity and are never derived from geometry.
 The v1 known types are:

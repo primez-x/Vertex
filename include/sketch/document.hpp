@@ -111,6 +111,13 @@ struct TransformBoundary {
 
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary, TransformBoundary>;
 
+// Commands cross worker, workspace, and persistence boundaries as a strict,
+// versioned JSON envelope.  The codec preserves typed command identity and
+// exact entity/asset payloads; decoding performs structural validation before
+// a caller is allowed to apply the command to a live document.
+[[nodiscard]] nlohmann::json command_to_json(const Command& command);
+[[nodiscard]] Command command_from_json(const nlohmann::json& value);
+
 enum class DocumentErrorCode {
     stale_revision,
     read_only,

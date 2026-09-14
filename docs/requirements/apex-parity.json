@@ -336,7 +336,7 @@
         "src/core/project_workspace_preview_adapters.cpp",
         "tests/project_workspace_preview_adapters_tests.cpp"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "Version-1 JSON command envelopes now preserve every typed Document command, complete entity/asset payloads, SHA-256 checked asset bytes, finite transforms, and strict field/version validation. ProjectWorkspace::prepare round-trips commands through the codec on an immutable fork before staging one revision; compound edits remain atomic, revision-fenced, and undoable. Debug document and workspace adapter tests cover canonical round trips, tampering rejection, assets, transforms, stale sources, and one-step undo/redo; production gate evidence remains open."
     },
     {
       "id": "CORE-DOC-006",

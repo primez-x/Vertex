@@ -30,10 +30,12 @@
 #include <charconv>
 #include <cmath>
 #include <iomanip>
+#include <initializer_list>
 #include <limits>
 #include <random>
 #include <set>
 #include <sstream>
+#include <type_traits>
 #include <unordered_set>
 
 namespace sketch {
@@ -1288,6 +1290,327 @@ Asset Asset::create(std::string id, std::string media_type, std::vector<std::byt
 Asset Asset::create(std::string media_type, std::vector<std::byte> bytes,
                     nlohmann::json metadata) {
     return create(make_stable_id(), std::move(media_type), std::move(bytes), std::move(metadata));
+}
+
+namespace {
+
+void command_exact_fields(const nlohmann::json& value,
+                          std::initializer_list<const char*> fields,
+                          DocumentErrorCode code, std::string_view context) {
+    if (!value.is_object() || value.size() != fields.size()) {
+        document_error(code, std::string(context) + " has unexpected fields");
+    }
+    for (const auto* field : fields) {
+        if (!value.contains(field)) {
+            document_error(code, std::string(context) + " is missing field " + field);
+        }
+    }
+}
+
+Revision command_revision(const nlohmann::json& value, std::string_view context) {
+    if ((!value.is_number_unsigned() && !value.is_number_integer()) ||
+        (value.is_number_integer() && value.get<std::int64_t>() < 0)) {
+        document_error(DocumentErrorCode::invalid_entity,
+                       std::string(context) + " must be a non-negative integer");
+    }
+    try {
+        return value.get<Revision>();
+    } catch (const std::exception&) {
+        document_error(DocumentErrorCode::invalid_entity,
+                       std::string(context) + " is outside the supported revision range");
+    }
+}
+
+std::string command_string(const nlohmann::json& value, std::string_view context,
+                           std::size_t maximum = 1024) {
+    if (!value.is_string()) {
+        document_error(DocumentErrorCode::invalid_entity,
+                       std::string(context) + " must be a string");
+    }
+    const auto result = value.get<std::string>();
+    if (result.empty() || result.size() > maximum || !is_valid_utf8_without_nul(result)) {
+        document_error(DocumentErrorCode::invalid_entity,
+                       std::string(context) + " is invalid");
+    }
+    return result;
+}
+
+double command_number(const nlohmann::json& value, std::string_view context) {
+    if (!value.is_number() || !std::isfinite(value.get<double>())) {
+        document_error(DocumentErrorCode::invalid_entity,
+                       std::string(context) + " must be finite");
+    }
+    return value.get<double>();
+}
+
+nlohmann::json command_vec2_to_json(Vec2 point) {
+    return nlohmann::json{{"x", point.x}, {"y", point.y}};
+}
+
+Vec2 command_vec2_from_json(const nlohmann::json& value, std::string_view context) {
+    command_exact_fields(value, {"x", "y"}, DocumentErrorCode::invalid_entity, context);
+    return {command_number(value.at("x"), std::string(context) + ".x"),
+            command_number(value.at("y"), std::string(context) + ".y")};
+}
+
+nlohmann::json command_transform_to_json(const PlanarTransform& transform) {
+    return nlohmann::json{
+        {"pivot", command_vec2_to_json(transform.pivot)},
+        {"rotation_radians", transform.rotation_radians},
+        {"flip_horizontal", transform.flip_horizontal},
+        {"flip_vertical", transform.flip_vertical},
+        {"offset", command_vec2_to_json(transform.offset)},
+    };
+}
+
+PlanarTransform command_transform_from_json(const nlohmann::json& value) {
+    command_exact_fields(value, {"pivot", "rotation_radians", "flip_horizontal",
+                                  "flip_vertical", "offset"},
+                         DocumentErrorCode::invalid_entity, "command transformation");
+    if (!value.at("flip_horizontal").is_boolean() || !value.at("flip_vertical").is_boolean()) {
+        document_error(DocumentErrorCode::invalid_entity,
+                       "command transformation flip flags must be boolean");
+    }
+    return {command_vec2_from_json(value.at("pivot"), "command transformation pivot"),
+            command_number(value.at("rotation_radians"), "command transformation rotation"),
+            value.at("flip_horizontal").get<bool>(), value.at("flip_vertical").get<bool>(),
+            command_vec2_from_json(value.at("offset"), "command transformation offset")};
+}
+
+std::string command_bytes_to_hex(std::span<const std::byte> bytes) {
+    static constexpr char hex[] = "0123456789abcdef";
+    std::string result(bytes.size() * 2, '0');
+    for (std::size_t index = 0; index < bytes.size(); ++index) {
+        const auto byte = std::to_integer<unsigned char>(bytes[index]);
+        result[index * 2] = hex[byte >> 4U];
+        result[index * 2 + 1] = hex[byte & 0x0fU];
+    }
+    return result;
+}
+
+unsigned char command_hex_digit(char value) {
+    if (value >= '0' && value <= '9') return static_cast<unsigned char>(value - '0');
+    if (value >= 'a' && value <= 'f') return static_cast<unsigned char>(value - 'a' + 10);
+    document_error(DocumentErrorCode::invalid_asset, "serialized asset bytes contain non-hex data");
+}
+
+std::vector<std::byte> command_bytes_from_hex(const nlohmann::json& value) {
+    if (!value.is_string()) {
+        document_error(DocumentErrorCode::invalid_asset, "serialized asset bytes must be a hex string");
+    }
+    const auto encoded = value.get<std::string>();
+    if (encoded.size() % 2 != 0 || encoded.size() > kMaximumAssetBytes * 2) {
+        document_error(DocumentErrorCode::invalid_asset, "serialized asset byte string has invalid length");
+    }
+    std::vector<std::byte> result(encoded.size() / 2);
+    for (std::size_t index = 0; index < result.size(); ++index) {
+        const auto high = command_hex_digit(encoded[index * 2]);
+        const auto low = command_hex_digit(encoded[index * 2 + 1]);
+        result[index] = static_cast<std::byte>((high << 4U) | low);
+    }
+    return result;
+}
+
+nlohmann::json command_entity_to_json(const Entity& entity) {
+    validate_entity(entity);
+    return nlohmann::json{{"id", entity.id}, {"type", entity.type}, {"required", entity.required},
+                          {"properties", entity.properties}, {"extensions", entity.extensions}};
+}
+
+Entity command_entity_from_json(const nlohmann::json& value) {
+    command_exact_fields(value, {"id", "type", "required", "properties", "extensions"},
+                         DocumentErrorCode::invalid_entity, "serialized entity");
+    if (!value.at("required").is_boolean() || !value.at("properties").is_object() ||
+        !value.at("extensions").is_object()) {
+        document_error(DocumentErrorCode::invalid_entity, "serialized entity fields are invalid");
+    }
+    Entity result{command_string(value.at("id"), "serialized entity id", kMaximumIdBytes),
+                  command_string(value.at("type"), "serialized entity type", kMaximumTypeBytes),
+                  value.at("properties"), value.at("required").get<bool>(), value.at("extensions")};
+    validate_entity(result);
+    return result;
+}
+
+nlohmann::json command_asset_to_json(const Asset& asset) {
+    validate_asset(asset);
+    return nlohmann::json{{"id", asset.id}, {"media_type", asset.media_type},
+                          {"sha256", asset.sha256}, {"metadata", asset.metadata},
+                          {"bytes_hex", command_bytes_to_hex(asset.bytes)}};
+}
+
+Asset command_asset_from_json(const nlohmann::json& value) {
+    command_exact_fields(value, {"id", "media_type", "sha256", "metadata", "bytes_hex"},
+                         DocumentErrorCode::invalid_asset, "serialized asset");
+    if (!value.at("metadata").is_object()) {
+        document_error(DocumentErrorCode::invalid_asset, "serialized asset metadata must be an object");
+    }
+    Asset result;
+    result.id = command_string(value.at("id"), "serialized asset id", kMaximumIdBytes);
+    result.media_type = command_string(value.at("media_type"), "serialized asset media type", 256);
+    result.sha256 = command_string(value.at("sha256"), "serialized asset SHA-256", 64);
+    result.metadata = value.at("metadata");
+    result.bytes = command_bytes_from_hex(value.at("bytes_hex"));
+    validate_asset(result);
+    return result;
+}
+
+}  // namespace
+
+nlohmann::json command_to_json(const Command& command) {
+    return std::visit([](const auto& typed) -> nlohmann::json {
+        using T = std::decay_t<decltype(typed)>;
+        if constexpr (std::is_same_v<T, ApplyEntityChanges>) {
+            nlohmann::json entities = nlohmann::json::array();
+            for (const auto& change : typed.entity_changes) {
+                if (change.kind == EntityChangeKind::upsert) {
+                    entities.push_back({{"kind", "upsert"}, {"entity", command_entity_to_json(change.entity)}});
+                } else {
+                    if (!is_valid_identifier(change.entity_id))
+                        document_error(DocumentErrorCode::invalid_entity, "serialized entity erase ID is invalid");
+                    entities.push_back({{"kind", "erase"}, {"entity_id", change.entity_id}});
+                }
+            }
+            nlohmann::json assets = nlohmann::json::array();
+            for (const auto& change : typed.asset_changes) {
+                if (change.kind == AssetChangeKind::upsert) {
+                    assets.push_back({{"kind", "upsert"}, {"asset", command_asset_to_json(change.asset)}});
+                } else {
+                    if (!is_valid_identifier(change.asset_id))
+                        document_error(DocumentErrorCode::invalid_asset, "serialized asset erase ID is invalid");
+                    assets.push_back({{"kind", "erase"}, {"asset_id", change.asset_id}});
+                }
+            }
+            if (typed.message.size() > 1024 || !is_valid_utf8_without_nul(typed.message))
+                document_error(DocumentErrorCode::invalid_entity, "serialized command message is invalid");
+            return nlohmann::json{{"version", 1}, {"kind", "apply_entity_changes"},
+                                  {"expected_revision", typed.expected_revision}, {"message", typed.message},
+                                  {"entity_changes", std::move(entities)}, {"asset_changes", std::move(assets)}};
+        } else if constexpr (std::is_same_v<T, NameRevision>) {
+            validate_revision_name(typed.name);
+            return nlohmann::json{{"version", 1}, {"kind", "name_revision"},
+                                  {"expected_revision", typed.expected_revision}, {"name", typed.name}};
+        } else if constexpr (std::is_same_v<T, TranslateBoundary>) {
+            if (!is_valid_identifier(typed.translation.boundary_id))
+                document_error(DocumentErrorCode::invalid_entity, "serialized boundary ID is invalid");
+            (void)command_number(typed.translation.offset.x, "serialized translation offset.x");
+            (void)command_number(typed.translation.offset.y, "serialized translation offset.y");
+            return nlohmann::json{{"version", 1}, {"kind", "translate_boundary"},
+                                  {"expected_revision", typed.expected_revision},
+                                  {"translation", {{"boundary_id", typed.translation.boundary_id},
+                                      {"offset", command_vec2_to_json(typed.translation.offset)}}}};
+        } else {
+            if (!is_valid_identifier(typed.transformation.boundary_id))
+                document_error(DocumentErrorCode::invalid_entity, "serialized boundary ID is invalid");
+            (void)command_transform_from_json(command_transform_to_json(typed.transformation.transform));
+            return nlohmann::json{{"version", 1}, {"kind", "transform_boundary"},
+                                  {"expected_revision", typed.expected_revision},
+                                  {"transformation", {{"boundary_id", typed.transformation.boundary_id},
+                                      {"transform", command_transform_to_json(typed.transformation.transform)}}}};
+        }
+    }, command);
+}
+
+Command command_from_json(const nlohmann::json& value) {
+    try {
+        if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
+            !value.at("version").is_number_integer() || value.at("version") != 1 ||
+            !value.at("kind").is_string()) {
+            document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
+        }
+        const auto kind = value.at("kind").get<std::string>();
+        if (kind == "apply_entity_changes") {
+            command_exact_fields(value, {"version", "kind", "expected_revision", "message",
+                                          "entity_changes", "asset_changes"},
+                                 DocumentErrorCode::invalid_entity, "serialized apply command");
+            if (!value.at("entity_changes").is_array() || !value.at("asset_changes").is_array())
+                document_error(DocumentErrorCode::invalid_entity, "serialized change lists must be arrays");
+            ApplyEntityChanges result;
+            result.expected_revision = command_revision(value.at("expected_revision"), "command expected_revision");
+            if (!value.at("message").is_string() || value.at("message").get<std::string>().size() > 1024 ||
+                !is_valid_utf8_without_nul(value.at("message").get<std::string>()))
+                document_error(DocumentErrorCode::invalid_entity, "serialized command message is invalid");
+            result.message = value.at("message").get<std::string>();
+            for (const auto& encoded : value.at("entity_changes")) {
+                if (!encoded.is_object() || !encoded.contains("kind") || !encoded.at("kind").is_string())
+                    document_error(DocumentErrorCode::invalid_entity, "serialized entity change is invalid");
+                const auto change_kind = encoded.at("kind").get<std::string>();
+                if (change_kind == "upsert") {
+                    command_exact_fields(encoded, {"kind", "entity"}, DocumentErrorCode::invalid_entity,
+                                         "serialized entity upsert");
+                    result.entity_changes.push_back(EntityChange::upsert(command_entity_from_json(encoded.at("entity"))));
+                } else if (change_kind == "erase") {
+                    command_exact_fields(encoded, {"kind", "entity_id"}, DocumentErrorCode::invalid_entity,
+                                         "serialized entity erase");
+                    result.entity_changes.push_back(EntityChange::erase(command_string(encoded.at("entity_id"),
+                        "serialized entity erase ID", kMaximumIdBytes)));
+                } else {
+                    document_error(DocumentErrorCode::invalid_entity, "unknown serialized entity change kind");
+                }
+            }
+            for (const auto& encoded : value.at("asset_changes")) {
+                if (!encoded.is_object() || !encoded.contains("kind") || !encoded.at("kind").is_string())
+                    document_error(DocumentErrorCode::invalid_asset, "serialized asset change is invalid");
+                const auto change_kind = encoded.at("kind").get<std::string>();
+                if (change_kind == "upsert") {
+                    command_exact_fields(encoded, {"kind", "asset"}, DocumentErrorCode::invalid_asset,
+                                         "serialized asset upsert");
+                    result.asset_changes.push_back(AssetChange::upsert(command_asset_from_json(encoded.at("asset"))));
+                } else if (change_kind == "erase") {
+                    command_exact_fields(encoded, {"kind", "asset_id"}, DocumentErrorCode::invalid_asset,
+                                         "serialized asset erase");
+                    result.asset_changes.push_back(AssetChange::erase(command_string(encoded.at("asset_id"),
+                        "serialized asset erase ID", kMaximumIdBytes)));
+                } else {
+                    document_error(DocumentErrorCode::invalid_asset, "unknown serialized asset change kind");
+                }
+            }
+            return result;
+        }
+        if (kind == "name_revision") {
+            command_exact_fields(value, {"version", "kind", "expected_revision", "name"},
+                                 DocumentErrorCode::invalid_entity, "serialized name command");
+            NameRevision result{command_revision(value.at("expected_revision"), "command expected_revision"),
+                                command_string(value.at("name"), "serialized revision name", 256)};
+            validate_revision_name(result.name);
+            return result;
+        }
+        if (kind == "translate_boundary") {
+            command_exact_fields(value, {"version", "kind", "expected_revision", "translation"},
+                                 DocumentErrorCode::invalid_entity, "serialized translation command");
+            const auto& translation = value.at("translation");
+            command_exact_fields(translation, {"boundary_id", "offset"}, DocumentErrorCode::invalid_entity,
+                                 "serialized translation");
+            TranslateBoundary result;
+            result.expected_revision = command_revision(value.at("expected_revision"), "command expected_revision");
+            result.translation.boundary_id = command_string(translation.at("boundary_id"),
+                "serialized boundary ID", kMaximumIdBytes);
+            if (!is_valid_identifier(result.translation.boundary_id))
+                document_error(DocumentErrorCode::invalid_entity, "serialized boundary ID is invalid");
+            result.translation.offset = command_vec2_from_json(translation.at("offset"), "serialized translation offset");
+            return result;
+        }
+        if (kind == "transform_boundary") {
+            command_exact_fields(value, {"version", "kind", "expected_revision", "transformation"},
+                                 DocumentErrorCode::invalid_entity, "serialized transform command");
+            const auto& transformation = value.at("transformation");
+            command_exact_fields(transformation, {"boundary_id", "transform"}, DocumentErrorCode::invalid_entity,
+                                 "serialized transformation");
+            TransformBoundary result;
+            result.expected_revision = command_revision(value.at("expected_revision"), "command expected_revision");
+            result.transformation.boundary_id = command_string(transformation.at("boundary_id"),
+                "serialized boundary ID", kMaximumIdBytes);
+            if (!is_valid_identifier(result.transformation.boundary_id))
+                document_error(DocumentErrorCode::invalid_entity, "serialized boundary ID is invalid");
+            result.transformation.transform = command_transform_from_json(transformation.at("transform"));
+            return result;
+        }
+        document_error(DocumentErrorCode::invalid_entity, "unknown serialized command kind");
+    } catch (const DocumentError&) {
+        throw;
+    } catch (const nlohmann::json::exception& error) {
+        document_error(DocumentErrorCode::invalid_entity,
+                       std::string("serialized command JSON is invalid: ") + error.what());
+    }
 }
 
 EntityChange EntityChange::upsert(Entity entity) {

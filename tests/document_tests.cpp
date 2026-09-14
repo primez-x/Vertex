@@ -1080,6 +1080,53 @@ void test_room_volume_validation_is_atomic() {
         "invalid canonical height must not fall back to a legacy alias");
 }
 
+void test_typed_command_codec_round_trips_and_rejects_tampering() {
+    const auto asset = Asset::create("asset-1", "image/png",
+        {std::byte{0x00}, std::byte{0x7f}, std::byte{static_cast<unsigned char>(0xff)}},
+        {{"source", "fixture"}, {"scale", 1.25}});
+    const ApplyEntityChanges apply{
+        .expected_revision = 7,
+        .entity_changes = {
+            EntityChange::upsert(entity("label-1", "label", {{"text", "A#1"}, {"count", 3}},
+                false, {{"vendor", "opaque"}})),
+            EntityChange::erase("old-label"),
+        },
+        .asset_changes = {AssetChange::upsert(asset), AssetChange::erase("old-asset")},
+        .message = "compound command",
+    };
+    const std::vector<sketch::Command> commands{
+        sketch::Command{apply},
+        sketch::Command{NameRevision{.expected_revision = 8, .name = "checkpoint"}},
+        sketch::Command{sketch::TranslateBoundary{.expected_revision = 9,
+            .translation = {"boundary-1", {1.25, -2.5}}}},
+        sketch::Command{sketch::TransformBoundary{.expected_revision = 10,
+            .transformation = {"boundary-1", {{2.0, 3.0}, 0.75, true, false, {-1.0, 4.0}}}}},
+    };
+    for (const auto& command : commands) {
+        const auto encoded = sketch::command_to_json(command);
+        const auto decoded = sketch::command_from_json(encoded);
+        require(sketch::command_to_json(decoded) == encoded,
+            "typed command JSON must round-trip canonically");
+    }
+
+    const auto source = Document::create({entity("property-1", "property")});
+    const auto source_digest = sketch::document_snapshot_digest(source.snapshot());
+    auto tampered = sketch::command_to_json(sketch::Command{apply});
+    tampered["unexpected"] = true;
+    require_error([&] { (void)sketch::command_from_json(tampered); },
+        DocumentErrorCode::invalid_entity, "unknown command fields must be rejected");
+    tampered = sketch::command_to_json(sketch::Command{apply});
+    tampered["version"] = 2;
+    require_error([&] { (void)sketch::command_from_json(tampered); },
+        DocumentErrorCode::invalid_entity, "unsupported command versions must be rejected");
+    tampered = sketch::command_to_json(sketch::Command{apply});
+    tampered["asset_changes"][0]["asset"]["bytes_hex"] = "0g";
+    require_error([&] { (void)sketch::command_from_json(tampered); },
+        DocumentErrorCode::invalid_asset, "invalid serialized asset bytes must be rejected");
+    require(sketch::document_snapshot_digest(source.snapshot()) == source_digest,
+        "command decode rejection must not mutate a source snapshot");
+}
+
 }  // namespace
 
 int main() {
@@ -1105,6 +1152,7 @@ int main() {
         test_command_preview_rejects_invalid_stale_and_read_only_sources();
         test_validated_document_fork_preserves_authority_and_isolation();
         test_session_read_only_latch_survives_navigation_and_fork();
+        test_typed_command_codec_round_trips_and_rejects_tampering();
     } catch (const std::exception& error) {
         std::cerr << "document_tests: unexpected exception: " << error.what() << '\n';
         return 1;

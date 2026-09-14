@@ -268,7 +268,12 @@ PreparedWorkspaceEdit ProjectWorkspace::prepare_document_edit(const Command& com
     auto state = prepare_state();
     auto& candidate = *state->candidate;
     auto event = next_event(candidate, WorkspaceLifecycleKind::document_edit);
-    event.after_revision = candidate.document->apply(command);
+    // Worker and workspace boundaries carry the same immutable, versioned
+    // command envelope.  Round-tripping before isolated application prevents
+    // an in-memory variant from bypassing the structural command contract.
+    const auto encoded = command_to_json(command);
+    const auto decoded = command_from_json(encoded);
+    event.after_revision = candidate.document->apply(decoded);
     append_document_event(candidate, event, WorkspaceDocumentEventKind::edit);
     candidate.navigation = record_workspace_operation(candidate.navigation, event.event_id,
         WorkspaceOperationKind::document_edit);

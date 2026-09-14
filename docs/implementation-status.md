@@ -14,6 +14,11 @@ now contribute read-only material slot rows, optional explicit cubic-metre
 volume/net-volume quantities, and grouped material-summary provenance while
 respecting host visibility. Persisted annotation colors, fills, emphasis,
 text-height, and symbol stroke width now reach interactive and fitted output.
+Version-1 typed command envelopes now serialize every Document command with
+strict field, revision, geometry, asset-byte, and digest validation. Workspace
+preparation round-trips each command on an immutable fork before staging one
+atomic, undoable revision; focused Debug and Release document/workspace tests
+cover all command kinds and tamper rejection.
 Explicitly scaled sheet viewports now use the same output boundary: grids,
 cursor readouts, draft previews, tool instructions, overview maps, and selected
 interactive colors are excluded before the viewport is painted. Persisted
