@@ -126,8 +126,11 @@ python scripts/test_installed_runtime.py `
 
 This launches both workspaces with private application-data directories, only
 Windows directories on the child PATH, and developer Qt/QML settings removed.
-It captures the two workspaces and native 3D view, samples loaded module paths,
-and checks observed packaged modules against the installed manifest and hashes.
+Each workspace runs twice: the first process saves a source `.bldproj`, and the
+second opens that file and saves a reopened copy. The evidence directory
+therefore contains both project artifacts alongside the workspace captures and
+native 3D view. The harness samples loaded module paths and checks observed
+packaged modules against the installed manifest and hashes.
 The five CRT DLLs and Qt Windows platform plugin must be observed inside the
 installation. Each run writes a new evidence directory, including failure
 reports. Sampling cannot establish complete dynamic-load coverage; screenshot

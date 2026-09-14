@@ -126,6 +126,10 @@ temporary directory, and passed the installed-runtime smoke for both workspaces
 with exit code 0. The native 3D viewport now supports Ctrl+left-drag previews
 and one-command world-space translation requests for supported architectural
 objects, committed by the desktop shell through the existing typed history.
+The installed-runtime harness now records a saved and reopened `.bldproj` for
+each workspace, validates the SQLite project container, and binds both hashes
+into the run report; this remains developer-machine smoke evidence rather than
+clean-machine or production qualification.
 Walls, slabs, and rooms now use canonical shared-solid transforms, including
 hosted-opening dimensions and solid-kernel validation, alongside the dedicated
 building-object forms.

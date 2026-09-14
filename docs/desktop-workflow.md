@@ -573,6 +573,8 @@ The executable supports:
 ```text
 property-studio.exe --smoke --smoke-output C:\path\desktop-smoke.png --smoke-size 1366x768
 property-studio.exe --smoke --smoke-workspace architectural --smoke-output C:\path\architectural.png --smoke-3d-output C:\path\model.png
+property-studio.exe --smoke --smoke-workspace measurement --smoke-project-output C:\path\measurement-source.bldproj
+property-studio.exe --smoke --smoke-workspace measurement --smoke-project-input C:\path\measurement-source.bldproj --smoke-project-output C:\path\measurement-reopened.bldproj
 ```
 
 `--smoke` creates a representative 12 m × 8 m boundary and two interior walls
@@ -584,6 +586,11 @@ is exported from the real OCCT framebuffer; an unavailable or not-ready native
 viewer returns a nonzero exit code. If no output path is given, each image is
 written under the system temporary directory with a unique filename.
 `--smoke-size` is optional and defaults to 1366 × 768.
+`--smoke-project-output` saves the seeded or opened document to the supplied
+`.bldproj` path before capture. `--smoke-project-input` opens an existing local
+project instead of seeding a new one; combining both options provides a
+deterministic save/reopen pair for runtime evidence. Existing output files are
+never overwritten by the project store.
 
 The architectural UI capture is taken after the dedicated native 3D export and
 temporarily collapses the native child surface because `QWidget::grab()` cannot

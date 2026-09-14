@@ -35,6 +35,22 @@ QString native_smoke_output_path(const QStringList& arguments) {
         .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
 }
 
+QString smoke_project_output_path(const QStringList& arguments) {
+    const auto index = arguments.indexOf(QStringLiteral("--smoke-project-output"));
+    if (index >= 0 && index + 1 < arguments.size() && !arguments.at(index + 1).isEmpty()) {
+        return arguments.at(index + 1);
+    }
+    return {};
+}
+
+QString smoke_project_input_path(const QStringList& arguments) {
+    const auto index = arguments.indexOf(QStringLiteral("--smoke-project-input"));
+    if (index >= 0 && index + 1 < arguments.size() && !arguments.at(index + 1).isEmpty()) {
+        return arguments.at(index + 1);
+    }
+    return {};
+}
+
 bool architectural_smoke(const QStringList& arguments) {
     const auto index = arguments.indexOf(QStringLiteral("--smoke-workspace"));
     if (index < 0 || index + 1 >= arguments.size()) {
@@ -193,7 +209,13 @@ int main(int argc, char** argv) {
         window.setAttribute(Qt::WA_DontShowOnScreen, true);
         window.setAttribute(Qt::WA_ShowWithoutActivating, true);
         window.resize(smoke_size(application.arguments()));
-        if (!seed_smoke_document(window, architectural)) {
+        const auto project_input = smoke_project_input_path(application.arguments());
+        if (project_input.isEmpty()) {
+            if (!seed_smoke_document(window, architectural)) {
+                return 2;
+            }
+        } else if (!window.openProject(project_input)) {
+            qCritical() << "Vertex: smoke project reopen failed:" << window.lastError();
             return 2;
         }
         if (application.arguments().contains(QStringLiteral("--smoke-reference")) &&
@@ -212,9 +234,16 @@ int main(int argc, char** argv) {
     if (smoke) {
         const auto output = smoke_output_path(application.arguments());
         const auto native_output = native_smoke_output_path(application.arguments());
+        const auto project_output = smoke_project_output_path(application.arguments());
         QTimer::singleShot(500, &window,
-                           [&application, &window, output, native_output, architectural] {
+                           [&application, &window, output, native_output, project_output,
+                            architectural] {
             window.fitView();
+            if (!project_output.isEmpty() && !window.saveProjectAs(project_output)) {
+                qCritical() << "Vertex: smoke project save failed:" << window.lastError();
+                application.exit(5);
+                return;
+            }
             if (architectural && !window.exportNativeViewImage(native_output)) {
                 qCritical() << "Vertex: native 3D smoke export failed:"
                             << window.lastError();

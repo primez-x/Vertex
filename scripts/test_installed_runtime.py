@@ -3,7 +3,9 @@
 
 This is a sampled developer-machine smoke check, not a clean-machine, network
 isolation, registry-isolation, or production qualification test. No SDK paths
-are added and no app is launched merely by importing this module.
+are added and no app is launched merely by importing this module. Each
+workspace is exercised through a save/reopen pair so the evidence directory
+contains the source and reopened .bldproj artifacts as well as screenshots.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ REQUIRED_MODULES = {
     "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll",
     "vcruntime140.dll", "vcruntime140_1.dll", "qwindows.dll",
 }
+PROJECT_MAGIC = b"SQLite format 3\0"
 MAX_CAPTURE_BYTES = 64 * 1024
 TIMEOUT_SECONDS = 15.0
 
@@ -133,6 +136,24 @@ def png_evidence(path: Path) -> dict:
             "sha256": sha256_file(path), "validation": "PNG signature and IHDR dimensions only"}
 
 
+def project_evidence(path: Path) -> dict:
+    """Validate and fingerprint one persisted Vertex .bldproj artifact.
+
+    The smoke harness intentionally checks only the stable SQLite container
+    signature here.  The application itself proves semantic reopen by opening
+    the source artifact in a second process; this helper records the bytes and
+    hash for later production-evidence binding without pretending that a
+    header check is a complete project validation.
+    """
+    with path.open("rb") as stream:
+        header = stream.read(len(PROJECT_MAGIC))
+    size = path.stat().st_size
+    if size <= len(PROJECT_MAGIC) or header != PROJECT_MAGIC:
+        raise ValueError(f"missing/non-SQLite Vertex project: {path}")
+    return {"path": str(path), "bytes": size, "sha256": sha256_file(path),
+            "validation": "SQLite header; semantic reopen performed by a subsequent smoke process"}
+
+
 class WindowsModules:
     """Read modules through an owned query handle; never attach to other PIDs."""
 
@@ -205,7 +226,9 @@ class BoundedCapture:
 
 
 def run_workspace(executable: Path, workspace: str, run_root: Path, env: dict,
-                  declared: dict[str, set[str]], records: dict[str, dict]) -> dict:
+                  declared: dict[str, set[str]], records: dict[str, dict], *,
+                  project_output: Path | None = None,
+                  project_input: Path | None = None) -> dict:
     image = run_root / f"{workspace}.png"
     outputs = [image]
     args = [str(executable), "--smoke", "--smoke-workspace", workspace, "--smoke-output", str(image)]
@@ -213,6 +236,10 @@ def run_workspace(executable: Path, workspace: str, run_root: Path, env: dict,
         model = run_root / "architectural-model.png"
         outputs.append(model)
         args.extend(["--smoke-3d-output", str(model)])
+    if project_input is not None:
+        args.extend(["--smoke-project-input", str(project_input)])
+    if project_output is not None:
+        args.extend(["--smoke-project-output", str(project_output)])
     result = {"workspace": workspace, "arguments": args, "timeout_seconds": TIMEOUT_SECONDS,
               "module_poll_interval_seconds": 0.02, "errors": [], "screenshots": [],
               "timed_out": False, "module_samples": 0, "module_sample_errors": []}
@@ -281,6 +308,13 @@ def run_workspace(executable: Path, workspace: str, run_root: Path, env: dict,
             result["screenshots"].append(png_evidence(path))
         except (OSError, ValueError) as error:
             result["errors"].append(str(error))
+    if project_output is not None:
+        try:
+            result["project"] = project_evidence(project_output)
+        except (OSError, ValueError) as error:
+            result["errors"].append(str(error))
+    if project_input is not None:
+        result["project_input"] = str(project_input)
     result["passed"] = not result["errors"]
     return result
 
@@ -330,7 +364,21 @@ def main(argv: list[str] | None = None) -> int:
         report["environment"] = limits
         report["cwd"] = str(executable.parent)
         for workspace in ("measurement", "architectural"):
-            report["runs"].append(run_workspace(executable, workspace, run_root, env, declared, records))
+            source_project = run_root / f"{workspace}-source.bldproj"
+            reopened_project = run_root / f"{workspace}-reopened.bldproj"
+            source_run = run_workspace(executable, workspace, run_root, env, declared, records,
+                                       project_output=source_project)
+            report["runs"].append(source_run)
+            reopened_run = run_workspace(executable, workspace, run_root, env, declared, records,
+                                         project_input=source_project,
+                                         project_output=reopened_project)
+            report["runs"].append(reopened_run)
+            report.setdefault("projects", []).append({
+                "workspace": workspace,
+                "source": source_run.get("project"),
+                "reopened": reopened_run.get("project"),
+                "reopen_process_exit_code": reopened_run.get("exit_code"),
+            })
         report["passed"] = all(run["passed"] for run in report["runs"])
     except Exception as error:
         report["errors"].append(f"{type(error).__name__}: {error}")

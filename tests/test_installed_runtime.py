@@ -86,6 +86,18 @@ class InstalledRuntimeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 runtime.png_evidence(path)
 
+    def test_project_evidence_requires_a_nonempty_sqlite_project(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "project.bldproj"
+            path.write_bytes(b"SQLite format 3\0" + b"project bytes")
+            result = runtime.project_evidence(path)
+            self.assertEqual(result["path"], str(path))
+            self.assertGreater(result["bytes"], 16)
+            self.assertEqual(len(result["sha256"]), 64)
+            path.write_bytes(b"not a project")
+            with self.assertRaisesRegex(ValueError, "SQLite"):
+                runtime.project_evidence(path)
+
     def test_unsafe_manifest_path_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
@@ -120,14 +132,21 @@ class InstalledRuntimeTests(unittest.TestCase):
              mock.patch.object(runtime, "png_evidence", return_value={"valid_header": True}), \
              mock.patch.object(runtime.time, "sleep"):
             monitor.return_value.snapshot.return_value = paths
-            result = runtime.run_workspace(Path("installed/bin/property-studio.exe"), "architectural",
-                                           Path("evidence"), {"PATH": "Windows"}, declared, records)
+            with mock.patch.object(runtime, "project_evidence", return_value={"valid": True}) as project:
+                result = runtime.run_workspace(
+                    Path("installed/bin/property-studio.exe"), "architectural",
+                    Path("evidence"), {"PATH": "Windows"}, declared, records,
+                    project_output=Path("evidence/source.bldproj"),
+                    project_input=Path("evidence/original.bldproj"))
         self.assertTrue(result["passed"], result["errors"])
         self.assertEqual(len(result["screenshots"]), 2)
+        project.assert_called_once_with(Path("evidence/source.bldproj"))
         self.assertEqual(launch.call_args.kwargs["creationflags"], 0x08000000)
         self.assertFalse(launch.call_args.kwargs["shell"])
         self.assertEqual(launch.call_args.kwargs["cwd"], Path("installed/bin"))
         self.assertIn("--smoke-3d-output", launch.call_args.args[0])
+        self.assertIn("--smoke-project-output", launch.call_args.args[0])
+        self.assertIn("--smoke-project-input", launch.call_args.args[0])
         monitor.assert_called_once_with(12345)
         monitor.return_value.close.assert_called_once()
         child.kill.assert_not_called()
