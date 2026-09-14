@@ -1,0 +1,12 @@
+{
+  "OPS-QA-001": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/ops-qa-001.json",
+        "sha256": "cf754bcf6648a316bcc857673fb42516bbf22a3745d8e068e97972a72067bf54"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "ec49b8c5cd6b90bf00e5cb8d67d07393fc6e79548bb2d0d8ac62710a8cf5b8c4"
+  }
+}

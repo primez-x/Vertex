@@ -1,0 +1,188 @@
+{
+  "acceptance": "The verification suite covers lines, arcs, holes, overlaps, winding, tangency, units, area tolerance max(1e-6 m2, 1e-8 times reference area), and constraint branches.",
+  "audit_check": {
+    "details": [],
+    "evidence": [
+      "build/windows-debug/CTestTestfile.cmake",
+      "build/windows-debug/Testing/Temporary/LastTest.log",
+      "build/windows-release/CTestTestfile.cmake",
+      "build/windows-release/Testing/Temporary/LastTest.log",
+      "src/calculations/calculations.cpp",
+      "tests/architecture_tests.cpp",
+      "tests/calculation_tests.cpp",
+      "tests/constraints_tests.cpp",
+      "tests/curve_construction_tests.cpp",
+      "tests/geometry_tests.cpp",
+      "tests/project_store_tests.cpp",
+      "tests/quantity_tests.cpp"
+    ],
+    "id": "qa_fixture_coverage",
+    "status": "pass",
+    "summary": "Independent analytical fixtures passed in geometry, curves, calculations_and_units, topology, constraints, and persistence"
+  },
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "8f3c02f7aa2e0f8c75fad1b4ef04dedbff61281619d1535e08b008abc89a677a",
+        "size": 81657
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "aa3ad67693baee9a076c50562f10a1364f46a49d6202066cfc314ccc11a0428a",
+        "size": 136582
+      }
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6857d2dd24c177dd5fca71b69392a998745a74eea64f4fa89d005071d5d18b34",
+        "size": 81743
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "913e67767d65f4025ecda2e83283b47466e60e4f6b8d5e0bc191006a79bfb5fa",
+        "size": 137113
+      }
+    }
+  ],
+  "fixture_families": [
+    {
+      "id": "geometry",
+      "source_anchors": [
+        "signed_area",
+        "overlap",
+        "tangent"
+      ],
+      "source_files": [
+        {
+          "path": "tests/geometry_tests.cpp",
+          "sha256": "ea4780c584140f7dd398e062763555cf0726a6e0b5fad5f7f83c9012e39b976a",
+          "size": 19599
+        }
+      ],
+      "tests": [
+        "geometry",
+        "geometry_operations"
+      ]
+    },
+    {
+      "id": "curves",
+      "source_anchors": [
+        "arc_from_chord_arc_length",
+        "arc_from_start_tangent",
+        "tangent"
+      ],
+      "source_files": [
+        {
+          "path": "tests/curve_construction_tests.cpp",
+          "sha256": "690e8ceaa9082ad92189ac434a01512ef6e72ddc266dc7ee88623776500001df",
+          "size": 2628
+        }
+      ],
+      "tests": [
+        "curve_construction"
+      ]
+    },
+    {
+      "id": "calculations_and_units",
+      "source_anchors": [
+        "calculate_areas",
+        "parse_quantity",
+        "round",
+        "overlap",
+        "winding",
+        "tolerance"
+      ],
+      "source_files": [
+        {
+          "path": "src/calculations/calculations.cpp",
+          "sha256": "1b3a166b865189ebbf2e4ae04181514402966ca941d9e4a095b8011db5179879",
+          "size": 8961
+        },
+        {
+          "path": "tests/calculation_tests.cpp",
+          "sha256": "91a76221a734917c71980aef9458a9009442664ae76e066133d07b6572ac841a",
+          "size": 7097
+        },
+        {
+          "path": "tests/quantity_tests.cpp",
+          "sha256": "4a17ed73e3c2900c320d5cf301c26d78971acc32190275c34ef772c30a9c5178",
+          "size": 6910
+        }
+      ],
+      "tests": [
+        "calculations",
+        "quantity"
+      ]
+    },
+    {
+      "id": "topology",
+      "source_anchors": [
+        "holes",
+        "overlap",
+        "volume"
+      ],
+      "source_files": [
+        {
+          "path": "tests/architecture_tests.cpp",
+          "sha256": "3298f0e58e91d3b11084c74c3c715bee4e76cf55e03b0148ab60bb0c733f28da",
+          "size": 7608
+        }
+      ],
+      "tests": [
+        "architecture",
+        "room_relationship_geometry",
+        "slab_semantics"
+      ]
+    },
+    {
+      "id": "constraints",
+      "source_anchors": [
+        "degrees_of_freedom",
+        "redundan",
+        "conflict",
+        "winding"
+      ],
+      "source_files": [
+        {
+          "path": "tests/constraints_tests.cpp",
+          "sha256": "3f5f8f57c9acaddf2dcc36e231d683af4e638054747d006a017899ef27761ca4",
+          "size": 14455
+        }
+      ],
+      "tests": [
+        "constraints",
+        "constraint_authoring",
+        "constraint_integrity"
+      ]
+    },
+    {
+      "id": "persistence",
+      "source_anchors": [
+        "ProjectStore",
+        "reopen",
+        "recovery"
+      ],
+      "source_files": [
+        {
+          "path": "tests/project_store_tests.cpp",
+          "sha256": "0173b50073129527b592ffcef579ccaa30b4376b599774e445087cc08cf8143d",
+          "size": 82418
+        }
+      ],
+      "tests": [
+        "project_storage",
+        "project_exchange",
+        "project_archive"
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers independent analytical fixtures only. It does not certify Apex fidelity, clean-machine behavior, physical devices or printing, integrations, or the unified production release gate.",
+  "requirement_id": "OPS-QA-001",
+  "result": "pass",
+  "schema_version": 1,
+  "source_tree_sha256": "ec49b8c5cd6b90bf00e5cb8d67d07393fc6e79548bb2d0d8ac62710a8cf5b8c4"
+}

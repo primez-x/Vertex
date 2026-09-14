@@ -125,6 +125,17 @@ class ProductionGateTests(unittest.TestCase):
             package.write_text("runtime v2")
             self.assertNotEqual(previous, audit.source_fingerprint(root))
 
+    def test_generated_acceptance_artifacts_do_not_change_source_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "include").mkdir()
+            (root / "include/model.hpp").write_text("model v1")
+            evidence = root / "docs/requirements/evidence/ops-qa-001.json"
+            evidence.parent.mkdir(parents=True)
+            previous = audit.source_fingerprint(root)
+            evidence.write_text("generated evidence v1")
+            self.assertEqual(previous, audit.source_fingerprint(root))
+
 
 class RequirementAuditCliTests(unittest.TestCase):
     def setUp(self):

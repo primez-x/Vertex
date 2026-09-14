@@ -184,7 +184,10 @@ OPS-QA-001. It requires the named independent geometry, curve, calculation,
 topology, constraint, and persistence fixture families to be present in both
 generated CTest inventories and to pass in both Debug and Release logs. This
 records analytical fixture coverage without treating it as Apex compatibility,
-clean-machine, physical-device, or production certification evidence.
+clean-machine, physical-device, or production certification evidence. The
+OPS-QA-001 ledger row now has current acceptance evidence for those six named
+fixture families, including the area tolerance implementation and constraint
+branch checks; the remaining production gates are intentionally unaffected.
 
 The packaging result also verifies every payload size and SHA-256 in the
 staged offline-bundle manifest, along with its source-kit, runtime, and SBOM

@@ -28,6 +28,53 @@ class CompletionAuditTests(unittest.TestCase):
                             for check in first["checks"]))
         self.assertGreater(first["summary"]["blocked"] + first["summary"]["missing"], 0)
 
+    def test_build_report_evaluates_current_acceptance_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            requirements_dir = root / "docs/requirements"
+            requirements_dir.mkdir(parents=True)
+            ledger = {
+                "requirements": [{
+                    "id": "REQ-1", "area": "quality", "requirement": "Verify fixtures",
+                    "source_urls": [], "evidence_status": "documented",
+                    "implementation_status": "verified", "acceptance": "Run fixtures",
+                    "package": 9, "blocker": None,
+                }]
+            }
+            gates = {
+                "gates": {"quality": {"required": True, "requirement_ids": ["REQ-1"]}},
+                "requirement_to_gate": {"REQ-1": "quality"},
+                "release_rule": {
+                    "type": "all_required_gates", "required_gate_ids": ["quality"],
+                    "alternatives_allowed": False, "parity_only_exit": False,
+                    "architecture_only_exit": False, "internal_checkpoint_is_production": False,
+                    "pass_condition": "All required gates pass.",
+                },
+            }
+            (requirements_dir / "apex-parity.json").write_text(
+                json.dumps(ledger), encoding="utf-8")
+            (requirements_dir / "production-gates.json").write_text(
+                json.dumps(gates), encoding="utf-8")
+            artifact = root / "proof.txt"
+            artifact.write_text("fixture proof", encoding="utf-8")
+            evidence = {
+                "REQ-1": {
+                    "result": "pass",
+                    "source_tree_sha256": audit.source_fingerprint(root),
+                    "artifacts": [{
+                        "path": "proof.txt",
+                        "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+                    }],
+                }
+            }
+            (requirements_dir / "acceptance-evidence.json").write_text(
+                json.dumps(evidence), encoding="utf-8")
+
+            report = audit.build_report(root)
+            production_gate = next(check for check in report["checks"]
+                                   if check["id"] == "production_gate")
+            self.assertEqual(production_gate["status"], "pass")
+
     def test_runtime_status_requires_clean_offline_boundary(self):
         complete = {
             "passed": True,
@@ -176,6 +223,12 @@ class CompletionAuditTests(unittest.TestCase):
             self.assertEqual(result["status"], "pass")
             self.assertIn("geometry", result["summary"])
             self.assertIn("windows-debug", result["evidence"][0])
+
+    def test_qa_fixture_rules_pin_area_tolerance_implementation(self):
+        calculations = next(rule for rule in audit.QA_FIXTURE_RULES
+                            if rule["id"] == "calculations_and_units")
+        self.assertIn("src/calculations/calculations.cpp", calculations["sources"])
+        self.assertIn("tolerance", calculations["anchors"])
 
     def test_qa_fixture_coverage_fails_closed_when_a_required_fixture_is_skipped(self):
         with tempfile.TemporaryDirectory() as directory:

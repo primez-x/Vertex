@@ -287,6 +287,14 @@
     },
     {
       "category": "docs",
+      "path": "docs/requirements/acceptance-evidence.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/ops-qa-001.json"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/apex-parity.json"
     },
     {
@@ -840,6 +848,10 @@
     {
       "category": "source",
       "path": "scripts/distribution_sbom.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/generate_analytical_fixture_evidence.py"
     },
     {
       "category": "source",

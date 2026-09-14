@@ -2738,7 +2738,7 @@
       "requirement": "Validate geometry, calculations, constraints, units, factors, rounding, topology, and persistence through independent analytical fixtures.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "The verification suite covers lines, arcs, holes, overlaps, winding, tangency, units, area tolerance max(1e-6 m2, 1e-8 times reference area), and constraint branches.",
       "package": 9,
       "blocker": null,
@@ -2746,9 +2746,16 @@
         "scripts/completion_audit.py",
         "tests/test_completion_audit.py",
         "docs/completion-audit.md",
+        "src/calculations/calculations.cpp",
+        "tests/geometry_tests.cpp",
+        "tests/curve_construction_tests.cpp",
+        "tests/calculation_tests.cpp",
+        "tests/quantity_tests.cpp",
+        "tests/constraints_tests.cpp",
+        "tests/constraint_integrity_tests.cpp",
         "tests/project_store_tests.cpp"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "The named independent geometry, curve, calculation/unit, topology, constraint, and persistence fixture families pass in both current Debug and Release CTest matrices. The calculation implementation pins the required area tolerance max(1e-6 m2, 1e-8 times reference area), and constraint fixtures cover degrees of freedom, redundancy, conflict diagnostics, minimum-motion branches, and winding rejection. Current acceptance evidence is tied to the source tree and both CTest logs; Apex fidelity, clean-machine behavior, physical I/O, and the broader production gate remain separate requirements."
     },
     {
       "id": "OPS-QA-002",

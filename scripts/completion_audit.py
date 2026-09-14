@@ -89,8 +89,10 @@ QA_FIXTURE_RULES = (
     {
         "id": "calculations_and_units",
         "tests": ("calculations", "quantity"),
-        "sources": ("tests/calculation_tests.cpp", "tests/quantity_tests.cpp"),
-        "anchors": ("calculate_areas", "parse_quantity", "round", "overlap", "winding"),
+        "sources": ("src/calculations/calculations.cpp", "tests/calculation_tests.cpp",
+                    "tests/quantity_tests.cpp"),
+        "anchors": ("calculate_areas", "parse_quantity", "round", "overlap", "winding",
+                    "tolerance"),
     },
     {
         "id": "topology",
@@ -742,11 +744,27 @@ def build_report(root: pathlib.Path | str = ROOT):
     implementation, counts = _implementation_check(ledger or {})
     checks.append(implementation)
     if ledger is not None and gates is not None:
-        gaps = release_gaps(ledger, gates, {}, root)
+        evidence_path = root / "docs/requirements/acceptance-evidence.json"
+        evidence = {}
+        evidence_errors = []
+        if evidence_path.is_file():
+            try:
+                evidence = _load_json(evidence_path)
+            except (OSError, ValueError, TypeError) as error:
+                evidence_errors.append(
+                    f"acceptance evidence could not be loaded: {error}"
+                )
+        else:
+            evidence_errors.append("acceptance evidence file is missing")
+        gaps = release_gaps(ledger, gates, evidence if not evidence_errors else {}, root)
+        gaps.extend(evidence_errors)
+        gate_evidence = [_relative(ledger_path, root), _relative(gates_path, root)]
+        if evidence_path.is_file():
+            gate_evidence.append(_relative(evidence_path, root))
         checks.append(_check("production_gate", "pass" if not gaps else "blocked",
                              "All requirements have current passing evidence" if not gaps else
                              f"Release gate is blocked by {len(gaps)} unresolved items",
-                             evidence=(_relative(ledger_path, root), _relative(gates_path, root)),
+                             evidence=gate_evidence,
                              details=gaps))
     else:
         checks.append(_check("production_gate", "missing", "Release gate could not be evaluated"))

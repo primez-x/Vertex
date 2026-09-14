@@ -15,8 +15,10 @@ def source_fingerprint(root):
     for directory in ("include", "src", "tests", "scripts", "third_party", "assets", "cmake",
                       "docs", "packaging"):
         for path in (root / directory).rglob("*"):
+            relative = path.relative_to(root).as_posix()
             if (path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc" and
-                    path.relative_to(root).as_posix() != "docs/requirements/acceptance-evidence.json"):
+                    relative != "docs/requirements/acceptance-evidence.json" and
+                    not relative.startswith("docs/requirements/evidence/")):
                 paths.append(path)
     paths.extend(root / name for name in ("CMakeLists.txt", "CMakePresets.json", "vcpkg.json", ".gitattributes") if (root / name).is_file())
     for path in sorted(paths):
