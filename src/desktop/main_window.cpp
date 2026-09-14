@@ -14578,7 +14578,7 @@ public:
     void showReferenceImport() {
         const auto selected = QFileDialog::getOpenFileName(
             owner, QStringLiteral("Import reference image"), {},
-            QStringLiteral("Reference files (*.pdf *.png *.jpg *.jpeg *.bmp)"));
+            QStringLiteral("Reference files (*.pdf *.png *.jpg *.jpeg *.bmp *.tif *.tiff)"));
         if (selected.isEmpty()) return;
         try {
             int page_index = 0;

@@ -13,6 +13,12 @@ class ReferenceImportBoundary(unittest.TestCase):
             self.assertNotIn("QPdfDocument", body)
             self.assertNotIn("QImage::fromData", body)
 
+    def test_ui_file_dialog_advertises_all_supported_raster_formats(self):
+        source = (Path(__file__).resolve().parents[1] / "src/desktop/main_window.cpp").read_text(encoding="utf-8")
+        body = source[source.index("    void showReferenceImport()"):source.index(
+            "    void showReferenceCalibration()", source.index("    void showReferenceImport()"))]
+        self.assertIn("*.png *.jpg *.jpeg *.bmp *.tif *.tiff", body)
+
 
 if __name__ == "__main__":
     unittest.main()
