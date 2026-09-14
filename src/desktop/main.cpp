@@ -278,31 +278,46 @@ int main(int argc, char** argv) {
                            [&application, &window, output, native_output, project_output,
                             architectural] {
             window.fitView();
+            // Selection is local presentation state and is not persisted in a
+            // project. Clear it before both source and reopened captures so
+            // their screenshots compare the document rather than an
+            // inspector highlight left by the seed fixture.
+            (void)window.selectEntity(QString{});
             if (!project_output.isEmpty() && !window.saveProjectAs(project_output)) {
                 qCritical() << "Vertex: smoke project save failed:" << window.lastError();
                 application.exit(5);
                 return;
             }
-            if (architectural && !window.exportNativeViewImage(native_output)) {
-                qCritical() << "Vertex: native 3D smoke export failed:"
-                            << window.lastError();
-                application.exit(4);
-                return;
-            }
-            // Qt window grabs cannot include the native OCCT child surface.
-            // Keep the dedicated 3D export above, then collapse that child so
-            // the architectural UI capture contains no misleading black pane.
-            if (architectural) {
-                window.setNativeModelViewVisible(false);
-                application.processEvents();
-            }
-            const auto image = window.grab();
-            if (image.isNull() || !image.save(output)) {
-                qCritical() << "Vertex: visual smoke capture failed:" << output;
-                application.exit(2);
-                return;
-            }
-            application.exit(0);
+            // Saving and clearing selection refreshes the inspector and
+            // navigator asynchronously. Wait for that presentation state to
+            // settle before exporting the native view and grabbing the shell,
+            // otherwise source and reopened captures can differ only because
+            // one process was caught mid-refresh.
+            QTimer::singleShot(150, &window,
+                               [&application, &window, output, native_output,
+                                architectural] {
+                window.fitView();
+                if (architectural && !window.exportNativeViewImage(native_output)) {
+                    qCritical() << "Vertex: native 3D smoke export failed:"
+                                << window.lastError();
+                    application.exit(4);
+                    return;
+                }
+                // Qt window grabs cannot include the native OCCT child surface.
+                // Keep the dedicated 3D export above, then collapse that child so
+                // the architectural UI capture contains no misleading black pane.
+                if (architectural) {
+                    window.setNativeModelViewVisible(false);
+                    application.processEvents();
+                }
+                const auto image = window.grab();
+                if (image.isNull() || !image.save(output)) {
+                    qCritical() << "Vertex: visual smoke capture failed:" << output;
+                    application.exit(2);
+                    return;
+                }
+                application.exit(0);
+            });
         });
     }
     return application.exec();
