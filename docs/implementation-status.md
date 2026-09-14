@@ -121,7 +121,7 @@ installer qualification is still open. The corrected
 native model-view runtime probe exits with `ready=true exported=true error=` and
 no CRT dialog in the captured run. The current Release PE inspection covers 45
 component binaries with no unresolved static imports; the staged offline bundle
-verified 611 declared files, installed 55 runtime files into a task-owned
+verified 611 declared files, installed 79 runtime files into a task-owned
 temporary directory, and passed the installed-runtime smoke for both workspaces
 with exit code 0. The native 3D viewport now supports Ctrl+left-drag previews
 and one-command world-space translation requests for supported architectural
