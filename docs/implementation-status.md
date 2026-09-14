@@ -3,7 +3,7 @@
 ## Latest integrated checkpoint
 
 At the current integrated checkpoint, the Release and Debug desktop builds and
-CTest matrices completed with 145 runnable tests passing in each configuration
+CTest matrices completed with 147 runnable tests passing in each configuration
 (the production acceptance test is
 intentionally disabled and the AppContainer runtime test is skipped when the host is already
 inside a parent Job Object). The focused Debug and Release architectural
@@ -109,9 +109,9 @@ bundle installer now has guarded Install, Repair, and Uninstall actions with
 transactional publish and installed-marker verification; clean-machine
 installer qualification is still open. The corrected
 native model-view runtime probe exits with `ready=true exported=true error=` and
-no CRT dialog in the captured run. The current Release PE inspection covers 44
+no CRT dialog in the captured run. The current Release PE inspection covers 45
 component binaries with no unresolved static imports; the staged offline bundle
-verified 577 declared files, installed 55 runtime files into a task-owned
+verified 611 declared files, installed 55 runtime files into a task-owned
 temporary directory, and passed the installed-runtime smoke for both workspaces
 with exit code 0. The native 3D viewport now supports Ctrl+left-drag previews
 and one-command world-space translation requests for supported architectural
