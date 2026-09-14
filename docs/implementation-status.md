@@ -693,6 +693,11 @@ draft recovery and receipt-preserving geometry edits remain required.
 The full production goal is active. The repository is an internal development
 checkpoint and does not yet satisfy the production replacement contract.
 All 130 requirements in `requirements/apex-parity.json` remain mandatory.
+The latest full Debug and Release CTest runs each recorded 147 passing tests;
+the production acceptance test remains intentionally disabled until the
+qualification manifest is complete, and the Windows AppContainer worker
+fixture remains skipped when the host test process is already inside a parent
+Job Object. The analytical fixture audit now passes in both configurations.
 
 ## Current construction work
 
