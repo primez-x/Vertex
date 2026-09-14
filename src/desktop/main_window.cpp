@@ -5548,6 +5548,9 @@ public:
             add->setObjectName(QStringLiteral("addRoomRelationship"));
             auto* remove = new QPushButton(QStringLiteral("Remove selected"), &dialog);
             remove->setObjectName(QStringLiteral("removeRoomRelationship"));
+            auto* retarget = new QPushButton(QStringLiteral("Retarget selected…"), &dialog);
+            retarget->setObjectName(QStringLiteral("retargetRoomRelationship"));
+            retarget->setEnabled(false);
             auto* sync = new QPushButton(QStringLiteral("Sync references"), &dialog);
             sync->setObjectName(QStringLiteral("syncRoomRelationships"));
             auto* propagation = new QPushButton(QStringLiteral("Preview geometry propagation…"), &dialog);
@@ -5556,6 +5559,7 @@ public:
             close->setDefault(true);
             buttons->addWidget(add);
             buttons->addWidget(remove);
+            buttons->addWidget(retarget);
             buttons->addWidget(sync);
             buttons->addWidget(propagation);
             buttons->addStretch(1);
@@ -5564,6 +5568,11 @@ public:
 
             std::optional<RoomRelationshipRecord> record;
             Revision record_revision{};
+            const auto update_retarget_state = [&] {
+                const auto index = relations->currentRow();
+                retarget->setEnabled(record.has_value() && index >= 0 &&
+                                     index < static_cast<int>(record->model.relations().size()));
+            };
             const auto populate_references = [&] {
                 const auto snapshot = authoringSnapshot();
                 const auto references = document_room_references(snapshot);
@@ -5608,8 +5617,12 @@ public:
                     .arg(record->model.references().size())
                     .arg(record->model.relations().size())
                     .arg(record->model.relations().size() == 1 ? QString{} : QStringLiteral("s")));
+                update_retarget_state();
             };
             populate();
+
+            QObject::connect(relations, &QListWidget::currentRowChanged, &dialog,
+                             [&update_retarget_state](int) { update_retarget_state(); });
 
             QObject::connect(add, &QPushButton::clicked, &dialog, [&] {
                 try {
@@ -5658,6 +5671,81 @@ public:
                     if (applyRoomRelationshipModel(updated, QStringLiteral("Remove room relationship"))) {
                         populate();
                         status->setText(QStringLiteral("Relationship removed through document history."));
+                    } else {
+                        status->setText(lastError());
+                    }
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                }
+            });
+            QObject::connect(retarget, &QPushButton::clicked, &dialog, [&] {
+                try {
+                    const auto* item = relations->currentItem();
+                    if (!item || !record)
+                        throw std::invalid_argument("Choose a relationship to retarget.");
+                    if (authoringSnapshot().revision() != record_revision) {
+                        populate();
+                        throw std::invalid_argument(
+                            "The project changed while the relationship editor was open. Review the refreshed list.");
+                    }
+                    const auto index = item->data(Qt::UserRole).toInt();
+                    if (index < 0 || index >= static_cast<int>(record->model.relations().size()))
+                        throw std::invalid_argument("The relationship list is stale. Refresh it and try again.");
+                    const auto relation = record->model.relations()[static_cast<std::size_t>(index)];
+
+                    QDialog retarget_dialog(&dialog);
+                    styleDialog(retarget_dialog);
+                    retarget_dialog.setObjectName(QStringLiteral("roomRelationshipRetargetDialog"));
+                    retarget_dialog.setWindowTitle(QStringLiteral("Retarget relationship"));
+                    retarget_dialog.setModal(true);
+                    retarget_dialog.resize(480, 260);
+                    auto* retarget_layout = new QVBoxLayout(&retarget_dialog);
+                    auto* retarget_help = new QLabel(
+                        QStringLiteral("Change the declared target in one validated, undoable operation. "
+                                       "Geometry remains unchanged until a separate propagation is confirmed."),
+                        &retarget_dialog);
+                    retarget_help->setWordWrap(true);
+                    retarget_help->setObjectName(QStringLiteral("roomRelationshipRetargetHelp"));
+                    retarget_layout->addWidget(retarget_help);
+                    auto* retarget_form = new QFormLayout;
+                    auto* source_label = new QLabel(
+                        QString::fromUtf8(relation.source_id.c_str()), &retarget_dialog);
+                    auto* kind_label = new QLabel(room_relation_kind_label(relation.kind), &retarget_dialog);
+                    auto* current_target_label = new QLabel(
+                        QString::fromUtf8(relation.target_id.c_str()), &retarget_dialog);
+                    auto* replacement = new QComboBox(&retarget_dialog);
+                    replacement->setObjectName(QStringLiteral("roomRelationshipRetargetTarget"));
+                    replacement->setAccessibleName(QStringLiteral("Replacement relationship target"));
+                    for (const auto& reference : record->model.references()) {
+                        if (reference.id == relation.source_id || reference.id == relation.target_id) continue;
+                        replacement->addItem(QStringLiteral("%1  ·  %2")
+                                                 .arg(room_reference_kind_label(reference.kind),
+                                                      id_from(reference.id)),
+                                             id_from(reference.id));
+                    }
+                    if (replacement->count() == 0)
+                        throw std::invalid_argument("No alternate reference is available for this relationship.");
+                    retarget_form->addRow(QStringLiteral("Source"), source_label);
+                    retarget_form->addRow(QStringLiteral("Relationship"), kind_label);
+                    retarget_form->addRow(QStringLiteral("Current target"), current_target_label);
+                    retarget_form->addRow(QStringLiteral("New target"), replacement);
+                    retarget_layout->addLayout(retarget_form);
+                    auto* retarget_buttons = new QDialogButtonBox(
+                        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &retarget_dialog);
+                    retarget_buttons->setObjectName(QStringLiteral("roomRelationshipRetargetButtons"));
+                    retarget_layout->addWidget(retarget_buttons);
+                    QObject::connect(retarget_buttons, &QDialogButtonBox::accepted,
+                                     &retarget_dialog, &QDialog::accept);
+                    QObject::connect(retarget_buttons, &QDialogButtonBox::rejected,
+                                     &retarget_dialog, &QDialog::reject);
+                    if (retarget_dialog.exec() != QDialog::Accepted) return;
+                    const auto replacement_id = replacement->currentData().toString().toStdString();
+                    const auto updated = record->model.retarget(
+                        {relation.source_id, relation.target_id, replacement_id, relation.kind});
+                    if (applyRoomRelationshipModel(updated, QStringLiteral("Retarget room relationship"))) {
+                        populate();
+                        status->setText(QStringLiteral(
+                            "Relationship target changed through one undoable document operation; geometry was preserved."));
                     } else {
                         status->setText(lastError());
                     }

@@ -286,9 +286,11 @@ relationship records its source, target, and independent/follows/derived-from
 kind; graph validation rejects cycles, ambiguous drivers, duplicate pairs, and
 role violations before the typed `room_relationships` entity reaches Document
 history. **Sync references** adds newly created live geometry and removes stale
-endpoints while retaining valid relations. The editor is an authoring slice;
-geometry propagation and controlled retargeting still require explicit follow-up
-operations.
+endpoints while retaining valid relations. **Retarget selected** replaces one
+declared target through a single validated, revision-checked, undoable operation;
+it rejects missing targets, no-op edits, wrong relation kinds, and dependency
+cycles, and preserves the referenced geometry until propagation is explicitly
+confirmed. Geometry propagation remains a separate preview-and-confirm operation.
 
 The command palette also provides **Create room boundary from selected
 geometry**. It copies a validated closed measurement or room boundary into a

@@ -45,6 +45,34 @@ void run() {
     const auto follows = RoomRelationshipSnapshot::create(refs(), {{"measure", "room", R::follows},
         {"room", "wall-a", R::derived_from}});
     require(follows.relations().size() == 2, "Valid dependency chain lost");
+    const auto retargeted = follows.retarget({"measure", "room", "wall-b", R::follows});
+    require(retargeted.relations().size() == 2 &&
+                std::any_of(retargeted.relations().begin(), retargeted.relations().end(),
+                    [](const auto& relation) {
+                        return relation.source_id == "measure" &&
+                               relation.target_id == "wall-b" &&
+                               relation.kind == R::follows;
+                    }),
+            "Valid retarget should replace only the declared dependency target");
+    require(follows.relations().size() == 2 && follows.relations()[0].target_id != "wall-b",
+            "Retarget must not mutate the original relationship snapshot");
+    const auto independent = RoomRelationshipSnapshot::create(refs(), {{"measure", "room", R::independent}});
+    const auto independent_retargeted = independent.retarget(
+        {"room", "measure", "wall-a", R::independent});
+    require(independent_retargeted.relations().size() == 1 &&
+                independent_retargeted.relations().front().source_id == "room" &&
+                independent_retargeted.relations().front().target_id == "wall-a",
+            "Independent retarget should preserve the selected endpoint");
+    rejects([&] { (void)follows.retarget({"measure", "room", "missing", R::follows}); });
+    rejects([&] { (void)follows.retarget({"measure", "wall-a", "wall-b", R::follows}); });
+    rejects([&] {
+        const auto cyclic = RoomRelationshipSnapshot::create(
+            {{"a", K::room_boundary}, {"b", K::room_boundary}, {"c", K::room_boundary}},
+            {{"a", "b", R::follows}, {"b", "c", R::follows}});
+        (void)cyclic.retarget({"b", "c", "a", R::follows});
+    });
+    rejects([&] { (void)follows.retarget({"measure", "room", "room", R::follows}); });
+    rejects([&] { (void)follows.retarget({"measure", "room", "wall-a", R::derived_from}); });
     rejects([] { auto r = refs(); r.push_back({"room", K::architectural_wall}); RoomRelationshipSnapshot::create(r, {}); });
     rejects([] { RoomRelationshipSnapshot::create({{" ", K::room_boundary}}, {}); });
     rejects([] { RoomRelationshipSnapshot::create({{"a", static_cast<K>(99)}}, {}); });

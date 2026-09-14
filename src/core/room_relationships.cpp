@@ -98,6 +98,35 @@ RoomRelationshipSnapshot RoomRelationshipSnapshot::create(std::vector<RoomRefere
 
 const std::vector<RoomReference>& RoomRelationshipSnapshot::references() const noexcept { return references_; }
 const std::vector<RoomRelation>& RoomRelationshipSnapshot::relations() const noexcept { return relations_; }
+RoomRelationshipSnapshot RoomRelationshipSnapshot::retarget(
+    const RoomRelationshipRetarget& edit) const {
+    (void)name(edit.kind);
+    if (!valid_id(edit.source_id) || !valid_id(edit.target_id) ||
+        !valid_id(edit.replacement_target_id))
+        throw std::invalid_argument("Invalid relationship retarget identity");
+
+    const auto matches = [&](const RoomRelation& relation) {
+        if (relation.kind != edit.kind) return false;
+        if (edit.kind == RoomRelationKind::independent) {
+            return (relation.source_id == edit.source_id && relation.target_id == edit.target_id) ||
+                   (relation.source_id == edit.target_id && relation.target_id == edit.source_id);
+        }
+        return relation.source_id == edit.source_id && relation.target_id == edit.target_id;
+    };
+    const auto found = std::find_if(relations_.begin(), relations_.end(), matches);
+    if (found == relations_.end())
+        throw std::invalid_argument("The relationship to retarget is not declared");
+    if (edit.target_id == edit.replacement_target_id)
+        throw std::invalid_argument("The relationship target is unchanged");
+
+    auto updated = relations_;
+    const auto index = static_cast<std::size_t>(std::distance(relations_.begin(), found));
+    // The caller names the endpoint that is being replaced. Independent
+    // relations are symmetric, so canonicalization in create() preserves the
+    // other endpoint regardless of the order used by the editor.
+    updated[index] = {edit.source_id, edit.replacement_target_id, edit.kind};
+    return create(references_, std::move(updated));
+}
 nlohmann::json RoomRelationshipSnapshot::to_json() const {
     auto references = nlohmann::json::array();
     auto relations = nlohmann::json::array();

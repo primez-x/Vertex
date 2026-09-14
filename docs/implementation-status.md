@@ -415,10 +415,15 @@ the More menu and command palette open a typed editor that lists live room
 boundaries, appraisal measurement boundaries, and architectural walls, applies
 validated independent/follows/derived-from declarations through Document
 history, and synchronizes newly created references without silently inventing
-relationships. Geometry propagation, controlled retargeting, and full
-cross-view acceptance remain open. A selected closed boundary can now be copied
-into a distinct named `room_boundary` entity from the command palette; its
-segments, area, classification, and source-independent history are persisted.
+relationships. A selected relationship can now be explicitly retargeted through
+one validated, revision-checked, undoable Document revision; missing targets,
+no-op edits, wrong relation kinds, and dependency cycles are rejected while the
+referenced geometry remains unchanged. The desktop smoke workflow covers target
+replacement, geometry preservation, undo/redo, and subsequent propagation.
+Full cross-view acceptance and production compatibility evidence remain open. A
+selected closed boundary can now be copied into a distinct named
+`room_boundary` entity from the command palette; its segments, area,
+classification, and source-independent history are persisted.
 
 The selection command surface now includes bounded local JSON copy, cut, paste,
 and delete operations. Wall selections carry their hosted openings; pasted

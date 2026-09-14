@@ -2994,8 +2994,9 @@ void test_room_relationship_workflow() {
         auto* list = dialog->findChild<QListWidget*>(QStringLiteral("roomRelationshipList"));
         auto* add = dialog->findChild<QPushButton*>(QStringLiteral("addRoomRelationship"));
         auto* remove = dialog->findChild<QPushButton*>(QStringLiteral("removeRoomRelationship"));
+        auto* retarget = dialog->findChild<QPushButton*>(QStringLiteral("retargetRoomRelationship"));
         auto* sync = dialog->findChild<QPushButton*>(QStringLiteral("syncRoomRelationships"));
-        require(source && target && kind && list && add && remove && sync,
+        require(source && target && kind && list && add && remove && retarget && sync,
                 "room relationship editor should expose typed controls");
         const auto source_index = source->findData(boundary_id);
         const auto target_index = target->findData(wall_id);
@@ -3053,6 +3054,56 @@ void test_room_relationship_workflow() {
     require(model.relations().empty(), "undo should restore the relation-free graph");
     require(window.redoCommand(), "room relationship edits should be redoable");
 
+    const auto boundary_before_retarget = window.document().snapshot().entities().at(boundary_id.toStdString());
+    const auto revision_before_retarget = window.document().revision();
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("roomRelationshipsDialog"));
+        require(dialog, "room relationship editor should reopen for controlled retargeting");
+        auto* list = dialog->findChild<QListWidget*>(QStringLiteral("roomRelationshipList"));
+        auto* retarget = dialog->findChild<QPushButton*>(QStringLiteral("retargetRoomRelationship"));
+        require(list && retarget, "relationship editor should expose the retarget action");
+        list->setCurrentRow(0);
+        require(retarget->isEnabled(), "retarget action should enable for a selected relation");
+        QTimer::singleShot(0, &window, [&] {
+            auto* retarget_dialog = window.findChild<QDialog*>(
+                QStringLiteral("roomRelationshipRetargetDialog"));
+            require(retarget_dialog, "retarget action should open an explicit target dialog");
+            auto* replacement = retarget_dialog->findChild<QComboBox*>(
+                QStringLiteral("roomRelationshipRetargetTarget"));
+            auto* buttons = retarget_dialog->findChild<QDialogButtonBox*>(
+                QStringLiteral("roomRelationshipRetargetButtons"));
+            require(replacement && buttons, "retarget dialog should expose target and confirmation controls");
+            const auto source_option_index = replacement->findData(boundary_id);
+            require(source_option_index < 0,
+                    "retarget dialog should not offer the current source as a replacement target");
+            const auto replacement_index = replacement->findData(room_id);
+            require(replacement_index >= 0,
+                    "retarget dialog should list the live room boundary target");
+            replacement->setCurrentIndex(replacement_index);
+            buttons->button(QDialogButtonBox::Ok)->click();
+            dialog->reject();
+        });
+        retarget->click();
+    });
+    window.showRoomRelationships();
+    model = RoomRelationshipSnapshot::from_json(relationship_entity().properties.at("model"));
+    require(model.relations().size() == 1 &&
+                model.relations().front().target_id == room_id.toStdString(),
+            "controlled retarget should update the dependency target in one operation");
+    require(window.document().revision() == revision_before_retarget + 1 &&
+                window.document().snapshot().entities().at(boundary_id.toStdString()) == boundary_before_retarget,
+            "controlled retarget should preserve geometry and commit exactly one document revision");
+    require(window.undoCommand(), "controlled retarget should be undoable");
+    model = RoomRelationshipSnapshot::from_json(relationship_entity().properties.at("model"));
+    require(model.relations().size() == 1 &&
+                model.relations().front().target_id == wall_id.toStdString(),
+            "undo should restore the original relationship target");
+    require(window.redoCommand(), "controlled retarget should be redoable");
+    model = RoomRelationshipSnapshot::from_json(relationship_entity().properties.at("model"));
+    require(model.relations().size() == 1 &&
+                model.relations().front().target_id == room_id.toStdString(),
+            "redo should restore the retargeted relationship target");
+
     const auto before_propagation = window.document().revision();
     QTimer::singleShot(0, &window, [&] {
         auto* dialog = window.findChild<QDialog*>(QStringLiteral("roomRelationshipsDialog"));
@@ -3075,8 +3126,8 @@ void test_room_relationship_workflow() {
                 QStringLiteral("roomRelationshipPropagationButtons"));
             require(driver && offset_x && canvas_widget && canvas && buttons,
                     "propagation preview should expose typed controls and a canvas");
-            const auto driver_index = driver->findData(wall_id);
-            require(driver_index >= 0, "propagation preview should list the wall driver");
+            const auto driver_index = driver->findData(room_id);
+            require(driver_index >= 0, "propagation preview should list the retargeted room driver");
             driver->setCurrentIndex(driver_index);
             offset_x->setText(QStringLiteral("1 m"));
             require(!canvas->entities().empty() &&
