@@ -290,7 +290,7 @@
       "requirement": "Save serializes an immutable snapshot at revision R into a validated standalone project while preserving the prior destination file.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Interleaved edits during save produce a file containing exactly the reported saved revision; a failed replacement leaves the previous valid file recoverable.",
       "package": 3,
       "blocker": null,
@@ -298,9 +298,11 @@
         "include/sketch/project_store.hpp",
         "src/core/project_store.cpp",
         "tests/project_store_tests.cpp",
-        "docs/project-format.md"
+        "docs/project-format.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "ProjectStore saves immutable snapshots through validated staging and publication. Project-store fixtures cover exact-revision snapshot saves, post-snapshot edits that do not leak into saved bytes, compare-and-swap destination checks, verified backups, external-change rejection, injected pre-publication rollback, and staging-handle/path tamper resistance. Clean-machine storage-fault evidence and the production gate remain open."
+      "implementation_note": "ProjectStore saves immutable snapshots through validated staging and publication. Project-store fixtures cover exact-revision snapshot saves, post-snapshot edits that do not leak into saved bytes, compare-and-swap destination checks, verified backups, external-change rejection, injected pre-publication rollback, and staging-handle/path tamper resistance. Clean-machine storage-fault evidence and the production gate remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "CORE-DOC-004",
@@ -308,15 +310,17 @@
       "requirement": "Every authoritative output carries an OutputFingerprint for document revision, profiles, assets, fonts, views, and processing components.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Changing a fingerprint input either regenerates output or produces a visible stale-output block; matching inputs reproduce the same output identity.",
       "package": 3,
       "blocker": null,
       "implementation_sources": [
         "include/sketch/output_fingerprint.hpp",
-        "src/core/output_fingerprint.cpp"
+        "src/core/output_fingerprint.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Core digest/manifest/currentness checks are implemented and tested. PDF, SVG, and native 3D image exports now emit adjacent fingerprint manifests, and print preview writes a local driver-evidence receipt; stale-output blocking, reproducibility fixtures, physical calibration, and production acceptance remain open. Serialized identity excludes private entity and asset payloads."
+      "implementation_note": "Core digest/manifest/currentness checks are implemented and tested. PDF, SVG, and native 3D image exports now emit adjacent fingerprint manifests, and print preview writes a local driver-evidence receipt; stale-output blocking, reproducibility fixtures, physical calibration, and production acceptance remain open. Serialized identity excludes private entity and asset payloads. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "CORE-DOC-005",
@@ -324,7 +328,7 @@
       "requirement": "All edits use typed serialized commands over immutable snapshots; accepted compound operations commit atomically and are reversible.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "A compound edit either commits as one revision with one undo entry or leaves the previous revision unchanged; stale worker results cannot overwrite newer edits.",
       "package": 3,
       "blocker": null,
@@ -334,9 +338,11 @@
         "src/core/workspace_save_queue.cpp",
         "src/desktop/main_window.cpp",
         "src/core/project_workspace_preview_adapters.cpp",
-        "tests/project_workspace_preview_adapters_tests.cpp"
+        "tests/project_workspace_preview_adapters_tests.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Version-1 JSON command envelopes now preserve every typed Document command, complete entity/asset payloads, SHA-256 checked asset bytes, finite transforms, and strict field/version validation. ProjectWorkspace::prepare round-trips commands through the codec on an immutable fork before staging one revision; compound edits remain atomic, revision-fenced, and undoable. Debug document and workspace adapter tests cover canonical round trips, tampering rejection, assets, transforms, stale sources, and one-step undo/redo; production gate evidence remains open."
+      "implementation_note": "Version-1 JSON command envelopes now preserve every typed Document command, complete entity/asset payloads, SHA-256 checked asset bytes, finite transforms, and strict field/version validation. ProjectWorkspace::prepare round-trips commands through the codec on an immutable fork before staging one revision; compound edits remain atomic, revision-fenced, and undoable. Debug document and workspace adapter tests cover canonical round trips, tampering rejection, assets, transforms, stale sources, and one-step undo/redo; production gate evidence remains open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "CORE-DOC-006",
@@ -344,15 +350,17 @@
       "requirement": "Entered quantities and units remain distinct from derived values, with analytical geometry, explicit tolerances, and display rounding that never changes measurement truth.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Fixtures retain entered dimensions and calculate within the documented tolerance after display-format changes, save/reopen, and unit conversion.",
       "package": 3,
       "blocker": null,
       "implementation_sources": [
         "src/core/quantity.cpp",
-        "tests/quantity_tests.cpp"
+        "tests/quantity_tests.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Exact rational parsing now covers fractional inches, feet-and-inches, metric units, equivalent imperial/metric geometry, original-expression preservation, and canonical display round trips; hardware/input parity, independent acceptance evidence, and the production gate remain open."
+      "implementation_note": "Exact rational parsing now covers fractional inches, feet-and-inches, metric units, equivalent imperial/metric geometry, original-expression preservation, and canonical display round trips; hardware/input parity, independent acceptance evidence, and the production gate remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "CORE-DOC-007",
@@ -386,7 +394,7 @@
       "requirement": "Migrations are copy-based and reversible, preserve originals and unknown data, and block unsafe editing or authoritative output for unsupported required features.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Each schema migration preserves the source fixture, reports unsupported content, and can be validated or rolled back without data loss.",
       "package": 3,
       "blocker": null,
@@ -394,9 +402,11 @@
         "include/sketch/project_store.hpp",
         "src/core/project_store.cpp",
         "tests/project_store_tests.cpp",
-        "docs/project-format.md"
+        "docs/project-format.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Versioned project load/save preserves opaque unknown data, reopens unknown required entities read-only, rejects downgraded or unsupported markers before acceptance, and refuses document-only writes over future recovery archives. Project-store fixtures retain exact source bytes while exercising v1-v6 markers, authoring receipts, future schemas, and rollback boundaries; a complete migration matrix and the production gate remain open."
+      "implementation_note": "Versioned project load/save preserves opaque unknown data, reopens unknown required entities read-only, rejects downgraded or unsupported markers before acceptance, and refuses document-only writes over future recovery archives. Project-store fixtures retain exact source bytes while exercising v1-v6 markers, authoring receipts, future schemas, and rollback boundaries; a complete migration matrix and the production gate remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "CORE-DOC-009",
@@ -650,15 +660,17 @@
       "requirement": "Represent lines, arcs, holes, winding, tangency, and topology as analytical geometry rather than screen strokes.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Independent analytical and high-precision fixtures agree within the documented area and coordinate tolerances after save/reopen.",
       "package": 4,
       "blocker": null,
       "implementation_sources": [
         "include/sketch/geometry.hpp",
-        "src/core/geometry.cpp"
+        "src/core/geometry.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Analytical line and circular-arc geometry, closure, winding, intersections, tangency, and boundary validation are implemented. Room-hole topology now validates each hole plus strict containment, disjoint interiors, and no contact or nesting analytically, rejecting indeterminate cases closed; independent high-precision fixture parity, broader topology workflows, and the production gate remain open."
+      "implementation_note": "Analytical line and circular-arc geometry, closure, winding, intersections, tangency, and boundary validation are implemented. Room-hole topology now validates each hole plus strict containment, disjoint interiors, and no contact or nesting analytically, rejecting indeterminate cases closed; independent high-precision fixture parity, broader topology workflows, and the production gate remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "GEO-BASE-002",
@@ -666,15 +678,17 @@
       "requirement": "Construct and edit true curves using chord length, arc length, arc height, and angle inputs.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Each curve input mode produces the expected analytical arc, preserves its defining parameters, and edits without converting to a faceted stroke.",
       "package": 4,
       "blocker": null,
       "implementation_sources": [
         "src/core/geometry.cpp",
-        "tests/curve_construction_tests.cpp"
+        "tests/curve_construction_tests.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Analytical chord/angle, chord/height, chord/arc-length and start-tangent construction is tested; Windows now exposes interactive endpoint editing for angle, arc-length, and arc-height walls. Boundary curve authoring, joins, and complete parity qualification remain open."
+      "implementation_note": "Analytical chord/angle, chord/height, chord/arc-length and start-tangent construction is tested; Windows now exposes interactive endpoint editing for angle, arc-length, and arc-height walls. Boundary curve authoring, joins, and complete parity qualification remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "GEO-BASE-003",
@@ -682,16 +696,18 @@
       "requirement": "Support rise-and-run entry, relative turns, explicit angles, and unit-aware direction input.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Fixtures entered in imperial and metric units reproduce expected endpoints and headings with documented tolerance.",
       "package": 4,
       "blocker": null,
       "implementation_sources": [
         "src/core/boundary_authoring_session.cpp",
         "tests/boundary_authoring_session_tests.cpp",
-        "tests/boundary_input_dialog_tests.cpp"
+        "tests/boundary_input_dialog_tests.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Rise/run, relative-turn, angle, and unit-aware entry are implemented and covered by focused fixtures; complete mapped imperial/metric heading tolerance evidence remains open."
+      "implementation_note": "Rise/run, relative-turn, angle, and unit-aware entry are implemented and covered by focused fixtures; complete mapped imperial/metric heading tolerance evidence remains open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "GEO-BASE-004",
@@ -699,7 +715,7 @@
       "requirement": "Provide alignment, snapping, point jumping, automatic closure, and bay-window completion while retaining exact geometry.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Keyboard and pointer fixtures show each behavior, expose the resulting constraint or closure, and reopen without drift.",
       "package": 4,
       "blocker": null,
@@ -708,9 +724,11 @@
         "src/core/geometry_operations.cpp",
         "tests/geometry_operations_tests.cpp",
         "docs/geometry-operations.md",
-        "src/desktop/plan_canvas.cpp"
+        "src/desktop/plan_canvas.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Point jump, exact closure, bay completion, alignment/snap behavior and logical shortcut mappings have bounded geometry/UI foundations; physical shortcut verification, full command integration, and parity fixtures remain open."
+      "implementation_note": "Point jump, exact closure, bay completion, alignment/snap behavior and logical shortcut mappings have bounded geometry/UI foundations; physical shortcut verification, full command integration, and parity fixtures remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "GEO-CON-001",
@@ -718,7 +736,7 @@
       "requirement": "Support editable parallel, perpendicular, horizontal, vertical, coincident, and fixed-length relationships.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Constraint fixtures report intended degrees of freedom and preserve each relation through supported edits and save/reopen.",
       "package": 4,
       "blocker": null,
@@ -732,9 +750,11 @@
         "src/core/constraint_authoring.cpp",
         "src/desktop/constraint_dialog.cpp",
         "tests/constraint_authoring_tests.cpp",
-        "tests/constraint_dialog_tests.cpp"
+        "tests/constraint_dialog_tests.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Seven persistent straight-wall endpoint relations now have add/edit/remove controls, source-bound solver previews and atomic Apply in both workspaces. V14 integrated tests pass Debug/Release; final hardening and independent service/UI review remain. Boundary vertex and curve relations remain open."
+      "implementation_note": "Seven persistent straight-wall endpoint relations now have add/edit/remove controls, source-bound solver previews and atomic Apply in both workspaces. V14 integrated tests pass Debug/Release; final hardening and independent service/UI review remain. Boundary vertex and curve relations remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "GEO-CON-002",
@@ -742,7 +762,7 @@
       "requirement": "Preview dimension changes with an explicit anchored endpoint and an explicit choice about moving connected geometry.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "A 12-foot-to-14-foot edit previews both supported anchoring choices, shows dependent movement, and commits only after selection.",
       "package": 4,
       "blocker": null,
@@ -751,9 +771,11 @@
         "src/core/constraint_authoring.cpp",
         "src/desktop/constraint_dialog.cpp",
         "tests/constraint_authoring_tests.cpp",
-        "tests/constraint_dialog_tests.cpp"
+        "tests/constraint_dialog_tests.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Both workspaces preview straight-wall length changes with start/end anchor and explicit connected-movement choice. Candidate and source digests bind Apply; keyboard, invalidation and comparison captures are covered. Boundary/curve editing and full production qualification remain open."
+      "implementation_note": "Both workspaces preview straight-wall length changes with start/end anchor and explicit connected-movement choice. Candidate and source digests bind Apply; keyboard, invalidation and comparison captures are covered. Boundary/curve editing and full production qualification remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "GEO-CON-003",
@@ -832,7 +854,7 @@
       "requirement": "Model levels and floor-to-floor relationships through an explicit vertical dependency graph.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Changing a level elevation previews and applies expected dependent changes across plans, sections, and 3D without cycles.",
       "package": 4,
       "blocker": null,
@@ -846,9 +868,11 @@
         "tests/vertical_levels_tests.cpp",
         "tests/desktop_smoke.cpp",
         "tests/document_tests.cpp",
-        "docs/vertical-levels.md"
+        "docs/vertical-levels.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "A validated vertical level graph with connected, frozen, and disconnected floor-to-floor links now has strict version-1 JSON decoding, Document admission through the vertical_levels entity, explicit validated floor bindings, and a Windows Levels editor for revision-checked create/edit/link/freeze/disconnect/assign operations. A revision-bound adapter now previews and atomically applies endpoint-preserving elevation edits together with canonical total_rise_m updates for connected straight stairs, preserving unrelated properties and rejecting frozen, retargeted, deleted, malformed, stale, or divergent candidates; the Levels editor shows affected stair rises and requires confirmation before the single undoable revision. Newly created walls, slabs, and architectural objects on a bound floor carry an opt-in versioned level placement record; plan, elevation, section, and native 3D projections resolve it from the same snapshot without mutating source coordinates. Site/terrain tools and full cross-view production qualification remain open."
+      "implementation_note": "A validated vertical level graph with connected, frozen, and disconnected floor-to-floor links now has strict version-1 JSON decoding, Document admission through the vertical_levels entity, explicit validated floor bindings, and a Windows Levels editor for revision-checked create/edit/link/freeze/disconnect/assign operations. A revision-bound adapter now previews and atomically applies endpoint-preserving elevation edits together with canonical total_rise_m updates for connected straight stairs, preserving unrelated properties and rejecting frozen, retargeted, deleted, malformed, stale, or divergent candidates; the Levels editor shows affected stair rises and requires confirmation before the single undoable revision. Newly created walls, slabs, and architectural objects on a bound floor carry an opt-in versioned level placement record; plan, elevation, section, and native 3D projections resolve it from the same snapshot without mutating source coordinates. Site/terrain tools and full cross-view production qualification remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-WF-001",
@@ -935,15 +959,17 @@
       "requirement": "Accept fractional inches, feet-and-inches, metric units, and unit-aware precision input without lossy intermediate rounding.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Equivalent imperial and metric entries create equivalent analytical geometry and preserve the original entered quantity and unit.",
       "package": 4,
       "blocker": null,
       "implementation_sources": [
         "src/core/quantity.cpp",
-        "tests/quantity_tests.cpp"
+        "tests/quantity_tests.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Exact rational parsing now covers fractional inches, feet-and-inches, metric units, equivalent imperial/metric geometry, original-expression preservation, and canonical display round trips; hardware/input parity, independent acceptance evidence, and the production gate remain open."
+      "implementation_note": "Exact rational parsing now covers fractional inches, feet-and-inches, metric units, equivalent imperial/metric geometry, original-expression preservation, and canonical display round trips; hardware/input parity, independent acceptance evidence, and the production gate remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-KEY-003",
@@ -951,7 +977,7 @@
       "requirement": "Preserve efficient keyboard semantics and provide an Apex-compatible shortcut preset alongside customizable shortcuts.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Shortcut fixtures pass under the Apex preset, conflicts are reported, and user-customized bindings persist in a workspace.",
       "package": 5,
       "blocker": null,
@@ -962,9 +988,11 @@
         "docs/geometry-operations.md",
         "src/desktop/main_window.cpp",
         "tests/desktop_smoke.cpp",
-        "docs/workspace-accessibility.md"
+        "docs/workspace-accessibility.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Logical Apex operation names, conflict reporting, deterministic Apex preset bindings, and atomic local customizable shortcut persistence are implemented and covered by the desktop workflow. Physical key mapping, complete keyboard-only parity, and production evidence remain open."
+      "implementation_note": "Logical Apex operation names, conflict reporting, deterministic Apex preset bindings, and atomic local customizable shortcut persistence are implemented and covered by the desktop workflow. Physical key mapping, complete keyboard-only parity, and production evidence remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-KEY-004",
@@ -1014,7 +1042,7 @@
       "requirement": "Support selection and clipboard operations for geometry, areas, annotations, and architectural objects.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Copy, cut, paste, multi-select, and selection filtering preserve semantic links and produce undoable commands.",
       "package": 4,
       "blocker": null,
@@ -1024,9 +1052,11 @@
         "src/desktop/main_window.cpp",
         "src/desktop/plan_canvas.hpp",
         "src/desktop/plan_canvas.cpp",
-        "tests/desktop_smoke.cpp"
+        "tests/desktop_smoke.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Bounded local JSON clipboard supports copy, paste, cut, and guarded delete for supported geometry graphs. Ctrl-click toggles ordered selection roots, both plan canvases highlight the selection, and combined clipboard/delete commands deduplicate hosted dependencies in one revision and undo/redo step; paste preserves root order with fresh identities and remapped links. Desktop smoke covers two walls plus an explicitly selected hosted opening, replacement/toggle behavior, atomic rejection, and undo/redo. Individual annotation children retain single-selection delete behavior; multi-root cut/delete requires annotation groups. Selection filtering, broader linked-object policies, and production qualification remain open."
+      "implementation_note": "Bounded local JSON clipboard supports copy, paste, cut, and guarded delete for supported geometry graphs. Ctrl-click toggles ordered selection roots, both plan canvases highlight the selection, and combined clipboard/delete commands deduplicate hosted dependencies in one revision and undo/redo step; paste preserves root order with fresh identities and remapped links. Desktop smoke covers two walls plus an explicitly selected hosted opening, replacement/toggle behavior, atomic rejection, and undo/redo. Individual annotation children retain single-selection delete behavior; multi-root cut/delete requires annotation groups. Selection filtering, broader linked-object policies, and production qualification remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-EDIT-002",
@@ -1034,7 +1064,7 @@
       "requirement": "Support rotation and flipping of supported geometry, areas, references, annotations, and architectural objects with explicit pivot behavior.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Transform fixtures preserve analytical dimensions, typed links, and expected handedness, and can be undone exactly.",
       "package": 4,
       "blocker": null,
@@ -1046,9 +1076,11 @@
         "src/desktop/main_window.cpp",
         "include/sketch/desktop/main_window.hpp",
         "tests/desktop_smoke.cpp",
-        "docs/desktop-workflow.md"
+        "docs/desktop-workflow.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "The desktop exposes rotation around a deterministic bounding-box pivot, independent horizontal/vertical reflection, and offsets for identified closed boundaries. Receipt-backed copies and in-place transforms preserve original local construction inputs, topology identities where retained, metadata, and attached dimension placement through atomic commands. The architectural transaction path now applies type-aware transforms to canonical building geometry, dimensions, and local vectors while removing stale generic transform markers. Typed transform history uses format 6 for deterministic reconstruction across save, recovery, and exchange. Broader reference/annotation coverage, linked-relationship propagation, visible architectural binding, and production qualification remain open."
+      "implementation_note": "The desktop exposes rotation around a deterministic bounding-box pivot, independent horizontal/vertical reflection, and offsets for identified closed boundaries. Receipt-backed copies and in-place transforms preserve original local construction inputs, topology identities where retained, metadata, and attached dimension placement through atomic commands. The architectural transaction path now applies type-aware transforms to canonical building geometry, dimensions, and local vectors while removing stale generic transform markers. Typed transform history uses format 6 for deterministic reconstruction across save, recovery, and exchange. Broader reference/annotation coverage, linked-relationship propagation, visible architectural binding, and production qualification remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-EDIT-003",
@@ -1056,7 +1088,7 @@
       "requirement": "Support vertex insertion and cloning for applicable boundaries, walls, and objects without breaking constraints or area topology.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Insertion and clone fixtures preserve valid topology, report any new degrees of freedom, and reopen identically.",
       "package": 4,
       "blocker": null,
@@ -1068,9 +1100,11 @@
         "src/desktop/main_window.cpp",
         "include/sketch/desktop/main_window.hpp",
         "tests/desktop_smoke.cpp",
-        "docs/desktop-workflow.md"
+        "docs/desktop-workflow.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Validated boundary vertex insertion and explicit-ID cloning are implemented; desktop vertex insertion now performs a guarded fresh-ID replacement for identified receipt-free boundaries, migrates typed references, preserves topology and exact undo/redo, and rejects legacy or receipt-bound edits. Wall/object insertion, constraint degrees-of-freedom reporting, broader lifecycle/reopen acceptance, and production qualification remain open."
+      "implementation_note": "Validated boundary vertex insertion and explicit-ID cloning are implemented; desktop vertex insertion now performs a guarded fresh-ID replacement for identified receipt-free boundaries, migrates typed references, preserves topology and exact undo/redo, and rejects legacy or receipt-bound edits. Wall/object insertion, constraint degrees-of-freedom reporting, broader lifecycle/reopen acceptance, and production qualification remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-EDIT-004",
@@ -1100,7 +1134,7 @@
       "requirement": "Every committed operation, including classification, calibration, and compound edits, supports complete undo and redo.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "A mixed command sequence returns byte-equivalent semantic state after undo-all and redo-all, including derived recalculation state.",
       "package": 4,
       "blocker": null,
@@ -1110,9 +1144,11 @@
         "src/desktop/main_window.cpp",
         "tests/document_tests.cpp",
         "tests/desktop_smoke.cpp",
-        "tests/project_store_tests.cpp"
+        "tests/project_store_tests.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Document history records accepted classification, calibration, geometry, annotation, architectural, and compound edits as reversible revisions; desktop and storage fixtures exercise undo/redo and save/reopen boundaries. A complete mixed-command byte-equivalence fixture across every supported operation, crash-recovery replay, and production qualification remain open."
+      "implementation_note": "Document history records accepted classification, calibration, geometry, annotation, architectural, and compound edits as reversible revisions; desktop and storage fixtures exercise undo/redo and save/reopen boundaries. A complete mixed-command byte-equivalence fixture across every supported operation, crash-recovery replay, and production qualification remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-AREA-001",
@@ -1120,7 +1156,7 @@
       "requirement": "Detect, aggregate, and subtract areas from analytical boundaries with explicit grouping and hole behavior.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Nested, adjacent, overlapping, and disconnected area fixtures produce independently inspectable totals and deductions.",
       "package": 4,
       "blocker": null,
@@ -1134,9 +1170,11 @@
         "src/desktop/main_window.cpp",
         "include/sketch/desktop/main_window.hpp",
         "tests/desktop_smoke.cpp",
-        "docs/desktop-workflow.md"
+        "docs/desktop-workflow.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Analytical calculation, union subtraction, deterministic endpoint-graph face detection, and explicit room-hole deductions are implemented. The desktop command creates independent room boundaries for all simple bounded faces in one guarded Document transaction; schedule generation now rejects outside, crossing, touching, overlapping, duplicate, nested, or numerically indeterminate holes and preserves analytical quantities for valid disjoint curved or straight holes. Same-floor production fixtures, compatibility evidence, and complete Apex workflows remain open."
+      "implementation_note": "Analytical calculation, union subtraction, deterministic endpoint-graph face detection, and explicit room-hole deductions are implemented. The desktop command creates independent room boundaries for all simple bounded faces in one guarded Document transaction; schedule generation now rejects outside, crossing, touching, overlapping, duplicate, nested, or numerically indeterminate holes and preserves analytical quantities for valid disjoint curved or straight holes. Same-floor production fixtures, compatibility evidence, and complete Apex workflows remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-AREA-002",
@@ -1144,16 +1182,18 @@
       "requirement": "Support classifications, base area, factors, net area, and explicit measurement profiles.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Changing classification or factor produces a visible, attributed calculation revision without altering boundary geometry.",
       "package": 4,
       "blocker": null,
       "implementation_sources": [
         "include/sketch/calculations.hpp",
         "src/calculations/calculations.cpp",
-        "tests/calculation_tests.cpp"
+        "tests/calculation_tests.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Custom versioned profiles, rational factors and base/net area are implemented. The Windows profile editor exposes persisted ID, display unit, precision, and explicit classification rules through one undoable versioned command; Apex standards fixtures remain open."
+      "implementation_note": "Custom versioned profiles, rational factors and base/net area are implemented. The Windows profile editor exposes persisted ID, display unit, precision, and explicit classification rules through one undoable versioned command; Apex standards fixtures remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-AREA-003",
@@ -1161,15 +1201,17 @@
       "requirement": "Report perimeter, living-area totals, building totals, and other required area aggregates with configurable rounding.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Reference fixtures match independently calculated perimeter and totals within the documented tolerance, with rounding shown separately.",
       "package": 4,
       "blocker": null,
       "implementation_sources": [
         "src/calculations/calculations.cpp",
-        "tests/calculation_tests.cpp"
+        "tests/calculation_tests.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Unrounded aggregation, explicit building/living classifications and display rounding are implemented; production output parity remains open."
+      "implementation_note": "Unrounded aggregation, explicit building/living classifications and display rounding are implemented; production output parity remains open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-AREA-004",
@@ -1186,14 +1228,16 @@
       "acceptance": "The calculation inspector identifies every contributing object and applies the same-type Auto-Subtract rule from the compatibility fixture, with no hidden deduction.",
       "package": 4,
       "blocker": null,
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "implementation_sources": [
         "src/calculations/calculations.cpp",
         "src/desktop/main_window.cpp",
         "tests/calculation_tests.cpp",
-        "tests/desktop_smoke.cpp"
+        "tests/desktop_smoke.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Deduction contributions, profile provenance, overlap handling, classifications, factors, rounding deltas, and an offline contained-boundary editor are implemented. The editor persists deduction_ids, validates same-floor containment and nested-reference rules, and exposes requested versus marginally applied amounts; documented same-type Auto-Subtract compatibility and production certification remain open."
+      "implementation_note": "Deduction contributions, profile provenance, overlap handling, classifications, factors, rounding deltas, and an offline contained-boundary editor are implemented. The editor persists deduction_ids, validates same-floor containment and nested-reference rules, and exposes requested versus marginally applied amounts; documented same-type Auto-Subtract compatibility and production certification remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-ANNO-001",

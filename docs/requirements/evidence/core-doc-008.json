@@ -1,5 +1,5 @@
 {
-  "acceptance": "Concurrent-open and external-change fixtures prevent silent overwrite and make the selected read-only or independent-copy path explicit.",
+  "acceptance": "Each schema migration preserves the source fixture, reports unsupported content, and can be validated or rolled back without data loss.",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -15,15 +15,15 @@
       },
       "tests": [
         {
-          "name": "project_ownership",
+          "name": "project_storage",
           "status": "passed"
         },
         {
-          "name": "project_ownership_process",
+          "name": "project_archive",
           "status": "passed"
         },
         {
-          "name": "desktop_workflow",
+          "name": "project_exchange",
           "status": "passed"
         }
       ]
@@ -42,31 +42,31 @@
       },
       "tests": [
         {
-          "name": "project_ownership",
+          "name": "project_storage",
           "status": "passed"
         },
         {
-          "name": "project_ownership_process",
+          "name": "project_archive",
           "status": "passed"
         },
         {
-          "name": "desktop_workflow",
+          "name": "project_exchange",
           "status": "passed"
         }
       ]
     }
   ],
-  "qualification_boundary": "This evidence covers local and cross-process ownership, Windows path identity, external-change save blocking, and the desktop read-only second-open behavior. Clean-machine lifetime and hostile-writer qualification remain open.",
-  "requirement_id": "REC-004",
+  "qualification_boundary": "This evidence covers copy-based version markers, opaque preservation, unsupported required content, and rollback fixtures. The complete migration matrix and production release qualification remain open.",
+  "requirement_id": "CORE-DOC-008",
   "result": "pass",
   "schema_version": 1,
   "source_anchors": [
-    "ProjectOwnershipSession",
-    "external_change",
+    "migration",
+    "unknown",
     "read-only",
-    "case-insensitive",
-    "second_open_is_read_only",
-    "saveProject"
+    "future",
+    "rollback",
+    "opaque"
   ],
   "source_files": [
     {
@@ -80,29 +80,9 @@
       "size": 118721
     },
     {
-      "path": "include/sketch/project_ownership.hpp",
-      "sha256": "2e69973b10b6572f7b6ec6d957e4728d43bdded66fcea398f676fea9e5cb4da7",
-      "size": 3530
-    },
-    {
-      "path": "src/core/project_ownership.cpp",
-      "sha256": "6232dacc1112bda147440ca138a94e3d68e5477d076d3068f2a761c9f5e2deec",
-      "size": 14355
-    },
-    {
-      "path": "tests/project_ownership_tests.cpp",
-      "sha256": "2af4ba21a8afe70addca0e6304a0a65a90e4bc0e1dc4fe7ee9ac99b3a3fabcee",
-      "size": 5853
-    },
-    {
-      "path": "tests/project_ownership_process_tests.cpp",
-      "sha256": "5723787caaa8c97368ec9f0f91332a316212dd732472090a02d45653795a8107",
-      "size": 6848
-    },
-    {
-      "path": "tests/desktop_smoke.cpp",
-      "sha256": "3d4ca2bcaf7e0cc91019e52bf599882ecd11061f4e502e272614b694816d5abe",
-      "size": 381257
+      "path": "tests/project_store_tests.cpp",
+      "sha256": "0173b50073129527b592ffcef579ccaa30b4376b599774e445087cc08cf8143d",
+      "size": 82418
     },
     {
       "path": "docs/project-format.md",
@@ -112,8 +92,8 @@
   ],
   "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602",
   "tests": [
-    "project_ownership",
-    "project_ownership_process",
-    "desktop_workflow"
+    "project_storage",
+    "project_archive",
+    "project_exchange"
   ]
 }

@@ -1,5 +1,5 @@
 {
-  "acceptance": "Alternative fixtures switch, compare, save, and print without contaminating one another or changing the shared existing state.",
+  "acceptance": "Copy, cut, paste, multi-select, and selection filtering preserve semantic links and produce undoable commands.",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -14,10 +14,6 @@
         "size": 125608
       },
       "tests": [
-        {
-          "name": "model_phases",
-          "status": "passed"
-        },
         {
           "name": "desktop_workflow",
           "status": "passed"
@@ -38,38 +34,30 @@
       },
       "tests": [
         {
-          "name": "model_phases",
-          "status": "passed"
-        },
-        {
           "name": "desktop_workflow",
           "status": "passed"
         }
       ]
     }
   ],
-  "qualification_boundary": "This evidence covers the shared model phase value, comparison controls, coordinated plan/elevation/section output, undo/redo, and save/reopen on the development host. It does not certify imported Apex files, physical printers, or the unified release gate.",
-  "requirement_id": "ARCH-MOD-011",
+  "qualification_boundary": "This evidence covers the supported geometry graph clipboard, ordered multi-selection, semantic link remapping, and atomic undo/redo on the development host. Broader annotation and object policies plus production qualification remain open.",
+  "requirement_id": "APX-EDIT-001",
   "result": "pass",
   "schema_version": 1,
   "source_anchors": [
-    "ModelPhases",
-    "with_active",
-    "compare",
-    "remodelingComparisonList",
-    "exportDraftPdf",
-    "save and reopen"
+    "copy",
+    "cut",
+    "paste",
+    "selected",
+    "remap",
+    "undo",
+    "redo"
   ],
   "source_files": [
     {
-      "path": "include/sketch/model_phases.hpp",
-      "sha256": "64487916cdc47f9e8fe240cd34e8c9efe985b71111f69b67aeda70bff62c3739",
-      "size": 3044
-    },
-    {
-      "path": "src/core/model_phases.cpp",
-      "sha256": "54f952b1e5fd4391f61f44c8d0a0817d4fdfead0fa59d8ac4a56bc0561a07db5",
-      "size": 8320
+      "path": "include/sketch/desktop/main_window.hpp",
+      "sha256": "0acf0194cb15c22dda4f09e2415af17dc115b3a374fe2bec22cf4ff07806b92b",
+      "size": 34261
     },
     {
       "path": "src/desktop/main_window.cpp",
@@ -77,9 +65,14 @@
       "size": 1240133
     },
     {
-      "path": "tests/model_phases_tests.cpp",
-      "sha256": "c9e040c0f44fcb9f2351676ad6cabb8a2255a0045fc12e820d7f1ef9e5887697",
-      "size": 6233
+      "path": "src/desktop/plan_canvas.hpp",
+      "sha256": "c53c5826fb859e674f8d4e5eaa94e224f8bd545267a26cffda6b690f96183e55",
+      "size": 11498
+    },
+    {
+      "path": "src/desktop/plan_canvas.cpp",
+      "sha256": "8200a8c4e6d753e12d00253b9baed280360b6e1cf5ec42a752a45f2784b2fa47",
+      "size": 62610
     },
     {
       "path": "tests/desktop_smoke.cpp",
@@ -87,14 +80,13 @@
       "size": 381257
     },
     {
-      "path": "docs/phases-alternatives.md",
-      "sha256": "1c3e09a1ac8e706cb9ecf2639dbf590ee87425862b8d0fc69f4484e079e9ae3e",
-      "size": 4333
+      "path": "docs/desktop-workflow.md",
+      "sha256": "3de1796c3b8131e5d0e1abc9dfabaf834e424a3b85622e7b517dc88806630b0d",
+      "size": 39626
     }
   ],
   "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602",
   "tests": [
-    "model_phases",
     "desktop_workflow"
   ]
 }

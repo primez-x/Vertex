@@ -1,5 +1,5 @@
 {
-  "acceptance": "Alternative fixtures switch, compare, save, and print without contaminating one another or changing the shared existing state.",
+  "acceptance": "Changing a fingerprint input either regenerates output or produces a visible stale-output block; matching inputs reproduce the same output identity.",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -15,7 +15,7 @@
       },
       "tests": [
         {
-          "name": "model_phases",
+          "name": "output_fingerprint",
           "status": "passed"
         },
         {
@@ -38,7 +38,7 @@
       },
       "tests": [
         {
-          "name": "model_phases",
+          "name": "output_fingerprint",
           "status": "passed"
         },
         {
@@ -48,28 +48,33 @@
       ]
     }
   ],
-  "qualification_boundary": "This evidence covers the shared model phase value, comparison controls, coordinated plan/elevation/section output, undo/redo, and save/reopen on the development host. It does not certify imported Apex files, physical printers, or the unified release gate.",
-  "requirement_id": "ARCH-MOD-011",
+  "qualification_boundary": "This evidence covers deterministic fingerprint construction, dependency currentness, and desktop output binding on the development host. Physical output calibration and production authority qualification remain open.",
+  "requirement_id": "CORE-DOC-004",
   "result": "pass",
   "schema_version": 1,
   "source_anchors": [
-    "ModelPhases",
-    "with_active",
-    "compare",
-    "remodelingComparisonList",
-    "exportDraftPdf",
-    "save and reopen"
+    "OutputFingerprintInputs",
+    "make_output_fingerprint",
+    "check_output_fingerprint_current",
+    "digest_sha256",
+    "stale",
+    "exportDraftPdf"
   ],
   "source_files": [
     {
-      "path": "include/sketch/model_phases.hpp",
-      "sha256": "64487916cdc47f9e8fe240cd34e8c9efe985b71111f69b67aeda70bff62c3739",
-      "size": 3044
+      "path": "include/sketch/output_fingerprint.hpp",
+      "sha256": "f856a097ac91b1b81655b28bc7071bd4c67b6dccc6e28bbfef7695bad175e38e",
+      "size": 4293
     },
     {
-      "path": "src/core/model_phases.cpp",
-      "sha256": "54f952b1e5fd4391f61f44c8d0a0817d4fdfead0fa59d8ac4a56bc0561a07db5",
-      "size": 8320
+      "path": "src/core/output_fingerprint.cpp",
+      "sha256": "9f3986c61735d45b386e510b6e89b266901716768eef89537943517ad7d9661f",
+      "size": 43465
+    },
+    {
+      "path": "tests/output_fingerprint_tests.cpp",
+      "sha256": "2f94347e28d500a2b674e6293b6f12f7cc6f94adae035afadb3f63b90aadcb99",
+      "size": 17892
     },
     {
       "path": "src/desktop/main_window.cpp",
@@ -77,24 +82,19 @@
       "size": 1240133
     },
     {
-      "path": "tests/model_phases_tests.cpp",
-      "sha256": "c9e040c0f44fcb9f2351676ad6cabb8a2255a0045fc12e820d7f1ef9e5887697",
-      "size": 6233
-    },
-    {
       "path": "tests/desktop_smoke.cpp",
       "sha256": "3d4ca2bcaf7e0cc91019e52bf599882ecd11061f4e502e272614b694816d5abe",
       "size": 381257
     },
     {
-      "path": "docs/phases-alternatives.md",
-      "sha256": "1c3e09a1ac8e706cb9ecf2639dbf590ee87425862b8d0fc69f4484e079e9ae3e",
-      "size": 4333
+      "path": "docs/output-fingerprint.md",
+      "sha256": "803c62b309782c94a5f0c10a66086228ba582945ffd9422e11c1e1e1829e7f24",
+      "size": 7289
     }
   ],
   "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602",
   "tests": [
-    "model_phases",
+    "output_fingerprint",
     "desktop_workflow"
   ]
 }

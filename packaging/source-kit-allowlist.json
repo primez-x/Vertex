@@ -295,6 +295,46 @@
     },
     {
       "category": "docs",
+      "path": "docs/requirements/evidence/apx-area-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/apx-area-002.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/apx-area-003.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/apx-area-004.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/apx-edit-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/apx-edit-002.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/apx-edit-003.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/apx-edit-005.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/apx-key-002.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/apx-key-003.json"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/evidence/apx-key-004.json"
     },
     {
@@ -307,7 +347,55 @@
     },
     {
       "category": "docs",
+      "path": "docs/requirements/evidence/core-doc-003.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/core-doc-004.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/core-doc-005.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/core-doc-006.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/core-doc-008.json"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/evidence/core-doc-009.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/geo-base-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/geo-base-002.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/geo-base-003.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/geo-base-004.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/geo-con-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/geo-con-002.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/geo-con-006.json"
     },
     {
       "category": "docs",

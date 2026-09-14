@@ -1,0 +1,169 @@
+{
+  "acceptance": "Constraint fixtures report intended degrees of freedom and preserve each relation through supported edits and save/reopen.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "constraints",
+          "status": "passed"
+        },
+        {
+          "name": "constraint_entities",
+          "status": "passed"
+        },
+        {
+          "name": "constraint_integrity",
+          "status": "passed"
+        },
+        {
+          "name": "constraint_authoring",
+          "status": "passed"
+        },
+        {
+          "name": "constraint_dialog",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "constraints",
+          "status": "passed"
+        },
+        {
+          "name": "constraint_entities",
+          "status": "passed"
+        },
+        {
+          "name": "constraint_integrity",
+          "status": "passed"
+        },
+        {
+          "name": "constraint_authoring",
+          "status": "passed"
+        },
+        {
+          "name": "constraint_dialog",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers persistent straight-wall relation authoring, solver previews, degrees-of-freedom checks, and save/reopen behavior in Debug and Release. Boundary-vertex and curve relations plus production qualification remain open.",
+  "requirement_id": "GEO-CON-001",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "parallel",
+    "perpendicular",
+    "horizontal",
+    "vertical",
+    "coincident",
+    "fixed_length",
+    "degrees_of_freedom",
+    "constraint_integrity"
+  ],
+  "source_files": [
+    {
+      "path": "include/sketch/constraint_entity.hpp",
+      "sha256": "91b42ad89aa9a51301aeb49d6733f9a4c841410029bcc78709e4d274b51c2452",
+      "size": 2409
+    },
+    {
+      "path": "include/sketch/constraints.hpp",
+      "sha256": "d5ef9c8ff2d361bc275a7b685babdaad983589c3ee360a217717063ee1e8eb75",
+      "size": 3463
+    },
+    {
+      "path": "src/core/constraint_entity.cpp",
+      "sha256": "78a4f2ca6d4f612e2cac26e360f67dbcbe8f95585eeef080ba4424881057efcb",
+      "size": 29319
+    },
+    {
+      "path": "src/core/constraint_integrity.cpp",
+      "sha256": "21509827cc79624dafc1c7d2a5ba577fba536f25a4f504047c4aa9adf1bb1569",
+      "size": 11012
+    },
+    {
+      "path": "src/core/constraints.cpp",
+      "sha256": "4068e4e1e22d3688c645d6bfa70ab95163d91b69cc9a1ac817bf055fd15bd71e",
+      "size": 27613
+    },
+    {
+      "path": "include/sketch/constraint_authoring.hpp",
+      "sha256": "109fd68089453fb2b559169369d397f9b8a10d8857bfe6b7f75ed51f0f55edbf",
+      "size": 4886
+    },
+    {
+      "path": "src/core/constraint_authoring.cpp",
+      "sha256": "3aa906e3986fe1213de5de328db423e30c851022effcf5a22c8f19309f6d0e01",
+      "size": 63033
+    },
+    {
+      "path": "src/desktop/constraint_dialog.cpp",
+      "sha256": "67b6eeda3d6eed088513603e0ec2ca8273d67903750ba408db90f86aad0fe989",
+      "size": 24583
+    },
+    {
+      "path": "tests/constraint_entity_tests.cpp",
+      "sha256": "0d4ed8c6970beaf88e3dd9d1f5f562da8fcdf1c03a48bffc5ebfe3b2a02cc748",
+      "size": 30217
+    },
+    {
+      "path": "tests/constraints_tests.cpp",
+      "sha256": "3f5f8f57c9acaddf2dcc36e231d683af4e638054747d006a017899ef27761ca4",
+      "size": 14455
+    },
+    {
+      "path": "tests/constraint_integrity_tests.cpp",
+      "sha256": "2d471544f7f34db1473fe948cd8cd77c37de363c73e7c8854ecb3b5009a2c6c4",
+      "size": 17026
+    },
+    {
+      "path": "tests/constraint_authoring_tests.cpp",
+      "sha256": "eb1f7f369015660519a8b5eb33afffa06f45d497718d749c0149fdc524c83f82",
+      "size": 46448
+    },
+    {
+      "path": "tests/constraint_dialog_tests.cpp",
+      "sha256": "4f77bee8ce28131045d220a33cbafb4d3dcbca0a522e8c452b6ed922b05f8c50",
+      "size": 7883
+    },
+    {
+      "path": "docs/constraint-authoring.md",
+      "sha256": "3c47831a0fa95fc7caebe3cc63d799640c28fb52bd645b0b2fc42fdbcfec4d55",
+      "size": 11165
+    }
+  ],
+  "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602",
+  "tests": [
+    "constraints",
+    "constraint_entities",
+    "constraint_integrity",
+    "constraint_authoring",
+    "constraint_dialog"
+  ]
+}

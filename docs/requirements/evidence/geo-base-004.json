@@ -1,5 +1,5 @@
 {
-  "acceptance": "Each point-jump, automatic-closure, and bay-window operation is observable in command history, produces the expected topology, and is undoable.",
+  "acceptance": "Keyboard and pointer fixtures show each behavior, expose the resulting constraint or closure, and reopen without drift.",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -16,6 +16,10 @@
       "tests": [
         {
           "name": "geometry_operations",
+          "status": "passed"
+        },
+        {
+          "name": "boundary_canvas",
           "status": "passed"
         },
         {
@@ -42,24 +46,29 @@
           "status": "passed"
         },
         {
+          "name": "boundary_canvas",
+          "status": "passed"
+        },
+        {
           "name": "desktop_workflow",
           "status": "passed"
         }
       ]
     }
   ],
-  "qualification_boundary": "This evidence covers the deterministic geometry operations and Windows workflow history/undo behavior. Physical Apex key mapping, native Apex fixtures, and the unified production gate remain open.",
-  "requirement_id": "APX-KEY-004",
+  "qualification_boundary": "This evidence covers analytical alignment/snap, point jumping, exact closure, bay-window completion, pointer rendering, and desktop history. Physical Apex key mapping and native compatibility fixtures remain open.",
+  "requirement_id": "GEO-BASE-004",
   "result": "pass",
   "schema_version": 1,
   "source_anchors": [
     "jump_to_boundary_vertex",
     "automatically_close_boundary",
     "complete_bay_window",
-    "Auto close boundary",
+    "snapped",
+    "setSnapEnabled",
+    "Auto Close",
     "Complete bay window",
-    "undo",
-    "redo"
+    "save/reopen"
   ],
   "source_files": [
     {
@@ -78,14 +87,14 @@
       "size": 10230
     },
     {
-      "path": "docs/geometry-operations.md",
-      "sha256": "f5a331ac8f38b46296b042f0ad60d468946ade29a8825d331c664d31b39ef9be",
-      "size": 7266
+      "path": "tests/boundary_canvas_tests.cpp",
+      "sha256": "10d26626c1f8cbf18c39d98d570cee2f6fbb2a9d667a92b4d2500167f94692f6",
+      "size": 41909
     },
     {
-      "path": "include/sketch/desktop/main_window.hpp",
-      "sha256": "0acf0194cb15c22dda4f09e2415af17dc115b3a374fe2bec22cf4ff07806b92b",
-      "size": 34261
+      "path": "src/desktop/plan_canvas.cpp",
+      "sha256": "8200a8c4e6d753e12d00253b9baed280360b6e1cf5ec42a752a45f2784b2fa47",
+      "size": 62610
     },
     {
       "path": "src/desktop/main_window.cpp",
@@ -98,14 +107,15 @@
       "size": 381257
     },
     {
-      "path": "docs/desktop-workflow.md",
-      "sha256": "3de1796c3b8131e5d0e1abc9dfabaf834e424a3b85622e7b517dc88806630b0d",
-      "size": 39626
+      "path": "docs/geometry-operations.md",
+      "sha256": "f5a331ac8f38b46296b042f0ad60d468946ade29a8825d331c664d31b39ef9be",
+      "size": 7266
     }
   ],
   "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602",
   "tests": [
     "geometry_operations",
+    "boundary_canvas",
     "desktop_workflow"
   ]
 }

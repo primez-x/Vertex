@@ -1,0 +1,119 @@
+{
+  "acceptance": "Independent analytical and high-precision fixtures agree within the documented area and coordinate tolerances after save/reopen.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "geometry",
+          "status": "passed"
+        },
+        {
+          "name": "architecture",
+          "status": "passed"
+        },
+        {
+          "name": "room_relationship_geometry",
+          "status": "passed"
+        },
+        {
+          "name": "slab_semantics",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "geometry",
+          "status": "passed"
+        },
+        {
+          "name": "architecture",
+          "status": "passed"
+        },
+        {
+          "name": "room_relationship_geometry",
+          "status": "passed"
+        },
+        {
+          "name": "slab_semantics",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers analytical lines, arcs, holes, winding, tangency, topology, and the named Debug/Release fixtures. Independent reference parity, native Apex projects, and production qualification remain open.",
+  "requirement_id": "GEO-BASE-001",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "Segment",
+    "arc_from_chord_angle",
+    "signed_area",
+    "winding",
+    "tangent",
+    "holes",
+    "validate_boundary"
+  ],
+  "source_files": [
+    {
+      "path": "include/sketch/geometry.hpp",
+      "sha256": "1d599dcb1a08cd49ebf09c3943536b4063cda64eac1425fd7ed4e0c64be4ce84",
+      "size": 4555
+    },
+    {
+      "path": "src/core/geometry.cpp",
+      "sha256": "995c8bb032eb627402f9d5f83dafff015e03ca406e4e74c635aaf9e27813ef0c",
+      "size": 42871
+    },
+    {
+      "path": "tests/geometry_tests.cpp",
+      "sha256": "ea4780c584140f7dd398e062763555cf0726a6e0b5fad5f7f83c9012e39b976a",
+      "size": 19599
+    },
+    {
+      "path": "tests/architecture_tests.cpp",
+      "sha256": "3298f0e58e91d3b11084c74c3c715bee4e76cf55e03b0148ab60bb0c733f28da",
+      "size": 7608
+    },
+    {
+      "path": "tests/room_relationship_geometry_tests.cpp",
+      "sha256": "77bc3016e804ab7717c394912cc11473faa606845c8e9c8442647f02c2ddca20",
+      "size": 10594
+    },
+    {
+      "path": "docs/geometry-operations.md",
+      "sha256": "f5a331ac8f38b46296b042f0ad60d468946ade29a8825d331c664d31b39ef9be",
+      "size": 7266
+    }
+  ],
+  "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602",
+  "tests": [
+    "geometry",
+    "architecture",
+    "room_relationship_geometry",
+    "slab_semantics"
+  ]
+}

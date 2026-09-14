@@ -1,0 +1,100 @@
+{
+  "acceptance": "A 12-foot-to-14-foot edit previews both supported anchoring choices, shows dependent movement, and commits only after selection.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "constraint_authoring",
+          "status": "passed"
+        },
+        {
+          "name": "constraint_dialog",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "constraint_authoring",
+          "status": "passed"
+        },
+        {
+          "name": "constraint_dialog",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers source-bound length previews, explicit endpoint anchoring, connected movement selection, invalidation, and atomic Apply. Boundary/curve editing and production qualification remain open.",
+  "requirement_id": "GEO-CON-002",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "constraintAnchor",
+    "Allow connected walls to move",
+    "preview",
+    "Apply",
+    "source_snapshot_digest",
+    "invalidate"
+  ],
+  "source_files": [
+    {
+      "path": "include/sketch/constraint_authoring.hpp",
+      "sha256": "109fd68089453fb2b559169369d397f9b8a10d8857bfe6b7f75ed51f0f55edbf",
+      "size": 4886
+    },
+    {
+      "path": "src/core/constraint_authoring.cpp",
+      "sha256": "3aa906e3986fe1213de5de328db423e30c851022effcf5a22c8f19309f6d0e01",
+      "size": 63033
+    },
+    {
+      "path": "src/desktop/constraint_dialog.cpp",
+      "sha256": "67b6eeda3d6eed088513603e0ec2ca8273d67903750ba408db90f86aad0fe989",
+      "size": 24583
+    },
+    {
+      "path": "tests/constraint_authoring_tests.cpp",
+      "sha256": "eb1f7f369015660519a8b5eb33afffa06f45d497718d749c0149fdc524c83f82",
+      "size": 46448
+    },
+    {
+      "path": "tests/constraint_dialog_tests.cpp",
+      "sha256": "4f77bee8ce28131045d220a33cbafb4d3dcbca0a522e8c452b6ed922b05f8c50",
+      "size": 7883
+    },
+    {
+      "path": "docs/constraint-authoring.md",
+      "sha256": "3c47831a0fa95fc7caebe3cc63d799640c28fb52bd645b0b2fc42fdbcfec4d55",
+      "size": 11165
+    }
+  ],
+  "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602",
+  "tests": [
+    "constraint_authoring",
+    "constraint_dialog"
+  ]
+}

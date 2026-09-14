@@ -1,0 +1,126 @@
+{
+  "acceptance": "Changing a level elevation previews and applies expected dependent changes across plans, sections, and 3D without cycles.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "vertical_levels",
+          "status": "passed"
+        },
+        {
+          "name": "document_commands",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "vertical_levels",
+          "status": "passed"
+        },
+        {
+          "name": "document_commands",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers the validated vertical dependency graph, level edits, connected stair rise updates, and plan/elevation/section/native-3D projections in Debug and Release. Site/terrain coordination and production qualification remain open.",
+  "requirement_id": "GEO-CON-006",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "VerticalLevel",
+    "floor_to_floor",
+    "elevation",
+    "freeze",
+    "disconnect",
+    "total_rise_m",
+    "preview",
+    "apply"
+  ],
+  "source_files": [
+    {
+      "path": "include/sketch/vertical_levels.hpp",
+      "sha256": "6e041607b7f6a807d1888c6ba4c20057a7565c2c9b8112fae3ee4035771e0509",
+      "size": 3071
+    },
+    {
+      "path": "include/sketch/vertical_level_document_adapter.hpp",
+      "sha256": "74e77044faaa1b743fe5c5afa11c188df13c075937397e5e81af893aeb590318",
+      "size": 1870
+    },
+    {
+      "path": "src/core/vertical_levels.cpp",
+      "sha256": "d0277375d20dddf1c603732416431f094434f5be99b043128b3d61ba7eb343c5",
+      "size": 14432
+    },
+    {
+      "path": "src/core/vertical_level_document_adapter.cpp",
+      "sha256": "9ff48a1f1712214a38a28238ec3008cbc4990ca681df190a727eb74be296dd3a",
+      "size": 6558
+    },
+    {
+      "path": "src/desktop/main_window.cpp",
+      "sha256": "944a00fc2959043c1f5b3b2ebfa50f287421a0338ee6908d6e926bf429f32223",
+      "size": 1240133
+    },
+    {
+      "path": "tests/vertical_levels_tests.cpp",
+      "sha256": "11e12af334897250b53a1d543d609d1dc80acbd909ff7c3e92a35cf7bf8dea54",
+      "size": 9493
+    },
+    {
+      "path": "tests/document_tests.cpp",
+      "sha256": "37b82cd96ea5c47fe1e3f2ca62ffb939fb97109e7d73b5717e2137f23768bae6",
+      "size": 57490
+    },
+    {
+      "path": "tests/desktop_smoke.cpp",
+      "sha256": "3d4ca2bcaf7e0cc91019e52bf599882ecd11061f4e502e272614b694816d5abe",
+      "size": 381257
+    },
+    {
+      "path": "docs/vertical-levels.md",
+      "sha256": "74146b268b7e90c86c660dbb9f65099c3d0f1cfd451d9776697d430ce8b15c47",
+      "size": 6968
+    }
+  ],
+  "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602",
+  "tests": [
+    "vertical_levels",
+    "document_commands",
+    "desktop_workflow"
+  ]
+}

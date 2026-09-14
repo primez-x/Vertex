@@ -1,5 +1,5 @@
 {
-  "acceptance": "The CLI validates a good fixture, rejects malformed or incomplete data with actionable diagnostics, extracts assets, and produces a migration report.",
+  "acceptance": "Equivalent imperial and metric entries create equivalent analytical geometry and preserve the original entered quantity and unit.",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -15,7 +15,7 @@
       },
       "tests": [
         {
-          "name": "project_cli",
+          "name": "quantity",
           "status": "passed"
         }
       ]
@@ -34,43 +34,43 @@
       },
       "tests": [
         {
-          "name": "project_cli",
+          "name": "quantity",
           "status": "passed"
         }
       ]
     }
   ],
-  "qualification_boundary": "This evidence covers the local inspect, validate, extract, and migrate CLI fixture including malformed input and source preservation. It does not certify Apex/native migration fidelity or a production release.",
-  "requirement_id": "CORE-DOC-009",
+  "qualification_boundary": "This evidence covers exact fractional, feet-and-inches, metric, and display-round-trip behavior. Physical input devices, Apex native fixtures, and the production gate remain open.",
+  "requirement_id": "APX-KEY-002",
   "result": "pass",
   "schema_version": 1,
   "source_anchors": [
-    "inspect",
-    "validate",
-    "extract",
-    "migrate",
-    "source_preserved",
-    "malformed"
+    "fraction",
+    "feet",
+    "metres",
+    "original_expression",
+    "exact_metres",
+    "display"
   ],
   "source_files": [
     {
-      "path": "src/cli/main.cpp",
-      "sha256": "2bc8852db846ba88788a816546a885e079f1c5985bf276dee8dc15faf2ad3d3b",
-      "size": 7425
+      "path": "src/core/quantity.cpp",
+      "sha256": "07b315b4a4d66d68447463fc484a0d6a9b110441c613852212b08b346672fd29",
+      "size": 14206
     },
     {
-      "path": "tests/test_cli.py",
-      "sha256": "95f78131121b30d0e5391aceae5d19149019c44d6072f54850bb39df968dbecc",
-      "size": 9941
+      "path": "tests/quantity_tests.cpp",
+      "sha256": "4a17ed73e3c2900c320d5cf301c26d78971acc32190275c34ef772c30a9c5178",
+      "size": 6910
     },
     {
-      "path": "docs/project-format.md",
-      "sha256": "396fbfd62b5c7da9701520773efc097753ac2a34666ede9dd41d045e12f8dbb3",
-      "size": 34904
+      "path": "docs/calculations.md",
+      "sha256": "478d8238419008d0909eb4a12dec77aeb1674c82ba664dd884aecc752466b67c",
+      "size": 3065
     }
   ],
   "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602",
   "tests": [
-    "project_cli"
+    "quantity"
   ]
 }

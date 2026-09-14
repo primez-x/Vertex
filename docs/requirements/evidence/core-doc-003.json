@@ -1,5 +1,5 @@
 {
-  "acceptance": "The CLI validates a good fixture, rejects malformed or incomplete data with actionable diagnostics, extracts assets, and produces a migration report.",
+  "acceptance": "Interleaved edits during save produce a file containing exactly the reported saved revision; a failed replacement leaves the previous valid file recoverable.",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -15,7 +15,7 @@
       },
       "tests": [
         {
-          "name": "project_cli",
+          "name": "project_storage",
           "status": "passed"
         }
       ]
@@ -34,34 +34,39 @@
       },
       "tests": [
         {
-          "name": "project_cli",
+          "name": "project_storage",
           "status": "passed"
         }
       ]
     }
   ],
-  "qualification_boundary": "This evidence covers the local inspect, validate, extract, and migrate CLI fixture including malformed input and source preservation. It does not certify Apex/native migration fidelity or a production release.",
-  "requirement_id": "CORE-DOC-009",
+  "qualification_boundary": "This evidence covers immutable snapshot saves, compare-and-swap publication, and pre-publication rollback on the development host. Clean-machine storage faults and the unified production gate remain open.",
+  "requirement_id": "CORE-DOC-003",
   "result": "pass",
   "schema_version": 1,
   "source_anchors": [
-    "inspect",
-    "validate",
-    "extract",
-    "migrate",
-    "source_preserved",
-    "malformed"
+    "DocumentSnapshot",
+    "expected_destination_sha256",
+    "SaveFaultStage",
+    "before_publish",
+    "saved_revision",
+    "FlushFileBuffers"
   ],
   "source_files": [
     {
-      "path": "src/cli/main.cpp",
-      "sha256": "2bc8852db846ba88788a816546a885e079f1c5985bf276dee8dc15faf2ad3d3b",
-      "size": 7425
+      "path": "include/sketch/project_store.hpp",
+      "sha256": "5c561fbbbb30fb7c7b88b568dba7d32a628f537e793efea1dec3882baddc999c",
+      "size": 5412
     },
     {
-      "path": "tests/test_cli.py",
-      "sha256": "95f78131121b30d0e5391aceae5d19149019c44d6072f54850bb39df968dbecc",
-      "size": 9941
+      "path": "src/core/project_store.cpp",
+      "sha256": "5253111144a37957320269506ebc1aaf9873b671909d3c96e5913ac98da7d94a",
+      "size": 118721
+    },
+    {
+      "path": "tests/project_store_tests.cpp",
+      "sha256": "0173b50073129527b592ffcef579ccaa30b4376b599774e445087cc08cf8143d",
+      "size": 82418
     },
     {
       "path": "docs/project-format.md",
@@ -71,6 +76,6 @@
   ],
   "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602",
   "tests": [
-    "project_cli"
+    "project_storage"
   ]
 }

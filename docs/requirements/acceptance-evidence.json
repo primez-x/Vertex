@@ -1,62 +1,282 @@
 {
+  "APX-AREA-001": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/apx-area-001.json",
+        "sha256": "a3ef244587f6daa5182469581641da6941bcc6ca158ebf44ea2b88c2b1e99b97"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
+  },
+  "APX-AREA-002": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/apx-area-002.json",
+        "sha256": "9c8be2b6fec494dd035e1eb1ce86bec2a427b7f02f7134303e9370633cb36de6"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
+  },
+  "APX-AREA-003": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/apx-area-003.json",
+        "sha256": "d14be875a37cfa469dd1e68bd66629c433b0c71e359319c51153e44d0f13fcf9"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
+  },
+  "APX-AREA-004": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/apx-area-004.json",
+        "sha256": "2fc1252c5805e5ddcf43c98dab836b72c7d529d029349c431a3a193ffe217113"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
+  },
+  "APX-EDIT-001": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/apx-edit-001.json",
+        "sha256": "e2385a657d0e11d90c247b393cf3a53aa08f521b3b364e924f1fcc6d802858e9"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
+  },
+  "APX-EDIT-002": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/apx-edit-002.json",
+        "sha256": "827df3efb5a15f8b7ac40a824a6659b0b9372a576287eddbd8fef2fdbbc9d55b"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
+  },
+  "APX-EDIT-003": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/apx-edit-003.json",
+        "sha256": "cfc2c9ddd950038e88a9e094c5fe5ebb3fc1a115e6b482f0fdea6813456630a4"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
+  },
+  "APX-EDIT-005": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/apx-edit-005.json",
+        "sha256": "8edf7283d6d28fe58e14b795f47f9b7fe8031fd6697048edb31d9181dfedb467"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
+  },
+  "APX-KEY-002": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/apx-key-002.json",
+        "sha256": "74e823cc29a48a3b2870e298f18903434b411ab93fbd64f5c7de6ab1a6d0689d"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
+  },
+  "APX-KEY-003": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/apx-key-003.json",
+        "sha256": "c8473beb8bf8d15b4b65d21a96d342850ae940b28c7a81a0304554c23b617bd5"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
+  },
   "APX-KEY-004": {
     "artifacts": [
       {
         "path": "docs/requirements/evidence/apx-key-004.json",
-        "sha256": "058be62c119f68bc2361f47733dc64f1b8579f6cf5db499132318c9ffb039611"
+        "sha256": "93f00af6ee4b4221743f5aabf9d7b58af9c61c56f69508d15ffa8350725418af"
       }
     ],
     "result": "pass",
-    "source_tree_sha256": "6764d8a1a1719ff34e89d61950210a552d13b0f868baf0282f130a9c61e6f065"
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
   },
   "ARCH-MOD-009": {
     "artifacts": [
       {
         "path": "docs/requirements/evidence/arch-mod-009.json",
-        "sha256": "d6eb203360baaa76835e1f4b8bacbe276bc33df42147d6ffe8e9337df1bf7c1c"
+        "sha256": "895099909d02153fa5e8b5b6c6e4f70dc912afe26c54cd5237794709a6a40b61"
       }
     ],
     "result": "pass",
-    "source_tree_sha256": "6764d8a1a1719ff34e89d61950210a552d13b0f868baf0282f130a9c61e6f065"
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
   },
   "ARCH-MOD-011": {
     "artifacts": [
       {
         "path": "docs/requirements/evidence/arch-mod-011.json",
-        "sha256": "60e31bdbd0c3ea7b40016ddc45bf249f67f86e77f813cbbf8906cbbd561a1e9d"
+        "sha256": "3aefa6977e9af96aa8392176364ae92397a7d380b9cc25eb5fef3831eee8459d"
       }
     ],
     "result": "pass",
-    "source_tree_sha256": "6764d8a1a1719ff34e89d61950210a552d13b0f868baf0282f130a9c61e6f065"
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
+  },
+  "CORE-DOC-003": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/core-doc-003.json",
+        "sha256": "f2c6ff868978d9b8643af711fcb42b0e8de6c893ec47d9e5f2606537906bc4eb"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
+  },
+  "CORE-DOC-004": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/core-doc-004.json",
+        "sha256": "adf46585dc12238efbbc0896bbfb1c66045f96a0005c50c73f1f9f9c6626fa70"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
+  },
+  "CORE-DOC-005": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/core-doc-005.json",
+        "sha256": "0feabd736376f829fa2691417dad26da0e8ea2c5bac734aea918a16d107e3d85"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
+  },
+  "CORE-DOC-006": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/core-doc-006.json",
+        "sha256": "29bb65e5c8bb7de606bb83510600b832a7d0d23b1447fef7d8741d0f2a1f1c46"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
+  },
+  "CORE-DOC-008": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/core-doc-008.json",
+        "sha256": "d5b5c16d45cb78262bbee5529ea3b9d997da799ee5921109456641fcd6982f29"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
   },
   "CORE-DOC-009": {
     "artifacts": [
       {
         "path": "docs/requirements/evidence/core-doc-009.json",
-        "sha256": "e275a3800a578161074d31370e72c1944988f8dd26faa2b59a51b5e71d12a55f"
+        "sha256": "b02115d88421086da8cb5a19b9e09d0ed5fb6d29438b3cbba2fc34c6bc60017f"
       }
     ],
     "result": "pass",
-    "source_tree_sha256": "6764d8a1a1719ff34e89d61950210a552d13b0f868baf0282f130a9c61e6f065"
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
+  },
+  "GEO-BASE-001": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/geo-base-001.json",
+        "sha256": "f4ee99f339ea344575a5af3700ac1451cb356b2474c8df266c9e145716057050"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
+  },
+  "GEO-BASE-002": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/geo-base-002.json",
+        "sha256": "2f2bc13851fc82e20b52688bd0a965ced8e4ccd21e9b20ac1dcc836f37cfc927"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
+  },
+  "GEO-BASE-003": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/geo-base-003.json",
+        "sha256": "b73ded2873e5904687f677072fd989f0da8fe86c5ad75b3ce55cef98991c382c"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
+  },
+  "GEO-BASE-004": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/geo-base-004.json",
+        "sha256": "9c538e61211ac30295eaf66fbd3af96140618d5c5524e6c6707045ea38f3adf2"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
+  },
+  "GEO-CON-001": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/geo-con-001.json",
+        "sha256": "42054a22809b714e6f035eab84af83d4db45435646bb5c4fde916bae729f2d29"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
+  },
+  "GEO-CON-002": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/geo-con-002.json",
+        "sha256": "6e0aa9e3462091594207b9c8ccbf9b4b2d2b151ab2b81a8dc550e713637d107c"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
+  },
+  "GEO-CON-006": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/geo-con-006.json",
+        "sha256": "e87a3bc8a536327ae66a848e6acfb0c5f3528f92b6dc9a4ed5d36c2aca4ccc44"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
   },
   "OPS-QA-001": {
     "artifacts": [
       {
         "path": "docs/requirements/evidence/ops-qa-001.json",
-        "sha256": "77daddb5b25c1b233a9d5cce006b7a83bf7ab399a66921bab6c3208f9803ddef"
+        "sha256": "77292adc5877952e034356353f73c284d441c7153bfa3d41724657af4a612673"
       }
     ],
     "result": "pass",
-    "source_tree_sha256": "6764d8a1a1719ff34e89d61950210a552d13b0f868baf0282f130a9c61e6f065"
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
   },
   "REC-004": {
     "artifacts": [
       {
         "path": "docs/requirements/evidence/rec-004.json",
-        "sha256": "5b351b96ba63544445a45a72197fbb475380a755aadbbef9bb90558b766b2391"
+        "sha256": "7e1c23f5f989ba02ba1fc25aae9a180da21104f2b9391c2fa665900d0722f51d"
       }
     ],
     "result": "pass",
-    "source_tree_sha256": "6764d8a1a1719ff34e89d61950210a552d13b0f868baf0282f130a9c61e6f065"
+    "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602"
   }
 }

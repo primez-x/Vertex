@@ -64,6 +64,14 @@ class WorkflowAcceptanceEvidenceTests(unittest.TestCase):
 
             evidence = generator.build_evidence(root)
             self.assertEqual(set(evidence), set(generator.WORKFLOW_RULES))
+            self.assertTrue({
+                "CORE-DOC-003", "CORE-DOC-004", "CORE-DOC-005", "CORE-DOC-006", "CORE-DOC-008",
+                "GEO-BASE-001", "GEO-BASE-002", "GEO-BASE-003", "GEO-BASE-004",
+                "GEO-CON-001", "GEO-CON-002", "GEO-CON-006",
+                "APX-KEY-002", "APX-KEY-003",
+                "APX-EDIT-001", "APX-EDIT-002", "APX-EDIT-003", "APX-EDIT-005",
+                "APX-AREA-001", "APX-AREA-002", "APX-AREA-003", "APX-AREA-004",
+            }.issubset(set(evidence)))
             for requirement_id, record in evidence.items():
                 self.assertEqual(record["result"], "pass")
                 self.assertEqual(len(record["ctest"]), 2)

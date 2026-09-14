@@ -1,5 +1,5 @@
 {
-  "acceptance": "Alternative fixtures switch, compare, save, and print without contaminating one another or changing the shared existing state.",
+  "acceptance": "Each curve input mode produces the expected analytical arc, preserves its defining parameters, and edits without converting to a faceted stroke.",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -15,7 +15,11 @@
       },
       "tests": [
         {
-          "name": "model_phases",
+          "name": "curve_construction",
+          "status": "passed"
+        },
+        {
+          "name": "boundary_authoring_session",
           "status": "passed"
         },
         {
@@ -38,7 +42,11 @@
       },
       "tests": [
         {
-          "name": "model_phases",
+          "name": "curve_construction",
+          "status": "passed"
+        },
+        {
+          "name": "boundary_authoring_session",
           "status": "passed"
         },
         {
@@ -48,28 +56,38 @@
       ]
     }
   ],
-  "qualification_boundary": "This evidence covers the shared model phase value, comparison controls, coordinated plan/elevation/section output, undo/redo, and save/reopen on the development host. It does not certify imported Apex files, physical printers, or the unified release gate.",
-  "requirement_id": "ARCH-MOD-011",
+  "qualification_boundary": "This evidence covers true chord, arc-length, height, angle, and tangent construction plus desktop editing on the development host. Boundary-join fidelity and complete Apex parity remain open.",
+  "requirement_id": "GEO-BASE-002",
   "result": "pass",
   "schema_version": 1,
   "source_anchors": [
-    "ModelPhases",
-    "with_active",
-    "compare",
-    "remodelingComparisonList",
-    "exportDraftPdf",
-    "save and reopen"
+    "arc_from_chord_arc_length",
+    "arc_from_start_tangent",
+    "add_arc_chord_height",
+    "add_arc_chord_angle",
+    "sweep_radians",
+    "arc_length"
   ],
   "source_files": [
     {
-      "path": "include/sketch/model_phases.hpp",
-      "sha256": "64487916cdc47f9e8fe240cd34e8c9efe985b71111f69b67aeda70bff62c3739",
-      "size": 3044
+      "path": "include/sketch/geometry.hpp",
+      "sha256": "1d599dcb1a08cd49ebf09c3943536b4063cda64eac1425fd7ed4e0c64be4ce84",
+      "size": 4555
     },
     {
-      "path": "src/core/model_phases.cpp",
-      "sha256": "54f952b1e5fd4391f61f44c8d0a0817d4fdfead0fa59d8ac4a56bc0561a07db5",
-      "size": 8320
+      "path": "src/core/geometry.cpp",
+      "sha256": "995c8bb032eb627402f9d5f83dafff015e03ca406e4e74c635aaf9e27813ef0c",
+      "size": 42871
+    },
+    {
+      "path": "tests/curve_construction_tests.cpp",
+      "sha256": "690e8ceaa9082ad92189ac434a01512ef6e72ddc266dc7ee88623776500001df",
+      "size": 2628
+    },
+    {
+      "path": "tests/boundary_authoring_session_tests.cpp",
+      "sha256": "9c13578594f5962b5dd66dbd864ca3afc48528e256bd2eff9207541abf0c3a2e",
+      "size": 19674
     },
     {
       "path": "src/desktop/main_window.cpp",
@@ -77,24 +95,20 @@
       "size": 1240133
     },
     {
-      "path": "tests/model_phases_tests.cpp",
-      "sha256": "c9e040c0f44fcb9f2351676ad6cabb8a2255a0045fc12e820d7f1ef9e5887697",
-      "size": 6233
-    },
-    {
       "path": "tests/desktop_smoke.cpp",
       "sha256": "3d4ca2bcaf7e0cc91019e52bf599882ecd11061f4e502e272614b694816d5abe",
       "size": 381257
     },
     {
-      "path": "docs/phases-alternatives.md",
-      "sha256": "1c3e09a1ac8e706cb9ecf2639dbf590ee87425862b8d0fc69f4484e079e9ae3e",
-      "size": 4333
+      "path": "docs/boundary-authoring.md",
+      "sha256": "e1a4f4b842506612182625a768c520caa655edf84ddb3b750a9fe23973683260",
+      "size": 12984
     }
   ],
   "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602",
   "tests": [
-    "model_phases",
+    "curve_construction",
+    "boundary_authoring_session",
     "desktop_workflow"
   ]
 }

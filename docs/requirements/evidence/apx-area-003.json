@@ -1,5 +1,5 @@
 {
-  "acceptance": "Alternative fixtures switch, compare, save, and print without contaminating one another or changing the shared existing state.",
+  "acceptance": "Reference fixtures match independently calculated perimeter and totals within the documented tolerance, with rounding shown separately.",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -15,7 +15,7 @@
       },
       "tests": [
         {
-          "name": "model_phases",
+          "name": "calculations",
           "status": "passed"
         },
         {
@@ -38,7 +38,7 @@
       },
       "tests": [
         {
-          "name": "model_phases",
+          "name": "calculations",
           "status": "passed"
         },
         {
@@ -48,28 +48,27 @@
       ]
     }
   ],
-  "qualification_boundary": "This evidence covers the shared model phase value, comparison controls, coordinated plan/elevation/section output, undo/redo, and save/reopen on the development host. It does not certify imported Apex files, physical printers, or the unified release gate.",
-  "requirement_id": "ARCH-MOD-011",
+  "qualification_boundary": "This evidence covers unrounded perimeter and living/building aggregates with separate display rounding. Production output parity and external standard certification remain open.",
+  "requirement_id": "APX-AREA-003",
   "result": "pass",
   "schema_version": 1,
   "source_anchors": [
-    "ModelPhases",
-    "with_active",
-    "compare",
-    "remodelingComparisonList",
-    "exportDraftPdf",
-    "save and reopen"
+    "perimeter",
+    "living",
+    "building",
+    "round",
+    "unrounded"
   ],
   "source_files": [
     {
-      "path": "include/sketch/model_phases.hpp",
-      "sha256": "64487916cdc47f9e8fe240cd34e8c9efe985b71111f69b67aeda70bff62c3739",
-      "size": 3044
+      "path": "src/calculations/calculations.cpp",
+      "sha256": "1b3a166b865189ebbf2e4ae04181514402966ca941d9e4a095b8011db5179879",
+      "size": 8961
     },
     {
-      "path": "src/core/model_phases.cpp",
-      "sha256": "54f952b1e5fd4391f61f44c8d0a0817d4fdfead0fa59d8ac4a56bc0561a07db5",
-      "size": 8320
+      "path": "tests/calculation_tests.cpp",
+      "sha256": "91a76221a734917c71980aef9458a9009442664ae76e066133d07b6572ac841a",
+      "size": 7097
     },
     {
       "path": "src/desktop/main_window.cpp",
@@ -77,24 +76,19 @@
       "size": 1240133
     },
     {
-      "path": "tests/model_phases_tests.cpp",
-      "sha256": "c9e040c0f44fcb9f2351676ad6cabb8a2255a0045fc12e820d7f1ef9e5887697",
-      "size": 6233
-    },
-    {
       "path": "tests/desktop_smoke.cpp",
       "sha256": "3d4ca2bcaf7e0cc91019e52bf599882ecd11061f4e502e272614b694816d5abe",
       "size": 381257
     },
     {
-      "path": "docs/phases-alternatives.md",
-      "sha256": "1c3e09a1ac8e706cb9ecf2639dbf590ee87425862b8d0fc69f4484e079e9ae3e",
-      "size": 4333
+      "path": "docs/calculations.md",
+      "sha256": "478d8238419008d0909eb4a12dec77aeb1674c82ba664dd884aecc752466b67c",
+      "size": 3065
     }
   ],
   "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602",
   "tests": [
-    "model_phases",
+    "calculations",
     "desktop_workflow"
   ]
 }

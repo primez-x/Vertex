@@ -1,0 +1,104 @@
+{
+  "acceptance": "Fixtures entered in imperial and metric units reproduce expected endpoints and headings with documented tolerance.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "boundary_authoring_session",
+          "status": "passed"
+        },
+        {
+          "name": "boundary_input_dialog",
+          "status": "passed"
+        },
+        {
+          "name": "boundary_workflow",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "boundary_authoring_session",
+          "status": "passed"
+        },
+        {
+          "name": "boundary_input_dialog",
+          "status": "passed"
+        },
+        {
+          "name": "boundary_workflow",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers Draw First and Define First construction receipts, rise/run, relative turns, explicit angles, and unit-aware precision entry. Physical keyboard mapping and production qualification remain open.",
+  "requirement_id": "GEO-BASE-003",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "add_line_rise_run",
+    "add_line_relative_turn",
+    "parse_angle",
+    "exact_metres",
+    "Define First",
+    "Draw First"
+  ],
+  "source_files": [
+    {
+      "path": "include/sketch/boundary_authoring_session.hpp",
+      "sha256": "a1236b324c53f81f1d37a2d7b88dfab417e6d2b27c85caa2cde0f2b025539e13",
+      "size": 22346
+    },
+    {
+      "path": "src/core/boundary_authoring_session.cpp",
+      "sha256": "c3b24972eca7010c3e331bc5439f1278d49dfccc381bf20a206670271ed6b993",
+      "size": 95429
+    },
+    {
+      "path": "tests/boundary_authoring_session_tests.cpp",
+      "sha256": "9c13578594f5962b5dd66dbd864ca3afc48528e256bd2eff9207541abf0c3a2e",
+      "size": 19674
+    },
+    {
+      "path": "tests/boundary_input_dialog_tests.cpp",
+      "sha256": "108c0ff70c59ac9472c61929f2406d2fb189d64964c8afb3497886feb5085be3",
+      "size": 17546
+    },
+    {
+      "path": "docs/boundary-authoring.md",
+      "sha256": "e1a4f4b842506612182625a768c520caa655edf84ddb3b750a9fe23973683260",
+      "size": 12984
+    }
+  ],
+  "source_tree_sha256": "72f48c763beb424efd5ef519b6a9e98cc4554dbdd17d46c1eed9ee1ac25c9602",
+  "tests": [
+    "boundary_authoring_session",
+    "boundary_input_dialog",
+    "boundary_workflow"
+  ]
+}
