@@ -10,8 +10,8 @@ clean-machine and network-denied qualification, accessibility captures,
 package handoff qualification, and the final dependency-license review.
 
 The latest private `Vertex` checkpoint is published to the private `origin/main`
-repository. Its deterministic offline bundle contains 729 declared files and
-its source-kit manifest contains 643 allowlisted files. These counts describe the current local evidence and
+repository. Its deterministic offline bundle contains 733 declared files and
+its source-kit manifest contains 647 allowlisted files. These counts describe the current local evidence and
 packaging checkpoint; they do not certify a production release.
 
 ## Latest integrated checkpoint
