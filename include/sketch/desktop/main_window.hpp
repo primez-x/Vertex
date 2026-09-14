@@ -478,9 +478,10 @@ public:
                                       bool italic = false,
                                       bool style_enabled = false);
     [[nodiscard]] bool deleteAnnotation(const QString& annotation_id);
-    // Imports a local raster or first-page PDF into the project Asset store and
-    // creates a reference_asset entity with an explicit, editable calibration
-    // scale. PDF source bytes remain alongside a deterministic local preview.
+    // Imports a local PNG/JPEG/BMP/TIFF raster or first-page PDF into the
+    // project Asset store and creates a reference_asset entity with an
+    // explicit, editable calibration scale. PDF source bytes remain alongside
+    // a deterministic local preview.
     [[nodiscard]] QString importReferenceImage(const QString& path);
     // Calibrates a reference from two source-pixel points and a known local
     // distance expression (for example, "12 ft" or "3.5 m"). The source
