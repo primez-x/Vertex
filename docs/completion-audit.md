@@ -32,6 +32,8 @@ The report includes these checks:
   layout or a task-owned smoke run), including clean-machine, network,
   registry-isolation, and production-qualification flags
 - offline package manifests and SBOM inputs
+- the staged offline bundle's declared payload sizes and SHA-256 values,
+  including source-kit, runtime-manifest, and SBOM references
 - Apex/native compatibility, caller, and device evidence status
 - the production qualification manifest and its declared runs
 

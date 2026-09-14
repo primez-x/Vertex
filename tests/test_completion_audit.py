@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 import os
 import pathlib
@@ -218,6 +219,70 @@ class CompletionAuditTests(unittest.TestCase):
             result = audit.qa_fixture_coverage_check(root)
             self.assertEqual(result["status"], "partial")
             self.assertTrue(any("skipped" in detail for detail in result["details"]))
+
+    def test_packaging_check_verifies_declared_payload_hashes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            package = root / "artifacts/packages/property-studio-offline-current"
+            package.mkdir(parents=True)
+            payloads = {
+                "runtime-manifest.json": b"runtime",
+                "metadata/distribution-sbom.spdx.json": b"sbom",
+                "metadata/source-kit-manifest.json": b"source-kit",
+                "bin/property-studio.exe": b"vertex",
+            }
+            for relative, content in payloads.items():
+                path = package / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+
+            def record(relative, kind="metadata", role="metadata"):
+                content = (package / relative).read_bytes()
+                return {
+                    "component_id": "test",
+                    "install": True,
+                    "kind": kind,
+                    "path": relative,
+                    "role": role,
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                    "size": len(content),
+                }
+
+            source_kit_ref = {
+                "audit_status": "incomplete",
+                "path": "metadata/source-kit-manifest.json",
+                "sha256": hashlib.sha256(payloads["metadata/source-kit-manifest.json"]).hexdigest(),
+            }
+            bundle = {
+                "audit_status": "incomplete",
+                "manifest_kind": "offline-bundle",
+                "schema_version": 1,
+                "manifest_version": 1,
+                "files": [record(relative, "runtime" if relative.startswith("bin/") else "metadata",
+                                  "runtime" if relative.startswith("bin/") else "metadata")
+                          for relative in sorted(payloads)],
+                "summary": {"file_count": len(payloads)},
+                "source_kit": source_kit_ref,
+                "runtime_manifest": {
+                    "path": "runtime-manifest.json",
+                    "sha256": hashlib.sha256(payloads["runtime-manifest.json"]).hexdigest(),
+                },
+                "sbom": {
+                    "path": "metadata/distribution-sbom.spdx.json",
+                    "sha256": hashlib.sha256(payloads["metadata/distribution-sbom.spdx.json"]).hexdigest(),
+                },
+            }
+            (package / "offline-bundle-manifest.json").write_text(
+                json.dumps(bundle), encoding="utf-8"
+            )
+            result = audit._packaging_check(root)
+            self.assertEqual(result["status"], "partial")
+            self.assertTrue(any("hash" in detail for detail in result["details"]) is False)
+            (package / "bin/property-studio.exe").write_bytes(b"tampered")
+            result = audit._packaging_check(root)
+            self.assertEqual(result["status"], "blocked")
+            self.assertTrue(any("sha256" in detail or "hash" in detail
+                                for detail in result["details"]))
 
 
 if __name__ == "__main__":

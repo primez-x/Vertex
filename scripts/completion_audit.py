@@ -603,6 +603,102 @@ def _configuration_check(root):
                   evidence=REQUIRED_CONFIGURATION)
 
 
+def _package_payload_path(package_root: pathlib.Path, value, field: str):
+    """Resolve one package-relative payload while rejecting escapes and links."""
+
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} must be a nonempty relative path")
+    normalized = value.replace("\\", "/")
+    path = pathlib.PurePosixPath(normalized)
+    if (normalized.startswith("/") or re.match(r"^[A-Za-z]:/", normalized) or
+            ":" in normalized or path == pathlib.PurePosixPath(".") or
+            ".." in path.parts):
+        raise ValueError(f"{field} is unsafe: {value!r}")
+    candidate = package_root.joinpath(*path.parts)
+    package_resolved = package_root.resolve()
+    resolved = candidate.resolve(strict=True)
+    if not resolved.is_file() or not resolved.is_relative_to(package_resolved):
+        raise ValueError(f"{field} is not a regular file inside the package: {value!r}")
+    for ancestor in (candidate, *candidate.parents):
+        if ancestor.is_symlink():
+            raise ValueError(f"{field} contains a symbolic link: {value!r}")
+    return resolved, path.as_posix()
+
+
+def _package_sha256(path: pathlib.Path) -> str:
+    with path.open("rb") as source:
+        return hashlib.file_digest(source, "sha256").hexdigest()
+
+
+def _package_integrity_errors(package_root: pathlib.Path, manifest_path: pathlib.Path):
+    """Return deterministic payload/reference errors from an offline bundle."""
+
+    try:
+        manifest = _load_json(manifest_path)
+    except (OSError, ValueError) as error:
+        return [f"offline bundle manifest is invalid: {error}"]
+    if not isinstance(manifest, Mapping):
+        return ["offline bundle manifest must contain an object"]
+    errors = []
+    if manifest.get("manifest_kind") != "offline-bundle":
+        errors.append("manifest_kind is not offline-bundle")
+    if manifest.get("schema_version") != 1 or manifest.get("manifest_version") != 1:
+        errors.append("offline bundle manifest schema/version is unsupported")
+    files = manifest.get("files")
+    if not isinstance(files, list) or not files:
+        errors.append("offline bundle manifest files must be a nonempty list")
+        files = []
+    seen = set()
+    for index, record in enumerate(files):
+        field = f"files[{index}]"
+        if not isinstance(record, Mapping):
+            errors.append(f"{field} must be an object")
+            continue
+        try:
+            resolved, relative = _package_payload_path(package_root, record.get("path"), field)
+        except (OSError, RuntimeError, ValueError) as error:
+            errors.append(str(error))
+            continue
+        key = relative.casefold()
+        if key in seen:
+            errors.append(f"{field} duplicates payload path: {relative}")
+            continue
+        seen.add(key)
+        expected_hash = record.get("sha256")
+        if not isinstance(expected_hash, str) or re.fullmatch(r"[0-9a-fA-F]{64}", expected_hash) is None:
+            errors.append(f"{field}.sha256 is invalid")
+        else:
+            actual_hash = _package_sha256(resolved)
+            if actual_hash != expected_hash.lower():
+                errors.append(f"{field} sha256 mismatch: {relative}")
+        expected_size = record.get("size")
+        if not isinstance(expected_size, int) or isinstance(expected_size, bool) or expected_size < 0:
+            errors.append(f"{field}.size is invalid")
+        elif resolved.stat().st_size != expected_size:
+            errors.append(f"{field} size mismatch: {relative}")
+    summary = manifest.get("summary")
+    if not isinstance(summary, Mapping) or summary.get("file_count") != len(files):
+        errors.append("summary.file_count does not match files")
+
+    for name in ("source_kit", "runtime_manifest", "sbom"):
+        reference = manifest.get(name)
+        if not isinstance(reference, Mapping):
+            errors.append(f"{name} reference is missing")
+            continue
+        field = f"{name}.path"
+        try:
+            resolved, relative = _package_payload_path(package_root, reference.get("path"), field)
+        except (OSError, RuntimeError, ValueError) as error:
+            errors.append(str(error))
+            continue
+        expected_hash = reference.get("sha256")
+        if not isinstance(expected_hash, str) or re.fullmatch(r"[0-9a-fA-F]{64}", expected_hash) is None:
+            errors.append(f"{name}.sha256 is invalid")
+        elif _package_sha256(resolved) != expected_hash.lower():
+            errors.append(f"{name} sha256 mismatch: {relative}")
+    return sorted(set(errors))
+
+
 def _packaging_check(root):
     package = "artifacts/packages/property-studio-offline-current"
     paths = [package + "/offline-bundle-manifest.json",
@@ -611,8 +707,14 @@ def _packaging_check(root):
              package + "/metadata/source-kit-manifest.json"]
     result = _path_check(root, "packaging", "Offline package integrity inputs", paths)
     if result["status"] == "pass":
+        package_root = root / package
+        errors = _package_integrity_errors(package_root, package_root / "offline-bundle-manifest.json")
+        if errors:
+            return _check("packaging", "blocked",
+                          "Offline package manifest or payload hashes are invalid",
+                          evidence=paths, details=errors)
         result["status"] = "partial"
-        result["summary"] = "Offline package integrity inputs are present; clean-machine qualification remains open"
+        result["summary"] = "Offline package payload hashes and metadata references verify; clean-machine qualification remains open"
     return result
 
 

@@ -154,6 +154,11 @@ generated CTest inventories and to pass in both Debug and Release logs. This
 records analytical fixture coverage without treating it as Apex compatibility,
 clean-machine, physical-device, or production certification evidence.
 
+The packaging result also verifies every payload size and SHA-256 in the
+staged offline-bundle manifest, along with its source-kit, runtime, and SBOM
+references. The result remains partial until the package passes a clean-machine
+offline installation and runtime qualification.
+
 The Release PE import report now also has a dedicated offline static audit.
 Application entry points are checked for direct WinHTTP, WinINet, Winsock,
 DNS, URL, and Qt Network imports; transitive imports carried by third-party
