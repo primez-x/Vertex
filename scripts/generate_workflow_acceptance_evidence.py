@@ -86,6 +86,92 @@ WORKFLOW_RULES: dict[str, dict[str, Any]] = {
             "It does not certify imported Apex files, physical printers, or the unified release gate."
         ),
     },
+    "CORE-DOC-009": {
+        "acceptance": (
+            "The CLI validates a good fixture, rejects malformed or incomplete data with "
+            "actionable diagnostics, extracts assets, and produces a migration report."
+        ),
+        "sources": (
+            "src/cli/main.cpp",
+            "tests/test_cli.py",
+            "docs/project-format.md",
+        ),
+        "anchors": (
+            "inspect",
+            "validate",
+            "extract",
+            "migrate",
+            "source_preserved",
+            "malformed",
+        ),
+        "tests": ("project_cli",),
+        "qualification_boundary": (
+            "This evidence covers the local inspect, validate, extract, and migrate CLI fixture "
+            "including malformed input and source preservation. It does not certify Apex/native "
+            "migration fidelity or a production release."
+        ),
+    },
+    "APX-KEY-004": {
+        "acceptance": (
+            "Each point-jump, automatic-closure, and bay-window operation is observable in "
+            "command history, produces the expected topology, and is undoable."
+        ),
+        "sources": (
+            "include/sketch/geometry_operations.hpp",
+            "src/core/geometry_operations.cpp",
+            "tests/geometry_operations_tests.cpp",
+            "docs/geometry-operations.md",
+            "include/sketch/desktop/main_window.hpp",
+            "src/desktop/main_window.cpp",
+            "tests/desktop_smoke.cpp",
+            "docs/desktop-workflow.md",
+        ),
+        "anchors": (
+            "jump_to_boundary_vertex",
+            "automatically_close_boundary",
+            "complete_bay_window",
+            "Auto close boundary",
+            "Complete bay window",
+            "undo",
+            "redo",
+        ),
+        "tests": ("geometry_operations", "desktop_workflow"),
+        "qualification_boundary": (
+            "This evidence covers the deterministic geometry operations and Windows workflow "
+            "history/undo behavior. Physical Apex key mapping, native Apex fixtures, and the "
+            "unified production gate remain open."
+        ),
+    },
+    "REC-004": {
+        "acceptance": (
+            "Concurrent-open and external-change fixtures prevent silent overwrite and make the "
+            "selected read-only or independent-copy path explicit."
+        ),
+        "sources": (
+            "include/sketch/project_store.hpp",
+            "src/core/project_store.cpp",
+            "include/sketch/project_ownership.hpp",
+            "src/core/project_ownership.cpp",
+            "tests/project_ownership_tests.cpp",
+            "tests/project_ownership_process_tests.cpp",
+            "tests/desktop_smoke.cpp",
+            "docs/project-format.md",
+        ),
+        "anchors": (
+            "ProjectOwnershipSession",
+            "external_change",
+            "read-only",
+            "case-insensitive",
+            "second_open_is_read_only",
+            "saveProject",
+        ),
+        "tests": ("project_ownership", "project_ownership_process", "desktop_workflow"),
+        "qualification_boundary": (
+            "This evidence covers local and cross-process ownership, Windows path identity, "
+            "external-change save blocking, and the desktop read-only second-open behavior. "
+            "Clean-machine lifetime and hostile-writer qualification remain open."
+        ),
+    },
 }
 
 

@@ -63,7 +63,7 @@ class WorkflowAcceptanceEvidenceTests(unittest.TestCase):
                 )
 
             evidence = generator.build_evidence(root)
-            self.assertEqual(set(evidence), {"ARCH-MOD-009", "ARCH-MOD-011"})
+            self.assertEqual(set(evidence), set(generator.WORKFLOW_RULES))
             for requirement_id, record in evidence.items():
                 self.assertEqual(record["result"], "pass")
                 self.assertEqual(len(record["ctest"]), 2)

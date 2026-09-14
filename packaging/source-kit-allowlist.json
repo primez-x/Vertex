@@ -295,6 +295,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/requirements/evidence/apx-key-004.json"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/evidence/arch-mod-009.json"
     },
     {
@@ -303,7 +307,15 @@
     },
     {
       "category": "docs",
+      "path": "docs/requirements/evidence/core-doc-009.json"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/evidence/ops-qa-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/rec-004.json"
     },
     {
       "category": "docs",

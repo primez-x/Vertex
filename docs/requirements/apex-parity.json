@@ -404,16 +404,18 @@
       "requirement": "Provide a documented JSON-and-assets exchange representation plus local inspect, validate, extract, and migrate CLI operations.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "The CLI validates a good fixture, rejects malformed or incomplete data with actionable diagnostics, extracts assets, and produces a migration report.",
       "package": 3,
       "blocker": null,
       "implementation_sources": [
         "src/cli/main.cpp",
         "tests/test_cli.py",
-        "docs/project-format.md"
+        "docs/project-format.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Inspect, validate, extract, and copy based migrate commands now report local fingerprints and preserve the source; malformed/incomplete fixtures, broader migration reports, and production qualification remain open."
+      "implementation_note": "Inspect, validate, extract, and copy-based migrate commands now report local fingerprints and preserve the source; the current Debug/Release CLI fixture covers good, malformed, incomplete, asset-extraction, migration, Unicode-filename, and constraint-integrity cases. Native Apex migration fidelity and production qualification remain open."
     },
     {
       "id": "CORE-DOC-010",
@@ -970,7 +972,7 @@
       "requirement": "Support point jumping, automatic closure, and bay-window completion as explicit geometry operations.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Each operation is observable in command history, produces the expected topology, and is undoable.",
       "package": 4,
       "blocker": null,
@@ -981,9 +983,11 @@
         "docs/geometry-operations.md",
         "include/sketch/desktop/main_window.hpp",
         "src/desktop/main_window.cpp",
-        "tests/desktop_smoke.cpp"
+        "tests/desktop_smoke.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Point jumping is dispatched from the desktop without dirtying the project; automatic closure and bay-window completion now publish named identified-boundary commands with exact topology and undo/redo coverage. Physical Apex key mapping, native Apex project fixtures, and production qualification remain open."
+      "implementation_note": "Point jumping is dispatched from the desktop without dirtying the project; automatic closure and bay-window completion publish named identified-boundary commands with exact topology and undo/redo coverage. Current Debug/Release evidence covers the core operations and desktop history path; physical Apex key mapping, native Apex project fixtures, and production qualification remain open."
     },
     {
       "id": "APX-CURVE-001",
@@ -2435,7 +2439,7 @@
       "requirement": "Detect external changes and enforce exclusive editing ownership, with read-only or independent-copy behavior for a second opening.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Concurrent-open and external-change fixtures prevent silent overwrite and make the selected read-only/copy path explicit.",
       "package": 3,
       "blocker": null,
@@ -2447,9 +2451,11 @@
         "tests/project_ownership_tests.cpp",
         "tests/project_ownership_process_tests.cpp",
         "tests/desktop_smoke.cpp",
-        "docs/project-format.md"
+        "docs/project-format.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Project ownership uses normalized path and file identity leases, detects external content changes, and exposes explicit second-open behavior. Unit, cross-process, and desktop fixtures cover contention, Windows path casing, external edits, read-only second opens, and save/reopen behavior. Clean-machine lifetime, hostile writer races, and the production gate remain open."
+      "implementation_note": "Project ownership uses normalized path and file identity leases, detects external content changes, and exposes explicit second-open behavior. Current Debug/Release evidence covers contention, cross-process release, Windows path casing, external edits, read-only second opens, and save behavior. Clean-machine lifetime, hostile writer races, and the production gate remain open."
     },
     {
       "id": "REC-005",

@@ -1,32 +1,62 @@
 {
+  "APX-KEY-004": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/apx-key-004.json",
+        "sha256": "058be62c119f68bc2361f47733dc64f1b8579f6cf5db499132318c9ffb039611"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "6764d8a1a1719ff34e89d61950210a552d13b0f868baf0282f130a9c61e6f065"
+  },
   "ARCH-MOD-009": {
     "artifacts": [
       {
         "path": "docs/requirements/evidence/arch-mod-009.json",
-        "sha256": "85369d29f77da134e827d556e00a886d527769d3df625faa273cdb4fa1bbb874"
+        "sha256": "d6eb203360baaa76835e1f4b8bacbe276bc33df42147d6ffe8e9337df1bf7c1c"
       }
     ],
     "result": "pass",
-    "source_tree_sha256": "333cbbcedfa4a862be162f1143f66452054331c4931811f5ca59d5147b9cc92c"
+    "source_tree_sha256": "6764d8a1a1719ff34e89d61950210a552d13b0f868baf0282f130a9c61e6f065"
   },
   "ARCH-MOD-011": {
     "artifacts": [
       {
         "path": "docs/requirements/evidence/arch-mod-011.json",
-        "sha256": "0a8b256c4bc2513844ae06c83d846b004da2fdfb2f10d543bcc6a3a6743e10be"
+        "sha256": "60e31bdbd0c3ea7b40016ddc45bf249f67f86e77f813cbbf8906cbbd561a1e9d"
       }
     ],
     "result": "pass",
-    "source_tree_sha256": "333cbbcedfa4a862be162f1143f66452054331c4931811f5ca59d5147b9cc92c"
+    "source_tree_sha256": "6764d8a1a1719ff34e89d61950210a552d13b0f868baf0282f130a9c61e6f065"
+  },
+  "CORE-DOC-009": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/core-doc-009.json",
+        "sha256": "e275a3800a578161074d31370e72c1944988f8dd26faa2b59a51b5e71d12a55f"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "6764d8a1a1719ff34e89d61950210a552d13b0f868baf0282f130a9c61e6f065"
   },
   "OPS-QA-001": {
     "artifacts": [
       {
         "path": "docs/requirements/evidence/ops-qa-001.json",
-        "sha256": "5f7cc7e62c7ee4e9fb78f8e64aed7992d377d490a859dda6cb9e6f03a45b9abb"
+        "sha256": "77daddb5b25c1b233a9d5cce006b7a83bf7ab399a66921bab6c3208f9803ddef"
       }
     ],
     "result": "pass",
-    "source_tree_sha256": "333cbbcedfa4a862be162f1143f66452054331c4931811f5ca59d5147b9cc92c"
+    "source_tree_sha256": "6764d8a1a1719ff34e89d61950210a552d13b0f868baf0282f130a9c61e6f065"
+  },
+  "REC-004": {
+    "artifacts": [
+      {
+        "path": "docs/requirements/evidence/rec-004.json",
+        "sha256": "5b351b96ba63544445a45a72197fbb475380a755aadbbef9bb90558b766b2391"
+      }
+    ],
+    "result": "pass",
+    "source_tree_sha256": "6764d8a1a1719ff34e89d61950210a552d13b0f868baf0282f130a9c61e6f065"
   }
 }
