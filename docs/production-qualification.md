@@ -177,7 +177,8 @@ starting manifest. It contains no manufactured project files or observations.
 The installed-runtime smoke helper is a capture aid, not a qualification
 manifest. `scripts/test_installed_runtime.py` now runs a save/reopen pair for
 both workspaces and records the source and reopened `.bldproj` paths, hashes,
-process results, screenshots, and native 3D output in its report. Those files
+process results, explicit assistance-disabled mode, screenshots, and native 3D
+output in its report. Those files
 can be retained as candidate artifacts when a qualified operator performs the
 real production workflow; the report still records developer-machine limits
 and cannot satisfy the real-evidence contract by itself.

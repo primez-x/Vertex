@@ -2812,7 +2812,7 @@
         "docs/production-qualification.md",
         "docs/production-qualification.pending.json"
       ],
-      "implementation_note": "The installed-runtime smoke harness now records a save/reopen pair and source/reopened project hashes for both workspaces alongside screenshots and native 3D output. This is still developer-machine capture aid; network-denied, clean-machine, assistance-independent, and independent production review evidence remain open."
+      "implementation_note": "The installed-runtime smoke harness now records a save/reopen pair and source/reopened project hashes for both workspaces alongside screenshots and native 3D output, and each process explicitly enforces assistance-disabled mode. This is still developer-machine capture aid; network-denied, clean-machine, and independent production review evidence remain open."
     },
     {
       "id": "OPS-QA-005",

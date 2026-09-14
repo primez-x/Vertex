@@ -209,6 +209,13 @@ int main(int argc, char** argv) {
         window.setAttribute(Qt::WA_DontShowOnScreen, true);
         window.setAttribute(Qt::WA_ShowWithoutActivating, true);
         window.resize(smoke_size(application.arguments()));
+        if (application.arguments().contains(QStringLiteral("--smoke-assistance-disabled"))) {
+            window.setAssistanceEnabled(false);
+            if (window.assistanceEnabled()) {
+                qCritical() << "Vertex: smoke assistance could not be disabled";
+                return 2;
+            }
+        }
         const auto project_input = smoke_project_input_path(application.arguments());
         if (project_input.isEmpty()) {
             if (!seed_smoke_document(window, architectural)) {

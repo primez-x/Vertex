@@ -147,6 +147,8 @@ class InstalledRuntimeTests(unittest.TestCase):
         self.assertIn("--smoke-3d-output", launch.call_args.args[0])
         self.assertIn("--smoke-project-output", launch.call_args.args[0])
         self.assertIn("--smoke-project-input", launch.call_args.args[0])
+        self.assertIn("--smoke-assistance-disabled", launch.call_args.args[0])
+        self.assertTrue(result["assistance_disabled_requested"])
         monitor.assert_called_once_with(12345)
         monitor.return_value.close.assert_called_once()
         child.kill.assert_not_called()

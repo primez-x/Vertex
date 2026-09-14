@@ -573,8 +573,8 @@ The executable supports:
 ```text
 property-studio.exe --smoke --smoke-output C:\path\desktop-smoke.png --smoke-size 1366x768
 property-studio.exe --smoke --smoke-workspace architectural --smoke-output C:\path\architectural.png --smoke-3d-output C:\path\model.png
-property-studio.exe --smoke --smoke-workspace measurement --smoke-project-output C:\path\measurement-source.bldproj
-property-studio.exe --smoke --smoke-workspace measurement --smoke-project-input C:\path\measurement-source.bldproj --smoke-project-output C:\path\measurement-reopened.bldproj
+property-studio.exe --smoke --smoke-assistance-disabled --smoke-workspace measurement --smoke-project-output C:\path\measurement-source.bldproj
+property-studio.exe --smoke --smoke-assistance-disabled --smoke-workspace measurement --smoke-project-input C:\path\measurement-source.bldproj --smoke-project-output C:\path\measurement-reopened.bldproj
 ```
 
 `--smoke` creates a representative 12 m × 8 m boundary and two interior walls
@@ -590,7 +590,9 @@ written under the system temporary directory with a unique filename.
 `.bldproj` path before capture. `--smoke-project-input` opens an existing local
 project instead of seeding a new one; combining both options provides a
 deterministic save/reopen pair for runtime evidence. Existing output files are
-never overwritten by the project store.
+never overwritten by the project store. `--smoke-assistance-disabled` forces
+the optional local assistance state off and fails the process if the state
+cannot be enforced; the installed-runtime harness records this explicit mode.
 
 The architectural UI capture is taken after the dedicated native 3D export and
 temporarily collapses the native child surface because `QWidget::grab()` cannot

@@ -231,7 +231,8 @@ def run_workspace(executable: Path, workspace: str, run_root: Path, env: dict,
                   project_input: Path | None = None) -> dict:
     image = run_root / f"{workspace}.png"
     outputs = [image]
-    args = [str(executable), "--smoke", "--smoke-workspace", workspace, "--smoke-output", str(image)]
+    args = [str(executable), "--smoke", "--smoke-assistance-disabled",
+            "--smoke-workspace", workspace, "--smoke-output", str(image)]
     if workspace == "architectural":
         model = run_root / "architectural-model.png"
         outputs.append(model)
@@ -242,7 +243,8 @@ def run_workspace(executable: Path, workspace: str, run_root: Path, env: dict,
         args.extend(["--smoke-project-output", str(project_output)])
     result = {"workspace": workspace, "arguments": args, "timeout_seconds": TIMEOUT_SECONDS,
               "module_poll_interval_seconds": 0.02, "errors": [], "screenshots": [],
-              "timed_out": False, "module_samples": 0, "module_sample_errors": []}
+              "timed_out": False, "module_samples": 0, "module_sample_errors": [],
+              "assistance_disabled_requested": True}
     process = None
     monitor = None
     captures = []
