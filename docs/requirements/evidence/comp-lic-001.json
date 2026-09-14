@@ -106,7 +106,7 @@
       "size": 4424
     }
   ],
-  "source_tree_sha256": "085ae56428e369fd82fe2631d21b001a94da9efb0cc3f510218fd33d5ae53df8",
+  "source_tree_sha256": "131d63d1398554164cfd56a7b285af7e5f7de44ae32dc5b6d0bce6240f3e49dc",
   "tests": [
     "packaging_distribution_inventory",
     "packaging_distribution_sbom",

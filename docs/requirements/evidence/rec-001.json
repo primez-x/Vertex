@@ -1,0 +1,159 @@
+{
+  "acceptance": "Autosave fixtures distinguish edited, autosaved, and saved generations, debounce quiet periods, retry failures, and preserve recovery state through queued local saves.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "workspace_autosave_scheduler",
+          "status": "passed"
+        },
+        {
+          "name": "workspace_save_queue",
+          "status": "passed"
+        },
+        {
+          "name": "recovery_discovery",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workspace_recovery",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "workspace_autosave_scheduler",
+          "status": "passed"
+        },
+        {
+          "name": "workspace_save_queue",
+          "status": "passed"
+        },
+        {
+          "name": "recovery_discovery",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workspace_recovery",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers deterministic local autosave scheduling, queued snapshots, and recovery discovery. Power-loss and clean-machine fault injection remain open.",
+  "requirement_id": "REC-001",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "WorkspaceAutosaveScheduler",
+    "edited_generation",
+    "autosaved_checkpoint_generation",
+    "saved",
+    "recovery",
+    "capture",
+    "retry"
+  ],
+  "source_files": [
+    {
+      "path": "include/sketch/workspace_autosave_scheduler.hpp",
+      "sha256": "9c010a0c8cb61ca5f2736ff209f22b5c0c9816af70ac40352f34acc5bbd7cf2e",
+      "size": 2459
+    },
+    {
+      "path": "src/core/workspace_autosave_scheduler.cpp",
+      "sha256": "72c0ca866e52e983851a7a1a7fbcbc6a1eed07ad1ea4aa29cc5af6909d297d76",
+      "size": 3315
+    },
+    {
+      "path": "include/sketch/workspace_save_queue.hpp",
+      "sha256": "a0da7e78d7de0f3c08d341d2d159311c525eebc99505329d15653c1333deeeea",
+      "size": 2329
+    },
+    {
+      "path": "src/core/workspace_save_queue.cpp",
+      "sha256": "550822d005e225f378154caffb121c8f0b90518529594fe674fac39e35b00d2e",
+      "size": 3711
+    },
+    {
+      "path": "src/desktop/main_window.cpp",
+      "sha256": "944a00fc2959043c1f5b3b2ebfa50f287421a0338ee6908d6e926bf429f32223",
+      "size": 1240133
+    },
+    {
+      "path": "tests/desktop_workspace_recovery_tests.cpp",
+      "sha256": "41991b06c2fdeea609c7147a7d1fa47fcc3577b7232da9d99e96d1c621154de6",
+      "size": 29373
+    },
+    {
+      "path": "tests/workspace_autosave_scheduler_tests.cpp",
+      "sha256": "bb5a537cb359493430ae21c4703f6fc1c4d6c658f2e5010ed31f650144f5501f",
+      "size": 3529
+    },
+    {
+      "path": "tests/workspace_save_queue_tests.cpp",
+      "sha256": "3edf6a324e6e2ca134f18418a5de5bbe8ce5ce0980236ae1f71f5c8a27268e7d",
+      "size": 6321
+    },
+    {
+      "path": "include/sketch/recovery_discovery.hpp",
+      "sha256": "8588b15c2adff0d53ae377c2977989737ec314595e22868f42f32aef921304fe",
+      "size": 1886
+    },
+    {
+      "path": "src/core/recovery_discovery.cpp",
+      "sha256": "711d7292496a898978444dc25e3de688142d6cdbfa7b96c9a892b4342873c332",
+      "size": 6728
+    },
+    {
+      "path": "tests/recovery_discovery_tests.cpp",
+      "sha256": "acbf364994a59246f6976bdc732c72d49972c12b84c6acfc8c4dd24f9bfee4c8",
+      "size": 9124
+    },
+    {
+      "path": "docs/recovery-discovery.md",
+      "sha256": "5be2bb8308fdafc87e2521c86d1dc1185156e15dcfcad382dce6ccb2a2965208",
+      "size": 3552
+    },
+    {
+      "path": "docs/workspace-autosave-scheduler.md",
+      "sha256": "31c1ae5c594f3602a0dbb2026c164c4addb9e66d369891af247438a2294d6933",
+      "size": 1808
+    },
+    {
+      "path": "docs/workspace-save-queue.md",
+      "sha256": "1985c287cf5bc9047b729b2a5e017fc04f75b779d7e7e132a74b63f2ad76f038",
+      "size": 1628
+    }
+  ],
+  "source_tree_sha256": "131d63d1398554164cfd56a7b285af7e5f7de44ae32dc5b6d0bce6240f3e49dc",
+  "tests": [
+    "workspace_autosave_scheduler",
+    "workspace_save_queue",
+    "recovery_discovery",
+    "desktop_workspace_recovery"
+  ]
+}

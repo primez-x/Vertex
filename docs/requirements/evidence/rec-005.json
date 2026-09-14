@@ -1,0 +1,130 @@
+{
+  "acceptance": "Failure-injection fixtures reject transaction, serialization, flush, replacement, recovery, migration, lock, damaged-asset, stale-recovery, and newer-schema failures without presenting corrupted authoritative state.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "project_storage",
+          "status": "passed"
+        },
+        {
+          "name": "recovery_ledger",
+          "status": "passed"
+        },
+        {
+          "name": "recovery_discovery",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workspace_recovery",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "project_storage",
+          "status": "passed"
+        },
+        {
+          "name": "recovery_ledger",
+          "status": "passed"
+        },
+        {
+          "name": "recovery_discovery",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workspace_recovery",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers deterministic injected failure handling and recovery ledgers. Physical disk exhaustion, power-loss timing, and production failure-injection runs remain open.",
+  "requirement_id": "REC-005",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "Fault",
+    "disk",
+    "flush",
+    "replacement",
+    "recovery",
+    "corrupt",
+    "mismatch",
+    "schema"
+  ],
+  "source_files": [
+    {
+      "path": "include/sketch/project_store.hpp",
+      "sha256": "5c561fbbbb30fb7c7b88b568dba7d32a628f537e793efea1dec3882baddc999c",
+      "size": 5412
+    },
+    {
+      "path": "src/core/project_store.cpp",
+      "sha256": "5253111144a37957320269506ebc1aaf9873b671909d3c96e5913ac98da7d94a",
+      "size": 118721
+    },
+    {
+      "path": "tests/project_store_tests.cpp",
+      "sha256": "0173b50073129527b592ffcef579ccaa30b4376b599774e445087cc08cf8143d",
+      "size": 82418
+    },
+    {
+      "path": "tests/recovery_ledger_tests.cpp",
+      "sha256": "1e7004e4139ce37862034b29c807b5b780e469652c6bfde2306fabee1a4e04e9",
+      "size": 7070
+    },
+    {
+      "path": "tests/recovery_discovery_tests.cpp",
+      "sha256": "acbf364994a59246f6976bdc732c72d49972c12b84c6acfc8c4dd24f9bfee4c8",
+      "size": 9124
+    },
+    {
+      "path": "tests/desktop_workspace_recovery_tests.cpp",
+      "sha256": "41991b06c2fdeea609c7147a7d1fa47fcc3577b7232da9d99e96d1c621154de6",
+      "size": 29373
+    },
+    {
+      "path": "docs/recovery-ledger.md",
+      "sha256": "fcb8a29762b65b45eb7ee7f3a037f77f9171ced2e76aaeeb87d7bfd93bfa2318",
+      "size": 2276
+    },
+    {
+      "path": "docs/recovery-discovery.md",
+      "sha256": "5be2bb8308fdafc87e2521c86d1dc1185156e15dcfcad382dce6ccb2a2965208",
+      "size": 3552
+    }
+  ],
+  "source_tree_sha256": "131d63d1398554164cfd56a7b285af7e5f7de44ae32dc5b6d0bce6240f3e49dc",
+  "tests": [
+    "project_storage",
+    "recovery_ledger",
+    "recovery_discovery",
+    "desktop_workspace_recovery"
+  ]
+}

@@ -2452,7 +2452,7 @@
       "requirement": "Provide optional offline suggested tracing from plans or reference images.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "A local model or deterministic assistant suggests trace geometry on a fixture without network access and labels every suggestion unverified.",
       "package": 7,
       "blocker": null,
@@ -2465,9 +2465,11 @@
         "tests/assistance_engine_tests.cpp",
         "tests/assistance_workflow_tests.cpp",
         "docs/assistance-contract.md",
-        "assets/assistance/deterministic-engine-v1.json"
+        "assets/assistance/deterministic-engine-v1.json",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Offline tracing now has a deterministic local raster engine, source bounds, explicit calibration and identified-boundary desktop dispatch. The desktop also exposes connected-component edge tracing that emits one provisional convex contour per useful component with retained bounds and pixel provenance; arbitrary-plan accuracy and production qualification remain open."
+      "implementation_note": "Offline tracing now has a deterministic local raster engine, source bounds, explicit calibration and identified-boundary desktop dispatch. The desktop also exposes connected-component edge tracing that emits one provisional convex contour per useful component with retained bounds and pixel provenance; arbitrary-plan accuracy and production qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "ASSIST-002",
@@ -2475,7 +2477,7 @@
       "requirement": "Provide optional offline dimension extraction from supported plans and references.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Extracted dimensions are visibly provisional, include source location/confidence, and require acceptance before becoming document commands.",
       "package": 7,
       "blocker": null,
@@ -2488,9 +2490,11 @@
         "tests/assistance_engine_tests.cpp",
         "tests/assistance_workflow_tests.cpp",
         "docs/assistance-contract.md",
-        "assets/assistance/deterministic-engine-v1.json"
+        "assets/assistance/deterministic-engine-v1.json",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Offline explicit-unit extraction now retains source text/offset/confidence and can atomically upgrade a legacy target boundary and create a typed dimension; plan-accuracy and production qualification remain open."
+      "implementation_note": "Offline explicit-unit extraction now retains source text/offset/confidence and can atomically upgrade a legacy target boundary and create a typed dimension; plan-accuracy and production qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "ASSIST-003",
@@ -2498,7 +2502,7 @@
       "requirement": "Provide optional assisted label placement and natural-language commands through the same command and permission model as manual edits.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Suggestions preview as normal typed commands, identify affected entities, require acceptance, and are fully undoable.",
       "package": 7,
       "blocker": null,
@@ -2511,9 +2515,11 @@
         "tests/assistance_engine_tests.cpp",
         "tests/assistance_workflow_tests.cpp",
         "docs/assistance-contract.md",
-        "assets/assistance/deterministic-engine-v1.json"
+        "assets/assistance/deterministic-engine-v1.json",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Offline label placement and bounded natural-language commands now produce typed proposals and dispatch through annotation/boundary/workspace command paths; broader language coverage and production qualification remain open."
+      "implementation_note": "Offline label placement and bounded natural-language commands now produce typed proposals and dispatch through annotation/boundary/workspace command paths; broader language coverage and production qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "ASSIST-004",
@@ -2521,7 +2527,7 @@
       "requirement": "Assistance never silently invents measurements, changes classifications, or modifies accepted geometry; disabling it does not affect deterministic workflows.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Assistance-off and malformed-suggestion tests complete draw/edit/calculate/save/print/export, and unaccepted suggestions leave no semantic changes.",
       "package": 7,
       "blocker": null,
@@ -2534,9 +2540,11 @@
         "tests/assistance_engine_tests.cpp",
         "tests/assistance_workflow_tests.cpp",
         "docs/assistance-contract.md",
-        "assets/assistance/deterministic-engine-v1.json"
+        "assets/assistance/deterministic-engine-v1.json",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "The deterministic engine and desktop workflow tests prove disabled/unaccepted safety, normal undo/history and fail-closed malformed inputs; full draw/edit/calculate/save/print/export qualification remains open."
+      "implementation_note": "The deterministic engine and desktop workflow tests prove disabled/unaccepted safety, normal undo/history and fail-closed malformed inputs; full draw/edit/calculate/save/print/export qualification remains open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "ASSIST-005",
@@ -2544,7 +2552,7 @@
       "requirement": "Distributed assistance assets and processing libraries have offline resource paths, provenance, and license records.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "The offline package contains or explicitly omits optional assets, reports missing local resources, and passes the same source/license audit as core dependencies.",
       "package": 7,
       "blocker": null,
@@ -2557,9 +2565,11 @@
         "tests/assistance_engine_tests.cpp",
         "tests/assistance_workflow_tests.cpp",
         "docs/assistance-contract.md",
-        "assets/assistance/deterministic-engine-v1.json"
+        "assets/assistance/deterministic-engine-v1.json",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "The deterministic engine declares portable resource paths and private-source provenance, and its fixture is allowlisted; package hash/license audit and clean-machine qualification remain open."
+      "implementation_note": "The deterministic engine declares portable resource paths and private-source provenance, and its fixture is allowlisted; package hash/license audit and clean-machine qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "REC-001",
@@ -2567,7 +2577,7 @@
       "requirement": "Provide local autosave, recoverable history, and crash/power-loss recovery with explicit edited, autosaved, and saved states.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Crash and power-interruption fixtures recover the last valid revision, identify the session and checksum, and never silently overwrite the saved source.",
       "package": 3,
       "blocker": null,
@@ -2585,9 +2595,11 @@
         "tests/recovery_discovery_tests.cpp",
         "docs/recovery-discovery.md",
         "docs/workspace-autosave-scheduler.md",
-        "docs/workspace-save-queue.md"
+        "docs/workspace-save-queue.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Owner-thread scheduling, queued immutable captures, guarded recovery archives, timed coverage for recovered, legacy, and untitled projects, read-only recovery-candidate discovery, startup selection of unsaved unbound copies, a native Recover action, and ownership-verified Save As cleanup/rebasing are implemented; crash/power interruption fixtures, broader restart qualification, and final restore certification remain open."
+      "implementation_note": "Owner-thread scheduling, queued immutable captures, guarded recovery archives, timed coverage for recovered, legacy, and untitled projects, read-only recovery-candidate discovery, startup selection of unsaved unbound copies, a native Recover action, and ownership-verified Save As cleanup/rebasing are implemented; crash/power interruption fixtures, broader restart qualification, and final restore certification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "REC-002",
@@ -2595,7 +2607,7 @@
       "requirement": "Provide named revisions and comparison views for semantic, geometric, calculation, and presentation changes.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Two named revisions can be compared and restored without losing later work or changing the original revision.",
       "package": 3,
       "blocker": null,
@@ -2604,9 +2616,11 @@
         "src/desktop/main_window.cpp",
         "include/sketch/desktop/main_window.hpp",
         "tests/desktop_smoke.cpp",
-        "docs/desktop-workflow.md"
+        "docs/desktop-workflow.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "The Document NameRevision command is now surfaced in a local desktop editor with ordered listing, read-only entity/asset comparison, and guarded restore-as-new-project copies that preserve the open document. Geometric/calculation/presentation diff detail and production fixtures remain open."
+      "implementation_note": "The Document NameRevision command is now surfaced in a local desktop editor with ordered listing, read-only entity/asset comparison, and guarded restore-as-new-project copies that preserve the open document. Geometric/calculation/presentation diff detail and production fixtures remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "REC-003",
@@ -2614,7 +2628,7 @@
       "requirement": "Provide portable project packages and reusable templates containing required assets, profiles, and documentation references.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "A package copied to another offline Windows machine opens with all required assets and produces the same calculated and output fingerprints.",
       "package": 3,
       "blocker": null,
@@ -2632,9 +2646,11 @@
         "src/desktop/main_window.cpp",
         "tests/project_resource_desktop_tests.cpp",
         "src/cli/main.cpp",
-        "tests/test_cli.py"
+        "tests/test_cli.py",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Portable runtime staging remains integrity-only. A separate local project-package assembler now preserves the saved .bldproj byte stream, closes over every revision asset with verified content-addressed copies, and carries explicitly declared templates, profiles, and documentation. Package staging derives metadata and the complete revision asset closure from the copied database, so a source change after the byte copy cannot mix revisions; verification reopens the packaged database and cross-checks all project metadata, asset references, payload hashes, file kinds, project/asset/resource records, summary counts, symlink chains, and resource-manifest hashes. A copy-only restore helper re-hashes each payload while materializing a new local destination. The Windows core and native desktop shell now register package templates, profiles, and documentation through a hash-verified local catalog; the compact Project resources command and property-cli expose deterministic results with network_required=false. The source must remain stable during byte copy; arbitrary concurrent SQLite writes and uncheckpointed WAL contents remain a separate qualification boundary. Cross-machine calculated/output fingerprint acceptance and production qualification remain open."
+      "implementation_note": "Portable runtime staging remains integrity-only. A separate local project-package assembler now preserves the saved .bldproj byte stream, closes over every revision asset with verified content-addressed copies, and carries explicitly declared templates, profiles, and documentation. Package staging derives metadata and the complete revision asset closure from the copied database, so a source change after the byte copy cannot mix revisions; verification reopens the packaged database and cross-checks all project metadata, asset references, payload hashes, file kinds, project/asset/resource records, summary counts, symlink chains, and resource-manifest hashes. A copy-only restore helper re-hashes each payload while materializing a new local destination. The Windows core and native desktop shell now register package templates, profiles, and documentation through a hash-verified local catalog; the compact Project resources command and property-cli expose deterministic results with network_required=false. The source must remain stable during byte copy; arbitrary concurrent SQLite writes and uncheckpointed WAL contents remain a separate qualification boundary. Cross-machine calculated/output fingerprint acceptance and production qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "REC-004",
@@ -2666,7 +2682,7 @@
       "requirement": "Failure-injection tests cover transaction, serialization, flush, replacement, recovery, migration, disk exhaustion, file locks, damaged assets, stale recovery, and newer schemas.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Each injected failure has an expected recoverable result, evidence log, and no corrupted authoritative project is presented as valid.",
       "package": 8,
       "blocker": null,
@@ -2678,9 +2694,11 @@
         "tests/recovery_discovery_tests.cpp",
         "tests/desktop_workspace_recovery_tests.cpp",
         "docs/recovery-ledger.md",
-        "docs/recovery-discovery.md"
+        "docs/recovery-discovery.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Project-store and recovery fixtures cover staged transaction faults, serialization and replacement failures, damaged assets, unsupported schemas, recovery-ledger handling, stale-candidate discovery, and cleanup of residual files while preserving the last valid destination. Disk-exhaustion, power-loss, and complete production failure-injection evidence remain open."
+      "implementation_note": "Project-store and recovery fixtures cover staged transaction faults, serialization and replacement failures, damaged assets, unsupported schemas, recovery-ledger handling, stale-candidate discovery, and cleanup of residual files while preserving the last valid destination. Disk-exhaustion, power-loss, and complete production failure-injection evidence remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "IO-IFC-001",
@@ -2694,7 +2712,7 @@
         "ifc_mvd"
       ],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Representative IFC fixtures export/import with a fidelity report for geometry, types, properties, materials, relationships, and unreconstructed content.",
       "package": 6,
       "blocker": null,
@@ -2705,9 +2723,11 @@
         "docs/interchange-profiles.md",
         "include/sketch/ifc_project_exchange.hpp",
         "src/core/ifc_project_exchange.cpp",
-        "tests/ifc_project_exchange_tests.cpp"
+        "tests/ifc_project_exchange_tests.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "A bounded IFC4 STEP project mapper now exports linear boundaries, wall axes, hosted opening products, wall void relationships, slab footprints and optional swept solids, and retains bounded native properties in a standard Pset_VertexExchange_v1 container. Import reconstructs typed straight walls, closed slabs, and rectangular hosted openings when dimensions, translation-only placement, metre units, and unambiguous void relationships are reliable; otherwise it returns identifiable boundary candidates with source-retention diagnostics. Opening assembly parts, worker isolation, Reference View conformance, full standardized types/properties/materials/relationship reconstruction, desktop source retention, and representative cross-application fixtures remain open."
+      "implementation_note": "A bounded IFC4 STEP project mapper now exports linear boundaries, wall axes, hosted opening products, wall void relationships, slab footprints and optional swept solids, and retains bounded native properties in a standard Pset_VertexExchange_v1 container. Import reconstructs typed straight walls, closed slabs, and rectangular hosted openings when dimensions, translation-only placement, metre units, and unambiguous void relationships are reliable; otherwise it returns identifiable boundary candidates with source-retention diagnostics. Opening assembly parts, worker isolation, Reference View conformance, full standardized types/properties/materials/relationship reconstruction, desktop source retention, and representative cross-application fixtures remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "IO-DXF-001",
@@ -2715,7 +2735,7 @@
       "requirement": "Support a declared DXF R2013 subset covering lines, arcs, polylines, text, dimensions, hatches, and blocks.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Subset fixtures round-trip supported entities and report unsupported entities without blocking native project use.",
       "package": 6,
       "blocker": null,
@@ -2730,9 +2750,11 @@
         "src/core/dxf_project_exchange.cpp",
         "tests/dxf_project_exchange_tests.cpp",
         "tests/dxf_desktop_workflow_tests.cpp",
-        "docs/interchange-profiles.md"
+        "docs/interchange-profiles.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "A bounded in-memory ASCII DXF R2013 codec now round-trips LINE, ARC, LWPOLYLINE (including bulges), plain TEXT, linear DIMENSION records, one-loop solid polygon HATCH records, BLOCK definitions, and INSERT references with deterministic serialization, hard limits, and explicit unsupported-feature diagnostics. Before native mapping, declared inches, feet, millimetres, centimetres, metres, and kilometres are converted to SI metres across direct and block geometry, annotation dimensions, text heights, hatch paths, and insert bases/transforms; missing or unsupported units return no candidates with source-retention diagnostics instead of silently assuming metres. A separate native project-mapping layer now translates immutable snapshots to that drawing model, emits hosted-opening jamb/threshold plan markers with explicit host-loss diagnostics, and reconstructs bounded geometry into editable boundary candidates plus typed annotation state. It does not claim nested blocks, patterned or multi-loop hatches, native Apex compatibility, active floor/layer assignment, original-source asset retention, worker isolation, or external CAD fidelity; those fixtures and integrations remain open."
+      "implementation_note": "A bounded in-memory ASCII DXF R2013 codec now round-trips LINE, ARC, LWPOLYLINE (including bulges), plain TEXT, linear DIMENSION records, one-loop solid polygon HATCH records, BLOCK definitions, and INSERT references with deterministic serialization, hard limits, and explicit unsupported-feature diagnostics. Before native mapping, declared inches, feet, millimetres, centimetres, metres, and kilometres are converted to SI metres across direct and block geometry, annotation dimensions, text heights, hatch paths, and insert bases/transforms; missing or unsupported units return no candidates with source-retention diagnostics instead of silently assuming metres. A separate native project-mapping layer now translates immutable snapshots to that drawing model, emits hosted-opening jamb/threshold plan markers with explicit host-loss diagnostics, and reconstructs bounded geometry into editable boundary candidates plus typed annotation state. It does not claim nested blocks, patterned or multi-loop hatches, native Apex compatibility, active floor/layer assignment, original-source asset retention, worker isolation, or external CAD fidelity; those fixtures and integrations remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "IO-PDF-001",
@@ -2740,7 +2762,7 @@
       "requirement": "Treat PDF and raster underlays as calibrated reference assets, and distinguish editable extraction from simple tracing or image display.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Import reports whether content is editable, traceable, or image-only and preserves calibration and source provenance.",
       "package": 6,
       "blocker": null,
@@ -2748,9 +2770,11 @@
         "include/sketch/reference_asset.hpp",
         "src/core/reference_asset.cpp",
         "tests/reference_asset_tests.cpp",
-        "docs/reference-assets.md"
+        "docs/reference-assets.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Reference assets carry explicit fidelity mode, source identity, page selection, calibration, and transforms; the Windows reference_asset entity persists traceable-reference, editable_extraction=false, source-preserved, decoder fidelity, source format, and page selection/count fields; selected PDF pages and multiple project-level underlays persist through the desktop Document path, while editable PDF extraction remains open."
+      "implementation_note": "Reference assets carry explicit fidelity mode, source identity, page selection, calibration, and transforms; the Windows reference_asset entity persists traceable-reference, editable_extraction=false, source-preserved, decoder fidelity, source format, and page selection/count fields; selected PDF pages and multiple project-level underlays persist through the desktop Document path, while editable PDF extraction remains open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "IO-OUTPUT-001",
@@ -2758,16 +2782,18 @@
       "requirement": "Preview, PDF, SVG, and printing consume one vector scene; raster imagery and shaded 3D are explicitly identified raster content.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Paired output fixtures compare scene geometry, scale, text, dimensions, and raster placement across preview and exported/printed results.",
       "package": 8,
       "blocker": null,
       "implementation_sources": [
         "src/desktop/plan_canvas.cpp",
         "src/desktop/main_window.cpp",
-        "tests/desktop_smoke.cpp"
+        "tests/desktop_smoke.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Preview, draft PDF, draft SVG, and print use one shared canvas geometry renderer; draft exports now render persisted sheet bounds, independent viewport scales, title-block data, and revision-bound schedule placements with a visible draft stamp. Explicitly scaled sheet viewports share the fitted-output boundary and exclude interactive grids, previews, instructions, overview maps, and selection colors; persisted architectural cut and projection widths render as fixed paper-space strokes. PDF, SVG, native 3D image, and print-preview receipts bind the output fingerprint. Persisted selected-sheet dimensions now set the zero-margin PDF physical page, SVG physical dimensions and aspect, and print-preview requested paper independently of the toolbar preset; numeric PDF/SVG and preview-driver regressions cover landscape and custom portrait sheets. Physical printer/output comparison and paired production qualification remain open."
+      "implementation_note": "Preview, draft PDF, draft SVG, and print use one shared canvas geometry renderer; draft exports now render persisted sheet bounds, independent viewport scales, title-block data, and revision-bound schedule placements with a visible draft stamp. Explicitly scaled sheet viewports share the fitted-output boundary and exclude interactive grids, previews, instructions, overview maps, and selection colors; persisted architectural cut and projection widths render as fixed paper-space strokes. PDF, SVG, native 3D image, and print-preview receipts bind the output fingerprint. Persisted selected-sheet dimensions now set the zero-margin PDF physical page, SVG physical dimensions and aspect, and print-preview requested paper independently of the toolbar preset; numeric PDF/SVG and preview-driver regressions cover landscape and custom portrait sheets. Physical printer/output comparison and paired production qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "IO-OUTPUT-002",
@@ -2775,7 +2801,7 @@
       "requirement": "Support Letter, Legal, Tabloid, A4, A3, and architectural sheet sizes with independent scale and printer calibration verification.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Each sheet fixture reports numeric page dimensions and a physical/driver scaling check separately from PDF geometry.",
       "package": 8,
       "blocker": null,
@@ -2785,9 +2811,11 @@
         "tests/sheet_view_model_tests.cpp",
         "docs/sheets-views.md",
         "src/desktop/main_window.cpp",
-        "tests/desktop_smoke.cpp"
+        "tests/desktop_smoke.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Letter, Legal, Tabloid, A4, A3, and architectural page sizes plus independent viewport scales are validated; persisted selected-sheet dimensions determine PDF physical page, SVG dimensions/aspect, and requested print paper, while the toolbar preset is only a fallback for documents without sheets. The persisted sheet renderer maps viewport bounds/scales to paper coordinates, and viewport bounds/scale edits use typed Document history. Numeric landscape/custom portrait tests verify exported geometry and preset independence. Print preview records requested_sheet_mm separately from actual driver paper/page rectangles and DPI; physical printer calibration and paired production output evidence remain open."
+      "implementation_note": "Letter, Legal, Tabloid, A4, A3, and architectural page sizes plus independent viewport scales are validated; persisted selected-sheet dimensions determine PDF physical page, SVG dimensions/aspect, and requested print paper, while the toolbar preset is only a fallback for documents without sheets. The persisted sheet renderer maps viewport bounds/scales to paper coordinates, and viewport bounds/scale edits use typed Document history. Numeric landscape/custom portrait tests verify exported geometry and preset independence. Print preview records requested_sheet_mm separately from actual driver paper/page rectangles and DPI; physical printer calibration and paired production output evidence remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "IO-OUTPUT-003",
@@ -2798,14 +2826,16 @@
       "acceptance": "Stale-calculation, missing-asset, broken-link, and incomplete-drawing fixtures cannot silently produce an authoritative file.",
       "package": 8,
       "blocker": null,
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "implementation_sources": [
         "src/desktop/main_window.cpp",
         "src/core/output_fingerprint.cpp",
         "tests/desktop_smoke.cpp",
-        "tests/output_fingerprint_tests.cpp"
+        "tests/output_fingerprint_tests.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Draft output stamping covers PDF, SVG, print, and native 3D images; native image export stages a visible draft/filter footer before atomic destination replacement and fails on read/stamp/write errors while retaining the fingerprint sidecar. Print preview now runs the same scene/fingerprint gate before opening and records the serialized fingerprint with driver evidence. Explicitly scaled sheet viewport rendering now shares the fitted-output boundary and suppresses interactive-only state. Invalid-geometry blocking, fingerprint mismatch checks, and revision-bound persisted schedule placement rendering are implemented; integrated stale calculations/assets/reference fixtures and production authority qualification remain open."
+      "implementation_note": "Draft output stamping covers PDF, SVG, print, and native 3D images; native image export stages a visible draft/filter footer before atomic destination replacement and fails on read/stamp/write errors while retaining the fingerprint sidecar. Print preview now runs the same scene/fingerprint gate before opening and records the serialized fingerprint with driver evidence. Explicitly scaled sheet viewport rendering now shares the fitted-output boundary and suppresses interactive-only state. Invalid-geometry blocking, fingerprint mismatch checks, and revision-bound persisted schedule placement rendering are implemented; integrated stale calculations/assets/reference fixtures and production authority qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "SEC-WORKER-001",
@@ -2819,7 +2849,7 @@
         "appcontainer"
       ],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "A worker security fixture verifies token/container policy, network denial, resource limits, path restrictions, and controlled parent termination.",
       "package": 8,
       "blocker": null,
@@ -2831,9 +2861,11 @@
         "src/core/windows_import_worker.cpp",
         "tests/windows_import_worker_tests.cpp",
         "tests/windows_import_worker_probe.cpp",
-        "docs/import-worker-security.md"
+        "docs/import-worker-security.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Fail-closed worker policy and attestation/resource/path checks are implemented. The Windows broker now provisions an AppContainer profile, ACL-protected job directory, explicit handle list, controlled environment, suspended launch, Job Object limits, and post-launch token/network attestation; live clean-machine evidence remains required, and the runtime fixture skips when its host process is already inside a parent Job Object."
+      "implementation_note": "Fail-closed worker policy and attestation/resource/path checks are implemented. The Windows broker now provisions an AppContainer profile, ACL-protected job directory, explicit handle list, controlled environment, suspended launch, Job Object limits, and post-launch token/network attestation; live clean-machine evidence remains required, and the runtime fixture skips when its host process is already inside a parent Job Object. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "SEC-WORKER-002",
@@ -2847,7 +2879,7 @@
         "appcontainer"
       ],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Adversarial fixtures terminate or reject safely, leave the core project usable, and produce actionable local diagnostics without network access.",
       "package": 8,
       "blocker": null,
@@ -2859,9 +2891,11 @@
         "src/core/windows_import_worker.cpp",
         "tests/windows_import_worker_tests.cpp",
         "tests/windows_import_worker_probe.cpp",
-        "docs/import-worker-security.md"
+        "docs/import-worker-security.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Malformed input, traversal, expansion, timeout, child-process, crash, and module-path rejection decisions are covered by policy tests. The native broker rejects unsafe roots and limits output, terminates the whole Job Object on watchdog or output failure, and never returns partial output; adversarial clean-machine OS fixtures and project-survival evidence remain open."
+      "implementation_note": "Malformed input, traversal, expansion, timeout, child-process, crash, and module-path rejection decisions are covered by policy tests. The native broker rejects unsafe roots and limits output, terminates the whole Job Object on watchdog or output failure, and never returns partial output; adversarial clean-machine OS fixtures and project-survival evidence remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "SEC-PROJ-001",
@@ -2875,7 +2909,7 @@
         "proj_network"
       ],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Network-denied georeferencing fixtures either use bundled resources or fail locally with no network request.",
       "package": 8,
       "blocker": null,
@@ -2890,9 +2924,11 @@
         "include/sketch/georeferencing_runtime.hpp",
         "src/core/georeferencing_runtime.cpp",
         "tests/georeferencing_runtime_tests.cpp",
-        "docs/import-worker-security.md"
+        "docs/import-worker-security.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Policy requires offline PROJ resource declarations and reports missing resources locally. The native worker environment sets PROJ_NETWORK=OFF and omits network capabilities; the Windows georeferencing runtime additionally disables the PROJ context, binds a contained local database, and fails on missing or mismatched resources. Externally monitored network-denied worker evidence remains open."
+      "implementation_note": "Policy requires offline PROJ resource declarations and reports missing resources locally. The native worker environment sets PROJ_NETWORK=OFF and omits network capabilities; the Windows georeferencing runtime additionally disables the PROJ context, binds a contained local database, and fails on missing or mismatched resources. Externally monitored network-denied worker evidence remains open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "OPS-PERF-001",

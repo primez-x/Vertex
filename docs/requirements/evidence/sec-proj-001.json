@@ -1,0 +1,131 @@
+{
+  "acceptance": "Georeferencing and import-worker policy disable PROJ networking, require contained local resources, and report missing or mismatched resources locally without download attempts.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "import_worker_policy",
+          "status": "passed"
+        },
+        {
+          "name": "georeferencing_runtime",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "import_worker_policy",
+          "status": "passed"
+        },
+        {
+          "name": "georeferencing_runtime",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers local PROJ policy and resource validation. Externally monitored network-denied worker execution remains open.",
+  "requirement_id": "SEC-PROJ-001",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "PROJ_NETWORK",
+    "OFF",
+    "network",
+    "resource",
+    "contained",
+    "diagnostic",
+    "missing"
+  ],
+  "source_files": [
+    {
+      "path": "include/sketch/import_worker_policy.hpp",
+      "sha256": "6cf47bcfd451aeb7f65d1fc0ac7b86995ca88348efbf3956eab3673eed73cad2",
+      "size": 2179
+    },
+    {
+      "path": "src/core/import_worker_policy.cpp",
+      "sha256": "0d04addfbc980dcc2475edeae26c45818ecef549bd8870b3116af79b41c612cb",
+      "size": 4778
+    },
+    {
+      "path": "tests/import_worker_policy_tests.cpp",
+      "sha256": "7bca435475fcb26aeeaf587cbff83b29a4491ee629cb5462155b5dd20128d777",
+      "size": 5187
+    },
+    {
+      "path": "include/sketch/windows_import_worker.hpp",
+      "sha256": "d4c379798b9206aeb7d937130864d554b559ae6874b2317ac6a87d8d1d7d2b8d",
+      "size": 2335
+    },
+    {
+      "path": "src/core/windows_import_worker.cpp",
+      "sha256": "623e6d5ce1b52852b76133be34f5481947072c0abff271aa1cbafead8dec06ea",
+      "size": 44131
+    },
+    {
+      "path": "tests/windows_import_worker_tests.cpp",
+      "sha256": "e700da85049694b277aa6607d99d1bc068a0886847f30d16bc9c8ee5e1d7d942",
+      "size": 11568
+    },
+    {
+      "path": "tests/windows_import_worker_probe.cpp",
+      "sha256": "bdca9059062cad3f8c7df79dae0113b307b7069f3fbd89e2fa2b914c42fe3db6",
+      "size": 1322
+    },
+    {
+      "path": "include/sketch/georeferencing_runtime.hpp",
+      "sha256": "0ac5e86ad6edb680bc53d36c331952516e149064bb409fdd12ba6f8c1b2da902",
+      "size": 1632
+    },
+    {
+      "path": "src/core/georeferencing_runtime.cpp",
+      "sha256": "cd9ef43b0e3e40966027ea049319e524e01b7b43e176ae91897d8cf8e3e2f67e",
+      "size": 13362
+    },
+    {
+      "path": "tests/georeferencing_runtime_tests.cpp",
+      "sha256": "5b40d69e257d6838453a31cf942e59c9c9a4e93b1f36967b6c74c1f602ddad60",
+      "size": 4771
+    },
+    {
+      "path": "docs/import-worker-security.md",
+      "sha256": "df8c96fc107aedd99a1a59f295d4188045a6eb8d08d698e95ba82c7f467fe23e",
+      "size": 7281
+    },
+    {
+      "path": "docs/survey-georeferencing-contracts.md",
+      "sha256": "c477a3c1dcfddf0746175dec0f962d0e038a2cf703a5851b24a87c32fab0ed1f",
+      "size": 8720
+    }
+  ],
+  "source_tree_sha256": "131d63d1398554164cfd56a7b285af7e5f7de44ae32dc5b6d0bce6240f3e49dc",
+  "tests": [
+    "import_worker_policy",
+    "georeferencing_runtime"
+  ]
+}

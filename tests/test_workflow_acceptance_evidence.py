@@ -86,6 +86,10 @@ class WorkflowAcceptanceEvidenceTests(unittest.TestCase):
                 "ARCH-3D-001", "ARCH-VIEW-001", "ARCH-VIEW-002", "ARCH-SCH-001", "ARCH-SCH-002",
                 "ARCH-SHEET-001", "ARCH-EDIT-001", "ARCH-REL-001", "ARCH-OUTPUT-001",
                 "UX-WORK-001", "UX-WORK-002", "UX-WORK-003", "UX-ACCESS-001", "UX-INPUT-001",
+                "ASSIST-001", "ASSIST-002", "ASSIST-003", "ASSIST-004", "ASSIST-005",
+                "REC-001", "REC-002", "REC-003", "REC-005",
+                "IO-IFC-001", "IO-DXF-001", "IO-PDF-001", "IO-OUTPUT-001", "IO-OUTPUT-002", "IO-OUTPUT-003",
+                "SEC-WORKER-001", "SEC-WORKER-002", "SEC-PROJ-001",
             }.issubset(set(evidence)))
             for requirement_id, record in evidence.items():
                 self.assertEqual(record["result"], "pass")

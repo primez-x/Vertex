@@ -1837,6 +1837,136 @@ WORKFLOW_RULES.update({
 })
 
 
+WORKFLOW_RULES.update({
+    "ASSIST-001": {
+        "acceptance": "Optional local assistance proposes deterministic raster and connected-component traces with source identity and an explicit unverified state.",
+        "sources": ("include/sketch/assistance_contract.hpp", "include/sketch/assistance_engine.hpp", "src/core/assistance_contract.cpp", "src/core/assistance_engine.cpp", "tests/assistance_contract_tests.cpp", "tests/assistance_engine_tests.cpp", "tests/assistance_workflow_tests.cpp", "docs/assistance-contract.md", "assets/assistance/deterministic-engine-v1.json"),
+        "anchors": ("AssistanceKind", "suggest_tracing", "edge_tracing", "proposal", "unverified", "offline"),
+        "tests": ("assistance_contract", "assistance_engine", "assistance_workflow"),
+        "qualification_boundary": "This evidence covers the deterministic local tracing engine and proposal envelope. Production plan-image diversity and visual qualification remain open.",
+    },
+    "ASSIST-002": {
+        "acceptance": "Optional local assistance extracts explicit-unit dimensions while retaining the original text, parsed units, and typed proposal provenance.",
+        "sources": ("include/sketch/assistance_contract.hpp", "include/sketch/assistance_engine.hpp", "src/core/assistance_contract.cpp", "src/core/assistance_engine.cpp", "tests/assistance_contract_tests.cpp", "tests/assistance_engine_tests.cpp", "tests/assistance_workflow_tests.cpp", "docs/assistance-contract.md", "assets/assistance/deterministic-engine-v1.json"),
+        "anchors": ("extract_dimensions", "dimension_extraction", "original_text", "length_metres", "unit", "provenance"),
+        "tests": ("assistance_contract", "assistance_engine", "assistance_workflow"),
+        "qualification_boundary": "This evidence covers explicit-unit extraction from deterministic fixture text. Real plan OCR, ambiguous labels, and production accuracy qualification remain open.",
+    },
+    "ASSIST-003": {
+        "acceptance": "Optional assisted label placement and bounded natural-language commands produce typed proposals that use the same permission, command, and undo path as manual edits.",
+        "sources": ("include/sketch/assistance_contract.hpp", "include/sketch/assistance_engine.hpp", "src/core/assistance_contract.cpp", "src/core/assistance_engine.cpp", "tests/assistance_contract_tests.cpp", "tests/assistance_engine_tests.cpp", "tests/assistance_workflow_tests.cpp", "docs/assistance-contract.md", "assets/assistance/deterministic-engine-v1.json"),
+        "anchors": ("suggest_label_placements", "parse_natural_language", "add_label", "permission", "command", "undo"),
+        "tests": ("assistance_contract", "assistance_engine", "assistance_workflow"),
+        "qualification_boundary": "This evidence covers the bounded local label/language grammar and command integration. Broader language coverage and production UX review remain open.",
+    },
+    "ASSIST-004": {
+        "acceptance": "Assistance proposals remain visibly unverified until accepted, cannot silently change measurements or classifications, and disabling assistance leaves deterministic workflows unchanged.",
+        "sources": ("include/sketch/assistance_contract.hpp", "include/sketch/assistance_engine.hpp", "src/core/assistance_contract.cpp", "src/core/assistance_engine.cpp", "tests/assistance_contract_tests.cpp", "tests/assistance_engine_tests.cpp", "tests/assistance_workflow_tests.cpp", "docs/assistance-contract.md", "assets/assistance/deterministic-engine-v1.json"),
+        "anchors": ("AssistanceSession", "requires_permission_check", "requires_undo_transaction", "disabled", "acceptance", "classification", "unverified"),
+        "tests": ("assistance_contract", "assistance_engine", "assistance_workflow"),
+        "qualification_boundary": "This evidence covers local fail-closed proposal acceptance and the assistance-disabled path. End-user review and production workflow qualification remain open.",
+    },
+    "ASSIST-005": {
+        "acceptance": "Assistance assets declare local resource paths, provenance, and licenses, and the deterministic engine ships without third-party model weights.",
+        "sources": ("include/sketch/assistance_contract.hpp", "include/sketch/assistance_engine.hpp", "src/core/assistance_contract.cpp", "src/core/assistance_engine.cpp", "tests/assistance_contract_tests.cpp", "tests/assistance_engine_tests.cpp", "tests/assistance_workflow_tests.cpp", "docs/assistance-contract.md", "assets/assistance/deterministic-engine-v1.json"),
+        "anchors": ("deterministic-engine-v1", "provenance", "license", "resources", "third-party", "offline"),
+        "tests": ("assistance_contract", "assistance_engine", "assistance_workflow"),
+        "qualification_boundary": "This evidence covers the declared local assistance inventory and provenance contract. Final legal review and distribution approval remain open.",
+    },
+    "REC-001": {
+        "acceptance": "Autosave fixtures distinguish edited, autosaved, and saved generations, debounce quiet periods, retry failures, and preserve recovery state through queued local saves.",
+        "sources": ("include/sketch/workspace_autosave_scheduler.hpp", "src/core/workspace_autosave_scheduler.cpp", "include/sketch/workspace_save_queue.hpp", "src/core/workspace_save_queue.cpp", "src/desktop/main_window.cpp", "tests/desktop_workspace_recovery_tests.cpp", "tests/workspace_autosave_scheduler_tests.cpp", "tests/workspace_save_queue_tests.cpp", "include/sketch/recovery_discovery.hpp", "src/core/recovery_discovery.cpp", "tests/recovery_discovery_tests.cpp", "docs/recovery-discovery.md", "docs/workspace-autosave-scheduler.md", "docs/workspace-save-queue.md"),
+        "anchors": ("WorkspaceAutosaveScheduler", "edited_generation", "autosaved_checkpoint_generation", "saved", "recovery", "capture", "retry"),
+        "tests": ("workspace_autosave_scheduler", "workspace_save_queue", "recovery_discovery", "desktop_workspace_recovery"),
+        "qualification_boundary": "This evidence covers deterministic local autosave scheduling, queued snapshots, and recovery discovery. Power-loss and clean-machine fault injection remain open.",
+    },
+    "REC-002": {
+        "acceptance": "Named revision and comparison fixtures retain semantic, geometric, calculation, and presentation history and restore selected revisions without contaminating later work.",
+        "sources": ("src/core/document.cpp", "src/desktop/main_window.cpp", "include/sketch/desktop/main_window.hpp", "tests/desktop_smoke.cpp", "docs/desktop-workflow.md"),
+        "anchors": ("named revision", "restore", "compare", "comparison", "revision", "history", "undo"),
+        "tests": ("desktop_workflow", "document_commands"),
+        "qualification_boundary": "This evidence covers local named revisions, comparison controls, and history restoration. Production project-scale comparison and native Apex compatibility remain open.",
+    },
+    "REC-003": {
+        "acceptance": "Portable project packages and templates include required project assets, profiles, documentation references, manifests, and a verified restore path.",
+        "sources": ("scripts/stage_project_package.py", "tests/test_stage_project_package.py", "docs/dependencies/project-package.md", "scripts/stage_portable_package.py", "tests/test_stage_portable_package.py", "docs/dependencies/portable-package.md", "include/sketch/project_resource_catalog.hpp", "src/core/project_resource_catalog.cpp", "tests/project_resource_catalog_tests.cpp", "include/sketch/desktop/main_window.hpp", "src/desktop/main_window.cpp", "tests/project_resource_desktop_tests.cpp", "src/cli/main.cpp", "tests/test_cli.py"),
+        "anchors": ("portable", "template", "assets", "profiles", "documentation", "manifest", "restore"),
+        "tests": ("packaging_stage_project_package", "packaging_stage_portable_package", "project_resource_catalog", "project_resource_desktop", "project_cli"),
+        "qualification_boundary": "This evidence covers local package/template staging, integrity, and restore. Clean-machine handoff and broad legacy migration qualification remain open.",
+    },
+    "REC-005": {
+        "acceptance": "Failure-injection fixtures reject transaction, serialization, flush, replacement, recovery, migration, lock, damaged-asset, stale-recovery, and newer-schema failures without presenting corrupted authoritative state.",
+        "sources": ("include/sketch/project_store.hpp", "src/core/project_store.cpp", "tests/project_store_tests.cpp", "tests/recovery_ledger_tests.cpp", "tests/recovery_discovery_tests.cpp", "tests/desktop_workspace_recovery_tests.cpp", "docs/recovery-ledger.md", "docs/recovery-discovery.md"),
+        "anchors": ("Fault", "disk", "flush", "replacement", "recovery", "corrupt", "mismatch", "schema"),
+        "tests": ("project_storage", "recovery_ledger", "recovery_discovery", "desktop_workspace_recovery"),
+        "qualification_boundary": "This evidence covers deterministic injected failure handling and recovery ledgers. Physical disk exhaustion, power-loss timing, and production failure-injection runs remain open.",
+    },
+    "IO-IFC-001": {
+        "acceptance": "The declared IFC4 STEP subset exports supported walls, slabs, openings, relationships, units, and Vertex property preservation, and reconstructs reliable typed entities while reporting unsupported content.",
+        "sources": ("include/sketch/interchange_profile.hpp", "src/core/interchange_profile.cpp", "tests/interchange_profile_tests.cpp", "include/sketch/ifc_project_exchange.hpp", "src/core/ifc_project_exchange.cpp", "tests/ifc_project_exchange_tests.cpp", "tests/ifc_desktop_workflow_tests.cpp", "docs/interchange-profiles.md"),
+        "anchors": ("IFC4", "IFCWALL", "IFCSLAB", "IFCOPENINGELEMENT", "Pset_VertexExchange_v1", "reconstruct", "unsupported"),
+        "tests": ("interchange_profile", "ifc_project_exchange", "ifc_desktop_workflow"),
+        "qualification_boundary": "This evidence covers the bounded local IFC4 exchange subset and diagnostics. External IFC consumers, full MVD fidelity, and production interoperability remain open.",
+    },
+    "IO-DXF-001": {
+        "acceptance": "The declared DXF R2013 subset round-trips lines, arcs, polylines, text, dimensions, hatches, blocks, and inserts with units and explicit unsupported-feature diagnostics.",
+        "sources": ("include/sketch/interchange_profile.hpp", "src/core/interchange_profile.cpp", "tests/interchange_profile_tests.cpp", "include/sketch/dxf_exchange.hpp", "src/core/dxf_exchange.cpp", "tests/dxf_exchange_tests.cpp", "include/sketch/dxf_project_exchange.hpp", "src/core/dxf_project_exchange.cpp", "tests/dxf_project_exchange_tests.cpp", "tests/dxf_desktop_workflow_tests.cpp", "docs/interchange-profiles.md"),
+        "anchors": ("R2013", "LINE", "ARC", "LWPOLYLINE", "HATCH", "BLOCK", "INSERT", "unsupported", "units"),
+        "tests": ("interchange_profile", "dxf_exchange", "dxf_project_exchange", "dxf_desktop_workflow"),
+        "qualification_boundary": "This evidence covers the bounded local DXF R2013 subset and desktop exchange path. External CAD consumer comparison and complete production fidelity remain open.",
+    },
+    "IO-PDF-001": {
+        "acceptance": "PDF and raster references persist source identity, page selection, calibration, transforms, and explicit traceable versus editable fidelity modes.",
+        "sources": ("include/sketch/reference_asset.hpp", "src/core/reference_asset.cpp", "tests/reference_asset_tests.cpp", "src/desktop/main_window.cpp", "tests/desktop_smoke.cpp", "docs/reference-assets.md"),
+        "anchors": ("ReferenceAsset", "editable_extraction", "traceable", "calibration", "source_preserved", "page", "fidelity"),
+        "tests": ("reference_assets", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers local reference asset semantics and calibration. Editable PDF extraction and production visual qualification remain open.",
+    },
+    "IO-OUTPUT-001": {
+        "acceptance": "Preview, PDF, SVG, and printing use one shared vector scene, while raster imagery and shaded 3D are identified as raster content with bound output fingerprints.",
+        "sources": ("include/sketch/sheet_output_scene.hpp", "src/core/sheet_output_scene.cpp", "src/desktop/plan_canvas.cpp", "src/desktop/main_window.cpp", "tests/desktop_smoke.cpp", "tests/output_fingerprint_tests.cpp", "docs/output-fingerprint.md", "docs/desktop-workflow.md"),
+        "anchors": ("SheetOutputScene", "vector", "raster", "print", "PDF", "SVG", "fingerprint"),
+        "tests": ("sheet_output_scene", "output_fingerprint", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers the shared local scene and output receipts. Physical printer calibration and production output comparison remain open.",
+    },
+    "IO-OUTPUT-002": {
+        "acceptance": "Letter, Legal, Tabloid, A4, A3, and architectural sheet definitions persist independent scales and map numeric page dimensions consistently into PDF, SVG, preview, and print requests.",
+        "sources": ("include/sketch/sheet_view_model.hpp", "src/core/sheet_view_model.cpp", "tests/sheet_view_model_tests.cpp", "docs/sheets-views.md", "src/desktop/main_window.cpp", "tests/desktop_smoke.cpp"),
+        "anchors": ("Letter", "Legal", "Tabloid", "A4", "A3", "scale_denominator", "printer", "page"),
+        "tests": ("sheet_view_model", "sheet_output_scene", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers numeric local page and scale semantics. Driver-specific scaling and physical printer calibration remain open.",
+    },
+    "IO-OUTPUT-003": {
+        "acceptance": "Stale calculations, missing assets, broken references, invalid geometry, or mismatched fingerprints block authoritative output or apply a visible draft mark before atomic publication.",
+        "sources": ("src/desktop/main_window.cpp", "src/core/output_fingerprint.cpp", "tests/desktop_smoke.cpp", "tests/output_fingerprint_tests.cpp", "docs/output-fingerprint.md", "docs/desktop-workflow.md"),
+        "anchors": ("stale", "fingerprint", "invalid", "draft", "authoritative", "missing", "print preview"),
+        "tests": ("output_fingerprint", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers local output gating and draft stamping. Full integrated stale-input fixtures and production authority qualification remain open.",
+    },
+    "SEC-WORKER-001": {
+        "acceptance": "The import-worker policy declares AppContainer isolation, network denial, Job Object limits, brokered inputs, controlled temporary storage, fixed search paths, and attestation requirements.",
+        "sources": ("include/sketch/import_worker_policy.hpp", "src/core/import_worker_policy.cpp", "tests/import_worker_policy_tests.cpp", "include/sketch/windows_import_worker.hpp", "src/core/windows_import_worker.cpp", "tests/windows_import_worker_tests.cpp", "tests/windows_import_worker_probe.cpp", "docs/import-worker-security.md"),
+        "anchors": ("AppContainer", "network", "Job", "attestation", "temporary", "search", "limits"),
+        "tests": ("import_worker_policy",),
+        "qualification_boundary": "This evidence covers deterministic worker policy, path, resource, and attestation contracts. Live AppContainer/network-denial execution on a clean Windows host remains open.",
+    },
+    "SEC-WORKER-002": {
+        "acceptance": "Malformed, traversal, decompression, module-planting, child-process, timeout, and crash fixtures fail closed with bounded diagnostics and no partial import result.",
+        "sources": ("include/sketch/import_worker_policy.hpp", "src/core/import_worker_policy.cpp", "tests/import_worker_policy_tests.cpp", "include/sketch/windows_import_worker.hpp", "src/core/windows_import_worker.cpp", "tests/windows_import_worker_tests.cpp", "tests/windows_import_worker_probe.cpp", "docs/import-worker-security.md"),
+        "anchors": ("traversal", "decompression", "timeout", "crash", "module", "partial", "Job"),
+        "tests": ("import_worker_policy",),
+        "qualification_boundary": "This evidence covers deterministic adversarial policy decisions and bounded output rules. OS-level child containment and clean-machine worker survival remain open.",
+    },
+    "SEC-PROJ-001": {
+        "acceptance": "Georeferencing and import-worker policy disable PROJ networking, require contained local resources, and report missing or mismatched resources locally without download attempts.",
+        "sources": ("include/sketch/import_worker_policy.hpp", "src/core/import_worker_policy.cpp", "tests/import_worker_policy_tests.cpp", "include/sketch/windows_import_worker.hpp", "src/core/windows_import_worker.cpp", "tests/windows_import_worker_tests.cpp", "tests/windows_import_worker_probe.cpp", "include/sketch/georeferencing_runtime.hpp", "src/core/georeferencing_runtime.cpp", "tests/georeferencing_runtime_tests.cpp", "docs/import-worker-security.md", "docs/survey-georeferencing-contracts.md"),
+        "anchors": ("PROJ_NETWORK", "OFF", "network", "resource", "contained", "diagnostic", "missing"),
+        "tests": ("import_worker_policy", "georeferencing_runtime"),
+        "qualification_boundary": "This evidence covers local PROJ policy and resource validation. Externally monitored network-denied worker execution remains open.",
+    },
+})
+
+
 def _load_module(name: str, path: pathlib.Path):
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:

@@ -1,0 +1,168 @@
+{
+  "acceptance": "Portable project packages and templates include required project assets, profiles, documentation references, manifests, and a verified restore path.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "packaging_stage_project_package",
+          "status": "passed"
+        },
+        {
+          "name": "packaging_stage_portable_package",
+          "status": "passed"
+        },
+        {
+          "name": "project_resource_catalog",
+          "status": "passed"
+        },
+        {
+          "name": "project_resource_desktop",
+          "status": "passed"
+        },
+        {
+          "name": "project_cli",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "packaging_stage_project_package",
+          "status": "passed"
+        },
+        {
+          "name": "packaging_stage_portable_package",
+          "status": "passed"
+        },
+        {
+          "name": "project_resource_catalog",
+          "status": "passed"
+        },
+        {
+          "name": "project_resource_desktop",
+          "status": "passed"
+        },
+        {
+          "name": "project_cli",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers local package/template staging, integrity, and restore. Clean-machine handoff and broad legacy migration qualification remain open.",
+  "requirement_id": "REC-003",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "portable",
+    "template",
+    "assets",
+    "profiles",
+    "documentation",
+    "manifest",
+    "restore"
+  ],
+  "source_files": [
+    {
+      "path": "scripts/stage_project_package.py",
+      "sha256": "2bb84b186def3c9d6eec9ea30ff22274f2c5d4f751d7ee3c7c3544df12087b7d",
+      "size": 36900
+    },
+    {
+      "path": "tests/test_stage_project_package.py",
+      "sha256": "9fe538e193bc43d353ee561ea70f8e920cf70cf53da31d9413daa136c5f36a43",
+      "size": 17155
+    },
+    {
+      "path": "docs/dependencies/project-package.md",
+      "sha256": "9066da108f58780010e512fb8b19405def6da10b16433f9e98d71ca8af4b6ebe",
+      "size": 4762
+    },
+    {
+      "path": "scripts/stage_portable_package.py",
+      "sha256": "3bfb235089f946a5ca8da093563a917aa7fa641173ed505c509d8f3fec761d47",
+      "size": 28535
+    },
+    {
+      "path": "tests/test_stage_portable_package.py",
+      "sha256": "9b8047f3245315c4f9fe8c909b204062d33cea926bef45d0e9ca90b82ba42106",
+      "size": 12169
+    },
+    {
+      "path": "docs/dependencies/portable-package.md",
+      "sha256": "a6734c50af239d09a1b8f9649879697741c710c789fee30e5c52ed1588acbf42",
+      "size": 3298
+    },
+    {
+      "path": "include/sketch/project_resource_catalog.hpp",
+      "sha256": "848769a919246555ea22aa77bdd04b1206c1984e9bb8a4d445c6eeb133f964cb",
+      "size": 2120
+    },
+    {
+      "path": "src/core/project_resource_catalog.cpp",
+      "sha256": "0afb3401720e8eeb29fd048c26aa06f81fc0b450d53f55f1d295e19c76fec167",
+      "size": 19336
+    },
+    {
+      "path": "tests/project_resource_catalog_tests.cpp",
+      "sha256": "e78cdd4e2c0ca7ddfd8de92728d85da3c0758062060e58f8f50509dcfa3b455c",
+      "size": 10807
+    },
+    {
+      "path": "include/sketch/desktop/main_window.hpp",
+      "sha256": "0acf0194cb15c22dda4f09e2415af17dc115b3a374fe2bec22cf4ff07806b92b",
+      "size": 34261
+    },
+    {
+      "path": "src/desktop/main_window.cpp",
+      "sha256": "944a00fc2959043c1f5b3b2ebfa50f287421a0338ee6908d6e926bf429f32223",
+      "size": 1240133
+    },
+    {
+      "path": "tests/project_resource_desktop_tests.cpp",
+      "sha256": "e447df505c2d4f3f20f5b6ae89520dd4b2f3dea997c17f4a021c17ef3dd27c74",
+      "size": 5639
+    },
+    {
+      "path": "src/cli/main.cpp",
+      "sha256": "2bc8852db846ba88788a816546a885e079f1c5985bf276dee8dc15faf2ad3d3b",
+      "size": 7425
+    },
+    {
+      "path": "tests/test_cli.py",
+      "sha256": "95f78131121b30d0e5391aceae5d19149019c44d6072f54850bb39df968dbecc",
+      "size": 9941
+    }
+  ],
+  "source_tree_sha256": "131d63d1398554164cfd56a7b285af7e5f7de44ae32dc5b6d0bce6240f3e49dc",
+  "tests": [
+    "packaging_stage_project_package",
+    "packaging_stage_portable_package",
+    "project_resource_catalog",
+    "project_resource_desktop",
+    "project_cli"
+  ]
+}

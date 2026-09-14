@@ -375,6 +375,14 @@
     },
     {
       "category": "docs",
+      "path": "docs/requirements/evidence/apx-spec-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/apx-spec-002.json"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/evidence/apx-sym-001.json"
     },
     {
@@ -399,6 +407,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/requirements/evidence/apx-ui-003.json"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/evidence/apx-wf-001.json"
     },
     {
@@ -411,11 +423,83 @@
     },
     {
       "category": "docs",
+      "path": "docs/requirements/evidence/arch-3d-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/arch-edit-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/arch-mod-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/arch-mod-002.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/arch-mod-003.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/arch-mod-004.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/arch-mod-005.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/arch-mod-006.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/arch-mod-007.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/arch-mod-008.json"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/evidence/arch-mod-009.json"
     },
     {
       "category": "docs",
+      "path": "docs/requirements/evidence/arch-mod-010.json"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/evidence/arch-mod-011.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/arch-output-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/arch-rel-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/arch-sch-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/arch-sch-002.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/arch-sheet-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/arch-view-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/arch-view-002.json"
     },
     {
       "category": "docs",
@@ -564,6 +648,26 @@
     {
       "category": "docs",
       "path": "docs/requirements/evidence/rec-004.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/ux-access-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/ux-input-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/ux-work-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/ux-work-002.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/ux-work-003.json"
     },
     {
       "category": "docs",
