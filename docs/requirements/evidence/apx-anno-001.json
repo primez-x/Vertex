@@ -1,0 +1,135 @@
+{
+  "acceptance": "Editable annotation templates and instances preserve placement, font, text height, visibility, and provenance through save and exchange.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "annotation_catalog",
+          "status": "passed"
+        },
+        {
+          "name": "annotation_entity_codec",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        },
+        {
+          "name": "dxf_project_exchange",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "annotation_catalog",
+          "status": "passed"
+        },
+        {
+          "name": "annotation_entity_codec",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        },
+        {
+          "name": "dxf_project_exchange",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers local annotation libraries, instances, and supported exchange. Full Apex label catalog parity and production output qualification remain open.",
+  "requirement_id": "APX-ANNO-001",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "annotation",
+    "template",
+    "visibility",
+    "placement",
+    "font",
+    "text_height",
+    "save",
+    "filter"
+  ],
+  "source_files": [
+    {
+      "path": "include/sketch/annotation_catalog.hpp",
+      "sha256": "75fbbd8326d986bca8f4fe732c07f443bb15f8d08e8f924055db9e2186cbb300",
+      "size": 4050
+    },
+    {
+      "path": "src/core/annotation_catalog.cpp",
+      "sha256": "5fe4a7046d3c483484589036cae96d3c42e8b17f88d3dcdeed97fdb6128bf14b",
+      "size": 31062
+    },
+    {
+      "path": "include/sketch/annotation_entity_codec.hpp",
+      "sha256": "3631310d2158829070dfb9cd275ab280bba63782a9264c45f64e04dc275890da",
+      "size": 679
+    },
+    {
+      "path": "src/core/annotation_entity_codec.cpp",
+      "sha256": "bc9472e7d3f4b344b6efc007e452a5b2c4a1f57d8211f856cc82ef22c8c80c54",
+      "size": 1929
+    },
+    {
+      "path": "tests/annotation_catalog_tests.cpp",
+      "sha256": "883d9a619626a51c9294b738c0e49dac0f5917e45f9346d0b9d5761ee2f418f8",
+      "size": 12315
+    },
+    {
+      "path": "tests/annotation_entity_codec_tests.cpp",
+      "sha256": "b73d9c31e4e89606c6b5dc320743fa316e6f223e63f92cec4a2824d7e4c153ba",
+      "size": 3331
+    },
+    {
+      "path": "tests/desktop_smoke.cpp",
+      "sha256": "3d4ca2bcaf7e0cc91019e52bf599882ecd11061f4e502e272614b694816d5abe",
+      "size": 381257
+    },
+    {
+      "path": "tests/dxf_project_exchange_tests.cpp",
+      "sha256": "e1a862b0f04c09a1f18a189df56170bc2441a6138b7fafdcd983b357c5137c8f",
+      "size": 20646
+    },
+    {
+      "path": "docs/annotation-catalog.md",
+      "sha256": "2146acf1d86ccdb221ed99af41e691ea39243fc7f1cc3f22b4b441536df9a7a0",
+      "size": 6323
+    }
+  ],
+  "source_tree_sha256": "247d7b2262e144e1314be3218448a810a54ef58427c76d61b1f8014ca3792a7f",
+  "tests": [
+    "annotation_catalog",
+    "annotation_entity_codec",
+    "desktop_workflow",
+    "dxf_project_exchange"
+  ]
+}

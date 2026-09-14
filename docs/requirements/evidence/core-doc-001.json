@@ -1,5 +1,5 @@
 {
-  "acceptance": "A mixed command sequence returns byte-equivalent semantic state after undo-all and redo-all, including derived recalculation state.",
+  "acceptance": "A project retains stable document revisions, named revisions, sheets, alternatives, schedules, and export metadata across the desktop workflow.",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -15,15 +15,19 @@
       },
       "tests": [
         {
-          "name": "document_commands",
-          "status": "passed"
-        },
-        {
-          "name": "project_storage",
-          "status": "passed"
-        },
-        {
           "name": "desktop_workflow",
+          "status": "passed"
+        },
+        {
+          "name": "architectural_workflow_contract",
+          "status": "passed"
+        },
+        {
+          "name": "architectural_schedule",
+          "status": "passed"
+        },
+        {
+          "name": "project_resource_desktop",
           "status": "passed"
         }
       ]
@@ -42,38 +46,39 @@
       },
       "tests": [
         {
-          "name": "document_commands",
-          "status": "passed"
-        },
-        {
-          "name": "project_storage",
-          "status": "passed"
-        },
-        {
           "name": "desktop_workflow",
+          "status": "passed"
+        },
+        {
+          "name": "architectural_workflow_contract",
+          "status": "passed"
+        },
+        {
+          "name": "architectural_schedule",
+          "status": "passed"
+        },
+        {
+          "name": "project_resource_desktop",
           "status": "passed"
         }
       ]
     }
   ],
-  "qualification_boundary": "This evidence covers typed history for classification, calibration, geometry, annotation, architectural, compound, and persisted edits in Debug and Release. Complete mixed-command crash-recovery replay and production qualification remain open.",
-  "requirement_id": "APX-EDIT-005",
+  "qualification_boundary": "This evidence covers shared-document revision and presentation resources in Debug and Release. Native Apex project compatibility, physical output, and production qualification remain open.",
+  "requirement_id": "CORE-DOC-001",
   "result": "pass",
   "schema_version": 1,
   "source_anchors": [
-    "undo",
-    "redo",
-    "classification",
-    "calibration",
-    "compound",
-    "revision"
+    "Document",
+    "revision",
+    "stable",
+    "NameRevision",
+    "schedule",
+    "sheet",
+    "alternative",
+    "export"
   ],
   "source_files": [
-    {
-      "path": "include/sketch/document.hpp",
-      "sha256": "dac3c1759ac652c2d8e0840bb3603eb5e8d8d6feab1dc478bf8c194852c688e9",
-      "size": 9155
-    },
     {
       "path": "src/core/document.cpp",
       "sha256": "0d3a341f1171975a7389c4d4bbad4e0abae4a4f8c7b3c44924e0c3b4d4563a0a",
@@ -85,19 +90,14 @@
       "size": 1240133
     },
     {
-      "path": "tests/document_tests.cpp",
-      "sha256": "37b82cd96ea5c47fe1e3f2ca62ffb939fb97109e7d73b5717e2137f23768bae6",
-      "size": 57490
+      "path": "include/sketch/desktop/main_window.hpp",
+      "sha256": "0acf0194cb15c22dda4f09e2415af17dc115b3a374fe2bec22cf4ff07806b92b",
+      "size": 34261
     },
     {
       "path": "tests/desktop_smoke.cpp",
       "sha256": "3d4ca2bcaf7e0cc91019e52bf599882ecd11061f4e502e272614b694816d5abe",
       "size": 381257
-    },
-    {
-      "path": "tests/project_store_tests.cpp",
-      "sha256": "0173b50073129527b592ffcef579ccaa30b4376b599774e445087cc08cf8143d",
-      "size": 82418
     },
     {
       "path": "docs/desktop-workflow.md",
@@ -107,8 +107,9 @@
   ],
   "source_tree_sha256": "247d7b2262e144e1314be3218448a810a54ef58427c76d61b1f8014ca3792a7f",
   "tests": [
-    "document_commands",
-    "project_storage",
-    "desktop_workflow"
+    "desktop_workflow",
+    "architectural_workflow_contract",
+    "architectural_schedule",
+    "project_resource_desktop"
   ]
 }

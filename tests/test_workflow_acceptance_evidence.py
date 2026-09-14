@@ -71,6 +71,10 @@ class WorkflowAcceptanceEvidenceTests(unittest.TestCase):
                 "APX-KEY-002", "APX-KEY-003",
                 "APX-EDIT-001", "APX-EDIT-002", "APX-EDIT-003", "APX-EDIT-005",
                 "APX-AREA-001", "APX-AREA-002", "APX-AREA-003", "APX-AREA-004",
+                "CORE-SCOPE-002", "CORE-DOC-001", "CORE-DOC-002", "CORE-DOC-007", "CORE-DOC-010",
+                "COMP-GEO-001", "COMP-GEO-002", "COMP-IO-001", "COMP-IO-002", "COMP-IO-003",
+                "APX-WF-001", "APX-WF-002", "APX-WF-003", "APX-KEY-001", "APX-CURVE-001",
+                "APX-ANNO-001", "APX-ANNO-002", "APX-ANNO-003", "APX-SYM-001", "APX-TRACE-001",
             }.issubset(set(evidence)))
             for requirement_id, record in evidence.items():
                 self.assertEqual(record["result"], "pass")

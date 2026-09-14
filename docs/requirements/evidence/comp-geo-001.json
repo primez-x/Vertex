@@ -1,0 +1,149 @@
+{
+  "acceptance": "Architectural slabs and building objects retain analytical solids with holes, native projections, and schedule quantities derived from one canonical geometry.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "slab_semantics",
+          "status": "passed"
+        },
+        {
+          "name": "architecture",
+          "status": "passed"
+        },
+        {
+          "name": "architectural_schedule",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "slab_semantics",
+          "status": "passed"
+        },
+        {
+          "name": "architecture",
+          "status": "passed"
+        },
+        {
+          "name": "architectural_schedule",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers canonical solid and quantity derivation in Debug and Release. Independent geometric reference parity and production CAD qualification remain open.",
+  "requirement_id": "COMP-GEO-001",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "slab",
+    "holes",
+    "solid",
+    "projection",
+    "native",
+    "schedule",
+    "volume"
+  ],
+  "source_files": [
+    {
+      "path": "include/sketch/slab_semantics.hpp",
+      "sha256": "9f7fc2dd953010965c7ed75b5a7675c83b92fccd549e56c378ffdefa4629f7dd",
+      "size": 968
+    },
+    {
+      "path": "src/core/slab_semantics.cpp",
+      "sha256": "a3c4568826d8dfeaa587efb408f85adaa7b003bf54f2a46fc80f4b9f62068070",
+      "size": 6113
+    },
+    {
+      "path": "src/core/document.cpp",
+      "sha256": "0d3a341f1171975a7389c4d4bbad4e0abae4a4f8c7b3c44924e0c3b4d4563a0a",
+      "size": 110624
+    },
+    {
+      "path": "src/architecture/architecture.cpp",
+      "sha256": "b3daf993f54593fba9d10d8fe8a1fa09c838efeb0bab89572bd84bf3d043af1f",
+      "size": 38852
+    },
+    {
+      "path": "src/architecture/document_solid.cpp",
+      "sha256": "fc6efbcd099d767c1ebc7bd316117a1ddb4bd3e21187300883a193b461d2e379",
+      "size": 11243
+    },
+    {
+      "path": "src/architecture/architectural_schedule.cpp",
+      "sha256": "b3358d21127863b5536ce18cafb9bebbf363843c415a4a775540abe4fccc9e0c",
+      "size": 40539
+    },
+    {
+      "path": "src/desktop/main_window.cpp",
+      "sha256": "944a00fc2959043c1f5b3b2ebfa50f287421a0338ee6908d6e926bf429f32223",
+      "size": 1240133
+    },
+    {
+      "path": "tests/slab_semantics_tests.cpp",
+      "sha256": "d80a0035ee7849fa312229e6ab331a8421e0709366f69656d82fa379adb314c1",
+      "size": 2862
+    },
+    {
+      "path": "tests/architecture_tests.cpp",
+      "sha256": "3298f0e58e91d3b11084c74c3c715bee4e76cf55e03b0148ab60bb0c733f28da",
+      "size": 7608
+    },
+    {
+      "path": "tests/architectural_schedule_tests.cpp",
+      "sha256": "4288419266482d4016fb241128b8e50b9d39c75b1a41cef0a1daa463aeb68b4c",
+      "size": 24928
+    },
+    {
+      "path": "tests/desktop_smoke.cpp",
+      "sha256": "3d4ca2bcaf7e0cc91019e52bf599882ecd11061f4e502e272614b694816d5abe",
+      "size": 381257
+    },
+    {
+      "path": "docs/project-format.md",
+      "sha256": "396fbfd62b5c7da9701520773efc097753ac2a34666ede9dd41d045e12f8dbb3",
+      "size": 34904
+    }
+  ],
+  "source_tree_sha256": "247d7b2262e144e1314be3218448a810a54ef58427c76d61b1f8014ca3792a7f",
+  "tests": [
+    "slab_semantics",
+    "architecture",
+    "architectural_schedule",
+    "desktop_workflow"
+  ]
+}

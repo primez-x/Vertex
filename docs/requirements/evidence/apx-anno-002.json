@@ -1,5 +1,5 @@
 {
-  "acceptance": "Changing classification or factor produces a visible, attributed calculation revision without altering boundary geometry.",
+  "acceptance": "Boundary dimensions retain analytical references and allow explicit placement, visibility, rotation, scale, curve, and area presentation without storing measurement truth in text.",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -15,7 +15,7 @@
       },
       "tests": [
         {
-          "name": "calculations",
+          "name": "boundary_dimensions",
           "status": "passed"
         },
         {
@@ -38,7 +38,7 @@
       },
       "tests": [
         {
-          "name": "calculations",
+          "name": "boundary_dimensions",
           "status": "passed"
         },
         {
@@ -48,53 +48,47 @@
       ]
     }
   ],
-  "qualification_boundary": "This evidence covers versioned profiles, classifications, rational factors, base/net area, and attributed desktop revisions. Apex standards fixtures and production qualification remain open.",
-  "requirement_id": "APX-AREA-002",
+  "qualification_boundary": "This evidence covers analytical boundary dimension semantics and desktop placement. Native Apex dimension layout and calibrated production print remain open.",
+  "requirement_id": "APX-ANNO-002",
   "result": "pass",
   "schema_version": 1,
   "source_anchors": [
-    "CalculationProfile",
-    "factor",
-    "base_area",
-    "net_area",
-    "classification",
-    "version"
+    "Dimension",
+    "placement",
+    "visibility",
+    "reference",
+    "rotation",
+    "paper",
+    "scale",
+    "curve",
+    "area",
+    "save"
   ],
   "source_files": [
     {
-      "path": "include/sketch/calculations.hpp",
-      "sha256": "5ebac1318b699527931c2602e3be95768d83f2f33aa361718b9cbff6694dff73",
-      "size": 3309
+      "path": "src/core/boundary_dimension.cpp",
+      "sha256": "92c22f443a05a72e6d032a1c426bde2942ac742dcb1822e1024e1bb5688d359b",
+      "size": 25841
     },
     {
-      "path": "src/calculations/calculations.cpp",
-      "sha256": "1b3a166b865189ebbf2e4ae04181514402966ca941d9e4a095b8011db5179879",
-      "size": 8961
+      "path": "tests/boundary_dimension_tests.cpp",
+      "sha256": "17f21d83361e8a233f1852eea9585646af41d581acf523d191c38253194da83d",
+      "size": 27604
     },
     {
-      "path": "src/desktop/main_window.cpp",
-      "sha256": "944a00fc2959043c1f5b3b2ebfa50f287421a0338ee6908d6e926bf429f32223",
-      "size": 1240133
+      "path": "tests/boundary_workflow_tests.cpp",
+      "sha256": "869d597471dd3ca0749de0dbb23b497fb5ed314230b453afb2129dcb62dc11c5",
+      "size": 75556
     },
     {
-      "path": "tests/calculation_tests.cpp",
-      "sha256": "91a76221a734917c71980aef9458a9009442664ae76e066133d07b6572ac841a",
-      "size": 7097
-    },
-    {
-      "path": "tests/desktop_smoke.cpp",
-      "sha256": "3d4ca2bcaf7e0cc91019e52bf599882ecd11061f4e502e272614b694816d5abe",
-      "size": 381257
-    },
-    {
-      "path": "docs/calculations.md",
-      "sha256": "478d8238419008d0909eb4a12dec77aeb1674c82ba664dd884aecc752466b67c",
-      "size": 3065
+      "path": "docs/desktop-workflow.md",
+      "sha256": "3de1796c3b8131e5d0e1abc9dfabaf834e424a3b85622e7b517dc88806630b0d",
+      "size": 39626
     }
   ],
   "source_tree_sha256": "247d7b2262e144e1314be3218448a810a54ef58427c76d61b1f8014ca3792a7f",
   "tests": [
-    "calculations",
+    "boundary_dimensions",
     "desktop_workflow"
   ]
 }

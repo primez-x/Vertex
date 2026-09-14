@@ -1,0 +1,159 @@
+{
+  "acceptance": "Architectural documents persist native solid semantics for slabs, floors, ceilings, and foundations and expose consistent projections and schedules.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "architecture",
+          "status": "passed"
+        },
+        {
+          "name": "slab_semantics",
+          "status": "passed"
+        },
+        {
+          "name": "architectural_schedule",
+          "status": "passed"
+        },
+        {
+          "name": "document_commands",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "architecture",
+          "status": "passed"
+        },
+        {
+          "name": "slab_semantics",
+          "status": "passed"
+        },
+        {
+          "name": "architectural_schedule",
+          "status": "passed"
+        },
+        {
+          "name": "document_commands",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers persisted architectural solids, horizontal element kinds, native projections, and schedule rows. External CAD/native compatibility and production qualification remain open.",
+  "requirement_id": "CORE-DOC-007",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "document_solid",
+    "slab",
+    "floor",
+    "ceiling",
+    "foundation",
+    "projection",
+    "native",
+    "schedule"
+  ],
+  "source_files": [
+    {
+      "path": "include/sketch/architecture.hpp",
+      "sha256": "1f1e3d0fcebc73c12e4fb69b0af2a7db52041b82b02cf36f6e3d2a60339998a3",
+      "size": 3733
+    },
+    {
+      "path": "src/architecture/architecture.cpp",
+      "sha256": "b3daf993f54593fba9d10d8fe8a1fa09c838efeb0bab89572bd84bf3d043af1f",
+      "size": 38852
+    },
+    {
+      "path": "src/architecture/document_solid.cpp",
+      "sha256": "fc6efbcd099d767c1ebc7bd316117a1ddb4bd3e21187300883a193b461d2e379",
+      "size": 11243
+    },
+    {
+      "path": "src/core/document.cpp",
+      "sha256": "0d3a341f1171975a7389c4d4bbad4e0abae4a4f8c7b3c44924e0c3b4d4563a0a",
+      "size": 110624
+    },
+    {
+      "path": "src/core/document_schedule_adapter.cpp",
+      "sha256": "2ec85cd959d79a6766820ee1abea010f79c8b40f437d3f68696c0af0929f0192",
+      "size": 24367
+    },
+    {
+      "path": "src/desktop/main_window.cpp",
+      "sha256": "944a00fc2959043c1f5b3b2ebfa50f287421a0338ee6908d6e926bf429f32223",
+      "size": 1240133
+    },
+    {
+      "path": "tests/architecture_tests.cpp",
+      "sha256": "3298f0e58e91d3b11084c74c3c715bee4e76cf55e03b0148ab60bb0c733f28da",
+      "size": 7608
+    },
+    {
+      "path": "tests/wall_join_tests.cpp",
+      "sha256": "634e063d375b8490948f507d053e0edb35c70c2476ad36179cb2433c8e5f9a83",
+      "size": 5510
+    },
+    {
+      "path": "tests/architectural_schedule_tests.cpp",
+      "sha256": "4288419266482d4016fb241128b8e50b9d39c75b1a41cef0a1daa463aeb68b4c",
+      "size": 24928
+    },
+    {
+      "path": "tests/document_tests.cpp",
+      "sha256": "37b82cd96ea5c47fe1e3f2ca62ffb939fb97109e7d73b5717e2137f23768bae6",
+      "size": 57490
+    },
+    {
+      "path": "tests/desktop_smoke.cpp",
+      "sha256": "3d4ca2bcaf7e0cc91019e52bf599882ecd11061f4e502e272614b694816d5abe",
+      "size": 381257
+    },
+    {
+      "path": "docs/building-objects.md",
+      "sha256": "2f2534c7aaca82c4808101f8379847e2da64570639ea7532e5d601b322ed5b04",
+      "size": 7119
+    }
+  ],
+  "source_tree_sha256": "247d7b2262e144e1314be3218448a810a54ef58427c76d61b1f8014ca3792a7f",
+  "tests": [
+    "architecture",
+    "slab_semantics",
+    "architectural_schedule",
+    "document_commands",
+    "desktop_workflow"
+  ]
+}

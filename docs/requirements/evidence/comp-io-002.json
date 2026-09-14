@@ -1,5 +1,5 @@
 {
-  "acceptance": "The CLI validates a good fixture, rejects malformed or incomplete data with actionable diagnostics, extracts assets, and produces a migration report.",
+  "acceptance": "Each interchange profile declares its capabilities, required resources, loaded module allowlist, and licensing review before use.",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -15,7 +15,7 @@
       },
       "tests": [
         {
-          "name": "project_cli",
+          "name": "interchange_profile",
           "status": "passed"
         }
       ]
@@ -34,43 +34,47 @@
       },
       "tests": [
         {
-          "name": "project_cli",
+          "name": "interchange_profile",
           "status": "passed"
         }
       ]
     }
   ],
-  "qualification_boundary": "This evidence covers the local inspect, validate, extract, and migrate CLI fixture including malformed input and source preservation. It does not certify Apex/native migration fidelity or a production release.",
-  "requirement_id": "CORE-DOC-009",
+  "qualification_boundary": "This evidence covers local profile attestation and module/license policy checks. Independent license approval and clean-machine module verification remain open.",
+  "requirement_id": "COMP-IO-002",
   "result": "pass",
   "schema_version": 1,
   "source_anchors": [
-    "inspect",
-    "validate",
-    "extract",
-    "migrate",
-    "source_preserved",
-    "malformed"
+    "pdf",
+    "PrintSupport",
+    "module_allowlist",
+    "loaded_modules",
+    "license_review"
   ],
   "source_files": [
     {
-      "path": "src/cli/main.cpp",
-      "sha256": "2bc8852db846ba88788a816546a885e079f1c5985bf276dee8dc15faf2ad3d3b",
-      "size": 7425
+      "path": "include/sketch/interchange_profile.hpp",
+      "sha256": "0898837c7efd343a30c8f6ce796b9eefa360c28cc784fc21d7d2f2f09084e472",
+      "size": 2118
     },
     {
-      "path": "tests/test_cli.py",
-      "sha256": "95f78131121b30d0e5391aceae5d19149019c44d6072f54850bb39df968dbecc",
-      "size": 9941
+      "path": "src/core/interchange_profile.cpp",
+      "sha256": "acc9f6d759ea287e0b99dbe63796e98a69283fc3c83f61d3ec0b2912dfea55cf",
+      "size": 7993
     },
     {
-      "path": "docs/project-format.md",
-      "sha256": "396fbfd62b5c7da9701520773efc097753ac2a34666ede9dd41d045e12f8dbb3",
-      "size": 34904
+      "path": "tests/interchange_profile_tests.cpp",
+      "sha256": "74b3ce8ba66f79cfea9d96ce2259e0ff5373d9d216341caa9a644c9a3563730c",
+      "size": 5244
+    },
+    {
+      "path": "docs/interchange-profiles.md",
+      "sha256": "646919a6a31e03d34292639c85bc80df08386e60766f1a59f231bd24461b4e88",
+      "size": 13814
     }
   ],
   "source_tree_sha256": "247d7b2262e144e1314be3218448a810a54ef58427c76d61b1f8014ca3792a7f",
   "tests": [
-    "project_cli"
+    "interchange_profile"
   ]
 }

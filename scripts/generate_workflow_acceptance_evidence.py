@@ -812,6 +812,643 @@ WORKFLOW_RULES.update({
             "fixtures and production certification remain open."
         ),
     },
+    "CORE-SCOPE-002": {
+        "acceptance": (
+            "Measurement and Architectural workspaces expose distinct task surfaces while editing "
+            "one shared project and document model."
+        ),
+        "sources": (
+            "src/desktop/main_window.cpp",
+            "tests/desktop_smoke.cpp",
+            "docs/workspace-ui.md",
+        ),
+        "anchors": (
+            "Measurement",
+            "Architectural",
+            "shared",
+            "workspace",
+            "overview",
+            "grid",
+            "snap",
+        ),
+        "tests": ("desktop_workflow", "workspace_navigation"),
+        "qualification_boundary": (
+            "This evidence covers the two workspace surfaces, shared document binding, and local "
+            "navigation controls on the development host. Clean-machine input and production UI "
+            "qualification remain open."
+        ),
+    },
+    "CORE-DOC-001": {
+        "acceptance": (
+            "A project retains stable document revisions, named revisions, sheets, alternatives, "
+            "schedules, and export metadata across the desktop workflow."
+        ),
+        "sources": (
+            "src/core/document.cpp",
+            "src/desktop/main_window.cpp",
+            "include/sketch/desktop/main_window.hpp",
+            "tests/desktop_smoke.cpp",
+            "docs/desktop-workflow.md",
+        ),
+        "anchors": (
+            "Document",
+            "revision",
+            "stable",
+            "NameRevision",
+            "schedule",
+            "sheet",
+            "alternative",
+            "export",
+        ),
+        "tests": (
+            "desktop_workflow",
+            "architectural_workflow_contract",
+            "architectural_schedule",
+            "project_resource_desktop",
+        ),
+        "qualification_boundary": (
+            "This evidence covers shared-document revision and presentation resources in Debug and "
+            "Release. Native Apex project compatibility, physical output, and production qualification "
+            "remain open."
+        ),
+    },
+    "CORE-DOC-002": {
+        "acceptance": (
+            "Typed relationships keep measurement, room, and wall references distinct, support "
+            "freeze/disconnect and controlled propagation, and reject ambiguity or cycles."
+        ),
+        "sources": (
+            "include/sketch/typed_relationships.hpp",
+            "src/core/typed_relationships.cpp",
+            "tests/typed_relationships_tests.cpp",
+            "docs/typed-relationships.md",
+            "include/sketch/room_relationship_geometry.hpp",
+            "src/core/room_relationship_geometry.cpp",
+            "tests/room_relationship_geometry_tests.cpp",
+            "include/sketch/room_relationship_geometry_commit.hpp",
+            "src/core/room_relationship_geometry_commit.cpp",
+            "tests/room_relationship_geometry_commit_tests.cpp",
+            "docs/room-relationships.md",
+        ),
+        "anchors": (
+            "wall_derived",
+            "room_boundary",
+            "appraisal_measurement_boundary",
+            "independent",
+            "freeze",
+            "disconnect",
+            "cycle",
+            "ambiguous",
+        ),
+        "tests": (
+            "typed_relationships",
+            "room_relationships",
+            "room_relationship_geometry",
+            "room_relationship_geometry_commit",
+        ),
+        "qualification_boundary": (
+            "This evidence covers typed relationship graph validation, controlled propagation, and "
+            "independence semantics. Native Apex relationship behavior and production qualification "
+            "remain open."
+        ),
+    },
+    "CORE-DOC-007": {
+        "acceptance": (
+            "Architectural documents persist native solid semantics for slabs, floors, ceilings, and "
+            "foundations and expose consistent projections and schedules."
+        ),
+        "sources": (
+            "include/sketch/architecture.hpp",
+            "src/architecture/architecture.cpp",
+            "src/architecture/document_solid.cpp",
+            "src/core/document.cpp",
+            "src/core/document_schedule_adapter.cpp",
+            "src/desktop/main_window.cpp",
+            "tests/architecture_tests.cpp",
+            "tests/wall_join_tests.cpp",
+            "tests/architectural_schedule_tests.cpp",
+            "tests/document_tests.cpp",
+            "tests/desktop_smoke.cpp",
+            "docs/building-objects.md",
+        ),
+        "anchors": (
+            "document_solid",
+            "slab",
+            "floor",
+            "ceiling",
+            "foundation",
+            "projection",
+            "native",
+            "schedule",
+        ),
+        "tests": (
+            "architecture",
+            "slab_semantics",
+            "architectural_schedule",
+            "document_commands",
+            "desktop_workflow",
+        ),
+        "qualification_boundary": (
+            "This evidence covers persisted architectural solids, horizontal element kinds, native "
+            "projections, and schedule rows. External CAD/native compatibility and production "
+            "qualification remain open."
+        ),
+    },
+    "CORE-DOC-010": {
+        "acceptance": (
+            "Integration adapters declare versioned capabilities, provenance, and licensing metadata "
+            "and resolve deterministically or fail closed."
+        ),
+        "sources": (
+            "include/sketch/integration_adapter.hpp",
+            "src/core/integration_adapter.cpp",
+            "tests/integration_adapter_tests.cpp",
+            "docs/integration-adapters.md",
+        ),
+        "anchors": (
+            "IntegrationAdapterDefinition",
+            "IntegrationAdapterRegistry",
+            "capability",
+            "api_version",
+            "format_version",
+            "provenance",
+            "license",
+            "resolve",
+        ),
+        "tests": ("integration_adapter",),
+        "qualification_boundary": (
+            "This evidence covers deterministic local adapter metadata and capability resolution. "
+            "Apex/native integrations, legal review, and production qualification remain open."
+        ),
+    },
+    "COMP-GEO-001": {
+        "acceptance": (
+            "Architectural slabs and building objects retain analytical solids with holes, native "
+            "projections, and schedule quantities derived from one canonical geometry."
+        ),
+        "sources": (
+            "include/sketch/slab_semantics.hpp",
+            "src/core/slab_semantics.cpp",
+            "src/core/document.cpp",
+            "src/architecture/architecture.cpp",
+            "src/architecture/document_solid.cpp",
+            "src/architecture/architectural_schedule.cpp",
+            "src/desktop/main_window.cpp",
+            "tests/slab_semantics_tests.cpp",
+            "tests/architecture_tests.cpp",
+            "tests/architectural_schedule_tests.cpp",
+            "tests/desktop_smoke.cpp",
+            "docs/project-format.md",
+        ),
+        "anchors": (
+            "slab",
+            "holes",
+            "solid",
+            "projection",
+            "native",
+            "schedule",
+            "volume",
+        ),
+        "tests": ("slab_semantics", "architecture", "architectural_schedule", "desktop_workflow"),
+        "qualification_boundary": (
+            "This evidence covers canonical solid and quantity derivation in Debug and Release. "
+            "Independent geometric reference parity and production CAD qualification remain open."
+        ),
+    },
+    "COMP-GEO-002": {
+        "acceptance": (
+            "The constraint solver reports degrees of freedom, redundancy, and conflicts with stable "
+            "diagnostics while preserving the documented PlaneGCS/Eigen integration boundary."
+        ),
+        "sources": (
+            "include/sketch/constraints.hpp",
+            "src/core/constraints.cpp",
+            "tests/constraints_tests.cpp",
+            "tests/constraint_integrity_tests.cpp",
+            "cmake/PlaneGCS.cmake",
+            "docs/constraint-authoring.md",
+        ),
+        "anchors": (
+            "PlaneGCS",
+            "Eigen",
+            "degrees_of_freedom",
+            "redundant",
+            "conflict",
+            "constraint",
+        ),
+        "tests": ("constraints", "constraint_integrity", "constraint_scaling"),
+        "qualification_boundary": (
+            "This evidence covers the bounded local constraint solver and deterministic diagnostics. "
+            "Full architectural constraint parity and production qualification remain open."
+        ),
+    },
+    "COMP-IO-001": {
+        "acceptance": (
+            "DXF and IFC project exchanges run through isolated local adapters, preserve supported "
+            "content, and report unsupported or failed reconstruction explicitly."
+        ),
+        "sources": (
+            "include/sketch/interchange_profile.hpp",
+            "src/core/interchange_profile.cpp",
+            "tests/interchange_profile_tests.cpp",
+            "include/sketch/dxf_project_exchange.hpp",
+            "src/core/dxf_project_exchange.cpp",
+            "tests/dxf_project_exchange_tests.cpp",
+            "tests/dxf_desktop_workflow_tests.cpp",
+            "include/sketch/ifc_project_exchange.hpp",
+            "src/core/ifc_project_exchange.cpp",
+            "tests/ifc_project_exchange_tests.cpp",
+            "tests/ifc_desktop_workflow_tests.cpp",
+            "docs/interchange-profiles.md",
+        ),
+        "anchors": (
+            "InterchangeProfile",
+            "isolated",
+            "worker",
+            "failure",
+            "capabilities",
+            "required_resources",
+            "preserve_reference_and_report",
+            "IFC",
+            "DXF",
+        ),
+        "tests": (
+            "interchange_profile",
+            "dxf_project_exchange",
+            "ifc_project_exchange",
+            "dxf_desktop_workflow",
+            "ifc_desktop_workflow",
+        ),
+        "qualification_boundary": (
+            "This evidence covers the bounded local DXF and IFC adapters and desktop workflows. "
+            "Broad native-file fidelity, clean-machine adapter discovery, and production qualification "
+            "remain open."
+        ),
+    },
+    "COMP-IO-002": {
+        "acceptance": (
+            "Each interchange profile declares its capabilities, required resources, loaded module "
+            "allowlist, and licensing review before use."
+        ),
+        "sources": (
+            "include/sketch/interchange_profile.hpp",
+            "src/core/interchange_profile.cpp",
+            "tests/interchange_profile_tests.cpp",
+            "docs/interchange-profiles.md",
+        ),
+        "anchors": (
+            "pdf",
+            "PrintSupport",
+            "module_allowlist",
+            "loaded_modules",
+            "license_review",
+        ),
+        "tests": ("interchange_profile",),
+        "qualification_boundary": (
+            "This evidence covers local profile attestation and module/license policy checks. "
+            "Independent license approval and clean-machine module verification remain open."
+        ),
+    },
+    "COMP-IO-003": {
+        "acceptance": (
+            "Offline georeferencing binds declared PROJ resources, disables network callbacks, and "
+            "validates identity transforms without silently using remote data."
+        ),
+        "sources": (
+            "include/sketch/interchange_profile.hpp",
+            "src/core/interchange_profile.cpp",
+            "tests/interchange_profile_tests.cpp",
+            "include/sketch/georeferencing_runtime.hpp",
+            "src/core/georeferencing_runtime.cpp",
+            "tests/georeferencing_runtime_tests.cpp",
+            "tests/georeferencing_contract_tests.cpp",
+            "docs/interchange-profiles.md",
+        ),
+        "anchors": (
+            "proj_network_disabled",
+            "proj_network_callbacks_disabled",
+            "PROJ_NETWORK",
+            "proj.db",
+            "network_enabled",
+            "identity_transform_validated",
+            "OfflineGeoResources",
+        ),
+        "tests": ("interchange_profile", "georeferencing_runtime", "georeferencing_contract"),
+        "qualification_boundary": (
+            "This evidence covers declared local PROJ resources and network-disabled runtime checks. "
+            "Coordinate-system breadth and production field qualification remain open."
+        ),
+    },
+    "APX-WF-001": {
+        "acceptance": (
+            "Draw First creates a closed classified boundary from geometry, then saves, reopens, and "
+            "prints the same analytical result."
+        ),
+        "sources": (
+            "src/desktop/main_window.cpp",
+            "tests/boundary_workflow_tests.cpp",
+            "tests/desktop_smoke.cpp",
+            "docs/boundary-authoring.md",
+            "docs/desktop-workflow.md",
+        ),
+        "anchors": (
+            "Draw First",
+            "draw_first",
+            "close_chain",
+            "classification",
+            "save",
+            "reopen",
+            "print",
+        ),
+        "tests": ("boundary_workflow", "desktop_workflow"),
+        "qualification_boundary": (
+            "This evidence covers the local Draw First workflow and persisted output path. Physical "
+            "Apex key behavior, native files, and production qualification remain open."
+        ),
+    },
+    "APX-WF-002": {
+        "acceptance": (
+            "Define First accepts a manual ordered chain, assigns classification, closes it, and "
+            "persists the accepted result through the desktop workflow."
+        ),
+        "sources": (
+            "src/core/boundary_authoring_session.cpp",
+            "tests/boundary_authoring_session_tests.cpp",
+            "tests/boundary_workflow_tests.cpp",
+            "docs/boundary-authoring.md",
+        ),
+        "anchors": (
+            "Define First",
+            "define_first",
+            "set_classification",
+            "manual",
+            "close_chain",
+            "accepted_chains",
+            "save",
+        ),
+        "tests": ("boundary_authoring_session", "boundary_workflow", "desktop_workflow"),
+        "qualification_boundary": (
+            "This evidence covers deterministic Define First authoring and classification receipts. "
+            "Native Apex keyboard mapping and production qualification remain open."
+        ),
+    },
+    "APX-WF-003": {
+        "acceptance": (
+            "An unfinished authoring session can recover source geometry, assemble a valid boundary, "
+            "and undo or discard the recovery without losing the original document."
+        ),
+        "sources": (
+            "src/core/boundary_authoring_recovery.cpp",
+            "src/core/boundary_active_recovery.cpp",
+            "tests/boundary_authoring_recovery_tests.cpp",
+            "tests/desktop_workspace_recovery_tests.cpp",
+            "src/desktop/main_window.cpp",
+            "tests/desktop_smoke.cpp",
+            "docs/desktop-workflow.md",
+        ),
+        "anchors": (
+            "recovery",
+            "unfinished",
+            "assemble_boundary_from_segments",
+            "source geometry",
+            "undo",
+        ),
+        "tests": ("boundary_authoring_recovery", "desktop_workspace_recovery", "desktop_workflow"),
+        "qualification_boundary": (
+            "This evidence covers local recovery candidates and undoable desktop admission. Crash-loss "
+            "qualification and production recovery certification remain open."
+        ),
+    },
+    "APX-KEY-001": {
+        "acceptance": (
+            "Keyboard-first distance and direction entry commits valid values, supports focus and "
+            "cancel behavior, and leaves invalid entries recoverable."
+        ),
+        "sources": (
+            "src/desktop/boundary_input_dialog.cpp",
+            "tests/boundary_input_dialog_tests.cpp",
+            "src/desktop/main_window.cpp",
+            "tests/desktop_smoke.cpp",
+            "docs/boundary-authoring.md",
+        ),
+        "anchors": (
+            "QLineEdit",
+            "Escape",
+            "Tab",
+            "focus",
+            "distance",
+            "direction",
+            "commit",
+            "cancel",
+        ),
+        "tests": ("boundary_input_dialog", "desktop_workflow"),
+        "qualification_boundary": (
+            "This evidence covers local keyboard dialog semantics and deterministic commit/cancel "
+            "behavior. Physical keypad/keyboard parity and production qualification remain open."
+        ),
+    },
+    "APX-CURVE-001": {
+        "acceptance": (
+            "Chord, arc-length, height, angle, and tangent curve entries produce true analytical arcs "
+            "whose sweep and perimeter survive edit and save/reopen."
+        ),
+        "sources": (
+            "src/core/geometry.cpp",
+            "src/core/boundary_authoring_session.cpp",
+            "tests/curve_construction_tests.cpp",
+            "tests/boundary_authoring_session_tests.cpp",
+            "tests/calculation_tests.cpp",
+            "src/desktop/main_window.cpp",
+            "tests/desktop_smoke.cpp",
+            "docs/boundary-authoring.md",
+            "docs/desktop-workflow.md",
+        ),
+        "anchors": (
+            "arc_from_chord_angle",
+            "arc_from_chord_arc_length",
+            "arc_from_chord_height",
+            "arc_from_start_tangent",
+            "curve_input",
+            "sweep",
+            "perimeter",
+            "save",
+        ),
+        "tests": ("curve_construction", "boundary_authoring_session", "calculations", "desktop_workflow"),
+        "qualification_boundary": (
+            "This evidence covers analytical curve construction and local persistence. Native Apex "
+            "curve fixtures, field input, and production qualification remain open."
+        ),
+    },
+    "APX-ANNO-001": {
+        "acceptance": (
+            "Editable annotation templates and instances preserve placement, font, text height, "
+            "visibility, and provenance through save and exchange."
+        ),
+        "sources": (
+            "include/sketch/annotation_catalog.hpp",
+            "src/core/annotation_catalog.cpp",
+            "include/sketch/annotation_entity_codec.hpp",
+            "src/core/annotation_entity_codec.cpp",
+            "tests/annotation_catalog_tests.cpp",
+            "tests/annotation_entity_codec_tests.cpp",
+            "tests/desktop_smoke.cpp",
+            "tests/dxf_project_exchange_tests.cpp",
+            "docs/annotation-catalog.md",
+        ),
+        "anchors": (
+            "annotation",
+            "template",
+            "visibility",
+            "placement",
+            "font",
+            "text_height",
+            "save",
+            "filter",
+        ),
+        "tests": ("annotation_catalog", "annotation_entity_codec", "desktop_workflow", "dxf_project_exchange"),
+        "qualification_boundary": (
+            "This evidence covers local annotation libraries, instances, and supported exchange. "
+            "Full Apex label catalog parity and production output qualification remain open."
+        ),
+    },
+    "APX-ANNO-002": {
+        "acceptance": (
+            "Boundary dimensions retain analytical references and allow explicit placement, visibility, "
+            "rotation, scale, curve, and area presentation without storing measurement truth in text."
+        ),
+        "sources": (
+            "src/core/boundary_dimension.cpp",
+            "tests/boundary_dimension_tests.cpp",
+            "tests/boundary_workflow_tests.cpp",
+            "docs/desktop-workflow.md",
+        ),
+        "anchors": (
+            "Dimension",
+            "placement",
+            "visibility",
+            "reference",
+            "rotation",
+            "paper",
+            "scale",
+            "curve",
+            "area",
+            "save",
+        ),
+        "tests": ("boundary_dimensions", "desktop_workflow"),
+        "qualification_boundary": (
+            "This evidence covers analytical boundary dimension semantics and desktop placement. "
+            "Native Apex dimension layout and calibrated production print remain open."
+        ),
+    },
+    "APX-ANNO-003": {
+        "acceptance": (
+            "Annotation styles preserve text height, stroke/fill colors, fill patterns, visibility, "
+            "and target binding across instance edits and serialization."
+        ),
+        "sources": (
+            "include/sketch/annotation_catalog.hpp",
+            "src/core/annotation_catalog.cpp",
+            "include/sketch/annotation_entity_codec.hpp",
+            "src/core/annotation_entity_codec.cpp",
+            "tests/annotation_catalog_tests.cpp",
+            "tests/annotation_entity_codec_tests.cpp",
+            "docs/annotation-catalog.md",
+        ),
+        "anchors": (
+            "style",
+            "fill",
+            "visibility",
+            "stroke",
+            "text_height",
+            "color",
+            "target",
+        ),
+        "tests": ("annotation_catalog", "annotation_entity_codec", "desktop_workflow"),
+        "qualification_boundary": (
+            "This evidence covers portable local annotation presentation state. Font availability, "
+            "native Apex style parity, and production rendering qualification remain open."
+        ),
+    },
+    "APX-SYM-001": {
+        "acceptance": (
+            "The local symbol catalog contains at least 468 scaled residential and light-commercial "
+            "entries with deterministic previews, filtering, resizing, rotation, and output metadata."
+        ),
+        "sources": (
+            "include/sketch/annotation_catalog.hpp",
+            "src/core/annotation_catalog.cpp",
+            "src/cli/main.cpp",
+            "include/sketch/annotation_entity_codec.hpp",
+            "src/core/annotation_entity_codec.cpp",
+            "tests/annotation_catalog_tests.cpp",
+            "tests/test_cli.py",
+            "tests/annotation_entity_codec_tests.cpp",
+            "tests/dxf_project_exchange_tests.cpp",
+            "scripts/validate_symbol_catalog.py",
+            "tests/test_symbol_catalog_manifest.py",
+            "docs/annotation-catalog.md",
+        ),
+        "anchors": (
+            "468",
+            "scale",
+            "plumbing",
+            "furniture",
+            "commercial",
+            "preview",
+            "catalog_revision",
+            "resize",
+            "rotation",
+            "symbols",
+        ),
+        "tests": (
+            "annotation_catalog",
+            "annotation_entity_codec",
+            "dxf_project_exchange",
+            "project_cli",
+            "packaging_symbol_catalog_manifest",
+            "desktop_workflow",
+        ),
+        "qualification_boundary": (
+            "This evidence covers the deterministic local symbol library and manifest checks. Final "
+            "print/export legibility and complete Apex catalog certification remain open."
+        ),
+    },
+    "APX-TRACE-001": {
+        "acceptance": (
+            "PDF and raster references are imported through the bounded local worker, preserve source "
+            "assets and pages, and provide validated previews for tracing."
+        ),
+        "sources": (
+            "include/sketch/reference_asset.hpp",
+            "src/core/reference_asset.cpp",
+            "src/desktop/reference_import.hpp",
+            "src/desktop/reference_import.cpp",
+            "src/desktop/reference_import_worker.cpp",
+            "tests/reference_asset_tests.cpp",
+            "tests/reference_import_tests.cpp",
+            "tests/test_reference_import_boundary.py",
+            "docs/import-worker-security.md",
+            "docs/reference-assets.md",
+        ),
+        "anchors": (
+            "PDF",
+            "PNG",
+            "JPEG",
+            "BMP",
+            "TIFF",
+            "source_preserved",
+            "page",
+            "preview",
+            "asset",
+            "WIC",
+        ),
+        "tests": ("reference_assets", "reference_import", "reference_import_boundary", "desktop_workflow"),
+        "qualification_boundary": (
+            "This evidence covers bounded local PDF/raster import, page handling, source preservation, "
+            "and worker validation. Full tracing parity, clean-machine codecs, and production "
+            "qualification remain open."
+        ),
+    },
 })
 
 

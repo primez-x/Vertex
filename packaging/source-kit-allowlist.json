@@ -295,6 +295,18 @@
     },
     {
       "category": "docs",
+      "path": "docs/requirements/evidence/apx-anno-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/apx-anno-002.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/apx-anno-003.json"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/evidence/apx-area-001.json"
     },
     {
@@ -308,6 +320,10 @@
     {
       "category": "docs",
       "path": "docs/requirements/evidence/apx-area-004.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/apx-curve-001.json"
     },
     {
       "category": "docs",
@@ -327,6 +343,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/requirements/evidence/apx-key-001.json"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/evidence/apx-key-002.json"
     },
     {
@@ -339,11 +359,59 @@
     },
     {
       "category": "docs",
+      "path": "docs/requirements/evidence/apx-sym-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/apx-trace-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/apx-wf-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/apx-wf-002.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/apx-wf-003.json"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/evidence/arch-mod-009.json"
     },
     {
       "category": "docs",
       "path": "docs/requirements/evidence/arch-mod-011.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/comp-geo-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/comp-geo-002.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/comp-io-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/comp-io-002.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/comp-io-003.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/core-doc-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/core-doc-002.json"
     },
     {
       "category": "docs",
@@ -363,11 +431,23 @@
     },
     {
       "category": "docs",
+      "path": "docs/requirements/evidence/core-doc-007.json"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/evidence/core-doc-008.json"
     },
     {
       "category": "docs",
       "path": "docs/requirements/evidence/core-doc-009.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/core-doc-010.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/core-scope-002.json"
     },
     {
       "category": "docs",

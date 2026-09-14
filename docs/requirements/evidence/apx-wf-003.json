@@ -1,5 +1,5 @@
 {
-  "acceptance": "Keyboard and pointer fixtures show each behavior, expose the resulting constraint or closure, and reopen without drift.",
+  "acceptance": "An unfinished authoring session can recover source geometry, assemble a valid boundary, and undo or discard the recovery without losing the original document.",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -15,11 +15,11 @@
       },
       "tests": [
         {
-          "name": "geometry_operations",
+          "name": "boundary_authoring_recovery",
           "status": "passed"
         },
         {
-          "name": "boundary_canvas",
+          "name": "desktop_workspace_recovery",
           "status": "passed"
         },
         {
@@ -42,11 +42,11 @@
       },
       "tests": [
         {
-          "name": "geometry_operations",
+          "name": "boundary_authoring_recovery",
           "status": "passed"
         },
         {
-          "name": "boundary_canvas",
+          "name": "desktop_workspace_recovery",
           "status": "passed"
         },
         {
@@ -56,45 +56,37 @@
       ]
     }
   ],
-  "qualification_boundary": "This evidence covers analytical alignment/snap, point jumping, exact closure, bay-window completion, pointer rendering, and desktop history. Physical Apex key mapping and native compatibility fixtures remain open.",
-  "requirement_id": "GEO-BASE-004",
+  "qualification_boundary": "This evidence covers local recovery candidates and undoable desktop admission. Crash-loss qualification and production recovery certification remain open.",
+  "requirement_id": "APX-WF-003",
   "result": "pass",
   "schema_version": 1,
   "source_anchors": [
-    "jump_to_boundary_vertex",
-    "automatically_close_boundary",
-    "complete_bay_window",
-    "snapped",
-    "setSnapEnabled",
-    "Auto Close",
-    "Complete bay window",
-    "save/reopen"
+    "recovery",
+    "unfinished",
+    "assemble_boundary_from_segments",
+    "source geometry",
+    "undo"
   ],
   "source_files": [
     {
-      "path": "include/sketch/geometry_operations.hpp",
-      "sha256": "5c5ed63aff4267ef6e95c92e640dd2f3c1f6ab380b55f0a3d71c66ab152845ec",
-      "size": 2858
+      "path": "src/core/boundary_authoring_recovery.cpp",
+      "sha256": "cb2939e416cd99190392f7fdca40411bcad696982fece832e6d8d77ecb9568de",
+      "size": 54634
     },
     {
-      "path": "src/core/geometry_operations.cpp",
-      "sha256": "eb511faf8a08b8181e1cb8b9e781de1b97d49086b82d8f629b4c83e6c8ca0a17",
-      "size": 20222
+      "path": "src/core/boundary_active_recovery.cpp",
+      "sha256": "62a431acd5b23210d6abd0adc0a7e7b53e598385ff78071ee40400e1f7230829",
+      "size": 5689
     },
     {
-      "path": "tests/geometry_operations_tests.cpp",
-      "sha256": "71d08b875cfeb8df5d0027b905970887bec2ebfeeb428407d6daa462f730bb5c",
-      "size": 10230
+      "path": "tests/boundary_authoring_recovery_tests.cpp",
+      "sha256": "8266867f747c1337dfcfbe57f085ae277373dcd9a6a065d9ce9177d572dc3d11",
+      "size": 38113
     },
     {
-      "path": "tests/boundary_canvas_tests.cpp",
-      "sha256": "10d26626c1f8cbf18c39d98d570cee2f6fbb2a9d667a92b4d2500167f94692f6",
-      "size": 41909
-    },
-    {
-      "path": "src/desktop/plan_canvas.cpp",
-      "sha256": "8200a8c4e6d753e12d00253b9baed280360b6e1cf5ec42a752a45f2784b2fa47",
-      "size": 62610
+      "path": "tests/desktop_workspace_recovery_tests.cpp",
+      "sha256": "41991b06c2fdeea609c7147a7d1fa47fcc3577b7232da9d99e96d1c621154de6",
+      "size": 29373
     },
     {
       "path": "src/desktop/main_window.cpp",
@@ -107,15 +99,15 @@
       "size": 381257
     },
     {
-      "path": "docs/geometry-operations.md",
-      "sha256": "f5a331ac8f38b46296b042f0ad60d468946ade29a8825d331c664d31b39ef9be",
-      "size": 7266
+      "path": "docs/desktop-workflow.md",
+      "sha256": "3de1796c3b8131e5d0e1abc9dfabaf834e424a3b85622e7b517dc88806630b0d",
+      "size": 39626
     }
   ],
   "source_tree_sha256": "247d7b2262e144e1314be3218448a810a54ef58427c76d61b1f8014ca3792a7f",
   "tests": [
-    "geometry_operations",
-    "boundary_canvas",
+    "boundary_authoring_recovery",
+    "desktop_workspace_recovery",
     "desktop_workflow"
   ]
 }

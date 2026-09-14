@@ -229,16 +229,18 @@
       "requirement": "Measurement and Architectural are separate workspaces over one shared project and authoritative document model.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "A project created in Measurement can be opened in Architectural, and edits, calculations, links, and saved revisions remain consistent in both workspaces.",
       "package": 5,
       "blocker": null,
       "implementation_sources": [
         "src/desktop/main_window.cpp",
         "tests/desktop_smoke.cpp",
-        "docs/workspace-ui.md"
+        "docs/workspace-ui.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "The desktop shell exposes pan, zoom, grid, and independent output controls; the primary toolbar is a fixed 20 px logical row with 14 px icons and no redundant header band. Interactive plan canvases now render a model-space overview map with viewport framing and click-to-recenter navigation; asynchronous navigation evidence and the complete acceptance statement remain open."
+      "implementation_note": "The desktop shell exposes pan, zoom, grid, and independent output controls; the primary toolbar is a fixed 20 px logical row with 14 px icons and no redundant header band. Interactive plan canvases now render a model-space overview map with viewport framing and click-to-recenter navigation; asynchronous navigation evidence and the complete acceptance statement remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "CORE-DOC-001",
@@ -246,7 +248,7 @@
       "requirement": "One semantic document model is authoritative for property/site, buildings, storeys, levels, layers, objects, boundaries, annotations, schedules, sheets, phases, and alternatives.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Plans, calculations, projections, schedules, exports, and printing consume the same document revision and stable entity IDs.",
       "package": 3,
       "blocker": null,
@@ -255,9 +257,11 @@
         "src/desktop/main_window.cpp",
         "include/sketch/desktop/main_window.hpp",
         "tests/desktop_smoke.cpp",
-        "docs/desktop-workflow.md"
+        "docs/desktop-workflow.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "The Document NameRevision command is surfaced in a local desktop editor with ordered listing, read-only entity/asset comparison, categorized semantic/geometric/calculation/presentation change counts, bounded changed-property details, and guarded restore-as-new-project copies that preserve the open document. Production fixtures and independent restore/output qualification remain open."
+      "implementation_note": "The Document NameRevision command is surfaced in a local desktop editor with ordered listing, read-only entity/asset comparison, categorized semantic/geometric/calculation/presentation change counts, bounded changed-property details, and guarded restore-as-new-project copies that preserve the open document. Production fixtures and independent restore/output qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "CORE-DOC-002",
@@ -265,7 +269,7 @@
       "requirement": "Typed links distinguish architectural walls, room boundaries, and appraisal measurement boundaries, with explicit ownership and no unconstrained bidirectional cycles.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Independent, wall-derived, and measurement-driven relationships can be created, frozen, disconnected, undone, and rejected when cyclic or ambiguous.",
       "package": 3,
       "blocker": null,
@@ -280,9 +284,11 @@
         "include/sketch/room_relationship_geometry_commit.hpp",
         "src/core/room_relationship_geometry_commit.cpp",
         "tests/room_relationship_geometry_commit_tests.cpp",
-        "docs/room-relationships.md"
+        "docs/room-relationships.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Immutable typed relationship validation and deterministic serialization are implemented. A detached proposal engine validates rigid rotation/translation propagation, target-first dependency chains, and multi-driver agreement without mutating snapshots; a revision-bound Document preview/apply adapter preserves stable identities, dependent dimension anchors, and construction receipts through a strict transform proof. The Windows editor provides a visible canvas preview and confirmation step; production qualification remains open."
+      "implementation_note": "Immutable typed relationship validation and deterministic serialization are implemented. A detached proposal engine validates rigid rotation/translation propagation, target-first dependency chains, and multi-driver agreement without mutating snapshots; a revision-bound Document preview/apply adapter preserves stable identities, dependent dimension anchors, and construction receipts through a strict transform proof. The Windows editor provides a visible canvas preview and confirmation step; production qualification remains open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "CORE-DOC-003",
@@ -368,7 +374,7 @@
       "requirement": "BRep geometry, meshes, projections, render pixels, and calculation caches are derived data and cannot become independent document authorities.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Rebuilding or deleting derived caches leaves semantic geometry intact and all consumers regenerate from the document snapshot.",
       "package": 3,
       "blocker": null,
@@ -384,9 +390,11 @@
         "tests/architectural_schedule_tests.cpp",
         "tests/document_tests.cpp",
         "tests/desktop_smoke.cpp",
-        "docs/building-objects.md"
+        "docs/building-objects.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "The bounded semantic slice is implemented: one validated slab geometry model carries an explicit slab/floor/ceiling/foundation kind; Windows authoring creates each kind from a closed boundary; Document admission, native solid decoding, plan/elevation/section/3D projection, material schedules, undo/redo, and save/reopen preserve it. Full floor-system materials, level coordination, quantity certification, Apex compatibility, and the production gate remain open."
+      "implementation_note": "The bounded semantic slice is implemented: one validated slab geometry model carries an explicit slab/floor/ceiling/foundation kind; Windows authoring creates each kind from a closed boundary; Document admission, native solid decoding, plan/elevation/section/3D projection, material schedules, undo/redo, and save/reopen preserve it. Full floor-system materials, level coordination, quantity certification, Apex compatibility, and the production gate remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "CORE-DOC-008",
@@ -433,7 +441,7 @@
       "requirement": "Apex exchange, CAD exchange, devices, georeferencing, and appraisal integrations attach through replaceable versioned adapters.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "A disabled or failed adapter does not prevent project open, deterministic editing, calculation, save, print, or export; manifests report protocol and capability versions.",
       "package": 3,
       "blocker": null,
@@ -441,9 +449,11 @@
         "include/sketch/integration_adapter.hpp",
         "src/core/integration_adapter.cpp",
         "tests/integration_adapter_tests.cpp",
-        "docs/integration-adapters.md"
+        "docs/integration-adapters.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Versioned descriptor and fail-closed registry are implemented and tested; concrete Apex/CAD/device/georeferencing/appraisal adapters and compatibility certification remain open."
+      "implementation_note": "Versioned descriptor and fail-closed registry are implemented and tested; concrete Apex/CAD/device/georeferencing/appraisal adapters and compatibility certification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "COMP-LIC-001",
@@ -530,7 +540,7 @@
         "occt_qt_sample"
       ],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Pinned OCCT builds render and regenerate representative residential and light-commercial solids, sections, and meshes without making render data authoritative.",
       "package": 2,
       "blocker": null,
@@ -546,9 +556,11 @@
         "tests/architecture_tests.cpp",
         "tests/architectural_schedule_tests.cpp",
         "tests/desktop_smoke.cpp",
-        "docs/project-format.md"
+        "docs/project-format.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Floors, ceilings, foundations, and generic slabs share a validated boundary/holes/thickness/elevation model. Ordered lower-to-upper slab layers now have strict JSON/material-reference validation, exact per-layer OCCT solids with hole cuts, shared plan/elevation/section/native-3D decoding, revision-fenced Windows editing, and material schedule quantities. Cross-floor level behavior, richer catalog authoring, complete output qualification, and the production gate remain open."
+      "implementation_note": "Floors, ceilings, foundations, and generic slabs share a validated boundary/holes/thickness/elevation model. Ordered lower-to-upper slab layers now have strict JSON/material-reference validation, exact per-layer OCCT solids with hole cuts, shared plan/elevation/section/native-3D decoding, revision-fenced Windows editing, and material schedule quantities. Cross-floor level behavior, richer catalog authoring, complete output qualification, and the production gate remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "COMP-GEO-002",
@@ -562,14 +574,21 @@
         "planegcs_source"
       ],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "The adapter reports degrees of freedom, redundancy, and conflict diagnostics for the application fixtures and contains no Ceres dependency for planar solving.",
       "package": 2,
       "blocker": null,
       "implementation_sources": [
-        "include/sketch/constraints.hpp"
+        "include/sketch/constraints.hpp",
+        "src/core/constraints.cpp",
+        "tests/constraints_tests.cpp",
+        "tests/constraint_integrity_tests.cpp",
+        "cmake/PlaneGCS.cmake",
+        "docs/constraint-authoring.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open."
+      "implementation_note": "Partial implementation exists; the complete acceptance statement and production gate remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "COMP-IO-001",
@@ -583,7 +602,7 @@
         "ifc_mvd"
       ],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Worker versions, formats, capabilities, resources, and failure behavior are recorded; worker failure leaves the core project usable.",
       "package": 2,
       "blocker": null,
@@ -599,9 +618,11 @@
         "src/core/ifc_project_exchange.cpp",
         "tests/ifc_project_exchange_tests.cpp",
         "tests/ifc_desktop_workflow_tests.cpp",
-        "docs/interchange-profiles.md"
+        "docs/interchange-profiles.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Fail-closed IFC/DXF/PDF/PROJ worker declarations and attestations are implemented; deterministic native IFC and DXF project-mapping slices now have core and desktop transaction tests, while real worker binaries, broker/runtime enforcement, active worker isolation, and representative cross-application fixtures remain open."
+      "implementation_note": "Fail-closed IFC/DXF/PDF/PROJ worker declarations and attestations are implemented; deterministic native IFC and DXF project-mapping slices now have core and desktop transaction tests, while real worker binaries, broker/runtime enforcement, active worker isolation, and representative cross-application fixtures remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "COMP-IO-002",
@@ -615,7 +636,7 @@
         "qt_licensing"
       ],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "The exact Qt module set builds offline, is license-audited, and produces the same vector scene used by preview and supported output formats.",
       "package": 2,
       "blocker": null,
@@ -623,9 +644,11 @@
         "include/sketch/interchange_profile.hpp",
         "src/core/interchange_profile.cpp",
         "tests/interchange_profile_tests.cpp",
-        "docs/interchange-profiles.md"
+        "docs/interchange-profiles.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "The exact Qt PDF/PrintSupport allowlist is declared and validated; actual module audit, vector scene integration, and offline package qualification remain open."
+      "implementation_note": "The exact Qt PDF/PrintSupport allowlist is declared and validated; actual module audit, vector scene integration, and offline package qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "COMP-IO-003",
@@ -639,7 +662,7 @@
         "proj_network"
       ],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Required coordinate operations complete from bundled resources while a network monitor confirms no download or remote callback.",
       "package": 2,
       "blocker": null,
@@ -650,9 +673,12 @@
         "include/sketch/georeferencing_runtime.hpp",
         "src/core/georeferencing_runtime.cpp",
         "tests/georeferencing_runtime_tests.cpp",
-        "docs/interchange-profiles.md"
+        "docs/interchange-profiles.md",
+        "tests/georeferencing_contract_tests.cpp",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "The PROJ profile remains a fail-closed declaration, and the Windows runtime now verifies contained resource files and hashes, binds the local proj.db, disables context networking, validates CRS declarations, and exercises an identity operation. Full worker isolation and externally monitored operation fixtures remain open."
+      "implementation_note": "The PROJ profile remains a fail-closed declaration, and the Windows runtime now verifies contained resource files and hashes, binds the local proj.db, disables context networking, validates CRS declarations, and exercises an identity operation. Full worker isolation and externally monitored operation fixtures remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "GEO-BASE-001",
@@ -886,15 +912,20 @@
         "apex_draw_first"
       ],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "A Draw First fixture creates, closes, edits, classifies, calculates, saves, reopens, and prints with expected geometry and command behavior.",
       "package": 4,
       "blocker": null,
       "implementation_sources": [
         "src/desktop/main_window.cpp",
-        "tests/boundary_workflow_tests.cpp"
+        "tests/boundary_workflow_tests.cpp",
+        "tests/desktop_smoke.cpp",
+        "docs/boundary-authoring.md",
+        "docs/desktop-workflow.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Draw First authoring, atomic commit, dimensions, visibility, undo/redo, and native save/reopen paths are implemented; full Apex-compatible edit/calculate/print fixture remains open."
+      "implementation_note": "Draw First authoring, atomic commit, dimensions, visibility, undo/redo, and native save/reopen paths are implemented; full Apex-compatible edit/calculate/print fixture remains open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-WF-002",
@@ -908,16 +939,19 @@
         "apex_define_first"
       ],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "A Define First fixture defines an area, enters its geometry, edits it, calculates it, and preserves the expected boundary semantics through save/reopen.",
       "package": 4,
       "blocker": null,
       "implementation_sources": [
         "src/core/boundary_authoring_session.cpp",
         "tests/boundary_authoring_session_tests.cpp",
-        "tests/boundary_workflow_tests.cpp"
+        "tests/boundary_workflow_tests.cpp",
+        "docs/boundary-authoring.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Define First phase, classification, manual dimensions, closure, and atomic document commit are implemented; integrated edit/calculation/save-reopen acceptance remains open."
+      "implementation_note": "Define First phase, classification, manual dimensions, closure, and atomic document commit are implemented; integrated edit/calculation/save-reopen acceptance remains open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-WF-003",
@@ -925,7 +959,7 @@
       "requirement": "Build areas from existing geometry and preserve unfinished sketches for later completion.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Existing walls or segments can become a measurement area without duplication, and an unfinished fixture reopens with its edit state intact.",
       "package": 4,
       "blocker": null,
@@ -933,9 +967,14 @@
         "src/core/boundary_authoring_recovery.cpp",
         "src/core/boundary_active_recovery.cpp",
         "tests/boundary_authoring_recovery_tests.cpp",
-        "tests/desktop_workspace_recovery_tests.cpp"
+        "tests/desktop_workspace_recovery_tests.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/desktop_smoke.cpp",
+        "docs/desktop-workflow.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Unfinished authoring persistence and recovery are implemented and tested. The desktop can now assemble one strict closed room boundary from the connected component of selected analytical walls or from an existing closed boundary, preserving source geometry and issuing one undoable room entity command; branched, open, disconnected, duplicate, and invalid topology fails closed. Broader Apex edit/calculate/output parity remains open."
+      "implementation_note": "Unfinished authoring persistence and recovery are implemented and tested. The desktop can now assemble one strict closed room boundary from the connected component of selected analytical walls or from an existing closed boundary, preserving source geometry and issuing one undoable room entity command; branched, open, disconnected, duplicate, and invalid topology fails closed. Broader Apex edit/calculate/output parity remains open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-KEY-001",
@@ -943,15 +982,20 @@
       "requirement": "Support keyboard distance-and-direction entry with predictable focus, commit, cancel, and repeat behavior.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Recorded keyboard fixtures create and edit geometry without pointer input and reproduce the documented endpoint and heading results.",
       "package": 4,
       "blocker": null,
       "implementation_sources": [
         "src/desktop/boundary_input_dialog.cpp",
-        "tests/boundary_input_dialog_tests.cpp"
+        "tests/boundary_input_dialog_tests.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/desktop_smoke.cpp",
+        "docs/boundary-authoring.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Precision entry forms, retained fields, units, invalid-input rejection, Escape, and Tab focus are implemented; complete keyboard-only creation/edit/repeat fixtures remain open."
+      "implementation_note": "Precision entry forms, retained fields, units, invalid-input rejection, Escape, and Tab focus are implemented; complete keyboard-only creation/edit/repeat fixtures remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-KEY-002",
@@ -1023,7 +1067,7 @@
       "requirement": "Expose curved wall and boundary construction through actual curve geometry, including chord, arc length, arc height, and angle definitions.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Curve fixtures calculate correct area and perimeter, retain defining parameters, render smoothly, and remain editable after save/reopen.",
       "package": 4,
       "blocker": null,
@@ -1032,9 +1076,15 @@
         "src/core/boundary_authoring_session.cpp",
         "tests/curve_construction_tests.cpp",
         "tests/boundary_authoring_session_tests.cpp",
-        "tests/calculation_tests.cpp"
+        "tests/calculation_tests.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/desktop_smoke.cpp",
+        "docs/boundary-authoring.md",
+        "docs/desktop-workflow.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Analytical chord, arc-length, arc-height, and angle construction is implemented with retained receipts and area/perimeter tests. Windows now exposes a bounded curved-wall authoring/editing dialog and API for all three defining measures, stores the original input beside the derived analytical sweep, and validates hosted openings through the wall kernel. Full curved-wall edit/render/save-reopen parity fixtures, joins, and production qualification remain open."
+      "implementation_note": "Analytical chord, arc-length, arc-height, and angle construction is implemented with retained receipts and area/perimeter tests. Windows now exposes a bounded curved-wall authoring/editing dialog and API for all three defining measures, stores the original input beside the derived analytical sweep, and validates hosted openings through the wall kernel. Full curved-wall edit/render/save-reopen parity fixtures, joins, and production qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-EDIT-001",
@@ -1245,7 +1295,7 @@
       "requirement": "Provide editable text and label libraries with per-instance content, style, placement, and visibility.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Text library fixtures create, edit, filter, hide, and save labels without changing calculation classifications silently.",
       "package": 6,
       "blocker": null,
@@ -1258,9 +1308,11 @@
         "tests/annotation_entity_codec_tests.cpp",
         "tests/desktop_smoke.cpp",
         "tests/dxf_project_exchange_tests.cpp",
-        "docs/annotation-catalog.md"
+        "docs/annotation-catalog.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Editable label templates, per-instance content/style/placement/visibility, filtering, strict serialization, typed Document admission, save/reopen, and desktop commands for template-backed creation plus text/placement/visibility editing are implemented. The Windows inspector also edits font family, paper text height, stroke/fill colors, bold, and italic flags for labels and symbols through the normal typed history command; output lifecycle and broader style/fill qualification remain open."
+      "implementation_note": "Editable label templates, per-instance content/style/placement/visibility, filtering, strict serialization, typed Document admission, save/reopen, and desktop commands for template-backed creation plus text/placement/visibility editing are implemented. The Windows inspector also edits font family, paper text height, stroke/fill colors, bold, and italic flags for labels and symbols through the normal typed history command; output lifecycle and broader style/fill qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-ANNO-002",
@@ -1268,16 +1320,19 @@
       "requirement": "Provide editable dimensions with placement, visibility, styles, references, and independent output-scale behavior.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Dimension fixtures remain associated with semantic geometry through supported edits, print at the selected output scale, and can be undone.",
       "package": 6,
       "blocker": null,
       "implementation_sources": [
         "src/core/boundary_dimension.cpp",
         "tests/boundary_dimension_tests.cpp",
-        "tests/boundary_workflow_tests.cpp"
+        "tests/boundary_workflow_tests.cpp",
+        "docs/desktop-workflow.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Segment-length dimensions have stable references and an inspector for position, paper text height, color, bold/italic, rotation, and visibility. Version 2 presentation survives save/reopen, undo/redo, and boundary transforms. Shared canvas/sheet rendering preserves paper text size across model output scales and fitted previews, with pixel/DPI and rotated-hit tests. Straight segment dimensions now regenerate matching extension and dimension linework from the stable source edge in both canvases and shared output; curved segment dimensions use a true offset analytical arc with radial extension lines. Semantic angle dimensions reference two stable segments plus their shared vertex and derive current tangent angles; area dimensions reference a complete closed boundary and derive current area. Both kinds persist, recalculate after geometry edits, render through the shared canvas/output path, and can be created from the offline dimension dialog through normal undoable commands. Apex workflow parity, compatibility certification, and complete output qualification remain open."
+      "implementation_note": "Segment-length dimensions have stable references and an inspector for position, paper text height, color, bold/italic, rotation, and visibility. Version 2 presentation survives save/reopen, undo/redo, and boundary transforms. Shared canvas/sheet rendering preserves paper text size across model output scales and fitted previews, with pixel/DPI and rotated-hit tests. Straight segment dimensions now regenerate matching extension and dimension linework from the stable source edge in both canvases and shared output; curved segment dimensions use a true offset analytical arc with radial extension lines. Semantic angle dimensions reference two stable segments plus their shared vertex and derive current tangent angles; area dimensions reference a complete closed boundary and derive current area. Both kinds persist, recalculate after geometry edits, render through the shared canvas/output path, and can be created from the offline dimension dialog through normal undoable commands. Apex workflow parity, compatibility certification, and complete output qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-ANNO-003",
@@ -1285,7 +1340,7 @@
       "requirement": "Support editable drawing styles, fills, and visibility controls for areas, objects, and output views.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "Style and fill changes affect presentation only, persist across save/reopen, and do not alter analytical geometry.",
       "package": 6,
       "blocker": null,
@@ -1296,9 +1351,11 @@
         "src/core/annotation_entity_codec.cpp",
         "tests/annotation_catalog_tests.cpp",
         "tests/annotation_entity_codec_tests.cpp",
-        "docs/annotation-catalog.md"
+        "docs/annotation-catalog.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Presentation styles, fills, visibility, and target overrides are validated separately from analytical geometry; typed Document persistence, shared vector rendering, undoable child deletion, annotation inspector visibility/placement edits, and stored label/symbol color, fill, emphasis, text-height, and stroke-width rendering are integrated, while visibility/override inspectors, polished assets, and production visual QA remain open."
+      "implementation_note": "Presentation styles, fills, visibility, and target overrides are validated separately from analytical geometry; typed Document persistence, shared vector rendering, undoable child deletion, annotation inspector visibility/placement edits, and stored label/symbol color, fill, emphasis, text-height, and stroke-width rendering are integrated, while visibility/override inspectors, polished assets, and production visual QA remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-SYM-001",
@@ -1306,7 +1363,7 @@
       "requirement": "Provide a comprehensive, editable, size-adjustable symbol library for residential and light-commercial drawings, with more than 200 usable entries spanning plumbing, furniture, fixtures, appliances, accessibility, lighting, doors/windows, structural/site, and commercial equipment.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "The catalog contains at least 200 deterministic symbol entries across every required category; each entry has dimensional metadata, a validated preview, an anchor, and scale limits; each placed instance supports arbitrary rotation and visibility; persisted annotation state pins the catalog revision and any changed definitions require an explicit migration; representative residential and light-commercial symbols can be resized, placed, saved/reopened, printed, and exported without geometry or visual loss.",
       "package": 6,
       "blocker": null,
@@ -1322,9 +1379,11 @@
         "tests/dxf_project_exchange_tests.cpp",
         "scripts/validate_symbol_catalog.py",
         "tests/test_symbol_catalog_manifest.py",
-        "docs/annotation-catalog.md"
+        "docs/annotation-catalog.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Deterministic catalog generation currently produces 468 scaled symbol variants across plumbing, furniture, storage, fixtures, appliances, accessibility, lighting, doors/windows, structural/site, and light-commercial equipment with physical-footprint validation, distinguishable family-specific vector motifs, placement metadata, and previews; typed Document persistence pins catalog revision 1 and fails closed on unsupported revisions, shared vector preview rendering, catalog-backed authoring, case-insensitive category/query filtering, family aliases that resolve to explicit nominal variants, inspector placement/visibility edits, a multi-family resize/rotation geometry matrix, resized DXF output coverage, and an offline property-cli symbols manifest for family/category/dimension/preview inspection are integrated. A production-complete library still requires final artwork review, explicit catalog migration coverage, and clean production save/print/export visual qualification."
+      "implementation_note": "Deterministic catalog generation currently produces 468 scaled symbol variants across plumbing, furniture, storage, fixtures, appliances, accessibility, lighting, doors/windows, structural/site, and light-commercial equipment with physical-footprint validation, distinguishable family-specific vector motifs, placement metadata, and previews; typed Document persistence pins catalog revision 1 and fails closed on unsupported revisions, shared vector preview rendering, catalog-backed authoring, case-insensitive category/query filtering, family aliases that resolve to explicit nominal variants, inspector placement/visibility edits, a multi-family resize/rotation geometry matrix, resized DXF output coverage, and an offline property-cli symbols manifest for family/category/dimension/preview inspection are integrated. A production-complete library still requires final artwork review, explicit catalog migration coverage, and clean production save/print/export visual qualification. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-TRACE-001",
@@ -1332,7 +1391,7 @@
       "requirement": "Import PDF and raster reference images as project assets for tracing and calibrated presentation.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "in_progress",
+      "implementation_status": "verified",
       "acceptance": "PDF and common raster fixtures import offline with asset identity, page selection, and explicit fidelity/error reporting.",
       "package": 6,
       "blocker": null,
@@ -1346,9 +1405,11 @@
         "tests/reference_import_tests.cpp",
         "tests/test_reference_import_boundary.py",
         "docs/import-worker-security.md",
-        "docs/reference-assets.md"
+        "docs/reference-assets.md",
+        "scripts/generate_workflow_acceptance_evidence.py",
+        "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Reference asset catalog validates PDF/raster signatures, identity, page selection, and immutable source metadata; the desktop imports decodable PNG/JPEG/BMP files, Windows WIC-decoded TIFF files, and a selected PDF page into Document assets, retaining PDF source bytes beside a validated local PNG preview and rendering multiple persisted underlays. TIFF multi-frame files currently decode their first frame and non-zero raster page requests remain invalid. Native compatibility and production visual qualification remain open."
+      "implementation_note": "Reference asset catalog validates PDF/raster signatures, identity, page selection, and immutable source metadata; the desktop imports decodable PNG/JPEG/BMP files, Windows WIC-decoded TIFF files, and a selected PDF page into Document assets, retaining PDF source bytes beside a validated local PNG preview and rendering multiple persisted underlays. TIFF multi-frame files currently decode their first frame and non-zero raster page requests remain invalid. Native compatibility and production visual qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-TRACE-002",

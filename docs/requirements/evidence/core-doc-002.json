@@ -1,5 +1,5 @@
 {
-  "acceptance": "A room can relate to, follow, or remain independent from a measurement boundary without silently conflating classifications or geometry.",
+  "acceptance": "Typed relationships keep measurement, room, and wall references distinct, support freeze/disconnect and controlled propagation, and reject ambiguity or cycles.",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -15,6 +15,10 @@
       },
       "tests": [
         {
+          "name": "typed_relationships",
+          "status": "passed"
+        },
+        {
           "name": "room_relationships",
           "status": "passed"
         },
@@ -24,10 +28,6 @@
         },
         {
           "name": "room_relationship_geometry_commit",
-          "status": "passed"
-        },
-        {
-          "name": "desktop_workflow",
           "status": "passed"
         }
       ]
@@ -46,6 +46,10 @@
       },
       "tests": [
         {
+          "name": "typed_relationships",
+          "status": "passed"
+        },
+        {
           "name": "room_relationships",
           "status": "passed"
         },
@@ -56,37 +60,44 @@
         {
           "name": "room_relationship_geometry_commit",
           "status": "passed"
-        },
-        {
-          "name": "desktop_workflow",
-          "status": "passed"
         }
       ]
     }
   ],
-  "qualification_boundary": "This evidence covers deterministic relationship semantics, controlled retargeting, geometry propagation, and the Windows workflow on the development host. It does not certify imported Apex files, physical devices, printing, or the unified release gate.",
-  "requirement_id": "ARCH-MOD-009",
+  "qualification_boundary": "This evidence covers typed relationship graph validation, controlled propagation, and independence semantics. Native Apex relationship behavior and production qualification remain open.",
+  "requirement_id": "CORE-DOC-002",
   "result": "pass",
   "schema_version": 1,
   "source_anchors": [
-    "RoomRelationshipSnapshot",
+    "wall_derived",
     "room_boundary",
     "appraisal_measurement_boundary",
-    "retarget",
-    "propagation",
     "independent",
-    "undo"
+    "freeze",
+    "disconnect",
+    "cycle",
+    "ambiguous"
   ],
   "source_files": [
     {
-      "path": "include/sketch/room_relationships.hpp",
-      "sha256": "c0884cdf880e2bfb4de0826e5ea821ed912979c02e902d7bbcdef8e54c4995ef",
-      "size": 2221
+      "path": "include/sketch/typed_relationships.hpp",
+      "sha256": "402040f02b35d195e2b41517d8ca8bdf882161a9d78771f5bfc0daa0ee8e3149",
+      "size": 2383
     },
     {
-      "path": "src/core/room_relationships.cpp",
-      "sha256": "09f2446d5621ec7c3eb65a0b723859f73ac3a63c3a0cc0a6481a95e37c78ca56",
-      "size": 9709
+      "path": "src/core/typed_relationships.cpp",
+      "sha256": "46c12e182d1acd286e38c20f9440657c00499cd7978f88f2fc6cf5fcca1d6a96",
+      "size": 5748
+    },
+    {
+      "path": "tests/typed_relationships_tests.cpp",
+      "sha256": "eecff53a85fc6257eb54abff4dd44c7bc091091822ab8c4ef0ec0956dcb13a58",
+      "size": 7547
+    },
+    {
+      "path": "docs/typed-relationships.md",
+      "sha256": "821a7f362fdd42cf99cd879ca23f69233461fec4a2ac9234f208f39df525ee26",
+      "size": 3175
     },
     {
       "path": "include/sketch/room_relationship_geometry.hpp",
@@ -99,6 +110,11 @@
       "size": 17716
     },
     {
+      "path": "tests/room_relationship_geometry_tests.cpp",
+      "sha256": "77bc3016e804ab7717c394912cc11473faa606845c8e9c8442647f02c2ddca20",
+      "size": 10594
+    },
+    {
       "path": "include/sketch/room_relationship_geometry_commit.hpp",
       "sha256": "4b5d07466cabbe46e09d4d0de6f60e24558c947560cbdbec770e4cf3ec89100e",
       "size": 4349
@@ -109,16 +125,6 @@
       "size": 15631
     },
     {
-      "path": "tests/room_relationships_tests.cpp",
-      "sha256": "1ada8c2b49198efac43884eaeea502b957fb4d661f8380577794b07cbc9fab61",
-      "size": 6916
-    },
-    {
-      "path": "tests/room_relationship_geometry_tests.cpp",
-      "sha256": "77bc3016e804ab7717c394912cc11473faa606845c8e9c8442647f02c2ddca20",
-      "size": 10594
-    },
-    {
       "path": "tests/room_relationship_geometry_commit_tests.cpp",
       "sha256": "37471cad5ae914a67e6d4a38586a18dea587b0ff9f84e6654cb967248c9a3055",
       "size": 11300
@@ -127,28 +133,13 @@
       "path": "docs/room-relationships.md",
       "sha256": "36aaa32cf44ae9acf532394b6583fbffd9084fa4ee91b8d805087b273c0a7fe4",
       "size": 5243
-    },
-    {
-      "path": "src/desktop/main_window.cpp",
-      "sha256": "944a00fc2959043c1f5b3b2ebfa50f287421a0338ee6908d6e926bf429f32223",
-      "size": 1240133
-    },
-    {
-      "path": "tests/desktop_smoke.cpp",
-      "sha256": "3d4ca2bcaf7e0cc91019e52bf599882ecd11061f4e502e272614b694816d5abe",
-      "size": 381257
-    },
-    {
-      "path": "docs/desktop-workflow.md",
-      "sha256": "3de1796c3b8131e5d0e1abc9dfabaf834e424a3b85622e7b517dc88806630b0d",
-      "size": 39626
     }
   ],
   "source_tree_sha256": "247d7b2262e144e1314be3218448a810a54ef58427c76d61b1f8014ca3792a7f",
   "tests": [
+    "typed_relationships",
     "room_relationships",
     "room_relationship_geometry",
-    "room_relationship_geometry_commit",
-    "desktop_workflow"
+    "room_relationship_geometry_commit"
   ]
 }

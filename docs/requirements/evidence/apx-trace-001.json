@@ -1,0 +1,142 @@
+{
+  "acceptance": "PDF and raster references are imported through the bounded local worker, preserve source assets and pages, and provide validated previews for tracing.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "reference_assets",
+          "status": "passed"
+        },
+        {
+          "name": "reference_import",
+          "status": "passed"
+        },
+        {
+          "name": "reference_import_boundary",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "reference_assets",
+          "status": "passed"
+        },
+        {
+          "name": "reference_import",
+          "status": "passed"
+        },
+        {
+          "name": "reference_import_boundary",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers bounded local PDF/raster import, page handling, source preservation, and worker validation. Full tracing parity, clean-machine codecs, and production qualification remain open.",
+  "requirement_id": "APX-TRACE-001",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "PDF",
+    "PNG",
+    "JPEG",
+    "BMP",
+    "TIFF",
+    "source_preserved",
+    "page",
+    "preview",
+    "asset",
+    "WIC"
+  ],
+  "source_files": [
+    {
+      "path": "include/sketch/reference_asset.hpp",
+      "sha256": "1181e49cee9c932c5f944b1224182bbe18a00b375b7facb25d4482d2b6af7f77",
+      "size": 2304
+    },
+    {
+      "path": "src/core/reference_asset.cpp",
+      "sha256": "7cf4c4457208a90f5fe24247d3eb562a6f8e66574980e7b82347a7417bd1bae3",
+      "size": 9078
+    },
+    {
+      "path": "src/desktop/reference_import.hpp",
+      "sha256": "1476c770889fd7e7d492fa6d66c84c1314cc54f1e2451f3b08f0faa1c1f7a10e",
+      "size": 1082
+    },
+    {
+      "path": "src/desktop/reference_import.cpp",
+      "sha256": "e1dc7bbd15b8309c2fcf4d3af0c5f293e5a4fb166f56290db1578bda5c0ac57f",
+      "size": 5214
+    },
+    {
+      "path": "src/desktop/reference_import_worker.cpp",
+      "sha256": "f78773d391363a2b8ab64e36079c6df1e26d622bdc61fc00c66cfd6800ab9404",
+      "size": 6803
+    },
+    {
+      "path": "tests/reference_asset_tests.cpp",
+      "sha256": "000fda1dc17dd1f7cc6120ebffe9798e949bac7f380744b30c91a1d32e36dd2e",
+      "size": 4493
+    },
+    {
+      "path": "tests/reference_import_tests.cpp",
+      "sha256": "983bbd8040ff6674fa5c81158126702f89ad5425aa7cf87ad5ce30d659aa3546",
+      "size": 10847
+    },
+    {
+      "path": "tests/test_reference_import_boundary.py",
+      "sha256": "acff7e92da38e5801b68bae4e5e79944f5d90f8130ee6bd6b1bd94f1e8a3ff6f",
+      "size": 1286
+    },
+    {
+      "path": "docs/import-worker-security.md",
+      "sha256": "df8c96fc107aedd99a1a59f295d4188045a6eb8d08d698e95ba82c7f467fe23e",
+      "size": 7281
+    },
+    {
+      "path": "docs/reference-assets.md",
+      "sha256": "e789a494e289f494d063ef7cd5bbc5213dea797acac7a3497c2fcf062dee31b6",
+      "size": 2919
+    }
+  ],
+  "source_tree_sha256": "247d7b2262e144e1314be3218448a810a54ef58427c76d61b1f8014ca3792a7f",
+  "tests": [
+    "reference_assets",
+    "reference_import",
+    "reference_import_boundary",
+    "desktop_workflow"
+  ]
+}

@@ -1,5 +1,5 @@
 {
-  "acceptance": "The CLI validates a good fixture, rejects malformed or incomplete data with actionable diagnostics, extracts assets, and produces a migration report.",
+  "acceptance": "Integration adapters declare versioned capabilities, provenance, and licensing metadata and resolve deterministically or fail closed.",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -15,7 +15,7 @@
       },
       "tests": [
         {
-          "name": "project_cli",
+          "name": "integration_adapter",
           "status": "passed"
         }
       ]
@@ -34,43 +34,50 @@
       },
       "tests": [
         {
-          "name": "project_cli",
+          "name": "integration_adapter",
           "status": "passed"
         }
       ]
     }
   ],
-  "qualification_boundary": "This evidence covers the local inspect, validate, extract, and migrate CLI fixture including malformed input and source preservation. It does not certify Apex/native migration fidelity or a production release.",
-  "requirement_id": "CORE-DOC-009",
+  "qualification_boundary": "This evidence covers deterministic local adapter metadata and capability resolution. Apex/native integrations, legal review, and production qualification remain open.",
+  "requirement_id": "CORE-DOC-010",
   "result": "pass",
   "schema_version": 1,
   "source_anchors": [
-    "inspect",
-    "validate",
-    "extract",
-    "migrate",
-    "source_preserved",
-    "malformed"
+    "IntegrationAdapterDefinition",
+    "IntegrationAdapterRegistry",
+    "capability",
+    "api_version",
+    "format_version",
+    "provenance",
+    "license",
+    "resolve"
   ],
   "source_files": [
     {
-      "path": "src/cli/main.cpp",
-      "sha256": "2bc8852db846ba88788a816546a885e079f1c5985bf276dee8dc15faf2ad3d3b",
-      "size": 7425
+      "path": "include/sketch/integration_adapter.hpp",
+      "sha256": "082a4adc88c38f35fd87bc0b09d7011455b6357b34e2b23c290f2498a84f7dc9",
+      "size": 2304
     },
     {
-      "path": "tests/test_cli.py",
-      "sha256": "95f78131121b30d0e5391aceae5d19149019c44d6072f54850bb39df968dbecc",
-      "size": 9941
+      "path": "src/core/integration_adapter.cpp",
+      "sha256": "eadb4ee8a9872e8cb96a1f525001f75d37090576dfcb443c3e13b000b1cf76a6",
+      "size": 4327
     },
     {
-      "path": "docs/project-format.md",
-      "sha256": "396fbfd62b5c7da9701520773efc097753ac2a34666ede9dd41d045e12f8dbb3",
-      "size": 34904
+      "path": "tests/integration_adapter_tests.cpp",
+      "sha256": "8e4e8a3588ee412b1308d82cb2dce2dd2d2205885582b6a39d96e547d89c1018",
+      "size": 3783
+    },
+    {
+      "path": "docs/integration-adapters.md",
+      "sha256": "e9f392cc410b13c3ec68713f0141d50a0c2b15afaf233c4bbcf233286f634605",
+      "size": 2751
     }
   ],
   "source_tree_sha256": "247d7b2262e144e1314be3218448a810a54ef58427c76d61b1f8014ca3792a7f",
   "tests": [
-    "project_cli"
+    "integration_adapter"
   ]
 }

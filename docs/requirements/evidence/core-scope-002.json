@@ -1,5 +1,5 @@
 {
-  "acceptance": "The CLI validates a good fixture, rejects malformed or incomplete data with actionable diagnostics, extracts assets, and produces a migration report.",
+  "acceptance": "Measurement and Architectural workspaces expose distinct task surfaces while editing one shared project and document model.",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -15,7 +15,11 @@
       },
       "tests": [
         {
-          "name": "project_cli",
+          "name": "desktop_workflow",
+          "status": "passed"
+        },
+        {
+          "name": "workspace_navigation",
           "status": "passed"
         }
       ]
@@ -34,43 +38,49 @@
       },
       "tests": [
         {
-          "name": "project_cli",
+          "name": "desktop_workflow",
+          "status": "passed"
+        },
+        {
+          "name": "workspace_navigation",
           "status": "passed"
         }
       ]
     }
   ],
-  "qualification_boundary": "This evidence covers the local inspect, validate, extract, and migrate CLI fixture including malformed input and source preservation. It does not certify Apex/native migration fidelity or a production release.",
-  "requirement_id": "CORE-DOC-009",
+  "qualification_boundary": "This evidence covers the two workspace surfaces, shared document binding, and local navigation controls on the development host. Clean-machine input and production UI qualification remain open.",
+  "requirement_id": "CORE-SCOPE-002",
   "result": "pass",
   "schema_version": 1,
   "source_anchors": [
-    "inspect",
-    "validate",
-    "extract",
-    "migrate",
-    "source_preserved",
-    "malformed"
+    "Measurement",
+    "Architectural",
+    "shared",
+    "workspace",
+    "overview",
+    "grid",
+    "snap"
   ],
   "source_files": [
     {
-      "path": "src/cli/main.cpp",
-      "sha256": "2bc8852db846ba88788a816546a885e079f1c5985bf276dee8dc15faf2ad3d3b",
-      "size": 7425
+      "path": "src/desktop/main_window.cpp",
+      "sha256": "944a00fc2959043c1f5b3b2ebfa50f287421a0338ee6908d6e926bf429f32223",
+      "size": 1240133
     },
     {
-      "path": "tests/test_cli.py",
-      "sha256": "95f78131121b30d0e5391aceae5d19149019c44d6072f54850bb39df968dbecc",
-      "size": 9941
+      "path": "tests/desktop_smoke.cpp",
+      "sha256": "3d4ca2bcaf7e0cc91019e52bf599882ecd11061f4e502e272614b694816d5abe",
+      "size": 381257
     },
     {
-      "path": "docs/project-format.md",
-      "sha256": "396fbfd62b5c7da9701520773efc097753ac2a34666ede9dd41d045e12f8dbb3",
-      "size": 34904
+      "path": "docs/workspace-ui.md",
+      "sha256": "5fdac7dc4408ab4659f344567b23e96d03dac93ec1a51873cf7f89c604f39882",
+      "size": 3410
     }
   ],
   "source_tree_sha256": "247d7b2262e144e1314be3218448a810a54ef58427c76d61b1f8014ca3792a7f",
   "tests": [
-    "project_cli"
+    "desktop_workflow",
+    "workspace_navigation"
   ]
 }

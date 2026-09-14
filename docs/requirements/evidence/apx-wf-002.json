@@ -1,5 +1,5 @@
 {
-  "acceptance": "Fixtures entered in imperial and metric units reproduce expected endpoints and headings with documented tolerance.",
+  "acceptance": "Define First accepts a manual ordered chain, assigns classification, closes it, and persists the accepted result through the desktop workflow.",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -19,11 +19,11 @@
           "status": "passed"
         },
         {
-          "name": "boundary_input_dialog",
+          "name": "boundary_workflow",
           "status": "passed"
         },
         {
-          "name": "boundary_workflow",
+          "name": "desktop_workflow",
           "status": "passed"
         }
       ]
@@ -46,34 +46,30 @@
           "status": "passed"
         },
         {
-          "name": "boundary_input_dialog",
+          "name": "boundary_workflow",
           "status": "passed"
         },
         {
-          "name": "boundary_workflow",
+          "name": "desktop_workflow",
           "status": "passed"
         }
       ]
     }
   ],
-  "qualification_boundary": "This evidence covers Draw First and Define First construction receipts, rise/run, relative turns, explicit angles, and unit-aware precision entry. Physical keyboard mapping and production qualification remain open.",
-  "requirement_id": "GEO-BASE-003",
+  "qualification_boundary": "This evidence covers deterministic Define First authoring and classification receipts. Native Apex keyboard mapping and production qualification remain open.",
+  "requirement_id": "APX-WF-002",
   "result": "pass",
   "schema_version": 1,
   "source_anchors": [
-    "add_line_rise_run",
-    "add_line_relative_turn",
-    "parse_angle",
-    "exact_metres",
     "Define First",
-    "Draw First"
+    "define_first",
+    "set_classification",
+    "manual",
+    "close_chain",
+    "accepted_chains",
+    "save"
   ],
   "source_files": [
-    {
-      "path": "include/sketch/boundary_authoring_session.hpp",
-      "sha256": "a1236b324c53f81f1d37a2d7b88dfab417e6d2b27c85caa2cde0f2b025539e13",
-      "size": 22346
-    },
     {
       "path": "src/core/boundary_authoring_session.cpp",
       "sha256": "c3b24972eca7010c3e331bc5439f1278d49dfccc381bf20a206670271ed6b993",
@@ -85,9 +81,9 @@
       "size": 19674
     },
     {
-      "path": "tests/boundary_input_dialog_tests.cpp",
-      "sha256": "108c0ff70c59ac9472c61929f2406d2fb189d64964c8afb3497886feb5085be3",
-      "size": 17546
+      "path": "tests/boundary_workflow_tests.cpp",
+      "sha256": "869d597471dd3ca0749de0dbb23b497fb5ed314230b453afb2129dcb62dc11c5",
+      "size": 75556
     },
     {
       "path": "docs/boundary-authoring.md",
@@ -98,7 +94,7 @@
   "source_tree_sha256": "247d7b2262e144e1314be3218448a810a54ef58427c76d61b1f8014ca3792a7f",
   "tests": [
     "boundary_authoring_session",
-    "boundary_input_dialog",
-    "boundary_workflow"
+    "boundary_workflow",
+    "desktop_workflow"
   ]
 }

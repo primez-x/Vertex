@@ -1,5 +1,5 @@
 {
-  "acceptance": "Fixtures entered in imperial and metric units reproduce expected endpoints and headings with documented tolerance.",
+  "acceptance": "Keyboard-first distance and direction entry commits valid values, supports focus and cancel behavior, and leaves invalid entries recoverable.",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -15,15 +15,11 @@
       },
       "tests": [
         {
-          "name": "boundary_authoring_session",
-          "status": "passed"
-        },
-        {
           "name": "boundary_input_dialog",
           "status": "passed"
         },
         {
-          "name": "boundary_workflow",
+          "name": "desktop_workflow",
           "status": "passed"
         }
       ]
@@ -42,52 +38,50 @@
       },
       "tests": [
         {
-          "name": "boundary_authoring_session",
-          "status": "passed"
-        },
-        {
           "name": "boundary_input_dialog",
           "status": "passed"
         },
         {
-          "name": "boundary_workflow",
+          "name": "desktop_workflow",
           "status": "passed"
         }
       ]
     }
   ],
-  "qualification_boundary": "This evidence covers Draw First and Define First construction receipts, rise/run, relative turns, explicit angles, and unit-aware precision entry. Physical keyboard mapping and production qualification remain open.",
-  "requirement_id": "GEO-BASE-003",
+  "qualification_boundary": "This evidence covers local keyboard dialog semantics and deterministic commit/cancel behavior. Physical keypad/keyboard parity and production qualification remain open.",
+  "requirement_id": "APX-KEY-001",
   "result": "pass",
   "schema_version": 1,
   "source_anchors": [
-    "add_line_rise_run",
-    "add_line_relative_turn",
-    "parse_angle",
-    "exact_metres",
-    "Define First",
-    "Draw First"
+    "QLineEdit",
+    "Escape",
+    "Tab",
+    "focus",
+    "distance",
+    "direction",
+    "commit",
+    "cancel"
   ],
   "source_files": [
     {
-      "path": "include/sketch/boundary_authoring_session.hpp",
-      "sha256": "a1236b324c53f81f1d37a2d7b88dfab417e6d2b27c85caa2cde0f2b025539e13",
-      "size": 22346
-    },
-    {
-      "path": "src/core/boundary_authoring_session.cpp",
-      "sha256": "c3b24972eca7010c3e331bc5439f1278d49dfccc381bf20a206670271ed6b993",
-      "size": 95429
-    },
-    {
-      "path": "tests/boundary_authoring_session_tests.cpp",
-      "sha256": "9c13578594f5962b5dd66dbd864ca3afc48528e256bd2eff9207541abf0c3a2e",
-      "size": 19674
+      "path": "src/desktop/boundary_input_dialog.cpp",
+      "sha256": "59946d25d2ec027fa42970e32e5ff2cb413a5ce064cf782cac5c6dfab48e11c9",
+      "size": 21745
     },
     {
       "path": "tests/boundary_input_dialog_tests.cpp",
       "sha256": "108c0ff70c59ac9472c61929f2406d2fb189d64964c8afb3497886feb5085be3",
       "size": 17546
+    },
+    {
+      "path": "src/desktop/main_window.cpp",
+      "sha256": "944a00fc2959043c1f5b3b2ebfa50f287421a0338ee6908d6e926bf429f32223",
+      "size": 1240133
+    },
+    {
+      "path": "tests/desktop_smoke.cpp",
+      "sha256": "3d4ca2bcaf7e0cc91019e52bf599882ecd11061f4e502e272614b694816d5abe",
+      "size": 381257
     },
     {
       "path": "docs/boundary-authoring.md",
@@ -97,8 +91,7 @@
   ],
   "source_tree_sha256": "247d7b2262e144e1314be3218448a810a54ef58427c76d61b1f8014ca3792a7f",
   "tests": [
-    "boundary_authoring_session",
     "boundary_input_dialog",
-    "boundary_workflow"
+    "desktop_workflow"
   ]
 }
