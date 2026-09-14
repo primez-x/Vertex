@@ -1,9 +1,23 @@
 # Implementation status
 
+## Current evidence snapshot (2026-09-14)
+
+The requirement ledger contains 130 mandatory requirements. **112 are locally
+verified (86.2%) and 18 remain in progress.** The unified production gate is
+still blocked by 19 items: the unresolved native Apex and external-integration
+fixtures, physical device checks, reference-hardware performance runs,
+clean-machine and network-denied qualification, accessibility captures,
+package handoff qualification, and the final dependency-license review.
+
+The latest private `Vertex` checkpoint is commit `1e545cf`. Its deterministic
+offline bundle contains 709 declared files and its source-kit manifest contains
+623 allowlisted files. These counts describe the current local evidence and
+packaging checkpoint; they do not certify a production release.
+
 ## Latest integrated checkpoint
 
 At the current integrated checkpoint, the Release and Debug desktop builds and
-CTest matrices completed with 147 runnable tests passing in each configuration
+CTest matrices completed with 149 tests passing in each configuration
 (the production acceptance test is
 intentionally disabled and the AppContainer runtime test is skipped when the host is already
 inside a parent Job Object). The focused Debug and Release architectural
@@ -123,14 +137,14 @@ usable without a service; Apex standard-profile fixtures and production
 calculation certification remain open.
 
 The requirement contract passes, while `python scripts/requirement_audit.py
---release` still fails closed with 130 in-progress requirements. The offline
+--release` still fails closed with 18 in-progress requirements. The offline
 bundle installer now has guarded Install, Repair, and Uninstall actions with
 transactional publish and installed-marker verification; clean-machine
 installer qualification is still open. The corrected
 native model-view runtime probe exits with `ready=true exported=true error=` and
 no CRT dialog in the captured run. The current Release PE inspection covers 45
 component binaries with no unresolved static imports; the staged offline bundle
-verified 611 declared files, installed 79 runtime files into a task-owned
+verified 709 declared files, installed 79 runtime files into a task-owned
 temporary directory, and passed the installed-runtime smoke for both workspaces
 with exit code 0. The native 3D viewport now supports Ctrl+left-drag previews
 and one-command world-space translation requests for supported architectural
@@ -718,7 +732,7 @@ draft recovery and receipt-preserving geometry edits remain required.
 The full production goal is active. The repository is an internal development
 checkpoint and does not yet satisfy the production replacement contract.
 All 130 requirements in `requirements/apex-parity.json` remain mandatory.
-The latest full Debug and Release CTest runs each recorded 147 passing tests;
+The latest full Debug and Release CTest runs each recorded 149 passing tests;
 the production acceptance test remains intentionally disabled until the
 qualification manifest is complete, and the Windows AppContainer worker
 fixture remains skipped when the host test process is already inside a parent

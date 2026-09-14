@@ -503,6 +503,26 @@
     },
     {
       "category": "docs",
+      "path": "docs/requirements/evidence/assist-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/assist-002.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/assist-003.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/assist-004.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/assist-005.json"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/evidence/comp-geo-001.json"
     },
     {
@@ -643,11 +663,63 @@
     },
     {
       "category": "docs",
+      "path": "docs/requirements/evidence/io-dxf-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/io-ifc-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/io-output-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/io-output-002.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/io-output-003.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/io-pdf-001.json"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/evidence/ops-qa-001.json"
     },
     {
       "category": "docs",
+      "path": "docs/requirements/evidence/rec-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/rec-002.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/rec-003.json"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/evidence/rec-004.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/rec-005.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/sec-proj-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/sec-worker-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/sec-worker-002.json"
     },
     {
       "category": "docs",
