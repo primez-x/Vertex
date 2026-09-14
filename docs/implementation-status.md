@@ -234,7 +234,11 @@ exposes connected-component edge tracing: thresholded pixels are segmented
 deterministically and each useful component yields a provisional convex contour
 with retained source bounds and pixel provenance. Editable PDF geometry, native
 Apex compatibility, arbitrary-plan contour accuracy, clean-machine packaging,
-and end-to-end production evidence are still open.
+and end-to-end production evidence are still open. The Windows import worker now
+decodes TIFF through the system WIC codec in addition to the packaged Qt
+PNG/JPEG/BMP codecs; a generated 2x2 TIFF fixture covers pixel fidelity and
+first-frame behavior. Multi-frame TIFF page selection and end-to-end production
+qualification remain open.
 
 The same canvas path now supports validated persisted `reference_grid` entities.
 The Windows Reference grids editor creates, edits, removes, and toggles rotated

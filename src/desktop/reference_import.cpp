@@ -16,7 +16,8 @@ QString mimeFor(const QString& suffix) {
     if (suffix == "png") return QStringLiteral("image/png");
     if (suffix == "jpg" || suffix == "jpeg") return QStringLiteral("image/jpeg");
     if (suffix == "bmp") return QStringLiteral("image/bmp");
-    throw std::invalid_argument("Reference image extension must be PDF, PNG, JPEG, or BMP.");
+    if (suffix == "tif" || suffix == "tiff") return QStringLiteral("image/tiff");
+    throw std::invalid_argument("Reference image extension must be PDF, PNG, JPEG, BMP, or TIFF.");
 }
 }
 

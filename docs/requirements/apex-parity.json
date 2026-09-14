@@ -1300,7 +1300,7 @@
         "docs/import-worker-security.md",
         "docs/reference-assets.md"
       ],
-      "implementation_note": "Reference asset catalog validates PDF/raster signatures, identity, page selection, and immutable source metadata; the desktop imports decodable PNG/JPEG/BMP files and a selected PDF page into Document assets, retaining PDF source bytes beside a validated local PNG preview and rendering multiple persisted underlays. TIFF signatures remain preservable catalog data but are rejected by the desktop decoder until a separately qualified codec is packaged."
+      "implementation_note": "Reference asset catalog validates PDF/raster signatures, identity, page selection, and immutable source metadata; the desktop imports decodable PNG/JPEG/BMP files, Windows WIC-decoded TIFF files, and a selected PDF page into Document assets, retaining PDF source bytes beside a validated local PNG preview and rendering multiple persisted underlays. TIFF multi-frame files currently decode their first frame and non-zero raster page requests remain invalid. Native compatibility and production visual qualification remain open."
     },
     {
       "id": "APX-TRACE-002",

@@ -76,7 +76,6 @@ int main(int argc, char** argv) {
         rejects([&] { (void)decodeReferenceBytes("source", "png", 0, {}, broker); });
         const auto before = calls;
         rejects([&] { (void)decodeReferenceBytes("source", "svg", 0, {}, broker); });
-        rejects([&] { (void)decodeReferenceBytes("source", "tiff", 0, {}, broker); });
         rejects([&] { (void)decodeReferenceBytes({}, "png", 0, {}, broker); });
         rejects([&] { (void)decodeReferenceBytes("source", "png", -1, {}, broker); });
         require(calls == before, "invalid requests must be rejected before launch");
@@ -144,6 +143,55 @@ int main(int argc, char** argv) {
         const auto pdf_result = run_codec(pdf, "pdf", 1, true);
         require(pdf_result.page_count == 2 && !pdf_result.image.isNull(), "worker must render selected PDF page");
         (void)run_codec(pdf, "pdf", 2, false);
+        // Minimal little-endian, uncompressed RGB TIFF fixture. The worker
+        // decodes it through the Windows Imaging Component path rather than
+        // relying on a Qt TIFF plugin being installed on the target machine.
+        const auto append_u16 = [](QByteArray& bytes, quint16 value) {
+            bytes.append(static_cast<char>(value & 0xff));
+            bytes.append(static_cast<char>((value >> 8) & 0xff));
+        };
+        const auto append_u32 = [](QByteArray& bytes, quint32 value) {
+            bytes.append(static_cast<char>(value & 0xff));
+            bytes.append(static_cast<char>((value >> 8) & 0xff));
+            bytes.append(static_cast<char>((value >> 16) & 0xff));
+            bytes.append(static_cast<char>((value >> 24) & 0xff));
+        };
+        QByteArray tiff;
+        tiff.append("II", 2);
+        append_u16(tiff, 42);
+        append_u32(tiff, 8);
+        append_u16(tiff, 10);
+        const auto append_short_entry = [&](quint16 tag, quint16 value) {
+            append_u16(tiff, tag); append_u16(tiff, 3); append_u32(tiff, 1);
+            append_u16(tiff, value); append_u16(tiff, 0);
+        };
+        const auto append_long_entry = [&](quint16 tag, quint32 value) {
+            append_u16(tiff, tag); append_u16(tiff, 4); append_u32(tiff, 1);
+            append_u32(tiff, value);
+        };
+        append_short_entry(256, 2); // ImageWidth
+        append_short_entry(257, 2); // ImageLength
+        append_u16(tiff, 258); append_u16(tiff, 3); append_u32(tiff, 3);
+        append_u32(tiff, 134); // BitsPerSample values
+        append_short_entry(259, 1); // Compression = none
+        append_short_entry(262, 2); // PhotometricInterpretation = RGB
+        append_long_entry(273, 140); // StripOffsets
+        append_short_entry(277, 3); // SamplesPerPixel
+        append_long_entry(278, 2); // RowsPerStrip
+        append_long_entry(279, 12); // StripByteCounts
+        append_short_entry(284, 1); // PlanarConfiguration = chunky
+        append_u32(tiff, 0); // no next IFD
+        append_u16(tiff, 8); append_u16(tiff, 8); append_u16(tiff, 8);
+        tiff.append(char(255)); tiff.append(char(0)); tiff.append(char(0));
+        tiff.append(char(0)); tiff.append(char(255)); tiff.append(char(0));
+        tiff.append(char(0)); tiff.append(char(0)); tiff.append(char(255));
+        tiff.append(char(255)); tiff.append(char(255)); tiff.append(char(255));
+        const auto tiff_result = run_codec(tiff, "tiff", 0, true);
+        require(tiff_result.image.size() == QSize(2, 2) &&
+                    tiff_result.image.pixelColor(0, 0) == QColor(255, 0, 0) &&
+                    tiff_result.image.pixelColor(1, 1) == QColor(255, 255, 255),
+                "worker must decode TIFF pixels through the native Windows codec");
+        (void)run_codec(tiff, "tiff", 1, false);
         std::cout << "reference import broker boundary passed\n";
         return 0;
     } catch (const std::exception& error) {

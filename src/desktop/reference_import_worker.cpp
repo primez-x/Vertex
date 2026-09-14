@@ -9,10 +9,77 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
+#include <wincodec.h>
+#include <wrl/client.h>
 #endif
+
+namespace {
+
+#ifdef _WIN32
+struct ComScope {
+    const HRESULT result{CoInitializeEx(nullptr, COINIT_MULTITHREADED)};
+    ~ComScope() {
+        if (SUCCEEDED(result)) CoUninitialize();
+    }
+    [[nodiscard]] bool usable() const noexcept {
+        // RPC_E_CHANGED_MODE means the thread was already initialized by the
+        // host. WIC remains callable, but this scope must not uninitialize it.
+        return SUCCEEDED(result) || result == RPC_E_CHANGED_MODE;
+    }
+};
+
+QImage decode_tiff_wic(const QByteArray& input) {
+    if (input.isEmpty() || static_cast<quint64>(input.size()) > (std::numeric_limits<DWORD>::max)())
+        return {};
+    ComScope com;
+    if (!com.usable()) return {};
+
+    Microsoft::WRL::ComPtr<IWICImagingFactory> factory;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&factory))))
+        return {};
+    Microsoft::WRL::ComPtr<IWICStream> stream;
+    if (FAILED(factory->CreateStream(&stream)) ||
+        FAILED(stream->InitializeFromMemory(
+            reinterpret_cast<BYTE*>(const_cast<char*>(input.constData())),
+            static_cast<DWORD>(input.size()))))
+        return {};
+    Microsoft::WRL::ComPtr<IWICBitmapDecoder> decoder;
+    if (FAILED(factory->CreateDecoderFromStream(stream.Get(), nullptr,
+                                                 WICDecodeMetadataCacheOnLoad, &decoder)))
+        return {};
+    UINT frame_count = 0;
+    if (FAILED(decoder->GetFrameCount(&frame_count)) || frame_count == 0) return {};
+    Microsoft::WRL::ComPtr<IWICBitmapFrameDecode> frame;
+    if (FAILED(decoder->GetFrame(0, &frame))) return {};
+    UINT width = 0;
+    UINT height = 0;
+    if (FAILED(frame->GetSize(&width, &height)) || width == 0 || height == 0 ||
+        width > static_cast<UINT>(sketch::desktop::referenceDimensionLimit) ||
+        height > static_cast<UINT>(sketch::desktop::referenceDimensionLimit))
+        return {};
+    Microsoft::WRL::ComPtr<IWICFormatConverter> converter;
+    if (FAILED(factory->CreateFormatConverter(&converter)) ||
+        FAILED(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppRGBA,
+                                     WICBitmapDitherTypeNone, nullptr, 0.0,
+                                     WICBitmapPaletteTypeCustom)))
+        return {};
+    QImage image(static_cast<int>(width), static_cast<int>(height), QImage::Format_RGBA8888);
+    if (image.isNull()) return {};
+    const auto stride = width * 4U;
+    if (height > (std::numeric_limits<UINT>::max)() / stride) return {};
+    if (FAILED(converter->CopyPixels(nullptr, stride, stride * height,
+                                     image.bits())))
+        return {};
+    return image;
+}
+#endif
+
+} // namespace
 
 int main(int argc, char** argv) {
 #ifdef _WIN32
@@ -60,14 +127,22 @@ int main(int argc, char** argv) {
         if (page != 0) return 2;
         auto format = args[1].toLatin1();
         if (format == "jpg") format = "jpeg";
-        if (format != "png" && format != "jpeg" && format != "bmp") return 2;
-        QImageReader::setAllocationLimit(128);
-        QImageReader reader(&buffer, format);
-        reader.setDecideFormatFromContent(false);
-        const auto size = reader.size();
-        if (!size.isValid() || size.width() > sketch::desktop::referenceDimensionLimit ||
-            size.height() > sketch::desktop::referenceDimensionLimit) return 4;
-        image = reader.read();
+        if (format == "tif" || format == "tiff") {
+#ifdef _WIN32
+            image = decode_tiff_wic(input);
+#else
+            return 4;
+#endif
+        } else {
+            if (format != "png" && format != "jpeg" && format != "bmp") return 2;
+            QImageReader::setAllocationLimit(128);
+            QImageReader reader(&buffer, format);
+            reader.setDecideFormatFromContent(false);
+            const auto size = reader.size();
+            if (!size.isValid() || size.width() > sketch::desktop::referenceDimensionLimit ||
+                size.height() > sketch::desktop::referenceDimensionLimit) return 4;
+            image = reader.read();
+        }
     }
     if (image.isNull() || image.width() > sketch::desktop::referenceDimensionLimit ||
         image.height() > sketch::desktop::referenceDimensionLimit) return 4;

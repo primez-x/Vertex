@@ -10,10 +10,12 @@ paths, Windows devices and nonportable reserved characters.
 PNG, JPEG, BMP, TIFF and PDF container signatures are recognized by the
 storage catalog. PDFs require an explicit one-based page request. This is
 deliberately a catalog import, not a renderer: signatures do not prove
-decoding success or PDF page existence. The Windows desktop decoder currently
-ships PNG, JPEG, and BMP codecs; TIFF bytes can remain preserved as catalog
-data, but a desktop TIFF underlay is rejected until a separately qualified
-decoder is packaged.
+decoding success or PDF page existence. The Windows desktop decoder ships
+PNG, JPEG, and BMP codecs through Qt and decodes TIFF through the Windows
+Imaging Component (WIC), so TIFF underlays work on Windows without requiring a
+Qt TIFF plugin. TIFF multi-frame files currently use the first frame; a
+non-zero page request remains invalid for raster assets. The decoder reports
+failure before an asset is published when the WIC frame cannot be rendered.
 The snapshot reports this fidelity limitation and identifies imported content
 as tracing references with no editable extraction. The Windows `reference_asset`
 entity persists the same declaration with `content_mode`, `editable_extraction`,
