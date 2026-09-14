@@ -15,8 +15,12 @@ ships PNG, JPEG, and BMP codecs; TIFF bytes can remain preserved as catalog
 data, but a desktop TIFF underlay is rejected until a separately qualified
 decoder is packaged.
 The snapshot reports this fidelity limitation and identifies imported content
-as tracing references with no editable extraction. A decoder must validate
-page bounds and renderability before displaying an underlay.
+as tracing references with no editable extraction. The Windows `reference_asset`
+entity persists the same declaration with `content_mode`, `editable_extraction`,
+`source_preserved`, `fidelity_mode`, `source_format`, and zero-based page
+selection/count fields, so a reopened project never has to infer whether an
+underlay is editable. A decoder must validate page bounds and renderability
+before displaying an underlay.
 
 Calibration records the original known-distance expression, default input unit,
 two source-coordinate points and derived metres per source unit. It uses the

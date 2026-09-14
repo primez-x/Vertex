@@ -7942,6 +7942,14 @@ public:
                  {"flip_horizontal", false}, {"flip_vertical", false},
                  {"intensity", 0.72}, {"visible", true}});
             entity.id = entity_id;
+            const auto fidelity_mode = suffix == "pdf" ? "decoded-pdf-page" : "decoded-raster";
+            entity.properties["source_format"] = mime.toStdString();
+            entity.properties["content_mode"] = "traceable-reference";
+            entity.properties["editable_extraction"] = false;
+            entity.properties["source_preserved"] = true;
+            entity.properties["fidelity_mode"] = fidelity_mode;
+            entity.properties["page_index"] = page_index;
+            entity.properties["page_count"] = decoded.page_count;
             std::vector<AssetChange> asset_changes;
             asset_changes.push_back(AssetChange::upsert(std::move(asset)));
             asset_changes.push_back(AssetChange::upsert(std::move(render_asset)));

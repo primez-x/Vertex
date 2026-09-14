@@ -48,7 +48,10 @@ inline QString importOrSeedTrustedReferenceFixture(desktop::MainWindow& window,
         {"asset_id", source_id}, {"render_asset_id", preview_id}, {"mime_type", mime},
         {"source_path", QFileInfo(path).fileName().toStdString()}, {"position_m", {0.0, 0.0}},
         {"metres_per_source_unit", 0.01}, {"scale", 1.0}, {"rotation_degrees", 0.0},
-        {"flip_horizontal", false}, {"flip_vertical", false}, {"intensity", 0.72}, {"visible", true}});
+        {"flip_horizontal", false}, {"flip_vertical", false}, {"intensity", 0.72}, {"visible", true},
+        {"source_format", mime}, {"content_mode", "traceable-reference"},
+        {"editable_extraction", false}, {"source_preserved", true},
+        {"fidelity_mode", "decoded-raster"}, {"page_index", 0}, {"page_count", 1}});
     entity.id = id;
     window.document().apply(ApplyEntityChanges{revision, {EntityChange::upsert(std::move(entity))},
         {AssetChange::upsert(std::move(original)), AssetChange::upsert(std::move(preview))},

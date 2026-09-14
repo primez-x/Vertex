@@ -4393,6 +4393,13 @@ int main(int argc, char** argv) {
     require(reference_entity != reference_snapshot.entities().end() &&
                 reference_entity->second.type == "reference_asset",
             "reference import should create a typed reference entity");
+    require(reference_entity->second.properties.at("content_mode") == "traceable-reference" &&
+                reference_entity->second.properties.at("editable_extraction") == false &&
+                reference_entity->second.properties.at("source_preserved") == true &&
+                reference_entity->second.properties.at("page_index") == 0 &&
+                reference_entity->second.properties.at("page_count") == 1 &&
+                reference_entity->second.properties.at("fidelity_mode") == "decoded-raster",
+            "reference import should declare traceable content and decoded fidelity explicitly");
     const auto reference_asset_id = reference_entity->second.properties.at("asset_id").get<std::string>();
     require(reference_snapshot.assets().contains(reference_asset_id),
             "reference import should retain source bytes in the project asset store");

@@ -2536,7 +2536,7 @@
         "tests/reference_asset_tests.cpp",
         "docs/reference-assets.md"
       ],
-      "implementation_note": "Reference assets carry explicit fidelity mode, source identity, page selection, calibration, and transforms; selected PDF pages and multiple project-level underlays persist through the desktop Document path, while editable PDF extraction remains open."
+      "implementation_note": "Reference assets carry explicit fidelity mode, source identity, page selection, calibration, and transforms; the Windows reference_asset entity persists traceable-reference, editable_extraction=false, source-preserved, decoder fidelity, source format, and page selection/count fields; selected PDF pages and multiple project-level underlays persist through the desktop Document path, while editable PDF extraction remains open."
     },
     {
       "id": "IO-OUTPUT-001",
