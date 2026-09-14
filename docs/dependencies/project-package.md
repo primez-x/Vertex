@@ -8,10 +8,12 @@ document identity, format version, revision range, asset references, and
 integrity hashes.
 
 The command copies the project byte-for-byte, then reads that staged copy
-through SQLite's read-only URI and checks the
+through an absolute, percent-encoded SQLite read-only URI and checks the
 database integrity, required metadata, revision head, asset metadata, and
-asset bytes before publishing. It stages into a private directory and publishes
-only after all payloads and the manifest have been written. Existing package
+asset bytes before publishing. The encoded URI preserves literal Windows
+project names containing syntax characters such as `#` and `%` while keeping
+inspection read-only. It stages into a private directory and publishes only
+after all payloads and the manifest have been written. Existing package
 destinations are never replaced.
 
 Document metadata and the complete revision asset closure come from the staged

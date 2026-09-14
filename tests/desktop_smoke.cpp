@@ -2789,6 +2789,10 @@ void test_design_phase_workflow() {
     desktop::MainWindow window;
     const auto wall_id = window.createStraightWall({0.0, 0.0}, {4.0, 0.0});
     require(!wall_id.isEmpty(), "phase fixture wall should be created");
+    const auto proposed_wall_id = window.createStraightWall({6.0, 2.0}, {10.0, 2.0});
+    require(!proposed_wall_id.isEmpty(), "phase fixture proposed wall should be created");
+    const auto anchor_wall_id = window.createStraightWall({-10.0, -3.0}, {-8.0, -3.0});
+    require(!anchor_wall_id.isEmpty(), "phase fixture anchor wall should be created");
     require(window.activeRemodelingAlternative().isEmpty(),
             "a new project starts on the shared existing baseline");
     auto* phase_combo = window.findChild<QComboBox*>(QStringLiteral("modelPhase"));
@@ -2796,16 +2800,21 @@ void test_design_phase_workflow() {
             "the navigator should expose the design phase setup action");
 
     const auto phases = ModelPhases::create(
-        {wall_id.toStdString()}, {wall_id.toStdString()},
-        {{"remove-wall", "Remove wall", {wall_id.toStdString()}, {}}});
+        {wall_id.toStdString(), proposed_wall_id.toStdString()}, {wall_id.toStdString()},
+        {{"remove-wall", "Remove wall", {wall_id.toStdString()},
+          {proposed_wall_id.toStdString()}}});
     auto phase_entity = Entity::create("model_phases", {{"model", phases.to_json()}});
     phase_entity.id = "phases-desktop";
     auto material_wall = window.document().snapshot().entities().at(wall_id.toStdString());
     material_wall.properties["material_name"] = "Timber";
     material_wall.properties["volume_m3"] = 2.0;
+    auto proposed_material = window.document().snapshot().entities().at(proposed_wall_id.toStdString());
+    proposed_material.properties["material_name"] = "Masonry";
+    proposed_material.properties["volume_m3"] = 3.0;
     window.document().apply(ApplyEntityChanges{
-        window.document().revision(),
-        {EntityChange::upsert(phase_entity), EntityChange::upsert(material_wall)}, {},
+        window.document().revision(), {EntityChange::upsert(phase_entity),
+                                        EntityChange::upsert(material_wall),
+                                        EntityChange::upsert(proposed_material)}, {},
         "add design phase fixture"});
     require(window.selectEntity(wall_id), "phase fixture should refresh after adding its record");
     require(phase_combo->count() == 2 &&
@@ -2813,6 +2822,10 @@ void test_design_phase_workflow() {
                 phase_combo->itemData(1).toString() == QStringLiteral("remove-wall"),
             "the navigator should list baseline and imported alternatives");
     require(window.entityVisible(wall_id), "baseline geometry should be visible before selection");
+    require(!window.entityVisible(proposed_wall_id),
+            "a proposed object must stay out of the shared baseline view");
+    require(window.entityVisible(anchor_wall_id),
+            "objects outside the phase registry must remain visible in every phase");
     const auto has_wall_material = [&] {
         const auto projection = window.scheduleSnapshot();
         return std::any_of(projection.snapshot.rows.begin(), projection.snapshot.rows.end(),
@@ -2820,13 +2833,51 @@ void test_design_phase_workflow() {
     };
     require(has_wall_material(), "baseline schedule must include the visible wall material");
 
+    window.setWorkspace(desktop::Workspace::architectural);
+    auto* architectural = dynamic_cast<desktop::PlanCanvas*>(
+        window.findChild<QWidget*>(QStringLiteral("architecturalPlanCanvas")));
+    require(architectural != nullptr, "phase workflow must expose the architectural canvas");
+    const auto canvas_has = [&](const desktop::PlanCanvas* canvas, const QString& id) {
+        return canvas != nullptr && std::any_of(canvas->entities().begin(), canvas->entities().end(),
+            [&](const auto& entity) { return entity.id == id; });
+    };
+    require(canvas_has(architectural, wall_id) && !canvas_has(architectural, proposed_wall_id),
+            "baseline architectural geometry must exclude proposed objects");
+
+    QTemporaryDir directory;
+    require(directory.isValid(), "phase fixture needs a temporary directory");
+    const auto render_pdf = [&](const QString& path) {
+        QPdfDocument pdf;
+        require(pdf.load(path) == QPdfDocument::Error::None && pdf.pageCount() == 1,
+                "phase output PDF must load as one page");
+        const auto rendered = pdf.render(0, QSize(1680, 1188));
+        require(!rendered.isNull(), "phase output PDF must render");
+        return rendered;
+    };
+    const auto fingerprint_digest = [](const QString& path) {
+        QFile file(path + QStringLiteral(".fingerprint.json"));
+        require(file.open(QIODevice::ReadOnly | QIODevice::Text),
+                "phase output fingerprint must be readable");
+        return nlohmann::json::parse(file.readAll()).at("fingerprint").at("digest_sha256")
+            .get<std::string>();
+    };
+    const auto baseline_pdf = directory.filePath(QStringLiteral("baseline.pdf"));
+    require(window.exportDraftPdf(baseline_pdf),
+            "existing baseline must export through coordinated sheet output");
+    const auto baseline_render = render_pdf(baseline_pdf);
+    const auto baseline_digest = fingerprint_digest(baseline_pdf);
+
     const auto baseline_revision = window.document().revision();
     require(window.selectRemodelingAlternative(QStringLiteral("remove-wall")),
             "selecting an alternative should use the typed document command");
     require(window.activeRemodelingAlternative() == QStringLiteral("remove-wall") &&
                 !window.entityVisible(wall_id),
             "a demolished baseline object should be hidden in its active alternative");
+    require(window.entityVisible(proposed_wall_id),
+            "a proposed object should appear in its active alternative");
     require(!has_wall_material(), "demolished wall material must be absent from the active schedule");
+    require(canvas_has(architectural, proposed_wall_id) && !canvas_has(architectural, wall_id),
+            "alternative architectural geometry must replace the baseline object");
     auto* plan = dynamic_cast<desktop::PlanCanvas*>(
         window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
     bool wall_visible = false;
@@ -2840,10 +2891,33 @@ void test_design_phase_workflow() {
     require(window.undoCommand() && window.document().revision() > baseline_revision &&
                 window.activeRemodelingAlternative().isEmpty() && window.entityVisible(wall_id),
             "phase selection should be undoable and restore the baseline view");
+    require(!window.entityVisible(proposed_wall_id) && canvas_has(architectural, wall_id) &&
+                !canvas_has(architectural, proposed_wall_id),
+            "undoing phase selection must restore baseline coordinated geometry");
     require(has_wall_material(), "undoing phase selection must restore baseline material quantities");
     require(window.redoCommand() &&
                 window.activeRemodelingAlternative() == QStringLiteral("remove-wall"),
             "phase selection should be redoable");
+    require(canvas_has(architectural, proposed_wall_id) && !canvas_has(architectural, wall_id),
+            "redoing phase selection must restore alternative architectural geometry");
+
+    const auto alternative_pdf = directory.filePath(QStringLiteral("alternative.pdf"));
+    require(window.exportDraftPdf(alternative_pdf),
+            "the active alternative must export through coordinated sheet output");
+    const auto alternative_render = render_pdf(alternative_pdf);
+    require(baseline_render != alternative_render,
+            "switching phase must change the coordinated output image");
+    require(baseline_digest != fingerprint_digest(alternative_pdf),
+            "switching phase must change the coordinated output fingerprint");
+    require(baseline_render.copy(QRect(50, 50, 1580, 360)) !=
+                alternative_render.copy(QRect(50, 50, 1580, 360)),
+            "phase selection must change the coordinated plan viewport");
+    require(baseline_render.copy(QRect(50, 500, 740, 320)) !=
+                alternative_render.copy(QRect(50, 500, 740, 320)),
+            "phase selection must change the coordinated elevation viewport");
+    require(baseline_render.copy(QRect(870, 500, 740, 320)) !=
+                alternative_render.copy(QRect(870, 500, 740, 320)),
+            "phase selection must change the coordinated section viewport");
 
     QTimer::singleShot(0, &window, [&] {
         auto* dialog = window.findChild<QDialog*>(QStringLiteral("remodelingAlternativesDialog"));
@@ -2855,21 +2929,35 @@ void test_design_phase_workflow() {
         auto* comparison = dialog->findChild<QListWidget*>(QStringLiteral("remodelingComparisonList"));
         require(selection && demolition && selection->count() == 2 && demolition->count() == 1,
                 "design phase manager should expose typed phase and demolition controls");
+        bool has_demolished = false;
+        bool has_proposed = false;
+        if (comparison != nullptr) {
+            for (int index = 0; index < comparison->count(); ++index) {
+                const auto text = comparison->item(index)->text();
+                has_demolished = has_demolished || text.contains(QStringLiteral("demolished"));
+                has_proposed = has_proposed || text.contains(QStringLiteral("proposed"));
+            }
+        }
         require(compare_left && compare_right && comparison && compare_left->count() == 2 &&
-                    compare_right->count() == 2 && comparison->count() == 1 &&
-                    comparison->item(0)->text().contains(QStringLiteral("demolished")),
+                    compare_right->count() == 2 && comparison->count() == 2 &&
+                    has_demolished && has_proposed,
                 "design phase manager should expose baseline-versus-alternative comparison");
         dialog->reject();
     });
     window.showRemodelingAlternatives();
 
-    QTemporaryDir directory;
-    require(directory.isValid(), "phase fixture needs a temporary directory");
     const auto path = directory.filePath(QStringLiteral("phases.bldproj"));
     require(window.saveProjectAs(path) && window.openProject(path),
             "active design phase should save and reopen through the project store");
     require(window.activeRemodelingAlternative() == QStringLiteral("remove-wall"),
             "active design phase should persist across reopen");
+    const auto reopened_pdf = directory.filePath(QStringLiteral("reopened.pdf"));
+    require(window.exportDraftPdf(reopened_pdf),
+            "a reopened alternative must export through the same coordinated sheet output");
+    require(fingerprint_digest(reopened_pdf) == fingerprint_digest(alternative_pdf),
+            "save and reopen must preserve the alternative output fingerprint");
+    require(render_pdf(reopened_pdf) == alternative_render,
+            "save and reopen must preserve coordinated plan/elevation/section output");
 }
 
 void test_phase_authoring_ownership() {
@@ -4107,6 +4195,11 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string_view(argv[1]) == "--building-form-only") {
         test_building_form_authoring_and_quantity_history();
         std::cout << "Building form workflow tests passed\n";
+        return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--design-phase-only") {
+        test_design_phase_workflow();
+        std::cout << "Design phase workflow tests passed\n";
         return 0;
     }
     test_plan_canvas_native_pointer_events();

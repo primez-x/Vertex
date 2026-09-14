@@ -232,10 +232,15 @@ def _inspect_project(
     """Read the saved project without a write-capable SQLite connection."""
 
     try:
-        database = sqlite3.connect(f"file:{project.as_posix()}?mode=ro", uri=True)
+        # Build a real SQLite file URI so Windows filenames containing URI
+        # syntax characters (for example ``#`` or ``%``) remain literal path
+        # data.  Interpolating ``as_posix()`` directly lets SQLite interpret a
+        # fragment or percent escape and can open the wrong database.
+        project_uri = project.resolve(strict=True).as_uri()
+        database = sqlite3.connect(f"{project_uri}?mode=ro", uri=True)
         database.execute("PRAGMA query_only=ON")
         database.row_factory = sqlite3.Row
-    except sqlite3.Error as exc:
+    except (OSError, RuntimeError, sqlite3.Error) as exc:
         _error(f"could not open project database read-only: {exc}")
 
     try:

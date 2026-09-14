@@ -303,6 +303,55 @@ class StageProjectPackageTests(unittest.TestCase):
             stage.restore_project_package(package, destination_root, "copy")
         self.assertIn("already exists", str(context.exception).lower())
 
+    def test_stages_windows_project_names_that_need_uri_encoding(self):
+        fixture = self.fixture()
+        self.addCleanup(fixture[0].cleanup)
+        _, root, project, _, _, _ = fixture
+
+        for index, filename in enumerate((
+            "house#1.bldproj",
+            "house%231.bldproj",
+            "house with spaces é.bldproj",
+        )):
+            with self.subTest(filename=filename):
+                special_project = project.with_name(filename)
+                create_project(special_project)
+                project_bytes = special_project.read_bytes()
+                output = root / f"out-special-{index}"
+                manifest = stage.stage_project_package(
+                    special_project, root, output, "project-package"
+                )
+                package = output / "project-package"
+                self.assertEqual(
+                    manifest["project"]["source"], f"projects/{filename}"
+                )
+                self.assertEqual(stage.verify_package(package)["file_count"],
+                                 len(manifest["files"]))
+                payload_files = {
+                    path.relative_to(package).as_posix()
+                    for path in package.rglob("*")
+                    if path.is_file()
+                }
+                self.assertEqual(
+                    payload_files,
+                    {record["path"] for record in manifest["files"]}
+                    | {stage.DEFAULT_MANIFEST_NAME},
+                )
+                restored = root / f"restored-{index}"
+                stage.restore_project_package(package, root, restored.name)
+                self.assertEqual(
+                    (restored / "project" / filename).read_bytes(), project_bytes
+                )
+
+    def test_inspecting_missing_project_never_creates_a_database(self):
+        fixture = self.fixture()
+        self.addCleanup(fixture[0].cleanup)
+        _, root, _, _, _, _ = fixture
+        missing = root / "projects" / "missing#project.bldproj"
+        with self.assertRaises(stage.ProjectPackageError):
+            stage._inspect_project(missing, lambda digest, data: None)
+        self.assertFalse(missing.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

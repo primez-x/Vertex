@@ -56,5 +56,10 @@ active selections. Repeated demolition of a shared object in different mutually
 exclusive alternatives is valid. Names are display metadata, never identity.
 
 The focused C++20 tests exercise isolation, explicit comparison, deterministic
-roundtrips, detached exports and malformed/conflicting input rejection. They do
-not establish consistent rendering, downstream quantities, or printed output.
+roundtrips, detached exports and malformed/conflicting input rejection. The
+Windows desktop smoke workflow additionally proves that baseline and proposed
+geometry reach both workspace canvases and each persisted plan, elevation, and
+section sheet viewport; undo/redo restores the selected state, and a saved
+alternative reopens with the same rendered output and fingerprint. Imported
+Apex projects, physical printer behavior, and broader production certification
+remain separate acceptance gates.

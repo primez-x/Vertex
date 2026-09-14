@@ -358,7 +358,10 @@ at the boundary, referenced entities are checked atomically, and role mismatches
 are rejected without advancing history. The desktop now exposes the model-phase
 selector and alternative manager; active-phase filtering reaches the plan,
 architectural views, native 3D visibility, schedules, and sheet output through
-the shared visible-ID path. Assembly instances now support validated host
+the shared visible-ID path. A Windows desktop smoke fixture now exercises
+baseline/proposed replacement in both workspace canvases and the persisted
+plan, elevation, and section sheet viewports, including undo/redo and
+save/reopen output stability. Assembly instances now support validated host
 placements, transformed plan/elevation/section previews, native 3D solids, and
 read-only assembly plus material-slot quantity schedules; explicit cubic-metre
 volume quantities feed the grouped material summaries. Room relationship parity,

@@ -1908,9 +1908,10 @@
         "include/sketch/model_phases.hpp",
         "src/core/model_phases.cpp",
         "tests/model_phases_tests.cpp",
+        "tests/desktop_smoke.cpp",
         "docs/phases-alternatives.md"
       ],
-      "implementation_note": "Immutable existing/demolished/proposed phase state and validation are implemented. Canvas visibility and the revision-bound schedule projection now honor the active phase on canonical source entities, including derived material rows; calculation-inspector, sheet, and broader persistence qualification remain open."
+      "implementation_note": "Immutable existing/demolished/proposed phase state and validation are implemented. Canvas visibility and the revision-bound schedule projection now honor the active phase on canonical source entities, including derived material rows. The Windows desktop smoke workflow proves phase replacement in both workspace canvases and persisted plan, elevation, and section sheet viewports, with undo/redo and save/reopen output checks; calculation-inspector and broader production qualification remain open."
     },
     {
       "id": "ARCH-MOD-011",
@@ -1930,7 +1931,7 @@
         "tests/desktop_smoke.cpp",
         "docs/phases-alternatives.md"
       ],
-      "implementation_note": "Mutually exclusive remodeling alternatives over a shared baseline and deterministic comparison state are implemented; the Windows manager now exposes a read-only baseline-versus-alternative comparison list with stable controls. Coordinated model/views, save/print, and undo integration remain open."
+      "implementation_note": "Mutually exclusive remodeling alternatives over a shared baseline and deterministic comparison state are implemented; the Windows manager now exposes a read-only baseline-versus-alternative comparison list with stable controls. The Windows desktop smoke workflow proves coordinated plan, elevation, and section output, undo/redo restoration, and alternative save/reopen output stability. Imported Apex projects, physical printing, and broader production qualification remain open."
     },
     {
       "id": "ARCH-3D-001",
