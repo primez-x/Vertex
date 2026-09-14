@@ -2114,7 +2114,7 @@
         "src/core/typed_relationships.cpp",
         "docs/typed-relationships.md"
       ],
-      "implementation_note": "Typed stable references and cycle/ambiguity validation are present, and the Windows editor now exposes live relationship declarations through typed Document history. Coordinated view definitions now persist canonical semantic object IDs; Document admission rejects missing referenced objects and legacy view payloads upgrade with an empty reference list. The Architectural view settings editor accepts and validates comma- or semicolon-separated source IDs, and projection filters those references with hosted-opening and placed-assembly dependency closure while preserving the shared retained geometry for other views. Controlled retargeting and full cross-view production evidence remain open."
+      "implementation_note": "Typed stable references and cycle/ambiguity validation are present, and the Windows editor now exposes live relationship declarations through typed Document history. Coordinated view definitions now persist canonical semantic object IDs; Document admission rejects missing referenced objects and legacy view payloads upgrade with an empty reference list. The Architectural view settings editor accepts and validates comma- or semicolon-separated source IDs, and projection filters those references with hosted-opening and placed-assembly dependency closure while preserving the shared retained geometry for other views. Relationship targets can be explicitly retargeted through one validated, revision-checked, undoable operation with cycle and missing-reference rejection. Full cross-view production evidence remains open."
     },
     {
       "id": "ARCH-OUTPUT-001",
