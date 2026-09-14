@@ -327,6 +327,18 @@
     },
     {
       "category": "docs",
+      "path": "docs/requirements/evidence/apx-doc-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/apx-doc-002.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/apx-doc-003.json"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/evidence/apx-edit-001.json"
     },
     {
@@ -336,6 +348,10 @@
     {
       "category": "docs",
       "path": "docs/requirements/evidence/apx-edit-003.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/apx-edit-004.json"
     },
     {
       "category": "docs",
@@ -364,6 +380,22 @@
     {
       "category": "docs",
       "path": "docs/requirements/evidence/apx-trace-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/apx-trace-002.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/apx-trace-003.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/apx-ui-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/apx-ui-002.json"
     },
     {
       "category": "docs",
@@ -407,6 +439,18 @@
     },
     {
       "category": "docs",
+      "path": "docs/requirements/evidence/comp-lic-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/comp-lic-002.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/comp-lic-003.json"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/evidence/core-doc-001.json"
     },
     {
@@ -447,6 +491,30 @@
     },
     {
       "category": "docs",
+      "path": "docs/requirements/evidence/core-off-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/core-off-002.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/core-off-003.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/core-own-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/core-own-002.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/core-scope-001.json"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/evidence/core-scope-002.json"
     },
     {
@@ -472,6 +540,18 @@
     {
       "category": "docs",
       "path": "docs/requirements/evidence/geo-con-002.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/geo-con-003.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/geo-con-004.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/geo-con-005.json"
     },
     {
       "category": "docs",

@@ -1,0 +1,119 @@
+{
+  "acceptance": "Local save, import, export, and declared legacy exchange workflows preserve supported content and emit explicit fidelity reports.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "dxf_project_exchange",
+          "status": "passed"
+        },
+        {
+          "name": "dxf_desktop_workflow",
+          "status": "passed"
+        },
+        {
+          "name": "project_exchange",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "dxf_project_exchange",
+          "status": "passed"
+        },
+        {
+          "name": "dxf_desktop_workflow",
+          "status": "passed"
+        },
+        {
+          "name": "project_exchange",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers the bounded local exchange path; native Apex compatibility and broad legacy fidelity remain open.",
+  "requirement_id": "APX-DOC-002",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "save",
+    "import",
+    "export",
+    "legacy",
+    "fidelity",
+    "DXF",
+    "report"
+  ],
+  "source_files": [
+    {
+      "path": "src/desktop/main_window.cpp",
+      "sha256": "944a00fc2959043c1f5b3b2ebfa50f287421a0338ee6908d6e926bf429f32223",
+      "size": 1240133
+    },
+    {
+      "path": "include/sketch/dxf_project_exchange.hpp",
+      "sha256": "302beeca885dd5a6760c4624fcbed638e260f730607ce65e221b45e41ed2be8e",
+      "size": 2393
+    },
+    {
+      "path": "src/core/dxf_project_exchange.cpp",
+      "sha256": "2a698186aebde0dd1ddcba5dd83c67ee6c7f98e70d75fc48715acd42d051a6d3",
+      "size": 39893
+    },
+    {
+      "path": "tests/dxf_project_exchange_tests.cpp",
+      "sha256": "e1a862b0f04c09a1f18a189df56170bc2441a6138b7fafdcd983b357c5137c8f",
+      "size": 20646
+    },
+    {
+      "path": "tests/dxf_desktop_workflow_tests.cpp",
+      "sha256": "ebee17cfe0e1ca3a3b60969b892234a0be1fdedad720585aaf2111390829b353",
+      "size": 2781
+    },
+    {
+      "path": "docs/interchange-profiles.md",
+      "sha256": "646919a6a31e03d34292639c85bc80df08386e60766f1a59f231bd24461b4e88",
+      "size": 13814
+    }
+  ],
+  "source_tree_sha256": "067f156e946ec501c67a4aae744c4c362604f20b3be605135fe7a0648e32d2f6",
+  "tests": [
+    "dxf_project_exchange",
+    "dxf_desktop_workflow",
+    "project_exchange",
+    "desktop_workflow"
+  ]
+}

@@ -1,0 +1,107 @@
+{
+  "acceptance": "The offline package stages the application runtime, fonts, help, libraries, resources, installer, and verifier without a network prerequisite.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "packaging_stage_portable_package",
+          "status": "passed"
+        },
+        {
+          "name": "packaging_stage_offline_bundle",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "packaging_stage_portable_package",
+          "status": "passed"
+        },
+        {
+          "name": "packaging_stage_offline_bundle",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers deterministic local staging and hash verification; signed installer and clean-machine installation qualification remain open.",
+  "requirement_id": "CORE-OFF-003",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "stage_package",
+    "offline",
+    "installer",
+    "runtime",
+    "fonts",
+    "help",
+    "bundle",
+    "network"
+  ],
+  "source_files": [
+    {
+      "path": "include/sketch/offline_policy.hpp",
+      "sha256": "f617e226c145e14487aa85945418d037095682b84c6449187c267e2bd73c72c9",
+      "size": 1808
+    },
+    {
+      "path": "scripts/stage_portable_package.py",
+      "sha256": "3bfb235089f946a5ca8da093563a917aa7fa641173ed505c509d8f3fec761d47",
+      "size": 28535
+    },
+    {
+      "path": "scripts/install-offline-bundle.ps1",
+      "sha256": "91c0aad3bff091b6c1313c85070788b88a91559bcc71fc6741872ce990517f8e",
+      "size": 11269
+    },
+    {
+      "path": "tests/test_stage_portable_package.py",
+      "sha256": "9b8047f3245315c4f9fe8c909b204062d33cea926bef45d0e9ca90b82ba42106",
+      "size": 12169
+    },
+    {
+      "path": "tests/test_stage_offline_bundle.py",
+      "sha256": "a014293e1a77a80a9a2c8a3bec08f2515557fd5ceacebd335e68d6a4e91d14d3",
+      "size": 26132
+    },
+    {
+      "path": "docs/dependencies/portable-package.md",
+      "sha256": "a6734c50af239d09a1b8f9649879697741c710c789fee30e5c52ed1588acbf42",
+      "size": 3298
+    },
+    {
+      "path": "docs/dependencies/offline-installer.md",
+      "sha256": "751e5aa0b296ff0f42f2a2d7640908b358a7a9a852c8dc0fbb4a53aa8b3b5d4a",
+      "size": 7992
+    }
+  ],
+  "source_tree_sha256": "067f156e946ec501c67a4aae744c4c362604f20b3be605135fe7a0648e32d2f6",
+  "tests": [
+    "packaging_stage_portable_package",
+    "packaging_stage_offline_bundle"
+  ]
+}

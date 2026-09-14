@@ -1,0 +1,95 @@
+{
+  "acceptance": "Original application paths and third-party paths have explicit ownership and provenance classifications suitable for private delivery or later licensing review.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "packaging_source_provenance_audit",
+          "status": "passed"
+        },
+        {
+          "name": "source_kit_allowlist_contract",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "packaging_source_provenance_audit",
+          "status": "passed"
+        },
+        {
+          "name": "source_kit_allowlist_contract",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers repository provenance declarations; independent legal review and future publication decisions remain open.",
+  "requirement_id": "COMP-LIC-002",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "source-provenance",
+    "ownership",
+    "provenance",
+    "third_party",
+    "application",
+    "audit"
+  ],
+  "source_files": [
+    {
+      "path": "third_party/dependencies.json",
+      "sha256": "146341037ab0e7e882530791394b24117d96c7180db28ca2438fae3e26a9a51f",
+      "size": 1674
+    },
+    {
+      "path": "third_party/source-provenance.json",
+      "sha256": "b559ccad6217cedb439b6d5595c107d0576b3447fcfd30ca7d8bb21a547c4119",
+      "size": 1118
+    },
+    {
+      "path": "scripts/source_provenance_audit.py",
+      "sha256": "1fd1c68e34469948ed09cfa7337fada90272ee5e7f16f97042fb1927257a5ef7",
+      "size": 13705
+    },
+    {
+      "path": "tests/test_source_provenance_audit.py",
+      "sha256": "37ceb2792a96a67e705b72f39078decb1f15568965a79f494027a0244ea1cf2f",
+      "size": 3891
+    },
+    {
+      "path": "docs/dependencies/source-provenance.md",
+      "sha256": "833843d6b4acc8f60cc8f85cd0381a6b7f1a85a93aab7605bfdcd4351521b54d",
+      "size": 1876
+    }
+  ],
+  "source_tree_sha256": "067f156e946ec501c67a4aae744c4c362604f20b3be605135fe7a0648e32d2f6",
+  "tests": [
+    "packaging_source_provenance_audit",
+    "source_kit_allowlist_contract"
+  ]
+}

@@ -1,0 +1,115 @@
+{
+  "acceptance": "Every shipped component has a pinned source or revision, build input, license record, notice path, and distribution inventory entry.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "packaging_distribution_inventory",
+          "status": "passed"
+        },
+        {
+          "name": "packaging_distribution_sbom",
+          "status": "passed"
+        },
+        {
+          "name": "packaging_stage_portable_package",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "packaging_distribution_inventory",
+          "status": "passed"
+        },
+        {
+          "name": "packaging_distribution_sbom",
+          "status": "passed"
+        },
+        {
+          "name": "packaging_stage_portable_package",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers declared component inventory and SPDX generation; final legal clearance and redistributability approval remain open.",
+  "requirement_id": "COMP-LIC-001",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "distribution",
+    "inventory",
+    "SBOM",
+    "license",
+    "source",
+    "notice",
+    "dependency"
+  ],
+  "source_files": [
+    {
+      "path": "third_party/dependencies.json",
+      "sha256": "146341037ab0e7e882530791394b24117d96c7180db28ca2438fae3e26a9a51f",
+      "size": 1674
+    },
+    {
+      "path": "third_party/distribution-components.json",
+      "sha256": "009d6960719f5988bcf9571e784a45a52fb9f993f89c5b05f41945c4a569a300",
+      "size": 26956
+    },
+    {
+      "path": "scripts/distribution_inventory.py",
+      "sha256": "7fa2bdaf6e610b8f88e1f361c717bfed27131af19536e0253959bbbb925ee2e3",
+      "size": 62951
+    },
+    {
+      "path": "scripts/distribution_sbom.py",
+      "sha256": "34e23a0c94f14e3587585372e819a312e451039f7d44fd57822ca0797b302ff3",
+      "size": 19842
+    },
+    {
+      "path": "scripts/stage_portable_package.py",
+      "sha256": "3bfb235089f946a5ca8da093563a917aa7fa641173ed505c509d8f3fec761d47",
+      "size": 28535
+    },
+    {
+      "path": "tests/test_stage_portable_package.py",
+      "sha256": "9b8047f3245315c4f9fe8c909b204062d33cea926bef45d0e9ca90b82ba42106",
+      "size": 12169
+    },
+    {
+      "path": "docs/dependencies/distribution-inventory.md",
+      "sha256": "2412a196b38b8950ce9eeecf895d2269cc28c527cb367ac1890d46c42426f896",
+      "size": 4424
+    }
+  ],
+  "source_tree_sha256": "067f156e946ec501c67a4aae744c4c362604f20b3be605135fe7a0648e32d2f6",
+  "tests": [
+    "packaging_distribution_inventory",
+    "packaging_distribution_sbom",
+    "packaging_stage_portable_package"
+  ]
+}

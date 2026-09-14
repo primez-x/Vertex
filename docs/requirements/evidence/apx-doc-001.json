@@ -1,0 +1,92 @@
+{
+  "acceptance": "Multipage projects preserve subject information, area attributes, shared models, page presentation, independent visibility, and stable IDs.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "multipage_document",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "multipage_document",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers the local multipage semantic model; complete production sheet lifecycle and Apex parity remain open.",
+  "requirement_id": "APX-DOC-001",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "multipage",
+    "subject",
+    "area",
+    "attribute",
+    "presentation",
+    "shared",
+    "page",
+    "version"
+  ],
+  "source_files": [
+    {
+      "path": "include/sketch/multipage_document.hpp",
+      "sha256": "9ecfd5d5a5cf2eff120f82dc6600fd34dc08fbfced490799a6df5a8ca0cf460a",
+      "size": 2202
+    },
+    {
+      "path": "src/core/multipage_document.cpp",
+      "sha256": "c29eb603ea362d8ba7a6dba20172298d710da59f10a262fa45add0edc77233fd",
+      "size": 7315
+    },
+    {
+      "path": "tests/multipage_document_tests.cpp",
+      "sha256": "1ea22521e0edc45d1fddde13634552ab32a70cf44ae12dd837d714f47447cf30",
+      "size": 4619
+    },
+    {
+      "path": "docs/multipage-projects.md",
+      "sha256": "f4af8990374acaaac0e9d90ad075894776b4aedeb39bc160e6a5c1c28acf0589",
+      "size": 3375
+    }
+  ],
+  "source_tree_sha256": "067f156e946ec501c67a4aae744c4c362604f20b3be605135fe7a0648e32d2f6",
+  "tests": [
+    "multipage_document",
+    "desktop_workflow"
+  ]
+}

@@ -1,0 +1,112 @@
+{
+  "acceptance": "Supported areas and objects can be reopened, redefined, deleted, and restored through explicit history while retaining relationships.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "39044e9f086cfd9ff0ad666f3854c0ecec828c06b4cbd96a63a5e6a669a331e8",
+        "size": 82254
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "ce4ffeb9356b81bb31d6365d95fccf3d268fe3b51d2712bfe70ab7ea5668df7a",
+        "size": 125608
+      },
+      "tests": [
+        {
+          "name": "geometry_operations",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "6a81a306ace67367d8def03b61395b4dd7208e575cf1aeeb269cab158fd80c86",
+        "size": 82340
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "04dcf3edb7945b98bac51fdbc343c3119e8cc585efed09155f8a12a53f6d9511",
+        "size": 126143
+      },
+      "tests": [
+        {
+          "name": "geometry_operations",
+          "status": "passed"
+        },
+        {
+          "name": "desktop_workflow",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers supported local geometry editing and history; complete Apex object parity remains open.",
+  "requirement_id": "APX-EDIT-004",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "reopen",
+    "redefine",
+    "delete",
+    "remove",
+    "undo",
+    "redo",
+    "clone",
+    "boundary"
+  ],
+  "source_files": [
+    {
+      "path": "include/sketch/geometry_operations.hpp",
+      "sha256": "5c5ed63aff4267ef6e95c92e640dd2f3c1f6ab380b55f0a3d71c66ab152845ec",
+      "size": 2858
+    },
+    {
+      "path": "src/core/geometry_operations.cpp",
+      "sha256": "eb511faf8a08b8181e1cb8b9e781de1b97d49086b82d8f629b4c83e6c8ca0a17",
+      "size": 20222
+    },
+    {
+      "path": "tests/geometry_operations_tests.cpp",
+      "sha256": "71d08b875cfeb8df5d0027b905970887bec2ebfeeb428407d6daa462f730bb5c",
+      "size": 10230
+    },
+    {
+      "path": "docs/geometry-operations.md",
+      "sha256": "f5a331ac8f38b46296b042f0ad60d468946ade29a8825d331c664d31b39ef9be",
+      "size": 7266
+    },
+    {
+      "path": "src/desktop/main_window.cpp",
+      "sha256": "944a00fc2959043c1f5b3b2ebfa50f287421a0338ee6908d6e926bf429f32223",
+      "size": 1240133
+    },
+    {
+      "path": "include/sketch/desktop/main_window.hpp",
+      "sha256": "0acf0194cb15c22dda4f09e2415af17dc115b3a374fe2bec22cf4ff07806b92b",
+      "size": 34261
+    },
+    {
+      "path": "tests/desktop_smoke.cpp",
+      "sha256": "3d4ca2bcaf7e0cc91019e52bf599882ecd11061f4e502e272614b694816d5abe",
+      "size": 381257
+    },
+    {
+      "path": "docs/desktop-workflow.md",
+      "sha256": "3de1796c3b8131e5d0e1abc9dfabaf834e424a3b85622e7b517dc88806630b0d",
+      "size": 39626
+    }
+  ],
+  "source_tree_sha256": "067f156e946ec501c67a4aae744c4c362604f20b3be605135fe7a0648e32d2f6",
+  "tests": [
+    "geometry_operations",
+    "desktop_workflow"
+  ]
+}

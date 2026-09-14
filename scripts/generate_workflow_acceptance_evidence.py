@@ -1452,6 +1452,201 @@ WORKFLOW_RULES.update({
 })
 
 
+WORKFLOW_RULES.update({
+    "CORE-OFF-001": {
+        "acceptance": "The offline policy blocks unknown external dependencies and allows a runtime explicitly declared free of account, activation, subscription, and network requirements.",
+        "sources": (
+            "include/sketch/offline_policy.hpp", "src/core/offline_policy.cpp", "src/desktop/main_window.cpp",
+            "tests/offline_policy_tests.cpp", "docs/offline-policy.md",
+        ),
+        "anchors": ("evaluate_offline_policy", "require_no_account", "require_no_activation", "require_no_subscription", "require_no_network", "startup_allowed", "offline"),
+        "tests": ("offline_policy", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers the deterministic local offline policy and desktop startup declaration; network-denied clean-machine execution remains open.",
+    },
+    "CORE-OFF-002": {
+        "acceptance": "Startup and static import policy explicitly reject account, activation, subscription, network, and direct network-library dependencies.",
+        "sources": (
+            "include/sketch/offline_policy.hpp", "src/core/offline_policy.cpp", "tests/offline_policy_tests.cpp",
+            "scripts/offline_static_audit.py", "tests/test_offline_static_audit.py",
+            "docs/dependencies/offline-static-audit.md", "docs/offline-policy.md",
+        ),
+        "anchors": ("account", "activation", "subscription", "network", "static_network_audit_passed", "direct_network_imports", "offline"),
+        "tests": ("offline_policy", "packaging_offline_static_audit"),
+        "qualification_boundary": "This evidence covers local policy and static direct-import checks; dynamic loading, entitlement absence, and network-denied runtime qualification remain open.",
+    },
+    "CORE-OFF-003": {
+        "acceptance": "The offline package stages the application runtime, fonts, help, libraries, resources, installer, and verifier without a network prerequisite.",
+        "sources": (
+            "include/sketch/offline_policy.hpp", "scripts/stage_portable_package.py", "scripts/install-offline-bundle.ps1",
+            "tests/test_stage_portable_package.py", "tests/test_stage_offline_bundle.py",
+            "docs/dependencies/portable-package.md", "docs/dependencies/offline-installer.md",
+        ),
+        "anchors": ("stage_package", "offline", "installer", "runtime", "fonts", "help", "bundle", "network"),
+        "tests": ("packaging_stage_portable_package", "packaging_stage_offline_bundle"),
+        "qualification_boundary": "This evidence covers deterministic local staging and hash verification; signed installer and clean-machine installation qualification remain open.",
+    },
+    "CORE-OWN-001": {
+        "acceptance": "The source kit records pinned dependencies, reproducible build inputs, an explicit allowlist, and local build instructions for private delivery.",
+        "sources": (
+            "third_party/dependencies.json", "scripts/source_kit_manifest.py", "tests/test_source_kit_manifest.py",
+            "docs/dependencies/source-kit.md",
+        ),
+        "anchors": ("source-kit", "manifest", "reproducible", "build", "dependency", "allowlist", "source"),
+        "tests": ("packaging_source_kit_manifest", "packaging_update_source_kit_allowlist", "source_kit_allowlist_contract"),
+        "qualification_boundary": "This evidence covers the repository source/build kit and manifest contract; private handoff and clean-machine reproducibility remain open.",
+    },
+    "CORE-OWN-002": {
+        "acceptance": "The local project format preserves inspectable geometry, metadata, assets, history, ownership, and migration behavior through save and reopen.",
+        "sources": (
+            "include/sketch/project_ownership.hpp", "src/core/project_ownership.cpp", "src/core/project_store.cpp",
+            "include/sketch/document.hpp", "src/core/document.cpp", "tests/project_ownership_tests.cpp",
+            "tests/project_ownership_process_tests.cpp", "tests/document_tests.cpp", "tests/desktop_smoke.cpp",
+        ),
+        "anchors": ("ProjectOwnershipSession", "DocumentSnapshot", "revision", "migration", "asset", "history", "read-only", "save"),
+        "tests": ("project_ownership", "project_ownership_process", "project_storage", "document_commands", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers the documented local project format and ownership safeguards; broad legacy migration fidelity remains open.",
+    },
+    "CORE-SCOPE-001": {
+        "acceptance": "The product scope declares Windows 11 x64, imperial and metric units, and residential and light-commercial markets.",
+        "sources": (
+            "include/sketch/product_scope.hpp", "src/core/product_scope.cpp", "tests/product_scope_tests.cpp", "docs/product-scope.md",
+        ),
+        "anchors": ("Windows 11", "x64", "residential", "light_commercial", "imperial", "metric", "ProductScope"),
+        "tests": ("product_scope",),
+        "qualification_boundary": "This evidence covers the declared product scope and validation contract; market workflow qualification remains open.",
+    },
+    "COMP-LIC-001": {
+        "acceptance": "Every shipped component has a pinned source or revision, build input, license record, notice path, and distribution inventory entry.",
+        "sources": (
+            "third_party/dependencies.json", "third_party/distribution-components.json", "scripts/distribution_inventory.py",
+            "scripts/distribution_sbom.py", "scripts/stage_portable_package.py", "tests/test_stage_portable_package.py",
+            "docs/dependencies/distribution-inventory.md",
+        ),
+        "anchors": ("distribution", "inventory", "SBOM", "license", "source", "notice", "dependency"),
+        "tests": ("packaging_distribution_inventory", "packaging_distribution_sbom", "packaging_stage_portable_package"),
+        "qualification_boundary": "This evidence covers declared component inventory and SPDX generation; final legal clearance and redistributability approval remain open.",
+    },
+    "COMP-LIC-002": {
+        "acceptance": "Original application paths and third-party paths have explicit ownership and provenance classifications suitable for private delivery or later licensing review.",
+        "sources": (
+            "third_party/dependencies.json", "third_party/source-provenance.json", "scripts/source_provenance_audit.py",
+            "tests/test_source_provenance_audit.py", "docs/dependencies/source-provenance.md",
+        ),
+        "anchors": ("source-provenance", "ownership", "provenance", "third_party", "application", "audit"),
+        "tests": ("packaging_source_provenance_audit", "source_kit_allowlist_contract"),
+        "qualification_boundary": "This evidence covers repository provenance declarations; independent legal review and future publication decisions remain open.",
+    },
+    "COMP-LIC-003": {
+        "acceptance": "The distribution inventory identifies GPL, AGPL, LGPL, commercial, and other license obligations and rejects unapproved dependency policy violations.",
+        "sources": (
+            "scripts/distribution_inventory.py", "tests/test_distribution_inventory.py", "docs/dependencies/distribution-inventory.md",
+            "third_party/distribution-components.json",
+        ),
+        "anchors": ("GPL", "LGPL", "commercial", "license", "distribution", "inventory"),
+        "tests": ("packaging_distribution_inventory",),
+        "qualification_boundary": "This evidence covers the declared dependency policy and inventory checks; final counsel approval remains open.",
+    },
+    "GEO-CON-003": {
+        "acceptance": "Constraint previews report underconstrained, redundant, and conflicting states with diagnostics and never silently relax locked measurements.",
+        "sources": (
+            "include/sketch/constraints.hpp", "src/core/constraints.cpp", "src/core/constraint_integrity.cpp",
+            "tests/constraints_tests.cpp", "tests/constraint_integrity_tests.cpp", "include/sketch/constraint_authoring.hpp",
+            "src/core/constraint_authoring.cpp", "src/desktop/constraint_dialog.cpp", "tests/constraint_authoring_tests.cpp",
+            "tests/constraint_dialog_tests.cpp",
+        ),
+        "anchors": ("degrees_of_freedom", "redundant", "conflicting_constraints", "rejected_conflict", "diagnostic", "locked"),
+        "tests": ("constraints", "constraint_integrity", "constraint_authoring", "constraint_dialog"),
+        "qualification_boundary": "This evidence covers local solver diagnostics and atomic rejection; full constraint parity and production qualification remain open.",
+    },
+    "GEO-CON-004": {
+        "acceptance": "Constraint solving preserves protected winding, topology, stable endpoint identity, and branch behavior while rejecting mirrored or unstable solutions.",
+        "sources": (
+            "src/core/constraint_integrity.cpp", "src/core/constraints.cpp", "tests/constraint_integrity_tests.cpp",
+            "tests/constraints_tests.cpp", "include/sketch/constraint_authoring.hpp", "src/core/constraint_authoring.cpp",
+            "src/desktop/constraint_dialog.cpp", "tests/constraint_authoring_tests.cpp", "tests/constraint_dialog_tests.cpp",
+        ),
+        "anchors": ("winding", "topology", "orientation", "branch", "stable", "preserve", "mirror"),
+        "tests": ("constraints", "constraint_integrity", "constraint_authoring", "constraint_dialog"),
+        "qualification_boundary": "This evidence covers deterministic branch and topology guards; broader architectural constraint coverage remains open.",
+    },
+    "GEO-CON-005": {
+        "acceptance": "Failed geometric edits leave the previous valid document state unchanged and return a reversible, understandable error result.",
+        "sources": (
+            "src/core/document.cpp", "src/core/constraint_integrity.cpp", "src/core/wall_semantics.cpp",
+            "tests/constraint_integrity_tests.cpp", "tests/test_cli.py", "include/sketch/constraint_authoring.hpp",
+            "src/core/constraint_authoring.cpp", "src/desktop/constraint_dialog.cpp", "tests/constraint_authoring_tests.cpp",
+            "tests/constraint_dialog_tests.cpp",
+        ),
+        "anchors": ("rejected_unchanged", "previous", "reversible", "error", "stale", "atomic", "DocumentError"),
+        "tests": ("constraint_integrity", "constraint_authoring", "constraint_dialog", "document_commands"),
+        "qualification_boundary": "This evidence covers local atomic failure behavior and history safety; production stress and crash qualification remain open.",
+    },
+    "APX-EDIT-004": {
+        "acceptance": "Supported areas and objects can be reopened, redefined, deleted, and restored through explicit history while retaining relationships.",
+        "sources": (
+            "include/sketch/geometry_operations.hpp", "src/core/geometry_operations.cpp", "tests/geometry_operations_tests.cpp",
+            "docs/geometry-operations.md", "src/desktop/main_window.cpp", "include/sketch/desktop/main_window.hpp",
+            "tests/desktop_smoke.cpp", "docs/desktop-workflow.md",
+        ),
+        "anchors": ("reopen", "redefine", "delete", "remove", "undo", "redo", "clone", "boundary"),
+        "tests": ("geometry_operations", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers supported local geometry editing and history; complete Apex object parity remains open.",
+    },
+    "APX-TRACE-002": {
+        "acceptance": "A reference asset calibrates against a known measurement while retaining the original expression, source points, units, and derived scale.",
+        "sources": ("include/sketch/reference_asset.hpp", "src/core/reference_asset.cpp", "tests/reference_asset_tests.cpp", "docs/reference-assets.md"),
+        "anchors": ("calibrat", "known_distance", "metres_per_source_unit", "source", "unit", "measure_metres", "provenance"),
+        "tests": ("reference_assets",),
+        "qualification_boundary": "This evidence covers deterministic local calibration provenance; external measurement-device and production tracing qualification remain open.",
+    },
+    "APX-TRACE-003": {
+        "acceptance": "Reference transforms support scale, rotation, horizontal and vertical flips, intensity, visibility, and undo without changing source bytes.",
+        "sources": ("include/sketch/reference_asset.hpp", "src/core/reference_asset.cpp", "tests/reference_asset_tests.cpp", "docs/reference-assets.md"),
+        "anchors": ("transform", "scale", "rotation", "flip_horizontal", "flip_vertical", "intensity", "undo", "source"),
+        "tests": ("reference_assets", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers local reference transform semantics; full trace editing parity and production visual qualification remain open.",
+    },
+    "APX-DOC-001": {
+        "acceptance": "Multipage projects preserve subject information, area attributes, shared models, page presentation, independent visibility, and stable IDs.",
+        "sources": ("include/sketch/multipage_document.hpp", "src/core/multipage_document.cpp", "tests/multipage_document_tests.cpp", "docs/multipage-projects.md"),
+        "anchors": ("multipage", "subject", "area", "attribute", "presentation", "shared", "page", "version"),
+        "tests": ("multipage_document", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers the local multipage semantic model; complete production sheet lifecycle and Apex parity remain open.",
+    },
+    "APX-DOC-002": {
+        "acceptance": "Local save, import, export, and declared legacy exchange workflows preserve supported content and emit explicit fidelity reports.",
+        "sources": (
+            "src/desktop/main_window.cpp", "include/sketch/dxf_project_exchange.hpp", "src/core/dxf_project_exchange.cpp",
+            "tests/dxf_project_exchange_tests.cpp", "tests/dxf_desktop_workflow_tests.cpp", "docs/interchange-profiles.md",
+        ),
+        "anchors": ("save", "import", "export", "legacy", "fidelity", "DXF", "report"),
+        "tests": ("dxf_project_exchange", "dxf_desktop_workflow", "project_exchange", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers the bounded local exchange path; native Apex compatibility and broad legacy fidelity remain open.",
+    },
+    "APX-DOC-003": {
+        "acceptance": "Multipage sheets expose print preview and PDF/image output using independent presentation scale and the shared output scene.",
+        "sources": ("src/desktop/main_window.cpp", "tests/desktop_smoke.cpp", "include/sketch/sheet_view_model.hpp", "src/core/sheet_view_model.cpp", "tests/sheet_view_model_tests.cpp", "docs/sheets-views.md"),
+        "anchors": ("print", "preview", "PDF", "image", "scale", "sheet", "output", "QPrinter"),
+        "tests": ("sheet_output_scene", "output_fingerprint", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers local output scene and presentation controls; printer calibration and production output certification remain open.",
+    },
+    "APX-UI-001": {
+        "acceptance": "The workspace provides pan, zoom, grid, snap, independent output scale, and responsive overview navigation over the shared canvas.",
+        "sources": ("src/desktop/main_window.cpp", "tests/desktop_smoke.cpp", "docs/workspace-ui.md"),
+        "anchors": ("gridTool", "snapTool", "overviewMapTool", "overview", "scale", "workspace", "Fit"),
+        "tests": ("desktop_workflow", "workspace_navigation"),
+        "qualification_boundary": "This evidence covers local navigation and workspace controls; agreed reference-hardware performance qualification remains open.",
+    },
+    "APX-UI-002": {
+        "acceptance": "Visibility filters, overview navigation, themes, and saved workspace configurations persist locally and apply to the drawing views.",
+        "sources": ("src/core/project_visibility.cpp", "src/visualization/native_model_view.cpp", "src/desktop/main_window.cpp", "tests/desktop_smoke.cpp", "docs/workspace-accessibility.md"),
+        "anchors": ("visibility", "overview", "theme", "dark", "light", "saved", "workspace", "filter"),
+        "tests": ("project_visibility", "visibility_workflow", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers local visibility and workspace presentation behavior; accessibility and DPI certification remain open.",
+    },
+})
+
+
 def _load_module(name: str, path: pathlib.Path):
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
