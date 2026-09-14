@@ -43,6 +43,7 @@
 #include "sketch/workspace_accessibility.hpp"
 #include "sketch/workspace_save_coordinator.hpp"
 #include "sketch/workspace_save_queue.hpp"
+#include "sketch/workspace_regeneration_queue.hpp"
 #include "sketch/workspace_autosave_scheduler.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/project_visibility.hpp"
@@ -172,6 +173,72 @@ using json = nlohmann::json;
 constexpr std::size_t kMaximumClipboardBytes = 4ULL * 1024ULL * 1024ULL;
 constexpr std::size_t kMaximumClipboardEntities = 128;
 constexpr std::string_view kClipboardFormat = "sketch.document.clipboard";
+
+std::string cancellable_regeneration_digest(
+    const DocumentSnapshot& snapshot, const RegenerationCancellationToken& token) {
+    // This is an opaque derived-work identity, deliberately separate from the
+    // persisted authoring digest.  FNV-1a keeps the worker incremental so a
+    // large project can observe cancellation between records without
+    // constructing one giant JSON temporary on the GUI thread.
+    std::uint64_t value = 1469598103934665603ULL;
+    const auto update = [&](std::string_view text) {
+        for (const auto byte : text) {
+            value ^= static_cast<unsigned char>(byte);
+            value *= 1099511628211ULL;
+        }
+    };
+    const auto update_json = [&](const json& item) {
+        const auto encoded = item.dump();
+        update(encoded);
+    };
+    const auto update_entity_map = [&](const auto& entities) {
+        for (const auto& [id, entity] : entities) {
+            if (token.is_cancelled()) return false;
+            update(id);
+            update(entity.id);
+            update(entity.type);
+            update_json(entity.properties);
+            update(entity.required ? "required" : "optional");
+            update_json(entity.extensions);
+        }
+        return true;
+    };
+    const auto update_asset_map = [&](const auto& assets) {
+        for (const auto& [id, asset] : assets) {
+            if (token.is_cancelled()) return false;
+            update(id);
+            update(asset.id);
+            update(asset.media_type);
+            update(asset.sha256);
+            update_json(asset.metadata);
+            for (const auto byte : asset.bytes) {
+                value ^= static_cast<unsigned char>(std::to_integer<unsigned char>(byte));
+                value *= 1099511628211ULL;
+            }
+        }
+        return true;
+    };
+    update(snapshot.document_id());
+    update(std::to_string(snapshot.revision()));
+    for (const auto& record : snapshot.history()) {
+        if (token.is_cancelled()) return {};
+        update(std::to_string(record.revision));
+        update(record.action);
+        if (!update_entity_map(record.entities) || !update_asset_map(record.assets)) return {};
+        for (const auto revision : record.undo_stack) update(std::to_string(revision));
+        for (const auto revision : record.redo_stack) update(std::to_string(revision));
+    }
+    for (const auto& [name, revision] : snapshot.named_revisions()) {
+        if (token.is_cancelled()) return {};
+        update(name);
+        update(std::to_string(revision));
+    }
+    if (token.is_cancelled()) return {};
+    std::array<char, 16> encoded{};
+    const auto converted = std::to_chars(encoded.data(), encoded.data() + encoded.size(), value, 16);
+    if (converted.ec != std::errc{}) return {};
+    return std::string(encoded.data(), converted.ptr);
+}
 
 void add_default_level_placement(json& properties, const DrawingContext& context) {
     if (!properties.is_object() || properties.contains("vertical_placement") ||
@@ -2021,6 +2088,12 @@ public:
         m_project_workspace = std::make_unique<ProjectWorkspace>(m_document->snapshot());
         initializeDrawingContext();
         buildUi();
+        m_regeneration_timer = new QTimer(owner);
+        m_regeneration_timer->setObjectName(QStringLiteral("workspaceRegenerationPoll"));
+        m_regeneration_timer->setInterval(25);
+        QObject::connect(m_regeneration_timer, &QTimer::timeout, owner,
+                         [this] { drainRegenerationCompletions(); });
+        m_regeneration_timer->start();
         refresh();
         m_save_timer = new QTimer(owner);
         m_save_timer->setObjectName(QStringLiteral("workspaceSavePoll"));
@@ -2030,6 +2103,12 @@ public:
     }
 
     ~Impl() {
+        if (m_regeneration_timer) m_regeneration_timer->stop();
+        // Derived results are disposable. Cancel and join before any owner
+        // snapshot or widget state is destroyed; the valid document revision
+        // is never replaced by a worker completion.
+        m_regeneration_queue.shutdown(false);
+        drainRegenerationCompletions();
         m_save_timer->stop();
         // Jobs own detached values only. Join before destroying any owner state.
         m_save_queue.shutdown(true);
@@ -2040,6 +2119,11 @@ public:
     }
 
     QString recoveryCopyPath() const { return QString::fromStdWString(m_autosave_path.wstring()); }
+    [[nodiscard]] bool regenerationReadyForCurrentRevision() noexcept {
+        drainRegenerationCompletions();
+        return m_regeneration_receipt.has_value() &&
+            m_regeneration_receipt->source_revision == m_document->revision();
+    }
 
     [[nodiscard]] Document& document() noexcept { return *m_document; }
     [[nodiscard]] const Document& document() const noexcept { return *m_document; }
@@ -16026,6 +16110,54 @@ private:
         }
     }
 
+    void scheduleRegeneration(DocumentSnapshot snapshot) {
+        if (m_regeneration_pending) {
+            (void)m_regeneration_queue.cancel(*m_regeneration_pending);
+            m_regeneration_pending.reset();
+        }
+        m_regeneration_receipt.reset();
+        try {
+            const auto sequence = m_regeneration_queue.enqueue(
+                [snapshot = std::move(snapshot)](
+                    const RegenerationCancellationToken& token) mutable {
+                    if (token.is_cancelled()) {
+                        return RegenerationReceipt{snapshot.revision(), {}};
+                    }
+                    // The digest is derived exclusively from the detached
+                    // snapshot.  The helper checks the token between records;
+                    // the queue also discards any receipt that crosses the
+                    // cancellation boundary after the worker returns.
+                    const auto digest = cancellable_regeneration_digest(snapshot, token);
+                    if (digest.empty() || token.is_cancelled()) {
+                        return RegenerationReceipt{snapshot.revision(), {}};
+                    }
+                    return RegenerationReceipt{snapshot.revision(), digest};
+                });
+            m_regeneration_pending = sequence;
+        } catch (const std::exception&) {
+            // Derived work is an optimization and never blocks authoring. A
+            // failed enqueue leaves the authoritative document untouched.
+            m_regeneration_pending.reset();
+        }
+    }
+
+    void drainRegenerationCompletions() {
+        for (auto& completion : m_regeneration_queue.take_completed()) {
+            if (!m_regeneration_pending || completion.sequence != *m_regeneration_pending) {
+                continue;
+            }
+            m_regeneration_pending.reset();
+            if (completion.kind != WorkspaceRegenerationQueue::CompletionKind::completed ||
+                !completion.receipt || completion.receipt->output_digest.empty()) {
+                continue;
+            }
+            if (completion.receipt->source_revision != m_document->revision()) {
+                continue;
+            }
+            m_regeneration_receipt = std::move(completion.receipt);
+        }
+    }
+
     void resetAutosaveSession() {
         // Called only after a project transition has drained the queue. The
         // document ID can remain stable across reopen, so session state must
@@ -17799,7 +17931,7 @@ private:
         if (m_selected_id.isEmpty()) m_selected_ids.clear();
         else if (m_selected_ids.isEmpty() || m_selected_ids.back() != m_selected_id)
             m_selected_ids = {m_selected_id};
-        const auto snapshot = m_document->snapshot();
+        auto snapshot = m_document->snapshot();
         m_selected_ids.removeIf([&](const QString& id) {
             return !snapshot.entities().contains(id.toStdString()) &&
                 !annotation_parent_for_child(snapshot, id.toStdString());
@@ -17812,6 +17944,7 @@ private:
         refreshActions();
         refreshTitle();
         m_refreshing = false;
+        scheduleRegeneration(std::move(snapshot));
     }
 
     void refreshCanvases() {
@@ -21117,6 +21250,7 @@ private:
     std::uint64_t m_saved_edited_generation{};
     const std::string m_save_owner_token{make_stable_id()};
     WorkspaceSaveQueue m_save_queue;
+    WorkspaceRegenerationQueue m_regeneration_queue;
     WorkspaceAutosaveScheduler m_autosave_scheduler;
     struct PendingAutosave {
         std::uint64_t sequence;
@@ -21127,6 +21261,9 @@ private:
     std::map<std::uint64_t, WorkspaceSaveQueue::Completion> m_completed_saves;
     std::uint64_t m_completed_barrier{};
     std::uint64_t m_autosaved_checkpoint{};
+    QTimer* m_regeneration_timer{};
+    std::optional<std::uint64_t> m_regeneration_pending;
+    std::optional<RegenerationReceipt> m_regeneration_receipt;
     std::string m_autosave_document_id;
     std::string m_autosave_archive_id;
     std::filesystem::path m_autosave_path;
@@ -21972,6 +22109,10 @@ bool MainWindow::exportNativeViewImage(const QString& path) {
 
 void MainWindow::setNativeModelViewVisible(bool visible) {
     m_impl->setNativeModelViewVisible(visible);
+}
+
+bool MainWindow::regenerationReadyForCurrentRevision() noexcept {
+    return m_impl->regenerationReadyForCurrentRevision();
 }
 
 bool MainWindow::exportDxf(const QString& path) {

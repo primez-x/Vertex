@@ -59,6 +59,12 @@ report contains a threshold failure; exit 2 means invalid input or an I/O error.
 Reports are emitted for exits 0 and 1. These codes never mean production gate
 completion. Input and output must be different paths.
 
+The application-side cancellation boundary is implemented by
+`WorkspaceRegenerationQueue` (`include/sketch/workspace_regeneration_queue.hpp`)
+and its owner-thread completion contract.  Its focused fixture proves that a
+cancelled derived result is discarded and cannot replace the valid source
+revision; see `docs/workspace-regeneration-queue.md`.
+
 Remaining evidence includes agreed reference hardware and the three prescribed
 representative workloads (50,000 entities; 10,000 objects/one million triangles;
 20 sheets/250 MB), actual application instrumentation, long-regeneration

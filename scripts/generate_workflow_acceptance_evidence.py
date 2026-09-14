@@ -180,6 +180,38 @@ WORKFLOW_RULES: dict[str, dict[str, Any]] = {
 # local pass proves the implemented behavior, while the qualification boundary
 # keeps external compatibility claims visible.
 WORKFLOW_RULES.update({
+    "OPS-PERF-002": {
+        "acceptance": (
+            "The owner-independent regeneration boundary runs derived work off the owner thread, "
+            "cancels queued and running operations, discards cancelled receipts, captures failures, "
+            "and preserves the valid source revision until the owner accepts a matching result."
+        ),
+        "sources": (
+            "include/sketch/workspace_regeneration_queue.hpp",
+            "src/core/workspace_regeneration_queue.cpp",
+            "tests/regeneration_queue_tests.cpp",
+            "docs/workspace-regeneration-queue.md",
+            "docs/performance-benchmark.md",
+        ),
+        "anchors": (
+            "WorkspaceRegenerationQueue",
+            "RegenerationCancellationToken",
+            "cancel",
+            "source revision",
+            "FIFO",
+            "shutdown(false)",
+        ),
+        "tests": ("workspace_regeneration_queue",),
+        "qualification_boundary": (
+            "This evidence covers the deterministic queue/cancellation implementation on the "
+            "development host. Integrated application regeneration, reference hardware latency, "
+            "representative workloads, and final production performance qualification remain open."
+        ),
+    },
+})
+
+
+WORKFLOW_RULES.update({
     "CORE-DOC-003": {
         "acceptance": (
             "Interleaved edits during save produce a file containing exactly the reported saved "

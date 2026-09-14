@@ -807,6 +807,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/workspace-regeneration-queue.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/workspace-save-queue.md"
     },
     {
@@ -1228,6 +1232,10 @@
     {
       "category": "source",
       "path": "include/sketch/workspace_recovery_budget.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/workspace_regeneration_queue.hpp"
     },
     {
       "category": "source",
@@ -1775,6 +1783,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/workspace_regeneration_queue.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/workspace_save_coordinator.cpp"
     },
     {
@@ -2236,6 +2248,10 @@
     {
       "category": "source",
       "path": "tests/reference_import_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/regeneration_queue_tests.cpp"
     },
     {
       "category": "source",

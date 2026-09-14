@@ -71,6 +71,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -79,6 +80,7 @@
 #include <memory>
 #include <numbers>
 #include <string_view>
+#include <thread>
 
 namespace {
 
@@ -136,6 +138,13 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
                     window.findChild<QWidget*>(QStringLiteral("offlineBadge")) == nullptr &&
                     window.findChild<QWidget*>(QStringLiteral("appSubtitle")) == nullptr,
                     "modern workspace shell must expose a compact toolbar and tabs without redundant branding or status copy");
+        bool regeneration_ready = false;
+        for (int attempt = 0; attempt != 200 && !regeneration_ready; ++attempt) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            regeneration_ready = window.regenerationReadyForCurrentRevision();
+        }
+        require(regeneration_ready,
+                "desktop refresh must publish a source-bound regeneration result asynchronously");
         auto* measurement_canvas = dynamic_cast<sketch::desktop::PlanCanvas*>(
             window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
         auto* architectural_canvas = dynamic_cast<sketch::desktop::PlanCanvas*>(

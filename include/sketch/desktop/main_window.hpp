@@ -538,6 +538,11 @@ public:
     // Hiding it is useful when a host cannot capture native child surfaces;
     // it does not alter the document or the exported 3D view.
     void setNativeModelViewVisible(bool visible);
+    // True after the asynchronous source-bound derived-work preflight has
+    // completed for the current document revision.  The result is an internal
+    // readiness signal; document and presentation publication remain owned by
+    // the desktop thread.
+    [[nodiscard]] bool regenerationReadyForCurrentRevision() noexcept;
     // Local DXF R2013 interchange. Export writes an adjacent fidelity report;
     // import commits mapped geometry in one undoable command and retains the
     // original source bytes as a project asset for any reported gaps.
