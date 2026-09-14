@@ -598,6 +598,11 @@ cannot be enforced; the installed-runtime harness records this explicit mode.
 selected market into subject metadata; the commercial architectural seed also
 places a catalog-backed checkout-counter symbol.
 
+The installed-runtime harness gives source and reopened captures distinct
+filenames. Its report compares persisted project and native 3D hashes as the
+stable save/reopen check, while retaining screenshot hash differences because
+selection and focus are presentation state that may change after reopening.
+
 The architectural UI capture is taken after the dedicated native 3D export and
 temporarily collapses the native child surface because `QWidget::grab()` cannot
 capture that HWND. This keeps the review screenshot free of a misleading black

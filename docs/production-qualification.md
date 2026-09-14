@@ -179,7 +179,10 @@ manifest. `scripts/test_installed_runtime.py` now runs a save/reopen pair for
 the measurement workspace and for both residential and light-commercial
 architectural profiles, recording source and reopened `.bldproj` paths, hashes,
 process results, explicit assistance-disabled mode, screenshots, and native 3D
-output in its report. Those files
+output in its report. Source and reopened captures use distinct artifact paths;
+the report compares project and native 3D hashes as the stable round-trip gate
+and retains screenshot hash differences as presentation-state diagnostics.
+Those files
 can be retained as candidate artifacts when a qualified operator performs the
 real production workflow; the report still records developer-machine limits
 and cannot satisfy the real-evidence contract by itself.

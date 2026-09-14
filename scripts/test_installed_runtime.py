@@ -228,19 +228,66 @@ class BoundedCapture:
                 "truncated": self.total > MAX_CAPTURE_BYTES, "drain_complete": not self.thread.is_alive()}
 
 
+def _capture_suffix(capture_label: str | None) -> str:
+    if capture_label is None or capture_label == "":
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}", capture_label):
+        raise ValueError(f"unsafe smoke capture label: {capture_label}")
+    return "-" + capture_label
+
+
+def _hashes(evidence: dict, key: str) -> list[str]:
+    return [item.get("sha256") for item in evidence.get(key, [])
+            if isinstance(item, dict) and isinstance(item.get("sha256"), str)]
+
+
+def compare_output_evidence(source_run: dict, reopened_run: dict) -> dict:
+    """Compare source and reopened smoke artifacts without hiding missing evidence."""
+    source_project = source_run.get("project") or {}
+    reopened_project = reopened_run.get("project") or {}
+    project_hash_match = bool(source_project.get("sha256")) and (
+        source_project.get("sha256") == reopened_project.get("sha256"))
+    source_screenshots = _hashes(source_run, "screenshots")
+    reopened_screenshots = _hashes(reopened_run, "screenshots")
+    screenshot_hashes_match = bool(source_screenshots) and (
+        source_screenshots == reopened_screenshots)
+    source_models = _hashes(source_run, "native_3d")
+    reopened_models = _hashes(reopened_run, "native_3d")
+    native_3d_hashes_match = source_models == reopened_models and (
+        bool(source_models) or not source_models and not reopened_models)
+    # Selection and focus are presentation state, so a screenshot can change
+    # across reopen even when the persisted document and native model output
+    # are identical. Keep that diagnostic visible without failing the semantic
+    # round-trip gate on a transient inspector highlight.
+    stable_hashes_match = project_hash_match and native_3d_hashes_match
+    return {
+        "project_hash_match": project_hash_match,
+        "screenshot_hashes_match": screenshot_hashes_match,
+        "native_3d_hashes_match": native_3d_hashes_match,
+        "stable_hashes_match": stable_hashes_match,
+        "all_hashes_match": project_hash_match and screenshot_hashes_match and native_3d_hashes_match,
+        "source_screenshot_hashes": source_screenshots,
+        "reopened_screenshot_hashes": reopened_screenshots,
+        "source_native_3d_hashes": source_models,
+        "reopened_native_3d_hashes": reopened_models,
+    }
+
+
 def run_workspace(executable: Path, workspace: str, run_root: Path, env: dict,
                   declared: dict[str, set[str]], records: dict[str, dict], *,
                   market: str = "residential",
                   project_output: Path | None = None,
-                  project_input: Path | None = None) -> dict:
+                  project_input: Path | None = None,
+                  capture_label: str | None = None) -> dict:
     if market not in {"residential", "light-commercial"}:
         raise ValueError(f"unsupported smoke market: {market}")
-    image = run_root / f"{workspace}-{market}.png"
+    suffix = _capture_suffix(capture_label)
+    image = run_root / f"{workspace}-{market}{suffix}.png"
     outputs = [image]
     args = [str(executable), "--smoke", "--smoke-assistance-disabled", "--smoke-market", market,
             "--smoke-workspace", workspace, "--smoke-output", str(image)]
     if workspace == "architectural":
-        model = run_root / f"{workspace}-{market}-model.png"
+        model = run_root / f"{workspace}-{market}{suffix}-model.png"
         outputs.append(model)
         args.extend(["--smoke-3d-output", str(model)])
     if project_input is not None:
@@ -248,8 +295,10 @@ def run_workspace(executable: Path, workspace: str, run_root: Path, env: dict,
     if project_output is not None:
         args.extend(["--smoke-project-output", str(project_output)])
     result = {"workspace": workspace, "market": market, "arguments": args,
+              "capture_label": capture_label,
               "timeout_seconds": TIMEOUT_SECONDS,
               "module_poll_interval_seconds": 0.02, "errors": [], "screenshots": [],
+              "native_3d": [],
               "timed_out": False, "module_samples": 0, "module_sample_errors": [],
               "assistance_disabled_requested": True}
     process = None
@@ -312,9 +361,12 @@ def run_workspace(executable: Path, workspace: str, run_root: Path, env: dict,
                 result["errors"].append(f"observed packaged file does not match manifest hash: {path}")
         except OSError as error:
             result["errors"].append(str(error))
-    for path in outputs:
+    for index, path in enumerate(outputs):
         try:
-            result["screenshots"].append(png_evidence(path))
+            evidence = png_evidence(path)
+            result["screenshots"].append(evidence)
+            if workspace == "architectural" and index == 1:
+                result["native_3d"].append(evidence)
         except (OSError, ValueError) as error:
             result["errors"].append(str(error))
     if project_output is not None:
@@ -347,7 +399,7 @@ def main(argv: list[str] | None = None) -> int:
     # A new directory guarantees that old PNGs cannot satisfy a failed run.
     run_root = args.evidence_root.resolve() / ("run-" + time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8])
     run_root.mkdir(parents=True)
-    report = {"schema_version": 1, "kind": "installed-runtime-smoke", "passed": False,
+    report = {"schema_version": 2, "kind": "installed-runtime-smoke", "passed": False,
               "network_denied": False, "clean_machine": False, "production_qualified": False,
               "boundary": "Sampled installed-runtime developer-machine smoke; no network denial, clean-machine, registry isolation, or output-fidelity qualification.",
               "evidence_root": str(run_root), "runs": [], "errors": []}
@@ -379,20 +431,28 @@ def main(argv: list[str] | None = None) -> int:
                 source_project = run_root / f"{stem}-source.bldproj"
                 reopened_project = run_root / f"{stem}-reopened.bldproj"
                 source_run = run_workspace(executable, workspace, run_root, env, declared, records,
-                                           market=market, project_output=source_project)
+                                           market=market, project_output=source_project,
+                                           capture_label="source")
                 report["runs"].append(source_run)
                 reopened_run = run_workspace(executable, workspace, run_root, env, declared, records,
                                              market=market, project_input=source_project,
-                                             project_output=reopened_project)
+                                             project_output=reopened_project,
+                                             capture_label="reopened")
                 report["runs"].append(reopened_run)
+                comparison = compare_output_evidence(source_run, reopened_run)
                 report.setdefault("projects", []).append({
                     "workspace": workspace,
                     "market": market,
                     "source": source_run.get("project"),
                     "reopened": reopened_run.get("project"),
                     "reopen_process_exit_code": reopened_run.get("exit_code"),
+                    "output_comparison": comparison,
                 })
+                if not comparison["stable_hashes_match"]:
+                    report["errors"].append(
+                        f"{workspace}/{market} source and reopened stable output hashes differ")
         report["passed"] = all(run["passed"] for run in report["runs"])
+        report["passed"] = report["passed"] and not report["errors"]
     except Exception as error:
         report["errors"].append(f"{type(error).__name__}: {error}")
     report_path = run_root / "report.json"

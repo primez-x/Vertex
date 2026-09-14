@@ -182,6 +182,65 @@ class InstalledRuntimeTests(unittest.TestCase):
                                   Path("evidence"), {}, self.declarations(), {},
                                   market="industrial")
 
+    def test_capture_label_keeps_source_and_reopened_outputs_separate(self):
+        declared = self.declarations()
+        paths = [next(iter(rows)) for rows in declared.values()]
+        records = {runtime.windows_key(path): {"path": Path(path), "sha256": "a" * 64} for path in paths}
+        child = mock.Mock(pid=12345)
+        child.stdout = io.BytesIO()
+        child.stderr = io.BytesIO()
+        child.poll.side_effect = [None, 0, 0]
+        child.wait.return_value = 0
+        with mock.patch.object(runtime.subprocess, "Popen", return_value=child), \
+             mock.patch.object(runtime.subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True), \
+             mock.patch.object(runtime, "WindowsModules") as monitor, \
+             mock.patch.object(runtime, "sha256_file", return_value="a" * 64), \
+             mock.patch.object(runtime, "png_evidence", return_value={"sha256": "a" * 64}), \
+             mock.patch.object(runtime.time, "sleep"):
+            monitor.return_value.snapshot.return_value = paths
+            result = runtime.run_workspace(
+                Path("installed/bin/property-studio.exe"), "architectural",
+                Path("evidence"), {"PATH": "Windows"}, declared, records,
+                market="residential", capture_label="source")
+        self.assertTrue(result["passed"], result["errors"])
+        self.assertTrue(any(arg.endswith("architectural-residential-source.png") for arg in
+                            result["arguments"]))
+        self.assertTrue(any(arg.endswith("architectural-residential-source-model.png") for arg in
+                            result["arguments"]))
+        self.assertEqual(len(result["native_3d"]), 1)
+
+    def test_compare_output_evidence_reports_per_artifact_hashes(self):
+        source = {
+            "project": {"sha256": "p"},
+            "screenshots": [{"path": "drawing.png", "sha256": "d"},
+                            {"path": "model.png", "sha256": "m"}],
+        }
+        reopened = {
+            "project": {"sha256": "p"},
+            "screenshots": [{"path": "drawing-reopened.png", "sha256": "d"},
+                            {"path": "model-reopened.png", "sha256": "m"}],
+        }
+        result = runtime.compare_output_evidence(source, reopened)
+        self.assertTrue(result["project_hash_match"])
+        self.assertTrue(result["screenshot_hashes_match"])
+        self.assertTrue(result["all_hashes_match"])
+
+    def test_presentation_hash_difference_does_not_fail_stable_roundtrip(self):
+        source = {
+            "project": {"sha256": "p"},
+            "screenshots": [{"sha256": "selected"}, {"sha256": "model"}],
+            "native_3d": [{"sha256": "model"}],
+        }
+        reopened = {
+            "project": {"sha256": "p"},
+            "screenshots": [{"sha256": "unselected"}, {"sha256": "model"}],
+            "native_3d": [{"sha256": "model"}],
+        }
+        result = runtime.compare_output_evidence(source, reopened)
+        self.assertFalse(result["screenshot_hashes_match"])
+        self.assertTrue(result["stable_hashes_match"])
+        self.assertFalse(result["all_hashes_match"])
+
     def test_failure_still_writes_report_without_launching(self):
         with tempfile.TemporaryDirectory() as temporary:
             evidence = Path(temporary) / "evidence"

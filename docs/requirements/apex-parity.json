@@ -2812,7 +2812,7 @@
         "docs/production-qualification.md",
         "docs/production-qualification.pending.json"
       ],
-      "implementation_note": "The installed-runtime smoke harness now records save/reopen pairs for the measurement workspace and both residential/light-commercial architectural profiles, with source/reopened project hashes, screenshots, native 3D output, and explicit assistance-disabled enforcement. This is still developer-machine capture aid; network-denied, clean-machine, and independent production review evidence remain open."
+      "implementation_note": "The installed-runtime smoke harness now records save/reopen pairs for the measurement workspace and both residential/light-commercial architectural profiles, with distinct source/reopened artifacts, project hashes, screenshot diagnostics, native 3D output, and explicit assistance-disabled enforcement. Project and native 3D hashes form the stable round-trip check; screenshot differences remain visible because selection/focus are presentation state. This is still developer-machine capture aid; network-denied, clean-machine, and independent production review evidence remain open."
     },
     {
       "id": "OPS-QA-005",

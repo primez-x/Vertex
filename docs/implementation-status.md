@@ -129,7 +129,10 @@ objects, committed by the desktop shell through the existing typed history.
 The installed-runtime harness now records a saved and reopened `.bldproj` for
 the measurement workspace and for both residential and light-commercial
 architectural profiles, validates the SQLite project container, and binds both
-hashes into the run report. Each process also receives an explicit
+hashes into the run report. Source and reopened screenshot/native-3D artifacts
+now use separate paths; project and native-3D hashes form the stable
+round-trip check while screenshot hash differences remain visible as
+presentation-state diagnostics. Each process also receives an explicit
 assistance-disabled flag enforced by the desktop shell; the commercial seed
 records its market and places a catalog-backed checkout counter. This remains
 developer-machine smoke evidence rather than clean-machine or production
