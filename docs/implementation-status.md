@@ -9,9 +9,9 @@ fixtures, physical device checks, reference-hardware performance runs,
 clean-machine and network-denied qualification, accessibility captures,
 package handoff qualification, and the final dependency-license review.
 
-The latest private `Vertex` checkpoint is commit `56c9c3f`. Its deterministic
-offline bundle contains 727 declared files and its source-kit manifest contains
-641 allowlisted files. These counts describe the current local evidence and
+The latest private `Vertex` checkpoint is published to the private `origin/main`
+repository. Its deterministic offline bundle contains 727 declared files and
+its source-kit manifest contains 641 allowlisted files. These counts describe the current local evidence and
 packaging checkpoint; they do not certify a production release.
 
 ## Latest integrated checkpoint
