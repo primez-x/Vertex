@@ -14,6 +14,15 @@ now contribute read-only material slot rows, optional explicit cubic-metre
 volume/net-volume quantities, and grouped material-summary provenance while
 respecting host visibility. Persisted annotation colors, fills, emphasis,
 text-height, and symbol stroke width now reach interactive and fitted output.
+
+Native reference import now accepts TIFF files alongside PNG, JPEG, and BMP.
+The Windows import worker decodes the first TIFF frame through the system WIC
+codec into bounded RGBA pixels, so the packaged application does not require a
+Qt image-format plugin or an online service. Minimal RGB TIFF fixtures pass in
+both Debug and Release, the desktop file picker advertises `.tif` and `.tiff`,
+and the installed-runtime worker check passes. Multi-frame page selection,
+native Apex reference behavior, and production qualification remain open.
+
 Version-1 typed command envelopes now serialize every Document command with
 strict field, revision, geometry, asset-byte, and digest validation. Workspace
 preparation round-trips each command on an immutable fork before staging one
