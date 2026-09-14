@@ -7,9 +7,13 @@ does not open paths or perform network requests. It preserves bytes and SHA-256
 across all calibration and display commands. Paths reject traversal, absolute
 paths, Windows devices and nonportable reserved characters.
 
-PNG, JPEG, BMP, TIFF and PDF container signatures are recognized. PDFs require
-an explicit one-based page request. This is deliberately a catalog import,
-not a renderer: signatures do not prove decoding success or PDF page existence.
+PNG, JPEG, BMP, TIFF and PDF container signatures are recognized by the
+storage catalog. PDFs require an explicit one-based page request. This is
+deliberately a catalog import, not a renderer: signatures do not prove
+decoding success or PDF page existence. The Windows desktop decoder currently
+ships PNG, JPEG, and BMP codecs; TIFF bytes can remain preserved as catalog
+data, but a desktop TIFF underlay is rejected until a separately qualified
+decoder is packaged.
 The snapshot reports this fidelity limitation and identifies imported content
 as tracing references with no editable extraction. A decoder must validate
 page bounds and renderability before displaying an underlay.

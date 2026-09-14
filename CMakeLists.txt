@@ -436,6 +436,16 @@ endif()
 
 if(SKETCH_BUILD_DESKTOP)
   find_package(Qt6 6.8 CONFIG REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets PrintSupport Pdf Svg)
+  add_library(sketch_reference_import src/desktop/reference_import.cpp)
+  target_include_directories(sketch_reference_import PUBLIC src/desktop)
+  target_link_libraries(sketch_reference_import PUBLIC sketch_windows_import_worker Qt6::Gui)
+  add_executable(property-studio-import-worker src/desktop/reference_import_worker.cpp)
+  target_include_directories(property-studio-import-worker PRIVATE include)
+  target_link_libraries(property-studio-import-worker PRIVATE sketch_json Qt6::Gui Qt6::Pdf)
+  if(MSVC)
+    target_compile_options(sketch_reference_import PRIVATE /W4 /permissive- /utf-8)
+    target_compile_options(property-studio-import-worker PRIVATE /W4 /permissive- /utf-8)
+  endif()
   add_library(sketch_visualization src/visualization/native_model_view.cpp)
   target_include_directories(sketch_visualization PUBLIC include)
   target_link_libraries(sketch_visualization PUBLIC sketch_architecture sketch_building_entities sketch_document sketch_project_organization sketch_project_visibility sketch_architectural_workflow_contract Qt6::Widgets TKService TKV3d TKOpenGl)
@@ -450,11 +460,19 @@ if(SKETCH_BUILD_DESKTOP)
     src/desktop/building_object_dialog.cpp src/desktop/hosted_opening_dialog.cpp src/desktop/constraint_dialog.cpp
     src/desktop/constraint_preview_canvas.cpp)
   target_include_directories(sketch_desktop PUBLIC include PRIVATE src/desktop)
+  target_link_libraries(sketch_desktop PUBLIC sketch_reference_import)
+  add_dependencies(sketch_desktop property-studio-import-worker)
   target_link_libraries(sketch_desktop PUBLIC sketch_survey_contract sketch_storage sketch_project_ownership sketch_recovery_discovery sketch_project_organization sketch_project_visibility sketch_precision sketch_geometry_operations sketch_assistance_engine sketch_constraint_authoring sketch_room_relationship_geometry_commit sketch_calculations sketch_schedule_model sketch_document_schedule_adapter sketch_architectural_schedule sketch_visualization sketch_building_plan_projection sketch_plan_canvas sketch_boundary_input sketch_boundary_commit sketch_project_workspace_archive_restore sketch_project_workspace_preview_adapters sketch_workspace_save_coordinator sketch_workspace_save_queue sketch_workspace_autosave_scheduler sketch_offline_policy sketch_field_adapter_contract sketch_workspace_accessibility sketch_architectural_document_adapter sketch_sheet_output_scene sketch_output_fingerprint sketch_dxf_project_exchange sketch_ifc_project_exchange sketch_georeferencing_runtime sketch_project_resource_catalog Qt6::Widgets Qt6::PrintSupport Qt6::Pdf Qt6::Svg)
   qt_add_executable(property-studio WIN32 src/desktop/main.cpp)
   qt_add_resources(property-studio application_fonts PREFIX "/fonts" BASE assets/fonts
     FILES assets/fonts/Inter.ttf assets/fonts/OFL.txt)
   target_link_libraries(property-studio PRIVATE sketch_desktop)
+  if(BUILD_TESTING)
+    add_executable(reference_import_tests tests/reference_import_tests.cpp)
+    target_link_libraries(reference_import_tests PRIVATE sketch_reference_import)
+    add_dependencies(reference_import_tests property-studio-import-worker)
+    add_test(NAME reference_import COMMAND reference_import_tests "$<TARGET_FILE:property-studio-import-worker>")
+  endif()
   if(MSVC)
     target_compile_options(sketch_visualization PRIVATE /W4 /permissive- /utf-8)
     target_compile_options(sketch_plan_canvas PRIVATE /W4 /permissive- /utf-8)
@@ -504,6 +522,10 @@ if(SKETCH_BUILD_DESKTOP)
       FILES assets/fonts/Inter.ttf)
     qt_add_resources(visibility_workflow_tests visibility_test_fonts PREFIX "/fonts" BASE assets/fonts
       FILES assets/fonts/Inter.ttf)
+    qt_add_resources(dxf_desktop_workflow_tests dxf_workflow_test_fonts PREFIX "/fonts" BASE assets/fonts
+      FILES assets/fonts/Inter.ttf)
+    qt_add_resources(ifc_desktop_workflow_tests ifc_workflow_test_fonts PREFIX "/fonts" BASE assets/fonts
+      FILES assets/fonts/Inter.ttf)
     qt_add_resources(constraint_dialog_tests constraint_test_fonts PREFIX "/fonts" BASE assets/fonts
       FILES assets/fonts/Inter.ttf)
     if(MSVC)
@@ -539,7 +561,7 @@ if(SKETCH_BUILD_DESKTOP)
     get_target_property(SKETCH_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
     get_filename_component(SKETCH_QT_BIN "${SKETCH_QMAKE_EXECUTABLE}" DIRECTORY)
     get_filename_component(SKETCH_QT_PREFIX "${SKETCH_QT_BIN}" DIRECTORY)
-    set_tests_properties(desktop_workflow project_resource_desktop desktop_workspace_recovery building_object_dialog building_receipt_workflow modal_authoring constraint_dialog visibility_workflow boundary_canvas boundary_input_dialog boundary_workflow assistance_workflow dxf_desktop_workflow ifc_desktop_workflow PROPERTIES
+    set_tests_properties(reference_import desktop_workflow project_resource_desktop desktop_workspace_recovery building_object_dialog building_receipt_workflow modal_authoring constraint_dialog visibility_workflow boundary_canvas boundary_input_dialog boundary_workflow assistance_workflow dxf_desktop_workflow ifc_desktop_workflow PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
       ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
   endif()
@@ -547,6 +569,8 @@ endif()
 
 if(BUILD_TESTING)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME reference_import_boundary COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+    -s "${CMAKE_SOURCE_DIR}/tests" -p test_reference_import_boundary.py)
   if(WIN32)
     find_program(SKETCH_TEST_POWERSHELL NAMES pwsh powershell REQUIRED)
     add_test(NAME native_process_guard COMMAND "${SKETCH_TEST_POWERSHELL}"

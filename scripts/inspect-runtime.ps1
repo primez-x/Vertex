@@ -11,6 +11,7 @@ $dumpbin = Join-Path $vsRoot "VC\Tools\MSVC\$compilerVersion\bin\Hostx64\x64\dum
 if (!(Test-Path -LiteralPath $dumpbin)) { throw "Missing PE inspection tool: $dumpbin" }
 if ($EntryPoints.Count -eq 0) {
     $EntryPoints = @((Join-Path $releaseDirectory 'property-studio.exe'),
+                    (Join-Path $releaseDirectory 'property-studio-import-worker.exe'),
                     (Join-Path $releaseDirectory 'property-cli.exe'),
                     (Join-Path $releaseDirectory 'property_planegcs.dll'),
                     (Join-Path $qtPrefix 'plugins\platforms\qwindows.dll'),

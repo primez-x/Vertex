@@ -456,9 +456,11 @@
         "third_party/distribution-components.json",
         "scripts/distribution_inventory.py",
         "scripts/distribution_sbom.py",
+        "scripts/stage_portable_package.py",
+        "tests/test_stage_portable_package.py",
         "docs/dependencies/distribution-inventory.md"
       ],
-      "implementation_note": "The inventory now produces a deterministic SPDX 2.3 document with package, notice, source, checksum, and dependency relationships; exact revisions, legal review, relink evidence, and the production gate remain open."
+      "implementation_note": "The inventory now produces a deterministic SPDX 2.3 document with package, notice, source, checksum, and dependency relationships, and portable staging fails closed unless every included component notice is explicitly allowlisted; exact revisions, legal review, relink evidence, and the production gate remain open."
     },
     {
       "id": "COMP-LIC-002",
@@ -1289,10 +1291,16 @@
       "implementation_sources": [
         "include/sketch/reference_asset.hpp",
         "src/core/reference_asset.cpp",
+        "src/desktop/reference_import.hpp",
+        "src/desktop/reference_import.cpp",
+        "src/desktop/reference_import_worker.cpp",
         "tests/reference_asset_tests.cpp",
+        "tests/reference_import_tests.cpp",
+        "tests/test_reference_import_boundary.py",
+        "docs/import-worker-security.md",
         "docs/reference-assets.md"
       ],
-      "implementation_note": "Reference asset catalog validates PDF/raster signatures, identity, page selection, and immutable source metadata; the desktop imports decodable PNG/JPEG/BMP/TIFF files and a selected PDF page into Document assets, retaining PDF source bytes beside a validated local PNG preview and rendering multiple persisted underlays."
+      "implementation_note": "Reference asset catalog validates PDF/raster signatures, identity, page selection, and immutable source metadata; the desktop imports decodable PNG/JPEG/BMP files and a selected PDF page into Document assets, retaining PDF source bytes beside a validated local PNG preview and rendering multiple persisted underlays. TIFF signatures remain preservable catalog data but are rejected by the desktop decoder until a separately qualified codec is packaged."
     },
     {
       "id": "APX-TRACE-002",

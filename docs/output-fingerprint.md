@@ -5,7 +5,10 @@ to the dependency identities used to produce it. The implementation is in
 `include/sketch/output_fingerprint.hpp` and
 `src/core/output_fingerprint.cpp`. Draft PDF, draft SVG, and native 3D image
 exports now write an adjacent `<output>.fingerprint.json` manifest generated
-from the same document snapshot and view state used for rendering. Print
+from the same document snapshot and view state used for rendering. The sidecar
+also records `output_sha256`, the digest of the completed output bytes, so a
+consumer can reject a sidecar paired with a modified or different output file.
+Print
 preview runs the same fingerprint gate before opening and when it paints, and
 its local driver-evidence receipt carries the serialized output fingerprint
 used for that page. The receipt remains preview-driver evidence only; it does
@@ -52,6 +55,24 @@ resources or an explicit `not_applicable` reason, and a renderer resource is
 mandatory. A `fonts` `no_resource` sentinel is allowed when the caller has
 declared that the output contains no text.
 
+The desktop workflow binds the shipped `Inter.ttf` bytes into the `fonts`
+group, so text output cannot silently depend on an installed system font. It
+also binds the effective view state used for the page, including hidden floor
+and layer IDs and the project unit system, into `views`. The sheet-output
+adapter may append its persisted scene resource alongside these caller-owned
+view resources; changing an effective visibility mask therefore invalidates
+the output fingerprint even when the document head is unchanged.
+
+The desktop processing roles bind the complete local runtime dependency set.
+For an installed package this set is read from the adjacent verified
+`runtime-manifest.json`; every declared runtime binary is re-hashed from the
+installed bytes before its resource is added. Source builds without an
+installed manifest bind all application-local DLLs as developer evidence and
+use an explicit fallback only when no such DLL is co-located. A changed Qt,
+Open CASCADE, PlaneGCS, adapter, worker, or other packaged runtime binary
+therefore invalidates the fingerprint instead of being mislabeled as static.
+The application executable remains a separate `application_build` resource.
+
 The public workflow is:
 
 ```cpp
@@ -90,6 +111,9 @@ deliberately absent; that guarantee is established by
 The desktop exposes a draft SVG export through the same `PlanCanvas` vector
 renderer used by preview, draft PDF, and print. SVG is stamped as a draft and
 its sidecar records the document head, page/filter view descriptor, linked
-processing roles, and running Windows executable digest. Sidecar currentness
-can be checked with `check_output_fingerprint_current`; the output remains a
-draft until production output qualification and printer evidence are complete.
+processing roles, running Windows executable digest, and output-byte digest.
+Consumers must compare the sidecar's `output_sha256` with a fresh SHA-256 of
+the output before using the serialized fingerprint as currentness evidence;
+`check_output_fingerprint_current` then checks the document and dependency
+manifest. The output remains a draft until production output qualification and
+printer evidence are complete.

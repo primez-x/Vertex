@@ -266,6 +266,13 @@ native 3D, and quantity consumers. `room_boundary` remains a separate 2D
 appraisal/space boundary type. A legacy `room` row without height or elevation
 can still be displayed as a plan boundary, but solid-driven views report the
 missing volume fields instead of inventing a default height.
+Complete room volumes are validated when created, changed, or restored from a
+native project, including historical revisions. Invalid dimensions, malformed
+boundaries, and outside, touching, intersecting, overlapping, duplicate, nested,
+or numerically indeterminate holes are rejected before loading succeeds. This
+uses the shared analytical boundary validator without requiring a 3D renderer.
+Legacy `segments`, `height`, and `elevation` aliases remain accepted; canonical
+fields take precedence when both forms are present.
 
 Floors may carry an optional version-1 `vertical_level_binding` object with exactly
 `graph_id` and `level_id` (plus `version: 1`). `graph_id` resolves to a `vertical_levels`

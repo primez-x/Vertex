@@ -222,6 +222,23 @@ class StagePortablePackageTests(unittest.TestCase):
         self.assertIn("path", str(context.exception).lower())
         self.assertFalse(output_root.exists())
 
+    def test_every_included_component_notice_must_be_allowlisted(self):
+        fixture = self.fixture()
+        self.addCleanup(fixture[0].cleanup)
+        _, root, inventory, allowlist, output_root, *_ = fixture
+        data = json.loads(allowlist.read_text(encoding="utf-8"))
+        data["entries"] = [entry for entry in data["entries"]
+                           if not (entry["kind"] == "notice" and
+                                   entry["inventory_entry"] == "inter-font")]
+        write_json(allowlist, data)
+
+        with self.assertRaises(stager.StagingError) as context:
+            stager.stage_package(inventory, allowlist, root, output_root, "portable")
+
+        self.assertIn("notice", str(context.exception).lower())
+        self.assertIn("inter-font", str(context.exception).lower())
+        self.assertFalse(output_root.exists())
+
     def test_nonempty_destination_is_rejected_on_restaging(self):
         fixture = self.fixture()
         self.addCleanup(fixture[0].cleanup)

@@ -179,6 +179,12 @@ class StageOfflineBundleTests(unittest.TestCase):
                         "path": "assets/fonts/OFL.txt",
                         "destination": "licenses/Inter-OFL.txt",
                     },
+                    {
+                        "kind": "notice",
+                        "inventory_entry": "sqlite",
+                        "path": "LICENSE",
+                        "destination": "licenses/sqlite-LICENSE.txt",
+                    },
                 ],
             },
         )
@@ -232,6 +238,7 @@ class StageOfflineBundleTests(unittest.TestCase):
                 "assets/fonts/Inter.ttf",
                 "licenses/LICENSE.txt",
                 "licenses/Inter-OFL.txt",
+                "licenses/sqlite-LICENSE.txt",
                 "source-kit/src/main.cpp",
                 "source-kit/LICENSE",
                 "metadata/distribution-inventory.json",
@@ -259,6 +266,7 @@ class StageOfflineBundleTests(unittest.TestCase):
                 "assets/fonts/Inter.ttf",
                 "licenses/LICENSE.txt",
                 "licenses/Inter-OFL.txt",
+                "licenses/sqlite-LICENSE.txt",
             },
         )
         self.assertNotIn(str(root), json.dumps(result))

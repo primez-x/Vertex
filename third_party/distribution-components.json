@@ -76,6 +76,31 @@
       }
     },
     {
+      "id": "property-studio-import-worker",
+      "kind": "application",
+      "package": {
+        "name": "Vertex isolated reference import worker",
+        "version": "workspace",
+        "license": "Proprietary"
+      },
+      "source": {
+        "kind": "workspace",
+        "paths": [
+          "src/desktop/reference_import_worker.cpp",
+          "src/desktop/reference_import.hpp",
+          "src/desktop/reference_import.cpp",
+          "include/sketch/windows_import_worker.hpp",
+          "src/core/windows_import_worker.cpp",
+          "CMakeLists.txt"
+        ]
+      },
+      "notice_paths": ["LICENSE"],
+      "runtime_names": ["property-studio-import-worker.exe"],
+      "destinations": {
+        "property-studio-import-worker.exe": "bin/property-studio-import-worker.exe"
+      }
+    },
+    {
       "id": "property-cli",
       "kind": "application",
       "package": {

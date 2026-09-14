@@ -1359,6 +1359,18 @@
     },
     {
       "category": "source",
+      "path": "src/desktop/reference_import.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/reference_import.hpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/reference_import_worker.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/visualization/native_model_view.cpp"
     },
     {
@@ -1755,6 +1767,10 @@
     },
     {
       "category": "source",
+      "path": "tests/reference_import_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/roof_join_tests.cpp"
     },
     {
@@ -1800,6 +1816,10 @@
     {
       "category": "source",
       "path": "tests/support/test_process_policy.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/support/trusted_reference_fixture.hpp"
     },
     {
       "category": "source",
@@ -1864,6 +1884,10 @@
     {
       "category": "source",
       "path": "tests/test_production_qualification.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_reference_import_boundary.py"
     },
     {
       "category": "source",

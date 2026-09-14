@@ -16,6 +16,37 @@ capability set, and only then resumes the worker. A watchdog terminates the
 whole job on deadline or output-limit failure, and partial output is discarded.
 The broker has no unsandboxed fallback.
 
+Desktop reference-file imports and the PDF page-selection dialog now call
+`decodeReferenceFile`, which sends at most 64 MiB of source bytes to the bundled
+`bin/property-studio-import-worker.exe`. The worker uses Qt's
+PDF/PNG/JPEG/BMP decoders and returns a versioned, fixed-size header followed
+by RGBA pixels.
+The desktop accepts a reply only after all broker controls are attested and
+the page number, page count, dimensions (at most 4096 by 4096), and exact byte
+extent validate. It encodes a new PNG preview from those raw pixels for every
+reference, retaining the original only as a source asset. A failed import
+does not publish assets or change document history. The deadline is 30 seconds
+and the worker Job Object memory ceiling is 512 MiB. Oversized raster images
+are rejected; PDF pages are rendered within the dimension ceiling.
+
+The runtime inventory entry points include the worker so its Qt Core, Gui,
+PDF and transitive DLL dependencies are packaged. The installed layout must
+keep `bin` and its sibling `plugins` directory read-only to the caller, and
+grant the import AppContainer read/execute access. Image plugins belong under
+`plugins/imageformats`, matching `packaging/qt.conf`. The worker replaces Qt's
+plugin search path with that fixed directory; the broker removes inherited
+Qt/QML configuration variables. An unsupported raster extension, a missing
+worker, writable module directories, or an unavailable sandbox produce an
+actionable failure with no desktop decode
+fallback. No download, service, or network access is required.
+
+Development build directories and writable portable copies intentionally do
+not satisfy the immutable-installation gate. Adapter protocol and rejection
+tests, and direct worker codec tests with generated fixtures, are separate
+from live AppContainer acceptance. Installer ACL provisioning and a successful
+packaged PDF/raster import still require verification on an eligible Windows
+host; these source changes do not claim that release qualification.
+
 `windows_import_worker_tests` and its static `/MT` probe exercise the live
 Windows path when the test process is not already inside a parent Job Object.
 Some CI and desktop test harnesses place every child in such a job; those

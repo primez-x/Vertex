@@ -31,9 +31,15 @@ FingerprintResource scene_resource(const Json& value) {
              {"entity_id", value.at("entity_id")}, {"sheet_id", value.at("sheet_id")}}};
 }
 OutputFingerprintInputs bind_scene_inputs(const OutputFingerprintInputs& inputs, const Json& value) {
-    require(inputs.views.state == FingerprintGroupState::unspecified &&
-        inputs.views.resources.empty() && inputs.views.roles.empty() && inputs.views.reason.empty(),
-        "sheet output adapter requires an unspecified empty views dependency group");
+    require(inputs.views.roles.empty() && inputs.views.reason.empty(),
+        "sheet output adapter does not accept view roles or a view reason");
+    require(inputs.views.state == FingerprintGroupState::unspecified ||
+                inputs.views.state == FingerprintGroupState::resources,
+            "sheet output adapter requires an unspecified or resource-backed views dependency group");
+    if (inputs.views.state == FingerprintGroupState::unspecified) {
+        require(inputs.views.resources.empty(),
+            "an unspecified views dependency group cannot contain resources");
+    }
     auto result = inputs;
     result.views.state = FingerprintGroupState::resources;
     result.views.resources.push_back(scene_resource(value));
@@ -71,9 +77,16 @@ OutputFingerprintCurrentness check_sheet_output_scene_current(
         if (!fingerprint) throw std::invalid_argument(error);
         const auto expected = scene_resource(value);
         const auto& views = fingerprint->manifest.at("dependencies").at("views");
-        require(views.at("state") == "resources" && views.at("resources") == Json::array({
-            {{"id", expected.id}, {"sha256", expected.sha256}, {"metadata", expected.metadata}}}),
-            "output fingerprint does not bind this sheet scene");
+        require(views.at("state") == "resources" && views.at("resources").is_array(),
+                "output fingerprint does not bind resource-backed views");
+        const auto scene = std::find_if(views.at("resources").begin(),
+                                        views.at("resources").end(), [&](const auto& resource) {
+                                            return resource.at("id") == expected.id;
+                                        });
+        require(scene != views.at("resources").end() &&
+                    *scene == Json{{"id", expected.id}, {"sha256", expected.sha256},
+                                   {"metadata", expected.metadata}},
+                "output fingerprint does not bind this sheet scene");
         const auto current = descriptor(snapshot, entity_id, sheet_id);
         return check_output_fingerprint_current(*fingerprint, snapshot, bind_scene_inputs(inputs, current));
     } catch (const std::exception& error) {

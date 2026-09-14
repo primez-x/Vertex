@@ -21,6 +21,7 @@
 #include "sketch/product_scope.hpp"
 #include "sketch/desktop/building_object_dialog.hpp"
 #include "support/noninteractive_errors.hpp"
+#include "support/trusted_reference_fixture.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include "../src/desktop/draft_image_stamp.hpp"
 
@@ -29,6 +30,7 @@
 #include <QCheckBox>
 #include <QClipboard>
 #include <QComboBox>
+#include <QCryptographicHash>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -1931,7 +1933,11 @@ void test_building_form_authoring_and_quantity_history() {
     require(window.selectedEntityId().isEmpty(), "queued selection from an old document must not affect a reopened document");
     require(window.document().snapshot().entities().at(exact_id.toStdString()).properties.at("quantity_entries").at("/width_m") == receipt,
             "fractional input survives save/reopen without losing provenance");
-    require(window.exportDraftPdf(directory.filePath("architectural-forms.pdf")), "the architectural-form scene exports through the shared PDF renderer");
+    if (!window.exportDraftPdf(directory.filePath("architectural-forms.pdf"))) {
+        throw std::runtime_error(
+            "the architectural-form scene exports through the shared PDF renderer: " +
+            window.lastError().toStdString());
+    }
     const auto svg = directory.filePath("architectural-forms.svg");
     require(window.exportDraftSvg(svg), "the architectural-form scene exports through the shared SVG renderer");
     QFile svg_file(svg);
@@ -3864,6 +3870,169 @@ void test_market_scoped_architectural_workflow() {
     }
 }
 
+void test_pdf_export_atomicity() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "PDF atomicity fixture needs a temporary directory");
+    sketch::desktop::MainWindow window;
+    const auto path = directory.filePath(QStringLiteral("drawing.pdf"));
+    const auto read = [](const QString& name) {
+        QFile file(name);
+        require(file.open(QIODevice::ReadOnly), "PDF atomicity fixture must be readable");
+        return file.readAll();
+    };
+    if (!window.exportDraftPdf(path)) {
+        throw std::runtime_error("PDF atomicity fixture must export initially: " +
+                                 window.lastError().toStdString());
+    }
+    const auto original = read(path);
+    require(original.startsWith("%PDF-") && original.contains("%%EOF"),
+            "successful PDF must be finalized before export returns");
+    const auto fingerprint_path = path + QStringLiteral(".fingerprint.json");
+    require(QFile::remove(fingerprint_path) && QDir().mkdir(fingerprint_path),
+            "fingerprint destination must be blocked deterministically");
+    require(window.editSheetMetadata(QStringLiteral("sheet-1"), QStringLiteral("CHANGED"),
+                QStringLiteral("Replacement drawing"), QStringLiteral("Atomic output"),
+                QStringLiteral("Test"), QStringLiteral("2026-09-13")),
+            "replacement PDF must have changed drawing content");
+    require(!window.exportDraftPdf(path), "blocked fingerprint must fail the export");
+    require(read(path) == original, "fingerprint failure must preserve the existing PDF bytes");
+    const auto absent_path = directory.filePath(QStringLiteral("absent.pdf"));
+    require(QDir().mkdir(absent_path + QStringLiteral(".fingerprint.json")) &&
+                !window.exportDraftPdf(absent_path) && !QFileInfo::exists(absent_path),
+            "failed export must not publish a new PDF");
+    require(QDir().rmdir(fingerprint_path), "fingerprint fixture must unblock cleanly");
+
+    const auto valid_sheet = window.document().snapshot().entities().at("sheet-view-1");
+    auto unrenderable_sheet = valid_sheet;
+    auto& tiny_page = unrenderable_sheet.properties["model"]["sheets"][0];
+    tiny_page["width_mm"] = 0.001;
+    tiny_page["height_mm"] = 0.001;
+    for (const auto* placements : {"viewports", "schedules", "revisions", "callouts"}) {
+        tiny_page[placements] = nlohmann::json::array();
+    }
+    window.document().apply(sketch::ApplyEntityChanges{
+        window.document().revision(), {sketch::EntityChange::upsert(unrenderable_sheet)}, {},
+        "exercise sheet below PDF device resolution"});
+    require(!window.exportDraftPdf(path) && read(path) == original,
+            "unrenderable sheet output must preserve the existing PDF bytes");
+    window.document().apply(sketch::ApplyEntityChanges{
+        window.document().revision(), {sketch::EntityChange::upsert(valid_sheet)}, {},
+        "restore valid sheet output"});
+    require(window.exportDraftPdf(path) && read(path) != original,
+            "successful export must atomically replace the previous PDF");
+    {
+        QPdfDocument pdf;
+        require(pdf.load(path) == QPdfDocument::Error::None && pdf.pageCount() == 1,
+                "replacement PDF must be readable after writer finalization");
+        pdf.close();
+    }
+    const auto fingerprint_digest = [&] {
+        QFile file(path + QStringLiteral(".fingerprint.json"));
+        require(file.open(QIODevice::ReadOnly | QIODevice::Text),
+                "PDF fingerprint must remain readable");
+        return nlohmann::json::parse(file.readAll()).at("fingerprint").at("digest_sha256")
+            .get<std::string>();
+    };
+    const auto visible_digest = fingerprint_digest();
+    require(window.setContainerVisible(QStringLiteral("floor-1"), false),
+            "visibility fixture must hide the persisted floor");
+    if (!window.exportDraftPdf(path)) {
+        throw std::runtime_error(
+            "PDF export must remain available with an effective visibility mask: " +
+            window.lastError().toStdString());
+    }
+    require(fingerprint_digest() != visible_digest,
+            "effective visibility masks must change the output fingerprint");
+    window.showAllContainers();
+    const auto inspect_pdf_without_explicit_close = [&] {
+        QPdfDocument pdf;
+        require(pdf.load(path) == QPdfDocument::Error::None && pdf.pageCount() == 1,
+                "PDF atomicity fixture must inspect the committed page");
+        (void)pdf.pagePointSize(0);
+    };
+    inspect_pdf_without_explicit_close();
+    auto* page_size = window.findChild<QComboBox*>(QStringLiteral("outputPageSize"));
+    require(page_size != nullptr, "PDF atomicity fixture must expose the page-size selector");
+    page_size->setCurrentText(QStringLiteral("A3"));
+    if (!window.exportDraftPdf(path)) {
+        throw std::runtime_error("repeated A3 PDF export must remain available: " +
+                                 window.lastError().toStdString());
+    }
+    require(QFileInfo(path).size() > 0, "repeated A3 PDF export must publish bytes");
+    require(!window.exportDraftPdf(directory.filePath(QStringLiteral("missing/drawing.pdf"))),
+            "unavailable PDF destination must fail without publishing output");
+    const auto blocked_path = directory.filePath(QStringLiteral("directory.pdf"));
+    require(QDir().mkdir(blocked_path), "PDF destination fixture must block replacement with a directory");
+    require(!window.exportDraftPdf(blocked_path) && QFileInfo(blocked_path).isDir(),
+            "blocked PDF destination must preserve the existing directory");
+}
+
+void test_coordinated_view_output_identity() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "view output fixture directory");
+    sketch::desktop::MainWindow window;
+    const auto horizontal = window.createStraightWall({0, 0}, {8, 0});
+    const auto vertical = window.createStraightWall({0, 0}, {0, 4});
+    require(!horizontal.isEmpty() && !vertical.isEmpty(), "view output fixture walls");
+    const auto initial = window.document().snapshot().entities().at("sheet-view-1");
+    const auto model = sketch::decode_sheet_view_entity(initial);
+    auto sheet = model.sheets().front();
+    sheet.schedules.clear();
+    sheet.viewports = {{"left", "first", {10, 10, 190, 190}, 100},
+                       {"right", "second", {220, 10, 190, 190}, 100}};
+    const auto render = [&](sketch::CoordinatedViewKind kind, bool second_vertical,
+                            bool rotate_second, const QString& name) {
+        sketch::CoordinatedView first;
+        first.id = "first";
+        first.name = "First";
+        first.kind = kind;
+        first.object_ids = {horizontal.toStdString()};
+        if (kind == sketch::CoordinatedViewKind::elevation) {
+            first.direction = {0, -1, 0};
+            first.up = {0, 0, 1};
+        }
+        auto second = first;
+        second.id = "second";
+        second.name = "Second";
+        if (second_vertical) second.object_ids = {vertical.toStdString()};
+        if (rotate_second) {
+            second.direction = {1, 0, 0};
+            second.up = {0, 0, 1};
+        }
+        auto entity = initial;
+        entity.properties["model"] = sketch::SheetViewModel::create({first, second}, {sheet}).to_json();
+        window.document().apply(sketch::ApplyEntityChanges{
+            window.document().revision(), {sketch::EntityChange::upsert(entity)}, {},
+            "exercise independently coordinated viewport output"});
+        require(window.selectEntity(horizontal), "refresh view output fixture");
+        const auto path = directory.filePath(name + QStringLiteral(".pdf"));
+        require(window.exportDraftPdf(path), "coordinated viewport PDF must export");
+        QPdfDocument pdf;
+        require(pdf.load(path) == QPdfDocument::Error::None, "coordinated viewport PDF must load");
+        const auto image = pdf.render(0, QSize(1680, 1188));
+        require(!image.isNull(), "coordinated viewport PDF must render");
+        return image;
+    };
+    const auto left = QRect(50, 120, 730, 650);
+    const auto right = QRect(890, 120, 730, 650);
+    for (const auto kind : {sketch::CoordinatedViewKind::plan,
+                            sketch::CoordinatedViewKind::elevation}) {
+        const auto original = render(kind, false, false, QStringLiteral("original"));
+        const auto changed = render(kind, true, false, QStringLiteral("filtered"));
+        require(original.copy(left) == changed.copy(left),
+                "changing a second same-kind view must preserve the first viewport");
+        require(original.copy(right) != changed.copy(right),
+                "each same-kind viewport must render its own object_ids, including plan");
+    }
+    for (const auto kind : {sketch::CoordinatedViewKind::plan,
+                            sketch::CoordinatedViewKind::elevation}) {
+        const auto original = render(kind, false, false, QStringLiteral("frame-original"));
+        const auto rotated = render(kind, false, true, QStringLiteral("frame-rotated"));
+        require(original.copy(left) == rotated.copy(left) && original.copy(right) != rotated.copy(right),
+                "each same-kind viewport must render its own persisted frame");
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -3874,6 +4043,21 @@ int main(int argc, char** argv) {
     const auto families = QFontDatabase::applicationFontFamilies(font_id);
     require(!families.isEmpty(), "bundled Inter font must expose a family");
     application.setFont(QFont(families.front(), 10));
+    if (argc == 2 && std::string_view(argv[1]) == "--coordinated-view-output-only") {
+        test_coordinated_view_output_identity();
+        std::cout << "Coordinated view output tests passed\n";
+        return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--pdf-export-atomicity-only") {
+        test_pdf_export_atomicity();
+        std::cout << "PDF export atomicity tests passed\n";
+        return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--building-form-only") {
+        test_building_form_authoring_and_quantity_history();
+        std::cout << "Building form workflow tests passed\n";
+        return 0;
+    }
     test_plan_canvas_native_pointer_events();
     if (argc == 2 && std::string_view(argv[1]) == "--selection-clipboard-only") {
         test_multiple_selection_clipboard_workflow();
@@ -3920,6 +4104,8 @@ int main(int argc, char** argv) {
     test_hosted_opening_editor(field_ui_capture_directory);
     test_calculation_deduction_workflow();
     test_market_scoped_architectural_workflow();
+    test_coordinated_view_output_identity();
+    test_pdf_export_atomicity();
     test_contextual_building_dimension_inspector(field_ui_capture_directory);
     test_contextual_roof_dimension_inspector();
     test_hip_roof_authoring(field_ui_capture_directory);
@@ -4149,7 +4335,7 @@ int main(int argc, char** argv) {
     QImage reference_image(40, 20, QImage::Format_ARGB32);
     reference_image.fill(QColor(220, 240, 255));
     require(reference_image.save(reference_path, "PNG"), "reference fixture should save a PNG");
-    const auto reference_id = window.importReferenceImage(reference_path);
+    const auto reference_id = sketch::testing::importOrSeedTrustedReferenceFixture(window, reference_path, reference_image);
     require(!reference_id.isEmpty(), "a local raster should import into the document");
     const auto reference_snapshot = window.document().snapshot();
     const auto reference_entity = reference_snapshot.entities().find(reference_id.toStdString());
@@ -4207,8 +4393,12 @@ int main(int argc, char** argv) {
     require(reference_image.save(reference_path), "red reference fixture should save");
     reference_image.fill(Qt::blue);
     require(reference_image.save(second_reference_path), "blue reference fixture should save");
-    const auto first_underlay = multi_reference_window.importReferenceImage(reference_path);
-    const auto second_underlay = multi_reference_window.importReferenceImage(second_reference_path);
+    reference_image.fill(Qt::red);
+    const auto first_underlay = sketch::testing::importOrSeedTrustedReferenceFixture(
+        multi_reference_window, reference_path, reference_image);
+    reference_image.fill(Qt::blue);
+    const auto second_underlay = sketch::testing::importOrSeedTrustedReferenceFixture(
+        multi_reference_window, second_reference_path, reference_image);
     require(!first_underlay.isEmpty() && !second_underlay.isEmpty(), "two raster imports should succeed");
     const auto place_underlay = [&](const QString& id, const QString& x, bool visible) {
         return multi_reference_window.editReferenceTransform(id, x, QStringLiteral("0"),
@@ -4283,7 +4473,7 @@ int main(int argc, char** argv) {
         painter.end();
     }
     sketch::desktop::MainWindow pdf_window;
-    const auto pdf_id = pdf_window.importReferenceImage(reference_pdf_path);
+    const auto pdf_id = sketch::testing::importOrSeedTrustedReferenceFixture(pdf_window, reference_pdf_path, reference_image);
     require(!pdf_id.isEmpty(), "a local PDF first page should import into the document");
     const auto pdf_snapshot = pdf_window.document().snapshot();
     const auto pdf_entity = pdf_snapshot.entities().find(pdf_id.toStdString());
@@ -4878,6 +5068,7 @@ int main(int argc, char** argv) {
         require(std::abs(points.width() * 25.4 / 72.0 - width) < 0.4 &&
                     std::abs(points.height() * 25.4 / 72.0 - height) < 0.4,
                 "PDF physical page must match persisted selected sheet millimetres");
+        pdf.close();
     };
     require_pdf_page_mm(420.0, 297.0);
     auto* physical_page_preset = window.findChild<QComboBox*>(QStringLiteral("outputPageSize"));
@@ -4895,7 +5086,9 @@ int main(int argc, char** argv) {
     bool selected_sheet_bound = false;
     for (const auto& resource : selected_sheet_manifest.at("fingerprint").at("manifest")
                                       .at("dependencies").at("views").at("resources")) {
-        if (resource.at("metadata").at("sheet_id") == added_sheet_id.toStdString()) {
+        const auto& metadata = resource.at("metadata");
+        if (metadata.is_object() && metadata.contains("sheet_id") &&
+            metadata.at("sheet_id") == added_sheet_id.toStdString()) {
             selected_sheet_bound = true;
             break;
         }
@@ -5008,8 +5201,33 @@ int main(int argc, char** argv) {
             "draft PDF fingerprint should be readable");
     const auto pdf_fingerprint_json = nlohmann::json::parse(pdf_fingerprint.readAll().toStdString());
     require(pdf_fingerprint_json.at("output_kind") == "pdf" &&
-                pdf_fingerprint_json.at("fingerprint").at("digest_sha256").is_string(),
+                pdf_fingerprint_json.at("fingerprint").at("digest_sha256").is_string() &&
+                pdf_fingerprint_json.at("output_sha256").is_string(),
             "draft PDF fingerprint must identify the output and digest");
+    QFile pdf_bytes(pdf_path_qstring);
+    require(pdf_bytes.open(QIODevice::ReadOnly), "draft PDF bytes should be readable for evidence");
+    const auto pdf_digest = QCryptographicHash::hash(pdf_bytes.readAll(), QCryptographicHash::Sha256)
+                                .toHex().toStdString();
+    pdf_bytes.close();
+    require(pdf_fingerprint_json.at("output_sha256") == pdf_digest,
+            "draft PDF fingerprint must bind the committed PDF bytes");
+    const auto& processing_roles = pdf_fingerprint_json.at("fingerprint").at("manifest")
+                                       .at("dependencies").at("processing_components").at("roles");
+    bool runtime_dependency_bound = false;
+    for (const auto& [role_name, role] : processing_roles.items()) {
+        (void)role_name;
+        for (const auto& resource : role.at("resources")) {
+            if (resource.at("metadata").value("identity", "") == "verified-runtime-binary" ||
+                resource.at("metadata").value("identity", "") == "developer-runtime-binary") {
+                runtime_dependency_bound = true;
+            }
+            require(resource.at("metadata").value("identity", "") !=
+                        "statically-linked-into-application",
+                    "processing fingerprints must not mislabel dynamic runtime DLLs as static");
+        }
+    }
+    require(runtime_dependency_bound,
+            "processing fingerprints must bind an observed runtime dependency set");
     pdf_fingerprint.close();
     require(window.exportDraftSvg(svg_path_qstring), "draft SVG export should succeed locally");
     require(std::filesystem::file_size(svg_path) > 0, "draft SVG should be nonempty");
@@ -5044,7 +5262,10 @@ int main(int argc, char** argv) {
     auto* page_size = window.findChild<QComboBox*>(QStringLiteral("outputPageSize"));
     require(page_size && page_size->count() == 5, "output sheet selector should expose five page sizes");
     page_size->setCurrentText(QStringLiteral("A3"));
-    require(window.exportDraftPdf(pdf_path_qstring), "A3 draft PDF export should succeed locally");
+    if (!window.exportDraftPdf(pdf_path_qstring)) {
+        throw std::runtime_error("A3 draft PDF export should succeed locally: " +
+                                 window.lastError().toStdString());
+    }
     require(std::filesystem::file_size(pdf_path) > 0, "A3 draft PDF should be nonempty");
     require(std::filesystem::file_size(pdf_fingerprint_path) > 0,
             "A3 draft PDF must refresh its adjacent output fingerprint");

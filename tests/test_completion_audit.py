@@ -51,11 +51,57 @@ class CompletionAuditTests(unittest.TestCase):
     def test_test_log_status_rejects_failures_and_accepts_complete_log(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
+            (root / "CTestTestfile.cmake").write_text(
+                "# Source directory: {0}\n"
+                "# Build directory: {1}\n"
+                "add_test([=[one]=] \"{1}/one.exe\")\n"
+                "add_test([=[two]=] \"{1}/two.exe\")\n".format(root, root),
+                encoding="utf-8")
             log = root / "LastTest.log"
-            log.write_text("Test Passed.\nEnd testing: now\n", encoding="utf-8")
-            self.assertEqual(audit.test_log_status(log)["status"], "pass")
+            log.write_text(
+                "Start testing: now\n"
+                "1/2 Testing: one\n"
+                "1/2 Test: one\n"
+                "Command: \"{0}/one.exe\"\n"
+                "Directory: {0}\n"
+                "Test Passed.\n"
+                "2/2 Testing: two\n"
+                "2/2 Test: two\n"
+                "Command: \"{0}/two.exe\"\n"
+                "Directory: {0}\n"
+                "Test Passed.\n"
+                "End testing: now\n".format(root), encoding="utf-8")
+            self.assertEqual(audit.test_log_status(log, root)["status"], "pass")
             log.write_text("Test Passed.\nTest Failed.\nEnd testing: now\n", encoding="utf-8")
-            self.assertEqual(audit.test_log_status(log)["status"], "blocked")
+            self.assertEqual(audit.test_log_status(log, root)["status"], "blocked")
+
+    def test_test_log_status_rejects_focused_and_skipped_runs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "CTestTestfile.cmake").write_text(
+                "# Source directory: {0}\n# Build directory: {1}\n"
+                "add_test([=[one]=] \"{1}/one.exe\")\n"
+                "add_test([=[two]=] \"{1}/two.exe\")\n"
+                "set_tests_properties([=[two]=] PROPERTIES SKIP_RETURN_CODE \"77\")\n"
+                .format(root, root), encoding="utf-8")
+            log = root / "LastTest.log"
+            log.write_text(
+                "Start testing: now\n1/2 Testing: one\n1/2 Test: one\n"
+                "Command: \"{0}/one.exe\"\nDirectory: {0}\nTest Passed.\n"
+                "End testing: now\n".format(root), encoding="utf-8")
+            result = audit.test_log_status(log, root)
+            self.assertEqual(result["status"], "partial")
+            self.assertTrue(any("missing" in detail for detail in result["details"]))
+
+            log.write_text(
+                "Start testing: now\n1/2 Testing: one\n1/2 Test: one\n"
+                "Command: \"{0}/one.exe\"\nDirectory: {0}\nTest Passed.\n"
+                "2/2 Testing: two\n2/2 Test: two\nCommand: \"{0}/two.exe\"\n"
+                "Directory: {0}\nOutput:\nworker fixture skipped\nTest Passed.\n"
+                "End testing: now\n".format(root), encoding="utf-8")
+            result = audit.test_log_status(log, root)
+            self.assertEqual(result["status"], "partial")
+            self.assertTrue(any("skipped" in detail for detail in result["details"]))
 
     def test_latest_runtime_report_discovers_task_owned_reports(self):
         with tempfile.TemporaryDirectory() as directory:

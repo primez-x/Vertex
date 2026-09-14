@@ -345,7 +345,8 @@ bool environment_block(const WindowsImportWorkerOptions& options,
                 return static_cast<wchar_t>(std::towlower(c));
             });
             if (name == L"systemroot") system_root = entry.substr(separator + 1);
-            if (name == L"path" || name == L"temp" || name == L"tmp" || name == L"systemroot" ||
+            if (name.starts_with(L"qt_") || name.starts_with(L"qml") ||
+                name == L"path" || name == L"temp" || name == L"tmp" || name == L"systemroot" ||
                 name == L"windir" || name == L"localappdata" || name == L"appdata" ||
                 name == L"userprofile" || name == L"homedrive" || name == L"homepath" ||
                 name == L"comspec" || name == L"proj_network" || name == L"proj_debug" ||

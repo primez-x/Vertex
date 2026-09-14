@@ -9,8 +9,10 @@ inline constexpr std::uint32_t kSheetOutputSceneVersion = 1;
 
 // Resolves one persisted sheet_view_model entity and selected sheet. The
 // detached envelope retains the validated graph for cross-sheet references.
-// This adapter owns inputs.views: callers must leave that group unspecified
-// and empty. All other fingerprint dependencies remain caller responsibilities.
+// This adapter owns the scene resource within inputs.views. Callers may provide
+// additional resource-backed view inputs, such as effective visibility masks;
+// the adapter appends and validates its own scene resource. All other
+// fingerprint dependencies remain caller responsibilities.
 // Throws std::invalid_argument or OutputFingerprintError on invalid inputs.
 [[nodiscard]] nlohmann::json make_sheet_output_scene(
     const DocumentSnapshot& snapshot, const std::string& entity_id,

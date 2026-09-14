@@ -2,6 +2,7 @@
 #include "sketch/assistance_engine.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "support/noninteractive_errors.hpp"
+#include "support/trusted_reference_fixture.hpp"
 
 #include <QApplication>
 #include <QImage>
@@ -58,8 +59,8 @@ int main(int argc, char** argv) {
         }
         require(image.save(QString::fromStdWString(image_path.wstring()), "PNG"),
                 "reference fixture must save");
-        const auto reference_id = window.importReferenceImage(
-            QString::fromStdWString(image_path.wstring()));
+        const auto reference_id = testing::importOrSeedTrustedReferenceFixture(window,
+            QString::fromStdWString(image_path.wstring()), image);
         require(!reference_id.isEmpty(), "reference fixture must import");
         require(window.selectEntity(reference_id), "reference fixture must be selected");
         const auto require_calibration_error = [&] {

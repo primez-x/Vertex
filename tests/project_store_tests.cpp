@@ -1479,11 +1479,37 @@ void test_reopen_preserves_redo_navigation_and_named_abandoned_branch() {
             "branch replacement receipt should name the exact published revision");
 }
 
+void test_native_room_topology_is_validated_on_restore() {
+    TempDirectory temp;
+    const auto path = temp.path / "room.bldproj";
+    const auto rectangle = [](double x, double y, double w, double h) {
+        auto result = nlohmann::json::array();
+        for (const auto& edge : sketch::Boundary{{{x,y},{x+w,y},0}, {{x+w,y},{x+w,y+h},0},
+                 {{x+w,y+h},{x,y+h},0}, {{x,y+h},{x,y},0}})
+            result.push_back({{"start", {edge.start.x, edge.start.y}},
+                {"end", {edge.end.x, edge.end.y}}, {"sweep_radians", 0.0}});
+        return result;
+    };
+    auto room = entity("persisted-room", "room", {{"boundary", rectangle(0,0,10,10)},
+        {"holes", nlohmann::json::array({rectangle(1,1,2,2)})}, {"height_m", 3}, {"elevation_m", 0}});
+    const auto document = Document::create({room});
+    (void)ProjectStore::save(path, document.snapshot());
+    require(ProjectStore::load(path).document.snapshot().entities() == document.snapshot().entities(),
+        "valid room volume should reopen exactly");
+    room.properties["holes"] = nlohmann::json::array({rectangle(11,1,2,2)});
+    execute_sql(path, "UPDATE revision_entities SET properties_json='" + room.properties.dump() + "' WHERE id='persisted-room'");
+    // A valid logical digest must not substitute for semantic validation.
+    rewrite_logical_digest(path);
+    require_error([&] { (void)ProjectStore::load(path); }, StorageErrorCode::integrity_failure,
+        "persisted invalid room topology must fail at native project restore");
+}
+
 }  // namespace
 
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_native_room_topology_is_validated_on_restore();
         test_save_reopen_preserves_exact_revision_history_and_assets();
         test_existing_destination_requires_fingerprint_and_creates_backup();
         test_external_change_and_injected_failure_preserve_original();

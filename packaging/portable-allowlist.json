@@ -66,6 +66,144 @@
       "inventory_entry": "proj-resources",
       "path": ".deps/native/x64-windows/share/proj/copyright",
       "destination": "licenses/PROJ-COPYRIGHT.txt"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "assistance-engine",
+      "path": "LICENSE",
+      "destination": "licenses/assistance-engine-LICENSE"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "boost-graph",
+      "path": ".deps/native/x64-windows/share/boost-graph/copyright",
+      "destination": "licenses/boost-graph-copyright"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "brotli",
+      "path": ".deps/native/x64-windows/share/brotli/copyright",
+      "destination": "licenses/brotli-copyright"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "bzip2",
+      "path": ".deps/native/x64-windows/share/bzip2/copyright",
+      "destination": "licenses/bzip2-copyright"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "eigen3",
+      "path": ".deps/native/x64-windows/share/eigen3/copyright",
+      "destination": "licenses/eigen3-copyright"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "freetype",
+      "path": ".deps/native/x64-windows/share/freetype/copyright",
+      "destination": "licenses/freetype-copyright"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "libpng",
+      "path": ".deps/native/x64-windows/share/libpng/copyright",
+      "destination": "licenses/libpng-copyright"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "nlohmann-json",
+      "path": "third_party/nlohmann-json-LICENSE.MIT",
+      "destination": "licenses/nlohmann-json-nlohmann-json-LICENSE.MIT"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "opencascade",
+      "path": ".deps/native/x64-windows/share/opencascade/copyright",
+      "destination": "licenses/opencascade-copyright"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "planegcs",
+      "path": "third_party/planegcs/upstream/LICENSE",
+      "destination": "licenses/planegcs-LICENSE"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "proj",
+      "path": ".deps/native/x64-windows/share/proj/copyright",
+      "destination": "licenses/proj-copyright"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "property-cli",
+      "path": "LICENSE",
+      "destination": "licenses/property-cli-LICENSE"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "property-studio-help",
+      "path": "LICENSE",
+      "destination": "licenses/property-studio-help-LICENSE"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "property-studio-import-worker",
+      "path": "LICENSE",
+      "destination": "licenses/property-studio-import-worker-LICENSE"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "qt-runtime-config",
+      "path": "LICENSE",
+      "destination": "licenses/qt-runtime-config-LICENSE"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "qtbase",
+      "path": ".deps/qt/6.8.3/msvc2022_64/sbom/qtbase-6.8.3.spdx",
+      "destination": "licenses/qtbase-qtbase-6.8.3.spdx"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "qtbase",
+      "path": ".deps/qt/6.8.3/msvc2022_64/sbom/qtbase-6.8.3.source.spdx",
+      "destination": "licenses/qtbase-qtbase-6.8.3.source.spdx"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "qtpdf",
+      "path": ".deps/qt/6.8.3/msvc2022_64/sbom/qtpdf-6.8.3.spdx",
+      "destination": "licenses/qtpdf-qtpdf-6.8.3.spdx"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "qtpdf",
+      "path": ".deps/qt/6.8.3/msvc2022_64/sbom/qtpdf-6.8.3.source.spdx",
+      "destination": "licenses/qtpdf-qtpdf-6.8.3.source.spdx"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "qtsvg",
+      "path": ".deps/qt/6.8.3/msvc2022_64/sbom/qtsvg-6.8.3.spdx",
+      "destination": "licenses/qtsvg-qtsvg-6.8.3.spdx"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "sqlite",
+      "path": "third_party/README.md",
+      "destination": "licenses/sqlite-README.md"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "sqlite3-runtime",
+      "path": ".deps/native/x64-windows/share/sqlite3/copyright",
+      "destination": "licenses/sqlite3-runtime-copyright"
+    },
+    {
+      "kind": "notice",
+      "inventory_entry": "zlib",
+      "path": ".deps/native/x64-windows/share/zlib/copyright",
+      "destination": "licenses/zlib-copyright"
     }
   ]
 }

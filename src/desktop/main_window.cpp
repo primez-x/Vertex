@@ -2,6 +2,7 @@
 
 #include "plan_canvas.hpp"
 #include "draft_image_stamp.hpp"
+#include "reference_import.hpp"
 
 #include "sketch/architecture.hpp"
 #include "sketch/opening_assembly.hpp"
@@ -66,10 +67,12 @@
 #include <QCheckBox>
 #include <QClipboard>
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDesktopServices>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -95,7 +98,6 @@
 #include <QBuffer>
 #include <QRegularExpression>
 #include <QPainter>
-#include <QPdfDocument>
 #include <QPdfWriter>
 #include <QPrintPreviewDialog>
 #include <QPrinter>
@@ -123,6 +125,7 @@
 #include <QToolButton>
 #include <QTimer>
 #include <QTemporaryDir>
+#include <QTemporaryFile>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
@@ -1677,6 +1680,31 @@ struct ArchitecturalViewContext {
     std::vector<std::string> object_ids;
 };
 
+BuildingViewKind architectural_view_kind(CoordinatedViewKind kind) {
+    switch (kind) {
+    case CoordinatedViewKind::plan: return BuildingViewKind::plan;
+    case CoordinatedViewKind::elevation: return BuildingViewKind::elevation;
+    case CoordinatedViewKind::section: return BuildingViewKind::section;
+    }
+    throw std::invalid_argument("unknown coordinated view kind");
+}
+
+ArchitecturalViewContext architectural_view_context(const CoordinatedView& view) {
+    const BuildingViewFrame base{
+        {view.origin_m[0], view.origin_m[1], view.origin_m[2]},
+        {view.direction[0], view.direction[1], view.direction[2]},
+        {view.up[0], view.up[1], view.up[2]}};
+    ArchitecturalViewContext result{base,
+        BuildingViewDepth{base.origin, base.direction, view.presentation.far_depth_m},
+        view.presentation, view.object_ids};
+    if (view.kind == CoordinatedViewKind::section) {
+        result.frame.origin.x += base.direction.x * view.presentation.cut_depth_m;
+        result.frame.origin.y += base.direction.y * view.presentation.cut_depth_m;
+        result.frame.origin.z += base.direction.z * view.presentation.cut_depth_m;
+    }
+    return result;
+}
+
 ArchitecturalViewContext architectural_view_context(const DocumentSnapshot& snapshot,
                                                     BuildingViewKind kind) {
     const auto fallback = architectural_view_frame(kind);
@@ -1699,24 +1727,7 @@ ArchitecturalViewContext architectural_view_context(const DocumentSnapshot& snap
                     return view.kind == expected;
                 });
             if (found == model.views().end()) continue;
-            const BuildingViewFrame base{
-                {found->origin_m[0], found->origin_m[1], found->origin_m[2]},
-                {found->direction[0], found->direction[1], found->direction[2]},
-                {found->up[0], found->up[1], found->up[2]}};
-            result.frame = base;
-            result.depth = BuildingViewDepth{base.origin, base.direction,
-                                             found->presentation.far_depth_m};
-            result.presentation = found->presentation;
-            result.object_ids = found->object_ids;
-            if (kind == BuildingViewKind::section) {
-                result.frame.origin.x += result.frame.direction.x *
-                                         found->presentation.cut_depth_m;
-                result.frame.origin.y += result.frame.direction.y *
-                                         found->presentation.cut_depth_m;
-                result.frame.origin.z += result.frame.direction.z *
-                                         found->presentation.cut_depth_m;
-            }
-            return result;
+            return architectural_view_context(*found);
         } catch (const std::exception&) {
             // The typed Document boundary reports malformed sheet/view data;
             // a transient canvas still falls back to the safe default frame.
@@ -7804,61 +7815,24 @@ public:
             }
             const auto cleaned = path.trimmed();
             if (cleaned.isEmpty()) throw std::invalid_argument("Choose a reference image or PDF.");
-            QFile file(cleaned);
-            if (!file.open(QIODevice::ReadOnly)) {
-                throw std::invalid_argument("The reference image could not be opened.");
-            }
-            const auto raw = file.readAll();
-            if (raw.isEmpty()) throw std::invalid_argument("The reference image is empty.");
-            QString mime;
+            const auto decoded = decodeReferenceFile(cleaned, page_index);
+            const auto& raw = decoded.source;
+            const auto& image = decoded.image;
+            const auto& mime = decoded.mime;
             const auto suffix = QFileInfo(cleaned).suffix().trimmed().toLower();
-            QImage image;
-            std::optional<Asset> render_asset;
-            if (suffix == QStringLiteral("pdf")) {
-                QPdfDocument pdf;
-                if (pdf.load(cleaned) != QPdfDocument::Error::None || pdf.pageCount() < 1) {
-                    throw std::invalid_argument("The reference PDF could not be decoded.");
-                }
-                if (page_index < 0 || page_index >= pdf.pageCount()) {
-                    throw std::invalid_argument("The selected PDF page does not exist.");
-                }
-                const auto page_points = pdf.pagePointSize(page_index);
-                if (!(page_points.width() > 0.0) || !(page_points.height() > 0.0) ||
-                    !std::isfinite(page_points.width()) || !std::isfinite(page_points.height())) {
-                    throw std::invalid_argument("The reference PDF has no valid selected page.");
-                }
-                const auto pixels = [](qreal points) {
-                    return std::clamp(static_cast<int>(std::lround(points * 2.0)), 256, 4096);
-                };
-                image = pdf.render(page_index, QSize(pixels(page_points.width()), pixels(page_points.height())));
-                if (image.isNull()) throw std::invalid_argument("The reference PDF page could not be rasterized.");
-                QByteArray preview_bytes;
-                QBuffer preview_buffer(&preview_bytes);
-                if (!preview_buffer.open(QIODevice::WriteOnly) || !image.save(&preview_buffer, "PNG")) {
-                    throw std::invalid_argument("The reference PDF preview could not be encoded.");
-                }
-                std::vector<std::byte> preview;
-                preview.reserve(static_cast<std::size_t>(preview_bytes.size()));
-                for (const auto value : preview_bytes) preview.push_back(static_cast<std::byte>(value));
-                render_asset = Asset::create(new_id("reference-preview"), "image/png",
-                    std::move(preview), { {"content", "pdf-page-preview"},
-                                          {"page_index", page_index}, {"page_count", pdf.pageCount()} });
-                mime = QStringLiteral("application/pdf");
-            } else {
-                image = QImage::fromData(raw);
-                if (image.isNull()) {
-                    throw std::invalid_argument("Only decodable PDF, PNG, JPEG, BMP, and TIFF images are supported.");
-                }
-                if (suffix == QStringLiteral("png")) mime = QStringLiteral("image/png");
-                else if (suffix == QStringLiteral("jpg") || suffix == QStringLiteral("jpeg"))
-                    mime = QStringLiteral("image/jpeg");
-                else if (suffix == QStringLiteral("bmp")) mime = QStringLiteral("image/bmp");
-                else if (suffix == QStringLiteral("tif") || suffix == QStringLiteral("tiff"))
-                    mime = QStringLiteral("image/tiff");
-                else {
-                    throw std::invalid_argument("Reference image extension must be PDF, PNG, JPEG, BMP, or TIFF.");
-                }
+            // Publish only a desktop-encoded preview of validated raw worker
+            // pixels. Later views must not decode the untrusted source again.
+            QByteArray preview_bytes;
+            QBuffer preview_buffer(&preview_bytes);
+            if (!preview_buffer.open(QIODevice::WriteOnly) || !image.save(&preview_buffer, "PNG")) {
+                throw std::invalid_argument("The reference preview could not be encoded.");
             }
+            std::vector<std::byte> preview;
+            preview.reserve(static_cast<std::size_t>(preview_bytes.size()));
+            for (const auto value : preview_bytes) preview.push_back(static_cast<std::byte>(value));
+            auto render_asset = Asset::create(new_id("reference-preview"), "image/png",
+                std::move(preview), { {"content", suffix == "pdf" ? "pdf-page-preview" : "raster-preview"},
+                                      {"page_index", page_index}, {"page_count", decoded.page_count} });
             std::vector<std::byte> bytes;
             bytes.reserve(static_cast<std::size_t>(raw.size()));
             for (const auto value : raw) bytes.push_back(static_cast<std::byte>(value));
@@ -7873,7 +7847,7 @@ public:
                 {{"asset_id", asset_id},
                  {"source_path", QFileInfo(cleaned).fileName().toStdString()},
                  {"mime_type", mime.toStdString()},
-                 {"render_asset_id", render_asset ? render_asset->id : asset_id},
+                 {"render_asset_id", render_asset.id},
                  {"position_m", {0.0, 0.0}},
                  {"metres_per_source_unit", 0.01},
                  {"scale", 1.0}, {"rotation_degrees", 0.0},
@@ -7882,7 +7856,7 @@ public:
             entity.id = entity_id;
             std::vector<AssetChange> asset_changes;
             asset_changes.push_back(AssetChange::upsert(std::move(asset)));
-            if (render_asset) asset_changes.push_back(AssetChange::upsert(std::move(*render_asset)));
+            asset_changes.push_back(AssetChange::upsert(std::move(render_asset)));
             const auto command = ApplyEntityChanges{
                 source.revision(), {EntityChange::upsert(std::move(entity))},
                 std::move(asset_changes), "Import reference image"};
@@ -12244,14 +12218,7 @@ public:
             for (const auto& viewport : sheet.viewports) {
                 const auto* view = find_view(viewport.view_id);
                 if (view == nullptr) continue;
-                const auto view_kind = [&] {
-                    switch (view->kind) {
-                    case CoordinatedViewKind::plan: return BuildingViewKind::plan;
-                    case CoordinatedViewKind::elevation: return BuildingViewKind::elevation;
-                    case CoordinatedViewKind::section: return BuildingViewKind::section;
-                    }
-                    throw std::invalid_argument("unknown coordinated view kind");
-                }();
+                const auto view_kind = architectural_view_kind(view->kind);
                 const QRectF viewport_rect(
                     page.left() + viewport.bounds.x_mm * paper_scale,
                     page.top() + viewport.bounds.y_mm * paper_scale,
@@ -12260,22 +12227,36 @@ public:
                 painter.save();
                 painter.setClipRect(viewport_rect);
                 const auto model_scale = paper_scale * 1000.0 / viewport.scale_denominator;
-                std::unique_ptr<PlanCanvas> temporary_canvas;
-                PlanCanvas* viewport_canvas = nullptr;
-                if (view_kind == BuildingViewKind::plan) {
-                    viewport_canvas = m_measurementCanvas;
-                } else if (view_kind == m_architectural_view_kind) {
-                    viewport_canvas = m_architecturalCanvas;
-                } else {
-                    temporary_canvas = std::make_unique<PlanCanvas>();
-                    temporary_canvas->setGridEnabled(false);
-                    temporary_canvas->setSnapEnabled(false);
-                    temporary_canvas->setEntities(
-                        m_architectural_view_entities[architectural_view_index(view_kind)]);
-                    temporary_canvas->setLabels(m_measurementCanvas->labels());
-                    temporary_canvas->setReferences(m_measurementCanvas->references());
-                    viewport_canvas = temporary_canvas.get();
-                }
+                // A viewport references one persisted view, not the workspace's
+                // currently selected kind. Two plans/elevations can have entirely
+                // different source objects, frames, and presentation settings.
+                const auto cached = m_coordinated_view_entities.find(
+                    {sheet_entity->id, view->id});
+                if (cached == m_coordinated_view_entities.end())
+                    throw std::invalid_argument("coordinated viewport geometry is unavailable");
+                auto temporary_canvas = std::make_unique<PlanCanvas>();
+                temporary_canvas->setGridEnabled(false);
+                temporary_canvas->setSnapEnabled(false);
+                temporary_canvas->setMetricUnits(m_metric_units);
+                temporary_canvas->setEntities(cached->second);
+                const auto includes = [&](const QString& id) {
+                    return view->object_ids.empty() ||
+                        std::find(view->object_ids.begin(), view->object_ids.end(),
+                                  id.toStdString()) != view->object_ids.end();
+                };
+                std::vector<CanvasLabel> labels;
+                for (const auto& label : m_measurementCanvas->labels())
+                    if (includes(label.id)) labels.push_back(label);
+                temporary_canvas->setLabels(std::move(labels));
+                std::vector<CanvasReference> references;
+                for (const auto& reference : m_measurementCanvas->references())
+                    if (includes(reference.id)) references.push_back(reference);
+                temporary_canvas->setReferences(std::move(references));
+                std::vector<CanvasReferenceGrid> grids;
+                for (const auto& grid : m_measurementCanvas->referenceGrids())
+                    if (includes(grid.id)) grids.push_back(grid);
+                temporary_canvas->setReferenceGrids(std::move(grids));
+                auto* viewport_canvas = temporary_canvas.get();
                 const auto viewport_center = viewport_canvas->contentCenter();
                 viewport_canvas->renderSceneAt(painter, viewport_rect, model_scale,
                                                viewport_center, Qt::white, paper_scale);
@@ -12527,14 +12508,159 @@ public:
                                                      static_cast<std::size_t>(bytes.size())));
     }
 
+    [[nodiscard]] std::string digestFile(const QString& path) const {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            throw std::runtime_error("a runtime or output file cannot be read for fingerprinting");
+        }
+        QCryptographicHash digest(QCryptographicHash::Sha256);
+        while (!file.atEnd()) {
+            const auto chunk = file.read(1024 * 1024);
+            if (chunk.isEmpty()) {
+                if (file.error() != QFileDevice::NoError) {
+                    throw std::runtime_error("a runtime or output file could not be read completely");
+                }
+                break;
+            }
+            digest.addData(chunk);
+        }
+        if (file.error() != QFileDevice::NoError) {
+            throw std::runtime_error("a runtime or output file could not be read completely");
+        }
+        return digest.result().toHex().toStdString();
+    }
+
+    [[nodiscard]] std::vector<FingerprintResource> runtimeFingerprintResources() const {
+        std::vector<FingerprintResource> resources;
+        const QDir executable_dir(QCoreApplication::applicationDirPath());
+        const QDir install_root(QFileInfo(executable_dir.filePath(QStringLiteral("..")))
+                                    .absoluteFilePath());
+        const auto add_file = [&](const QString& relative, const QString& path,
+                                  const char* identity, const QString& expected_digest = QString()) {
+            const QFileInfo info(path);
+            if (!info.exists() || !info.isFile()) {
+                throw std::runtime_error("a declared runtime fingerprint file is missing");
+            }
+            const auto root = QDir::fromNativeSeparators(
+                QFileInfo(install_root.absolutePath()).canonicalFilePath()).trimmed();
+            const auto canonical = QDir::fromNativeSeparators(info.canonicalFilePath());
+            if (root.isEmpty() || canonical.isEmpty() ||
+                !canonical.startsWith(root + QStringLiteral("/"), Qt::CaseInsensitive)) {
+                throw std::runtime_error("a runtime fingerprint file escapes the application root");
+            }
+            const auto actual_digest = QString::fromStdString(digestFile(canonical));
+            if (!expected_digest.isEmpty() &&
+                expected_digest.compare(actual_digest, Qt::CaseInsensitive) != 0) {
+                throw std::runtime_error("a runtime fingerprint file does not match its manifest hash");
+            }
+            const auto name = relative.toStdString();
+            if (name == "bin/property-studio.exe") return;
+            resources.push_back(FingerprintResource{
+                "runtime-" + relative.toLower().replace('/', '_').toStdString(),
+                actual_digest.toStdString(),
+                json{{"identity", identity}, {"relative_path", name}}});
+        };
+
+        const auto manifest_path = install_root.filePath(QStringLiteral("runtime-manifest.json"));
+        if (QFileInfo::exists(manifest_path)) {
+            QFile manifest_file(manifest_path);
+            if (!manifest_file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                throw std::runtime_error("the installed runtime manifest cannot be read");
+            }
+            const auto manifest = json::parse(manifest_file.readAll().toStdString());
+            if (!manifest.is_object() || !manifest.contains("files") ||
+                !manifest.at("files").is_array()) {
+                throw std::runtime_error("the installed runtime manifest is malformed");
+            }
+            for (const auto& row : manifest.at("files")) {
+                if (!row.is_object() || row.value("install", false) != true ||
+                    row.value("kind", "") != "binary" || !row.contains("path") ||
+                    !row.at("path").is_string()) {
+                    continue;
+                }
+                const auto relative = QString::fromStdString(row.at("path").get<std::string>());
+                if (relative.isEmpty() || QDir::isAbsolutePath(relative) ||
+                    relative.contains(QStringLiteral("..")) ||
+                    (!relative.startsWith(QStringLiteral("bin/")) &&
+                     !relative.startsWith(QStringLiteral("plugins/")))) {
+                    throw std::runtime_error("the installed runtime manifest contains an unsafe binary path");
+                }
+                const auto expected = row.value("sha256", std::string());
+                if (!expected.empty() &&
+                    (expected.size() != 64 ||
+                     !std::all_of(expected.begin(), expected.end(), [](unsigned char value) {
+                         return (value >= '0' && value <= '9') ||
+                                (value >= 'a' && value <= 'f') ||
+                                (value >= 'A' && value <= 'F');
+                     }))) {
+                    throw std::runtime_error("the installed runtime manifest contains an invalid binary hash");
+                }
+                add_file(relative, install_root.filePath(relative), "verified-runtime-binary",
+                         QString::fromStdString(expected));
+            }
+            if (resources.empty()) {
+                throw std::runtime_error("the installed runtime manifest declares no runtime binaries");
+            }
+        } else {
+            // Source builds do not have an installed runtime manifest. Bind
+            // every application-local DLL that is present so developer output
+            // still becomes stale when a co-located dynamic dependency changes.
+            const std::array<QString, 2> roots{
+                executable_dir.absolutePath(),
+                install_root.filePath(QStringLiteral("plugins"))};
+            std::set<QString> seen;
+            for (const auto& root : roots) {
+                if (!QFileInfo(root).isDir()) continue;
+                QDirIterator iterator(root, {QStringLiteral("*.dll")}, QDir::Files,
+                                      QDirIterator::Subdirectories);
+                while (iterator.hasNext()) {
+                    const auto path = iterator.next();
+                    const auto canonical = QFileInfo(path).canonicalFilePath();
+                    if (!seen.insert(canonical.toLower()).second) continue;
+                    const auto relative = QDir::fromNativeSeparators(
+                        install_root.relativeFilePath(canonical));
+                    add_file(relative, canonical, "developer-runtime-binary");
+                }
+            }
+            if (resources.empty()) {
+                resources.push_back(fingerprint_resource(
+                    "runtime-development-fallback", "runtime-dependencies-not-co-located",
+                    json{{"identity", "development-runtime-fallback"},
+                         {"reason", "source build has no application-local dependency binaries"}}));
+            }
+        }
+        std::sort(resources.begin(), resources.end(),
+                  [](const auto& left, const auto& right) { return left.id < right.id; });
+        return resources;
+    }
+
     [[nodiscard]] OutputFingerprintInputs outputFingerprintInputs(
         const DocumentSnapshot& snapshot, bool include_legacy_view_descriptor = true) const {
         const auto build_digest = currentExecutableDigest();
         OutputFingerprintInputs inputs;
         inputs.profiles = fingerprint_not_applicable(
             "Calculation profiles are stored in the document head.");
-        inputs.fonts = fingerprint_not_applicable(
-            "Draft output uses the selected local Qt font without embedding font bytes.");
+        QFile bundled_output_font(QStringLiteral(":/fonts/Inter.ttf"));
+        if (!bundled_output_font.open(QIODevice::ReadOnly)) {
+            throw std::runtime_error("the bundled output font cannot be read");
+        }
+        const auto font_bytes = bundled_output_font.readAll();
+        if (font_bytes.isEmpty()) {
+            throw std::runtime_error("the bundled output font is empty");
+        }
+        inputs.fonts = fingerprint_resources({fingerprint_resource(
+            "inter-font", std::string(font_bytes.constData(), font_bytes.size()),
+            json{{"family", "Inter"}, {"embedded", true}, {"source", "application-resource"}})});
+        const json effective_view_descriptor{
+            {"hidden_floor_ids", std::vector<std::string>(
+                m_view_filter.hidden_floor_ids.begin(), m_view_filter.hidden_floor_ids.end())},
+            {"hidden_layer_ids", std::vector<std::string>(
+                m_view_filter.hidden_layer_ids.begin(), m_view_filter.hidden_layer_ids.end())},
+            {"metric_units", m_metric_units},
+        };
+        inputs.views = fingerprint_resources({fingerprint_resource(
+            "effective-view-filters", effective_view_descriptor.dump(),
+            json{{"renderer", "ProjectVisibility"}, {"descriptor_version", 1}})});
         if (include_legacy_view_descriptor) {
             json view_descriptor{{"page_size", m_pageSizeCombo ? m_pageSizeCombo->currentText().toStdString()
                                                                    : std::string("A4")},
@@ -12549,19 +12675,19 @@ public:
                     json{{"entity_id", id}, {"content_sha256", digest_text(entity.properties.dump())}};
                 break;
             }
-            inputs.views = fingerprint_resources({fingerprint_resource(
+            inputs.views.resources.push_back(fingerprint_resource(
                 "plan-canvas-view", view_descriptor.dump(),
-                json{{"renderer", "PlanCanvas"}, {"descriptor_version", 1}})});
+                json{{"renderer", "PlanCanvas"}, {"descriptor_version", 1}}));
         }
         inputs.crs = fingerprint_not_applicable(
             "Output is expressed in local project coordinates; no georeference is active.");
+        const auto runtime_resources = runtimeFingerprintResources();
         inputs.processing_components.state = FingerprintGroupState::resources;
         for (const auto role : {std::string("kernel"), std::string("solver"),
                                 std::string("renderer"), std::string("adapters")}) {
             FingerprintRole role_resource;
             role_resource.state = FingerprintGroupState::resources;
-            role_resource.resources.push_back(fingerprint_resource(
-                "linked-" + role, build_digest, json{{"role", role}, {"identity", "application-build"}}));
+            role_resource.resources = runtime_resources;
             inputs.processing_components.roles.emplace(role, std::move(role_resource));
         }
         inputs.application_build = fingerprint_resources({FingerprintResource{
@@ -12609,19 +12735,35 @@ public:
         return *fingerprint;
     }
 
-    bool writeOutputFingerprint(const QString& output_path, const DocumentSnapshot& snapshot,
-                                QString output_kind) {
+    bool prepareOutputFingerprint(QSaveFile& sidecar, const QString& output_path,
+                                  const DocumentSnapshot& snapshot, const QString& output_kind,
+                                  std::string output_digest) {
         const auto fingerprint = outputFingerprintForSnapshot(snapshot);
         const auto payload = json{{"schema", "property-studio.output-fingerprint.v1"},
                                   {"output_kind", output_kind.toStdString()},
                                   {"output_file", QFileInfo(output_path).fileName().toStdString()},
+                                  {"output_sha256", std::move(output_digest)},
                                   {"fingerprint", serialize_output_fingerprint(fingerprint)}}.dump(2);
-        QSaveFile sidecar(output_path + QStringLiteral(".fingerprint.json"));
         if (!sidecar.open(QIODevice::WriteOnly) ||
             sidecar.write(QByteArray::fromStdString(payload)) !=
-                static_cast<qint64>(payload.size()) ||
-            !sidecar.commit()) {
+                static_cast<qint64>(payload.size()) || !sidecar.flush() ||
+            sidecar.error() != QFileDevice::NoError) {
             setError(QStringLiteral("%1 export fingerprint could not be written beside the output.")
+                         .arg(output_kind));
+            return false;
+        }
+        return true;
+    }
+
+    bool writeOutputFingerprint(const QString& output_path, const DocumentSnapshot& snapshot,
+                                QString output_kind) {
+        QSaveFile sidecar(output_path + QStringLiteral(".fingerprint.json"));
+        if (!prepareOutputFingerprint(sidecar, output_path, snapshot, output_kind,
+                                      digestFile(output_path))) {
+            return false;
+        }
+        if (!sidecar.commit()) {
+            setError(QStringLiteral("%1 export fingerprint could not be committed beside the output.")
                          .arg(output_kind));
             return false;
         }
@@ -12684,31 +12826,82 @@ public:
             return false;
         }
         try {
-            QPdfWriter writer(path);
-            writer.setPageLayout(QPageLayout(selectedSheetPageSize(m_document->snapshot()),
-                QPageLayout::Portrait, QMarginsF(), QPageLayout::Millimeter));
-            writer.setResolution(144);
-            QPainter painter(&writer);
-            if (!painter.isActive()) {
-                setError(QStringLiteral("PDF export could not open the destination."));
+            const QFileInfo output_info(path);
+            QTemporaryFile staged(output_info.dir().filePath(
+                QStringLiteral(".%1.vertex-pdf-XXXXXX").arg(output_info.fileName())));
+            staged.setAutoRemove(true);
+            if (!staged.open()) {
+                setError(QStringLiteral("PDF export could not create its local staging file."));
                 return false;
             }
-            if (!renderSheetOutput(painter,
-                                   QRectF(0.0, 0.0, writer.width(), writer.height()), Qt::white)) {
-                painter.end();
+            {
+                // Finish the painter and destroy the writer before checking the
+                // device: PDF trailer writes must stay inside the transaction.
+                QPdfWriter writer(&staged);
+                if (!writer.setPageLayout(QPageLayout(
+                        selectedSheetPageSize(m_document->snapshot()),
+                        QPageLayout::Portrait, QMarginsF(), QPageLayout::Millimeter))) {
+                    setError(QStringLiteral("PDF export could not configure the drawing sheet."));
+                    return false;
+                }
+                writer.setResolution(144);
+                QPainter painter(&writer);
+                if (!painter.isActive()) {
+                    setError(QStringLiteral("PDF export could not start the renderer."));
+                    return false;
+                }
+                if (!renderSheetOutput(painter,
+                                       QRectF(0.0, 0.0, writer.width(), writer.height()), Qt::white)) {
+                    painter.end();
+                    return false;
+                }
+                painter.resetTransform();
+                painter.setPen(QColor(150, 50, 50));
+                painter.drawText(QRectF(30.0, 30.0, writer.width() - 60.0, 80.0),
+                                 Qt::TextWordWrap | Qt::AlignRight | Qt::AlignTop,
+                                 draftOutputStamp());
+                if (!painter.end()) {
+                    setError(QStringLiteral("PDF export could not finish rendering."));
+                    return false;
+                }
+            }
+            if (!staged.flush() || staged.error() != QFileDevice::NoError ||
+                staged.size() <= 0 || !staged.seek(0)) {
+                setError(QStringLiteral("PDF export could not stage the complete file."));
                 return false;
             }
-            painter.resetTransform();
-            painter.setPen(QColor(150, 50, 50));
-            painter.drawText(QRectF(30.0, 30.0, writer.width() - 60.0, 80.0),
-                             Qt::TextWordWrap | Qt::AlignRight | Qt::AlignTop,
-                             draftOutputStamp());
-            painter.end();
-            if (!QFileInfo::exists(path) || QFileInfo(path).size() <= 0) {
-                setError(QStringLiteral("PDF export did not produce a file."));
+            const auto pdf_bytes = staged.readAll();
+            if (staged.error() != QFileDevice::NoError || pdf_bytes.isEmpty()) {
+                setError(QStringLiteral("PDF export could not read its staged file."));
                 return false;
             }
-            if (!writeOutputFingerprint(path, m_document->snapshot(), QStringLiteral("pdf"))) {
+            staged.close();
+            const auto pdf_digest = QCryptographicHash::hash(
+                pdf_bytes, QCryptographicHash::Sha256).toHex().toStdString();
+            QSaveFile destination(path);
+            destination.setDirectWriteFallback(false);
+            if (!destination.open(QIODevice::WriteOnly) ||
+                destination.write(pdf_bytes) != pdf_bytes.size() || !destination.flush() ||
+                destination.error() != QFileDevice::NoError) {
+                setError(QStringLiteral("PDF export could not stage the destination."));
+                return false;
+            }
+            // Prepare the sidecar while the destination is still unpublished.
+            // QSaveFile keeps both old files intact if either preflight fails;
+            // the sidecar is committed only after the PDF replacement succeeds.
+            QSaveFile sidecar(path + QStringLiteral(".fingerprint.json"));
+            if (!prepareOutputFingerprint(sidecar, path, m_document->snapshot(),
+                                          QStringLiteral("pdf"), pdf_digest)) {
+                return false;
+            }
+            if (!destination.commit()) {
+                setError(QStringLiteral("PDF export could not save the destination: %1")
+                             .arg(destination.errorString()));
+                return false;
+            }
+            if (!sidecar.commit()) {
+                setError(QStringLiteral("PDF export fingerprint could not be committed beside the output: %1")
+                             .arg(sidecar.errorString()));
                 return false;
             }
             clearError();
@@ -14258,21 +14451,24 @@ public:
     void showReferenceImport() {
         const auto selected = QFileDialog::getOpenFileName(
             owner, QStringLiteral("Import reference image"), {},
-            QStringLiteral("Reference files (*.pdf *.png *.jpg *.jpeg *.bmp *.tif *.tiff)"));
-        if (!selected.isEmpty()) {
+            QStringLiteral("Reference files (*.pdf *.png *.jpg *.jpeg *.bmp)"));
+        if (selected.isEmpty()) return;
+        try {
             int page_index = 0;
             if (QFileInfo(selected).suffix().compare(QStringLiteral("pdf"), Qt::CaseInsensitive) == 0) {
-                QPdfDocument pdf;
-                if (pdf.load(selected) == QPdfDocument::Error::None && pdf.pageCount() > 1) {
+                const auto decoded = decodeReferenceFile(selected);
+                if (decoded.page_count > 1) {
                     bool accepted = false;
                     const auto page = QInputDialog::getInt(owner, QStringLiteral("PDF reference page"),
                         QStringLiteral("Page to import as a raster underlay:"), 1, 1,
-                        pdf.pageCount(), 1, &accepted);
+                        decoded.page_count, 1, &accepted);
                     if (!accepted) return;
                     page_index = page - 1;
                 }
             }
             (void)importReferenceImage(selected, page_index);
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Reference image: %1").arg(QString::fromUtf8(error.what())));
         }
     }
 
@@ -18024,8 +18220,8 @@ private:
             }
             return translated.Shape();
         };
-        const auto build_architectural_geometry = [&](BuildingViewKind kind) {
-            const auto view_context = architectural_view_context(snapshot, kind);
+        const auto build_architectural_geometry = [&](BuildingViewKind kind,
+                                                       const ArchitecturalViewContext& view_context) {
             std::set<std::string, std::less<>> referenced(
                 view_context.object_ids.begin(), view_context.object_ids.end());
             if (!referenced.empty()) {
@@ -18047,13 +18243,24 @@ private:
                     }
                 }
             }
-            if (kind == BuildingViewKind::plan) {
-                if (referenced.empty()) return all_geometry;
+            // Conventional plans retain analytical boundaries and annotations;
+            // other frames/depth limits use the shape projection below.
+            const auto& plan_frame = view_context.frame;
+            const bool conventional_plan = kind == BuildingViewKind::plan &&
+                plan_frame.origin.x == 0.0 && plan_frame.origin.y == 0.0 &&
+                plan_frame.origin.z == 0.0 && plan_frame.direction.x == 0.0 &&
+                plan_frame.direction.y == 0.0 && plan_frame.direction.z == -1.0 &&
+                plan_frame.up.x == 0.0 && plan_frame.up.y == 1.0 && plan_frame.up.z == 0.0 &&
+                (view_context.depth.far_depth_m == ViewPresentation{}.far_depth_m ||
+                 std::isinf(view_context.depth.far_depth_m));
+            if (conventional_plan) {
                 std::vector<CanvasEntity> filtered;
                 filtered.reserve(all_geometry.size());
                 for (const auto& entity : all_geometry) {
-                    if (referenced.contains(entity.id.toStdString())) {
+                    if (referenced.empty() || referenced.contains(entity.id.toStdString())) {
                         filtered.push_back(entity);
+                        filtered.back().output_stroke_width_mm =
+                            view_context.presentation.projection_line_mm;
                     }
                 }
                 return filtered;
@@ -18066,9 +18273,7 @@ private:
                 const auto& presentation = view_context.presentation;
                 const auto line_width_mm = kind == BuildingViewKind::section
                     ? presentation.cut_line_mm
-                    : kind == BuildingViewKind::elevation
-                        ? presentation.projection_line_mm
-                        : 0.0;
+                    : presentation.projection_line_mm;
                 if (std::isfinite(line_width_mm) && line_width_mm > 0.0) {
                     // Persisted view line treatment is expressed in paper
                     // millimetres. The shared canvas converts it at render
@@ -18219,8 +18424,7 @@ private:
                 } catch (const std::exception& error) {
                     if (kind == m_architectural_view_kind) {
                         append_geometry_error(QStringLiteral("%1 view %2: %3")
-                            .arg(kind == BuildingViewKind::elevation
-                                     ? QStringLiteral("Elevation") : QStringLiteral("Section"),
+                            .arg(QString::fromLatin1(architectural_view_name(kind)),
                                  id_from(id), QString::fromUtf8(error.what())));
                     }
                 }
@@ -18251,8 +18455,7 @@ private:
                 } catch (const std::exception& error) {
                     if (kind == m_architectural_view_kind) {
                         append_geometry_error(QStringLiteral("%1 assembly %2: %3")
-                            .arg(kind == BuildingViewKind::elevation
-                                     ? QStringLiteral("Elevation") : QStringLiteral("Section"),
+                            .arg(QString::fromLatin1(architectural_view_name(kind)),
                                  id_from(assembly.child_id), QString::fromUtf8(error.what())));
                     }
                 }
@@ -18260,9 +18463,54 @@ private:
             return result;
         };
         view_geometry[architectural_view_index(BuildingViewKind::plan)] =
-            build_architectural_geometry(BuildingViewKind::plan);
+            build_architectural_geometry(BuildingViewKind::plan,
+                architectural_view_context(snapshot, BuildingViewKind::plan));
         for (const auto kind : {BuildingViewKind::elevation, BuildingViewKind::section}) {
-            view_geometry[architectural_view_index(kind)] = build_architectural_geometry(kind);
+            view_geometry[architectural_view_index(kind)] = build_architectural_geometry(
+                kind, architectural_view_context(snapshot, kind));
+        }
+        // Rebuild from this exact snapshot so removed or replaced view IDs never
+        // address stale geometry during output.
+        m_coordinated_view_entities.clear();
+        // The ordinary workspace already owns one complete geometry vector per
+        // kind. Reuse the first persisted view of each kind when it is the same
+        // view used to build that vector; otherwise a normal refresh would
+        // repeat the expensive OCCT projection for every default viewport.
+        std::array<std::string, 3> canonical_view_ids;
+        for (const auto& [sheet_id, entity] : snapshot.entities()) {
+            (void)sheet_id;
+            if (entity.type != kSheetViewEntityType) continue;
+            try {
+                const auto model = decode_sheet_view_entity(entity);
+                for (const auto& view : model.views()) {
+                    const auto index = architectural_view_index(architectural_view_kind(view.kind));
+                    if (canonical_view_ids[index].empty()) canonical_view_ids[index] = view.id;
+                }
+            } catch (const std::exception&) {
+                // The typed document boundary reports malformed sheet/view data;
+                // the map below will retain no entry for an unusable view.
+            }
+        }
+        for (const auto& [sheet_id, entity] : snapshot.entities()) {
+            if (entity.type != kSheetViewEntityType) continue;
+            try {
+                const auto model = decode_sheet_view_entity(entity);
+                for (const auto& view : model.views()) {
+                    const auto kind = architectural_view_kind(view.kind);
+                    const auto index = architectural_view_index(kind);
+                    if (canonical_view_ids[index] == view.id) {
+                        m_coordinated_view_entities.emplace(
+                            std::make_pair(sheet_id, view.id), view_geometry[index]);
+                        continue;
+                    }
+                    m_coordinated_view_entities.emplace(
+                        std::make_pair(sheet_id, view.id),
+                        build_architectural_geometry(kind, architectural_view_context(view)));
+                }
+            } catch (const std::exception& error) {
+                append_geometry_error(QStringLiteral("Coordinated views: %1")
+                    .arg(QString::fromUtf8(error.what())));
+            }
         }
         // Every supported entity above has been parsed and validated before
         // the view mask is applied. Hidden invalid geometry therefore keeps
@@ -18301,6 +18549,12 @@ private:
                     visible_view_geometry[index].push_back(std::move(entity));
                 }
             }
+        }
+        for (auto& [view_id, entities] : m_coordinated_view_entities) {
+            (void)view_id;
+            std::erase_if(entities, [&](const auto& entity) {
+                return !visible_ids.contains(entity.id.toStdString());
+            });
         }
         m_measurementCanvas->setEntities(geometry);
         m_architectural_view_entities = std::move(visible_view_geometry);
@@ -20783,6 +21037,8 @@ private:
     std::map<std::string, std::pair<std::string, QString>, std::less<>>
         m_plan_slab_validation_cache;
     std::array<std::vector<CanvasEntity>, 3> m_architectural_view_entities;
+    std::map<std::pair<std::string, std::string>, std::vector<CanvasEntity>>
+        m_coordinated_view_entities;
     Vec2 m_last_cursor{};
     std::optional<BoundaryAuthoringSession> m_boundary_session;
     std::optional<DocumentSnapshot> m_boundary_source;

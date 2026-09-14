@@ -378,6 +378,25 @@ def stage_package(
     source_records, notice_records = _inventory_file_records(inventory, component_index)
     allowlist_entries = _allowlist_entries(_read_json(allowlist_file, "portable allowlist"))
 
+    # A runtime component's declared notice is part of the distributable
+    # closure.  Requiring an explicit component/path entry here prevents a
+    # package from carrying a DLL while silently omitting its license text.
+    # Components deliberately marked excluded are outside this package's
+    # closure and remain rejected if an allowlist entry names them below.
+    allowlisted_notices = {
+        (entry["inventory_entry"], entry["source"].casefold())
+        for entry in allowlist_entries
+        if entry["kind"] == "notice"
+    }
+    missing_notices = sorted(
+        f"{component_id}:{path}"
+        for component_id, path in notice_records
+        if component_index[component_id].get("distribution_status", "included") != "excluded"
+        and (component_id, path) not in allowlisted_notices
+    )
+    _require(not missing_notices,
+             "portable allowlist is missing declared notices: " + ", ".join(missing_notices))
+
     package_relative = canonical_relative(destination, "package destination")
     package_root = _output_path(output_root_path, package_relative)
     manifest_relative = canonical_relative(manifest_name, "manifest name")

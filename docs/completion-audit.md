@@ -18,7 +18,10 @@ The report includes these checks:
   release-gate result from `scripts/requirement_audit.py`
 - required plan, format, qualification, and gate documentation
 - CMake/preset configuration and explicit production-gate registration
-- Debug and Release CTest terminal logs
+- Debug and Release CTest terminal logs, checked against each build's generated
+  `CTestTestfile.cmake`; focused runs, disabled tests, skip-return fixtures,
+  missing or duplicate test records, wrong execution directories, and failed
+  entries remain partial or blocked evidence rather than a passing matrix
 - the Release PE import report and direct application network-import audit
 - the tracked source ownership boundary and third-party provenance manifest
 - the newest installed-runtime report (from either the historical `current`

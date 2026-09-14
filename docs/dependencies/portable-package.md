@@ -48,7 +48,10 @@ record. The stager verifies every input hash from the inventory before it
 writes anything. It rejects absolute or traversal paths, duplicate
 case-insensitive package destinations, missing files, symlinks, excluded
 components, stale hashes, and allowlist references that are absent from the
-inventory. The output package directory is always resolved below
+inventory. Every notice declared by an included inventory component must also
+have an explicit `notice` entry in the allowlist; staging fails closed when a
+runtime dependency's license text is omitted. The output package directory is
+always resolved below
 `--output-root`.
 
 The generated `portable-package-manifest.json` records only relative source

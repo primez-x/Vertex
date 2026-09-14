@@ -215,6 +215,58 @@ std::optional<StairConnectionReference> stair_connection_reference(const Entity&
     return result;
 }
 
+void validate_room_volume(const Entity& entity) {
+    const auto& properties = entity.properties;
+    const auto field = [&](const char* canonical, const char* legacy) -> const nlohmann::json* {
+        auto found = properties.find(canonical);
+        if (found == properties.end()) found = properties.find(legacy);
+        return found == properties.end() ? nullptr : &*found;
+    };
+    const auto* height = field("height_m", "height");
+    const auto* elevation = field("elevation_m", "elevation");
+    // Historical plan-only rooms deliberately lack one or both volume fields.
+    if (height == nullptr || elevation == nullptr) return;
+    try {
+        const auto number = [](const nlohmann::json& value) {
+            if (!value.is_number() || !std::isfinite(value.get<double>()))
+                throw std::invalid_argument("coordinates and dimensions must be finite numbers");
+            return value.get<double>();
+        };
+        if (number(*height) <= default_geometry_tolerance_metres)
+            throw std::invalid_argument("height must be positive");
+        (void)number(*elevation);
+        const auto boundary = [&](const nlohmann::json& value) {
+            if (!value.is_array() || value.empty())
+                throw std::invalid_argument("boundary must be a nonempty segment array");
+            const auto point = [&](const nlohmann::json& coordinates) -> Vec2 {
+                if (!coordinates.is_array() || coordinates.size() != 2)
+                    throw std::invalid_argument("boundary point must be [x, y]");
+                return {number(coordinates[0]), number(coordinates[1])};
+            };
+            Boundary result;
+            result.reserve(value.size());
+            for (const auto& edge : value)
+                result.push_back({point(edge.at("start")), point(edge.at("end")),
+                                  number(edge.at("sweep_radians"))});
+            return result;
+        };
+        const auto* outer_value = field("boundary", "segments");
+        if (outer_value == nullptr) throw std::invalid_argument("boundary is required");
+        const auto outer = boundary(*outer_value);
+        std::vector<Boundary> holes;
+        if (const auto found = properties.find("holes"); found != properties.end()) {
+            if (!found->is_array()) throw std::invalid_argument("holes must be an array");
+            holes.reserve(found->size());
+            for (const auto& value : *found) holes.push_back(boundary(value));
+        }
+        if (const auto error = validate_boundary_holes(outer, holes))
+            throw std::invalid_argument(*error);
+    } catch (const std::exception& error) {
+        document_error(DocumentErrorCode::invalid_entity,
+                       "invalid room volume " + entity.id + ": " + error.what());
+    }
+}
+
 void validate_entity(const Entity& entity) {
     if (!is_valid_identifier(entity.id)) {
         document_error(DocumentErrorCode::invalid_entity, "entity id is empty or invalid");
@@ -261,6 +313,7 @@ void validate_entity(const Entity& entity) {
                            std::string("invalid georeferencing entity: ") + error.what());
         }
     }
+    if (entity.type == "room") validate_room_volume(entity);
     (void)stair_connection_reference(entity);
     if (entity.properties.contains("vertical_level_binding")) {
         if (entity.type != "floor") {

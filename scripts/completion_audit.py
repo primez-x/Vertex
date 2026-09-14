@@ -140,8 +140,75 @@ def runtime_status(report):
     return _check("runtime_smoke", "pass", "Runtime report records a clean isolated offline run")
 
 
-def test_log_status(path: pathlib.Path):
-    """Classify a CTest log using only its recorded terminal markers."""
+def _ctest_inventory(build_dir: pathlib.Path):
+    """Read the generated CTest inventory and execution properties."""
+
+    path = build_dir / "CTestTestfile.cmake"
+    if not path.is_file():
+        return None, (f"CTest inventory is missing: {path}",)
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as error:
+        return None, (f"CTest inventory could not be read: {error}",)
+    source_match = re.search(r"(?m)^# Source directory:\s*(.+?)\s*$", text)
+    build_match = re.search(r"(?m)^# Build directory:\s*(.+?)\s*$", text)
+    tests = {}
+    for match in re.finditer(r"(?m)^add_test\(\[=\[(.+?)\]=\]", text):
+        tests[match.group(1)] = {"disabled": False, "skip_return_code": False}
+    for match in re.finditer(
+        r"set_tests_properties\(\[=\[(.+?)\]=\]\s+PROPERTIES\s+(.*?)\)\s*$",
+        text, re.MULTILINE | re.DOTALL,
+    ):
+        name, properties = match.group(1), match.group(2)
+        if name not in tests:
+            continue
+        tests[name]["disabled"] = bool(re.search(r"\bDISABLED\s+\"?TRUE\"?", properties,
+                                                   re.IGNORECASE))
+        tests[name]["skip_return_code"] = bool(re.search(r"\bSKIP_RETURN_CODE\b", properties,
+                                                          re.IGNORECASE))
+    if not tests:
+        return None, (f"CTest inventory contains no tests: {path}",)
+    return {
+        "path": path,
+        "source_directory": pathlib.Path(source_match.group(1).strip()) if source_match else None,
+        "build_directory": pathlib.Path(build_match.group(1).strip()) if build_match else None,
+        "tests": tests,
+    }, ()
+
+
+def _test_log_blocks(text: str):
+    starts = list(re.finditer(r"(?m)^\d+/\d+\s+Testing:\s*(.+?)\s*$", text))
+    records = []
+    for index, start in enumerate(starts):
+        stop = starts[index + 1].start() if index + 1 < len(starts) else len(text)
+        block = text[start.start():stop]
+        name = start.group(1).strip()
+        if re.search(r"(?m)^Test Failed\.|\*\*\*Failed", block):
+            status = "failed"
+        elif re.search(r"(?m)^Test Skipped\.", block):
+            status = "skipped"
+        elif re.search(r"(?m)^Test Passed\.", block):
+            status = "passed"
+        else:
+            status = "incomplete"
+        command = re.search(r"(?m)^Command:\s*(.*?)\s*$", block)
+        directory = re.search(r"(?m)^Directory:\s*(.*?)\s*$", block)
+        records.append({
+            "name": name,
+            "status": status,
+            "command": command.group(1).strip() if command else "",
+            "directory": directory.group(1).strip() if directory else "",
+            "text": block,
+        })
+    return records
+
+
+def test_log_status(path: pathlib.Path, source_root: pathlib.Path | None = None):
+    """Classify a CTest log against its generated inventory.
+
+    Marker-only logs are insufficient: a focused run, a disabled production
+    test, or a SKIP_RETURN_CODE fixture must remain visible as partial evidence.
+    """
 
     if not path.is_file():
         return _check("test_matrix", "missing", "CTest log is missing", details=(str(path),))
@@ -149,12 +216,80 @@ def test_log_status(path: pathlib.Path):
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError as error:
         return _check("test_matrix", "blocked", "CTest log could not be read", details=(str(error),))
+    build_dir = path
+    for candidate in (path.parent, *path.parents):
+        if (candidate / "CTestTestfile.cmake").is_file():
+            build_dir = candidate
+            break
+    inventory, inventory_errors = _ctest_inventory(build_dir)
+    if inventory is None:
+        return _check("test_matrix", "partial", "CTest inventory is unavailable",
+                      evidence=(str(path),), details=inventory_errors)
     if "Test Failed." in text or re.search(r"\*\*\*Failed", text):
         return _check("test_matrix", "blocked", "CTest log contains a failed test",
                       evidence=(str(path),))
-    if "End testing:" not in text or "Test Passed." not in text:
+    if "End testing:" not in text:
         return _check("test_matrix", "partial", "CTest log is incomplete", evidence=(str(path),))
-    passed = text.count("Test Passed.")
+    if source_root is not None and inventory["source_directory"] is not None:
+        try:
+            expected_source = source_root.resolve()
+            recorded_source = inventory["source_directory"].resolve()
+        except OSError:
+            expected_source = source_root
+            recorded_source = inventory["source_directory"]
+        if expected_source != recorded_source:
+            return _check("test_matrix", "blocked", "CTest log belongs to a different source tree",
+                          evidence=(str(path),), details=(f"recorded source: {recorded_source}",
+                                                          f"expected source: {expected_source}"))
+    blocks = _test_log_blocks(text)
+    if not blocks:
+        return _check("test_matrix", "partial", "CTest log contains no structured test records",
+                      evidence=(str(path),))
+    expected = inventory["tests"]
+    seen = collections.Counter(record["name"] for record in blocks)
+    failures = [record["name"] for record in blocks if record["status"] == "failed"]
+    incomplete = [record["name"] for record in blocks if record["status"] == "incomplete"]
+    unexpected = sorted(name for name in seen if name not in expected)
+    missing = sorted(name for name, props in expected.items()
+                     if not props["disabled"] and seen.get(name, 0) == 0)
+    duplicates = sorted(name for name, count in seen.items() if count > 1)
+    disabled = sorted(name for name, props in expected.items()
+                      if props["disabled"] and seen.get(name, 0))
+    skipped = sorted(record["name"] for record in blocks
+                     if record["status"] == "skipped" or
+                     (expected.get(record["name"], {}).get("skip_return_code") and
+                      re.search(r"\bskip(?:ped)?\b", record["text"], re.IGNORECASE)))
+    bad_directories = []
+    expected_build = inventory["build_directory"] or build_dir
+    try:
+        expected_build_text = str(expected_build.resolve())
+    except OSError:
+        expected_build_text = str(expected_build)
+    for record in blocks:
+        if record["directory"]:
+            try:
+                actual_directory = str(pathlib.Path(record["directory"]).resolve())
+            except OSError:
+                actual_directory = record["directory"]
+            if actual_directory.casefold() != expected_build_text.casefold():
+                bad_directories.append(f"{record['name']}: {record['directory']}")
+    if failures:
+        return _check("test_matrix", "blocked", "CTest log contains failed tests",
+                      evidence=(str(path),), details=failures)
+    if incomplete or unexpected or duplicates or bad_directories:
+        details = ([f"incomplete: {name}" for name in incomplete] +
+                   [f"unexpected: {name}" for name in unexpected] +
+                   [f"duplicate: {name}" for name in duplicates] +
+                   [f"wrong execution directory: {item}" for item in bad_directories])
+        return _check("test_matrix", "blocked", "CTest log structure is invalid",
+                      evidence=(str(path),), details=details)
+    if missing or skipped or disabled:
+        details = ([f"missing from run: {name}" for name in missing] +
+                   [f"skipped: {name}" for name in skipped] +
+                   [f"disabled: {name}" for name in disabled])
+        return _check("test_matrix", "partial", "CTest run is incomplete or contains non-running tests",
+                      evidence=(str(path),), details=details)
+    passed = sum(record["status"] == "passed" for record in blocks)
     return _check("test_matrix", "pass", f"CTest log records {passed} passing test entries",
                   evidence=(str(path),))
 
@@ -367,16 +502,20 @@ def build_report(root: pathlib.Path | str = ROOT):
     checks.append(_offline_static_check(root))
     checks.append(_source_provenance_check(root))
 
-    log_results = [test_log_status(path) for path in _latest_test_logs(root)]
+    log_results = [test_log_status(path, root) for path in _latest_test_logs(root)]
     log_passes = sum(result["status"] == "pass" for result in log_results)
     log_blockers = [detail for result in log_results for detail in result["details"]
-                    if result["status"] in {"blocked", "missing"}]
+                    if result["status"] != "pass"]
     log_evidence = [_relative(path, root) for path in _latest_test_logs(root) if path.is_file()]
+    log_statuses = {result["status"] for result in log_results}
     if log_passes == len(log_results) and log_results:
         checks.append(_check("test_matrix", "pass", "Debug and Release CTest logs record passing runs",
                              evidence=log_evidence))
-    elif log_passes:
-        checks.append(_check("test_matrix", "partial", "Only some CTest configurations record passing runs",
+    elif "blocked" in log_statuses:
+        checks.append(_check("test_matrix", "blocked", "CTest logs contain a blocked configuration",
+                             evidence=log_evidence, details=log_blockers))
+    elif "pass" in log_statuses or "partial" in log_statuses:
+        checks.append(_check("test_matrix", "partial", "CTest evidence includes non-running or incomplete tests",
                              evidence=log_evidence, details=log_blockers))
     else:
         checks.append(_check("test_matrix", "missing", "No complete Debug and Release CTest evidence is available",

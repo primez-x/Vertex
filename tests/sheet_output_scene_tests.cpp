@@ -113,6 +113,22 @@ int main() {
         changed_inputs.views.reason = "caller view override";
         rejects([&] { (void)sketch::make_sheet_output_scene(document.snapshot(), "sheets", "a", changed_inputs); });
         changed_inputs = inputs;
+        changed_inputs.views.state = sketch::FingerprintGroupState::resources;
+        changed_inputs.views.resources.push_back({"effective-visibility", std::string(64, 'c'),
+                                                  {{"hidden_floor_ids", {"floor-1"}}}});
+        const auto filtered_scene = sketch::make_sheet_output_scene(
+            document.snapshot(), "sheets", "a", changed_inputs);
+        require(sketch::check_sheet_output_scene_current(
+                    filtered_scene, document.snapshot(), changed_inputs).current,
+                "caller-supplied effective visibility must bind into a sheet scene");
+        auto changed_visibility = changed_inputs;
+        changed_visibility.views.resources.front().sha256 = std::string(64, 'd');
+        const auto visibility_status = sketch::check_sheet_output_scene_current(
+            filtered_scene, document.snapshot(), changed_visibility);
+        require(visibility_status.valid && !visibility_status.current &&
+                    visibility_status.changed_groups == std::vector<std::string>{"views"},
+                "changed effective visibility must stale a sheet scene");
+        changed_inputs = inputs;
         changed_inputs.application_build.resources.clear();
         rejects([&] { (void)sketch::make_sheet_output_scene(document.snapshot(), "sheets", "a", changed_inputs); });
         require(!sketch::check_sheet_output_scene_current(scene, document.snapshot(), changed_inputs).valid,

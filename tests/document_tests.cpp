@@ -1029,11 +1029,63 @@ void test_connected_stair_level_edit() {
     } catch (const sketch::VerticalLevelError&) {}
 }
 
+void test_room_volume_validation_is_atomic() {
+    const auto rectangle = [](double x, double y, double w, double h) {
+        auto result = nlohmann::json::array();
+        for (const auto& edge : sketch::Boundary{{{x,y},{x+w,y},0}, {{x+w,y},{x+w,y+h},0},
+                 {{x+w,y+h},{x,y+h},0}, {{x,y+h},{x,y},0}})
+            result.push_back({{"start", {edge.start.x, edge.start.y}},
+                {"end", {edge.end.x, edge.end.y}}, {"sweep_radians", 0.0}});
+        return result;
+    };
+    auto room = entity("room-volume", "room", {{"boundary", rectangle(0,0,10,10)},
+        {"holes", nlohmann::json::array({rectangle(1,1,2,2)})}, {"height_m", 3}, {"elevation_m", 0}});
+    auto document = Document::create({room});
+    const auto before = sketch::document_snapshot_digest(document.snapshot());
+    for (const auto& holes : {nlohmann::json::array({rectangle(11,1,2,2)}),
+             nlohmann::json::array({rectangle(0,1,2,2)}),
+             nlohmann::json::array({rectangle(1,1,3,3), rectangle(2,2,3,3)}),
+             nlohmann::json::array({rectangle(1,1,3,3), rectangle(2,2,1,1)})}) {
+        auto invalid = room;
+        invalid.properties["holes"] = holes;
+        require_error([&] { document.apply(ApplyEntityChanges{0, {EntityChange::upsert(invalid)}, {}, "invalid room"}); },
+            DocumentErrorCode::invalid_entity, "invalid complete room topology should be rejected");
+        require(sketch::document_snapshot_digest(document.snapshot()) == before,
+            "invalid room command must preserve the complete document");
+    }
+    for (const auto& replacement : std::vector<std::pair<std::string, nlohmann::json>>{
+             {"height_m", 0}, {"height_m", "3"}, {"elevation_m", "0"},
+             {"boundary", nlohmann::json::array()}, {"holes", nlohmann::json::object()},
+             {"holes", nlohmann::json::array({nlohmann::json::array()})}}) {
+        auto invalid = room;
+        invalid.properties[replacement.first] = replacement.second;
+        require_error([&] { (void)Document::create({invalid}); }, DocumentErrorCode::invalid_entity,
+            "malformed complete room geometry or dimensions should be rejected");
+    }
+    auto legacy = room;
+    legacy.properties.erase("height_m");
+    require(Document::create({legacy}).snapshot().entities().at(legacy.id) == legacy,
+        "legacy plan-only room must remain unchanged");
+    auto aliases = room;
+    aliases.properties["segments"] = aliases.properties.at("boundary");
+    aliases.properties.erase("boundary");
+    aliases.properties["height"] = 3;
+    aliases.properties["elevation"] = 0;
+    aliases.properties.erase("height_m");
+    aliases.properties.erase("elevation_m");
+    require(Document::create({aliases}).snapshot().entities().at(aliases.id) == aliases,
+        "legacy volume aliases must remain supported");
+    aliases.properties["height_m"] = 0;
+    require_error([&] { (void)Document::create({aliases}); }, DocumentErrorCode::invalid_entity,
+        "invalid canonical height must not fall back to a legacy alias");
+}
+
 }  // namespace
 
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_room_volume_validation_is_atomic();
         test_connected_stair_level_edit();
         test_compound_change_is_atomic_and_references_are_checked();
         test_stale_revision_is_rejected();
