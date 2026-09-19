@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/geometry.hpp"
+#include "sketch/performance_telemetry.hpp"
 #include "sketch/reference_grid.hpp"
 
 #include <QColor>
@@ -123,6 +124,13 @@ class PlanCanvas final : public QWidget {
 public:
     explicit PlanCanvas(QWidget* parent = nullptr);
 
+    void setPerformanceMeasured(std::function<void(PerformanceMetric,
+                                std::chrono::steady_clock::duration)> callback);
+    void beginPerformanceMeasurement(PerformanceMetric metric,
+        std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now());
+    void cancelPerformanceMeasurement(PerformanceMetric metric);
+    void resetPerformanceMeasurements();
+
     void setEntities(std::vector<CanvasEntity> entities);
     [[nodiscard]] const std::vector<CanvasEntity>& entities() const noexcept { return m_entities; }
     void setTool(CanvasTool tool);
@@ -185,6 +193,7 @@ public:
     void setDraftRedoRequested(std::function<void()> callback);
 
 protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
     bool event(QEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
@@ -195,6 +204,11 @@ protected:
     void resizeEvent(QResizeEvent* event) override;
 
 private:
+    using PerformanceClock = std::chrono::steady_clock;
+    std::function<void(PerformanceMetric, PerformanceClock::duration)> m_performance_measured;
+    std::vector<std::pair<PerformanceMetric, PerformanceClock::time_point>> m_pending_measurements;
+    std::size_t m_measurement_generation{};
+
     void pointerPress(QPointF position, Qt::MouseButton button,
                       Qt::KeyboardModifiers modifiers = Qt::NoModifier);
     void pointerMove(QPointF position);

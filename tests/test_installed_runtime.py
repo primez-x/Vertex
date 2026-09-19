@@ -1,11 +1,14 @@
 """Portable checks for the installed-runtime smoke policy; never launch an app."""
 
 import importlib.util
+import copy
 import io
 import json
 import os
 from pathlib import Path
 import struct
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -18,6 +21,19 @@ SPEC.loader.exec_module(runtime)
 
 
 class InstalledRuntimeTests(unittest.TestCase):
+    def performance_report(self):
+        return {
+            "schema_version": 1, "audit_status": "incomplete",
+            "workload": {"id": "interactive-session", "entities": 4, "objects": 2,
+                         "triangles": None, "sheets": 1, "project_bytes": 4096},
+            "reference_hardware": "unspecified", "threshold_status": "incomplete",
+            "metrics": {name: {"sample_count": 0, "dropped_sample_count": 0,
+                                "threshold_ms": threshold, "has_samples": False,
+                                "within_threshold": False, "p95_ms": None}
+                        for name, threshold in [("navigation", 16.7), ("input", 50),
+                                                ("edit", 250), ("open", 5000), ("save", 5000)]},
+        }
+
     def declarations(self):
         return {name: {"C:\\installed\\bin\\" + name} for name in runtime.REQUIRED_MODULES}
 
@@ -98,6 +114,126 @@ class InstalledRuntimeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "SQLite"):
                 runtime.project_evidence(path)
 
+    def test_performance_evidence_validates_application_report_boundary(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "performance.json"
+            path.write_text(json.dumps(self.performance_report()), encoding="utf-8")
+            result = runtime.performance_evidence(path)
+            self.assertEqual(result["threshold_status"], "incomplete")
+            self.assertEqual(len(result["sha256"]), 64)
+            path.write_text("{}", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "schema"):
+                runtime.performance_evidence(path)
+
+    def test_performance_report_rejects_corruption_and_fabricated_passes(self):
+        valid = self.performance_report()
+        invalid = [[], None, True, {}, {**valid, "schema_version": True},
+                   {**valid, "schema_version": 1.0}, {**valid, "metrics": {}},
+                   {**valid, "workload": {}}, {**valid, "reference_hardware": ""},
+                   {**valid, "audit_status": "passed"},
+                   {**valid, "threshold_status": "within_targets"}]
+        for field in ("entities", "objects", "sheets", "project_bytes", "triangles"):
+            for value in (-1, True, 0.5, "0"):
+                report = copy.deepcopy(valid)
+                report["workload"][field] = value
+                invalid.append(report)
+        for field in ("entities", "objects", "sheets"):
+            report = copy.deepcopy(valid)
+            report["workload"][field] = None
+            invalid.append(report)
+        invalid.append({**valid, "workload": {**valid["workload"], "objects": 5}})
+        for field, values in {
+            "sample_count": [-1, True, 0.5, None, 1],
+            "dropped_sample_count": [-1, True, 0.5, None],
+            "threshold_ms": [True, -1, 0, 999999, float("nan"), float("inf")],
+            "p95_ms": [0, -1, True, "0", float("nan"), float("inf")],
+            "has_samples": [True, 0, "false"], "within_threshold": [True, 0, "false"],
+        }.items():
+            for value in values:
+                report = copy.deepcopy(valid)
+                report["metrics"]["input"][field] = value
+                invalid.append(report)
+        for field in valid["metrics"]["input"]:
+            report = copy.deepcopy(valid)
+            del report["metrics"]["input"][field]
+            invalid.append(report)
+        raw_reports = [json.dumps(report) for report in invalid]
+        raw_reports += ['{"schema_version":1,' + json.dumps(valid)[1:],
+                        json.dumps(valid).replace('"sample_count": 0', '"sample_count": 1, "sample_count": 0', 1),
+                        '{', json.dumps(valid).replace('"entities": 4', '"entities": 1e999')]
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "performance.json"
+            for raw in raw_reports:
+                with self.subTest(raw=raw):
+                    path.write_text(raw, encoding="utf-8")
+                    with self.assertRaises(ValueError):
+                        runtime.performance_evidence(path)
+
+    def test_performance_report_accepts_sheets_inside_one_model_entity(self):
+        report = self.performance_report()
+        report["workload"].update(entities=3, objects=2, sheets=12)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "performance.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            self.assertEqual(runtime.performance_evidence(path)["threshold_status"], "incomplete")
+
+    def test_performance_report_accepts_unknown_project_size(self):
+        report = self.performance_report()
+        report["workload"].update(project_bytes=None, metadata_scope="final_document_state")
+        report["sampling_scope"] = "document evolution since replacement or explicit begin-run"
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "performance.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            self.assertEqual(runtime.performance_evidence(path)["threshold_status"], "incomplete")
+
+    def test_performance_report_computes_threshold_outcome_from_samples(self):
+        report = self.performance_report()
+        for metric in report["metrics"].values():
+            metric.update(sample_count=1, has_samples=True, p95_ms=0, within_threshold=True)
+        report["threshold_status"] = "within_targets"
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "performance.json"
+            def check(status):
+                path.write_text(json.dumps(report), encoding="utf-8")
+                self.assertEqual(runtime.performance_evidence(path)["threshold_status"], status)
+            check("within_targets")
+            report["metrics"]["input"]["p95_ms"] = 50
+            check("within_targets")
+            report["metrics"]["input"].update(p95_ms=50.1, within_threshold=False)
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                runtime.performance_evidence(path)
+            report["threshold_status"] = "exceeds_targets"
+            check("exceeds_targets")
+            report["metrics"]["save"].update(sample_count=0, has_samples=False,
+                                              within_threshold=False, p95_ms=None)
+            report["threshold_status"] = "incomplete"
+            check("incomplete")
+
+    def test_performance_cli_returns_evidence_or_failure_without_application(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "report with spaces.json"
+            report = self.performance_report()
+            report["metrics"]["input"]["measurement_scope"] = "handler only"
+            report["workload"]["triangles_note"] = "not measured"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            command = [sys.executable, str(Path(runtime.__file__).with_name("performance_report.py")), str(path)]
+            options = {"capture_output": True, "text": True, "timeout": 15}
+            if os.name == "nt":
+                options["creationflags"] = subprocess.CREATE_NO_WINDOW
+            result = subprocess.run(command, **options)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["threshold_status"], "incomplete")
+            path.write_text('{"schema_version":true}', encoding="utf-8")
+            result = subprocess.run(command, **options)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stdout, "")
+            self.assertIn("invalid performance report", result.stderr)
+            path.unlink()
+            result = subprocess.run(command, **options)
+            self.assertEqual(result.returncode, 1)
+            self.assertNotIn("Traceback", result.stderr)
+
     def test_unsafe_manifest_path_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
@@ -130,6 +266,7 @@ class InstalledRuntimeTests(unittest.TestCase):
              mock.patch.object(runtime, "WindowsModules") as monitor, \
              mock.patch.object(runtime, "sha256_file", return_value="a" * 64), \
              mock.patch.object(runtime, "png_evidence", return_value={"valid_header": True}), \
+             mock.patch.object(runtime, "performance_evidence", return_value={"valid": True}), \
              mock.patch.object(runtime.time, "sleep"):
             monitor.return_value.snapshot.return_value = paths
             with mock.patch.object(runtime, "project_evidence", return_value={"valid": True}) as project:
@@ -149,6 +286,7 @@ class InstalledRuntimeTests(unittest.TestCase):
         self.assertIn("--smoke-3d-output", launch.call_args.args[0])
         self.assertIn("--smoke-project-output", launch.call_args.args[0])
         self.assertIn("--smoke-project-input", launch.call_args.args[0])
+        self.assertIn("--smoke-performance-output", launch.call_args.args[0])
         self.assertIn("--smoke-assistance-disabled", launch.call_args.args[0])
         self.assertIn("--smoke-market", launch.call_args.args[0])
         self.assertIn("light-commercial", launch.call_args.args[0])
@@ -196,6 +334,7 @@ class InstalledRuntimeTests(unittest.TestCase):
              mock.patch.object(runtime, "WindowsModules") as monitor, \
              mock.patch.object(runtime, "sha256_file", return_value="a" * 64), \
              mock.patch.object(runtime, "png_evidence", return_value={"sha256": "a" * 64}), \
+             mock.patch.object(runtime, "performance_evidence", return_value={"valid": True}), \
              mock.patch.object(runtime.time, "sleep"):
             monitor.return_value.snapshot.return_value = paths
             result = runtime.run_workspace(

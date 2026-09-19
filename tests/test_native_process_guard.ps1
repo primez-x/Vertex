@@ -61,6 +61,24 @@ $createdFiles = [System.Collections.Generic.List[string]]::new()
 $cleanupIssues = [System.Collections.Generic.List[string]]::new()
 $testSucceeded = $false
 try {
+    $duplicateEnvironment = [System.Collections.Specialized.OrderedDictionary]::new(
+        [System.StringComparer]::Ordinal)
+    $duplicateEnvironment.Add('Path', 'stale-process-path')
+    $duplicateEnvironment.Add('PATH', 'conflicting-process-path')
+    $duplicateEnvironment.Add('VERTEX_ENVIRONMENT_SENTINEL', 'preserved')
+    $environmentProbe = [System.Diagnostics.ProcessStartInfo]::new()
+    Set-NativeProcessEnvironment -StartInfo $environmentProbe `
+        -SourceEnvironment $duplicateEnvironment `
+        -PathPrefixes @('qt-bin', 'native-bin') -BasePath 'system-bin;user-bin'
+    $pathKeys = @($environmentProbe.Environment.Keys | Where-Object { $_ -ieq 'Path' })
+    Assert-NativeGuard ($pathKeys.Count -eq 1 -and $pathKeys[0] -ceq 'Path') `
+        'child environment must contain one canonical Path key'
+    Assert-NativeGuard ($environmentProbe.Environment['Path'] -eq
+        'qt-bin;native-bin;system-bin;user-bin') `
+        'child Path must use explicit runtime prefixes and the stable base path'
+    Assert-NativeGuard ($environmentProbe.Environment['VERTEX_ENVIRONMENT_SENTINEL'] -eq 'preserved') `
+        'non-Path process environment entries must be preserved'
+
     $timeoutStdout = Join-Path $temporary 'timeout.stdout.txt'
     $timeoutStderr = Join-Path $temporary 'timeout.stderr.txt'
     [void]$createdFiles.Add($timeoutStdout)

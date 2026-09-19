@@ -1,5 +1,7 @@
 #include "sketch/desktop/main_window.hpp"
+#include "../src/desktop/plan_canvas.hpp"
 #include "sketch/document_digest.hpp"
+#include "sketch/boundary_entity.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/project_workspace.hpp"
 #include "sketch/recovery_discovery.hpp"
@@ -7,6 +9,7 @@
 #include "support/noninteractive_errors.hpp"
 
 #include <QApplication>
+#include <QAction>
 #include <QAbstractButton>
 #include <QElapsedTimer>
 #include <QKeyEvent>
@@ -18,6 +21,7 @@
 #include <QTimer>
 #include <QUuid>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -26,6 +30,148 @@
 namespace {
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
+}
+void draft_click(sketch::desktop::PlanCanvas* canvas, QPoint offset) {
+    const QPointF point(canvas->rect().center() + offset);
+    QMouseEvent press(QEvent::MouseButtonPress, point, point, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(canvas, &press);
+    QMouseEvent release(QEvent::MouseButtonRelease, point, point, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(canvas, &release);
+}
+void draft_key(QWidget* canvas, int key) {
+    QKeyEvent event(QEvent::KeyPress, key, Qt::NoModifier);
+    QApplication::sendEvent(canvas, &event);
+}
+void test_discard_navigation() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    window.setAttribute(Qt::WA_DontShowOnScreen, true);
+    window.show();
+    QApplication::processEvents();
+    auto* canvas = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
+    require(window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, "living_area"), "begin discarded draft");
+    draft_click(canvas, {-60, -60});
+    draft_click(canvas, {60, -60});
+    draft_click(canvas, {60, 60});
+    require(window.undoCommand(), "draft local undo before discard");
+    draft_key(canvas, Qt::Key_Escape);
+    require(window.undoCommand(), "undo discard");
+    require(canvas->boundaryDraftPreview() && canvas->boundaryDraftPreview()->segments.size() == 1,
+        "undo discard reconstructs visible interactive draft");
+    const auto actions = window.findChildren<QAction*>();
+    const auto redo = std::find_if(actions.begin(), actions.end(), [](QAction* action) {
+        return action->text() == QStringLiteral("Redo");
+    });
+    require(redo != actions.end() && (*redo)->isEnabled(), "lifecycle redo is available through toolbar");
+    require(window.redoCommand() && !canvas->boundaryDraftPreview(), "redo discard clears restored draft");
+    require(window.undoCommand(), "undo discard again");
+    draft_click(canvas, {60, 60});
+    draft_click(canvas, {-60, 60});
+    const auto before = window.document().snapshot().entities().size();
+    draft_key(canvas, Qt::Key_Return);
+    require(window.document().snapshot().entities().size() > before, "restored draft continues and finishes without reopen");
+}
+void test_redefine_recovery() {
+    using namespace sketch;
+    for (const bool recovery : {false, true}) {
+        QTemporaryDir temporary;
+        require(temporary.isValid(), "redefine temporary directory");
+        const auto destination = temporary.filePath("draft.bldproj");
+        QString id;
+        std::size_t count{};
+        nlohmann::json original;
+        IdentifiedBoundary original_boundary;
+        Entity reference;
+        {
+            desktop::MainWindow window;
+            window.setAttribute(Qt::WA_DontShowOnScreen, true);
+            window.show();
+            QApplication::processEvents();
+            id = window.createBoundary({{{0,0},{4,0},0}, {{4,0},{4,4},0},
+                {{4,4},{0,4},0}, {{0,4},{0,0},0}}, "living_area");
+            require(!id.isEmpty() && window.selectEntity(id), "select redefine target");
+            original_boundary = decode_identified_boundary_entity(window.document().snapshot().entities().at(id.toStdString()));
+            const auto dimension_id = window.createAngleDimension(id,
+                QString::fromStdString(original_boundary.segments[0].segment_id),
+                QString::fromStdString(original_boundary.segments[1].segment_id),
+                QString::fromStdString(original_boundary.segments[0].end_vertex_id), {2, 1});
+            require(!dimension_id.isEmpty() && window.selectEntity(id), "create retained edge reference");
+            reference = window.document().snapshot().entities().at(dimension_id.toStdString());
+            count = window.document().snapshot().entities().size();
+            original = window.document().snapshot().entities().at(id.toStdString()).properties;
+            require(window.saveProjectAs(temporary.filePath("source.bldproj")), "save redefine source");
+            auto* action = window.findChild<QAction*>("boundaryRedefinition");
+            require(action != nullptr, "redefine action");
+            action->trigger();
+            auto* canvas = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
+            draft_click(canvas, {-60,-60});
+            draft_click(canvas, {60,-60});
+            if (recovery) {
+                QElapsedTimer timer;
+                timer.start();
+                while (timer.elapsed() < 10000 && !std::filesystem::exists(std::filesystem::path(window.recoveryCopyPath().toStdWString()))) {
+                    QApplication::processEvents();
+                    QThread::msleep(5);
+                }
+                std::filesystem::copy_file(std::filesystem::path(window.recoveryCopyPath().toStdWString()),
+                    std::filesystem::path(destination.toStdWString()));
+            } else require(window.saveProjectAs(destination), "save redefine draft");
+        }
+        desktop::MainWindow restored;
+        restored.setAttribute(Qt::WA_DontShowOnScreen, true);
+        restored.show();
+        QApplication::processEvents();
+        restored.document().mark_saved(restored.document().revision());
+        require(restored.openProject(destination), "reopen redefine draft");
+        auto* canvas = dynamic_cast<desktop::PlanCanvas*>(restored.findChild<QWidget*>("measurementPlanCanvas"));
+        draft_click(canvas, {60,60});
+        draft_click(canvas, {-60,60});
+        draft_key(canvas, Qt::Key_Return);
+        const auto snapshot = restored.document().snapshot();
+        require(snapshot.entities().size() == count && restored.selectedEntityId() == id,
+            "recovered redefine preserves target identity and entity count");
+        require(snapshot.entities().at(id.toStdString()).properties != original,
+            "recovered redefine changes existing geometry");
+        require(snapshot.entities().at(reference.id) == reference, "recovered redefine retains dependent reference");
+        const auto replaced = decode_identified_boundary_entity(snapshot.entities().at(id.toStdString()));
+        for (std::size_t index = 0; index < replaced.segments.size(); ++index) {
+            require(replaced.segments[index].segment_id == original_boundary.segments[index].segment_id &&
+                replaced.segments[index].start_vertex_id == original_boundary.segments[index].start_vertex_id &&
+                replaced.segments[index].end_vertex_id == original_boundary.segments[index].end_vertex_id,
+                "recovered redefine preserves referenced segment and vertex identities");
+        }
+    }
+}
+void test_invalid_redefine_recovery() {
+    using namespace sketch;
+    QTemporaryDir temporary;
+    desktop::MainWindow window;
+    window.document().mark_saved(window.document().revision());
+    const auto before = document_snapshot_digest(window.document().snapshot());
+    int fixture_index = 0;
+    for (const auto& operation : {
+        nlohmann::json{{"version", 1}, {"kind", "unknown"}, {"target_id", "missing"}},
+        nlohmann::json{{"version", 1}, {"kind", "redefine"}, {"target_id", "missing"}},
+        nlohmann::json{{"version", 1}, {"kind", "redefine"}, {"target_id", 7}}}) {
+        ProjectWorkspace workspace(window.document().snapshot());
+        BoundaryAuthoringSession session(BoundaryAuthoringMode::draw_first);
+        (void)session.anchor({0, 0});
+        BoundaryActiveRecovery active{capture_boundary_recovery_source(workspace.snapshot(),
+            {"property-1", "building-1", "floor-1", "layer-1"}), session.recovery_checkpoint()};
+        active.extensions["desktop_operation"] = operation;
+        auto edit = workspace.prepare_boundary_checkpoint(active);
+        (void)workspace.commit(edit);
+        const auto capture = workspace.capture();
+        const RecoveryLedger ledger{{"history", "workspace_history", encode_workspace_history_record(
+            capture.document(), capture_workspace_history_record(capture), capture.active_boundary())},
+            {"active", "boundary_active", encode_boundary_active_recovery(active)}};
+        const auto path = std::filesystem::path(temporary.filePath(
+            QStringLiteral("invalid-%1.bldproj").arg(fixture_index++)).toStdWString());
+        (void)ProjectStore::save_archive(path, ProjectArchiveSnapshot(capture.document(), ledger, ArchiveRole::ordinary));
+        require(!window.openProject(QString::fromStdWString(path.wstring())) &&
+            document_snapshot_digest(window.document().snapshot()) == before,
+            "invalid or absent redefine target fails closed before replacing current project");
+    }
 }
 QString qt_path(const std::filesystem::path& path) {
     return QString::fromStdWString(path.wstring());
@@ -119,6 +265,115 @@ void test_startup_recovery_selection() {
     QStandardPaths::setTestModeEnabled(original_test_mode);
 }
 
+void test_live_boundary_recovery() {
+    using namespace sketch;
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "live draft temporary directory");
+    desktop::MainWindow drawing;
+    drawing.setAttribute(Qt::WA_DontShowOnScreen, true);
+    drawing.show();
+    QApplication::processEvents();
+    require(drawing.saveProjectAs(temporary.filePath("clean.bldproj")), "save clean draft source");
+    const auto entities = drawing.document().snapshot().entities();
+    auto* canvas = dynamic_cast<desktop::PlanCanvas*>(
+        drawing.findChild<QWidget*>("measurementPlanCanvas"));
+    require(canvas != nullptr, "live draft canvas");
+    const auto click = [](desktop::PlanCanvas* target, QPoint offset) {
+        const QPointF point(target->rect().center() + offset);
+        QMouseEvent press(QEvent::MouseButtonPress, point, point, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(target, &press);
+        QMouseEvent release(QEvent::MouseButtonRelease, point, point, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(target, &release);
+    };
+    require(drawing.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, "living_area"), "start live draft");
+    click(canvas, {-80, -80});
+    click(canvas, {80, -80});
+    click(canvas, {80, 80});
+    require(drawing.undoCommand(), "undo live draft edge");
+    require(drawing.document().snapshot().entities() == entities, "draft leaves committed geometry unchanged");
+    std::optional<BoundaryActiveRecovery> captured;
+    wait_until([&] {
+        if (drawing.recoveryCopyPath().isEmpty()) return false;
+        const auto path = std::filesystem::path(drawing.recoveryCopyPath().toStdWString());
+        if (!std::filesystem::exists(path)) return false;
+        const auto archive = ProjectStore::load_archive(path, ArchiveRole::recovery_copy);
+        if (!archive.supported() || !archive.recovery.decoded->active) return false;
+        captured = archive.recovery.decoded->active;
+        return true;
+    }, "draft-only drawing publishes automatic recovery");
+    const auto recovered_path = temporary.filePath("recovered.bldproj");
+    std::filesystem::copy_file(std::filesystem::path(drawing.recoveryCopyPath().toStdWString()),
+        std::filesystem::path(recovered_path.toStdWString()));
+    desktop::MainWindow recovered;
+    recovered.setAttribute(Qt::WA_DontShowOnScreen, true);
+    recovered.show();
+    recovered.document().mark_saved(recovered.document().revision());
+    require(recovered.openProject(recovered_path), "open live draft recovery");
+    auto* restored = dynamic_cast<desktop::PlanCanvas*>(
+        recovered.findChild<QWidget*>("measurementPlanCanvas"));
+    require(restored && restored->boundaryDraftPreview() &&
+        restored->boundaryDraftPreview()->segments.size() == canvas->boundaryDraftPreview()->segments.size(),
+        "restored draft preview matches unfinished drawing");
+    const bool saved_recovered = recovered.saveProjectAs(temporary.filePath("exact.bldproj"));
+    require(saved_recovered,
+        ("save recovered draft: " + recovered.lastError().toStdString()).c_str());
+    const auto exact = ProjectStore::load_archive(
+        std::filesystem::path(temporary.filePath("exact.bldproj").toStdWString()), ArchiveRole::ordinary);
+    require(exact.supported() && exact.recovery.decoded->active == captured,
+        "restoration preserves exact receipts, undo redo history and drawing context");
+    require(!exact.recovery.decoded->recovery_copy,
+        "ordinary save removes only destination-specific recovery copy metadata");
+    QTimer reject_replacement;
+    QObject::connect(&reject_replacement, &QTimer::timeout, &recovered, [] {
+        if (auto* prompt = qobject_cast<QMessageBox*>(QApplication::activeModalWidget()))
+            if (auto* button = prompt->button(QMessageBox::Cancel)) button->click();
+    });
+    reject_replacement.start(1);
+    require(!recovered.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, "living_area"),
+        "existing recovered draft cannot be replaced without discard");
+    reject_replacement.stop();
+    const auto invalid_path = temporary.filePath("invalid.bldproj");
+    { std::ofstream invalid(std::filesystem::path(invalid_path.toStdWString())); invalid << "invalid archive"; }
+    QTimer allow_open;
+    QObject::connect(&allow_open, &QTimer::timeout, &recovered, [] {
+        if (auto* prompt = qobject_cast<QMessageBox*>(QApplication::activeModalWidget()))
+            if (auto* button = prompt->button(QMessageBox::Discard)) button->click();
+    });
+    allow_open.start(1);
+    require(!recovered.openProject(invalid_path), "invalid recovery open fails safely");
+    allow_open.stop();
+    require(restored->boundaryDraftPreview() && recovered.document().snapshot().entities() == entities,
+        "failed open preserves live session and geometry");
+    require(recovered.redoCommand(), "recovered draft retains redo edge");
+    click(restored, {-80, 80});
+    QKeyEvent finish(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(restored, &finish);
+    require(!restored->boundaryDraftPreview() && recovered.document().snapshot().entities().size() > entities.size(),
+        "recovered live draft continues and commits");
+    const auto await_retirement = [](desktop::MainWindow& window) {
+        wait_until([&] {
+            if (window.recoveryCopyPath().isEmpty()) return false;
+            const auto path = std::filesystem::path(window.recoveryCopyPath().toStdWString());
+            if (!std::filesystem::exists(path)) return false;
+            const auto archive = ProjectStore::load_archive(path, ArchiveRole::recovery_copy);
+            return archive.supported() && !archive.recovery.decoded->active;
+        }, "automatic recovery retires finished or discarded input");
+    };
+    await_retirement(recovered);
+    require(recovered.saveProject(), "save finalized draft");
+    const auto finalized = ProjectStore::load_archive(
+        std::filesystem::path(temporary.filePath("exact.bldproj").toStdWString()), ArchiveRole::ordinary);
+    require(finalized.supported() && !finalized.recovery.decoded->active, "finalized draft is retired");
+    require(recovered.openProject(temporary.filePath("exact.bldproj")) && !restored->boundaryDraftPreview(),
+        "finalized draft does not reappear on reopen");
+    QKeyEvent cancel(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(canvas, &cancel);
+    await_retirement(drawing);
+    require(drawing.saveProject(), "save discarded draft");
+    require(drawing.openProject(temporary.filePath("clean.bldproj")) && !canvas->boundaryDraftPreview(),
+        "discarded draft does not reappear on reopen");
+}
+
 void run() {
     using namespace sketch;
     QTemporaryDir temporary;
@@ -166,6 +421,12 @@ void run() {
         loaded.archive->recovery().front().envelope == ledger.front().envelope,
         "save preserves complete recovery ledger and extensions");
     require(loaded.recovery.decoded->active == active, "save retains active recovery input");
+    // Opening a current-source record now resumes the actual tool. Retire it
+    // before exercising the independent document-command history below.
+    auto* recovered_canvas = dynamic_cast<desktop::PlanCanvas*>(
+        window.findChild<QWidget*>("measurementPlanCanvas"));
+    QKeyEvent discard_recovered(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(recovered_canvas, &discard_recovered);
     const auto wall = window.createStraightWall({0, 0}, {4, 0});
     require(!wall.isEmpty(), "recovery workspace accepts desktop wall command");
     require(window.undoCommand() && !window.document().snapshot().entities().contains(wall.toStdString()),
@@ -174,9 +435,9 @@ void run() {
         "recovery workspace redo restores desktop wall");
     require(window.saveProject(), "edited recovery workspace saves its updated ledger");
     const auto edited = ProjectStore::load_archive(destination, ArchiveRole::ordinary);
-    require(edited.supported() && edited.recovery.decoded->active == active &&
+    require(edited.supported() && !edited.recovery.decoded->active &&
         edited.recovery.decoded->history->extensions == history.extensions,
-        "edited archive preserves recovered input and history extensions");
+        "edited archive retires discarded input and preserves history extensions");
     std::error_code copy_error;
     const auto independent_copy = directory / "independent-recovery.bldproj";
     std::filesystem::copy_file(destination, independent_copy,
@@ -207,10 +468,11 @@ void run() {
         "lifecycle-only undo marks the project dirty");
     require(lifecycle.saveProject(), "save lifecycle-only undo");
     const auto retired = ProjectStore::load_archive(lifecycle_path, ArchiveRole::ordinary);
-    require(retired.supported() && !retired.recovery.decoded->active,
-        "lifecycle undo removes the active record without losing history");
+    require(retired.supported() && retired.recovery.decoded->active &&
+        BoundaryAuthoringSession::from_recovery_checkpoint(retired.recovery.decoded->active->checkpoint).can_redo(),
+        "draft undo persists its redo history without discarding the session");
     require(lifecycle.openProject(qt_path(lifecycle_path)) && lifecycle.redoCommand() && lifecycle.saveProject(),
-        "lifecycle redo survives reopening");
+        "draft redo survives reopening");
     const auto reactivated = ProjectStore::load_archive(lifecycle_path, ArchiveRole::ordinary);
     require(reactivated.supported() && reactivated.recovery.decoded->active == active,
         "lifecycle redo restores the retained input record");
@@ -416,6 +678,9 @@ void run() {
         desktop::MainWindow constrained;
         constrained.document().mark_saved(constrained.document().revision());
         require(constrained.openProject(qt_path(source)), "open constraint workspace fixture");
+        QKeyEvent discard_constraint_draft(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(constrained.findChild<QWidget*>("measurementPlanCanvas"),
+            &discard_constraint_draft);
         const auto constraint_path = directory / "constraint-workspace.bldproj";
         require(constrained.saveProjectAs(qt_path(constraint_path)), "save before sealed constraint preview");
         const auto constrained_wall = constrained.createStraightWall({0, 6}, {4, 6});
@@ -454,13 +719,25 @@ void run() {
             "workspace boundary redo preserves saveable recovery ledger");
     }
     test_startup_recovery_selection();
+    test_live_boundary_recovery();
+    test_discard_navigation();
+    test_redefine_recovery();
+    test_invalid_redefine_recovery();
 }
 }
 
 int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QApplication application(argc, argv);
-    try { run(); }
+    try {
+        if (argc > 1 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--live-boundary"))
+            test_live_boundary_recovery();
+        else if (argc > 1 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--discard-navigation"))
+            test_discard_navigation();
+        else if (argc > 1 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--redefine-recovery"))
+            { test_redefine_recovery(); test_invalid_redefine_recovery(); }
+        else run();
+    }
     catch (const std::exception& error) {
         std::cerr << "desktop_workspace_recovery: " << error.what() << '\n';
         return 1;

@@ -65,9 +65,68 @@ and its owner-thread completion contract.  Its focused fixture proves that a
 cancelled derived result is discarded and cannot replace the valid source
 revision; see `docs/workspace-regeneration-queue.md`.
 
-Remaining evidence includes agreed reference hardware and the three prescribed
-representative workloads (50,000 entities; 10,000 objects/one million triangles;
-20 sheets/250 MB), actual application instrumentation, long-regeneration
-cancellation preserving the valid revision, and open/save revision, snapshot,
-asset and manifest integrity. The harness deliberately leaves all three
-requirements unresolved regardless of supplied timing values.
+The desktop also records bounded process-local timing samples through
+`PerformanceTelemetry`. `property-studio.exe --smoke` accepts
+`--smoke-performance-output <path>` and writes a version-1 JSON report after
+the capture completes. The report contains the workload counts visible to the
+run, nearest-rank p95 values, sample and drop counts, and explicit
+`audit_status: "incomplete"` and `reference_hardware` fields. The desktop and
+installed-runtime smoke runners retain and schema-check this report alongside
+their screenshots and project artifacts. A missing sample or an in-process
+threshold result remains incomplete; it never turns a developer-machine run
+into production qualification.
+
+Desktop navigation and input samples run from the earliest pending interaction
+through completed `PlanCanvas` QPainter work. Coalesced events retain that
+earliest start; committed edit samples include command duration and completed
+paint. These are process-local paint completion measurements, not compositor
+presentation, display latency, or native 3D frame timings. Explicit telemetry
+reset and new/open project transitions partition runs and discard pending paint
+measurements. Report workload counts describe final state, not every sample.
+Sheets are counted from decoded sheet models; unknown persisted `project_bytes`
+and unmeasured `triangles` are JSON `null`, not zero.
+
+Validate and hash a desktop report with:
+
+```powershell
+python scripts/performance_report.py measurement-performance.json
+```
+
+This validator checks the bounded report's schema, metric consistency, and
+incomplete audit boundary. It does not authenticate measurements. Its desktop
+report format is distinct from the caller-supplied input format above.
+
+The `performance-workload` CLI creates representative project fixtures and
+prints a separate JSON storage/integrity report to stdout:
+
+```powershell
+performance-workload drawing drawing.bldproj "CPU/GPU/RAM/OS label" "source revision"
+performance-workload architecture architecture.bldproj "CPU/GPU/RAM/OS label" "source revision"
+performance-workload sheets sheets.bldproj "CPU/GPU/RAM/OS label" "source revision"
+```
+
+Both the destination and its appended `.roundtrip.bldproj` path must be new.
+The fixtures contain 50,000 drawing entities, 10,000 architectural objects, or
+20 sheets with 12,500,000 bytes per reference asset. The report records actual
+persisted size, decoded sheet counts, tessellated triangle counts and meshing
+parameters, asset hashes, and semantic digests. It measures two synchronous
+ProjectStore saves and opens and compares authoring content and workload facts
+after both reopens. Semantic content is deterministic; document identity is
+fresh. Hardware and revision labels are caller assertions. The CLI does not
+measure GUI interactions, sheet image decoding, or rendered output, and its
+storage report is not input to `performance_report.py`.
+
+Native geometry preparation builds worker-owned topology from captured
+snapshots. Superseding requests discard stale candidates, including requests
+at equal document revisions; owner-thread completion retains the live scene
+on worker failure. Cancellation polls bracket objects and join input members;
+an individual wall/roof join builder is not interruptible. This implementation
+does not establish a bounded cancellation latency or native 3D frame target.
+
+Remaining evidence includes agreed reference hardware, observed runs of all
+three prescribed representative workloads (50,000 entities; 10,000 objects/one
+million triangles; 20 sheets/250 MB), statistically adequate interactive
+measurements, long-regeneration cancellation preserving the valid revision,
+and production open/save revision, snapshot, asset and manifest integrity.
+Fixture generation and focused implementation checks do not complete these
+acceptance gates. All reports retain `audit_status: "incomplete"`.

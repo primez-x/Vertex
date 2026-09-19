@@ -10,6 +10,7 @@
 #include <QImage>
 #include <QPainter>
 #include <QRegularExpression>
+#include <QSaveFile>
 #include <QSize>
 #include <QTimer>
 #include <QUuid>
@@ -45,6 +46,14 @@ QString smoke_project_output_path(const QStringList& arguments) {
 
 QString smoke_project_input_path(const QStringList& arguments) {
     const auto index = arguments.indexOf(QStringLiteral("--smoke-project-input"));
+    if (index >= 0 && index + 1 < arguments.size() && !arguments.at(index + 1).isEmpty()) {
+        return arguments.at(index + 1);
+    }
+    return {};
+}
+
+QString smoke_performance_output_path(const QStringList& arguments) {
+    const auto index = arguments.indexOf(QStringLiteral("--smoke-performance-output"));
     if (index >= 0 && index + 1 < arguments.size() && !arguments.at(index + 1).isEmpty()) {
         return arguments.at(index + 1);
     }
@@ -274,8 +283,10 @@ int main(int argc, char** argv) {
         const auto output = smoke_output_path(application.arguments());
         const auto native_output = native_smoke_output_path(application.arguments());
         const auto project_output = smoke_project_output_path(application.arguments());
+        const auto performance_output = smoke_performance_output_path(application.arguments());
         QTimer::singleShot(500, &window,
                            [&application, &window, output, native_output, project_output,
+                            performance_output,
                             architectural] {
             window.fitView();
             // Selection is local presentation state and is not persisted in a
@@ -295,6 +306,7 @@ int main(int argc, char** argv) {
             // one process was caught mid-refresh.
             QTimer::singleShot(150, &window,
                                [&application, &window, output, native_output,
+                                performance_output,
                                 architectural] {
                 window.fitView();
                 if (architectural && !window.exportNativeViewImage(native_output)) {
@@ -315,6 +327,16 @@ int main(int argc, char** argv) {
                     qCritical() << "Vertex: visual smoke capture failed:" << output;
                     application.exit(2);
                     return;
+                }
+                if (!performance_output.isEmpty()) {
+                    QSaveFile report(performance_output);
+                    if (!report.open(QIODevice::WriteOnly | QIODevice::Text) ||
+                        report.write(window.performanceReportJson().toUtf8()) < 0 ||
+                        !report.commit()) {
+                        qCritical() << "Vertex: performance report write failed:" << performance_output;
+                        application.exit(6);
+                        return;
+                    }
                 }
                 application.exit(0);
             });

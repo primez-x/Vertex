@@ -2943,9 +2943,16 @@
       "implementation_sources": [
         "scripts/performance_benchmark.py",
         "tests/test_performance_benchmark.py",
-        "docs/performance-benchmark.md"
+        "docs/performance-benchmark.md",
+        "include/sketch/performance_telemetry.hpp",
+        "src/core/performance_telemetry.cpp",
+        "tests/performance_telemetry_tests.cpp",
+        "src/desktop/main_window.cpp",
+        "src/desktop/main.cpp",
+        "scripts/test-desktop.ps1",
+        "scripts/test_installed_runtime.py"
       ],
-      "implementation_note": "Deterministic p95 navigation reporting and threshold checks are implemented; representative workloads, reference hardware runs, and final performance evidence remain open."
+      "implementation_note": "The desktop now emits bounded process-local navigation timing reports and the benchmark harness provides deterministic p95 threshold checks; representative workloads, reference hardware runs, and final performance evidence remain open."
     },
     {
       "id": "OPS-PERF-002",
@@ -2964,9 +2971,16 @@
         "include/sketch/workspace_regeneration_queue.hpp",
         "src/core/workspace_regeneration_queue.cpp",
         "tests/regeneration_queue_tests.cpp",
-        "docs/workspace-regeneration-queue.md"
+        "docs/workspace-regeneration-queue.md",
+        "include/sketch/performance_telemetry.hpp",
+        "src/core/performance_telemetry.cpp",
+        "tests/performance_telemetry_tests.cpp",
+        "src/desktop/main_window.cpp",
+        "src/desktop/main.cpp",
+        "scripts/test-desktop.ps1",
+        "scripts/test_installed_runtime.py"
       ],
-      "implementation_note": "Input/edit percentile calculations and explicit threshold failures are implemented. The owner-independent WorkspaceRegenerationQueue now provides FIFO cancellable derived work, discards cancelled receipts, captures failures, and preserves source-revision ownership under a focused Debug/Release fixture. Integrated application regeneration instrumentation, reference hardware measurements, and final performance evidence remain open."
+      "implementation_note": "Input/edit percentile calculations and explicit threshold failures are implemented. The owner-independent WorkspaceRegenerationQueue now provides FIFO cancellable derived work, discards cancelled receipts, captures failures, and preserves source-revision ownership under a focused Debug/Release fixture. The desktop now emits bounded process-local input/edit timing reports from the real canvas paths; reference hardware measurements, representative workloads, and final performance evidence remain open."
     },
     {
       "id": "OPS-PERF-003",
@@ -2981,9 +2995,15 @@
       "implementation_sources": [
         "scripts/performance_benchmark.py",
         "tests/test_performance_benchmark.py",
-        "docs/performance-benchmark.md"
+        "docs/performance-benchmark.md",
+        "include/sketch/performance_telemetry.hpp",
+        "src/core/performance_telemetry.cpp",
+        "tests/performance_telemetry_tests.cpp",
+        "src/desktop/main_window.cpp",
+        "src/desktop/main.cpp",
+        "scripts/test_installed_runtime.py"
       ],
-      "implementation_note": "Open/save percentile reporting validates explicit workload and sample metadata; representative project integrity and clean-machine performance evidence remain open."
+      "implementation_note": "The desktop now emits bounded process-local open/save timing reports from the real project paths, while the benchmark harness retains explicit workload and sample metadata. Representative project integrity, reference hardware, and clean-machine performance evidence remain open."
     },
     {
       "id": "OPS-QA-001",

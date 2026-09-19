@@ -576,6 +576,7 @@ property-studio.exe --smoke --smoke-workspace architectural --smoke-output C:\pa
 property-studio.exe --smoke --smoke-assistance-disabled --smoke-workspace measurement --smoke-project-output C:\path\measurement-source.bldproj
 property-studio.exe --smoke --smoke-assistance-disabled --smoke-workspace measurement --smoke-project-input C:\path\measurement-source.bldproj --smoke-project-output C:\path\measurement-reopened.bldproj
 property-studio.exe --smoke --smoke-assistance-disabled --smoke-market light-commercial --smoke-workspace architectural --smoke-output C:\path\commercial.png --smoke-3d-output C:\path\commercial-model.png
+property-studio.exe --smoke --smoke-workspace measurement --smoke-output C:\path\measurement.png --smoke-performance-output C:\path\measurement-performance.json
 ```
 
 `--smoke` creates a representative 12 m × 8 m boundary and two interior walls
@@ -598,6 +599,19 @@ cannot be enforced; the installed-runtime harness records this explicit mode.
 selected market into subject metadata; the commercial architectural seed also
 places a catalog-backed checkout-counter symbol.
 
+`--smoke-performance-output` writes the application's bounded process-local
+timing report. It records p95 samples for navigation, input, edit, open, and
+save scopes. Navigation/input retain the earliest coalesced interaction start
+through completed plan-canvas QPainter work; committed edits include command
+duration and completed paint. Reset and new/open project transitions partition
+the samples. These scopes do not measure compositor presentation or native 3D
+frame latency. Workload counts describe final state, sheets come from decoded
+sheet models, and unknown project size or unmeasured triangles are JSON `null`.
+The report retains an explicit incomplete qualification boundary; agreed
+reference hardware and representative workload evidence remain required for
+OPS-PERF-001/002/003 review. See [performance evidence](performance-benchmark.md)
+for the desktop report validator and separate representative-workload CLI.
+
 The installed-runtime harness gives source and reopened captures distinct
 filenames. Its report compares persisted project and native 3D hashes as the
 stable save/reopen check, while retaining screenshot hash differences because
@@ -611,7 +625,12 @@ native 3D capture. The normal application workspace keeps the 3D pane visible.
 
 On native Windows the Architectural tab contains the shared semantic plan
 canvas beside the real OCCT `NativeModelView`. Snapshot refreshes, stable-ID
-selection, errors, and Fit are wired to the same `Document`. Offscreen and
+selection, errors, and Fit are wired to the same `Document`. Native geometry
+preparation builds fresh topology on a worker from captured snapshots, then
+transfers completed candidates to the owner thread for presentation. New
+requests supersede stale candidates, even at equal revisions. Cancellation
+polls bracket objects and join inputs; individual join operations remain
+non-interruptible, and no native 3D timing acceptance is implied. Offscreen and
 minimal Qt platforms intentionally skip native viewer construction so the
 visual smoke path remains deterministic; the tab shows an explicit reason
 instead of a fake projection. The native export method therefore reports an

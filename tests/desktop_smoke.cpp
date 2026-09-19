@@ -5675,7 +5675,12 @@ int main(int argc, char** argv) {
             window.hide();
         }
     }
-    require(window.undoCommand(), "undo restores renderable building geometry");
+    // The malformed entity above is injected directly through the public
+    // document fixture API, outside the workspace command ledger. Reverse it
+    // through that same test-only path; desktop commands deliberately reject
+    // out-of-band divergence instead of replacing recovery history.
+    window.document().undo(window.document().revision());
+    require(window.selectEntity(column_id), "restored building geometry should be selectable");
     require(plan_error->isHidden(), "geometry error must clear after the valid object is restored");
     return 0;
 }

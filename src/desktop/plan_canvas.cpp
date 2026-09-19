@@ -1,5 +1,7 @@
 #include "plan_canvas.hpp"
 
+#include <QApplication>
+#include <QDialog>
 #include <QFontMetricsF>
 #include <QKeyEvent>
 #include <QKeySequence>
@@ -253,6 +255,7 @@ PlanCanvas::PlanCanvas(QWidget* parent) : QWidget(parent) {
     setAttribute(Qt::WA_AcceptTouchEvents, true);
     setAttribute(Qt::WA_TabletTracking, true);
     setAutoFillBackground(false);
+    qApp->installEventFilter(this);
 }
 
 void PlanCanvas::setEntities(std::vector<CanvasEntity> entities) {
@@ -277,6 +280,45 @@ void PlanCanvas::setSnapEnabled(bool enabled) {
     m_snap_enabled = enabled;
     if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
     update();
+}
+
+void PlanCanvas::setPerformanceMeasured(std::function<void(PerformanceMetric,
+                                       std::chrono::steady_clock::duration)> callback) {
+    resetPerformanceMeasurements();
+    m_performance_measured = std::move(callback);
+}
+
+void PlanCanvas::beginPerformanceMeasurement(PerformanceMetric metric,
+                                            PerformanceClock::time_point started) {
+    if (!m_performance_measured || !isVisible() || QApplication::activeModalWidget()) return;
+    // Use only the enum: the standalone canvas does not link core telemetry.
+    switch (metric) {
+    case PerformanceMetric::navigation:
+    case PerformanceMetric::input:
+    case PerformanceMetric::edit:
+    case PerformanceMetric::open:
+    case PerformanceMetric::save:
+        break;
+    default:
+        return;
+    }
+    const auto pending = std::find_if(m_pending_measurements.begin(), m_pending_measurements.end(),
+        [metric](const auto& item) { return item.first == metric; });
+    if (pending == m_pending_measurements.end())
+        m_pending_measurements.emplace_back(metric, started);
+    else
+        pending->second = std::min(pending->second, started);
+    // Even an input that only changes focus needs a completed canvas paint.
+    update();
+}
+
+void PlanCanvas::cancelPerformanceMeasurement(PerformanceMetric metric) {
+    std::erase_if(m_pending_measurements, [metric](const auto& item) { return item.first == metric; });
+}
+
+void PlanCanvas::resetPerformanceMeasurements() {
+    m_pending_measurements.clear();
+    ++m_measurement_generation;
 }
 
 void PlanCanvas::setOverviewMapEnabled(bool enabled) {
@@ -419,6 +461,7 @@ QRectF PlanCanvas::overviewMapRect() const noexcept {
 }
 
 void PlanCanvas::fitView() {
+    beginPerformanceMeasurement(PerformanceMetric::navigation);
     const auto bounds = contentBounds();
     if (!bounds) {
         m_view_center = {0.0, 0.0};
@@ -448,6 +491,7 @@ void PlanCanvas::zoomBy(double factor, QPointF anchor) {
     if (!(factor > 0.0) || !std::isfinite(factor)) {
         return;
     }
+    beginPerformanceMeasurement(PerformanceMetric::navigation);
     if (anchor.isNull()) {
         anchor = rect().center();
     }
@@ -791,7 +835,34 @@ void PlanCanvas::setDraftRedoRequested(std::function<void()> callback) {
     m_draft_redo_requested = std::move(callback);
 }
 
+bool PlanCanvas::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::Show) {
+        const auto* dialog = qobject_cast<QDialog*>(watched);
+        if (dialog && dialog->isModal()) resetPerformanceMeasurements();
+    } else if (event->type() == QEvent::WindowBlocked && watched == window()) {
+        resetPerformanceMeasurements();
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
 bool PlanCanvas::event(QEvent* event) {
+    switch (event->type()) {
+    case QEvent::Hide:
+    case QEvent::WindowBlocked:
+        resetPerformanceMeasurements();
+        break;
+    case QEvent::TouchBegin:
+    case QEvent::TouchUpdate:
+    case QEvent::TouchEnd:
+    case QEvent::TouchCancel:
+    case QEvent::TabletPress:
+    case QEvent::TabletMove:
+    case QEvent::TabletRelease:
+        beginPerformanceMeasurement(PerformanceMetric::input);
+        break;
+    default:
+        break;
+    }
     switch (event->type()) {
     case QEvent::TouchBegin: {
         auto* touch = static_cast<QTouchEvent*>(event);
@@ -864,6 +935,10 @@ bool PlanCanvas::event(QEvent* event) {
 
 void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
                               Qt::KeyboardModifiers modifiers) {
+    if (button == Qt::MiddleButton ||
+        (button == Qt::LeftButton && (modifiers.testFlag(Qt::AltModifier) ||
+                                     overviewMapRect().contains(position))))
+        beginPerformanceMeasurement(PerformanceMetric::navigation);
     setFocus();
     updateCursor(position);
     if (button == Qt::MiddleButton ||
@@ -887,6 +962,7 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
 void PlanCanvas::pointerMove(QPointF position) {
     m_last_mouse_position = position;
     if (m_panning) {
+        beginPerformanceMeasurement(PerformanceMetric::navigation);
         const auto delta = position - m_pan_start;
         m_view_center = {m_pan_view_start.x - delta.x() / m_scale,
                          m_pan_view_start.y + delta.y() / m_scale};
@@ -902,8 +978,20 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button) {
 
 void PlanCanvas::paintEvent(QPaintEvent* event) {
     Q_UNUSED(event);
-    QPainter painter(this);
-    renderScene(painter, QRectF(rect()));
+    const auto pending = std::exchange(m_pending_measurements, {});
+    const auto generation = m_measurement_generation;
+    {
+        QPainter painter(this);
+        renderScene(painter, QRectF(rect()));
+    }
+    const auto completed = PerformanceClock::now();
+    const auto callback = m_performance_measured;
+    if (!callback || !isVisible() || QApplication::activeModalWidget()) return;
+    for (const auto& [metric, started] : pending) {
+        // A reset from a callback must also discard the remainder of this batch.
+        if (generation != m_measurement_generation) break;
+        callback(metric, completed - started);
+    }
 }
 
 void PlanCanvas::mousePressEvent(QMouseEvent* event) {
@@ -911,6 +999,7 @@ void PlanCanvas::mousePressEvent(QMouseEvent* event) {
         event->accept();
         return;
     }
+    beginPerformanceMeasurement(PerformanceMetric::input);
     pointerPress(event->position(), event->button(), event->modifiers());
     event->accept();
 }
@@ -920,6 +1009,7 @@ void PlanCanvas::mouseMoveEvent(QMouseEvent* event) {
         event->accept();
         return;
     }
+    beginPerformanceMeasurement(PerformanceMetric::input);
     pointerMove(event->position());
     event->accept();
 }
@@ -929,11 +1019,13 @@ void PlanCanvas::mouseReleaseEvent(QMouseEvent* event) {
         event->accept();
         return;
     }
+    beginPerformanceMeasurement(PerformanceMetric::input);
     pointerRelease(event->position(), event->button());
     event->accept();
 }
 
 void PlanCanvas::wheelEvent(QWheelEvent* event) {
+    beginPerformanceMeasurement(PerformanceMetric::input);
     const auto steps = static_cast<double>(event->angleDelta().y()) / 120.0;
     if (steps != 0.0) {
         zoomBy(std::pow(1.18, steps), event->position());
@@ -942,6 +1034,16 @@ void PlanCanvas::wheelEvent(QWheelEvent* event) {
 }
 
 void PlanCanvas::keyPressEvent(QKeyEvent* event) {
+    // Precise input opens a dialog; exclude the entire dispatch even if a
+    // supplied callback happens to be nonmodal (for example in an embedder).
+    if (event->key() == Qt::Key_D && m_tool == CanvasTool::boundary) {
+        resetPerformanceMeasurements();
+    } else if ((event->matches(QKeySequence::Undo) && m_draft_undo_requested) ||
+               (event->matches(QKeySequence::Redo) && m_draft_redo_requested) ||
+               event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter ||
+               event->key() == Qt::Key_Escape || event->key() == Qt::Key_F) {
+        beginPerformanceMeasurement(PerformanceMetric::input);
+    }
     if (event->matches(QKeySequence::Undo) && m_draft_undo_requested) {
         m_draft_undo_requested();
         event->accept();

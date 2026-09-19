@@ -1075,6 +1075,14 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/performance_telemetry.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/performance_workload.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/product_scope.hpp"
     },
     {
@@ -1184,6 +1192,10 @@
     {
       "category": "source",
       "path": "include/sketch/vertical_levels.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/visualization/native_geometry_preparation.hpp"
     },
     {
       "category": "source",
@@ -1336,6 +1348,10 @@
     {
       "category": "source",
       "path": "scripts/performance_benchmark.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/performance_report.py"
     },
     {
       "category": "source",
@@ -1619,6 +1635,18 @@
     },
     {
       "category": "source",
+      "path": "src/core/performance_telemetry.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/performance_workload.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/performance_workload_main.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/product_scope.cpp"
     },
     {
@@ -1851,6 +1879,10 @@
     },
     {
       "category": "source",
+      "path": "src/visualization/native_geometry_preparation.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/visualization/native_model_view.cpp"
     },
     {
@@ -2035,6 +2067,10 @@
     },
     {
       "category": "source",
+      "path": "tests/desktop_performance_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/desktop_smoke.cpp"
     },
     {
@@ -2139,6 +2175,14 @@
     },
     {
       "category": "source",
+      "path": "tests/native_geometry_preparation_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/native_model_preparation_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/native_view_tests.cpp"
     },
     {
@@ -2152,6 +2196,14 @@
     {
       "category": "source",
       "path": "tests/output_fingerprint_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/performance_telemetry_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/performance_workload_tests.cpp"
     },
     {
       "category": "source",
@@ -2360,6 +2412,10 @@
     {
       "category": "source",
       "path": "tests/test_performance_benchmark.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_performance_report.py"
     },
     {
       "category": "source",

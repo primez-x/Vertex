@@ -538,11 +538,17 @@ public:
     // Hiding it is useful when a host cannot capture native child surfaces;
     // it does not alter the document or the exported 3D view.
     void setNativeModelViewVisible(bool visible);
-    // True after the asynchronous source-bound derived-work preflight has
-    // completed for the current document revision.  The result is an internal
-    // readiness signal; document and presentation publication remain owned by
-    // the desktop thread.
+    // True after actual semantic 3D geometry has been prepared for the current
+    // document revision. Polling collects work on the desktop thread even when
+    // the native pane is hidden; it does not certify native frame presentation.
     [[nodiscard]] bool regenerationReadyForCurrentRevision() noexcept;
+    // Returns process-local timing samples collected from the real desktop
+    // input, edit, open, save and navigation paths. The report is diagnostic
+    // evidence only and never asserts reference-hardware qualification.
+    [[nodiscard]] QString performanceReportJson() const;
+    // Start a fresh diagnostic run without changing the current document.
+    // Pending canvas paints from the previous run are excluded.
+    void beginPerformanceRun() noexcept;
     // Local DXF R2013 interchange. Export writes an adjacent fidelity report;
     // import commits mapped geometry in one undoable command and retains the
     // original source bytes as a project asset for any reported gaps.

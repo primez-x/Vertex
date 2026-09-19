@@ -43,7 +43,7 @@
 #include "sketch/workspace_accessibility.hpp"
 #include "sketch/workspace_save_coordinator.hpp"
 #include "sketch/workspace_save_queue.hpp"
-#include "sketch/workspace_regeneration_queue.hpp"
+#include "sketch/performance_telemetry.hpp"
 #include "sketch/workspace_autosave_scheduler.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/project_visibility.hpp"
@@ -173,72 +173,6 @@ using json = nlohmann::json;
 constexpr std::size_t kMaximumClipboardBytes = 4ULL * 1024ULL * 1024ULL;
 constexpr std::size_t kMaximumClipboardEntities = 128;
 constexpr std::string_view kClipboardFormat = "sketch.document.clipboard";
-
-std::string cancellable_regeneration_digest(
-    const DocumentSnapshot& snapshot, const RegenerationCancellationToken& token) {
-    // This is an opaque derived-work identity, deliberately separate from the
-    // persisted authoring digest.  FNV-1a keeps the worker incremental so a
-    // large project can observe cancellation between records without
-    // constructing one giant JSON temporary on the GUI thread.
-    std::uint64_t value = 1469598103934665603ULL;
-    const auto update = [&](std::string_view text) {
-        for (const auto byte : text) {
-            value ^= static_cast<unsigned char>(byte);
-            value *= 1099511628211ULL;
-        }
-    };
-    const auto update_json = [&](const json& item) {
-        const auto encoded = item.dump();
-        update(encoded);
-    };
-    const auto update_entity_map = [&](const auto& entities) {
-        for (const auto& [id, entity] : entities) {
-            if (token.is_cancelled()) return false;
-            update(id);
-            update(entity.id);
-            update(entity.type);
-            update_json(entity.properties);
-            update(entity.required ? "required" : "optional");
-            update_json(entity.extensions);
-        }
-        return true;
-    };
-    const auto update_asset_map = [&](const auto& assets) {
-        for (const auto& [id, asset] : assets) {
-            if (token.is_cancelled()) return false;
-            update(id);
-            update(asset.id);
-            update(asset.media_type);
-            update(asset.sha256);
-            update_json(asset.metadata);
-            for (const auto byte : asset.bytes) {
-                value ^= static_cast<unsigned char>(std::to_integer<unsigned char>(byte));
-                value *= 1099511628211ULL;
-            }
-        }
-        return true;
-    };
-    update(snapshot.document_id());
-    update(std::to_string(snapshot.revision()));
-    for (const auto& record : snapshot.history()) {
-        if (token.is_cancelled()) return {};
-        update(std::to_string(record.revision));
-        update(record.action);
-        if (!update_entity_map(record.entities) || !update_asset_map(record.assets)) return {};
-        for (const auto revision : record.undo_stack) update(std::to_string(revision));
-        for (const auto revision : record.redo_stack) update(std::to_string(revision));
-    }
-    for (const auto& [name, revision] : snapshot.named_revisions()) {
-        if (token.is_cancelled()) return {};
-        update(name);
-        update(std::to_string(revision));
-    }
-    if (token.is_cancelled()) return {};
-    std::array<char, 16> encoded{};
-    const auto converted = std::to_chars(encoded.data(), encoded.data() + encoded.size(), value, 16);
-    if (converted.ec != std::errc{}) return {};
-    return std::string(encoded.data(), converted.ptr);
-}
 
 void add_default_level_placement(json& properties, const DrawingContext& context) {
     if (!properties.is_object() || properties.contains("vertical_placement") ||
@@ -2088,12 +2022,6 @@ public:
         m_project_workspace = std::make_unique<ProjectWorkspace>(m_document->snapshot());
         initializeDrawingContext();
         buildUi();
-        m_regeneration_timer = new QTimer(owner);
-        m_regeneration_timer->setObjectName(QStringLiteral("workspaceRegenerationPoll"));
-        m_regeneration_timer->setInterval(25);
-        QObject::connect(m_regeneration_timer, &QTimer::timeout, owner,
-                         [this] { drainRegenerationCompletions(); });
-        m_regeneration_timer->start();
         refresh();
         m_save_timer = new QTimer(owner);
         m_save_timer->setObjectName(QStringLiteral("workspaceSavePoll"));
@@ -2103,12 +2031,6 @@ public:
     }
 
     ~Impl() {
-        if (m_regeneration_timer) m_regeneration_timer->stop();
-        // Derived results are disposable. Cancel and join before any owner
-        // snapshot or widget state is destroyed; the valid document revision
-        // is never replaced by a worker completion.
-        m_regeneration_queue.shutdown(false);
-        drainRegenerationCompletions();
         m_save_timer->stop();
         // Jobs own detached values only. Join before destroying any owner state.
         m_save_queue.shutdown(true);
@@ -2120,9 +2042,10 @@ public:
 
     QString recoveryCopyPath() const { return QString::fromStdWString(m_autosave_path.wstring()); }
     [[nodiscard]] bool regenerationReadyForCurrentRevision() noexcept {
-        drainRegenerationCompletions();
-        return m_regeneration_receipt.has_value() &&
-            m_regeneration_receipt->source_revision == m_document->revision();
+        if (!m_nativeModelView || m_native_geometry_document.lock() != m_document ||
+            m_native_geometry_revision != m_document->revision()) return false;
+        m_nativeModelView->pollGeometryPreparation();
+        return m_nativeModelView->isGeometryPrepared();
     }
 
     [[nodiscard]] Document& document() noexcept { return *m_document; }
@@ -4655,6 +4578,7 @@ public:
                 read_string(selected->properties, "classification").value_or(""));
             if (!beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, classification)) return;
             m_redefine_boundary_id = source_id;
+            boundaryDraftChanged();
             owner->statusBar()->showMessage(
                 QStringLiteral("Redefining boundary  •  draw the replacement with the same number of edges"),
                 6000);
@@ -5973,7 +5897,7 @@ public:
                 }
             }
             (void)message;
-            (void)apply_vertical_level_edit(*m_document, candidate);
+            measureDocumentEdit([&] { (void)apply_vertical_level_edit(*m_document, candidate); });
             clearError();
             refresh();
             return true;
@@ -8522,6 +8446,10 @@ public:
             setError(QStringLiteral("This project is read-only."));
             return false;
         }
+        if (m_project_workspace->active_boundary() && !m_boundary_session) {
+            setError(QStringLiteral("A retained boundary has an outdated source and cannot be replaced by a new drawing."));
+            return false;
+        }
         // Starting a fresh authoring session clears any pending redraw target;
         // the explicit redefinition command reinstates it after this setup
         // succeeds.
@@ -8556,8 +8484,7 @@ public:
             m_tool = CanvasTool::boundary;
             syncToolControls();
             clearError();
-            boundaryDraftChanged();
-            return true;
+            return boundaryDraftChanged();
         } catch (const std::exception& error) {
             setError(QStringLiteral("Start boundary: %1").arg(QString::fromUtf8(error.what())));
             return false;
@@ -12090,11 +12017,14 @@ public:
         }
         try {
             const auto selection_before = m_selected_id;
-            if (m_recovery_ledger.empty()) m_document->undo(m_document->revision());
+            if (m_recovery_ledger.empty()) {
+                measureDocumentEdit([&] { m_document->undo(m_document->revision()); });
+            }
             else {
                 requireWorkspaceDocument();
                 auto edit = m_project_workspace->prepare_undo();
                 commitWorkspaceEdit(edit);
+                restoreWorkspaceBoundaryDraft();
             }
             // Keep the inspector context across edits that leave the selected
             // entity in the document. Creation and deletion commands already
@@ -12120,7 +12050,7 @@ public:
             setError(QStringLiteral("This document is read-only."));
             return false;
         }
-        if (m_boundary_session) {
+        if (m_boundary_session && !(m_restored_boundary_navigation && m_project_workspace->can_redo())) {
             const bool changed = m_boundary_session->redo();
             if (changed) { clearError(); boundaryDraftChanged(); }
             return changed;
@@ -12130,11 +12060,14 @@ public:
         }
         try {
             const auto selection_before = m_selected_id;
-            if (m_recovery_ledger.empty()) m_document->redo(m_document->revision());
+            if (m_recovery_ledger.empty()) {
+                measureDocumentEdit([&] { m_document->redo(m_document->revision()); });
+            }
             else {
                 requireWorkspaceDocument();
                 auto edit = m_project_workspace->prepare_redo();
                 commitWorkspaceEdit(edit);
+                restoreWorkspaceBoundaryDraft();
             }
             if (!selection_before.isEmpty() &&
                 has_entity(*m_document, selection_before)) {
@@ -12166,6 +12099,7 @@ public:
             auto candidate = std::make_shared<Document>(Document::create());
             ensure_project_scaffold(*candidate);
             auto candidate_workspace = std::make_unique<ProjectWorkspace>(candidate->snapshot());
+            beginPerformanceRun();
             m_document = std::move(candidate);
             m_project_workspace = std::move(candidate_workspace);
             m_recovery_ledger.clear();
@@ -12200,6 +12134,8 @@ public:
                                     QStringLiteral("Save current changes before opening another project?"))) {
             return false;
         }
+        sketch::ScopedPerformanceMeasurement timing(
+            m_performance_telemetry, sketch::PerformanceMetric::open);
         try {
             const auto candidate_path = filesystem_path(path);
             const bool reuse_current_ownership =
@@ -12259,12 +12195,24 @@ public:
                 candidate_ledger = loaded.archive->recovery();
                 candidate_sha256 = std::move(loaded.file_sha256);
             }
+            // Decode the interactive state before publishing any replacement.
+            // Historical (stale) input remains retained, but cannot be resumed.
+            std::optional<BoundaryAuthoringSession> candidate_boundary;
+            std::optional<QString> candidate_redefine;
+            const auto candidate_active = candidate_workspace->active_boundary();
+            if (!candidate_read_only && candidate_active &&
+                inspect_boundary_recovery_source(candidate_workspace->snapshot(), candidate_active->source) ==
+                    BoundaryRecoverySourceStatus::current) {
+                candidate_redefine = boundaryRecoveryTarget(*candidate_active, candidate_workspace->snapshot());
+                candidate_boundary = BoundaryAuthoringSession::from_recovery_checkpoint(candidate_active->checkpoint);
+            }
             if (m_project_ownership && !reuse_current_ownership) {
                 const auto released = m_project_ownership->release();
                 if (!released.ok()) {
                     throw std::runtime_error("the current project ownership could not be released");
                 }
             }
+            beginPerformanceRun();
             m_document = std::move(candidate);
             m_project_workspace = std::move(candidate_workspace);
             if (candidate_ownership) {
@@ -12293,6 +12241,15 @@ public:
             m_project_resource_names.clear();
             clearPreview();
             m_tool = CanvasTool::select;
+            if (candidate_boundary) {
+                m_boundary_session = std::move(candidate_boundary);
+                m_boundary_source = m_document->snapshot();
+                m_boundary_context = candidate_active->source.context;
+                m_boundary_document = m_document;
+                m_redefine_boundary_id = candidate_redefine;
+                m_tool = CanvasTool::boundary;
+                refreshBoundaryPreview();
+            }
             syncToolControls();
             clearError();
             refresh();
@@ -15616,6 +15573,77 @@ public:
 
     [[nodiscard]] QString lastError() const { return m_last_error; }
 
+    void beginPerformanceRun() noexcept {
+        m_measurementCanvas->resetPerformanceMeasurements();
+        m_architecturalCanvas->resetPerformanceMeasurements();
+        m_performance_telemetry.reset();
+    }
+
+    [[nodiscard]] QString performanceReportJson() const {
+        const auto snapshot = m_document->snapshot();
+        std::size_t object_count = 0;
+        std::size_t sheet_count = 0;
+        for (const auto& [id, entity] : snapshot.entities()) {
+            (void)id;
+            if (entity.type == "sheet_view_model") {
+                sheet_count += decode_sheet_view_entity(entity).sheets().size();
+            } else if (entity.type == "wall" || entity.type == "slab" ||
+                       entity.type == "roof" || entity.type == "column" ||
+                       entity.type == "beam" || entity.type == "stair" ||
+                       entity.type == "railing" || entity.type == "room" ||
+                       entity.type == "opening") {
+                ++object_count;
+            }
+        }
+        json project_bytes = nullptr;
+        if (!m_file_path.empty()) {
+            std::error_code error;
+            if (std::filesystem::is_regular_file(m_file_path, error) && !error) {
+                const auto bytes = std::filesystem::file_size(m_file_path, error);
+                if (!error) project_bytes = bytes;
+            }
+        }
+        json report{
+            {"schema_version", 1},
+            {"audit_status", "incomplete"},
+            {"evidence_scope", "application-local samples: input, navigation and committed edits through completed canvas painting; open/save through synchronous storage operations; excludes native 3D completion, compositor presentation and hardware qualification"},
+            {"workload", {
+                {"id", "interactive-session"},
+                {"document_id", snapshot.document_id()},
+                {"revision", snapshot.revision()},
+                {"entities", snapshot.entities().size()},
+                {"objects", object_count},
+                {"triangles", nullptr},
+                {"sheets", sheet_count},
+                {"project_bytes", project_bytes},
+            }},
+            {"reference_hardware", "unspecified; supply the agreed qualification machine separately"},
+            {"metrics", json::object()},
+        };
+        bool all_metrics_present = true;
+        bool all_within_threshold = true;
+        for (const auto metric : {PerformanceMetric::navigation, PerformanceMetric::input,
+                                  PerformanceMetric::edit, PerformanceMetric::open,
+                                  PerformanceMetric::save}) {
+            const auto summary = m_performance_telemetry.summary(metric);
+            all_metrics_present = all_metrics_present && summary.has_samples;
+            all_within_threshold = all_within_threshold && summary.within_threshold;
+            json metric_json{
+                {"sample_count", summary.sample_count},
+                {"dropped_sample_count", summary.dropped_sample_count},
+                {"threshold_ms", summary.threshold_ms},
+                {"has_samples", summary.has_samples},
+                {"within_threshold", summary.within_threshold},
+            };
+            if (summary.has_samples) metric_json["p95_ms"] = summary.p95_ms;
+            else metric_json["p95_ms"] = nullptr;
+            report["metrics"][performance_metric_name(metric)] = std::move(metric_json);
+        }
+        report["threshold_status"] = !all_metrics_present ? "incomplete"
+            : (all_within_threshold ? "within_targets" : "exceeds_targets");
+        return QString::fromStdString(report.dump(2) + "\n");
+    }
+
     void closeEvent(QCloseEvent* event) {
         event->setAccepted(confirmDirtyTransition(
             QStringLiteral("Unsaved project"),
@@ -15915,14 +15943,30 @@ private:
             m_project_workspace->epoch() != m_saved_workspace_epoch);
     }
 
+    template <typename Mutation>
+    void measureDocumentEdit(Mutation&& mutation) {
+        auto* canvas = m_workspace == Workspace::measurement
+            ? m_measurementCanvas : m_architecturalCanvas;
+        const auto revision = m_document->revision();
+        const auto started = std::chrono::steady_clock::now();
+        std::forward<Mutation>(mutation)();
+        // Failed or no-op commands never create an edit sample. Register only
+        // after commit, keeping the command's start through its eventual paint.
+        if (m_document->revision() != revision) {
+            canvas->beginPerformanceMeasurement(PerformanceMetric::edit, started);
+        }
+    }
+
     void commitWorkspaceEdit(PreparedWorkspaceEdit& edit) {
         // Allocate the compatibility view before committing. Preserve its address
         // for both canvases and callers holding the shared Document.
-        auto candidate = Document::fork(edit.preview());
-        if (const auto saved = m_document->snapshot().saved_revision_optional())
-            candidate.mark_saved(*saved);
-        (void)m_project_workspace->commit(edit);
-        *m_document = std::move(candidate);
+        measureDocumentEdit([&] {
+            auto candidate = Document::fork(edit.preview());
+            if (const auto saved = m_document->snapshot().saved_revision_optional())
+                candidate.mark_saved(*saved);
+            (void)m_project_workspace->commit(edit);
+            *m_document = std::move(candidate);
+        });
     }
 
     Command augmentAuthoredCommand(const Command& command) {
@@ -15997,7 +16041,7 @@ private:
 
     void applyAuthoredCommand(const Command& command) {
         if (m_recovery_ledger.empty()) {
-            m_document->apply(command);
+            measureDocumentEdit([&] { m_document->apply(command); });
             return;
         }
         requireWorkspaceDocument();
@@ -16019,7 +16063,7 @@ private:
 
     void applyConstraintPreview(const ConstraintAuthoringPreview& preview) {
         if (m_recovery_ledger.empty()) {
-            apply_constraint_authoring(*m_document, preview);
+            measureDocumentEdit([&] { apply_constraint_authoring(*m_document, preview); });
             return;
         }
         requireWorkspaceDocument();
@@ -16034,7 +16078,13 @@ private:
         bool has_history = false;
         bool has_active = false;
         for (auto it = ledger.begin(); it != ledger.end();) {
-            if (it->record_kind == "workspace_history") {
+            if (it->record_kind == "recovery_copy") {
+                // Copy metadata belongs to the original publication, not the
+                // workspace. Ordinary saves cannot carry it; autosave adds a
+                // fresh record bound to this session and destination below.
+                it = ledger.erase(it);
+                continue;
+            } else if (it->record_kind == "workspace_history") {
                 it->envelope = encode_workspace_history_record(snapshot.document(), history,
                     snapshot.active_boundary());
                 has_history = true;
@@ -16107,54 +16157,6 @@ private:
             } else {
                 m_completed_saves.emplace(completion.sequence, std::move(completion));
             }
-        }
-    }
-
-    void scheduleRegeneration(DocumentSnapshot snapshot) {
-        if (m_regeneration_pending) {
-            (void)m_regeneration_queue.cancel(*m_regeneration_pending);
-            m_regeneration_pending.reset();
-        }
-        m_regeneration_receipt.reset();
-        try {
-            const auto sequence = m_regeneration_queue.enqueue(
-                [snapshot = std::move(snapshot)](
-                    const RegenerationCancellationToken& token) mutable {
-                    if (token.is_cancelled()) {
-                        return RegenerationReceipt{snapshot.revision(), {}};
-                    }
-                    // The digest is derived exclusively from the detached
-                    // snapshot.  The helper checks the token between records;
-                    // the queue also discards any receipt that crosses the
-                    // cancellation boundary after the worker returns.
-                    const auto digest = cancellable_regeneration_digest(snapshot, token);
-                    if (digest.empty() || token.is_cancelled()) {
-                        return RegenerationReceipt{snapshot.revision(), {}};
-                    }
-                    return RegenerationReceipt{snapshot.revision(), digest};
-                });
-            m_regeneration_pending = sequence;
-        } catch (const std::exception&) {
-            // Derived work is an optimization and never blocks authoring. A
-            // failed enqueue leaves the authoritative document untouched.
-            m_regeneration_pending.reset();
-        }
-    }
-
-    void drainRegenerationCompletions() {
-        for (auto& completion : m_regeneration_queue.take_completed()) {
-            if (!m_regeneration_pending || completion.sequence != *m_regeneration_pending) {
-                continue;
-            }
-            m_regeneration_pending.reset();
-            if (completion.kind != WorkspaceRegenerationQueue::CompletionKind::completed ||
-                !completion.receipt || completion.receipt->output_digest.empty()) {
-                continue;
-            }
-            if (completion.receipt->source_revision != m_document->revision()) {
-                continue;
-            }
-            m_regeneration_receipt = std::move(completion.receipt);
         }
     }
 
@@ -16347,6 +16349,8 @@ private:
             setError(QStringLiteral("The selected project path is reserved for recovery data."));
             return false;
         }
+        sketch::ScopedPerformanceMeasurement timing(
+            m_performance_telemetry, sketch::PerformanceMetric::save);
         try {
             if (current_destination && m_project_ownership && m_project_ownership->active()) {
                 const auto ownership = m_project_ownership->verify_current();
@@ -17179,8 +17183,13 @@ private:
         const auto platform = QGuiApplication::platformName();
         const auto native_platform = platform != QStringLiteral("offscreen") &&
                                      platform != QStringLiteral("minimal");
+        // Semantic geometry preparation also runs without a native surface.
+        // Keep its widget out of offscreen layouts so it never opens a window.
+        QWidget* native_parent = native_platform
+            ? static_cast<QWidget*>(architectural_splitter) : static_cast<QWidget*>(owner);
+        m_nativeModelView = new visualization::NativeModelView(native_parent);
+        if (!native_platform) m_nativeModelView->hide();
         if (native_platform) {
-            m_nativeModelView = new visualization::NativeModelView(architectural_splitter);
             m_nativeModelView->setEntitySelectedCallback(
                 [this](QString id) { selectEntity(id); });
             m_nativeModelView->setEntityTranslationRequestedCallback(
@@ -17903,8 +17912,16 @@ private:
     }
 
     void connectCanvas(PlanCanvas* canvas) {
-        canvas->setPointClicked([this](Vec2 point) { onCanvasPoint(point); });
-        canvas->setEntitySelectionClicked([this](QString id, bool toggle) { selectEntity(id, toggle); });
+        canvas->setPerformanceMeasured([this](PerformanceMetric metric,
+                                              std::chrono::steady_clock::duration elapsed) {
+            (void)m_performance_telemetry.record(metric, elapsed);
+        });
+        canvas->setPointClicked([this](Vec2 point) {
+            onCanvasPoint(point);
+        });
+        canvas->setEntitySelectionClicked([this](QString id, bool toggle) {
+            selectEntity(id, toggle);
+        });
         canvas->setCursorMoved([this, canvas](Vec2 point) {
             // Snap toggles update both canvases; only the active workspace
             // owns the shared authoring pointer and cursor status.
@@ -17918,11 +17935,21 @@ private:
                 refreshBoundaryPreview();
             }
         });
-        canvas->setFinishRequested([this] { finishTool(); });
-        canvas->setCancelRequested([this] { cancelTool(); });
-        canvas->setPreciseInputRequested([this] { preciseBoundaryInput(); });
-        canvas->setDraftUndoRequested([this] { (void)undoCommand(); });
-        canvas->setDraftRedoRequested([this] { (void)redoCommand(); });
+        canvas->setFinishRequested([this] {
+            finishTool();
+        });
+        canvas->setCancelRequested([this] {
+            cancelTool();
+        });
+        canvas->setPreciseInputRequested([this] {
+            preciseBoundaryInput();
+        });
+        canvas->setDraftUndoRequested([this] {
+            (void)undoCommand();
+        });
+        canvas->setDraftRedoRequested([this] {
+            (void)redoCommand();
+        });
     }
 
     void refresh() {
@@ -17944,7 +17971,6 @@ private:
         refreshActions();
         refreshTitle();
         m_refreshing = false;
-        scheduleRegeneration(std::move(snapshot));
     }
 
     void refreshCanvases() {
@@ -18844,6 +18870,8 @@ private:
             visualization::NativeModelView::VisibleEntityIds native_visible_ids;
             native_visible_ids.insert(visible_ids.begin(), visible_ids.end());
             m_nativeModelView->setSnapshot(snapshot, std::move(native_visible_ids));
+            m_native_geometry_document = m_document;
+            m_native_geometry_revision = snapshot.revision();
         }
     }
 
@@ -19974,7 +20002,8 @@ private:
     void refreshActions() {
         m_undo_action->setEnabled(m_boundary_session ? m_boundary_session->can_undo() :
             m_recovery_ledger.empty() ? m_document->can_undo() : m_project_workspace->can_undo());
-        m_redo_action->setEnabled(m_boundary_session ? m_boundary_session->can_redo() :
+        m_redo_action->setEnabled(m_restored_boundary_navigation && m_project_workspace->can_redo() ? true :
+            m_boundary_session ? m_boundary_session->can_redo() :
             m_recovery_ledger.empty() ? m_document->can_redo() : m_project_workspace->can_redo());
         m_save_action->setEnabled(m_document->is_editable() && projectDirty());
         m_save_as_action->setEnabled(m_document->is_editable());
@@ -20124,10 +20153,96 @@ private:
         m_architecturalCanvas->setBoundaryDraftPreview(std::move(preview));
     }
 
-    void boundaryDraftChanged() {
+    std::optional<QString> boundaryRecoveryTarget(const BoundaryActiveRecovery& active,
+                                                 const DocumentSnapshot& snapshot) const {
+        const auto found = active.extensions.find("desktop_operation");
+        if (found == active.extensions.end()) return std::nullopt; // Legacy create drafts.
+        const auto& operation = *found;
+        if (!operation.is_object() || operation.size() != 3 ||
+            !operation.contains("version") || operation.at("version") != 1 ||
+            !operation.contains("kind") || operation.at("kind") != "redefine" ||
+            !operation.contains("target_id") || !operation.at("target_id").is_string())
+            throw std::invalid_argument("Unsupported boundary recovery operation.");
+        const auto id = operation.at("target_id").get<std::string>();
+        const auto target = snapshot.entities().find(id);
+        if (id.empty() || id.size() > 128 || target == snapshot.entities().end() ||
+            !is_closed_boundary_entity(target->second.type) ||
+            inspect_boundary_entity_version(target->second).format != BoundaryEntityFormat::identified_v1 ||
+            target->second.properties.contains("boundary_authoring"))
+            throw std::invalid_argument("The recovered redefinition target is unavailable or unsupported.");
+        return QString::fromStdString(id);
+    }
+
+    void restoreWorkspaceBoundaryDraft() {
+        const auto active = m_project_workspace->active_boundary();
+        clearPreview(false);
+        m_tool = CanvasTool::select;
+        if (active && m_document->is_editable() &&
+            inspect_boundary_recovery_source(m_project_workspace->snapshot(), active->source) ==
+                BoundaryRecoverySourceStatus::current) {
+            m_redefine_boundary_id = boundaryRecoveryTarget(*active, m_project_workspace->snapshot());
+            m_boundary_session = BoundaryAuthoringSession::from_recovery_checkpoint(active->checkpoint);
+            m_boundary_source = m_document->snapshot();
+            m_boundary_context = active->source.context;
+            m_boundary_document = m_document;
+            m_restored_boundary_navigation = true;
+            m_tool = CanvasTool::boundary;
+            refreshBoundaryPreview();
+        }
+        syncToolControls();
+    }
+
+    void checkpointBoundaryDraft() {
+        if (!m_boundary_session || !m_boundary_source || !m_boundary_context ||
+            m_boundary_document != m_document || !m_document->is_editable()) return;
+        const bool promote = m_recovery_ledger.empty();
+        if (promote) {
+            // Drain legacy-generation jobs before switching to workspace counters.
+            waitForSaveBarrier();
+            m_project_workspace = std::make_unique<ProjectWorkspace>(m_document->snapshot());
+        }
+        requireWorkspaceDocument();
+        BoundaryActiveRecovery active{
+            capture_boundary_recovery_source(*m_boundary_source, *m_boundary_context),
+            m_boundary_session->recovery_checkpoint()};
+        const auto previous = m_project_workspace->active_boundary();
+        if (previous) {
+            if (previous->checkpoint.identity_namespace != active.checkpoint.identity_namespace)
+                throw std::runtime_error("A different recovered boundary is still active; discard it before starting another.");
+            active.extensions = previous->extensions;
+        }
+        if (m_redefine_boundary_id) {
+            active.extensions["desktop_operation"] = {{"version", 1}, {"kind", "redefine"},
+                {"target_id", m_redefine_boundary_id->toStdString()}};
+            (void)boundaryRecoveryTarget(active, *m_boundary_source);
+        }
+        if (previous && *previous == active) return;
+        auto edit = m_project_workspace->prepare_boundary_checkpoint(active);
+        (void)m_project_workspace->commit(edit);
+        if (promote) {
+            const auto snapshot = m_project_workspace->capture();
+            m_recovery_ledger.push_back({make_stable_id(), "workspace_history",
+                encode_workspace_history_record(snapshot.document(), capture_workspace_history_record(snapshot),
+                    snapshot.active_boundary())});
+            m_saved_workspace_epoch = 0;
+            m_saved_edited_generation = 0;
+            resetAutosaveSession();
+        }
+    }
+
+    bool boundaryDraftChanged() {
+        m_restored_boundary_navigation = false;
+        bool captured = true;
+        try {
+            checkpointBoundaryDraft();
+        } catch (const std::exception& error) {
+            captured = false;
+            setError(QStringLiteral("Boundary recovery checkpoint failed: %1").arg(QString::fromUtf8(error.what())));
+        }
         refreshBoundaryPreview();
         refreshActions();
         refreshTitle();
+        return captured;
     }
 
     void onCanvasPoint(Vec2 point) {
@@ -20260,6 +20375,7 @@ private:
                 }
                 const auto replacement = decode_identified_boundary_entity(created->second);
                 const auto source_id = *m_redefine_boundary_id;
+                m_selected_id = source_id;
                 const auto classification = QString::fromStdString(
                     read_string(created->second.properties, "classification").value_or(""));
                 if (!redefineSelectedBoundary(boundary_geometry(replacement), classification)) {
@@ -20271,10 +20387,11 @@ private:
                 committed_id = source_id;
                 m_redefine_boundary_id.reset();
             } else if (m_recovery_ledger.empty()) {
-                (void)apply_boundary_commit(*m_document, preview);
+                measureDocumentEdit([&] { (void)apply_boundary_commit(*m_document, preview); });
             } else {
                 requireWorkspaceDocument();
-                auto edit = m_project_workspace->prepare_boundary_commit(preview);
+                checkpointBoundaryDraft();
+                auto edit = m_project_workspace->prepare_finish_boundary();
                 commitWorkspaceEdit(edit);
             }
             if (committed_id.isEmpty()) {
@@ -20374,7 +20491,17 @@ private:
     }
     void toggleOverviewMap() { setOverviewMap(!m_overview_map_enabled); }
 
-    void clearPreview() {
+    void clearPreview(bool retire = true) {
+        // A successful finish already retired its input. Other tool exits retire
+        // only this document's matching session, never the incoming project's.
+        if (retire && m_boundary_session && m_boundary_document == m_document && m_document->is_editable()) {
+            const auto active = m_project_workspace->active_boundary();
+            if (active && active->checkpoint.identity_namespace ==
+                    m_boundary_session->recovery_checkpoint().identity_namespace) {
+                auto discard = m_project_workspace->prepare_discard_boundary();
+                (void)m_project_workspace->commit(discard);
+            }
+        }
         m_measurementCanvas->clearPreview();
         m_architecturalCanvas->clearPreview();
         m_boundary_session.reset();
@@ -20383,6 +20510,7 @@ private:
         m_boundary_document.reset();
         m_pending_wall_start.reset();
         m_redefine_boundary_id.reset();
+        m_restored_boundary_navigation = false;
     }
 
     void openFromDialog() {
@@ -21250,7 +21378,7 @@ private:
     std::uint64_t m_saved_edited_generation{};
     const std::string m_save_owner_token{make_stable_id()};
     WorkspaceSaveQueue m_save_queue;
-    WorkspaceRegenerationQueue m_regeneration_queue;
+    PerformanceTelemetry m_performance_telemetry;
     WorkspaceAutosaveScheduler m_autosave_scheduler;
     struct PendingAutosave {
         std::uint64_t sequence;
@@ -21261,9 +21389,6 @@ private:
     std::map<std::uint64_t, WorkspaceSaveQueue::Completion> m_completed_saves;
     std::uint64_t m_completed_barrier{};
     std::uint64_t m_autosaved_checkpoint{};
-    QTimer* m_regeneration_timer{};
-    std::optional<std::uint64_t> m_regeneration_pending;
-    std::optional<RegenerationReceipt> m_regeneration_receipt;
     std::string m_autosave_document_id;
     std::string m_autosave_archive_id;
     std::filesystem::path m_autosave_path;
@@ -21309,6 +21434,7 @@ private:
     std::optional<DrawingContext> m_boundary_context;
     std::shared_ptr<Document> m_boundary_document;
     std::optional<QString> m_redefine_boundary_id;
+    bool m_restored_boundary_navigation{};
     AssistanceSession m_assistance_session;
     QString m_last_boundary_classification{QStringLiteral("measurement")};
     QToolButton* m_define_boundary_button{};
@@ -21322,6 +21448,8 @@ private:
     PlanCanvas* m_measurementCanvas{};
     PlanCanvas* m_architecturalCanvas{};
     visualization::NativeModelView* m_nativeModelView{};
+    std::weak_ptr<Document> m_native_geometry_document;
+    std::optional<Revision> m_native_geometry_revision;
     QScrollArea* m_inspector{};
     QFormLayout* m_geometry_form{};
     QGroupBox* m_dimension_properties_group{};
@@ -22113,6 +22241,14 @@ void MainWindow::setNativeModelViewVisible(bool visible) {
 
 bool MainWindow::regenerationReadyForCurrentRevision() noexcept {
     return m_impl->regenerationReadyForCurrentRevision();
+}
+
+QString MainWindow::performanceReportJson() const {
+    return m_impl->performanceReportJson();
+}
+
+void MainWindow::beginPerformanceRun() noexcept {
+    m_impl->beginPerformanceRun();
 }
 
 bool MainWindow::exportDxf(const QString& path) {

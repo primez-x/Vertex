@@ -1,3 +1,26 @@
+function Set-NativeProcessEnvironment {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][System.Diagnostics.ProcessStartInfo]$StartInfo,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$SourceEnvironment,
+        [string[]]$PathPrefixes = @(),
+        [string]$BasePath = ((@(
+            [Environment]::GetEnvironmentVariable('Path', 'Machine'),
+            [Environment]::GetEnvironmentVariable('Path', 'User')) |
+            Where-Object { ![string]::IsNullOrWhiteSpace($_) }) -join ';')
+    )
+
+    $StartInfo.Environment.Clear()
+    foreach ($entry in $SourceEnvironment.GetEnumerator()) {
+        $name = [string]$entry.Key
+        if ($name -ieq 'Path') { continue }
+        $StartInfo.Environment[$name] = [string]$entry.Value
+    }
+    $pathParts = @($PathPrefixes | Where-Object { ![string]::IsNullOrWhiteSpace($_) })
+    if (![string]::IsNullOrWhiteSpace($BasePath)) { $pathParts += $BasePath }
+    $StartInfo.Environment['Path'] = $pathParts -join ';'
+}
+
 function New-NativeProcessGuardResult {
     param(
         [Parameter(Mandatory = $true)][string]$State,

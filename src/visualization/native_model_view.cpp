@@ -1,21 +1,12 @@
 #include "sketch/visualization/native_model_view.hpp"
+#include "sketch/visualization/native_geometry_preparation.hpp"
 
-#include "sketch/architecture.hpp"
 #include "sketch/architectural_workflow_contract.hpp"
-#include "sketch/document_solid.hpp"
-#include "sketch/building_entity.hpp"
 #include "sketch/document.hpp"
-#include "sketch/project_organization.hpp"
-#include "sketch/project_visibility.hpp"
-#include "sketch/assembly_model.hpp"
-#include "sketch/opening_assembly.hpp"
-#include "sketch/terrain_surface.hpp"
-#include <QColor>
 
 #include <AIS_InteractiveContext.hxx>
 #include <AIS_SelectionScheme.hxx>
 #include <AIS_Shape.hxx>
-#include <BRepBuilderAPI_Transform.hxx>
 #include <Aspect_DisplayConnection.hxx>
 #include <Aspect_Handle.hxx>
 #include <OpenGl_GraphicDriver.hxx>
@@ -25,8 +16,6 @@
 #include <V3d_View.hxx>
 #include <V3d_Viewer.hxx>
 #include <WNT_Window.hxx>
-#include <gp_Ax1.hxx>
-#include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
@@ -41,8 +30,11 @@
 #include <QResizeEvent>
 #include <QShowEvent>
 #include <QWheelEvent>
+#include <QTimer>
+#include <QThread>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <exception>
 #include <initializer_list>
@@ -60,37 +52,22 @@
 namespace sketch::visualization {
 namespace {
 
-using Json = nlohmann::json;
-
-void append_entity_content(std::string& result, const Entity& entity) {
-    result.append(entity.id);
-    result.push_back('\0');
-    result.append(entity.type);
-    result.push_back('\0');
-    result.append(entity.required ? "required" : "optional");
-    result.push_back('\0');
-    result.append(entity.properties.dump());
-    result.push_back('\0');
-    result.append(entity.extensions.dump());
-    result.push_back('\0');
-}
-
-std::string entity_content(const Entity& entity,
-                           const std::vector<const Entity*>& hosted_openings = {}) {
-    std::string canonical;
-    append_entity_content(canonical, entity);
-    for (const auto* opening : hosted_openings) {
-        if (opening != nullptr) {
-            append_entity_content(canonical, *opening);
-        }
+bool same_snapshot_content(const DocumentSnapshot& left, const DocumentSnapshot& right) {
+    // Snapshots own their history by value; there is no shared immutable storage
+    // token to compare. Compare the retained head directly, without hashing asset
+    // bytes or serializing the complete history on each shell refresh.
+    if (left.entities() != right.entities() || left.assets() != right.assets()) return false;
+    // Match Document's exact state comparison: JSON equality alone conflates
+    // integer/float values and signed zero, including inside opaque metadata.
+    for (const auto& [id, entity] : left.entities()) {
+        const auto& other = right.entities().at(id);
+        if (entity.properties.dump() != other.properties.dump() ||
+            entity.extensions.dump() != other.extensions.dump()) return false;
     }
-    return canonical;
-}
-
-void append_unique(std::vector<std::string>& messages, std::string message) {
-    if (std::find(messages.begin(), messages.end(), message) == messages.end()) {
-        messages.push_back(std::move(message));
+    for (const auto& [id, asset] : left.assets()) {
+        if (asset.metadata.dump() != right.assets().at(id).metadata.dump()) return false;
     }
+    return true;
 }
 
 QString status_text(std::string_view title, const std::vector<std::string>& messages) {
@@ -106,25 +83,6 @@ QString exception_text(const std::exception& error) {
     const auto* message = error.what();
     return (message != nullptr && *message != '\0') ? QString::fromUtf8(message)
                                                       : QStringLiteral("unknown failure");
-}
-
-bool is_ignored_hierarchy_type(std::string_view type) {
-    static constexpr std::string_view ignored[] = {
-        "property",          "building",        "floor",       "layer",      "label",
-        "sheet",             "view",            "constraint",  "annotation", "dimension",
-        "annotation_state",  "sheet_view_model", "boundary", "measurement_boundary",
-        "reference_asset",   "assembly_model",    "model_phases", "room_relationships",
-        "vertical_levels",   "room_boundary",     "terrain_surface"};
-    return std::find(std::begin(ignored), std::end(ignored), type) != std::end(ignored);
-}
-
-bool is_pending_geometry_type(std::string_view type) {
-    // Architectural rooms now have a native semantic volume when their
-    // explicit boundary, height, and elevation fields are present.  Keep this
-    // helper for future bounded geometry types without treating rooms as a
-    // permanent placeholder category.
-    (void)type;
-    return false;
 }
 
 struct NativeInputPoint {
@@ -167,19 +125,25 @@ public:
         std::string content;
         TopoDS_Shape shape;
         occ::handle<AIS_Shape> presentation;
-        std::optional<std::string> material_color;
+        Quantity_Color color;
     };
 
     NativeModelView* owner{};
     QLabel* status_label{};
     std::optional<DocumentSnapshot> snapshot;
     std::optional<NativeModelView::VisibleEntityIds> visible_ids;
+    NativeGeometryRegenerator regenerator;
+    QTimer* preparation_timer{};
+    std::optional<PreparedNativeGeometry> prepared_geometry;
+    std::optional<NativeModelView::PublicationMetrics> publication_metrics;
+    bool geometry_prepared{};
     QString native_error;
     QString geometry_status;
     QString operation_error;
     bool native_attempted{};
     bool native_ready{};
     bool has_fit{};
+    bool fit_requested{};
 
     occ::handle<Aspect_DisplayConnection> display_connection;
     occ::handle<OpenGl_GraphicDriver> graphic_driver;
@@ -203,7 +167,12 @@ public:
     };
     std::optional<WorldPoint> translation_start;
 
-    explicit Impl(NativeModelView* widget) : owner(widget) {}
+    explicit Impl(NativeModelView* widget) : owner(widget) {
+        preparation_timer = new QTimer(widget);
+        preparation_timer->setInterval(10);
+        QObject::connect(preparation_timer, &QTimer::timeout, widget,
+                         [this] { owner->pollGeometryPreparation(); });
+    }
 
     NativeInputPoint input_point(const QPointF& logical_point) const {
         int native_width = 0;
@@ -237,29 +206,36 @@ public:
         has_fit = true;
     }
 
+    void notify_error(const QString& text) noexcept {
+        // Observers do not own preparation or publication state. In particular,
+        // a throwing "Preparing" observer must not prevent the timer starting,
+        // and a throwing failure observer must not replace the real diagnostic.
+        try {
+            // Retain the callable while dispatching: the observer may replace
+            // its own registration during the callback.
+            const auto callback = owner->onError;
+            if (callback) callback(text);
+        } catch (...) {
+        }
+    }
+
     void show_status(const QString& text) {
         geometry_status = text;
         operation_error.clear();
         refresh_status_label();
-        if (!text.isEmpty() && owner->onError) {
-            owner->onError(text);
-        }
+        if (!text.isEmpty()) notify_error(text);
     }
 
     void show_native_error(const QString& text) {
         native_error = text;
         refresh_status_label();
-        if (owner->onError) {
-            owner->onError(text);
-        }
+        notify_error(text);
     }
 
     void show_operation_error(const QString& text) {
         operation_error = text;
         refresh_status_label();
-        if (owner->onError) {
-            owner->onError(text);
-        }
+        notify_error(text);
     }
 
     void refresh_status_label() {
@@ -269,584 +245,160 @@ public:
         status_label->setText(text);
         status_label->setVisible(!text.isEmpty());
         status_label->raise();
-        status_label->setGeometry(owner->rect().adjusted(12, 12, -12, -12));
-    }
-
-    void remove_solid(const std::string& id) {
-        const auto found = solids.find(id);
-        if (found == solids.end()) {
-            return;
+        auto bounds = owner->rect().adjusted(12, 12, -12, -12);
+        if (regenerator.is_pending() && native_error.isEmpty()) {
+            // Keep the previous valid scene visible while preparing its
+            // replacement; a progress banner must not cover the viewport.
+            bounds.setHeight(std::min(bounds.height(), status_label->sizeHint().height()));
         }
-        if (native_ready && !found->second.presentation.IsNull()) {
-            context->Remove(found->second.presentation, false);
-        }
-        solids.erase(found);
-    }
-
-    void clear_solids() {
-        if (native_ready && !context.IsNull()) {
-            for (const auto& [id, solid] : solids) {
-                (void)id;
-                if (!solid.presentation.IsNull()) {
-                    context->Remove(solid.presentation, false);
-                }
-            }
-        }
-        solids.clear();
-        has_fit = false;
+        status_label->setGeometry(bounds);
     }
 
     void rebuild_snapshot() {
-        if (!native_ready || !snapshot.has_value()) {
-            return;
-        }
+        if (!snapshot) return;
+        publication_metrics.reset();
+        prepared_geometry.reset();
+        geometry_prepared = false;
+        regenerator.request(*snapshot, visible_ids);
+        show_status(QStringLiteral("Preparing 3D geometry…"));
+        preparation_timer->start();
+    }
 
-        std::vector<std::string> errors;
-        std::vector<std::string> pending;
-        const auto& entities = snapshot->entities();
-        std::map<std::pair<std::string, std::string>, std::string> material_colors;
-        for (const auto& [id, entity] : entities) {
-            if (entity.type != "assembly_model") continue;
-            try {
-                const auto catalog = AssemblyModel::from_json(entity.properties.at("model"));
-                for (const auto& material : catalog.materials())
-                    if (material.color_srgb) material_colors[{id, material.id}] = *material.color_srgb;
-            } catch (const std::exception& error) {
-                append_unique(errors, "material catalog '" + id + "': " + error.what());
+    void collect_prepared_geometry() {
+        try {
+            if (auto completed = regenerator.take_completed()) prepared_geometry = std::move(completed);
+            if (!regenerator.is_pending()) preparation_timer->stop();
+            if (!prepared_geometry || !snapshot ||
+                prepared_geometry->revision != snapshot->revision() ||
+                prepared_geometry->visible_ids != visible_ids) return;
+            auto& prepared = prepared_geometry;
+            if (!prepared->errors.empty() || !prepared->pending.empty()) {
+                auto messages = prepared->errors;
+                messages.insert(messages.end(), prepared->pending.begin(), prepared->pending.end());
+                const auto text = status_text(prepared->errors.empty() ? "3D geometry pending:"
+                                                                      : "3D geometry is incomplete:", messages);
+                geometry_prepared = false;
+                prepared_geometry.reset();
+                show_status(text);
+                return; // Preserve the previous complete scene on invalid geometry.
             }
-        }
-        std::set<std::string, std::less<>> wall_ids;
-        for (const auto& [id, entity] : entities) {
-            if (entity.type == "wall") {
-                wall_ids.insert(id);
+            const bool newly_prepared = !geometry_prepared;
+            geometry_prepared = true;
+            // Preparation is independent of a visible/native window. Keep a
+            // completed candidate until Qt initializes the presentation owner.
+            if (!native_ready) {
+                if (newly_prepared) show_status(QString());
+                return;
             }
-        }
 
-        // A fused join replaces its sources only while the join and every
-        // member are visible. Re-derive on each mask transition; source entities
-        // and document history remain authoritative and unchanged.
-        const auto join_presentation_ids = derived_join_presentation_entities(
-            *snapshot, visible_ids ? *visible_ids : visible_project_entities(*snapshot, {}));
-
-        std::map<std::string, std::vector<const Entity*>, std::less<>> openings_by_wall;
-        for (const auto& [id, entity] : entities) {
-            if (entity.type != "opening") {
-                continue;
-            }
-            std::string wall_id;
-            std::string relation_error;
-            if (!read_document_wall_id(entity, wall_id, relation_error)) {
-                append_unique(pending, "opening '" + id + "': " + relation_error);
-            } else if (!wall_ids.contains(wall_id)) {
-                append_unique(pending, "opening '" + id + "' references missing wall '" + wall_id + "'");
-            } else {
-                openings_by_wall[wall_id].push_back(&entity);
-            }
-        }
-
-        std::set<std::string, std::less<>> supported_ids;
-        const bool had_solids = !solids.empty();
-        bool changed = false;
-        for (const auto& [id, entity] : entities) {
-            // Suppress visible members owned by a fused join. Hidden members
-            // still pass through geometry validation below; their cached AIS
-            // shapes are erased using join_presentation_ids, never displayed.
-            if ((entity.type == "wall" || entity.type == "roof") &&
-                (!visible_ids || visible_ids->contains(id)) &&
-                !join_presentation_ids.contains(id)) {
-                remove_solid(id);
-                changed = true;
-                continue;
-            }
-            if (entity.type == "opening" && entity.properties.contains("opening_assembly")) {
-                std::string wall_id;
-                std::string relation_error;
-                if (!read_document_wall_id(entity, wall_id, relation_error)) {
-                    append_unique(errors, "opening assembly '" + id + "': " + relation_error);
-                    remove_solid(id);
-                    changed = true;
+            // All expensive semantic reconstruction has finished. AIS and its
+            // context remain strictly on this widget's thread. Build candidates
+            // before removing any previous valid presentation.
+            const auto publication_started = std::chrono::steady_clock::now();
+            NativeModelView::PublicationMetrics metrics;
+            std::map<std::string, CachedSolid, std::less<>> replacement;
+            for (auto& [id, solid] : prepared->solids) {
+                const auto cached = solids.find(id);
+                if (cached != solids.end() && cached->second.content == solid.content) {
+                    // Retain the live topology as well as the AIS handle. The
+                    // worker's fresh triangulation must never replace or mutate
+                    // a shape already owned by an unchanged presentation.
+                    auto retained = cached->second;
+                    retained.color = solid.color;
+                    replacement.emplace(id, std::move(retained));
+                    ++metrics.reused;
                     continue;
                 }
-                const auto host = entities.find(wall_id);
-                if (host == entities.end() || host->second.type != "wall") {
-                    append_unique(errors, "opening assembly '" + id +
-                                             "' references missing wall '" + wall_id + "'");
-                    remove_solid(id);
-                    changed = true;
-                    continue;
-                }
-                try {
-                    const auto resolved_host = resolve_vertical_placement(*snapshot, host->second);
-                    Wall host_wall;
-                    std::string parse_error;
-                    if (!read_document_wall(resolved_host, openings_by_wall[wall_id],
-                                            host_wall, parse_error)) {
-                        throw std::invalid_argument(parse_error);
-                    }
-                    const auto hosted = std::find_if(host_wall.openings.begin(),
-                                                     host_wall.openings.end(),
-                                                     [&](const HostedOpening& candidate) {
-                                                         return candidate.id == id;
-                                                     });
-                    if (hosted == host_wall.openings.end()) {
-                        throw std::invalid_argument("opening is not present on its host wall");
-                    }
-                    const auto assembly = parse_opening_assembly(
-                        entity.properties.at("opening_assembly"));
-                    std::optional<DoorOperation> operation;
-                    if (assembly.kind == OpeningAssemblyKind::door &&
-                        entity.properties.contains("door_operation")) {
-                        operation = decode_door_operation(entity.properties.at("door_operation"));
-                    }
-                    auto content = entity_content(resolved_host, openings_by_wall[wall_id]);
-                    append_entity_content(content, entity);
-                    std::optional<std::string> material_color;
-                    if (entity.properties.contains("material_assignment")) {
-                        const auto& assignment = entity.properties.at("material_assignment");
-                        const auto found = material_colors.find({
-                            assignment.at("catalog_id").get<std::string>(),
-                            assignment.at("material_id").get<std::string>()});
-                        if (found != material_colors.end()) material_color = found->second;
-                    }
-                    auto presentation_color = assembly.kind == OpeningAssemblyKind::door
-                        ? Quantity_Color(0.92, 0.58, 0.28, Quantity_TOC_RGB)
-                        : Quantity_Color(0.30, 0.78, 0.88, Quantity_TOC_RGB);
-                    if (material_color) {
-                        const QColor color(QString::fromStdString(*material_color));
-                        if (color.isValid()) {
-                            presentation_color = Quantity_Color(color.redF(), color.greenF(),
-                                                               color.blueF(), Quantity_TOC_sRGB);
-                        }
-                    }
-                    supported_ids.insert(id);
-                    const auto cached = solids.find(id);
-                    if (cached != solids.end() && cached->second.content == content) {
-                        if (cached->second.material_color != material_color) {
-                            cached->second.presentation->SetColor(presentation_color);
-                            context->Redisplay(cached->second.presentation, false);
-                            cached->second.material_color = material_color;
-                            changed = true;
-                        }
-                        const bool visible = !visible_ids || visible_ids->contains(id) ||
-                                             visible_ids->contains(wall_id);
-                        if (visible != static_cast<bool>(context->IsDisplayed(
-                                cached->second.presentation))) {
-                            if (visible) context->Display(cached->second.presentation, false);
-                            else context->Erase(cached->second.presentation, false);
-                            changed = true;
-                        }
-                        continue;
-                    }
-                    const auto shape = make_opening_assembly(host_wall, *hosted, assembly,
-                                                             operation);
-                    auto presentation = occ::handle<AIS_Shape>(new AIS_Shape(shape));
-                    presentation->SetColor(presentation_color);
-                    presentation->SetDisplayMode(AIS_Shaded);
-                    remove_solid(id);
-                    const bool visible = !visible_ids || visible_ids->contains(id) ||
-                                         visible_ids->contains(wall_id);
-                    if (visible) context->Display(presentation, false);
-                    solids.emplace(id, CachedSolid{std::move(content), shape, presentation,
-                                                   material_color});
-                    changed = true;
-                } catch (const std::exception& error) {
-                    append_unique(errors, "opening assembly '" + id + "': " + error.what());
-                    remove_solid(id);
-                    changed = true;
-                } catch (...) {
-                    append_unique(errors, "opening assembly '" + id + "': unknown OCCT failure");
-                    remove_solid(id);
-                    changed = true;
-                }
-                continue;
-            }
-            if (entity.type != "wall" && entity.type != "slab" && entity.type != "room" &&
-                entity.type != "terrain_surface" && entity.type != "wall_join" &&
-                entity.type != "roof_join" &&
-                !can_recognize_building_entity_type(entity.type)) {
-                if (entity.type == "opening") {
-                    continue;
-                }
-                if (is_pending_geometry_type(entity.type)) {
-                    append_unique(pending, "entity '" + id + "' of type '" + entity.type +
-                                             "' has no native solid representation yet");
-                } else if (!is_ignored_hierarchy_type(entity.type)) {
-                    append_unique(pending, "entity '" + id + "' of unsupported type '" + entity.type +
-                                             "' is pending native geometry");
-                }
-                continue;
-            }
-
-            Entity geometry_entity;
-            try {
-                geometry_entity = resolve_vertical_placement(*snapshot, entity);
-            } catch (const std::exception& error) {
-                append_unique(errors, entity.type + " '" + id + "': " + error.what());
-                remove_solid(id);
-                changed = true;
-                continue;
-            }
-
-            supported_ids.insert(id);
-            const auto hosted = entity.type == "wall"
-                                    ? openings_by_wall[id]
-                                    : std::vector<const Entity*>{};
-            auto content = entity_content(geometry_entity, hosted);
-            if (geometry_entity.type == "wall_join") {
-                try {
-                    const auto join = parse_wall_join(geometry_entity.properties, id);
-                    for (const auto& wall_id : join.wall_ids) {
-                        const auto source = entities.find(wall_id);
-                        if (source != entities.end()) {
-                            append_entity_content(content, source->second);
-                            for (const auto* opening : openings_by_wall[wall_id]) {
-                                if (opening != nullptr) append_entity_content(content, *opening);
-                            }
-                        }
-                    }
-                } catch (const std::exception& error) {
-                    append_unique(errors, "wall join '" + id + "': " + error.what());
-                }
-            }
-            if (geometry_entity.type == "roof_join") {
-                try {
-                    const auto join = parse_roof_join(geometry_entity.properties, id);
-                    for (const auto& roof_id : join.roof_ids) {
-                        const auto source = entities.find(roof_id);
-                        if (source != entities.end()) append_entity_content(content, source->second);
-                    }
-                } catch (const std::exception& error) {
-                    append_unique(errors, "roof join '" + id + "': " + error.what());
-                }
-            }
-            std::optional<std::string> material_color;
-            if (geometry_entity.properties.contains("material_assignment")) {
-                const auto& assignment = geometry_entity.properties.at("material_assignment");
-                const auto found = material_colors.find({assignment.at("catalog_id").get<std::string>(),
-                    assignment.at("material_id").get<std::string>()});
-                if (found != material_colors.end()) material_color = found->second;
-            }
-            auto presentation_color = entity.type == "wall"
-                ? Quantity_Color(0.84, 0.66, 0.32, Quantity_TOC_RGB)
-                : entity.type == "terrain_surface"
-                    ? Quantity_Color(0.47, 0.64, 0.44, Quantity_TOC_RGB)
-                    : Quantity_Color(0.46, 0.70, 0.86, Quantity_TOC_RGB);
-            if (material_color) {
-                const QColor color(QString::fromStdString(*material_color));
-                presentation_color = Quantity_Color(color.redF(), color.greenF(), color.blueF(), Quantity_TOC_sRGB);
-            }
-            const auto cached = solids.find(id);
-            if (cached != solids.end() && cached->second.content == content) {
-                if (cached->second.material_color != material_color) {
-                    cached->second.presentation->SetColor(presentation_color);
-                    context->Redisplay(cached->second.presentation, false);
-                    cached->second.material_color = material_color;
-                    changed = true;
-                }
-                const bool visible = join_presentation_ids.contains(id);
-                if (visible != static_cast<bool>(context->IsDisplayed(cached->second.presentation))) {
-                    if (visible) context->Display(cached->second.presentation, false);
-                    else context->Erase(cached->second.presentation, false);
-                    changed = true;
-                }
-                continue;
-            }
-
-            std::string parse_error;
-            TopoDS_Shape shape;
-            try {
-                if (geometry_entity.type == "wall") {
-                    Wall wall;
-                    if (!read_document_wall(geometry_entity, hosted, wall, parse_error)) {
-                        append_unique(errors, "wall '" + id + "': " + parse_error);
-                        remove_solid(id);
-                        changed = true;
-                        continue;
-                    }
-                    shape = make_wall(wall);
-                } else if (geometry_entity.type == "wall_join") {
-                    const auto join = parse_wall_join(geometry_entity.properties, id);
-                    std::vector<Wall> source_walls;
-                    source_walls.reserve(join.wall_ids.size());
-                    for (const auto& wall_id : join.wall_ids) {
-                        const auto source = entities.find(wall_id);
-                        if (source == entities.end() || source->second.type != "wall") {
-                            throw std::invalid_argument("wall join source wall is missing: " + wall_id);
-                        }
-                        const auto resolved_source = resolve_vertical_placement(*snapshot,
-                                                                                 source->second);
-                        Wall wall;
-                        std::string error;
-                        if (!read_document_wall(resolved_source, openings_by_wall[wall_id],
-                                                wall, error)) {
-                            throw std::invalid_argument(error);
-                        }
-                        source_walls.push_back(std::move(wall));
-                    }
-                    shape = make_wall_join(join, source_walls);
-                } else if (geometry_entity.type == "roof_join") {
-                    const auto join = parse_roof_join(geometry_entity.properties, id);
-                    std::vector<TopoDS_Shape> source_roofs;
-                    source_roofs.reserve(join.roof_ids.size());
-                    for (const auto& roof_id : join.roof_ids) {
-                        const auto source = entities.find(roof_id);
-                        if (source == entities.end() || source->second.type != "roof") {
-                            throw std::invalid_argument("roof join source roof is missing: " + roof_id);
-                        }
-                        const auto resolved_source = resolve_vertical_placement(*snapshot,
-                                                                                 source->second);
-                        source_roofs.push_back(make_building_shape(
-                            decode_building_entity(resolved_source)));
-                    }
-                    shape = make_roof_join(join, source_roofs);
-                } else if (geometry_entity.type == "slab") {
-                    Slab slab;
-                    if (!read_document_slab(geometry_entity, slab, parse_error)) {
-                        append_unique(errors, "slab '" + id + "': " + parse_error);
-                        remove_solid(id);
-                        changed = true;
-                        continue;
-                    }
-                    shape = make_slab(slab);
-                } else if (geometry_entity.type == "terrain_surface") {
-                    shape = make_terrain_surface(
-                        TerrainSurface::from_json(geometry_entity.properties.at("model")));
-                } else if (geometry_entity.type == "room") {
-                    RoomVolume room;
-                    if (!read_document_room(geometry_entity, room, parse_error)) {
-                        append_unique(errors, "room '" + id + "': " + parse_error);
-                        remove_solid(id);
-                        changed = true;
-                        continue;
-                    }
-                    shape = make_room_volume(room);
-                } else {
-                    shape = make_building_shape(decode_building_entity(geometry_entity));
-                }
-                if (shape.IsNull()) {
-                    append_unique(errors, entity.type + " '" + id + "' produced a null solid");
-                    remove_solid(id);
-                    changed = true;
-                    continue;
-                }
-
-                auto presentation = occ::handle<AIS_Shape>(new AIS_Shape(shape));
-                presentation->SetColor(presentation_color);
+                auto presentation = occ::handle<AIS_Shape>(new AIS_Shape(solid.shape));
+                presentation->SetColor(solid.color);
                 presentation->SetDisplayMode(AIS_Shaded);
-
-                remove_solid(id);
-                if (join_presentation_ids.contains(id)) context->Display(presentation, false);
-                solids.emplace(id, CachedSolid{std::move(content), std::move(shape), presentation, material_color});
-                changed = true;
-            } catch (const std::exception& error) {
-                append_unique(errors, entity.type + " '" + id + "': " + error.what());
-                remove_solid(id);
-                changed = true;
-            } catch (...) {
-                append_unique(errors, entity.type + " '" + id + "': unknown OCCT failure");
-                remove_solid(id);
-                changed = true;
+                replacement.emplace(id, CachedSolid{std::move(solid.content), std::move(solid.shape),
+                                                   presentation, solid.color});
+                ++metrics.created;
             }
-        }
-
-        const auto make_assembly_host_shape = [&](const std::string& host_id) -> TopoDS_Shape {
-            const auto host = entities.find(host_id);
-            if (host == entities.end()) {
-                throw std::invalid_argument("assembly host is missing");
+            std::map<std::string, bool, std::less<>> previous_visibility;
+            for (const auto& [id, solid] : solids) {
+                previous_visibility.emplace(id, context->IsDisplayed(solid.presentation));
+                const auto next = replacement.find(id);
+                if (next == replacement.end() || next->second.presentation != solid.presentation)
+                    ++metrics.removed;
             }
-            const auto& source = host->second;
-            const auto geometry_entity = resolve_vertical_placement(*snapshot, source);
-            if (can_recognize_building_entity_type(geometry_entity.type)) {
-                return make_building_shape(decode_building_entity(geometry_entity));
-            }
-            if (geometry_entity.type == "wall") {
-                Wall wall;
-                std::string error;
-                if (!read_document_wall(geometry_entity, openings_by_wall[host_id], wall, error)) {
-                    throw std::invalid_argument(error);
-                }
-                return make_wall(wall);
-            }
-            if (geometry_entity.type == "slab") {
-                Slab slab;
-                std::string error;
-                if (!read_document_slab(geometry_entity, slab, error)) {
-                    throw std::invalid_argument(error);
-                }
-                return make_slab(slab);
-            }
-            if (geometry_entity.type == "room") {
-                RoomVolume room;
-                std::string error;
-                if (!read_document_room(geometry_entity, room, error)) {
-                    throw std::invalid_argument(error);
-                }
-                return make_room_volume(room);
-            }
-            throw std::invalid_argument("assembly host has no native architectural solid");
-        };
-        const auto transform_assembly_shape = [](const TopoDS_Shape& source,
-                                                 const AssemblyPlacement& placement) {
-            if (source.IsNull()) throw std::invalid_argument("assembly host solid is empty");
-            if (!std::isfinite(placement.scale) || placement.scale <= 0.0 ||
-                !std::isfinite(placement.rotation_radians) ||
-                !std::isfinite(placement.translation_m.x) ||
-                !std::isfinite(placement.translation_m.y)) {
-                throw std::invalid_argument("assembly placement transform is invalid");
-            }
-            gp_Trsf scale;
-            scale.SetScale(gp_Pnt(0.0, 0.0, 0.0), placement.scale);
-            BRepBuilderAPI_Transform scaled(source, scale, true);
-            if (!scaled.IsDone() || scaled.Shape().IsNull()) {
-                throw std::invalid_argument("assembly scale transform failed");
-            }
-            gp_Trsf rotate;
-            rotate.SetRotation(gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0)),
-                               placement.rotation_radians);
-            BRepBuilderAPI_Transform rotated(scaled.Shape(), rotate, true);
-            if (!rotated.IsDone() || rotated.Shape().IsNull()) {
-                throw std::invalid_argument("assembly rotation transform failed");
-            }
-            gp_Trsf translate;
-            translate.SetTranslation(gp_Vec(placement.translation_m.x,
-                                             placement.translation_m.y, 0.0));
-            BRepBuilderAPI_Transform translated(rotated.Shape(), translate, true);
-            if (!translated.IsDone() || translated.Shape().IsNull()) {
-                throw std::invalid_argument("assembly translation transform failed");
-            }
-            return translated.Shape();
-        };
-
-        for (const auto& [catalog_id, catalog_entity] : entities) {
-            if (catalog_entity.type != "assembly_model" ||
-                !catalog_entity.properties.contains("model")) continue;
+            const bool had_solids = !solids.empty();
+            const bool previously_fit = has_fit;
+            // A pending edit cannot move a stale displayed object in the new
+            // snapshot. Reset any preview before updating the scene.
+            clear_translation_preview();
             try {
-                const auto catalog = AssemblyModel::from_json(catalog_entity.properties.at("model"));
-                for (const auto& instance : catalog.instances()) {
-                    if (!instance.placement) continue;
-                    const auto child_id = catalog_id + ":instance:" + instance.id;
-                    const auto host = entities.find(instance.placement->host_entity_id);
-                    if (host == entities.end()) {
-                        append_unique(errors, "assembly instance '" + child_id +
-                                             "' references missing host '" +
-                                             instance.placement->host_entity_id + "'");
-                        continue;
+                for (const auto& [id, solid] : replacement) {
+                    const auto old = solids.find(id);
+                    if (old != solids.end() && old->second.presentation == solid.presentation &&
+                        old->second.color != solid.color) {
+                        // Context updates refresh an existing presentation's
+                        // aspects, including restoration of its default color.
+                        context->SetColor(solid.presentation, solid.color, false);
                     }
-                    const auto geometry_entity = resolve_vertical_placement(*snapshot, host->second);
-                    std::string content;
-                    content.reserve(catalog_entity.properties.dump().size() +
-                                    geometry_entity.properties.dump().size() + child_id.size() + 32);
-                    content.append(child_id);
-                    content.push_back('\0');
-                    append_entity_content(content, catalog_entity);
-                    append_entity_content(content, geometry_entity);
-                    if (geometry_entity.type == "wall") {
-                        for (const auto* opening : openings_by_wall[host->first]) {
-                            if (opening != nullptr) append_entity_content(content, *opening);
-                        }
+                    const bool visible = prepared->solids.at(id).visible;
+                    if (visible != context->IsDisplayed(solid.presentation)) {
+                        if (visible) context->Display(solid.presentation, false);
+                        else context->Erase(solid.presentation, false);
                     }
-                    std::optional<std::string> material_color;
-                    const auto resolved = catalog.resolve(instance.id);
-                    for (const auto& [slot, material_id] : resolved.materials) {
-                        (void)slot;
-                        const auto material = material_colors.find({catalog_id, material_id});
-                        if (material != material_colors.end()) {
-                            material_color = material->second;
-                            break;
-                        }
-                    }
-                    const auto cached = solids.find(child_id);
-                    const auto presentation_color = [&] {
-                        if (material_color) {
-                            const QColor color(QString::fromStdString(*material_color));
-                            if (color.isValid()) {
-                                return Quantity_Color(color.redF(), color.greenF(), color.blueF(),
-                                                       Quantity_TOC_sRGB);
-                            }
-                        }
-                        return Quantity_Color(0.63, 0.48, 0.78, Quantity_TOC_RGB);
-                    }();
-                    if (cached != solids.end() && cached->second.content == content) {
-                        if (cached->second.material_color != material_color) {
-                            cached->second.presentation->SetColor(presentation_color);
-                            context->Redisplay(cached->second.presentation, false);
-                            cached->second.material_color = material_color;
-                            changed = true;
-                        }
-                        const bool visible = !visible_ids || visible_ids->contains(child_id);
-                        if (visible != static_cast<bool>(context->IsDisplayed(cached->second.presentation))) {
-                            if (visible) context->Display(cached->second.presentation, false);
-                            else context->Erase(cached->second.presentation, false);
-                            changed = true;
-                        }
-                        supported_ids.insert(child_id);
-                        continue;
-                    }
-
-                    TopoDS_Shape shape = transform_assembly_shape(
-                        make_assembly_host_shape(instance.placement->host_entity_id),
-                        *instance.placement);
-                    if (shape.IsNull()) {
-                        append_unique(errors, "assembly instance '" + child_id + "' produced a null solid");
-                        remove_solid(child_id);
-                        changed = true;
-                        continue;
-                    }
-                    auto presentation = occ::handle<AIS_Shape>(new AIS_Shape(shape));
-                    presentation->SetColor(presentation_color);
-                    presentation->SetDisplayMode(AIS_Shaded);
-                    remove_solid(child_id);
-                    if (!visible_ids || visible_ids->contains(child_id)) context->Display(presentation, false);
-                    solids.emplace(child_id, CachedSolid{std::move(content), std::move(shape),
-                                                         presentation, material_color});
-                    supported_ids.insert(child_id);
-                    changed = true;
                 }
-            } catch (const std::exception& error) {
-                append_unique(errors, "assembly catalog '" + catalog_id + "': " + error.what());
+                // All candidates have been displayed successfully before any
+                // obsolete object is detached. Unchanged handles stay registered.
+                for (const auto& [id, solid] : solids) {
+                    const auto next = replacement.find(id);
+                    if (next == replacement.end() || next->second.presentation != solid.presentation)
+                        context->Remove(solid.presentation, false);
+                }
+                const bool has_visible_solids = std::any_of(prepared->solids.begin(), prepared->solids.end(),
+                    [](const auto& entry) { return entry.second.visible; });
+                if (has_visible_solids && (fit_requested || !has_fit || !had_solids)) fit_all();
+                else if (replacement.empty()) has_fit = false;
+                viewer->Redraw();
             } catch (...) {
-                append_unique(errors, "assembly catalog '" + catalog_id + "': unknown OCCT failure");
-            }
-        }
-
-        for (auto it = solids.begin(); it != solids.end();) {
-            if (!supported_ids.contains(it->first)) {
-                if (native_ready && !it->second.presentation.IsNull()) {
-                    context->Remove(it->second.presentation, false);
+                // Keep the authoritative cache until publication and redraw
+                // succeed. Best-effort rollback also restores reused objects
+                // changed before a later context operation failed. A failing
+                // driver must not mask the original publication diagnostic.
+                for (const auto& [id, solid] : replacement) {
+                    const auto old = solids.find(id);
+                    if (old == solids.end() || old->second.presentation != solid.presentation) {
+                        try { context->Remove(solid.presentation, false); } catch (...) {}
+                    }
                 }
-                it = solids.erase(it);
-                changed = true;
-            } else {
-                ++it;
+                for (const auto& [id, solid] : solids) {
+                    try {
+                        const auto next = replacement.find(id);
+                        if (next != replacement.end() && next->second.presentation == solid.presentation &&
+                            next->second.color != solid.color)
+                            context->SetColor(solid.presentation, solid.color, false);
+                        if (previous_visibility.at(id)) context->Display(solid.presentation, false);
+                        else context->Erase(solid.presentation, false);
+                    } catch (...) {}
+                }
+                has_fit = previously_fit;
+                try { viewer->Redraw(); } catch (...) {}
+                throw;
             }
-        }
-
-        const bool has_visible_solids = std::any_of(solids.begin(), solids.end(), [this](const auto& entry) {
-            return context->IsDisplayed(entry.second.presentation);
-        });
-        if (has_visible_solids && (!has_fit || (!had_solids && changed))) {
-            fit_all();
-        } else if (solids.empty()) {
-            has_fit = false;
-        }
-        if (changed) {
-            viewer->Redraw();
-        }
-
-        std::vector<std::string> status_messages;
-        status_messages.reserve(errors.size() + pending.size());
-        for (auto& message : errors) {
-            status_messages.push_back(std::move(message));
-        }
-        for (auto& message : pending) {
-            status_messages.push_back(std::move(message));
-        }
-        if (status_messages.empty()) {
+            solids.swap(replacement);
+            fit_requested = false;
+            prepared_geometry.reset();
+            metrics.elapsed_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - publication_started).count();
+            publication_metrics = metrics;
             show_status(QString());
-        } else if (!errors.empty()) {
-            show_status(status_text("3D geometry is incomplete:", status_messages));
-        } else {
-            show_status(status_text("3D geometry pending:", status_messages));
+        } catch (const Standard_Failure& error) {
+            preparation_timer->stop();
+            prepared_geometry.reset();
+            show_status(QStringLiteral("3D geometry preparation failed: ") + exception_text(error));
+        } catch (const std::exception& error) {
+            preparation_timer->stop();
+            prepared_geometry.reset();
+            show_status(QStringLiteral("3D geometry preparation failed: ") + exception_text(error));
+        } catch (...) {
+            preparation_timer->stop();
+            prepared_geometry.reset();
+            show_status(QStringLiteral("3D geometry preparation failed: unknown failure"));
         }
     }
 
@@ -903,7 +455,7 @@ public:
             native_error.clear();
             operation_error.clear();
             if (snapshot.has_value()) {
-                rebuild_snapshot();
+                collect_prepared_geometry();
             } else {
                 refresh_status_label();
             }
@@ -1000,7 +552,7 @@ public:
     }
 
     QString select_at(const NativeInputPoint point) {
-        if (!native_ready || context.IsNull() || view.IsNull()) {
+        if (!native_ready || !geometry_status.isEmpty() || context.IsNull() || view.IsNull()) {
             return {};
         }
         const auto x = point.x;
@@ -1023,7 +575,8 @@ public:
                 "Native OCCT 3D view is not ready; show the viewport before exporting an image"));
             return false;
         }
-        if (!native_error.isEmpty() || !geometry_status.isEmpty()) {
+        if (!geometry_prepared || regenerator.is_pending() || prepared_geometry ||
+            !native_error.isEmpty() || !geometry_status.isEmpty()) {
             // The framebuffer cannot represent the complete current model.
             // Keep the existing geometry diagnostic and never export stale or
             // partial solids as a successful image.
@@ -1081,6 +634,8 @@ NativeModelView::NativeModelView(QWidget* parent)
 }
 
 NativeModelView::~NativeModelView() {
+    m_impl->preparation_timer->stop();
+    m_impl->regenerator.shutdown();
     if (m_impl->native_ready && !m_impl->context.IsNull()) {
         m_impl->context->RemoveAll(false);
     }
@@ -1094,19 +649,33 @@ NativeModelView::~NativeModelView() {
 
 void NativeModelView::setSnapshot(const DocumentSnapshot& snapshot,
                                  std::optional<VisibleEntityIds> visible_ids) {
+    // Forks may share both identity and revision while holding different content.
+    // Deduplicate only the same immutable head and visibility request, retaining
+    // in-flight work, completed topology, and failures for unchanged refreshes.
+    if (m_impl->snapshot &&
+        m_impl->snapshot->document_id() == snapshot.document_id() &&
+        m_impl->snapshot->revision() == snapshot.revision() &&
+        m_impl->visible_ids == visible_ids &&
+        same_snapshot_content(*m_impl->snapshot, snapshot)) {
+        return;
+    }
+    m_impl->clear_translation_preview();
+    m_impl->left_pressed = false;
+    m_impl->translation_entity_id.reset();
+    m_impl->translation_start.reset();
     m_impl->visible_ids = std::move(visible_ids);
     m_impl->snapshot = snapshot;
+    m_impl->rebuild_snapshot();
     if (isVisible()) {
         m_impl->initialize_native_view();
-    }
-    if (m_impl->native_ready) {
-        // A previously initialized hidden viewport may still be exported.
-        // Keep its derived geometry synchronized with the current snapshot.
-        m_impl->rebuild_snapshot();
     }
 }
 
 void NativeModelView::fitAll() {
+    if (isGeometryPending()) {
+        m_impl->fit_requested = true;
+        return;
+    }
     if (!m_impl->native_ready || m_impl->view.IsNull()) {
         return;
     }
@@ -1118,7 +687,8 @@ bool NativeModelView::exportViewImage(const QString& path) {
 }
 
 bool NativeModelView::isReady() const noexcept {
-    return m_impl->native_ready && m_impl->native_error.isEmpty() &&
+    return m_impl->geometry_prepared && !m_impl->regenerator.is_pending() &&
+           !m_impl->prepared_geometry && m_impl->native_ready && m_impl->native_error.isEmpty() &&
            m_impl->geometry_status.isEmpty() && m_impl->operation_error.isEmpty();
 }
 
@@ -1130,6 +700,30 @@ QString NativeModelView::lastError() const {
         return m_impl->geometry_status;
     }
     return m_impl->operation_error;
+}
+
+bool NativeModelView::isGeometryPending() const noexcept {
+    return m_impl->regenerator.is_pending();
+}
+
+void NativeModelView::pollGeometryPreparation() noexcept {
+    if (QThread::currentThread() != thread()) return;
+    try {
+        m_impl->collect_prepared_geometry();
+    } catch (...) {
+        // Collection records worker/publication failures before notifying the
+        // shell. A throwing error callback must not escape a polling boundary.
+        // In particular, never clear the separate native initialization error.
+    }
+}
+
+bool NativeModelView::isGeometryPrepared() const noexcept {
+    return m_impl->geometry_prepared;
+}
+
+std::optional<NativeModelView::PublicationMetrics>
+NativeModelView::lastPublicationMetrics() const noexcept {
+    return m_impl->publication_metrics;
 }
 
 void NativeModelView::setEntitySelectedCallback(std::function<void(QString)> callback) {
@@ -1153,9 +747,7 @@ void NativeModelView::showEvent(QShowEvent* event) {
 
 void NativeModelView::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
-    if (!m_impl->status_label->isHidden()) {
-        m_impl->status_label->setGeometry(rect().adjusted(12, 12, -12, -12));
-    }
+    m_impl->refresh_status_label();
     if (m_impl->native_ready && !m_impl->view.IsNull()) {
         m_impl->view->MustBeResized();
         m_impl->view->Redraw();
@@ -1194,6 +786,10 @@ void NativeModelView::mousePressEvent(QMouseEvent* event) {
         return;
     }
     if (event->button() == Qt::LeftButton) {
+        if (!isReady()) {
+            event->ignore();
+            return;
+        }
         m_impl->left_pressed = true;
         m_impl->left_moved = false;
         m_impl->left_translate = event->modifiers().testFlag(Qt::ControlModifier);

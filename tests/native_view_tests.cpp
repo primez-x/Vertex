@@ -13,13 +13,31 @@
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QWheelEvent>
+#include <QThread>
 #include <chrono>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
 namespace {
 void check(bool condition, const char* message) { if (!condition) throw std::runtime_error(message); }
+void settle_geometry(sketch::visualization::NativeModelView& view) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while (view.isGeometryPending() && std::chrono::steady_clock::now() < deadline) {
+        QApplication::processEvents();
+        QThread::msleep(1);
+    }
+    check(!view.isGeometryPending(), "Native geometry worker must finish within the test deadline");
+}
+bool export_settled(sketch::visualization::NativeModelView& view, const QString& path) {
+    settle_geometry(view);
+    return view.exportViewImage(path);
+}
+bool ready_settled(sketch::visualization::NativeModelView& view) {
+    settle_geometry(view);
+    return view.isReady();
+}
 bool parse_positive_finite(const QString& text, double& value) {
     bool ok = false;
     value = text.toDouble(&ok);
@@ -29,7 +47,7 @@ struct Frame { QImage image; QRect bounds; QPointF centre; };
 Frame capture(sketch::visualization::NativeModelView& view, const QString& path) {
     const auto began = std::chrono::steady_clock::now();
     std::cerr << "Native capture started: " << path.section('/', -1).toStdString() << std::endl;
-    check(view.exportViewImage(path), "Native framebuffer export failed");
+    check(export_settled(view, path), "Native framebuffer export failed");
     const auto artifact_directory = qEnvironmentVariable("SKETCH_TEST_ARTIFACT_DIR");
     if (!artifact_directory.isEmpty()) {
         QDir().mkpath(artifact_directory);
@@ -72,6 +90,62 @@ void mouse(sketch::visualization::NativeModelView& view,QEvent::Type type,QPoint
     QMouseEvent event(type,p,view.mapToGlobal(p.toPoint()),button,buttons,modifiers);
     QApplication::sendEvent(&view,&event);
 }
+
+void check_publication_reuse(sketch::visualization::NativeModelView& view) {
+    // Exercise actual AIS publication on the Windows driver. Counts express
+    // bounded presentation work; recorded timings do not qualify production
+    // performance or a reference-hardware frame target.
+    constexpr std::size_t object_count = 256;
+    std::vector<sketch::Entity> walls;
+    for (std::size_t i = 0; i < object_count; ++i) {
+        const double x = static_cast<double>(i % 16) * 6.0;
+        const double y = static_cast<double>(i / 16) * 6.0;
+        auto wall = sketch::Entity::create("wall", {
+            {"baseline", {{"start", {x, y}}, {"end", {x + 4.0, y}}, {"sweep_radians", 0.0}}},
+            {"thickness_m", 0.2}, {"height_m", 2.8}, {"elevation_m", 0.0}});
+        wall.id = "publication-wall-" + std::to_string(i);
+        walls.push_back(std::move(wall));
+    }
+    auto document = sketch::Document::create(std::move(walls));
+    const auto publish = [&](const char* label,
+                             std::optional<sketch::visualization::NativeModelView::VisibleEntityIds> visible = std::nullopt) {
+        view.setSnapshot(document.snapshot(), std::move(visible));
+        check(!view.lastPublicationMetrics(), "New requests must clear stale publication diagnostics");
+        check(ready_settled(view), "Publication fixture must be ready");
+        const auto metrics = view.lastPublicationMetrics();
+        check(metrics.has_value() && std::isfinite(metrics->elapsed_ms) && metrics->elapsed_ms >= 0.0,
+              "Successful native publication must record finite owner-thread timing");
+        std::cerr << "Native publication " << label << ": " << metrics->elapsed_ms
+                  << " ms; created=" << metrics->created << "; reused=" << metrics->reused
+                  << "; removed=" << metrics->removed << '\n';
+        return *metrics;
+    };
+    auto metrics = publish("256-object initial scene");
+    check(metrics.created == object_count && metrics.reused == 0,
+          "A new model must create one presentation for each solid");
+    auto edited = document.snapshot().entities().at("publication-wall-0");
+    edited.properties["height_m"] = 3.2;
+    document.apply(sketch::ApplyEntityChanges{document.revision(),
+        {sketch::EntityChange::upsert(edited)}, {}, "Edit one of 256 walls"});
+    metrics = publish("one-object edit");
+    check(metrics.created == 1 && metrics.reused == object_count - 1 && metrics.removed == 1,
+          "A one-object edit must retain every unchanged AIS presentation");
+    metrics = publish("hide all", sketch::visualization::NativeModelView::VisibleEntityIds{});
+    check(metrics.created == 0 && metrics.reused == object_count && metrics.removed == 0,
+          "Visibility changes must update existing presentations without rebuilding shapes");
+    metrics = publish("reveal all");
+    check(metrics.created == 0 && metrics.reused == object_count && metrics.removed == 0,
+          "Revealing unchanged geometry must reuse every presentation");
+    document.apply(sketch::ApplyEntityChanges{document.revision(),
+        {sketch::EntityChange::erase("publication-wall-0")}, {}, "Delete one of 256 walls"});
+    metrics = publish("one-object deletion");
+    check(metrics.created == 0 && metrics.reused == object_count - 1 && metrics.removed == 1,
+          "Deleting one solid must detach only its presentation");
+    document.undo(document.revision());
+    metrics = publish("undo deletion");
+    check(metrics.created == 1 && metrics.reused == object_count - 1 && metrics.removed == 0,
+          "Undoing deletion must create only the restored solid's presentation");
+}
 }
 int main(int argc,char** argv) {
     sketch::testing::noninteractive_errors();
@@ -92,8 +166,8 @@ int main(int argc,char** argv) {
     }
     const int scenario_index = arguments.indexOf(QStringLiteral("--scenario"));
     const QString scenario = scenario_index < 0 ? QStringLiteral("all") : arguments.value(scenario_index + 1);
-    if (scenario != "all" && scenario != "geometry" && scenario != "forms") {
-        std::cerr << "Native scenario must be all, geometry or forms\n";
+    if (scenario != "all" && scenario != "geometry" && scenario != "forms" && scenario != "publication") {
+        std::cerr << "Native scenario must be all, geometry, forms or publication\n";
         return 1;
     }
     QTemporaryDir temporary;
@@ -120,10 +194,38 @@ int main(int argc,char** argv) {
                 application.exit(1);
                 return;
             }
-            check(view.isReady(),"Native viewport must be ready");
+            check(ready_settled(view),"Native viewport must be ready");
+            if (scenario == "publication") {
+                check_publication_reuse(view);
+                application.exit(0);
+                return;
+            }
             if (scenario != "forms") {
                 view.fitAll();
                 auto first=capture(view,temporary.filePath("first.png"));
+                {
+                    const auto source = document.snapshot();
+                    std::vector<sketch::Entity> walls;
+                    for (int i = 0; i != 24; ++i) {
+                        auto wall = source.entities().begin()->second;
+                        wall.id = "cancel-native-wall-" + std::to_string(i);
+                        wall.properties["elevation_m"] = double(i);
+                        walls.push_back(std::move(wall));
+                    }
+                    const auto expensive = sketch::Document::create(std::move(walls));
+                    view.setSnapshot(expensive.snapshot());
+                    check(view.isGeometryPending() && !view.isReady() &&
+                          !view.exportViewImage(temporary.filePath("pending-must-not-export.png")),
+                          "Pending real geometry must not be reported or exported as current");
+                    view.setSnapshot(source,
+                        sketch::visualization::NativeModelView::VisibleEntityIds{});
+                    view.setSnapshot(source);
+                    const auto restored = capture(view, temporary.filePath("cancel-restored.png"));
+                    check(restored.image == first.image &&
+                          document.revision() == source.revision() &&
+                          document.snapshot().history().size() == source.history().size(),
+                          "Superseded geometry and visibility must preserve the valid scene and history");
+                }
                 check(first.bounds.left()>2 && first.bounds.right()<first.image.width()-3
                       &&first.bounds.top()>2 && first.bounds.bottom()<first.image.height()-3,
                       "Fit must leave all geometry inside the native frame");
@@ -183,7 +285,7 @@ int main(int argc,char** argv) {
                 check(selected.isEmpty(),"Empty-space picking must clear selection");
                 const auto unchanged_source = document.snapshot();
                 view.setSnapshot(unchanged_source, sketch::visualization::NativeModelView::VisibleEntityIds{});
-                check(view.exportViewImage(temporary.filePath("hidden.png")), "Hidden view must export its current presentation");
+                check(export_settled(view, temporary.filePath("hidden.png")), "Hidden view must export its current presentation");
                 const QImage hidden(temporary.filePath("hidden.png"));
                 check(!hidden.isNull(), "Hidden view export must be readable");
                 const auto hidden_background = hidden.pixelColor(0, 0);
@@ -195,7 +297,7 @@ int main(int argc,char** argv) {
                 const auto replacement = sketch::Document::create({sketch::Entity::create("wall",
                     unchanged_source.entities().at(wall_id.toStdString()).properties)});
                 view.setSnapshot(replacement.snapshot(), sketch::visualization::NativeModelView::VisibleEntityIds{});
-                check(view.exportViewImage(temporary.filePath("hidden-new.png")) &&
+                check(export_settled(view, temporary.filePath("hidden-new.png")) &&
                       QImage(temporary.filePath("hidden-new.png")) == hidden,
                       "Newly built solids must also honor an empty visibility mask");
                 view.setSnapshot(unchanged_source);
@@ -211,7 +313,7 @@ int main(int argc,char** argv) {
                     initially_hidden.setSnapshot(unchanged_source, sketch::visualization::NativeModelView::VisibleEntityIds{});
                     initially_hidden.show();
                     application.processEvents();
-                    check(initially_hidden.exportViewImage(temporary.filePath("initially-hidden.png")) &&
+                    check(export_settled(initially_hidden, temporary.filePath("initially-hidden.png")) &&
                           QImage(temporary.filePath("initially-hidden.png")) == hidden,
                           "Initial native construction must honor hidden solids");
                     initially_hidden.setSnapshot(unchanged_source);
@@ -320,12 +422,12 @@ int main(int argc,char** argv) {
                           "A hidden join must preserve both visible source solids");
                     joined_view.setSnapshot(joined_source,
                         sketch::visualization::NativeModelView::VisibleEntityIds{join.id});
-                    check(joined_view.exportViewImage(path("-join-members-hidden.png")) &&
+                    check(export_settled(joined_view, path("-join-members-hidden.png")) &&
                               QImage(path("-join-members-hidden.png")) == hidden,
                           "A visible join must not leak geometry when all members are hidden");
                     joined_view.setSnapshot(joined_source,
                         sketch::visualization::NativeModelView::VisibleEntityIds{});
-                    check(joined_view.exportViewImage(path("-join-all-hidden.png")) &&
+                    check(export_settled(joined_view, path("-join-all-hidden.png")) &&
                               QImage(path("-join-all-hidden.png")) == hidden,
                           "An empty mask must erase every join and source presentation");
                     joined_view.setSnapshot(joined_source);
@@ -402,6 +504,11 @@ int main(int argc,char** argv) {
                 auto red = capture(view,temporary.filePath("material-red.png"));
                 check(red.image != redone.image && red.bounds == redone.bounds,
                     "material assignment changes appearance without changing geometry");
+                check(view.lastPublicationMetrics().has_value() &&
+                      view.lastPublicationMetrics()->created == 0 &&
+                      view.lastPublicationMetrics()->reused == 1 &&
+                      view.lastPublicationMetrics()->removed == 0,
+                      "Assigning material must retain the live wall presentation");
                 catalog.properties["model"] = sketch::AssemblyModel::create({{"finish","Finish","#2020e0"}}, {}, {}).to_json();
                 document.apply(sketch::ApplyEntityChanges{document.revision(),
                     {sketch::EntityChange::upsert(catalog)},{},"Change catalog color"});
@@ -409,12 +516,21 @@ int main(int argc,char** argv) {
                 auto blue = capture(view,temporary.filePath("material-blue.png"));
                 check(blue.image != red.image && blue.bounds == red.bounds,
                     "catalog color changes must refresh cached presentations");
+                check(view.lastPublicationMetrics().has_value() &&
+                      view.lastPublicationMetrics()->created == 0 &&
+                      view.lastPublicationMetrics()->reused == 1,
+                      "Changing a catalog color must reuse the wall's existing AIS presentation");
                 catalog.properties["model"] = sketch::AssemblyModel::create({{"finish","Finish"}}, {}, {}).to_json();
                 document.apply(sketch::ApplyEntityChanges{document.revision(),
                     {sketch::EntityChange::upsert(catalog)},{},"Clear catalog color"});
                 view.setSnapshot(document.snapshot());
                 auto default_color = capture(view,temporary.filePath("material-default.png"));
                 check(default_color.image == redone.image,"clearing a catalog color restores default shading");
+                check(view.lastPublicationMetrics().has_value() &&
+                      view.lastPublicationMetrics()->created == 0 &&
+                      view.lastPublicationMetrics()->reused == 1 &&
+                      view.lastPublicationMetrics()->removed == 0,
+                      "Clearing material color must update the retained presentation in place");
                 document.undo(document.revision());
                 view.setSnapshot(document.snapshot());
                 check(capture(view,temporary.filePath("material-clear-undo.png")).image == blue.image,
@@ -453,7 +569,7 @@ int main(int argc,char** argv) {
                     auto entity=sketch::encode_building_entity(object);
                     auto model=sketch::Document::create({entity});
                     view.setSnapshot(model.snapshot());
-                    check(view.isReady(),"Supported building form must have native geometry");
+                    check(ready_settled(view),"Supported building form must have native geometry");
                     view.fitAll();
                     auto frame=capture(view,temporary.filePath(QString::fromStdString(entity.id)+".png"));
                     check(!frame.bounds.isEmpty(),"Every supported form must render a solid");
@@ -507,16 +623,17 @@ int main(int argc,char** argv) {
                     model.apply(sketch::ApplyEntityChanges{model.revision(),
                         {sketch::EntityChange::upsert(entity)},{},"Malformed future form"});
                     view.setSnapshot(model.snapshot(), sketch::visualization::NativeModelView::VisibleEntityIds{});
-                    check(!view.isReady() && !view.lastError().isEmpty(),
+                    check(!ready_settled(view) && !view.lastError().isEmpty(),
                           "Invalid hidden building data must still surface a geometry error");
-                    check(!view.exportViewImage(temporary.filePath("invalid.png")),
+                    check(!export_settled(view, temporary.filePath("invalid.png")),
                           "Invalid building data must block successful image export");
                     model.undo(model.revision());
                     view.setSnapshot(model.snapshot());
-                    check(view.isReady(),"Undo must restore a valid building presentation");
+                    check(ready_settled(view),"Undo must restore a valid building presentation");
                     view.show();
                 }
             }
+            if (scenario == "all") check_publication_reuse(view);
             std::cout<<"Native "<<scenario.toStdString()<<" checks passed at DPR "<<ratio<<'\n';
             application.exit(0);
         } catch(const std::exception& error) {

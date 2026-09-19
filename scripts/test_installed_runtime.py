@@ -17,6 +17,7 @@ import argparse
 import ctypes
 from ctypes import wintypes
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -27,6 +28,16 @@ import sys
 import threading
 import time
 import uuid
+
+try:
+    from performance_report import performance_evidence
+except ModuleNotFoundError:
+    # Also support file-based test discovery from outside the repository.
+    _performance_spec = importlib.util.spec_from_file_location(
+        "performance_report", Path(__file__).with_name("performance_report.py"))
+    _performance_module = importlib.util.module_from_spec(_performance_spec)
+    _performance_spec.loader.exec_module(_performance_module)
+    performance_evidence = _performance_module.performance_evidence
 
 
 REQUIRED_MODULES = {
@@ -283,9 +294,11 @@ def run_workspace(executable: Path, workspace: str, run_root: Path, env: dict,
         raise ValueError(f"unsupported smoke market: {market}")
     suffix = _capture_suffix(capture_label)
     image = run_root / f"{workspace}-{market}{suffix}.png"
+    performance_path = run_root / f"{workspace}-{market}{suffix}-performance.json"
     outputs = [image]
     args = [str(executable), "--smoke", "--smoke-assistance-disabled", "--smoke-market", market,
-            "--smoke-workspace", workspace, "--smoke-output", str(image)]
+            "--smoke-workspace", workspace, "--smoke-output", str(image),
+            "--smoke-performance-output", str(performance_path)]
     if workspace == "architectural":
         model = run_root / f"{workspace}-{market}{suffix}-model.png"
         outputs.append(model)
@@ -376,6 +389,10 @@ def run_workspace(executable: Path, workspace: str, run_root: Path, env: dict,
             result["errors"].append(str(error))
     if project_input is not None:
         result["project_input"] = str(project_input)
+    try:
+        result["performance"] = performance_evidence(performance_path)
+    except (OSError, ValueError) as error:
+        result["errors"].append(str(error))
     result["passed"] = not result["errors"]
     return result
 

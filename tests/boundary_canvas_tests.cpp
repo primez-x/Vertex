@@ -4,6 +4,7 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QDialog>
 #include <QEventLoop>
 #include <QFontDatabase>
 #include <QFontMetrics>
@@ -12,6 +13,10 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPointingDevice>
+#include <QTabletEvent>
+#include <QTouchEvent>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
@@ -840,6 +845,166 @@ void test_output_stroke_width_is_paper_space() {
             "larger persisted paper line width must visibly increase output stroke weight");
 }
 
+void test_request_to_paint_telemetry() {
+    using sketch::PerformanceMetric;
+    using Clock = std::chrono::steady_clock;
+    PlanCanvas canvas;
+    canvas.resize(640, 480);
+    canvas.show();
+    process_events();
+    std::vector<std::pair<PerformanceMetric, Clock::duration>> samples;
+    auto earliest_completion = Clock::time_point::min();
+    canvas.setPerformanceMeasured([&](PerformanceMetric metric, Clock::duration elapsed) {
+        require(!canvas.paintingActive(), "performance callback must follow QPainter completion");
+        require(elapsed >= Clock::duration::zero(), "paint latency must be nonnegative");
+        earliest_completion = Clock::now() - elapsed;
+        samples.emplace_back(metric, elapsed);
+    });
+    const auto count = [&](PerformanceMetric metric) {
+        return std::count_if(samples.begin(), samples.end(), [&](const auto& sample) {
+            return sample.first == metric;
+        });
+    };
+    canvas.fitView();
+    require(samples.empty(), "fit handler must not report before painting");
+    const auto before_coalesced = Clock::now();
+    canvas.zoomBy(1.2);
+    canvas.fitView();
+    render(canvas, true);
+    require(samples.empty(), "export rendering must not complete a pending screen measurement");
+    process_events();
+    require(count(PerformanceMetric::navigation) == 1,
+            "coalesced fit and zoom must report exactly one sample after paint");
+    require(earliest_completion <= before_coalesced + std::chrono::milliseconds(1),
+            "coalesced navigation must retain the oldest request timestamp");
+    canvas.update();
+    process_events();
+    require(samples.size() == 1, "unrelated repaint must not add samples");
+
+    samples.clear();
+    canvas.beginPerformanceMeasurement(PerformanceMetric::edit);
+    canvas.setEntities({{"wall", "wall", {{{-1, 0}, {1, 0}, 0}}, 0.08, false}});
+    require(samples.empty(), "edit dispatch must wait for paint");
+    process_events();
+    require(count(PerformanceMetric::edit) == 1, "edit must complete at its screen paint");
+
+    samples.clear();
+    const auto mouse = [&](QEvent::Type type, QPointF position, Qt::MouseButton button,
+                           Qt::MouseButtons buttons) {
+        QMouseEvent event(type, position, position, button, buttons, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &event);
+    };
+    mouse(QEvent::MouseButtonPress, {200, 200}, Qt::MiddleButton, Qt::MiddleButton);
+    mouse(QEvent::MouseMove, {220, 220}, Qt::NoButton, Qt::MiddleButton);
+    mouse(QEvent::MouseButtonRelease, {220, 220}, Qt::MiddleButton, Qt::NoButton);
+    require(samples.empty(), "pan and mouse dispatch must wait for paint");
+    process_events();
+    require(count(PerformanceMetric::navigation) == 1 && count(PerformanceMetric::input) == 1,
+            "mouse pan batch must measure input and navigation through paint");
+    samples.clear();
+    mouse(QEvent::MouseButtonPress, canvas.overviewMapRect().center(),
+          Qt::LeftButton, Qt::LeftButton);
+    process_events();
+    require(count(PerformanceMetric::navigation) == 1 && count(PerformanceMetric::input) == 1,
+            "overview click must measure input and navigation");
+
+    samples.clear();
+    QKeyEvent fit(QEvent::KeyPress, Qt::Key_F, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &fit);
+    require(samples.empty(), "keyboard dispatch must wait for paint");
+    process_events();
+    require(count(PerformanceMetric::navigation) == 1 && count(PerformanceMetric::input) == 1,
+            "nonmodal keyboard navigation must reach paint");
+
+    samples.clear();
+    canvas.fitView();
+    canvas.hide();
+    canvas.beginPerformanceMeasurement(PerformanceMetric::edit);
+    canvas.fitView();
+    render(canvas, false);
+    canvas.show();
+    process_events();
+    require(samples.empty(), "hide must discard pending measurements and hidden requests");
+
+    canvas.fitView();
+    QDialog modal(&canvas);
+    modal.setModal(true);
+    modal.show();
+    process_events();
+    modal.hide();
+    canvas.update();
+    process_events();
+    require(samples.empty(), "opening a modal must discard pending operation latency");
+    canvas.setTool(CanvasTool::boundary);
+    process_events();
+    canvas.setPreciseInputRequested([&] { canvas.setBoundaryPreview({{0, 0}, {1, 1}}); });
+    QKeyEvent precise(QEvent::KeyPress, Qt::Key_D, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &precise);
+    process_events();
+    require(samples.empty(), "precise-input dispatch must not sample a modal deliberation interval");
+
+    canvas.beginPerformanceMeasurement(PerformanceMetric::edit);
+    canvas.cancelPerformanceMeasurement(PerformanceMetric::edit);
+    canvas.update();
+    process_events();
+    require(samples.empty(), "cancelled edit must not attach to an unrelated paint");
+
+    canvas.beginPerformanceMeasurement(PerformanceMetric::edit);
+    canvas.fitView();
+    canvas.resetPerformanceMeasurements();
+    canvas.setEntities({});
+    process_events();
+    require(samples.empty(), "reset before document replacement must discard the entire pending batch");
+
+    // Send Qt input events through the widget dispatch path rather than
+    // substituting explicit begin calls for actual input instrumentation.
+    int authored_points = 0;
+    canvas.setPointClicked([&](Vec2) { ++authored_points; });
+    QPointingDevice touch_device(QStringLiteral("canvas-test-touch"), 101,
+        QInputDevice::DeviceType::TouchScreen, QPointingDevice::PointerType::Finger,
+        QInputDevice::Capability::Position, 1, 0);
+    const auto touch = [&](QEvent::Type type, QEventPoint::State state) {
+        QTouchEvent event(type, &touch_device, Qt::NoModifier,
+                         {QEventPoint(1, state, QPointF(180, 180), QPointF(180, 180))});
+        QApplication::sendEvent(&canvas, &event);
+    };
+    touch(QEvent::TouchBegin, QEventPoint::State::Pressed);
+    touch(QEvent::TouchUpdate, QEventPoint::State::Updated);
+    touch(QEvent::TouchEnd, QEventPoint::State::Released);
+    require(authored_points == 1, "touch events must reach the authoring callback");
+    require(samples.empty(), "touch dispatch must wait for a screen paint");
+    process_events();
+    require(count(PerformanceMetric::input) == 1,
+            "touch press, move and release must coalesce into one painted input sample");
+
+    samples.clear();
+    QPointingDevice pen_device(QStringLiteral("canvas-test-pen"), 102,
+        QInputDevice::DeviceType::Stylus, QPointingDevice::PointerType::Pen,
+        QInputDevice::Capability::Position | QInputDevice::Capability::Pressure, 1, 1);
+    const auto tablet = [&](QEvent::Type type, Qt::MouseButton button, Qt::MouseButtons buttons) {
+        QTabletEvent event(type, &pen_device, QPointF(190, 190), QPointF(190, 190),
+                           0.5, 0, 0, 0, 0, 0, Qt::NoModifier, button, buttons);
+        QApplication::sendEvent(&canvas, &event);
+    };
+    tablet(QEvent::TabletPress, Qt::LeftButton, Qt::LeftButton);
+    tablet(QEvent::TabletMove, Qt::NoButton, Qt::LeftButton);
+    tablet(QEvent::TabletRelease, Qt::LeftButton, Qt::NoButton);
+    require(authored_points == 2, "pen events must reach the authoring callback");
+    require(samples.empty(), "pen dispatch must wait for a screen paint");
+    process_events();
+    require(count(PerformanceMetric::input) == 1,
+            "pen press, move and release must coalesce into one painted input sample");
+
+    samples.clear();
+    QWheelEvent wheel(QPointF(200, 200), QPointF(200, 200), {}, QPoint(0, 120),
+                      Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    QApplication::sendEvent(&canvas, &wheel);
+    require(samples.empty(), "wheel dispatch must wait for a screen paint");
+    process_events();
+    require(count(PerformanceMetric::navigation) == 1 && count(PerformanceMetric::input) == 1,
+            "wheel zoom must measure input and navigation through paint");
+}
+
 int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QApplication application(argc, argv);
@@ -854,6 +1019,7 @@ int main(int argc, char** argv) {
             require(metrics.inFont(character), "capture font must contain each rendered character");
         }
         test_boundary_draft_rendering_and_history();
+        test_request_to_paint_telemetry();
         test_effective_cursor_matches_click();
         test_cursor_measurement_readout_is_transient_and_contextual();
         test_overview_map_navigation();
