@@ -91,7 +91,7 @@ void require_error_contains(Function&& function, StorageErrorCode code, std::str
 
 struct TempDirectory {
     std::filesystem::path path = std::filesystem::temp_directory_path() /
-                                 ("property-studio-tests-" + sketch::make_stable_id());
+                                 ("vertex-tests-" + sketch::make_stable_id());
 
     TempDirectory() { std::filesystem::create_directory(path); }
     ~TempDirectory() {

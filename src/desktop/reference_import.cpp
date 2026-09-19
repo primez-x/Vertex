@@ -49,7 +49,7 @@ DecodedReference decodeReferenceBytes(const QByteArray& source, const QString& s
         for (const auto& code : report.diagnostics) codes.push_back(QString::fromStdString(code));
         throw std::runtime_error(QStringLiteral(
             "Isolated reference import is unavailable (%1). Install or repair the bundled "
-            "property-studio-import-worker and its runtime in a read-only application directory; "
+            "vertex-import-worker and its runtime in a read-only application directory; "
             "the Windows sandbox must be available. No source file was decoded in the desktop.")
             .arg(codes.isEmpty() ? QStringLiteral("worker_not_attested") : codes.join(',')).toStdString());
     }
@@ -119,7 +119,7 @@ DecodedReference decodeReferenceFile(const QString& path, int page_index) {
         throw std::invalid_argument("The reference file could not be read within the import limit.");
     WindowsImportWorkerOptions options;
     const auto root = std::filesystem::path(QCoreApplication::applicationDirPath().toStdWString());
-    options.executable = root / "property-studio-import-worker.exe";
+    options.executable = root / "vertex-import-worker.exe";
     options.immutable_module_roots = {root, root.parent_path() / "plugins"};
     options.temporary_root = std::filesystem::path(QDir::tempPath().toStdWString());
     return decodeReferenceBytes(bytes, suffix, page_index, std::move(options), run_windows_import_worker);

@@ -33,7 +33,7 @@ class StageOfflineBundleTests(unittest.TestCase):
     def fixture(self):
         directory = tempfile.TemporaryDirectory()
         root = pathlib.Path(directory.name)
-        app = root / "build" / "property-studio.exe"
+        app = root / "build" / "vertex.exe"
         dependency = root / "build" / "dependency.dll"
         font = root / "assets" / "fonts" / "Inter.ttf"
         notice = root / "third_party" / "NOTICE.txt"
@@ -70,11 +70,11 @@ class StageOfflineBundleTests(unittest.TestCase):
                 },
                 "components": [
                     {
-                        "id": "property-studio",
+                        "id": "vertex",
                         "kind": "application",
                         "distribution_status": "included",
                         "package": {
-                            "name": "Property Studio",
+                            "name": "Vertex",
                             "version": "workspace",
                             "license": "Proprietary",
                         },
@@ -98,18 +98,18 @@ class StageOfflineBundleTests(unittest.TestCase):
                 ],
                 "binaries": [
                     {
-                        "name": "property-studio.exe",
-                        "path": "build/property-studio.exe",
-                        "destination": "bin/property-studio.exe",
+                        "name": "vertex.exe",
+                        "path": "build/vertex.exe",
+                        "destination": "bin/vertex.exe",
                         "sha256": digest(app),
-                        "component_id": "property-studio",
+                        "component_id": "vertex",
                     },
                     {
                         "name": "dependency.dll",
                         "path": "build/dependency.dll",
                         "destination": "bin/dependency.dll",
                         "sha256": digest(dependency),
-                        "component_id": "property-studio",
+                        "component_id": "vertex",
                     },
                 ],
                 "static_inputs": [
@@ -123,7 +123,7 @@ class StageOfflineBundleTests(unittest.TestCase):
                 ],
                 "runtime_imports": [
                     {
-                        "from": "property-studio.exe",
+                        "from": "vertex.exe",
                         "to": "dependency.dll",
                         "kind": "local-component",
                     }
@@ -169,7 +169,7 @@ class StageOfflineBundleTests(unittest.TestCase):
                     },
                     {
                         "kind": "notice",
-                        "inventory_entry": "property-studio",
+                        "inventory_entry": "vertex",
                         "path": "LICENSE",
                         "destination": "licenses/LICENSE.txt",
                     },
@@ -202,9 +202,9 @@ class StageOfflineBundleTests(unittest.TestCase):
             source_kit,
             root,
             output_root,
-            "property-studio-offline",
+            "vertex-offline",
         )
-        bundle = output_root / "property-studio-offline"
+        bundle = output_root / "vertex-offline"
 
         self.assertEqual(result["audit_status"], "incomplete")
         self.assertFalse(result["qualification"]["installer_qualified"])
@@ -222,7 +222,7 @@ class StageOfflineBundleTests(unittest.TestCase):
         self.assertEqual(licenses["sqlite"]["license"], "Public-Domain")
         self.assertEqual(
             [row["destination"] for row in result["dependency_closure"]["runtime"]],
-            ["bin/dependency.dll", "bin/property-studio.exe"],
+            ["bin/dependency.dll", "bin/vertex.exe"],
         )
         self.assertEqual(result["dependency_closure"]["static"][0]["component_id"], "sqlite")
         self.assertEqual(
@@ -233,7 +233,7 @@ class StageOfflineBundleTests(unittest.TestCase):
         self.assertEqual(
             {item["path"] for item in result["files"]},
             {
-                "bin/property-studio.exe",
+                "bin/vertex.exe",
                 "bin/dependency.dll",
                 "assets/fonts/Inter.ttf",
                 "licenses/LICENSE.txt",
@@ -250,7 +250,7 @@ class StageOfflineBundleTests(unittest.TestCase):
                 "verify-offline-bundle.ps1",
             },
         )
-        self.assertEqual((bundle / "bin/property-studio.exe").read_bytes(), app.read_bytes())
+        self.assertEqual((bundle / "bin/vertex.exe").read_bytes(), app.read_bytes())
         self.assertEqual((bundle / "bin/dependency.dll").read_bytes(), dependency.read_bytes())
         self.assertEqual((bundle / "source-kit/src/main.cpp").read_bytes(), source.read_bytes())
         self.assertEqual((bundle / "source-kit/LICENSE").read_bytes(), source_notice.read_bytes())
@@ -261,7 +261,7 @@ class StageOfflineBundleTests(unittest.TestCase):
         self.assertEqual(
             {item["path"] for item in runtime_manifest["files"]},
             {
-                "bin/property-studio.exe",
+                "bin/vertex.exe",
                 "bin/dependency.dll",
                 "assets/fonts/Inter.ttf",
                 "licenses/LICENSE.txt",
@@ -366,7 +366,7 @@ class StageOfflineBundleTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(checked.returncode, 0, checked.stderr)
-        self.assertEqual((target / "bin" / "property-studio.exe").read_bytes(), b"application")
+        self.assertEqual((target / "bin" / "vertex.exe").read_bytes(), b"application")
         self.assertEqual((target / "bin" / "dependency.dll").read_bytes(), b"dependency")
         self.assertEqual((target / "licenses" / "LICENSE.txt").read_bytes(), b"project license\n")
         self.assertFalse((target / "source-kit").exists())
@@ -391,7 +391,7 @@ class StageOfflineBundleTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(checked.returncode, 0, checked.stderr)
-        self.assertEqual((target / "bin" / "property-studio.exe").read_bytes(), b"application")
+        self.assertEqual((target / "bin" / "vertex.exe").read_bytes(), b"application")
         self.assertFalse(any(path.name.startswith(".installed.") for path in target.parent.iterdir()))
 
     def test_powershell_installer_repairs_a_modified_runtime(self):
@@ -410,7 +410,7 @@ class StageOfflineBundleTests(unittest.TestCase):
             capture_output=True, text=True, check=False,
         )
         self.assertEqual(install.returncode, 0, install.stderr)
-        (target / "bin" / "property-studio.exe").write_bytes(b"tampered")
+        (target / "bin" / "vertex.exe").write_bytes(b"tampered")
         repaired = subprocess.run(
             [pwsh, "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
              str(bundle / "install-offline-bundle.ps1"), "-InstallRoot", str(target),
@@ -418,7 +418,7 @@ class StageOfflineBundleTests(unittest.TestCase):
             capture_output=True, text=True, check=False,
         )
         self.assertEqual(repaired.returncode, 0, repaired.stderr)
-        self.assertEqual((target / "bin" / "property-studio.exe").read_bytes(), b"application")
+        self.assertEqual((target / "bin" / "vertex.exe").read_bytes(), b"application")
         self.assertFalse(any(path.name.startswith(".installed.") for path in target.parent.iterdir()))
 
     def test_powershell_installer_uninstalls_only_a_marked_runtime(self):
@@ -538,7 +538,7 @@ class StageOfflineBundleTests(unittest.TestCase):
         (target / "verify-offline-bundle.ps1").write_text(
             "[IO.File]::WriteAllText((Join-Path (Split-Path $PSScriptRoot -Parent) "
             "'executed.txt'), 'executed')\nexit 0\n", encoding="utf-8")
-        (target / "bin" / "property-studio.exe").write_bytes(b"damaged")
+        (target / "bin" / "vertex.exe").write_bytes(b"damaged")
         rejected = run("Uninstall")
         self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
         self.assertFalse(sentinel.exists())

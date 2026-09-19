@@ -46,7 +46,7 @@ int main() {
 
         auto document = sketch::Document::create({entity});
         const auto path = std::filesystem::temp_directory_path() /
-            "property-studio-sheet-view-entity.bldproj";
+            "vertex-sheet-view-entity.bldproj";
         std::filesystem::remove(path);
         (void)sketch::ProjectStore::save(path, document.snapshot());
         const auto reopened = sketch::ProjectStore::load(path).document.snapshot();
@@ -64,7 +64,7 @@ int main() {
         wall.id = "wall-target";
         auto referenced_document = sketch::Document::create({wall, referenced_entity});
         const auto referenced_path = std::filesystem::temp_directory_path() /
-            "property-studio-sheet-view-references.bldproj";
+            "vertex-sheet-view-references.bldproj";
         std::filesystem::remove(referenced_path);
         (void)sketch::ProjectStore::save(referenced_path, referenced_document.snapshot());
         const auto reopened_references = sketch::ProjectStore::load(referenced_path).document.snapshot();

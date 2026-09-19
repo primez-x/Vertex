@@ -90,6 +90,8 @@ int main() {
     std::ifstream input(target / "project.json");
     auto json = nlohmann::json::parse(input);
     input.close();
+    check(json.at("exchange_format") == "vertex-json-assets",
+          "New exports must use the Vertex exchange identifier");
     auto rows = json.at("revisions");
     check(json.at("exchange_version") == 1 && !rows[0].contains("boundary_translation"),
           "proof-free exports must preserve the existing format");

@@ -571,12 +571,12 @@ does not emit a false overflow warning.
 The executable supports:
 
 ```text
-property-studio.exe --smoke --smoke-output C:\path\desktop-smoke.png --smoke-size 1366x768
-property-studio.exe --smoke --smoke-workspace architectural --smoke-output C:\path\architectural.png --smoke-3d-output C:\path\model.png
-property-studio.exe --smoke --smoke-assistance-disabled --smoke-workspace measurement --smoke-project-output C:\path\measurement-source.bldproj
-property-studio.exe --smoke --smoke-assistance-disabled --smoke-workspace measurement --smoke-project-input C:\path\measurement-source.bldproj --smoke-project-output C:\path\measurement-reopened.bldproj
-property-studio.exe --smoke --smoke-assistance-disabled --smoke-market light-commercial --smoke-workspace architectural --smoke-output C:\path\commercial.png --smoke-3d-output C:\path\commercial-model.png
-property-studio.exe --smoke --smoke-workspace measurement --smoke-output C:\path\measurement.png --smoke-performance-output C:\path\measurement-performance.json
+vertex.exe --smoke --smoke-output C:\path\desktop-smoke.png --smoke-size 1366x768
+vertex.exe --smoke --smoke-workspace architectural --smoke-output C:\path\architectural.png --smoke-3d-output C:\path\model.png
+vertex.exe --smoke --smoke-assistance-disabled --smoke-workspace measurement --smoke-project-output C:\path\measurement-source.bldproj
+vertex.exe --smoke --smoke-assistance-disabled --smoke-workspace measurement --smoke-project-input C:\path\measurement-source.bldproj --smoke-project-output C:\path\measurement-reopened.bldproj
+vertex.exe --smoke --smoke-assistance-disabled --smoke-market light-commercial --smoke-workspace architectural --smoke-output C:\path\commercial.png --smoke-3d-output C:\path\commercial-model.png
+vertex.exe --smoke --smoke-workspace measurement --smoke-output C:\path\measurement.png --smoke-performance-output C:\path\measurement-performance.json
 ```
 
 `--smoke` creates a representative 12 m × 8 m boundary and two interior walls

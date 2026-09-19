@@ -33,9 +33,9 @@
     },
     {
       "kind": "notice",
-      "inventory_entry": "property-studio",
+      "inventory_entry": "vertex",
       "path": "LICENSE",
-      "destination": "licenses/Property-Studio-LICENSE"
+      "destination": "licenses/Vertex-LICENSE"
     },
     {
       "kind": "asset",
@@ -45,7 +45,7 @@
     },
     {
       "kind": "asset",
-      "inventory_entry": "property-studio-help",
+      "inventory_entry": "vertex-help",
       "path": "docs/user-guide.html",
       "destination": "help/user-guide.html"
     },
@@ -135,21 +135,21 @@
     },
     {
       "kind": "notice",
-      "inventory_entry": "property-cli",
+      "inventory_entry": "vertex-cli",
       "path": "LICENSE",
-      "destination": "licenses/property-cli-LICENSE"
+      "destination": "licenses/vertex-cli-LICENSE"
     },
     {
       "kind": "notice",
-      "inventory_entry": "property-studio-help",
+      "inventory_entry": "vertex-help",
       "path": "LICENSE",
-      "destination": "licenses/property-studio-help-LICENSE"
+      "destination": "licenses/vertex-help-LICENSE"
     },
     {
       "kind": "notice",
-      "inventory_entry": "property-studio-import-worker",
+      "inventory_entry": "vertex-import-worker",
       "path": "LICENSE",
-      "destination": "licenses/property-studio-import-worker-LICENSE"
+      "destination": "licenses/vertex-import-worker-LICENSE"
     },
     {
       "kind": "notice",

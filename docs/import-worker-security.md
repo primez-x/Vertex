@@ -18,7 +18,7 @@ The broker has no unsandboxed fallback.
 
 Desktop reference-file imports and the PDF page-selection dialog now call
 `decodeReferenceFile`, which sends at most 64 MiB of source bytes to the bundled
-`bin/property-studio-import-worker.exe`. The worker uses Qt's
+`bin/vertex-import-worker.exe`. The worker uses Qt's
 PDF/PNG/JPEG/BMP decoders and the Windows Imaging Component (WIC) for TIFF,
 then returns a versioned, fixed-size header followed by RGBA pixels.
 The desktop accepts a reply only after all broker controls are attested and

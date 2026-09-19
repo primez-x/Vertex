@@ -8,7 +8,7 @@ artifacts at `artifacts/runtime/release-imports.json`.
 The entry points are the desktop executable, CLI, replaceable PlaneGCS DLL,
 Windows platform/style plugins and GIF/ICO/JPEG image plugins. A component's
 presence in this inventory alone does not prove the desktop calls it. The v15
-desktop import table now directly includes `property_planegcs.dll` through the
+desktop import table now directly includes `vertex-planegcs.dll` through the
 constraint-authoring service, so that DLL is a required local runtime component.
 Explicit entry points include separately built components and dynamically
 loaded plugins that an executable import table alone cannot discover.

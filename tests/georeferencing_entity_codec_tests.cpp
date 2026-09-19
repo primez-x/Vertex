@@ -49,7 +49,7 @@ int main() {
 
         auto document = sketch::Document::create({entity});
         const auto path = std::filesystem::temp_directory_path() /
-            "property-studio-georeferencing-entity.bldproj";
+            "vertex-georeferencing-entity.bldproj";
         std::filesystem::remove(path);
         (void)sketch::ProjectStore::save(path, document.snapshot());
         const auto reopened = sketch::ProjectStore::load(path).document.snapshot();

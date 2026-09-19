@@ -391,7 +391,7 @@ bool create_job_directory(const std::filesystem::path& root, std::filesystem::pa
     const auto stamp = static_cast<unsigned long long>(GetTickCount64());
     const auto pid = static_cast<unsigned long long>(GetCurrentProcessId());
     for (unsigned int attempt = 0; attempt < 64; ++attempt) {
-        result = root / (L"property-studio-import-" + std::to_wstring(pid) + L"-" +
+        result = root / (L"vertex-import-" + std::to_wstring(pid) + L"-" +
                          std::to_wstring(stamp) + L"-" + std::to_wstring(attempt));
         if (CreateDirectoryW(result.c_str(), nullptr)) {
             if (!ordinary_object(result, true)) {
@@ -497,7 +497,7 @@ bool parent_job_allows_breakaway(bool& parent_in_job, WindowsImportWorkerReport&
 }
 
 bool app_container_sid(SidBuffer& sid, WindowsImportWorkerReport& report) {
-    static constexpr wchar_t profile_name[] = L"PropertyStudio.ImportWorker";
+    static constexpr wchar_t profile_name[] = L"Vertex.ImportWorker";
     PSID value = nullptr;
     auto result = CreateAppContainerProfile(profile_name, L"Vertex import worker",
                                        L"Local worker for bounded drawing-file interchange", nullptr, 0, &value);

@@ -28,10 +28,10 @@ pinned dependencies, run `scripts/build.ps1 -Desktop`, and use the matching
 Debug or Release output for local qualification. The documented `.bldproj`
 format and migration rules are in [project-format.md](project-format.md).
 
-The current executable and package paths retain the internal
-`property-studio` compatibility IDs while the user-facing product is Vertex.
-Those IDs are part of the current packaging and test contracts and should only
-change with an explicit format/package migration.
+The desktop executable, command-line tool, import worker, packages, schemas,
+runtime namespaces, and generated files use the Vertex name. Readers may
+recognize identifiers written by earlier development builds solely to migrate
+those files; new output must always use Vertex identifiers.
 
 ## What remains a release gate
 

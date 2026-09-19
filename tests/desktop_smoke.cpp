@@ -112,7 +112,7 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
     const auto original_name = QCoreApplication::applicationName();
     const auto original_test_mode = QStandardPaths::isTestModeEnabled();
     QStandardPaths::setTestModeEnabled(true);
-    QCoreApplication::setApplicationName(QStringLiteral("PropertyStudio-shortcut-test-") +
+    QCoreApplication::setApplicationName(QStringLiteral("Vertex-shortcut-test-") +
         QUuid::createUuid().toString(QUuid::WithoutBraces));
     const auto settings_directory = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
     const auto settings_path = settings_directory + QStringLiteral("/keyboard-shortcuts.json");
@@ -632,7 +632,7 @@ void test_workspace_profiles() {
     const auto original_name = QCoreApplication::applicationName();
     const auto original_test_mode = QStandardPaths::isTestModeEnabled();
     QStandardPaths::setTestModeEnabled(true);
-    QCoreApplication::setApplicationName(QStringLiteral("PropertyStudio-profile-test-") +
+    QCoreApplication::setApplicationName(QStringLiteral("Vertex-profile-test-") +
         QUuid::createUuid().toString(QUuid::WithoutBraces));
     const auto settings_directory = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
     const auto settings_path = settings_directory + QStringLiteral("/workspace-profiles.json");
@@ -4881,7 +4881,7 @@ int main(int argc, char** argv) {
         }
         require(dialog && profile_id && decimals && classifications && save,
                 "calculation profile editor should expose version, precision, rules, and save controls");
-        require(profile_id->text() == QStringLiteral("property-studio-default") &&
+        require(profile_id->text() == QStringLiteral("vertex-default") &&
                     classifications->rowCount() >= 1,
                 "calculation profile editor should load the persisted profile");
         decimals->setValue(3);

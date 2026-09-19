@@ -29,7 +29,7 @@ class DistributionInventoryTests(unittest.TestCase):
     def fixture(self):
         directory = tempfile.TemporaryDirectory()
         root = pathlib.Path(directory.name)
-        app = root / "build" / "property-studio.exe"
+        app = root / "build" / "vertex.exe"
         dependency = root / "build" / "dependency.dll"
         source = root / "src" / "dependency.h"
         notice = root / "third_party" / "NOTICE.txt"
@@ -73,17 +73,17 @@ class DistributionInventoryTests(unittest.TestCase):
             "runtime_evidence": {"path": "evidence/runtime.json"},
             "components": [
                 {
-                    "id": "property-studio",
+                    "id": "vertex",
                     "kind": "application",
                     "package": {
-                        "name": "Property Studio",
+                        "name": "Vertex",
                         "version": "workspace",
                         "license": "Proprietary",
                     },
                     "source": {"kind": "workspace", "paths": ["src"]},
                     "notice_paths": ["third_party/NOTICE.txt"],
-                    "runtime_names": ["property-studio.exe"],
-                    "destinations": {"property-studio.exe": "bin/property-studio.exe"},
+                    "runtime_names": ["vertex.exe"],
+                    "destinations": {"vertex.exe": "bin/vertex.exe"},
                 },
                 {
                     "id": "dependency",
@@ -107,7 +107,7 @@ class DistributionInventoryTests(unittest.TestCase):
         self.assertEqual(result["schema_version"], 1)
         self.assertEqual(result["audit_status"], "incomplete")
         binaries = {row["name"]: row for row in result["binaries"]}
-        self.assertEqual(binaries["property-studio.exe"]["sha256"], digest(app))
+        self.assertEqual(binaries["vertex.exe"]["sha256"], digest(app))
         self.assertEqual(binaries["dependency.dll"]["sha256"], digest(dependency))
         self.assertEqual(binaries["dependency.dll"]["destination"], "bin/dependency.dll")
         self.assertEqual(result["system_runtime_imports"], ["KERNEL32.dll"])
@@ -157,7 +157,7 @@ class DistributionInventoryTests(unittest.TestCase):
     def test_duplicate_destinations_are_rejected(self):
         directory, root, manifest, runtime, app, dependency = self.fixture()
         self.addCleanup(directory.cleanup)
-        manifest["components"][1]["destinations"]["dependency.dll"] = "bin/property-studio.exe"
+        manifest["components"][1]["destinations"]["dependency.dll"] = "bin/vertex.exe"
 
         with self.assertRaises(inventory.InventoryError) as context:
             inventory.build_inventory(root, manifest)

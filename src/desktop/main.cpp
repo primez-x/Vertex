@@ -23,7 +23,7 @@ QString smoke_output_path(const QStringList& arguments) {
     if (index >= 0 && index + 1 < arguments.size() && !arguments.at(index + 1).isEmpty()) {
         return arguments.at(index + 1);
     }
-    return QDir::tempPath() + QStringLiteral("/property-studio-desktop-smoke-%1.png")
+    return QDir::tempPath() + QStringLiteral("/vertex-desktop-smoke-%1.png")
         .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
 }
 
@@ -32,7 +32,7 @@ QString native_smoke_output_path(const QStringList& arguments) {
     if (index >= 0 && index + 1 < arguments.size() && !arguments.at(index + 1).isEmpty()) {
         return arguments.at(index + 1);
     }
-    return QDir::tempPath() + QStringLiteral("/property-studio-desktop-smoke-3d-%1.png")
+    return QDir::tempPath() + QStringLiteral("/vertex-desktop-smoke-3d-%1.png")
         .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
 }
 
@@ -189,7 +189,7 @@ bool seed_smoke_document(sketch::desktop::MainWindow& window, bool architectural
 
 bool seed_smoke_reference(sketch::desktop::MainWindow& window) {
     const auto path = QDir::temp().filePath(
-        QStringLiteral("property-studio-reference-smoke-%1.png")
+        QStringLiteral("vertex-reference-smoke-%1.png")
             .arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
     QImage image(600, 400, QImage::Format_ARGB32);
     image.fill(QColor(217, 232, 242));

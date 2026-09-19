@@ -436,7 +436,7 @@ int main() {
         const auto revision = apply_architectural_transaction(document, transaction, document.revision());
         require(revision == 1 && document.snapshot().entities().at("wall-a").properties.at("height_m") == 4.0,
                 "architectural transaction did not apply");
-        const auto path = std::filesystem::temp_directory_path() / "property-studio-architectural-adapter.bldproj";
+        const auto path = std::filesystem::temp_directory_path() / "vertex-architectural-adapter.bldproj";
         std::filesystem::remove(path);
         (void)ProjectStore::save(path, document.snapshot());
         auto reopened = ProjectStore::load(path).document;

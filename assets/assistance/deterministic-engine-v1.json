@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "engine_id": "property-studio-assisted-v1",
+  "engine_id": "vertex-assisted-v1",
   "kind": "deterministic-offline-assistance",
   "algorithms": [
     {

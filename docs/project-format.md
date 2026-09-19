@@ -5,7 +5,7 @@ document snapshot and the complete command history known when that snapshot was 
 The file is an interchange/save artifact. The current foundation keeps the working document
 in memory; it does not claim to be a live SQLite working journal.
 
-The bundled `property-cli` provides local format operations without a hosted service:
+The bundled `vertex-cli` provides local format operations without a hosted service:
 `inspect` reports document identity, revision, entity/asset counts, history, and editability;
 `validate` loads and checks the storage, structural references, logical digest, and asset bytes;
 `extract` writes a new JSON-and-assets directory; and `migrate <source> <destination>` loads a

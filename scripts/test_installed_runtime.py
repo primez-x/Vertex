@@ -426,10 +426,10 @@ def main(argv: list[str] | None = None) -> int:
         install = args.install_root.resolve(strict=True)
         report["install_root"] = str(install)
         _, declared, records = load_runtime_manifest(install)
-        executable = install / "bin" / "property-studio.exe"
+        executable = install / "bin" / "vertex.exe"
         row = records.get(windows_key(executable))
         if row is None:
-            raise ValueError("installed executable is not declared at bin/property-studio.exe")
+            raise ValueError("installed executable is not declared at bin/vertex.exe")
         digest = sha256_file(executable)
         if digest != row["sha256"]:
             raise ValueError("installed executable hash does not match runtime manifest")

@@ -1,5 +1,5 @@
 param(
-    [string]$BuildRoot = 'C:\Build\PropertyStudio\vcpkg-build',
+    [string]$BuildRoot = 'C:\Build\Vertex\vcpkg-build',
     [ValidateRange(1, 64)][int]$Concurrency = 16,
     [switch]$Offline
 )

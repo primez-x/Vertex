@@ -27,7 +27,7 @@ class StagePortablePackageTests(unittest.TestCase):
     def fixture(self):
         directory = tempfile.TemporaryDirectory()
         root = pathlib.Path(directory.name)
-        app = root / "build" / "property-studio.exe"
+        app = root / "build" / "vertex.exe"
         dependency = root / "build" / "dependency.dll"
         font = root / "assets" / "fonts" / "Inter.ttf"
         notice = root / "third_party" / "NOTICE.txt"
@@ -52,10 +52,10 @@ class StagePortablePackageTests(unittest.TestCase):
                 "distribution_qualified": False,
                 "components": [
                     {
-                        "id": "property-studio",
+                        "id": "vertex",
                         "kind": "application",
                         "distribution_status": "included",
-                        "package": {"name": "Property Studio", "version": "workspace", "license": "Proprietary"},
+                        "package": {"name": "Vertex", "version": "workspace", "license": "Proprietary"},
                         "notices": [{"path": "third_party/NOTICE.txt", "sha256": digest(notice)}],
                     },
                     {
@@ -69,18 +69,18 @@ class StagePortablePackageTests(unittest.TestCase):
                 ],
                 "binaries": [
                     {
-                        "name": "property-studio.exe",
-                        "path": "build/property-studio.exe",
-                        "destination": "bin/property-studio.exe",
+                        "name": "vertex.exe",
+                        "path": "build/vertex.exe",
+                        "destination": "bin/vertex.exe",
                         "sha256": digest(app),
-                        "component_id": "property-studio",
+                        "component_id": "vertex",
                     },
                     {
                         "name": "dependency.dll",
                         "path": "build/dependency.dll",
                         "destination": "bin/dependency.dll",
                         "sha256": digest(dependency),
-                        "component_id": "property-studio",
+                        "component_id": "vertex",
                     },
                 ],
                 "summary": {"installer_qualified": False, "offline_qualified": False},
@@ -100,7 +100,7 @@ class StagePortablePackageTests(unittest.TestCase):
                     },
                     {
                         "kind": "notice",
-                        "inventory_entry": "property-studio",
+                        "inventory_entry": "vertex",
                         "path": "third_party/NOTICE.txt",
                         "destination": "licenses/NOTICE.txt",
                     },
@@ -138,7 +138,7 @@ class StagePortablePackageTests(unittest.TestCase):
         self.assertEqual(
             {row["path"] for row in manifest["files"]},
             {
-                "bin/property-studio.exe",
+                "bin/vertex.exe",
                 "bin/dependency.dll",
                 "assets/fonts/Inter.ttf",
                 "licenses/NOTICE.txt",
@@ -146,7 +146,7 @@ class StagePortablePackageTests(unittest.TestCase):
                 "metadata/distribution-sbom.spdx.json",
             },
         )
-        self.assertEqual((package / "bin/property-studio.exe").read_bytes(), app.read_bytes())
+        self.assertEqual((package / "bin/vertex.exe").read_bytes(), app.read_bytes())
         self.assertEqual((package / "bin/dependency.dll").read_bytes(), dependency.read_bytes())
         self.assertEqual((package / "assets/fonts/Inter.ttf").read_bytes(), font.read_bytes())
         self.assertEqual((package / "licenses/NOTICE.txt").read_bytes(), notice.read_bytes())
@@ -173,7 +173,7 @@ class StagePortablePackageTests(unittest.TestCase):
         self.addCleanup(fixture[0].cleanup)
         _, root, inventory, allowlist, output_root, *_ = fixture
         data = json.loads(allowlist.read_text(encoding="utf-8"))
-        data["entries"][1]["destination"] = "BIN/PROPERTY-STUDIO.EXE"
+        data["entries"][1]["destination"] = "BIN/VERTEX.EXE"
         write_json(allowlist, data)
 
         with self.assertRaises(stager.StagingError) as context:

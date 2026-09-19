@@ -18,16 +18,16 @@ SPEC.loader.exec_module(audit)
 def fixture():
     return {
         "entry_points": [
-            r"C:\build\property-studio.exe",
-            r"C:\build\property-cli.exe",
-            r"C:\build\property_planegcs.dll",
+            r"C:\build\vertex.exe",
+            r"C:\build\vertex-cli.exe",
+            r"C:\build\vertex-planegcs.dll",
         ],
         "modules": [
-            {"path": r"C:\build\property-studio.exe", "imports": [
+            {"path": r"C:\build\vertex.exe", "imports": [
                 {"name": "Qt6Core.dll", "kind": "local-component"}]},
-            {"path": r"C:\build\property-cli.exe", "imports": [
+            {"path": r"C:\build\vertex-cli.exe", "imports": [
                 {"name": "Qt6Core.dll", "kind": "local-component"}]},
-            {"path": r"C:\build\property_planegcs.dll", "imports": [],},
+            {"path": r"C:\build\vertex-planegcs.dll", "imports": [],},
             {"path": r"C:\deps\Qt6Core.dll", "imports": [
                 {"name": "WS2_32.dll", "kind": "installed-system-runtime"}]},
         ],
@@ -66,7 +66,7 @@ class OfflineStaticAuditTests(unittest.TestCase):
         value = fixture()
         value["modules"].append(copy.deepcopy(value["modules"][0]))
         value["entry_points"] = [value["entry_points"][0], r"C:\build\missing.exe"]
-        result = audit.audit_report(value, applications=("property-studio.exe", "missing.exe"))
+        result = audit.audit_report(value, applications=("vertex.exe", "missing.exe"))
         self.assertFalse(result["static_network_audit_passed"])
         self.assertTrue(any("duplicate module path" in item for item in result["errors"]))
         self.assertTrue(any("entry point is missing" in item for item in result["errors"]))

@@ -93,7 +93,7 @@ same manifest and hash checks before exposing them to the workspace. The local
 CLI provides a deterministic inspection surface for that registration:
 
 ```powershell
-.\build\windows-release\property-cli.exe resources C:\Projects\Imported\sample
+.\build\windows-release\vertex-cli.exe resources C:\Projects\Imported\sample
 ```
 
 The command reports the package-relative kind, name, path, size, and SHA-256

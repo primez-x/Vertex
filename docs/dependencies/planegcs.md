@@ -2,7 +2,7 @@
 
 ## Pinned source
 
-`property_planegcs` uses a bounded source extraction from FreeCAD `1.1.3`,
+`vertex_planegcs` uses a bounded source extraction from FreeCAD `1.1.3`,
 commit [`145529fe741292ff0b3977a01195bf0247425794`](https://github.com/FreeCAD/FreeCAD/commit/145529fe741292ff0b3977a01195bf0247425794).
 The exact upstream file list and hashes are recorded in
 `third_party/planegcs/SOURCE.md`. No FreeCAD application, UI, document, or Qt
@@ -22,7 +22,7 @@ reimplement FreeCAD application behavior.
 ## Build and replacement boundary
 
 `cmake/PlaneGCS.cmake` builds the extracted solver as the standalone shared
-library `property_planegcs`, and builds the application adapter separately as
+library `vertex_planegcs`, and builds the application adapter separately as
 `sketch_constraints`. This keeps the solver DLL replaceable without linking
 PlaneGCS source into the application-owned constraint model. Distributions
 must ship the retained license and corresponding source/provenance required by
@@ -49,13 +49,13 @@ and prepared native prefix, build the shared library and its focused test:
 
 ```powershell
 ./scripts/build.ps1 -Configuration Release -SkipTests `
-  -Targets @('property_planegcs', 'constraints_tests')
+  -Targets @('vertex_planegcs', 'constraints_tests')
 ```
 
 Run `ctest --test-dir build/windows-release -R '^constraints$'
 --output-on-failure` using the CTest executable from the configured toolchain.
-The generated DLL is `build/windows-release/property_planegcs.dll`; the runtime
-inventory maps it to `bin/property_planegcs.dll`. An ABI-compatible replacement
+The generated DLL is `build/windows-release/vertex-planegcs.dll`; the runtime
+inventory maps it to `bin/vertex-planegcs.dll`. An ABI-compatible replacement
 can be evaluated in a separate portable-package copy with the application
 closed. Preserve the original DLL and record both hashes. An intentional
 replacement makes the original package integrity manifest stale; a failed
@@ -64,7 +64,7 @@ If exported interfaces or compiler ABI change, rebuild dependent application
 targets too. A replacement build and application launch have not been
 qualified by this documentation or by the SBOM exporter tests.
 
-The local build definition makes `property_planegcs` shared and
+The local build definition makes `vertex_planegcs` shared and
 `sketch_constraints` static; the latter is application-owned adapter code.
 Eigen and Boost headers contribute code to the solver build. The separate
 application SQLite amalgamation is also compiled statically and nlohmann JSON

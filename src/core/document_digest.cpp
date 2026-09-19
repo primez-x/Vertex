@@ -103,6 +103,8 @@ ordered_json snapshot_json(const DocumentSnapshot& snapshot,
 }
 std::string authoring_digest(const DocumentSnapshot& snapshot, std::optional<Revision> through) {
     auto source = snapshot_json(snapshot, through);
+    // Frozen v1 hash domain: this is not a displayed or serialized product name.
+    // Renaming it would invalidate existing recovery receipts and history fences.
     ordered_json value{{"domain", "property-studio.authoring-source"}, {"version", 1},
                        {"document_id", snapshot.document_id()}, {"revision", through.value_or(snapshot.revision())},
                        {"history", std::move(source["history"])},

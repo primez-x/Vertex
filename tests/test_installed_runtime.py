@@ -271,7 +271,7 @@ class InstalledRuntimeTests(unittest.TestCase):
             monitor.return_value.snapshot.return_value = paths
             with mock.patch.object(runtime, "project_evidence", return_value={"valid": True}) as project:
                 result = runtime.run_workspace(
-                    Path("installed/bin/property-studio.exe"), "architectural",
+                    Path("installed/bin/vertex.exe"), "architectural",
                     Path("evidence"), {"PATH": "Windows"}, declared, records,
                     project_output=Path("evidence/source.bldproj"),
                     project_input=Path("evidence/original.bldproj"),
@@ -306,7 +306,7 @@ class InstalledRuntimeTests(unittest.TestCase):
              mock.patch.object(runtime, "WindowsModules") as monitor, \
              mock.patch.object(runtime.time, "monotonic", side_effect=[0.0, 16.0, 16.0]), \
              mock.patch.object(runtime, "png_evidence", side_effect=FileNotFoundError("missing output")):
-            result = runtime.run_workspace(Path("installed/bin/property-studio.exe"), "measurement",
+            result = runtime.run_workspace(Path("installed/bin/vertex.exe"), "measurement",
                                            Path("evidence"), {}, self.declarations(), {})
         self.assertFalse(result["passed"])
         self.assertTrue(result["timed_out"])
@@ -316,7 +316,7 @@ class InstalledRuntimeTests(unittest.TestCase):
 
     def test_smoke_market_is_bounded(self):
         with self.assertRaisesRegex(ValueError, "unsupported smoke market"):
-            runtime.run_workspace(Path("installed/bin/property-studio.exe"), "architectural",
+            runtime.run_workspace(Path("installed/bin/vertex.exe"), "architectural",
                                   Path("evidence"), {}, self.declarations(), {},
                                   market="industrial")
 
@@ -338,7 +338,7 @@ class InstalledRuntimeTests(unittest.TestCase):
              mock.patch.object(runtime.time, "sleep"):
             monitor.return_value.snapshot.return_value = paths
             result = runtime.run_workspace(
-                Path("installed/bin/property-studio.exe"), "architectural",
+                Path("installed/bin/vertex.exe"), "architectural",
                 Path("evidence"), {"PATH": "Windows"}, declared, records,
                 market="residential", capture_label="source")
         self.assertTrue(result["passed"], result["errors"])

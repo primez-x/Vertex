@@ -48,10 +48,10 @@ case-insensitive family alias (for example, `toilet`, `double-bed`, `sofa`, or
 `checkout-counter`). Family aliases resolve to the deterministic `-w2-d2`
 nominal footprint and the explicit variant ID is stored in the project.
 
-The offline `property-cli symbols` command emits a deterministic version-1
+The offline `vertex-cli symbols` command emits a deterministic version-1
 catalog manifest containing catalog revision 1, entry dimensions, anchors, scale limits, vector
 previews, family summaries, and category counts. It accepts an optional query
-and category (`property-cli symbols toilet` or `property-cli symbols "" commercial`)
+and category (`vertex-cli symbols toilet` or `vertex-cli symbols "" commercial`)
 so release reviewers and downstream tooling can inspect the shipped library
 without opening a project or contacting a service.
 The complete unfiltered manifest can be checked independently with

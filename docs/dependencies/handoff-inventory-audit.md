@@ -9,7 +9,7 @@ directories intact. It needs no network, installed application, Git, or ignored
 local build artifacts.
 
 ```powershell
-python scripts/handoff_inventory_audit.py --bundle-root artifacts/packages/property-studio-offline
+python scripts/handoff_inventory_audit.py --bundle-root artifacts/packages/vertex-offline
 ```
 
 The command prints a JSON report to stdout and exits 0 for a passing local audit

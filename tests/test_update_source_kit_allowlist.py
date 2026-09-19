@@ -25,7 +25,7 @@ class SourceKitAllowlistTests(unittest.TestCase):
             root = pathlib.Path(temporary)
             tracked = [
                 "temp.txt",
-                "build/property-studio.exe",
+                "build/vertex.exe",
                 ".deps/qt/bin/Qt6Core.dll",
                 "secrets/signing.pem",
                 "src/main.cpp",

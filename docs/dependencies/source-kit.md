@@ -13,7 +13,7 @@ Create an allowlist such as:
   "schema_version": 1,
   "entries": [
     {"category": "source", "path": "include/sketch/document.hpp"},
-    {"category": "build", "path": "build/windows-release/property-studio.exe"},
+    {"category": "build", "path": "build/windows-release/vertex.exe"},
     {"category": "docs", "path": "docs/production-plan.md"},
     {"category": "licenses", "path": "LICENSE"},
     {"category": "fixtures", "path": "tests/fixtures/example.json"}
@@ -69,7 +69,7 @@ python scripts/stage_offline_bundle.py `
   --allowlist packaging/portable-allowlist.json `
   --source-kit artifacts/source-kit-manifest.json `
   --output-root artifacts/packages `
-  --destination property-studio-offline
+  --destination vertex-offline
 ```
 
 This creates an installer bundle and a separate `runtime-manifest.json`. The

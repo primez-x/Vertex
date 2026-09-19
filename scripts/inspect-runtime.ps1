@@ -10,10 +10,10 @@ $compilerVersion = (Get-Content -LiteralPath (Join-Path $vsRoot 'VC\Auxiliary\Bu
 $dumpbin = Join-Path $vsRoot "VC\Tools\MSVC\$compilerVersion\bin\Hostx64\x64\dumpbin.exe"
 if (!(Test-Path -LiteralPath $dumpbin)) { throw "Missing PE inspection tool: $dumpbin" }
 if ($EntryPoints.Count -eq 0) {
-    $EntryPoints = @((Join-Path $releaseDirectory 'property-studio.exe'),
-                    (Join-Path $releaseDirectory 'property-studio-import-worker.exe'),
-                    (Join-Path $releaseDirectory 'property-cli.exe'),
-                    (Join-Path $releaseDirectory 'property_planegcs.dll'),
+    $EntryPoints = @((Join-Path $releaseDirectory 'vertex.exe'),
+                    (Join-Path $releaseDirectory 'vertex-import-worker.exe'),
+                    (Join-Path $releaseDirectory 'vertex-cli.exe'),
+                    (Join-Path $releaseDirectory 'vertex-planegcs.dll'),
                     (Join-Path $qtPrefix 'plugins\platforms\qwindows.dll'),
                     (Join-Path $qtPrefix 'plugins\styles\qmodernwindowsstyle.dll'),
                     (Join-Path $qtPrefix 'plugins\imageformats\qgif.dll'),

@@ -49,8 +49,8 @@ class Child final {
 public:
     explicit Child(const std::string& digest)
         : suffix_(random_digest()),
-          ready_name_("Local\\PropertyStudio.OwnershipTest.Ready." + suffix_),
-          release_name_("Local\\PropertyStudio.OwnershipTest.Release." + suffix_),
+          ready_name_("Local\\Vertex.OwnershipTest.Ready." + suffix_),
+          release_name_("Local\\Vertex.OwnershipTest.Release." + suffix_),
           ready_(CreateEventA(nullptr, TRUE, FALSE, ready_name_.c_str())),
           release_(CreateEventA(nullptr, TRUE, FALSE, release_name_.c_str())) {
         require(ready_.get() && release_.get(), "unique child handshake events must be created");
@@ -170,7 +170,7 @@ void owner_crash(WorkspaceOwnershipBroker& broker) {
     Child owner(digest);
     // Preserve the kernel object while its owning process exits. This handle
     // is never waited on or owned by the test's requesting thread.
-    const std::string mutex_name = "Global\\PropertyStudio.Owner.Path." + digest;
+    const std::string mutex_name = "Global\\Vertex.Owner.Path." + digest;
     const Handle retained(OpenMutexA(SYNCHRONIZE, FALSE, mutex_name.c_str()));
     require(retained.get() != nullptr, "crash fixture must retain the existing mutex object");
     owner.crash();

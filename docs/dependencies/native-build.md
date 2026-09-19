@@ -8,7 +8,7 @@ The source dependencies for Open CASCADE, Eigen, Boost, and PROJ are pinned by
 .\scripts\bootstrap-native.ps1
 ```
 
-The default compilation cache is `C:\Build\PropertyStudio\vcpkg-build`.
+The default compilation cache is `C:\Build\Vertex\vcpkg-build`.
 OCCT's long generated filenames exceeded Windows compiler path limits inside
 this deeply nested checkout. The short compilation path addresses that build
 failure without altering OCCT geometry code. Override it with `-BuildRoot` if

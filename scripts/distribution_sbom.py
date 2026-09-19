@@ -23,7 +23,7 @@ from typing import Any
 SPDX_VERSION = "SPDX-2.3"
 DATA_LICENSE = "CC0-1.0"
 SCHEMA_VERSION = 1
-DEFAULT_DOCUMENT_NAME = "Property Studio distribution"
+DEFAULT_DOCUMENT_NAME = "Vertex distribution"
 DEFAULT_OUTPUT = pathlib.Path("artifacts/runtime/distribution-sbom.spdx.json")
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 PATH_RE = re.compile(r"^[^\\/:\x00]+(?:/[^\\/:\x00]+)*$")
@@ -318,10 +318,10 @@ def build_sbom(inventory: Mapping[str, Any], inventory_sha256: str | None = None
         "dataLicense": DATA_LICENSE,
         "SPDXID": "SPDXRef-DOCUMENT",
         "name": _text(document_name, "document_name"),
-        "documentNamespace": f"https://property-studio.invalid/spdx/distribution/{inventory_digest}",
+        "documentNamespace": f"https://vertex.invalid/spdx/distribution/{inventory_digest}",
         "creationInfo": {
             "created": created,
-            "creators": ["Tool: Property Studio distribution SBOM exporter"],
+            "creators": ["Tool: Vertex distribution SBOM exporter"],
         },
         "documentComment": (
             "Generated from distribution-inventory.json; audit_status is incomplete. "
@@ -345,7 +345,7 @@ def validate_sbom(document: Mapping[str, Any]) -> None:
     _require(document.get("SPDXID") == "SPDXRef-DOCUMENT", "SBOM document SPDXID is invalid")
     _text(document.get("name"), "SBOM name")
     namespace = _text(document.get("documentNamespace"), "SBOM documentNamespace")
-    _require(namespace.startswith("https://property-studio.invalid/spdx/distribution/"),
+    _require(namespace.startswith("https://vertex.invalid/spdx/distribution/"),
              "SBOM documentNamespace is not repository-owned")
     creation = document.get("creationInfo")
     _require(isinstance(creation, Mapping), "SBOM creationInfo must be an object")

@@ -556,7 +556,7 @@ void extract_project(const DocumentSnapshot &snapshot,
     document["saved_revision"] = snapshot.saved_revision_optional()
                                      ? Json(*snapshot.saved_revision_optional())
                                      : Json(nullptr);
-    Json result = {{"exchange_format", "property-studio-json-assets"},
+    Json result = {{"exchange_format", "vertex-json-assets"},
                    {"exchange_version", 1},
                    {"document", std::move(document)},
                    {"revisions", Json::array()}};

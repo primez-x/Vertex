@@ -1,5 +1,5 @@
 {
-  "name": "property-studio-native-dependencies",
+  "name": "vertex-native-dependencies",
   "version-string": "0.1.0",
   "builtin-baseline": "0397b75952a7c874b68a7d4f9baf8d3c5951b371",
   "dependencies": [

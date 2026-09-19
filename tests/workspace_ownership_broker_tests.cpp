@@ -937,7 +937,7 @@ void test_identity_validation_shutdown_and_namespace() {
 
     for (const auto& event : first_backend->events) {
         if (event.kind == RecordingBackend::Event::Kind::create) {
-            require(event.name.rfind("Global\\PropertyStudio.Owner.", 0) == 0,
+            require(event.name.rfind("Global\\Vertex.Owner.", 0) == 0,
                     "lifetime mutexes must use the owner namespace");
             require(event.name.find("Save.") == std::string::npos,
                     "lifetime mutexes must not use the Save namespace");

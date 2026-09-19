@@ -2,7 +2,7 @@
 #pragma once
 
 #if defined(_WIN32)
-# if defined(PROPERTY_PLANEGCS_BUILD)
+# if defined(VERTEX_PLANEGCS_BUILD)
 #  define SketcherExport __declspec(dllexport)
 # else
 #  define SketcherExport __declspec(dllimport)

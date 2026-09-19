@@ -520,7 +520,7 @@ public:
         const auto canonical_bytes = std::as_bytes(
             std::span<const wchar_t>(canonical.data(), canonical.size()));
         const auto digest = sha256_hex(canonical_bytes);
-        const std::wstring name = L"Global\\PropertyStudio.Save." +
+        const std::wstring name = L"Global\\Vertex.Save." +
                                   std::wstring(digest.begin(), digest.end());
         mutex_ = CreateMutexW(nullptr, FALSE, name.c_str());
         if (mutex_ == nullptr) {

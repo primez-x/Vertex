@@ -1135,7 +1135,7 @@ json stored_factor_json(const StoredFactor& factor) {
 
 CalculationProfile default_calculation_profile() {
     return CalculationProfile{
-        "property-studio-default",
+        "vertex-default",
         1,
         AreaUnit::square_foot,
         2,
@@ -12809,7 +12809,7 @@ public:
                 throw std::runtime_error("a runtime fingerprint file does not match its manifest hash");
             }
             const auto name = relative.toStdString();
-            if (name == "bin/property-studio.exe") return;
+            if (name == "bin/vertex.exe") return;
             resources.push_back(FingerprintResource{
                 "runtime-" + relative.toLower().replace('/', '_').toStdString(),
                 actual_digest.toStdString(),
@@ -12946,7 +12946,7 @@ public:
             inputs.processing_components.roles.emplace(role, std::move(role_resource));
         }
         inputs.application_build = fingerprint_resources({FingerprintResource{
-            "property-studio-executable", build_digest,
+            "vertex-executable", build_digest,
             json{{"kind", "Windows-native-executable"}}}});
         return inputs;
     }
@@ -12994,7 +12994,7 @@ public:
                                   const DocumentSnapshot& snapshot, const QString& output_kind,
                                   std::string output_digest) {
         const auto fingerprint = outputFingerprintForSnapshot(snapshot);
-        const auto payload = json{{"schema", "property-studio.output-fingerprint.v1"},
+        const auto payload = json{{"schema", "vertex.output-fingerprint.v1"},
                                   {"output_kind", output_kind.toStdString()},
                                   {"output_file", QFileInfo(output_path).fileName().toStdString()},
                                   {"output_sha256", std::move(output_digest)},
@@ -13034,13 +13034,13 @@ public:
             const auto fingerprint = outputFingerprintForSnapshot(snapshot);
             const auto receipt_path = m_file_path.empty()
                 ? (std::filesystem::temp_directory_path() /
-                   "property-studio-print-preview-receipt.json")
+                   "vertex-print-preview-receipt.json")
                 : std::filesystem::path(m_file_path.wstring() + L".print-receipt.json");
             const auto page_mm = printer.pageRect(QPrinter::Millimeter);
             const auto paper_mm = printer.paperRect(QPrinter::Millimeter);
             const auto requested_mm = selectedSheetPageMm(snapshot);
             const auto payload = json{
-                {"schema", "property-studio.print-receipt.v1"},
+                {"schema", "vertex.print-receipt.v1"},
                 {"document_revision", snapshot.revision()},
                 {"page_size", printer.pageLayout().pageSize().name().toStdString()},
                 {"requested_sheet_mm", {requested_mm.width(), requested_mm.height()}},
@@ -16716,7 +16716,7 @@ private:
 
     void buildUi() {
         QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
-        owner->setObjectName(QStringLiteral("propertyStudioMainWindow"));
+        owner->setObjectName(QStringLiteral("vertexMainWindow"));
         owner->resize(1480, 900);
         owner->setMinimumSize(1080, 700);
 

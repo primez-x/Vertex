@@ -12,7 +12,7 @@ if (!$IsWindows) { throw 'This runner requires Windows.' }
 $root = Split-Path -Parent $PSScriptRoot
 $build = Join-Path $root ('build/windows-' + $Configuration.ToLowerInvariant())
 $names = @('windows_import_worker_tests.exe', 'windows_import_worker_probe.exe',
-           'assistance_workflow_tests.exe', 'property-studio-import-worker.exe')
+           'assistance_workflow_tests.exe', 'vertex-import-worker.exe')
 $captureLimitBytes = 1MB
 function Get-BinaryEvidence {
     @($names | ForEach-Object {

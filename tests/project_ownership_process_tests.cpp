@@ -85,7 +85,7 @@ int child_main(const wchar_t* path_argument, const char* ready_name,
 
 void cross_process_contention() {
     const auto path = std::filesystem::temp_directory_path() /
-        ("property-studio-project-ownership-" + suffix() + ".bldproj");
+        ("vertex-project-ownership-" + suffix() + ".bldproj");
     struct RemoveOnExit final {
         std::filesystem::path path;
         ~RemoveOnExit() {
@@ -101,8 +101,8 @@ void cross_process_contention() {
     }
 
     const auto token = suffix();
-    const auto ready_name = "Local\\PropertyStudio.ProjectOwnership.Ready." + token;
-    const auto release_name = "Local\\PropertyStudio.ProjectOwnership.Release." + token;
+    const auto ready_name = "Local\\Vertex.ProjectOwnership.Ready." + token;
+    const auto release_name = "Local\\Vertex.ProjectOwnership.Release." + token;
     UniqueHandle ready(CreateEventA(nullptr, TRUE, FALSE, ready_name.c_str()));
     UniqueHandle release(CreateEventA(nullptr, TRUE, FALSE, release_name.c_str()));
     require(ready.get() && release.get(), "process fixture events should be created");

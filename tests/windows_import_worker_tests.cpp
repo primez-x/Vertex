@@ -152,9 +152,9 @@ std::vector<std::byte> current_user_sid_storage() {
 }
 
 PSID worker_app_container_sid() {
-    static constexpr wchar_t name[] = L"PropertyStudio.ImportWorker";
+    static constexpr wchar_t name[] = L"Vertex.ImportWorker";
     PSID sid = nullptr;
-    auto result = CreateAppContainerProfile(name, L"Property Studio import worker",
+    auto result = CreateAppContainerProfile(name, L"Vertex import worker",
                                            L"Local worker test profile", nullptr, 0, &sid);
     if (FAILED(result) && result == HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)) {
         result = DeriveAppContainerSidFromAppContainerName(name, &sid);

@@ -113,6 +113,8 @@ AssistanceProposal decode_assistance_proposal(const Json& j) {
               j.at("requires_explicit_acceptance") == true, "Assistance cannot claim verification or bypass acceptance");
         AssistanceProposal p;
         p.id = j.at("id").get<std::string>(); p.producer = j.at("producer").get<std::string>();
+        // Upgrade only our legacy identifiers; retain third-party provenance.
+        if (p.producer == "property-studio-assisted-v1") p.producer = "vertex-assisted-v1";
         const auto name = j.at("kind").get<std::string>();
         bool found = false;
         for (auto kind : {AssistanceKind::tracing, AssistanceKind::edge_tracing,
@@ -126,6 +128,9 @@ AssistanceProposal decode_assistance_proposal(const Json& j) {
             keys(r, {"id","relative_path","provenance","license","included"});
             p.resources.push_back({r.at("id").get<std::string>(),r.at("relative_path").get<std::string>(),
                 r.at("provenance").get<std::string>(),r.at("license").get<std::string>(),r.at("included").get<bool>()});
+        }
+        for (auto& resource : p.resources) {
+            if (resource.id == "Property-Studio-LICENSE") resource.id = "Vertex-LICENSE";
         }
         const auto& s = j.at("source");
         keys(s, {"reference_id","original_text","x","y","width","height","confidence"});

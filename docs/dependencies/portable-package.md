@@ -13,7 +13,7 @@ python scripts/stage_portable_package.py `
   --allowlist packaging/portable-allowlist.json `
   --source-root . `
   --output-root artifacts/packages `
-  --destination property-studio-portable
+  --destination vertex-portable
 ```
 
 The allowlist is versioned JSON with `schema_version: 1` and an `entries`

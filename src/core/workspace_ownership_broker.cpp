@@ -641,7 +641,7 @@ private:
     }
 
     [[nodiscard]] std::string mutex_name(const WorkspaceOwnershipKey& key) const {
-        std::string name = "Global\\PropertyStudio.Owner.";
+        std::string name = "Global\\Vertex.Owner.";
         name += key.kind() == WorkspaceOwnershipKey::Kind::path ? "Path." : "File.";
         name += key.canonical_sha256();
         return name;

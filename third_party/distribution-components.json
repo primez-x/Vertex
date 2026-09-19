@@ -58,10 +58,10 @@
       }
     },
     {
-      "id": "property-studio",
+      "id": "vertex",
       "kind": "application",
       "package": {
-        "name": "Property Studio",
+        "name": "Vertex",
         "version": "workspace",
         "license": "Proprietary"
       },
@@ -70,13 +70,13 @@
         "paths": ["src", "include", "CMakeLists.txt", "packaging/qt.conf"]
       },
       "notice_paths": ["LICENSE"],
-      "runtime_names": ["property-studio.exe"],
+      "runtime_names": ["vertex.exe"],
       "destinations": {
-        "property-studio.exe": "bin/property-studio.exe"
+        "vertex.exe": "bin/vertex.exe"
       }
     },
     {
-      "id": "property-studio-import-worker",
+      "id": "vertex-import-worker",
       "kind": "application",
       "package": {
         "name": "Vertex isolated reference import worker",
@@ -95,16 +95,16 @@
         ]
       },
       "notice_paths": ["LICENSE"],
-      "runtime_names": ["property-studio-import-worker.exe"],
+      "runtime_names": ["vertex-import-worker.exe"],
       "destinations": {
-        "property-studio-import-worker.exe": "bin/property-studio-import-worker.exe"
+        "vertex-import-worker.exe": "bin/vertex-import-worker.exe"
       }
     },
     {
-      "id": "property-cli",
+      "id": "vertex-cli",
       "kind": "application",
       "package": {
-        "name": "Property Studio CLI",
+        "name": "Vertex CLI",
         "version": "workspace",
         "license": "Proprietary"
       },
@@ -113,16 +113,16 @@
         "paths": ["src", "include", "CMakeLists.txt"]
       },
       "notice_paths": ["LICENSE"],
-      "runtime_names": ["property-cli.exe"],
+      "runtime_names": ["vertex-cli.exe"],
       "destinations": {
-        "property-cli.exe": "bin/property-cli.exe"
+        "vertex-cli.exe": "bin/vertex-cli.exe"
       }
     },
     {
-      "id": "property-studio-help",
+      "id": "vertex-help",
       "kind": "asset",
       "package": {
-        "name": "Property Studio offline user guide",
+        "name": "Vertex offline user guide",
         "version": "workspace",
         "license": "Proprietary"
       },
@@ -146,9 +146,9 @@
         "paths": ["third_party/planegcs/upstream"]
       },
       "notice_paths": ["third_party/planegcs/upstream/LICENSE"],
-      "runtime_names": ["property_planegcs.dll"],
+      "runtime_names": ["vertex-planegcs.dll"],
       "destinations": {
-        "property_planegcs.dll": "bin/property_planegcs.dll"
+        "vertex-planegcs.dll": "bin/vertex-planegcs.dll"
       }
     },
     {
@@ -624,7 +624,7 @@
       "id": "assistance-engine",
       "kind": "asset",
       "package": {
-        "name": "Property Studio deterministic assistance engine",
+        "name": "Vertex deterministic assistance engine",
         "version": "1",
         "license": "Proprietary"
       },

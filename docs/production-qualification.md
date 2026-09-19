@@ -147,7 +147,7 @@ retaining their declared physical footprint and anchor through save/reopen.
 image output at the supported page scales. Missing categories, placeholder-only
 artwork, clipped geometry, or an unverified output path is a production blocker.
 The `symbol_library` evidence should include the complete unfiltered output of
-`property-cli symbols` and the passing report from
+`vertex-cli symbols` and the passing report from
 `scripts/validate_symbol_catalog.py`; this structural check supplements, but
 does not replace, visual artwork and output review.
 

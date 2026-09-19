@@ -11,7 +11,7 @@ from contextlib import closing
 
 def main():
     executable = pathlib.Path(sys.argv[1]).resolve()
-    with tempfile.TemporaryDirectory(prefix="property-cli-") as directory:
+    with tempfile.TemporaryDirectory(prefix="vertex-cli-") as directory:
         root = pathlib.Path(directory)
         project = root / "maison-é-住宅.bldproj"
         def invoke(*arguments, success=True):

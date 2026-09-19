@@ -33,7 +33,7 @@ class SourceKitManifestTests(unittest.TestCase):
         root = pathlib.Path(directory.name)
         files = {
             "source": root / "src" / "main.cpp",
-            "build": root / "build" / "property-studio.exe",
+            "build": root / "build" / "vertex.exe",
             "docs": root / "docs" / "offline-build.md",
             "licenses": root / "licenses" / "NOTICE.txt",
             "fixtures": root / "tests" / "fixtures" / "sample.json",
@@ -59,7 +59,7 @@ class SourceKitManifestTests(unittest.TestCase):
                 "sha256": digest(files["source"]).upper(),
             },
             {"category": "licenses", "path": "licenses/NOTICE.txt"},
-            {"category": "build", "path": "build/property-studio.exe"},
+            {"category": "build", "path": "build/vertex.exe"},
         ]
         write_json(allowlist, {"schema_version": 1, "entries": entries})
         return directory, root, files, allowlist
@@ -217,7 +217,7 @@ class SourceKitManifestTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         tracked = (
             b"temp.txt\x00"
-            b"build/property-studio.exe\x00"
+            b"build/vertex.exe\x00"
             b".deps/qt/bin/Qt6Core.dll\x00"
             b"secrets/signing.pem\x00"
             b"src/main.cpp\x00"

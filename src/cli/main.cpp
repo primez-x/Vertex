@@ -55,11 +55,11 @@ Json describe(const sketch::DocumentSnapshot& snapshot) {
 
 int run(int argc, wchar_t** argv) {
     const auto usage = [] {
-        std::cerr << "Usage: property-cli <new|inspect|validate> <project.bldproj>\n"
-                  << "       property-cli extract <project.bldproj> <new-directory>\n"
-                  << "       property-cli migrate <project.bldproj> <new-project.bldproj>\n"
-                  << "       property-cli resources <project-package-directory>\n"
-                  << "       property-cli symbols [query] [category]\n";
+        std::cerr << "Usage: vertex-cli <new|inspect|validate> <project.bldproj>\n"
+                  << "       vertex-cli extract <project.bldproj> <new-directory>\n"
+                  << "       vertex-cli migrate <project.bldproj> <new-project.bldproj>\n"
+                  << "       vertex-cli resources <project-package-directory>\n"
+                  << "       vertex-cli symbols [query] [category]\n";
     };
     if (argc < 2) {
         usage();

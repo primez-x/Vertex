@@ -55,7 +55,7 @@ void pdf_dimension_import_workflow(const QString& directory) {
     // Direct codec execution verifies extraction independently of installation
     // qualification. The synthetic attestation below is ONLY a broker test seam.
     QProcess worker;
-    worker.start(QDir(QCoreApplication::applicationDirPath()).filePath("property-studio-import-worker.exe"),
+    worker.start(QDir(QCoreApplication::applicationDirPath()).filePath("vertex-import-worker.exe"),
                  {"pdf", "0"});
     require(worker.waitForStarted(5000), "PDF text codec fixture must start");
     require(worker.write(pdf) == pdf.size(), "PDF fixture must be queued");

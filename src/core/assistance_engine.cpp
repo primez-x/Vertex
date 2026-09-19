@@ -222,7 +222,7 @@ std::vector<AssistanceResource> resources() {
     return {
         {"assistance-engine-v1", "assets/assistance/deterministic-engine-v1.json",
          "Vertex deterministic offline assistance engine v1", "private-source-notice", true},
-        {"Property-Studio-LICENSE", "LICENSE",
+        {"Vertex-LICENSE", "LICENSE",
          "Vertex source ownership notice", "private-source-notice", true},
     };
 }
@@ -237,7 +237,7 @@ AssistanceSource source_for(std::string reference_id, std::string original_text,
 
 AssistanceProposal proposal(std::string id, AssistanceKind kind, AssistanceSource source,
                             AssistanceCommandPreview preview) {
-    AssistanceProposal result{std::move(id), kind, "property-studio-assisted-v1",
+    AssistanceProposal result{std::move(id), kind, "vertex-assisted-v1",
                               resources(), std::move(source), std::move(preview)};
     validate_assistance_proposal(result);
     return result;
@@ -691,7 +691,7 @@ std::vector<AssistanceProposal> parse_natural_language(std::string_view command)
 }
 
 std::vector<std::string> default_assistance_resource_ids() {
-    return {"assistance-engine-v1", "Property-Studio-LICENSE"};
+    return {"assistance-engine-v1", "Vertex-LICENSE"};
 }
 
 }  // namespace sketch

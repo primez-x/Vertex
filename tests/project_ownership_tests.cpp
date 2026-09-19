@@ -19,7 +19,7 @@ void require(bool condition, std::string_view message) {
 
 std::filesystem::path temporary_path(std::string_view suffix) {
     return std::filesystem::temp_directory_path() /
-           ("property-studio-ownership-" + sketch::make_stable_id() + std::string(suffix));
+           ("vertex-ownership-" + sketch::make_stable_id() + std::string(suffix));
 }
 
 void write_text(const std::filesystem::path& path, std::string_view value) {

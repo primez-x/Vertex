@@ -119,7 +119,7 @@ re-hashes each payload after copying, returning relative project and resource
 paths for an offline consumer. The Windows core now registers those restored
 templates, profiles, and documentation through a hash-verified local catalog;
 the native desktop shell exposes the same deterministic registration result
-through its compact secondary command menu, while `property-cli resources`
+through its compact secondary command menu, while `vertex-cli resources`
 reports it for inspection and automation with `network_required=false`.
 Cross-machine fingerprint equivalence and production qualification remain open.
 
@@ -431,7 +431,7 @@ are covered by vector DXF output. Polished artwork,
 physical-footprint bounds, family-specific motifs, and case-insensitive
 catalog search/filtering are now covered. Authoring also accepts a
 case-insensitive family alias and stores the resolved `-w2-d2` nominal variant
-explicitly. The offline `property-cli symbols` command emits a deterministic
+explicitly. The offline `vertex-cli symbols` command emits a deterministic
 catalog manifest with category/family counts, physical dimensions, scale
 limits, anchors, and vector previews for review without opening the UI. Final
 print/export visual qualification and artwork review remain production-gate

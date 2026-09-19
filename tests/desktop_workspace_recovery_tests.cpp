@@ -191,7 +191,7 @@ void test_startup_recovery_selection() {
     const auto original_name = QCoreApplication::applicationName();
     const auto original_test_mode = QStandardPaths::isTestModeEnabled();
     QStandardPaths::setTestModeEnabled(true);
-    QCoreApplication::setApplicationName(QStringLiteral("PropertyStudio-startup-recovery-") +
+    QCoreApplication::setApplicationName(QStringLiteral("Vertex-startup-recovery-") +
         QUuid::createUuid().toString(QUuid::WithoutBraces));
     const auto recovery_directory = std::filesystem::path(
         QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation).toStdWString()) /

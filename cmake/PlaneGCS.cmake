@@ -14,32 +14,32 @@ set(_sketch_planegcs_sources
     "${_sketch_planegcs_vendor}/src/Mod/Sketcher/App/planegcs/SubSystem.cpp"
     "${_sketch_planegcs_vendor}/src/Mod/Sketcher/App/planegcs/qp_eq.cpp")
 
-add_library(property_planegcs SHARED ${_sketch_planegcs_sources})
-target_compile_features(property_planegcs PUBLIC cxx_std_20)
-target_compile_definitions(property_planegcs
-    PRIVATE PROPERTY_PLANEGCS_BUILD EIGEN_NO_DEBUG
+add_library(vertex_planegcs SHARED ${_sketch_planegcs_sources})
+target_compile_features(vertex_planegcs PUBLIC cxx_std_20)
+target_compile_definitions(vertex_planegcs
+    PRIVATE VERTEX_PLANEGCS_BUILD EIGEN_NO_DEBUG
     PUBLIC EIGEN_MPL2_ONLY)
-target_include_directories(property_planegcs
+target_include_directories(vertex_planegcs
     PUBLIC
         "${_sketch_planegcs_vendor}/src"
         "${_sketch_planegcs_vendor}/src/Mod/Sketcher/App/planegcs"
         "${_sketch_native_prefix}/include")
-target_link_libraries(property_planegcs PUBLIC Eigen3::Eigen)
-set_target_properties(property_planegcs PROPERTIES
-    OUTPUT_NAME property_planegcs
+target_link_libraries(vertex_planegcs PUBLIC Eigen3::Eigen)
+set_target_properties(vertex_planegcs PROPERTIES
+    OUTPUT_NAME vertex-planegcs
     CXX_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN YES)
 
 add_library(sketch_constraints STATIC "${_sketch_planegcs_root}/src/core/constraints.cpp")
 target_compile_features(sketch_constraints PUBLIC cxx_std_20)
 target_include_directories(sketch_constraints PUBLIC "${_sketch_planegcs_root}/include")
-target_link_libraries(sketch_constraints PRIVATE property_planegcs)
+target_link_libraries(sketch_constraints PRIVATE vertex_planegcs)
 
 if(MSVC)
-    target_compile_options(property_planegcs PRIVATE /W3 /permissive- /utf-8)
+    target_compile_options(vertex_planegcs PRIVATE /W3 /permissive- /utf-8)
     target_compile_options(sketch_constraints PRIVATE /W4 /permissive- /utf-8)
 else()
-    target_compile_options(property_planegcs PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(vertex_planegcs PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(sketch_constraints PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 

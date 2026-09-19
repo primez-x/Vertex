@@ -3,10 +3,11 @@
 Vertex is an independent, offline-first Windows application for property
 measurement and residential/light-commercial architectural work.
 
-The product name is **Vertex**. The current development build keeps the
-`property-studio.exe` executable name, `.bldproj` extension, and
-`property-studio` schema/package identifiers as stable compatibility IDs while
-the Vertex product surface is finalized.
+The product name and every first-party runtime artifact use **Vertex**.
+The desktop application is `vertex.exe`, the command-line tool is
+`vertex-cli.exe`, and the documented project extension is `.bldproj`.
+Older development identifiers are accepted only when required to read a
+project created by an earlier build; new files always use Vertex identifiers.
 
 **Development checkpoint — not a production release or a certified Apex
 replacement.** The accepted scope requires Apex parity, compatibility, both
@@ -50,7 +51,7 @@ so a build cannot silently omit requested targets:
 Launch the current development application with `.\scripts\run.ps1` (Debug) or
 `.\scripts\run.ps1 -Configuration Release`. This sets process-local DLL/plugin
 paths; it does not install runtimes globally. Source builds produce
-`build/windows-debug/property-studio.exe` and `property-cli.exe`.
+`build/windows-debug/vertex.exe` and `vertex-cli.exe`.
 
 Explicit native checks use `scripts/test-native.ps1` and
 `scripts/test-desktop.ps1`; their windows stay hidden and failures have timeouts.

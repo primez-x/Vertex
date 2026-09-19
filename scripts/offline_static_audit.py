@@ -31,7 +31,7 @@ NETWORK_IMPORTS = frozenset({
     "ws2_32.dll",
     "wsock32.dll",
 })
-DEFAULT_APPLICATIONS = ("property-studio.exe", "property-cli.exe", "property_planegcs.dll")
+DEFAULT_APPLICATIONS = ("vertex.exe", "vertex-cli.exe", "vertex-planegcs.dll")
 
 
 def _unique(pairs):

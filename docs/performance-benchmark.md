@@ -66,7 +66,7 @@ cancelled derived result is discarded and cannot replace the valid source
 revision; see `docs/workspace-regeneration-queue.md`.
 
 The desktop also records bounded process-local timing samples through
-`PerformanceTelemetry`. `property-studio.exe --smoke` accepts
+`PerformanceTelemetry`. `vertex.exe --smoke` accepts
 `--smoke-performance-output <path>` and writes a version-1 JSON report after
 the capture completes. The report contains the workload counts visible to the
 run, nearest-rank p95 values, sample and drop counts, and explicit

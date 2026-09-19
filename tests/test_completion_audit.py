@@ -276,13 +276,13 @@ class CompletionAuditTests(unittest.TestCase):
     def test_packaging_check_verifies_declared_payload_hashes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
-            package = root / "artifacts/packages/property-studio-offline-current"
+            package = root / "artifacts/packages/vertex-offline-current"
             package.mkdir(parents=True)
             payloads = {
                 "runtime-manifest.json": b"runtime",
                 "metadata/distribution-sbom.spdx.json": b"sbom",
                 "metadata/source-kit-manifest.json": b"source-kit",
-                "bin/property-studio.exe": b"vertex",
+                "bin/vertex.exe": b"vertex",
             }
             for relative, content in payloads.items():
                 path = package / relative
@@ -331,7 +331,7 @@ class CompletionAuditTests(unittest.TestCase):
             result = audit._packaging_check(root)
             self.assertEqual(result["status"], "partial")
             self.assertTrue(any("hash" in detail for detail in result["details"]) is False)
-            (package / "bin/property-studio.exe").write_bytes(b"tampered")
+            (package / "bin/vertex.exe").write_bytes(b"tampered")
             result = audit._packaging_check(root)
             self.assertEqual(result["status"], "blocked")
             self.assertTrue(any("sha256" in detail or "hash" in detail

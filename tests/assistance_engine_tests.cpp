@@ -64,6 +64,24 @@ int main() {
         require(trace.preview.arguments.at("points").size() == 4, "trace rectangle is incomplete");
         require(trace.source.reference_id == "reference-1", "trace source reference was lost");
         sketch::validate_assistance_proposal(trace);
+        require(trace.producer == "vertex-assisted-v1" &&
+                    trace.resources.at(1).id == "Vertex-LICENSE",
+                "new assistance must identify Vertex");
+        auto legacy = sketch::encode_assistance_proposal(trace);
+        legacy["producer"] = "property-studio-assisted-v1";
+        legacy["resources"][1]["id"] = "Property-Studio-LICENSE";
+        const auto upgraded = sketch::decode_assistance_proposal(legacy);
+        require(upgraded == trace && sketch::missing_assistance_resources(
+                    upgraded, sketch::default_assistance_resource_ids()).empty(),
+                "legacy assistance must upgrade and resolve current resources");
+        require(sketch::encode_assistance_proposal(upgraded)["producer"] == "vertex-assisted-v1",
+                "re-encoded legacy assistance must use Vertex");
+        legacy["producer"] = "third-party-engine";
+        legacy["resources"][1]["id"] = "third-party-license";
+        const auto external = sketch::decode_assistance_proposal(legacy);
+        require(external.producer == "third-party-engine" &&
+                    external.resources.at(1).id == "third-party-license",
+                "third-party assistance provenance must remain unchanged");
 
         auto components = raster;
         components.width = 40;

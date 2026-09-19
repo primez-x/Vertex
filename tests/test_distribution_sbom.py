@@ -35,14 +35,14 @@ class DistributionSbomTests(unittest.TestCase):
             "generated_utc": "2026-09-13T12:00:00Z",
             "components": [
                 {
-                    "id": "property-studio",
+                    "id": "vertex",
                     "kind": "application",
                     "distribution_status": "included",
                     "package": {
-                        "name": "Property Studio",
+                        "name": "Vertex",
                         "version": "workspace",
                         "license": "Proprietary",
-                        "source": {"kind": "workspace", "homepage": "https://property-studio.invalid"},
+                        "source": {"kind": "workspace", "homepage": "https://vertex.invalid"},
                     },
                     "notices": [{"path": "LICENSE", "sha256": digest(notice)}],
                 },
@@ -61,9 +61,9 @@ class DistributionSbomTests(unittest.TestCase):
                 },
             ],
             "binaries": [
-                {"name": "property-studio.exe", "path": "build/property-studio.exe",
-                 "destination": "bin/property-studio.exe", "sha256": digest(app),
-                 "component_id": "property-studio"},
+                {"name": "vertex.exe", "path": "build/vertex.exe",
+                 "destination": "bin/vertex.exe", "sha256": digest(app),
+                 "component_id": "vertex"},
                 {"name": "dependency.dll", "path": "build/dependency.dll",
                  "destination": "bin/dependency.dll", "sha256": digest(dependency),
                  "component_id": "dependency"},
@@ -74,7 +74,7 @@ class DistributionSbomTests(unittest.TestCase):
                  "source_inputs": [{"path": "third_party/dependency.h", "sha256": digest(source)}]},
             ],
             "runtime_imports": [
-                {"from": "property-studio.exe", "to": "dependency.dll",
+                {"from": "vertex.exe", "to": "dependency.dll",
                  "name": "dependency.dll", "kind": "local-component",
                  "component_id": "dependency"},
             ],
@@ -87,6 +87,9 @@ class DistributionSbomTests(unittest.TestCase):
         document = sbom.build_sbom(inventory, "a" * 64)
         sbom.validate_sbom(document)
         self.assertEqual(document["spdxVersion"], "SPDX-2.3")
+        self.assertEqual(document["name"], "Vertex distribution")
+        self.assertEqual(document["documentNamespace"],
+                         "https://vertex.invalid/spdx/distribution/" + "a" * 64)
         self.assertIn("/" + "a" * 64, document["documentNamespace"])
         self.assertEqual(len(document["packages"]), 2)
         # LICENSE is shared by both packages and appears once in the file set.
@@ -94,7 +97,7 @@ class DistributionSbomTests(unittest.TestCase):
         package_ids = {row["name"]: row["SPDXID"] for row in document["packages"]}
         self.assertTrue(any(
             relation["relationshipType"] == "DEPENDS_ON" and
-            relation["spdxElementId"] == package_ids["Property Studio"] and
+            relation["spdxElementId"] == package_ids["Vertex"] and
             relation["relatedSpdxElement"] == package_ids["Dependency"]
             for relation in document["relationships"]
         ))

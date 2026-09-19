@@ -46,7 +46,7 @@ python scripts/stage_offline_bundle.py `
   --allowlist packaging/portable-allowlist.json `
   --source-kit artifacts/source-kit-manifest.json `
   --output-root artifacts/packages `
-  --destination property-studio-offline
+  --destination vertex-offline
 ```
 
 The command validates every source-kit hash and size, delegates runtime file
@@ -72,8 +72,8 @@ Verify the carried bundle before installation:
 
 ```powershell
 pwsh -NoProfile -NonInteractive `
-  -File .\artifacts\packages\property-studio-offline\verify-offline-bundle.ps1 `
-  -Root .\artifacts\packages\property-studio-offline
+  -File .\artifacts\packages\vertex-offline\verify-offline-bundle.ps1 `
+  -Root .\artifacts\packages\vertex-offline
 ```
 
 Install into a missing or empty directory. The script verifies the bundle,
@@ -86,7 +86,7 @@ manifest, and verifies the installed bytes again:
 
 ```powershell
 pwsh -NoProfile -NonInteractive `
-  -File .\artifacts\packages\property-studio-offline\install-offline-bundle.ps1 `
+  -File .\artifacts\packages\vertex-offline\install-offline-bundle.ps1 `
   -InstallRoot 'C:\Program Files\Vertex'
 
 pwsh -NoProfile -NonInteractive `
@@ -120,12 +120,12 @@ destinations, and neither action contacts a network service:
 
 ```powershell
 pwsh -NoProfile -NonInteractive `
-  -File .\artifacts\packages\property-studio-offline\install-offline-bundle.ps1 `
+  -File .\artifacts\packages\vertex-offline\install-offline-bundle.ps1 `
   -InstallRoot 'C:\Program Files\Vertex' `
   -Action Repair
 
 pwsh -NoProfile -NonInteractive `
-  -File .\artifacts\packages\property-studio-offline\install-offline-bundle.ps1 `
+  -File .\artifacts\packages\vertex-offline\install-offline-bundle.ps1 `
   -InstallRoot 'C:\Program Files\Vertex' `
   -Action Uninstall
 ```

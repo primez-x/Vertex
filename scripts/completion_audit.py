@@ -702,7 +702,7 @@ def _package_integrity_errors(package_root: pathlib.Path, manifest_path: pathlib
 
 
 def _packaging_check(root):
-    package = "artifacts/packages/property-studio-offline-current"
+    package = "artifacts/packages/vertex-offline-current"
     paths = [package + "/offline-bundle-manifest.json",
              package + "/runtime-manifest.json",
              package + "/metadata/distribution-sbom.spdx.json",

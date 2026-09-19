@@ -24,7 +24,7 @@ void require(bool condition, std::string_view message) {
 
 std::filesystem::path temporary_root() {
     const auto root = std::filesystem::temp_directory_path() /
-                      ("property-studio-resource-catalog-" +
+                      ("vertex-resource-catalog-" +
                        std::to_string(std::rand()));
     std::filesystem::create_directories(root);
     return root;

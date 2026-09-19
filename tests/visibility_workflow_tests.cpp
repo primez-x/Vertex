@@ -253,7 +253,7 @@ void test_output_refreshes_current_document_head() {
     auto* print_preview = direct.findChild<QPrintPreviewDialog*>();
     require(print_preview != nullptr, "draft preview dialog is missing");
     const auto print_receipt = std::filesystem::temp_directory_path() /
-        "property-studio-print-preview-receipt.json";
+        "vertex-print-preview-receipt.json";
     std::error_code remove_error;
     std::filesystem::remove(print_receipt, remove_error);
     const auto valid_print = direct_output.filePath(QStringLiteral("valid-print.pdf"));
@@ -267,7 +267,7 @@ void test_output_refreshes_current_document_head() {
     require(receipt_file.open(QIODevice::ReadOnly | QIODevice::Text),
             "print receipt should be readable");
     const auto receipt_json = nlohmann::json::parse(receipt_file.readAll().toStdString());
-    require(receipt_json.at("schema") == "property-studio.print-receipt.v1" &&
+    require(receipt_json.at("schema") == "vertex.print-receipt.v1" &&
                 receipt_json.at("requested_sheet_mm") == nlohmann::json::array({215.5, 330.2}) &&
                 receipt_json.at("driver_paper_mm").size() == 4 &&
                 receipt_json.at("verification") == "preview-driver-evidence-only" &&

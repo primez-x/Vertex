@@ -266,7 +266,7 @@ replayed.
 
 `document_authoring_source_digest_v1` is a separate canonical digest from
 `document_snapshot_digest`. Its canonical object includes the explicit domain
-`property-studio.authoring-source`, version `1`, document ID, head revision,
+`vertex.authoring-source`, version `1`, document ID, head revision,
 the complete retained history and entity/asset serialization, and named
 revisions using the same byte contract as the full snapshot digest. It omits
 only saved-revision bookkeeping, derived editability or read-only reason,
@@ -694,9 +694,9 @@ thread: a successful wait alone cannot distinguish two workspaces in this
 process. Key bundles are deduplicated, acquired in deterministic order with
 zero-time waits, and rolled back on that thread if any acquisition fails.
 
-Lifetime names use separate `Global\\PropertyStudio.Owner.Path.*` and
-`Global\\PropertyStudio.Owner.File.*` namespaces. They never reuse the existing
-`Global\\PropertyStudio.Save.*` namespace: the synchronous storage publication
+Lifetime names use separate `Global\\Vertex.Owner.Path.*` and
+`Global\\Vertex.Owner.File.*` namespaces. They never reuse the existing
+`Global\\Vertex.Save.*` namespace: the synchronous storage publication
 continues to acquire and release its scoped save mutex on the I/O-calling
 thread. Lifetime ownership authorizes that publication but does not replace
 its destination CAS or staged-file guards.

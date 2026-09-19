@@ -26,7 +26,7 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 MANIFEST_VERSION = 1
-DEFAULT_DESTINATION = "property-studio-offline"
+DEFAULT_DESTINATION = "vertex-offline"
 DEFAULT_BUNDLE_MANIFEST = "offline-bundle-manifest.json"
 DEFAULT_RUNTIME_MANIFEST = "runtime-manifest.json"
 DEFAULT_INSTALLER_NAME = "install-offline-bundle.ps1"
