@@ -146,6 +146,16 @@ def classify_source_kit_path(path: str) -> str:
     lowered = normalized.casefold()
     filename = lowered.rsplit("/", 1)[-1]
     if (
+        lowered in {
+            "cmakelists.txt",
+            "cmakepresets.json",
+            "scripts/build.ps1",
+            "vcpkg.json",
+        }
+        or lowered.startswith("cmake/")
+    ):
+        return "build"
+    if (
         filename == "license"
         or filename.startswith("license.")
         or "license" in filename

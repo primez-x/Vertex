@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "requirement_id": "OPS-PACK-002",
+  "source_kit_categories": ["source", "build", "docs", "licenses", "fixtures"],
+  "artifacts": [
+    {"id": "offline_help", "path": "source-kit/docs/user-guide.html", "category": "docs"},
+    {"id": "keyboard_workflow_reference", "path": "source-kit/docs/desktop-workflow.md", "category": "docs"},
+    {"id": "source_build_kit", "kind": "source-kit", "category": "build"},
+    {"id": "dependency_sources", "prefix": "source-kit/third_party/", "category": "source"},
+    {"id": "dependency_notices", "kind": "notice"},
+    {"id": "sbom", "kind": "sbom"},
+    {"id": "project_format", "path": "source-kit/docs/project-format.md", "category": "docs"},
+    {"id": "adapter_documentation", "path": "source-kit/docs/integration-adapters.md", "category": "docs"},
+    {"id": "fixtures", "kind": "source-kit", "category": "fixtures"},
+    {"id": "verification_reports", "path": "source-kit/docs/requirements/acceptance-evidence.json", "category": "docs"}
+  ]
+}

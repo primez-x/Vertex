@@ -3150,9 +3150,13 @@
         "scripts/offline_static_audit.py",
         "tests/test_offline_static_audit.py",
         "docs/dependencies/distribution-sbom.md",
-        "docs/dependencies/portable-package.md"
+        "docs/dependencies/portable-package.md",
+        "packaging/handoff-inventory-contract.json",
+        "scripts/handoff_inventory_audit.py",
+        "tests/test_handoff_inventory_audit.py",
+        "docs/dependencies/handoff-inventory-audit.md"
       ],
-      "implementation_note": "Deterministic source-kit and portable-package manifests are implemented with hash, size, path-safety, and allowlist checks; both portable and offline bundle outputs now carry a hash-bound SPDX 2.3 SBOM and the local user guide, and a task-owned install/verification smoke passes on the development host. Complete artifact inventory, clean-machine rebuild, legal review, and final handoff certification remain open."
+      "implementation_note": "Deterministic source-kit and portable-package manifests are implemented with hash, size, path-safety, and allowlist checks; both portable and offline bundle outputs carry a hash-bound SPDX 2.3 SBOM and the local user guide. The handoff inventory audit now fails closed across ten required artifact classes and bundle/source-kit/runtime cross-references, and it exposed and corrected the missing build-category classification in the source kit. A task-owned install and verification smoke passes on the development host. Clean-machine rebuild, legal review, and final handoff certification remain open."
     }
   ]
 }

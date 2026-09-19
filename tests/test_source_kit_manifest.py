@@ -99,6 +99,19 @@ class SourceKitManifestTests(unittest.TestCase):
         self.assertIn("rebuild", boundary)
         self.assertEqual(result, json.loads(output.read_text(encoding="utf-8")))
 
+    def test_tracked_build_inputs_receive_build_category(self):
+        for path in (
+            "CMakeLists.txt",
+            "CMakePresets.json",
+            "cmake/PlaneGCS.cmake",
+            "scripts/build.ps1",
+            "vcpkg.json",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(manifest_module.classify_source_kit_path(path), "build")
+
+        self.assertEqual(manifest_module.classify_source_kit_path("src/main.cpp"), "source")
+
     def test_traversal_is_rejected_without_writing_output(self):
         directory, root, _, allowlist = self.fixture()
         self.addCleanup(directory.cleanup)

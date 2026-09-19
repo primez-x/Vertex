@@ -53,6 +53,11 @@ not claim a complete source kit, licensing review, SBOM, or reproducible
 Windows rebuild. Clean-machine offline build tests, dependency closure,
 license obligations, and rebuild evidence remain separate qualification work.
 
+Tracked CMake inputs, `vcpkg.json`, and `scripts/build.ps1` use the `build`
+category. Keeping those inputs distinct lets the handoff inventory fail when a
+source kit contains source code but omits the files needed to configure and
+build it.
+
 To carry the checked files with the runtime and dependency evidence, compose
 an offline bundle after generating this manifest. The source-kit manifest is
 validated again, copied under `source-kit/`, and retained under `metadata/`:

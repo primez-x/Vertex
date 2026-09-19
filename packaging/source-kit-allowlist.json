@@ -26,15 +26,15 @@
       "path": "assets/fonts/README.md"
     },
     {
-      "category": "source",
+      "category": "build",
       "path": "cmake/PlaneGCS.cmake"
     },
     {
-      "category": "source",
+      "category": "build",
       "path": "CMakeLists.txt"
     },
     {
-      "category": "source",
+      "category": "build",
       "path": "CMakePresets.json"
     },
     {
@@ -128,6 +128,10 @@
     {
       "category": "docs",
       "path": "docs/dependencies/distribution-sbom.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/dependencies/handoff-inventory-audit.md"
     },
     {
       "category": "docs",
@@ -684,6 +688,10 @@
     {
       "category": "docs",
       "path": "docs/requirements/evidence/io-pdf-001.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/evidence/ops-perf-002.json"
     },
     {
       "category": "docs",
@@ -1267,6 +1275,10 @@
     },
     {
       "category": "source",
+      "path": "packaging/handoff-inventory-contract.json"
+    },
+    {
+      "category": "source",
       "path": "packaging/portable-allowlist.json"
     },
     {
@@ -1306,7 +1318,7 @@
       "path": "scripts/bootstrap.py"
     },
     {
-      "category": "source",
+      "category": "build",
       "path": "scripts/build.ps1"
     },
     {
@@ -1328,6 +1340,10 @@
     {
       "category": "source",
       "path": "scripts/generate_workflow_acceptance_evidence.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/handoff_inventory_audit.py"
     },
     {
       "category": "source",
@@ -2399,6 +2415,10 @@
     },
     {
       "category": "source",
+      "path": "tests/test_handoff_inventory_audit.py"
+    },
+    {
+      "category": "source",
       "path": "tests/test_installed_runtime.py"
     },
     {
@@ -2642,7 +2662,7 @@
       "path": "third_party/source-provenance.json"
     },
     {
-      "category": "source",
+      "category": "build",
       "path": "vcpkg.json"
     }
   ]

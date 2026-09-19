@@ -620,7 +620,7 @@ if(BUILD_TESTING)
     add_test(NAME "performance_${performance_test}_contract" COMMAND "${Python3_EXECUTABLE}" -m unittest discover
       -s "${CMAKE_SOURCE_DIR}/tests" -p "test_performance_${performance_test}.py")
   endforeach()
-  foreach(packaging_test IN ITEMS source_kit_manifest update_source_kit_allowlist distribution_inventory distribution_sbom stage_portable_package stage_project_package stage_offline_bundle prepare_msvc_runtime installed_runtime offline_static_audit source_provenance_audit symbol_catalog_manifest)
+  foreach(packaging_test IN ITEMS source_kit_manifest update_source_kit_allowlist distribution_inventory distribution_sbom stage_portable_package stage_project_package stage_offline_bundle handoff_inventory_audit prepare_msvc_runtime installed_runtime offline_static_audit source_provenance_audit symbol_catalog_manifest)
     add_test(NAME "packaging_${packaging_test}" COMMAND "${Python3_EXECUTABLE}" -m unittest discover
       -s "${CMAKE_SOURCE_DIR}/tests" -p "test_${packaging_test}.py")
   endforeach()
