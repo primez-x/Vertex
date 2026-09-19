@@ -139,7 +139,7 @@ std::vector<SymbolDefinition> default_symbol_catalog() {
             }
         };
         const auto circle = [&](double centre_x, double centre_y, double radius) {
-            constexpr int segments = 12;
+            constexpr int segments = 32;
             for (int index = 0; index < segments; ++index) {
                 const double first = 2.0 * std::numbers::pi * index / segments;
                 const double second = 2.0 * std::numbers::pi * (index + 1) / segments;
@@ -147,14 +147,37 @@ std::vector<SymbolDefinition> default_symbol_catalog() {
                      centre_x + radius * std::cos(second), centre_y + radius * std::sin(second));
             }
         };
-        line(-1,-1,1,-1); line(1,-1,1,1); line(1,1,-1,1); line(-1,1,-1,-1);
-        if (f.shape == 1) { line(-0.7,-1,-0.7,0.7); line(0.7,-1,0.7,0.7); line(-1,0.7,1,0.7); }
-        if (f.shape == 2) { line(-0.8,-0.8,0.8,-0.8); line(0.8,-0.8,0.8,0.8); line(0.8,0.8,-0.8,0.8); line(-0.8,0.8,-0.8,-0.8); }
-        if (f.shape == 3) { line(-1,0.6,1,0.6); line(-0.8,0.8,0.8,0.8); }
-        if (f.shape == 4) { line(0,-1,0,1); line(-1,0,1,0); }
-        if (f.shape == 5) { line(-0.7,-0.7,0.7,-0.7); line(0.7,-0.7,0.7,0.7); line(0.7,0.7,-0.7,0.7); line(-0.7,0.7,-0.7,-0.7); line(-0.15,0.5,0.15,0.5); }
-        if (f.shape == 6) { line(-1,-1,1,1); line(-1,1,1,-1); }
-        if (f.shape == 7) { line(-0.8,-0.8,0.8,-0.8); line(0.8,-0.8,0.8,0.8); line(0.8,0.8,-0.8,0.8); line(-0.8,0.8,-0.8,-0.8); line(-0.8,0,0.8,0); }
+        // Original code-authored plan artwork. Curves are tessellated here so
+        // every preview/export consumer uses the same offline vector geometry.
+        const auto arc = [&](double cx, double cy, double rx, double ry,
+                             double start, double sweep, int segments) {
+            for (int i = 0; i < segments; ++i) {
+                const double a = start + sweep * i / segments;
+                const double b = start + sweep * (i + 1) / segments;
+                line(cx + rx * std::cos(a), cy + ry * std::sin(a),
+                     cx + rx * std::cos(b), cy + ry * std::sin(b));
+            }
+        };
+        const auto ellipse = [&](double cx, double cy, double rx, double ry) {
+            arc(cx, cy, rx, ry, 0, 2 * std::numbers::pi, 32);
+        };
+        const auto rounded = [&](double left, double bottom, double right, double top,
+                                 double rx, double ry) {
+            line(left + rx, bottom, right - rx, bottom);
+            line(right, bottom + ry, right, top - ry);
+            line(right - rx, top, left + rx, top);
+            line(left, top - ry, left, bottom + ry);
+            const double quarter = std::numbers::pi / 2;
+            arc(right - rx, bottom + ry, rx, ry, -quarter, quarter, 4);
+            arc(right - rx, top - ry, rx, ry, 0, quarter, 4);
+            arc(left + rx, top - ry, rx, ry, quarter, quarter, 4);
+            arc(left + rx, bottom + ry, rx, ry, 2 * quarter, quarter, 4);
+        };
+        const std::string_view family_id = f.id;
+        // Hard casework has a rectangular footprint. Soft furniture and bowls
+        // supply their own silhouette, with no superimposed bounding rectangle.
+        if (f.shape == 4 || (f.shape == 6 && family_id != "water-heater") || f.shape >= 8)
+            rect(-1, -1, 1, 1);
         if (f.shape == 8) { line(-0.8,0,0.8,0); line(-0.8,-0.35,-0.8,0.35); line(0.8,-0.35,0.8,0.35); }
         if (f.shape == 9) { line(-0.7,0,0.7,0); line(0,-0.7,0,0.7); line(-0.5,-0.5,0.5,0.5); line(-0.5,0.5,0.5,-0.5); }
         if (f.shape == 10) { line(0,-1,0,1); line(-1,0,1,0); line(-0.7,-0.7,0.7,0.7); line(-0.7,0.7,0.7,-0.7); }
@@ -164,8 +187,6 @@ std::vector<SymbolDefinition> default_symbol_catalog() {
         if (f.shape == 15) { line(-0.7,0,0.7,0); line(0,-0.7,0,0.7); line(-0.5,-0.5,0.5,0.5); line(-0.5,0.5,0.5,-0.5); }
         if (f.shape == 16) { line(-0.7,-0.7,0.7,0.7); line(-0.7,0.7,0.7,-0.7); }
         if (f.shape == 17) { line(-0.8,-0.7,0.8,-0.7); line(-0.8,-0.35,0.8,-0.35); line(-0.8,0,0.8,0); line(-0.8,0.35,0.8,0.35); line(-0.8,0.7,0.8,0.7); }
-        if (f.shape == 18) { line(-0.8,-0.55,-0.8,0.55); line(-0.8,0.55,0.8,0.55); line(0.8,0.55,0.8,-0.55); line(-0.8,0,0.8,0); }
-        const std::string_view family_id = f.id;
         if (family_id == "range") {
             // Four burner rings and a front control rail make the appliance
             // recognizable at plan scale while staying inside the footprint.
@@ -208,12 +229,11 @@ std::vector<SymbolDefinition> default_symbol_catalog() {
             line(-0.18, 0.78, 0.18, 0.78);
             line(0.48, 0.78, 0.62, 0.78);
         } else if (family_id == "water-heater") {
-            circle(0.0, 0.0, 0.68);
-            line(-0.55, 0.0, 0.55, 0.0);
-            line(-0.3, 0.0, -0.3, 0.5);
-            line(0.3, 0.0, 0.3, -0.5);
-            line(-0.25, 0.88, -0.25, 0.68);
-            line(0.25, 0.88, 0.25, 0.68);
+            ellipse(0, 0, 1, 1);
+            ellipse(0, 0, 0.84, 0.84);
+            circle(-0.3, 0.3, 0.09);
+            circle(0.3, 0.3, 0.09);
+            rect(-0.22, -0.65, 0.22, -0.38);
         } else if (family_id == "wardrobe") {
             line(0.0, -0.9, 0.0, 0.9);
             line(-0.5, -0.72, -0.5, 0.72);
@@ -237,77 +257,106 @@ std::vector<SymbolDefinition> default_symbol_catalog() {
                 line(-0.88, y_value, 0.88, y_value);
             line(-0.78, -0.82, -0.78, 0.82);
             line(0.78, -0.82, 0.78, 0.82);
-        } else if (family_id == "toilet") {
-            rect(-0.38, -0.92, 0.38, -0.5); // tank
-            polyline({{-0.38, -0.5}, {-0.28, -0.2}, {-0.2, 0.28},
-                      {0.2, 0.28}, {0.28, -0.2}, {0.38, -0.5}});
-            line(-0.2, 0.28, 0.2, 0.28);
-        } else if (family_id == "accessible-toilet") {
-            rect(-0.42, -0.9, 0.42, -0.52);
-            polyline({{-0.42, -0.52}, {-0.28, -0.15}, {-0.2, 0.35},
-                      {0.2, 0.35}, {0.28, -0.15}, {0.42, -0.52}});
-            circle(0.0, 0.48, 0.2);
-            line(-0.65, -0.82, -0.65, 0.65);
-            line(-0.65, 0.65, 0.05, 0.65);
-        } else if (family_id == "single-bed" || family_id == "double-bed") {
-            line(-0.88, 0.54, 0.88, 0.54);
-            line(-0.88, 0.2, 0.88, 0.2);
-            line(-0.88, 0.54, -0.88, 0.86);
-            line(0.88, 0.54, 0.88, 0.86);
-            line(-0.88, -0.1, 0.88, -0.1);
-            if (family_id == "double-bed") line(0.0, -0.1, 0.0, 0.86);
-        } else if (family_id == "sofa") {
-            line(-0.72, 0.18, 0.72, 0.18);
-            line(-0.72, -0.18, 0.72, -0.18);
-            line(-0.72, 0.18, -0.72, -0.18);
-            line(0.72, 0.18, 0.72, -0.18);
-            line(-0.9, -0.75, -0.9, 0.55);
-            line(0.9, -0.75, 0.9, 0.55);
-        } else if (family_id == "chair" || family_id == "armchair") {
-            line(-0.62, 0.15, 0.62, 0.15);
-            line(-0.62, 0.15, -0.62, -0.65);
-            line(0.62, 0.15, 0.62, -0.65);
-            line(-0.82, -0.65, 0.82, -0.65);
-            if (family_id == "armchair") {
-                line(-0.9, -0.2, -0.9, 0.55);
-                line(0.9, -0.2, 0.9, 0.55);
+        } else if (family_id == "toilet" || family_id == "accessible-toilet") {
+            const double bowl_width = family_id == "toilet" ? 0.88 : 0.44;
+            rounded(-bowl_width, 0.48, bowl_width, 1, 0.09, 0.09); // cistern
+            rounded(-bowl_width * 0.32, 0.68, bowl_width * 0.32, 0.8, 0.04, 0.04);
+            // The tapered pan joins the tank; two ellipses describe the seat.
+            polyline({{-bowl_width * 0.68, 0.48}, {-bowl_width, -0.18}});
+            polyline({{bowl_width * 0.68, 0.48}, {bowl_width, -0.18}});
+            arc(0, -0.18, bowl_width, 0.82, std::numbers::pi, std::numbers::pi, 16);
+            ellipse(0, -0.2, bowl_width * 0.71, 0.56);
+            if (family_id == "accessible-toilet") {
+                rounded(-0.9, -0.72, -0.8, 0.86, 0.03, 0.03);
+                rounded(-0.68, 0.9, 0.8, 1, 0.03, 0.03);
             }
+        } else if (family_id == "single-bed" || family_id == "double-bed") {
+            rounded(-1, -1, 1, 1, 0.08, 0.04);
+            rounded(-0.94, -0.94, 0.94, 0.9, 0.1, 0.06);
+            line(-0.94, 0.96, 0.94, 0.96); // headboard
+            const int pillows = family_id == "single-bed" ? 1 : 2;
+            for (int i = 0; i < pillows; ++i) {
+                const double left = -0.8 + i * 1.6 / pillows;
+                rounded(left, 0.53, left + 1.6 / pillows - 0.06, 0.82, 0.1, 0.07);
+            }
+            line(-0.94, 0.37, 0.94, 0.37); // turned-down duvet
+            line(-0.94, 0.24, 0.94, 0.24);
+            polyline({{-0.84, 0.24}, {-0.84, -0.78}, {-0.7, -0.9}});
+        } else if (family_id == "sofa" || family_id == "armchair") {
+            rounded(-1, -1, 1, 1, 0.12, 0.2); // upholstered carcass
+            const double inner = family_id == "sofa" ? 0.79 : 0.65;
+            rounded(-0.96, -0.88, -inner, 0.69, 0.05, 0.12); // arms
+            rounded(inner, -0.88, 0.96, 0.69, 0.05, 0.12);
+            const int cushions = family_id == "sofa" ? 3 : 1;
+            const double span = 2 * (inner - 0.035) / cushions;
+            for (int i = 0; i < cushions; ++i) {
+                const double left = -inner + 0.035 + i * span;
+                rounded(left, 0.48, left + span - 0.035, 0.89, 0.05, 0.09);
+                rounded(left, -0.84, left + span - 0.035, 0.4, 0.055, 0.12);
+            }
+            line(-inner + 0.04, -0.94, inner - 0.04, -0.94); // front apron seam
+        } else if (family_id == "chair") {
+            rounded(-0.88, 0.52, 0.88, 1, 0.14, 0.1); // curved back rest
+            rounded(-0.9, -0.9, 0.9, 0.4, 0.2, 0.22); // seat
+            line(-0.7, 0.4, -0.7, 0.52);
+            line(0.7, 0.4, 0.7, 0.52);
+            line(-0.7, -0.9, -0.7, -1);
+            line(0.7, -0.9, 0.7, -1);
         } else if (family_id == "bench") {
+            rounded(-1, -1, 1, 1, 0.06, 0.12);
             line(-0.82, -0.34, 0.82, -0.34);
             line(-0.82, 0.0, 0.82, 0.0);
             line(-0.82, 0.34, 0.82, 0.34);
             line(-0.72, -0.78, -0.72, 0.78);
             line(0.72, -0.78, 0.72, 0.78);
-        } else if (family_id == "desk" || family_id == "dining-table" ||
-                   family_id == "coffee-table" || family_id == "side-table") {
-            line(-0.78, 0.42, 0.78, 0.42);
-            line(-0.78, -0.42, 0.78, -0.42);
-            line(-0.6, -0.42, -0.6, -0.9);
-            line(0.6, -0.42, 0.6, -0.9);
-            if (family_id == "dining-table") {
-                line(-0.45, 0.0, 0.45, 0.0);
-                line(-0.45, -0.25, 0.45, -0.25);
-            } else if (family_id == "coffee-table") {
-                circle(0.0, 0.0, 0.2);
-            } else if (family_id == "side-table") {
-                line(0.0, -0.42, 0.0, 0.42);
-            }
+        } else if (family_id == "desk") {
+            rounded(-1, -1, 1, 1, 0.05, 0.1);
+            rect(-0.9, -0.86, -0.48, 0.86); // drawer pedestal
+            line(-0.8, -0.7, -0.58, -0.7);
+            rounded(-0.2, 0.16, 0.6, 0.75, 0.04, 0.05); // desk pad
+            line(0.76, 0.2, 0.76, 0.66);
+        } else if (family_id == "dining-table") {
+            rounded(-1, -1, 1, 1, 0.18, 0.3);
+            rounded(-0.95, -0.9, 0.95, 0.9, 0.16, 0.26);
+            line(0, -0.9, 0, 0.9); // extension leaf joint
+        } else if (family_id == "coffee-table") {
+            ellipse(0, 0, 1, 1);
+            ellipse(0, 0, 0.92, 0.87);
+        } else if (family_id == "side-table") {
+            rounded(-1, -1, 1, 1, 0.12, 0.12);
+            for (const double lx : {-0.76, 0.76})
+                for (const double ly : {-0.76, 0.76})
+                    rect(lx - 0.08, ly - 0.08, lx + 0.08, ly + 0.08);
         } else if (family_id == "sink" || family_id == "double-sink") {
-            const double centre = family_id == "double-sink" ? 0.45 : 0.0;
-            circle(-centre, 0.0, 0.28);
-            if (family_id == "double-sink") circle(centre, 0.0, 0.28);
-            line(-0.2, 0.72, 0.2, 0.72);
-            line(0.0, 0.72, 0.0, 0.45);
+            rounded(-1, -1, 1, 1, 0.1, 0.12);
+            const int bowls = family_id == "double-sink" ? 2 : 1;
+            for (int i = 0; i < bowls; ++i) {
+                const double left = -0.85 + i * 1.7 / bowls;
+                rounded(left, -0.82, left + 1.7 / bowls - 0.07, 0.58, 0.16, 0.22);
+                circle(left + 0.85 / bowls - 0.035, -0.08, 0.08);
+            }
+            polyline({{-0.08, 0.78}, {-0.08, 0.38}, {0.08, 0.38}, {0.08, 0.78}});
+            circle(-0.3, 0.78, 0.06);
+            circle(0.3, 0.78, 0.06);
         } else if (family_id == "bathtub") {
-            rect(-0.78, -0.62, 0.78, 0.62);
-            polyline({{-0.58, -0.42}, {0.58, -0.42}, {0.58, 0.42}, {-0.58, 0.42}});
-            circle(0.58, 0.42, 0.08);
+            rounded(-1, -1, 1, 1, 0.12, 0.06);
+            rounded(-0.8, -0.85, 0.8, 0.8, 0.4, 0.22);
+            circle(0, 0.57, 0.07);
+            line(-0.15, 0.9, 0.15, 0.9);
+            line(0, 0.9, 0, 0.72);
         } else if (family_id == "shower" || family_id == "accessible-shower") {
-            circle(0.0, 0.0, 0.32);
-            line(-0.78, 0.78, 0.2, 0.78);
-            line(0.2, 0.78, 0.2, 0.2);
-            line(-0.2, -0.2, 0.2, 0.2);
-            line(-0.2, 0.2, 0.2, -0.2);
+            rect(-1, -1, 1, 1);
+            rect(-0.9, -0.9, 0.9, 0.9);
+            circle(0, 0, 0.1);
+            for (const double corner_x : {-0.9, 0.9})
+                for (const double corner_y : {-0.9, 0.9})
+                    line(corner_x, corner_y, corner_x * 0.1, corner_y * 0.1);
+            line(0, 0.9, 0, 0.68);
+            arc(0, 0.68, 0.15, 0.1, std::numbers::pi, std::numbers::pi, 8);
+            if (family_id == "accessible-shower") {
+                rect(-0.84, 0.15, -0.42, 0.78); // fold-down seat
+                line(0.8, -0.6, 0.8, 0.6); // grab rail
+            }
         } else if (family_id == "floor-drain") {
             circle(0.0, 0.0, 0.55);
             line(-0.55, 0.0, 0.55, 0.0);
@@ -329,10 +378,16 @@ std::vector<SymbolDefinition> default_symbol_catalog() {
             circle(0.0, 0.0, 0.28);
             line(-0.1, -0.1, 0.18, 0.16);
         } else if (family_id == "urinal" || family_id == "bidet") {
-            rect(-0.62, -0.68, 0.62, 0.62);
-            circle(0.0, 0.0, family_id == "urinal" ? 0.34 : 0.26);
-            line(-0.25, 0.68, 0.25, 0.68);
-            line(0.0, 0.68, 0.0, 0.45);
+            rounded(-0.9, -1, 0.9, 1, 0.4, 0.42);
+            ellipse(0, -0.18, 0.64, family_id == "urinal" ? 0.56 : 0.68);
+            circle(0, -0.46, 0.07);
+            if (family_id == "bidet") {
+                line(0, 0.84, 0, 0.58);
+                circle(-0.25, 0.74, 0.07);
+                circle(0.25, 0.74, 0.07);
+            } else {
+                rect(-0.28, 0.68, 0.28, 0.84);
+            }
         } else if (family_id == "grab-bar") {
             line(-0.75, -0.45, -0.75, 0.45);
             line(-0.75, 0.45, 0.75, 0.45);

@@ -183,14 +183,20 @@ public:
                        Vec2 view_center, QColor background,
                        std::optional<double> paper_pixels_per_mm = std::nullopt) const;
     [[nodiscard]] Vec2 contentCenter() const noexcept;
+    // Interactive selection frame in widget-local logical pixels, including
+    // its fixed screen padding. Empty when no drawable selection is retained.
+    // Re-query after selection, pan, zoom, or resize to anchor contextual UI.
+    [[nodiscard]] std::optional<QRectF> selectionBounds() const;
 
     void setPointClicked(std::function<void(Vec2)> callback);
     void setEntityClicked(std::function<void(QString)> callback);
     void setEntitySelectionClicked(std::function<void(QString, bool)> callback);
-    // Rectangle selection replaces the selection, or adds to it with Ctrl/Shift.
+    // Rectangle selection replaces the selection, or adds to it with Shift.
     void setEntitiesSelected(std::function<void(QStringList, bool)> callback);
     void setSymbolDropped(std::function<void(QString, double, Vec2)> callback);
     void setCursorMoved(std::function<void(Vec2)> callback);
+    // Emitted only on a stationary right-button release, using effective snapping.
+    void setRightClicked(std::function<void(Vec2)> callback);
     void setFinishRequested(std::function<void()> callback);
     void setCancelRequested(std::function<void()> callback);
     void setPreciseInputRequested(std::function<void()> callback);
@@ -202,6 +208,7 @@ protected:
     bool event(QEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
@@ -221,14 +228,17 @@ private:
                       Qt::KeyboardModifiers modifiers = Qt::NoModifier);
     void pointerMove(QPointF position);
     void pointerRelease(QPointF position, Qt::MouseButton button);
+    void resetGesture();
     [[nodiscard]] std::optional<std::pair<Vec2, Vec2>> contentBounds() const;
+    [[nodiscard]] std::optional<QRectF> selectionBounds(const QRectF& viewport) const;
+    void drawSelectionFrame(QPainter& painter, const QRectF& viewport) const;
     [[nodiscard]] bool navigateOverviewMap(QPointF position);
     void drawOverviewMap(QPainter& painter) const;
     [[nodiscard]] QPointF toScreen(Vec2 point, const QRectF& viewport) const;
     [[nodiscard]] Vec2 toModel(QPointF point, const QRectF& viewport) const;
     [[nodiscard]] Vec2 snapped(Vec2 point) const;
     [[nodiscard]] QString hitTest(QPointF point) const;
-    [[nodiscard]] QStringList rectangleHits(const QRectF& rectangle) const;
+    [[nodiscard]] QStringList rectangleHits(const QRectF& rectangle, bool crossing) const;
     [[nodiscard]] std::optional<Vec2> closingAnchor(QPointF point) const;
     [[nodiscard]] Vec2 inputPoint(QPointF point) const;
     void updateCursor(QPointF point);
@@ -272,6 +282,9 @@ private:
     Vec2 m_view_center{0.0, 0.0};
     std::optional<QPointF> m_last_mouse_position;
     bool m_panning{false};
+    Qt::MouseButton m_gesture_button{Qt::NoButton};
+    QPointF m_right_start;
+    bool m_right_dragging{false};
     bool m_overview_dragging{false};
     std::optional<QPointF> m_selection_start;
     QPointF m_selection_end;
@@ -289,6 +302,7 @@ private:
     std::function<void(QStringList, bool)> m_entities_selected;
     std::function<void(QString, double, Vec2)> m_symbol_dropped;
     std::function<void(Vec2)> m_cursor_moved;
+    std::function<void(Vec2)> m_right_clicked;
     std::function<void()> m_finish_requested;
     std::function<void()> m_cancel_requested;
     std::function<void()> m_precise_input_requested;

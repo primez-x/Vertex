@@ -67,23 +67,32 @@ public:
     // representation of the complete snapshot. Exceptions from onError are
     // contained so observers cannot interrupt preparation or replace diagnostics.
     std::function<void(QString)> onEntitySelected;
-    // Ctrl+left-drag requests a translation of a native architectural object.
+    // Explicit Move mode requests a translation of a native architectural object.
     // The callback reports the stable entity ID and a world-space delta in
     // metres. The desktop shell owns the authoritative document transaction;
     // this view only previews the derived presentation and emits the request.
     std::function<void(QString, double, double, double)> onEntityTranslationRequested;
+    // Stationary right release; coordinates are global Qt logical pixels.
+    std::function<void(QPoint)> onContextMenuRequested;
     std::function<void(QString)> onError;
 
     void setEntitySelectedCallback(std::function<void(QString)> callback);
     void setEntityTranslationRequestedCallback(
         std::function<void(QString, double, double, double)> callback);
     void setErrorCallback(std::function<void(QString)> callback);
+    // Arm one plain left drag of the supplied visible architectural entity.
+    // Ctrl+left and middle always pan; right always orbits or opens context actions.
+    [[nodiscard]] bool beginMove(const QString& entity_id);
+    void cancelInteraction();
+    [[nodiscard]] bool isMoveActive() const noexcept;
 
 protected:
+    bool event(QEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;

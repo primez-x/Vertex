@@ -25,6 +25,7 @@
 #include <QGuiApplication>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QKeyEvent>
 #include <QPaintEngine>
 #include <QPaintEvent>
 #include <QResizeEvent>
@@ -153,12 +154,12 @@ public:
     occ::handle<WNT_Window> window;
     std::map<std::string, CachedSolid, std::less<>> solids;
 
-    Qt::MouseButton navigation_button = Qt::NoButton;
+    enum class Gesture { none, select, pan, orbit, move };
+    Gesture gesture = Gesture::none;
+    Qt::MouseButton initiating_button = Qt::NoButton;
     QPoint navigation_start;
     QPointF left_press;
-    bool left_pressed{};
     bool left_moved{};
-    bool left_translate{};
     std::optional<std::string> translation_entity_id;
     struct WorldPoint {
         double x{};
@@ -659,10 +660,7 @@ void NativeModelView::setSnapshot(const DocumentSnapshot& snapshot,
         same_snapshot_content(*m_impl->snapshot, snapshot)) {
         return;
     }
-    m_impl->clear_translation_preview();
-    m_impl->left_pressed = false;
-    m_impl->translation_entity_id.reset();
-    m_impl->translation_start.reset();
+    cancelInteraction();
     m_impl->visible_ids = std::move(visible_ids);
     m_impl->snapshot = snapshot;
     m_impl->rebuild_snapshot();
@@ -672,6 +670,7 @@ void NativeModelView::setSnapshot(const DocumentSnapshot& snapshot,
 }
 
 void NativeModelView::fitAll() {
+    cancelInteraction();
     if (isGeometryPending()) {
         m_impl->fit_requested = true;
         return;
@@ -739,6 +738,46 @@ void NativeModelView::setErrorCallback(std::function<void(QString)> callback) {
     onError = std::move(callback);
 }
 
+bool NativeModelView::beginMove(const QString& entity_id) {
+    cancelInteraction();
+    if (!isReady() || !m_impl->supports_direct_translation(entity_id)) return false;
+    const auto found = m_impl->solids.find(entity_id.toStdString());
+    if (found == m_impl->solids.end() ||
+        !m_impl->context->IsDisplayed(found->second.presentation)) return false;
+    m_impl->translation_entity_id = entity_id.toStdString();
+    setCursor(Qt::SizeAllCursor);
+    return true;
+}
+
+bool NativeModelView::isMoveActive() const noexcept {
+    return m_impl->translation_entity_id.has_value();
+}
+
+void NativeModelView::cancelInteraction() {
+    m_impl->clear_translation_preview();
+    m_impl->gesture = Impl::Gesture::none;
+    m_impl->initiating_button = Qt::NoButton;
+    m_impl->left_moved = false;
+    m_impl->translation_entity_id.reset();
+    m_impl->translation_start.reset();
+    unsetCursor();
+    if (m_impl->native_ready && !m_impl->view.IsNull()) m_impl->view->Redraw();
+}
+
+bool NativeModelView::event(QEvent* event) {
+    if (m_impl && (event->type() == QEvent::UngrabMouse || event->type() == QEvent::Hide ||
+                   event->type() == QEvent::WindowDeactivate || event->type() == QEvent::FocusOut)) {
+        cancelInteraction();
+    }
+    if (event->type() == QEvent::KeyPress &&
+        static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {
+        cancelInteraction();
+        event->accept();
+        return true;
+    }
+    return QWidget::event(event);
+}
+
 void NativeModelView::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
     m_impl->initialize_native_view();
@@ -769,18 +808,23 @@ void NativeModelView::mousePressEvent(QMouseEvent* event) {
     const auto logical_point = event->position();
     const auto point = m_impl->input_point(logical_point);
     setFocus();
-    if (event->button() == Qt::RightButton) {
-        m_impl->navigation_button = Qt::RightButton;
-        m_impl->navigation_start = QPoint(point.x, point.y);
-        m_impl->view->StartRotation(point.x, point.y, 0.4);
-        setCursor(Qt::ClosedHandCursor);
+    if (m_impl->initiating_button != Qt::NoButton) {
         event->accept();
-        return;
+        return; // Extra buttons cannot replace the gesture owner.
     }
-    if (event->button() == Qt::MiddleButton) {
-        m_impl->navigation_button = Qt::MiddleButton;
+    m_impl->left_press = logical_point;
+    m_impl->left_moved = false;
+    if (event->button() == Qt::RightButton || event->button() == Qt::MiddleButton ||
+        (event->button() == Qt::LeftButton && event->modifiers().testFlag(Qt::ControlModifier))) {
+        // Camera changes invalidate an armed Move's view-plane anchor.
+        cancelInteraction();
+        m_impl->initiating_button = event->button();
+        m_impl->gesture = event->button() == Qt::RightButton ? Impl::Gesture::orbit : Impl::Gesture::pan;
         m_impl->navigation_start = QPoint(point.x, point.y);
-        m_impl->view->Pan(0, 0, 1.0, true);
+        if (m_impl->gesture == Impl::Gesture::orbit)
+            m_impl->view->StartRotation(point.x, point.y, 0.4);
+        else
+            m_impl->view->Pan(0, 0, 1.0, true);
         setCursor(Qt::ClosedHandCursor);
         event->accept();
         return;
@@ -790,27 +834,22 @@ void NativeModelView::mousePressEvent(QMouseEvent* event) {
             event->ignore();
             return;
         }
-        m_impl->left_pressed = true;
-        m_impl->left_moved = false;
-        m_impl->left_translate = event->modifiers().testFlag(Qt::ControlModifier);
-        m_impl->translation_entity_id.reset();
+        m_impl->initiating_button = Qt::LeftButton;
+        m_impl->gesture = isMoveActive() ? Impl::Gesture::move : Impl::Gesture::select;
         m_impl->translation_start.reset();
-        m_impl->left_press = logical_point;
-        if (m_impl->left_translate) {
-            // Select immediately so the drag has a stable semantic target and
-            // the inspector follows the object before the first preview.
-            const auto selected_id = m_impl->select_at(point);
-            if (m_impl->supports_direct_translation(selected_id)) {
-                if (const auto start = m_impl->world_point(point)) {
-                    m_impl->translation_entity_id = selected_id.toStdString();
-                    m_impl->translation_start = *start;
-                }
-            }
-        }
+        if (m_impl->gesture == Impl::Gesture::move)
+            m_impl->translation_start = m_impl->world_point(point);
         event->accept();
         return;
     }
     QWidget::mousePressEvent(event);
+}
+
+void NativeModelView::mouseDoubleClickEvent(QMouseEvent* event) {
+    // Qt has already delivered the first click. Consume its double-click
+    // press and trailing release without another selection or Move commit.
+    cancelInteraction();
+    event->accept();
 }
 
 void NativeModelView::mouseMoveEvent(QMouseEvent* event) {
@@ -820,12 +859,21 @@ void NativeModelView::mouseMoveEvent(QMouseEvent* event) {
     }
     const auto logical_point = event->position();
     const auto point = m_impl->input_point(logical_point);
-    if (m_impl->navigation_button == Qt::RightButton) {
-        m_impl->view->Rotation(point.x, point.y);
+    if (m_impl->initiating_button != Qt::NoButton &&
+        !event->buttons().testFlag(m_impl->initiating_button)) {
+        cancelInteraction();
         event->accept();
         return;
     }
-    if (m_impl->navigation_button == Qt::MiddleButton) {
+    if (m_impl->initiating_button != Qt::NoButton &&
+        (logical_point - m_impl->left_press).manhattanLength() >= QApplication::startDragDistance())
+        m_impl->left_moved = true;
+    if (m_impl->gesture == Impl::Gesture::orbit) {
+        if (m_impl->left_moved) m_impl->view->Rotation(point.x, point.y);
+        event->accept();
+        return;
+    }
+    if (m_impl->gesture == Impl::Gesture::pan) {
         const auto delta = QPoint(point.x, point.y) - m_impl->navigation_start;
         // V3d::Pan accepts view-plane displacement (positive y is up),
         // unlike picking/rotation/zoom mouse positions measured from the top.
@@ -833,12 +881,8 @@ void NativeModelView::mouseMoveEvent(QMouseEvent* event) {
         event->accept();
         return;
     }
-    if (m_impl->left_pressed) {
-        const auto delta = logical_point - m_impl->left_press;
-        if (delta.manhattanLength() >= QApplication::startDragDistance()) {
-            m_impl->left_moved = true;
-        }
-        if (m_impl->left_translate && m_impl->left_moved &&
+    if (m_impl->initiating_button == Qt::LeftButton) {
+        if (m_impl->gesture == Impl::Gesture::move && m_impl->left_moved &&
             m_impl->translation_entity_id.has_value()) {
             if (const auto current = m_impl->world_point(point)) {
                 m_impl->preview_translation(*current);
@@ -859,16 +903,25 @@ void NativeModelView::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void NativeModelView::mouseReleaseEvent(QMouseEvent* event) {
-    const auto point = m_impl->input_point(event->position());
-    if (event->button() == m_impl->navigation_button) {
-        m_impl->navigation_button = Qt::NoButton;
-        unsetCursor();
+    if (event->button() != m_impl->initiating_button || event->button() == Qt::NoButton) {
         event->accept();
         return;
     }
-    if (event->button() == Qt::LeftButton && m_impl->left_pressed) {
-        const auto was_click = !m_impl->left_moved;
-        const auto was_translation = m_impl->left_translate && !was_click &&
+    const auto point = m_impl->input_point(event->position());
+    if ((event->position() - m_impl->left_press).manhattanLength() >= QApplication::startDragDistance())
+        m_impl->left_moved = true;
+    if (m_impl->gesture == Impl::Gesture::orbit || m_impl->gesture == Impl::Gesture::pan) {
+        const bool context_click = m_impl->gesture == Impl::Gesture::orbit && !m_impl->left_moved;
+        const auto global_position = event->globalPosition().toPoint();
+        cancelInteraction();
+        const auto callback = onContextMenuRequested;
+        if (context_click && callback) callback(global_position);
+        event->accept();
+        return;
+    }
+    if (event->button() == Qt::LeftButton) {
+        const auto was_click = m_impl->gesture == Impl::Gesture::select && !m_impl->left_moved;
+        const auto was_translation = m_impl->gesture == Impl::Gesture::move && m_impl->left_moved &&
                                      m_impl->translation_entity_id.has_value() &&
                                      m_impl->translation_start.has_value();
         std::optional<NativeModelView::Impl::WorldPoint> end_world;
@@ -877,12 +930,7 @@ void NativeModelView::mouseReleaseEvent(QMouseEvent* event) {
         }
         const auto translation_id = m_impl->translation_entity_id;
         const auto translation_start = m_impl->translation_start;
-        m_impl->clear_translation_preview();
-        m_impl->left_pressed = false;
-        m_impl->left_moved = false;
-        m_impl->left_translate = false;
-        m_impl->translation_entity_id.reset();
-        m_impl->translation_start.reset();
+        cancelInteraction();
         if (was_translation && end_world.has_value() && translation_id.has_value() &&
             translation_start.has_value()) {
             const auto dx = end_world->x - translation_start->x;
@@ -896,8 +944,6 @@ void NativeModelView::mouseReleaseEvent(QMouseEvent* event) {
             }
         }
         if (was_click) {
-            // Ctrl+click already selected the target on press; selecting again
-            // keeps ordinary click semantics for non-architectural solids.
             m_impl->select_at(point);
         }
         event->accept();
@@ -916,6 +962,7 @@ void NativeModelView::wheelEvent(QWheelEvent* event) {
         delta = event->pixelDelta().y() * 8;
     }
     if (delta != 0) {
+        cancelInteraction();
         const auto point = m_impl->input_point(event->position());
         const auto movement = std::clamp(delta / 8, -120, 120);
         const auto native_movement = qRound(static_cast<qreal>(movement) * m_impl->input_scale());

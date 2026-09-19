@@ -89,10 +89,41 @@ int main() {
                     normalized_preview(nominal("service-counter")),
             "Named symbol families must retain distinguishable vector motifs");
     const auto repeated = default_symbol_catalog();
+    require(std::abs(nominal("sofa").width_metres - 2.1) < 1e-12 &&
+                std::abs(nominal("sofa").depth_metres - 0.9) < 1e-12 &&
+                std::abs(nominal("double-bed").width_metres - 1.4) < 1e-12 &&
+                std::abs(nominal("double-bed").depth_metres - 2.0) < 1e-12 &&
+                std::abs(nominal("toilet").width_metres - 0.4) < 1e-12 &&
+                std::abs(nominal("toilet").depth_metres - 0.7) < 1e-12,
+            "Artwork refinements must preserve nominal real-world footprints");
+    // Upholstery and sanitary ware need actual curved silhouettes, rather than
+    // the old shared box with family decorations drawn over it.
+    for (const auto* family : {"sofa", "armchair", "chair", "single-bed", "double-bed",
+                               "toilet", "bidet", "bathtub", "sink"}) {
+        const auto strokes = normalized_preview(nominal(family));
+        require(std::any_of(strokes.begin(), strokes.end(), [](const auto& stroke) {
+                    return stroke[0] != stroke[2] && stroke[1] != stroke[3];
+                }), "Soft furniture and bowls must retain curved outline segments");
+        require(std::none_of(strokes.begin(), strokes.end(), [](const auto& stroke) {
+                    return std::abs(stroke[0]) == 1000 && std::abs(stroke[2]) == 1000 &&
+                           std::abs(stroke[1]) == 1000 && std::abs(stroke[3]) == 1000;
+                }), "Curved families must not regain a generic rectangular footprint overlay");
+    }
+    std::set<std::vector<std::array<long long, 4>>> residential_signatures;
+    for (const auto* family : {"sofa", "armchair", "chair", "bench", "single-bed", "double-bed",
+                               "desk", "dining-table", "coffee-table", "side-table", "toilet",
+                               "bidet", "urinal", "sink", "double-sink", "bathtub", "shower",
+                               "range", "refrigerator", "dishwasher", "washer", "dryer"})
+        require(residential_signatures.insert(normalized_preview(nominal(family))).second,
+                "Residential family silhouettes must remain structurally distinguishable");
     for (std::size_t i=0;i<catalog.size();++i) {
         require(catalog[i].id == repeated[i].id && catalog[i].width_metres == repeated[i].width_metres,
                 "Catalog must be deterministic");
         require(!placed_symbol_preview(catalog[i],{}).empty(),"Every catalog entry must produce preview strokes");
+        require(normalized_preview(catalog[i]) == normalized_preview(repeated[i]),
+                "All vector coordinates must be deterministic");
+        require(normalized_preview(catalog[i]) == normalized_preview(nominal(catalog[i].family.c_str())),
+                "Dimension variants must retain their family structure");
     }
     const auto manifest = encode_symbol_catalog_manifest(catalog);
     require(manifest.at("schema_version") == 1 && manifest.at("catalog_id") == "vertex.symbol-catalog",

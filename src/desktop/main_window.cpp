@@ -69,6 +69,7 @@
 #include <QClipboard>
 #include <QCoreApplication>
 #include <QCryptographicHash>
+#include <QCursor>
 #include <QDesktopServices>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -91,6 +92,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QKeySequenceEdit>
+#include <QListView>
 #include <QListWidget>
 #include <QDrag>
 #include <QMimeData>
@@ -389,11 +391,20 @@ QIcon modern_toolbar_icon(const char* paths) {
         "<g fill='none' stroke='#52657d' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'>") +
         QByteArray(paths) + QByteArrayLiteral("</g></svg>");
     QSvgRenderer renderer(svg);
-    QPixmap pixmap(24, 24);
-    pixmap.fill(Qt::transparent);
-    QPainter painter(&pixmap);
-    renderer.render(&painter);
-    return QIcon(pixmap);
+    QIcon icon;
+    constexpr int logical_size = 18;
+    for (const qreal ratio : {1.0, 2.0, 3.0}) {
+        const auto pixels = qRound(logical_size * ratio);
+        QPixmap pixmap(pixels, pixels);
+        pixmap.setDevicePixelRatio(ratio);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing);
+        renderer.render(&painter, QRectF(0, 0, logical_size, logical_size));
+        painter.end();
+        icon.addPixmap(pixmap);
+    }
+    return icon;
 }
 
 QString id_from(std::string value) {
@@ -1801,6 +1812,7 @@ bool has_entity(const Document& document, const QString& entity_id) {
 }
 
 constexpr int visibility_type_role = Qt::UserRole + 1;
+constexpr int symbol_family_role = Qt::UserRole + 2;
 
 bool is_visibility_container_type(std::string_view type) {
     return type == "floor" || type == "layer";
@@ -3251,11 +3263,11 @@ public:
             QWidget { font-size: 13px; }
             QDialog { background: $background; }
             QToolBar#primaryToolbar { background: $surface; border: 0; border-bottom: 1px solid $border;
-                       padding: 0 2px; spacing: 2px; min-height: 34px; max-height: 34px; }
+                       padding: 0 2px; spacing: 1px; min-height: 28px; max-height: 28px; }
             QToolBar::separator { background: $border; width: 1px; margin: 0 1px; }
             QPushButton, QToolButton { color: $foreground; background: $surface;
                 border: 1px solid $border; border-radius: 8px; padding: 8px 11px; }
-            QToolBar QToolButton { border-color: transparent; border-radius: 4px; padding: 3px 5px; min-height: 24px; max-height: 24px; }
+            QToolBar QToolButton { border-color: transparent; border-radius: 3px; padding: 1px 4px; min-height: 20px; max-height: 20px; }
             QToolBar QToolButton:hover { background: $selection; border-color: $selection; }
             QToolBar QToolButton:checked { background: $selection; color: $accent; border-color: $accent; }
             QWidget#toolPanel QToolButton { padding: 3px; min-height: 28px; max-height: 28px; }
@@ -3269,7 +3281,7 @@ public:
                 border: 1px solid $border; border-radius: 8px; padding: 5px 10px; min-height: 20px; }
             QComboBox { padding-right: 24px; }
             QComboBox::drop-down { border: 0; width: 24px; }
-            QToolBar QComboBox { font-size: 11px; border-radius: 3px; padding: 0 14px 0 4px; min-height: 16px; max-height: 16px; }
+            QToolBar QComboBox { font-size: 11px; border-radius: 3px; padding: 0 14px 0 4px; min-height: 14px; max-height: 14px; }
             QToolBar QComboBox::drop-down { width: 12px; }
             QComboBox QAbstractItemView, QMenu { background: $surface; color: $foreground;
                 border: 1px solid $border; selection-background-color: $selection;
@@ -14431,210 +14443,148 @@ public:
         }
     }
 
-    void showAnnotationEditor() {
-        if (m_symbol_library_dialog) {
-            m_symbol_library_dialog->show();
-            m_symbol_library_dialog->raise();
+    void populateSymbolLibrary() {
+        if (!m_symbol_category || !m_symbol_search || !m_symbol_list) return;
+        const auto previous_family = m_symbol_list->currentItem()
+            ? m_symbol_list->currentItem()->data(symbol_family_role).toString() : QString{};
+        const auto query = m_symbol_search->text().trimmed().toLower().toStdString();
+        const auto category = m_symbol_category->currentData().toString().toStdString();
+        const auto filtered = filter_symbol_catalog(default_symbol_catalog(), query, category);
+        const QSignalBlocker blocker(m_symbol_list);
+        m_symbol_list->clear();
+        std::set<std::string> rendered_families;
+        for (const auto& first_variant : filtered) {
+            if (!rendered_families.insert(first_variant.family).second) continue;
+            const SymbolDefinition* definition = &first_variant;
+            if (const auto chosen = m_symbol_variant_by_family.find(first_variant.family);
+                chosen != m_symbol_variant_by_family.end()) {
+                if (const auto match = std::find_if(filtered.begin(), filtered.end(), [&](const auto& candidate) {
+                        return candidate.family == first_variant.family && candidate.id == chosen->second;
+                    }); match != filtered.end()) definition = &*match;
+            } else if (const auto nominal = std::find_if(filtered.begin(), filtered.end(), [&](const auto& candidate) {
+                           return candidate.family == first_variant.family &&
+                                  QString::fromStdString(candidate.id).endsWith(QStringLiteral("-w2-d2"));
+                       }); nominal != filtered.end()) {
+                definition = &*nominal;
+            }
+            auto label = QString::fromStdString(definition->family);
+            label.replace(QLatin1Char('-'), QLatin1Char(' '));
+            if (!label.isEmpty()) label[0] = label[0].toUpper();
+            auto* entry = new QListWidgetItem(label, m_symbol_list);
+
+            QPixmap thumbnail(136, 108);
+            thumbnail.setDevicePixelRatio(2.0);
+            thumbnail.fill(QColor(248, 250, 253));
+            QPainter painter(&thumbnail);
+            painter.setRenderHint(QPainter::Antialiasing, true);
+            painter.setPen(QPen(QColor(42, 61, 82), 1.25,
+                                Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            double left = std::numeric_limits<double>::infinity();
+            double right = -std::numeric_limits<double>::infinity();
+            double bottom = std::numeric_limits<double>::infinity();
+            double top = -std::numeric_limits<double>::infinity();
+            for (const auto& stroke : definition->preview) {
+                for (const auto point : {stroke.start, stroke.end}) {
+                    left = std::min(left, point.x);
+                    right = std::max(right, point.x);
+                    bottom = std::min(bottom, point.y);
+                    top = std::max(top, point.y);
+                }
+            }
+            if (!std::isfinite(left) || right <= left || top <= bottom) {
+                left = -definition->width_metres * 0.5;
+                right = definition->width_metres * 0.5;
+                bottom = -definition->depth_metres * 0.5;
+                top = definition->depth_metres * 0.5;
+            }
+            const auto factor = std::min(58.0 / (right - left), 44.0 / (top - bottom));
+            const auto centre_x = (left + right) * 0.5;
+            const auto centre_y = (bottom + top) * 0.5;
+            const auto point = [factor, centre_x, centre_y](Vec2 value) {
+                return QPointF(34.0 + (value.x - centre_x) * factor,
+                               27.0 - (value.y - centre_y) * factor);
+            };
+            for (const auto& stroke : definition->preview)
+                painter.drawLine(point(stroke.start), point(stroke.end));
+            painter.end();
+
+            entry->setIcon(QIcon(thumbnail));
+            entry->setData(Qt::UserRole, QString::fromStdString(definition->id));
+            entry->setData(symbol_family_role, QString::fromStdString(definition->family));
+            entry->setSizeHint(QSize(112, 82));
+            entry->setToolTip(QStringLiteral("%1 × %2 m\nDrag onto the plan, or double-click then click to place.")
+                                  .arg(QString::number(definition->width_metres, 'g', 4))
+                                  .arg(QString::number(definition->depth_metres, 'g', 4)));
+            if (entry->data(symbol_family_role).toString() == previous_family)
+                m_symbol_list->setCurrentItem(entry);
+        }
+        if (!m_symbol_list->currentItem() && m_symbol_list->count() > 0)
+            m_symbol_list->setCurrentRow(0);
+        populateSymbolVariants(m_symbol_list->currentItem());
+    }
+
+    void populateSymbolVariants(QListWidgetItem* item) {
+        if (!m_symbol_size) return;
+        const QSignalBlocker blocker(m_symbol_size);
+        m_symbol_size->clear();
+        if (!item) {
+            m_symbol_size->setEnabled(false);
             return;
         }
-        auto* library_dialog = new QDialog(owner, Qt::Tool);
-        m_symbol_library_dialog = library_dialog;
-        auto& dialog = *library_dialog;
-        dialog.setAttribute(Qt::WA_DeleteOnClose);
-        dialog.setObjectName(QStringLiteral("symbolLibraryDialog"));
-        styleDialog(dialog);
-        dialog.setWindowTitle(QStringLiteral("Symbols & components library"));
-        dialog.setModal(false);
-        dialog.resize(460, 680);
-        auto* layout = new QVBoxLayout(&dialog);
-        auto* form = new QFormLayout;
-        auto* label_template = new QComboBox(&dialog);
-        label_template->setObjectName(QStringLiteral("annotationLabelTemplate"));
-        for (const auto& definition : default_label_templates()) {
-            label_template->addItem(
-                QString::fromStdString(definition.content),
-                QString::fromStdString(definition.id));
+        const auto family = item->data(symbol_family_role).toString().toStdString();
+        const auto selected_id = item->data(Qt::UserRole).toString();
+        int selected_index = -1;
+        for (const auto& definition : default_symbol_catalog()) {
+            if (definition.family != family) continue;
+            auto label = QStringLiteral("%1 × %2 m")
+                             .arg(QString::number(definition.width_metres, 'g', 4))
+                             .arg(QString::number(definition.depth_metres, 'g', 4));
+            if (QString::fromStdString(definition.id).endsWith(QStringLiteral("-w2-d2")))
+                label += QStringLiteral(" - Standard");
+            m_symbol_size->addItem(label, QString::fromStdString(definition.id));
+            if (QString::fromStdString(definition.id) == selected_id)
+                selected_index = m_symbol_size->count() - 1;
         }
-        auto* label_content = new QLineEdit(&dialog);
-        label_content->setObjectName(QStringLiteral("annotationLabelContent"));
-        label_content->setPlaceholderText(QStringLiteral("Uses the template text when empty"));
-        auto* label_x = new QLineEdit(QStringLiteral("0"), &dialog);
-        auto* label_y = new QLineEdit(QStringLiteral("0"), &dialog);
-        label_x->setObjectName(QStringLiteral("annotationLabelX"));
-        label_y->setObjectName(QStringLiteral("annotationLabelY"));
-        form->addRow(QStringLiteral("Label template"), label_template);
-        form->addRow(QStringLiteral("Label text"), label_content);
-        form->addRow(QStringLiteral("Label X (m)"), label_x);
-        form->addRow(QStringLiteral("Label Y (m)"), label_y);
+        m_symbol_size->setEnabled(m_symbol_size->count() > 0);
+        if (selected_index >= 0) m_symbol_size->setCurrentIndex(selected_index);
+    }
 
-        auto* symbol = new QComboBox(&dialog);
-        symbol->setObjectName(QStringLiteral("annotationSymbol"));
-        symbol->setAccessibleName(QStringLiteral("Drawing symbol"));
-        auto* symbol_category = new QComboBox(&dialog);
-        symbol_category->setObjectName(QStringLiteral("annotationSymbolCategory"));
-        symbol_category->setAccessibleName(QStringLiteral("Drawing symbol category"));
-        auto* symbol_search = new QLineEdit(&dialog);
-        symbol_search->setObjectName(QStringLiteral("annotationSymbolSearch"));
-        symbol_search->setAccessibleName(QStringLiteral("Search drawing symbols"));
-        symbol_search->setPlaceholderText(QStringLiteral("Search family or category"));
-        auto* symbol_list = new SymbolLibraryList(&dialog);
-        symbol_list->setObjectName(QStringLiteral("symbolLibraryItems"));
-        symbol_list->setAccessibleName(QStringLiteral("Drag a symbol onto the plan"));
-        symbol_list->setDragEnabled(true);
-        symbol_list->setDragDropMode(QAbstractItemView::DragOnly);
-        symbol_list->setMinimumHeight(150);
-        symbol_list->setIconSize(QSize(48, 48));
-        symbol_list->setProperty("symbolScale", 1.0);
-        const auto catalog = default_symbol_catalog();
-        std::set<std::string> symbol_categories;
-        for (const auto& definition : catalog) symbol_categories.insert(definition.category);
-        symbol_category->addItem(QStringLiteral("All categories"), QString());
-        for (const auto& category : symbol_categories)
-            symbol_category->addItem(QString::fromStdString(category),
-                                     QString::fromStdString(category));
-        const auto populate_symbols = [symbol, symbol_list, symbol_category, symbol_search, catalog] {
-            const auto previous = symbol->currentData().toString();
-            const auto query = symbol_search->text().trimmed().toLower().toStdString();
-            const auto category = symbol_category->currentData().toString().toStdString();
-            const auto filtered = filter_symbol_catalog(catalog, query, category);
-            const QSignalBlocker blocker(*symbol);
-            symbol->clear();
-            const QSignalBlocker list_blocker(symbol_list);
-            symbol_list->clear();
-            for (const auto& definition : filtered) {
-                symbol->addItem(QStringLiteral("%1  (%2 × %3 m)")
-                                     .arg(QString::fromStdString(definition.family))
-                                     .arg(QString::number(definition.width_metres, 'g', 4))
-                                     .arg(QString::number(definition.depth_metres, 'g', 4)),
-                                 QString::fromStdString(definition.id));
-                auto* entry = new QListWidgetItem(symbol->itemText(symbol->count() - 1), symbol_list);
-                QPixmap thumbnail(64, 64);
-                thumbnail.fill(QColor(247, 250, 255));
-                QPainter painter(&thumbnail);
-                painter.setRenderHint(QPainter::Antialiasing);
-                painter.setPen(QPen(QColor(37, 75, 125), 1.6));
-                const double extent = std::max(definition.width_metres, definition.depth_metres);
-                const double factor = extent > 0.0 ? 52.0 / extent : 1.0;
-                for (const auto& stroke : definition.preview) {
-                    const auto point = [factor, &definition](Vec2 value) {
-                        return QPointF(32.0 + (value.x - definition.anchor.x) * factor,
-                                       32.0 - (value.y - definition.anchor.y) * factor);
-                    };
-                    painter.drawLine(point(stroke.start), point(stroke.end));
-                }
-                painter.end();
-                entry->setIcon(QIcon(thumbnail));
-                entry->setData(Qt::UserRole, QString::fromStdString(definition.id));
-                entry->setToolTip(QStringLiteral("Drag onto the plan to place. Dimensions shown are before the size multiplier."));
-            }
-            const auto restored = symbol->findData(previous);
-            if (restored >= 0) symbol->setCurrentIndex(restored);
-            else if (symbol->count() > 0) symbol->setCurrentIndex(0);
-            symbol_list->setCurrentRow(symbol->currentIndex());
-        };
-        QObject::connect(symbol_list, &QListWidget::currentRowChanged, &dialog,
-                         [symbol](int row) { symbol->setCurrentIndex(row); });
-        QObject::connect(symbol_category, &QComboBox::currentIndexChanged,
-                         &dialog, populate_symbols);
-        QObject::connect(symbol_search, &QLineEdit::textChanged, &dialog, populate_symbols);
-        populate_symbols();
-        auto* symbol_x = new QLineEdit(QStringLiteral("0"), &dialog);
-        auto* symbol_y = new QLineEdit(QStringLiteral("0"), &dialog);
-        symbol_x->setObjectName(QStringLiteral("annotationSymbolX"));
-        symbol_y->setObjectName(QStringLiteral("annotationSymbolY"));
-        form->addRow(QStringLiteral("Symbol category"), symbol_category);
-        form->addRow(QStringLiteral("Find symbol"), symbol_search);
-        form->addRow(QStringLiteral("Drag to plan"), symbol_list);
-        symbol->hide();
-        form->addRow(QStringLiteral("Symbol X (m)"), symbol_x);
-        form->addRow(QStringLiteral("Symbol Y (m)"), symbol_y);
-        auto* symbol_scale = new QDoubleSpinBox(&dialog);
-        symbol_scale->setObjectName(QStringLiteral("annotationSymbolScale"));
-        symbol_scale->setRange(0.001, 100.0);
-        symbol_scale->setDecimals(3);
-        symbol_scale->setValue(1.0);
-        symbol_scale->setSingleStep(0.1);
-        QObject::connect(symbol_scale, &QDoubleSpinBox::valueChanged, &dialog,
-                         [symbol_list](double value) { symbol_list->setProperty("symbolScale", value); });
-        form->addRow(QStringLiteral("Size multiplier"), symbol_scale);
-        auto* library_help = new QLabel(QStringLiteral(
-            "Drag a symbol onto the plan, or choose Place on canvas and click its position. Adjust the size multiplier before placing. Selection properties let you move, rotate or resize it later."), &dialog);
-        library_help->setWordWrap(true);
-        form->addRow(library_help);
-        layout->addLayout(form);
+    void selectSymbolVariant(int index) {
+        if (!m_symbol_list || !m_symbol_size || index < 0) return;
+        auto* item = m_symbol_list->currentItem();
+        if (!item) return;
+        const auto family = item->data(symbol_family_role).toString().toStdString();
+        const auto id = m_symbol_size->itemData(index).toString().toStdString();
+        if (family.empty() || id.empty()) return;
+        m_symbol_variant_by_family[family] = id;
+        populateSymbolLibrary();
+    }
 
-        auto* actions = new QHBoxLayout;
-        auto* add_label = new QPushButton(QStringLiteral("Add label"), &dialog);
-        auto* add_symbol = new QPushButton(QStringLiteral("Place symbol at X / Y"), &dialog);
-        auto* place_on_canvas = new QPushButton(QStringLiteral("Place on canvas"), &dialog);
-        place_on_canvas->setObjectName(QStringLiteral("placeSymbolOnCanvas"));
-        layout->addWidget(place_on_canvas);
-        add_label->setObjectName(QStringLiteral("addAnnotationLabel"));
-        add_symbol->setObjectName(QStringLiteral("addAnnotationSymbol"));
-        actions->addWidget(add_label);
-        actions->addWidget(add_symbol);
-        actions->addStretch();
-        layout->addLayout(actions);
-        auto* status = new QLabel(&dialog);
-        status->setObjectName(QStringLiteral("annotationEditorStatus"));
-        m_symbol_library_status = status;
-        status->setWordWrap(true);
-        layout->addWidget(status);
-        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
-        layout->addWidget(buttons);
-        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-        const auto parse_position = [](const QLineEdit* x, const QLineEdit* y) {
-            bool x_ok = false;
-            bool y_ok = false;
-            const auto point = Vec2{x->text().trimmed().toDouble(&x_ok),
-                                    y->text().trimmed().toDouble(&y_ok)};
-            if (!x_ok || !y_ok || !std::isfinite(point.x) || !std::isfinite(point.y)) {
-                throw std::invalid_argument("Annotation coordinates must be finite metres.");
-            }
-            return point;
-        };
-        QObject::connect(add_label, &QPushButton::clicked, &dialog, [this, label_template,
-                                                                      label_content, label_x, label_y,
-                                                                      status, parse_position] {
-            try {
-                const auto position = parse_position(label_x, label_y);
-                const auto id = createAnnotationLabel(label_template->currentData().toString(),
-                                                       label_content->text(), position);
-                if (id.isEmpty()) throw std::invalid_argument(lastError().toStdString());
-                status->setText(QStringLiteral("Added label %1").arg(id));
-            } catch (const std::exception& error) {
-                status->setText(QStringLiteral("Label: %1").arg(QString::fromUtf8(error.what())));
-            }
-        });
-        QObject::connect(add_symbol, &QPushButton::clicked, &dialog, [this, symbol,
-                                                                       symbol_x, symbol_y, symbol_scale, status,
-                                                                       parse_position] {
-            try {
-                const auto position = parse_position(symbol_x, symbol_y);
-                const auto id = createAnnotationSymbol(symbol->currentData().toString(), position, symbol_scale->value());
-                if (id.isEmpty()) throw std::invalid_argument(lastError().toStdString());
-                status->setText(QStringLiteral("Added symbol %1").arg(id));
-            } catch (const std::exception& error) {
-                status->setText(QStringLiteral("Symbol: %1").arg(QString::fromUtf8(error.what())));
-            }
-        });
-        QObject::connect(place_on_canvas, &QPushButton::clicked, &dialog,
-                         [this, symbol, symbol_scale, status] {
-            if (symbol->currentData().toString().isEmpty()) {
-                status->setText(QStringLiteral("Choose a symbol first."));
-                return;
-            }
-            setTool(CanvasTool::select);
-            if (m_tool != CanvasTool::select) return;
-            m_pending_symbol_id = symbol->currentData().toString();
-            m_pending_symbol_scale = symbol_scale->value();
-            m_symbol_placement_document = m_document;
-            status->setText(QStringLiteral("Click the plan to place %1. Esc cancels.").arg(symbol->currentText()));
-            m_measurementCanvas->setCursor(Qt::CrossCursor);
-            m_architecturalCanvas->setCursor(Qt::CrossCursor);
-        });
-        QObject::connect(&dialog, &QDialog::finished, owner, [this] { cancelSymbolPlacement(); });
-        dialog.show();
+    void armSymbolPlacement(QListWidgetItem* item) {
+        if (!item) return;
+        const auto id = item->data(Qt::UserRole).toString();
+        if (id.isEmpty()) return;
+        if (m_boundary_session) {
+            m_symbol_library_status->setText(
+                QStringLiteral("Finish or cancel the current boundary before placing a component."));
+            return;
+        }
+        setTool(CanvasTool::select);
+        if (m_tool != CanvasTool::select) return;
+        m_pending_symbol_id = id;
+        m_pending_symbol_scale = 1.0;
+        m_symbol_placement_document = m_document;
+        m_symbol_library_status->setText(
+            QStringLiteral("Click the plan to place %1. Esc cancels.").arg(item->text()));
+        m_measurementCanvas->setCursor(Qt::CrossCursor);
+        m_architecturalCanvas->setCursor(Qt::CrossCursor);
+    }
+
+    void showAnnotationEditor() {
+        if (m_symbol_search) {
+            m_symbol_search->setFocus(Qt::ShortcutFocusReason);
+            m_symbol_search->selectAll();
+        }
     }
 
     void cancelSymbolPlacement() {
@@ -14651,7 +14601,7 @@ public:
             const auto created = createAnnotationSymbol(id, point, scale);
             if (m_symbol_library_status)
                 m_symbol_library_status->setText(created.isEmpty() ? lastError() :
-                    QStringLiteral("Symbol placed. Drag another from the library, or edit Selection properties."));
+                    QStringLiteral("Component placed. Select it to resize, rotate or move it."));
         }
     }
 
@@ -16733,7 +16683,8 @@ private:
             toolbar_layout->setSpacing(1);
         }
         // One compact row with readable icons and usable mouse targets.
-        toolbar->setMinimumHeight(34);
+        toolbar->setMinimumHeight(28);
+        toolbar->setMaximumHeight(28);
         const auto add_toolbar_action = [this, toolbar](const QString& label, const char* icon_paths) {
             auto* action = toolbar->addAction(modern_toolbar_icon(icon_paths), label);
             action->setToolTip(label);
@@ -17126,37 +17077,15 @@ private:
         auto* navigator_layout = new QVBoxLayout(navigator_panel);
         navigator_layout->setContentsMargins(10, 10, 10, 10);
         navigator_layout->setSpacing(6);
-        auto* drawing_layer_heading = new QLabel(QStringLiteral("DRAWING LAYER"), navigator_panel);
-        drawing_layer_heading->setObjectName(QStringLiteral("panelHeading"));
-        navigator_layout->addWidget(drawing_layer_heading);
+        // The project tree is the drawing-context control. Keep the legacy
+        // objects hidden for compatibility with older automation while
+        // removing the duplicated layer selector and breadcrumb from view.
         m_drawing_layer_combo = new QComboBox(navigator_panel);
         m_drawing_layer_combo->setObjectName(QStringLiteral("drawingLayer"));
-        m_drawing_layer_combo->setMinimumWidth(0);
-        m_drawing_layer_combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-        m_drawing_layer_combo->setToolTip(QStringLiteral(
-            "Choose the destination for new geometry. View filters affect only plan and 3D "
-            "visibility; drawing remains allowed on hidden layers. Floor association does not "
-            "offset an object's world elevation."));
-        navigator_layout->addWidget(m_drawing_layer_combo);
+        m_drawing_layer_combo->hide();
         m_drawing_context_label = new QLabel(navigator_panel);
         m_drawing_context_label->setObjectName(QStringLiteral("drawingContext"));
-        m_drawing_context_label->setWordWrap(true);
-        m_drawing_context_label->setTextFormat(Qt::PlainText);
-        navigator_layout->addWidget(m_drawing_context_label);
-        auto* organize_button = new QToolButton(navigator_panel);
-        organize_button->setObjectName(QStringLiteral("organizeProject"));
-        organize_button->setText(QStringLiteral("Add building / floor / layer"));
-        organize_button->setToolButtonStyle(Qt::ToolButtonTextOnly);
-        organize_button->setPopupMode(QToolButton::InstantPopup);
-        auto* organize_menu = new QMenu(organize_button);
-        for (const auto& type : {"building", "floor", "layer"}) {
-            auto* action = organize_menu->addAction(QStringLiteral("Add %1…").arg(QString::fromUtf8(type)));
-            QObject::connect(action, &QAction::triggered, owner, [this, type] { showOrganizationDialog(type); });
-        }
-        auto* rename_action = organize_menu->addAction(QStringLiteral("Rename selected…"));
-        QObject::connect(rename_action, &QAction::triggered, owner, [this] { showOrganizationDialog("rename"); });
-        organize_button->setMenu(organize_menu);
-        navigator_layout->addWidget(organize_button);
+        m_drawing_context_label->hide();
         auto* phase_heading = new QLabel(QStringLiteral("DESIGN PHASE"), navigator_panel);
         m_phase_heading = phase_heading;
         phase_heading->setObjectName(QStringLiteral("phaseHeading"));
@@ -17175,14 +17104,6 @@ private:
         navigator_layout->addWidget(manage_phases);
         QObject::connect(manage_phases, &QPushButton::clicked, owner,
                          [this] { showRemodelingAlternatives(); });
-        auto* library = new QPushButton(QStringLiteral("Symbols && components…"), navigator_panel);
-        library->setObjectName(QStringLiteral("symbolLibrary"));
-        library->setToolTip(QStringLiteral("Search furniture, fixtures and drawing symbols; choose a size and placement."));
-        navigator_layout->addWidget(library);
-        QObject::connect(library, &QPushButton::clicked, owner, [this] { showAnnotationEditor(); });
-        QObject::connect(m_drawing_layer_combo, &QComboBox::activated, owner, [this](int index) {
-            setActiveLayer(m_drawing_layer_combo->itemData(index).toString());
-        });
         QObject::connect(m_model_phase_combo, &QComboBox::activated, owner, [this](int index) {
             if (m_model_phase_combo->itemData(index).isValid()) {
                 (void)selectRemodelingAlternative(m_model_phase_combo->itemData(index).toString());
@@ -17194,6 +17115,11 @@ private:
         navigator_layout->addWidget(m_navigator, 1);
         m_navigator->setObjectName(QStringLiteral("projectNavigator"));
         m_navigator->setHeaderHidden(true);
+        m_navigator->setColumnCount(2);
+        m_navigator->header()->setStretchLastSection(false);
+        m_navigator->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+        m_navigator->header()->setSectionResizeMode(1, QHeaderView::Fixed);
+        m_navigator->setColumnWidth(1, 28);
         m_navigator->setItemDelegate(new VisibilityEyeDelegate(m_navigator));
         m_navigator->setIndentation(14);
         m_navigator->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -17210,12 +17136,19 @@ private:
                     return;
                 }
                 const auto id = item->data(0, Qt::UserRole).toString();
+                const auto type = item->data(0, visibility_type_role).toString();
                 const auto document = m_document;
                 // Defer rebuilding the tree until Qt finishes its keyboard or
                 // selection event; never retain a pointer to the old item.
-                QTimer::singleShot(0, owner, [this, id, document] {
-                    if (m_document == document && !id.isEmpty() && id != m_selected_id &&
-                        (has_entity(*m_document, id) || annotation_parent_for_child(m_document->snapshot(), id.toStdString()))) selectEntity(id);
+                QTimer::singleShot(0, owner, [this, id, type, document] {
+                    if (m_document != document || id.isEmpty()) return;
+                    if (type == QStringLiteral("layer")) {
+                        (void)setActiveLayer(id);
+                    } else if (id != m_selected_id &&
+                               (has_entity(*m_document, id) ||
+                                annotation_parent_for_child(m_document->snapshot(), id.toStdString()))) {
+                        selectEntity(id);
+                    }
                 });
             });
         QObject::connect(m_navigator, &QTreeWidget::itemClicked, owner,
@@ -17244,7 +17177,100 @@ private:
                              });
                          });
 
+        auto* components_header = new QWidget(navigator_panel);
+        auto* components_header_layout = new QHBoxLayout(components_header);
+        components_header_layout->setContentsMargins(0, 4, 0, 0);
+        components_header_layout->setSpacing(4);
+        auto* components_heading = new QLabel(QStringLiteral("COMPONENTS"), components_header);
+        components_heading->setObjectName(QStringLiteral("panelHeading"));
+        components_header_layout->addWidget(components_heading);
+        components_header_layout->addStretch();
+        auto* text_button = new QToolButton(components_header);
+        text_button->setText(QStringLiteral("+ Text"));
+        text_button->setToolTip(QStringLiteral("Create a text label at the current cursor position"));
+        text_button->setAutoRaise(true);
+        components_header_layout->addWidget(text_button);
+        navigator_layout->addWidget(components_header);
+
+        m_symbol_category = new QComboBox(navigator_panel);
+        m_symbol_category->setObjectName(QStringLiteral("annotationSymbolCategory"));
+        m_symbol_category->setAccessibleName(QStringLiteral("Component category"));
+        m_symbol_search = new QLineEdit(navigator_panel);
+        m_symbol_search->setObjectName(QStringLiteral("annotationSymbolSearch"));
+        m_symbol_search->setAccessibleName(QStringLiteral("Search components"));
+        m_symbol_search->setPlaceholderText(QStringLiteral("Search components"));
+        auto* symbol_filters = new QHBoxLayout;
+        symbol_filters->setContentsMargins(0, 0, 0, 0);
+        symbol_filters->setSpacing(5);
+        symbol_filters->addWidget(m_symbol_category, 1);
+        symbol_filters->addWidget(m_symbol_search, 2);
+        navigator_layout->addLayout(symbol_filters);
+
+        auto* symbol_size_row = new QHBoxLayout;
+        symbol_size_row->setContentsMargins(0, 0, 0, 0);
+        symbol_size_row->setSpacing(5);
+        auto* symbol_size_label = new QLabel(QStringLiteral("Size"), navigator_panel);
+        m_symbol_size = new QComboBox(navigator_panel);
+        m_symbol_size->setObjectName(QStringLiteral("annotationSymbolSize"));
+        m_symbol_size->setAccessibleName(QStringLiteral("Component size"));
+        symbol_size_row->addWidget(symbol_size_label);
+        symbol_size_row->addWidget(m_symbol_size, 1);
+        navigator_layout->addLayout(symbol_size_row);
+
+        m_symbol_list = new SymbolLibraryList(navigator_panel);
+        m_symbol_list->setObjectName(QStringLiteral("symbolLibraryItems"));
+        m_symbol_list->setAccessibleName(QStringLiteral("Drag a component onto the plan"));
+        m_symbol_list->setDragEnabled(true);
+        m_symbol_list->setDragDropMode(QAbstractItemView::DragOnly);
+        m_symbol_list->setViewMode(QListView::IconMode);
+        m_symbol_list->setResizeMode(QListView::Adjust);
+        m_symbol_list->setMovement(QListView::Static);
+        m_symbol_list->setUniformItemSizes(true);
+        m_symbol_list->setWordWrap(true);
+        m_symbol_list->setIconSize(QSize(68, 54));
+        m_symbol_list->setGridSize(QSize(118, 86));
+        m_symbol_list->setMinimumHeight(210);
+        m_symbol_list->setProperty("symbolScale", 1.0);
+        navigator_layout->addWidget(m_symbol_list, 2);
+        m_symbol_library_status = new QLabel(navigator_panel);
+        m_symbol_library_status->setObjectName(QStringLiteral("annotationEditorStatus"));
+        m_symbol_library_status->setWordWrap(true);
+        m_symbol_library_status->setStyleSheet(QStringLiteral("color:#52657d; font-size:11px;"));
+        m_symbol_library_status->setText(QStringLiteral(
+            "Drag a component onto the plan, or double-click to place by cursor."));
+        navigator_layout->addWidget(m_symbol_library_status);
+
+        const auto catalog = default_symbol_catalog();
+        std::set<std::string> symbol_categories;
+        for (const auto& definition : catalog) symbol_categories.insert(definition.category);
+        m_symbol_category->addItem(QStringLiteral("All categories"), QString{});
+        for (const auto& category : symbol_categories)
+            m_symbol_category->addItem(QString::fromStdString(category),
+                                       QString::fromStdString(category));
+        QObject::connect(m_symbol_category, &QComboBox::currentIndexChanged, owner,
+                         [this] { populateSymbolLibrary(); });
+        QObject::connect(m_symbol_search, &QLineEdit::textChanged, owner,
+                         [this] { populateSymbolLibrary(); });
+        QObject::connect(m_symbol_list, &QListWidget::currentItemChanged, owner,
+                         [this](QListWidgetItem* current, QListWidgetItem*) {
+                             populateSymbolVariants(current);
+                         });
+        QObject::connect(m_symbol_size, &QComboBox::currentIndexChanged, owner,
+                         [this](int index) { selectSymbolVariant(index); });
+        QObject::connect(m_symbol_list, &QListWidget::itemActivated, owner,
+                         [this](QListWidgetItem* item) { armSymbolPlacement(item); });
+        QObject::connect(text_button, &QToolButton::clicked, owner, [this] {
+            bool accepted = false;
+            const auto text = QInputDialog::getText(owner, QStringLiteral("Add text"),
+                QStringLiteral("Text"), QLineEdit::Normal, {}, &accepted).trimmed();
+            if (!accepted || text.isEmpty()) return;
+            const auto id = createAnnotationLabel(QStringLiteral("note"), text, m_last_cursor);
+            if (id.isEmpty()) setError(lastError());
+        });
+        populateSymbolLibrary();
+
         auto* drawing_panel = new QWidget(splitter);
+        m_drawing_panel = drawing_panel;
         auto* drawing_layout = new QVBoxLayout(drawing_panel);
         drawing_layout->setContentsMargins(0, 0, 0, 0);
         drawing_layout->setSpacing(3);
@@ -17418,6 +17444,36 @@ private:
             m_nativeModelView->setErrorCallback([this](QString error) {
                 setError(QStringLiteral("3D view: %1").arg(error));
             });
+            m_nativeModelView->onContextMenuRequested = [this](QPoint global_position) {
+                QMenu menu(owner);
+                if (!m_selected_id.isEmpty()) {
+                    auto* properties = menu.addAction(QStringLiteral("Properties"));
+                    QObject::connect(properties, &QAction::triggered, owner,
+                                     [this] { positionContextEditor(); });
+                    auto* move = menu.addAction(QStringLiteral("Move object"));
+                    QObject::connect(move, &QAction::triggered, owner, [this] {
+                        if (!m_nativeModelView->beginMove(m_selected_id)) {
+                            setError(QStringLiteral(
+                                "Select a visible movable architectural object first."));
+                            return;
+                        }
+                        owner->statusBar()->showMessage(
+                            QStringLiteral("Move armed — drag the selected object once. Esc cancels."));
+                    });
+                    menu.addSeparator();
+                    auto* copy = menu.addAction(QStringLiteral("Copy"));
+                    QObject::connect(copy, &QAction::triggered, owner,
+                                     [this] { (void)copySelection(); });
+                    auto* remove = menu.addAction(QStringLiteral("Delete"));
+                    QObject::connect(remove, &QAction::triggered, owner,
+                                     [this] { (void)deleteSelection(); });
+                    menu.addSeparator();
+                }
+                auto* fit = menu.addAction(QStringLiteral("Fit 3D view"));
+                QObject::connect(fit, &QAction::triggered, owner,
+                                 [this] { m_nativeModelView->fitAll(); });
+                menu.exec(global_position);
+            };
             architectural_splitter->addWidget(m_nativeModelView);
             architectural_splitter->setStretchFactor(0, 1);
             architectural_splitter->setStretchFactor(1, 1);
@@ -17443,23 +17499,40 @@ private:
         connectCanvas(m_measurementCanvas);
         connectCanvas(m_architecturalCanvas);
 
-        m_inspector = new QScrollArea(navigator_panel);
-        navigator_layout->addWidget(m_inspector, 2);
+        m_inspector = new QScrollArea(drawing_panel);
+        m_inspector->setObjectName(QStringLiteral("contextEditor"));
         m_inspector->setWidgetResizable(true);
         m_inspector->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        m_inspector->setMinimumWidth(0);
-        m_inspector->setFrameShape(QFrame::NoFrame);
+        m_inspector->setFixedWidth(316);
+        m_inspector->setMaximumHeight(430);
+        m_inspector->setFrameShape(QFrame::StyledPanel);
+        m_inspector->setStyleSheet(QStringLiteral(
+            "QScrollArea#contextEditor { background:#ffffff; border:1px solid #cbd5e1; "
+            "border-radius:10px; }"));
+        m_inspector->hide();
+        m_inspector->raise();
         auto* inspector_body = new QWidget(m_inspector);
         inspector_body->setObjectName(QStringLiteral("inspectorBody"));
         inspector_body->setMinimumWidth(0);
         inspector_body->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
         auto* inspector_layout = new QVBoxLayout(inspector_body);
-        inspector_layout->setContentsMargins(16, 15, 16, 16);
-        inspector_layout->setSpacing(12);
-        auto* heading = new QLabel(QStringLiteral("Selection properties"), inspector_body);
-        heading->setObjectName(QStringLiteral("inspectorHeading"));
-        heading->setStyleSheet(QStringLiteral("font-size:16px; font-weight:600;"));
-        inspector_layout->addWidget(heading);
+        inspector_layout->setContentsMargins(12, 10, 12, 12);
+        inspector_layout->setSpacing(8);
+        auto* heading_row = new QHBoxLayout;
+        heading_row->setContentsMargins(0, 0, 0, 0);
+        m_inspector_heading = new QLabel(QStringLiteral("Properties"), inspector_body);
+        m_inspector_heading->setObjectName(QStringLiteral("inspectorHeading"));
+        m_inspector_heading->setStyleSheet(QStringLiteral("font-size:14px; font-weight:650;"));
+        heading_row->addWidget(m_inspector_heading, 1);
+        auto* close_inspector = new QToolButton(inspector_body);
+        close_inspector->setText(QStringLiteral("×"));
+        close_inspector->setAccessibleName(QStringLiteral("Close properties"));
+        close_inspector->setAutoRaise(true);
+        close_inspector->setFixedSize(24, 24);
+        heading_row->addWidget(close_inspector);
+        inspector_layout->addLayout(heading_row);
+        QObject::connect(close_inspector, &QToolButton::clicked, owner,
+                         [this] { (void)selectEntity({}); });
         m_inspector_context = new QLabel(inspector_body);
         m_inspector_context->setWordWrap(true);
         inspector_layout->addWidget(m_inspector_context);
@@ -17695,15 +17768,16 @@ private:
         m_annotation_group = new QGroupBox(QStringLiteral("Annotation properties"), inspector_body);
         m_annotation_group->setObjectName(QStringLiteral("annotationProperties"));
         auto* annotation_layout = new QFormLayout(m_annotation_group);
+        m_annotation_layout = annotation_layout;
         m_annotation_content_edit = new QLineEdit(m_annotation_group);
         m_annotation_content_edit->setObjectName(QStringLiteral("annotationContent"));
         annotation_layout->addRow(QStringLiteral("Text"), m_annotation_content_edit);
         m_annotation_x_edit = new QLineEdit(m_annotation_group);
         m_annotation_x_edit->setObjectName(QStringLiteral("annotationX"));
-        annotation_layout->addRow(QStringLiteral("X (m)"), m_annotation_x_edit);
+        annotation_layout->addRow(QStringLiteral("Position X (m)"), m_annotation_x_edit);
         m_annotation_y_edit = new QLineEdit(m_annotation_group);
         m_annotation_y_edit->setObjectName(QStringLiteral("annotationY"));
-        annotation_layout->addRow(QStringLiteral("Y (m)"), m_annotation_y_edit);
+        annotation_layout->addRow(QStringLiteral("Position Y (m)"), m_annotation_y_edit);
         m_annotation_rotation_edit = new QLineEdit(m_annotation_group);
         m_annotation_rotation_edit->setObjectName(QStringLiteral("annotationRotation"));
         annotation_layout->addRow(QStringLiteral("Rotation (deg)"), m_annotation_rotation_edit);
@@ -17727,6 +17801,7 @@ private:
         m_annotation_fill_color_edit->setPlaceholderText(QStringLiteral("#RRGGBB"));
         annotation_layout->addRow(QStringLiteral("Fill color"), m_annotation_fill_color_edit);
         auto* annotation_style_flags = new QWidget(m_annotation_group);
+        m_annotation_style_flags = annotation_style_flags;
         auto* annotation_style_flags_layout = new QHBoxLayout(annotation_style_flags);
         annotation_style_flags_layout->setContentsMargins(0, 0, 0, 0);
         m_annotation_bold_check = new QCheckBox(QStringLiteral("Bold"), annotation_style_flags);
@@ -18153,6 +18228,12 @@ private:
             placeLibrarySymbol(id, scale, point);
         });
         canvas->setEntitiesSelected([this](QStringList ids, bool additive) {
+            if (!m_pending_symbol_id.isEmpty()) {
+                if (m_symbol_library_status)
+                    m_symbol_library_status->setText(
+                        QStringLiteral("Click once to place the component; drag does not change selection while placement is active."));
+                return;
+            }
             const auto snapshot = m_document->snapshot();
             if (!additive) m_selected_ids.clear();
             for (auto id : ids) {
@@ -18177,6 +18258,53 @@ private:
                 m_boundary_session->set_pointer(point);
                 refreshBoundaryPreview();
             }
+            if (m_pending_wall_start &&
+                (m_tool == CanvasTool::wall || m_tool == CanvasTool::sloped_wall)) {
+                m_measurementCanvas->setWallPreview(std::make_pair(*m_pending_wall_start, point));
+                m_architecturalCanvas->setWallPreview(std::make_pair(*m_pending_wall_start, point));
+            }
+            if (m_inspector && m_inspector->isVisible()) positionContextEditor();
+        });
+        canvas->setRightClicked([this](Vec2 point) {
+            if (m_boundary_session) {
+                finishTool();
+                return;
+            }
+            if (!m_pending_symbol_id.isEmpty()) {
+                cancelSymbolPlacement();
+                if (m_symbol_library_status)
+                    m_symbol_library_status->setText(QStringLiteral("Component placement cancelled."));
+                return;
+            }
+            if (m_pending_wall_start) {
+                cancelTool();
+                owner->statusBar()->showMessage(QStringLiteral("Wall placement cancelled."), 2500);
+                return;
+            }
+            QMenu menu(owner);
+            if (!m_selected_id.isEmpty()) {
+                auto* properties = menu.addAction(QStringLiteral("Properties"));
+                QObject::connect(properties, &QAction::triggered, owner,
+                                 [this] { positionContextEditor(); });
+                auto* copy = menu.addAction(QStringLiteral("Copy"));
+                QObject::connect(copy, &QAction::triggered, owner,
+                                 [this] { (void)copySelection(); });
+                auto* remove = menu.addAction(QStringLiteral("Delete"));
+                QObject::connect(remove, &QAction::triggered, owner,
+                                 [this] { (void)deleteSelection(); });
+                menu.addSeparator();
+            }
+            auto* add_text = menu.addAction(QStringLiteral("Add text here…"));
+            QObject::connect(add_text, &QAction::triggered, owner, [this, point] {
+                bool accepted = false;
+                const auto text = QInputDialog::getText(owner, QStringLiteral("Add text"),
+                    QStringLiteral("Text"), QLineEdit::Normal, {}, &accepted).trimmed();
+                if (!accepted || text.isEmpty()) return;
+                (void)createAnnotationLabel(QStringLiteral("note"), text, point);
+            });
+            auto* fit = menu.addAction(QStringLiteral("Fit drawing"));
+            QObject::connect(fit, &QAction::triggered, owner, [this] { fitView(); });
+            menu.exec(QCursor::pos());
         });
         canvas->setFinishRequested([this] {
             finishTool();
@@ -18214,6 +18342,7 @@ private:
         refreshActions();
         refreshTitle();
         m_refreshing = false;
+        QTimer::singleShot(0, owner, [this] { positionContextEditor(); });
     }
 
     void refreshCanvases() {
@@ -18584,6 +18713,7 @@ private:
                     canvas_symbol.stroke_color =
                         QColor(QString::fromStdString(symbol.style.stroke_color));
                     canvas_symbol.stroke_width_metres = symbol.style.stroke_width_metres;
+                    canvas_symbol.output_stroke_width_mm = 0.25;
                     canvas_symbol.fill_color =
                         QColor(QString::fromStdString(symbol.style.fill_color));
                     canvas_symbol.hatch_pattern =
@@ -19223,7 +19353,8 @@ private:
             const bool hidden_by_floor = node.type == "layer" && !node.context.floor_id.empty() &&
                 m_view_filter.hidden_floor_ids.contains(node.context.floor_id);
             const bool effective_visible = visible_ids.contains(id);
-            auto* item = new QTreeWidgetItem(QStringList{label});
+            const bool active_layer = node.type == "layer" && id_from(id) == m_active_layer_id;
+            auto* item = new QTreeWidgetItem(QStringList{label, QString{}});
             item->setData(0, Qt::UserRole, id_from(id));
             item->setData(0, visibility_type_role, QString::fromStdString(node.type));
             QString tooltip = id_from(id);
@@ -19245,7 +19376,23 @@ private:
                     tooltip += QStringLiteral("\nEffective state: visible because its organization is unresolved.");
                 }
             }
+            if (node.type == "layer") {
+                tooltip += active_layer
+                    ? QStringLiteral("\nActive layer: new drawing objects are added here.")
+                    : QStringLiteral("\nClick to make this the active drawing layer.");
+            }
             item->setToolTip(0, tooltip);
+            if (active_layer) {
+                auto active_font = item->font(0);
+                active_font.setBold(true);
+                item->setFont(0, active_font);
+                item->setForeground(0, QColor(37, 99, 235));
+                item->setBackground(0, QColor(231, 240, 255));
+                item->setText(1, QStringLiteral("●"));
+                item->setTextAlignment(1, Qt::AlignCenter);
+                item->setForeground(1, QColor(37, 99, 235));
+                item->setToolTip(1, QStringLiteral("Active drawing layer"));
+            }
             if (visibility_container && !effective_visible)
                 item->setForeground(0, owner->palette().color(QPalette::Disabled, QPalette::Text));
             if (!node.issues.empty()) item->setForeground(0, QColor(170, 35, 35));
@@ -19267,6 +19414,38 @@ private:
                 }
                 unassigned->addChild(item);
             }
+        }
+        for (const auto& [id, node] : organization.nodes) {
+            if (node.type != "property" || !items.contains(id)) continue;
+            auto* add = new QToolButton(m_navigator);
+            add->setText(QStringLiteral("+"));
+            add->setAccessibleName(QStringLiteral("Add to property"));
+            add->setToolTip(QStringLiteral("Add a building, floor or layer"));
+            add->setAutoRaise(true);
+            add->setFixedSize(24, 24);
+            add->setStyleSheet(QStringLiteral(
+                "QToolButton { font-size:18px; font-weight:600; padding:0; }"
+                "QToolButton::menu-indicator { image:none; width:0; }"));
+            add->setPopupMode(QToolButton::InstantPopup);
+            auto* menu = new QMenu(add);
+            auto* add_building = menu->addAction(QStringLiteral("Add building…"));
+            auto* add_floor = menu->addAction(QStringLiteral("Add floor…"));
+            auto* add_layer = menu->addAction(QStringLiteral("Add layer…"));
+            menu->addSeparator();
+            auto* rename = menu->addAction(QStringLiteral("Rename property…"));
+            const auto property_id = id_from(id);
+            QObject::connect(add_building, &QAction::triggered, owner, [this, property_id] {
+                if (selectEntity(property_id)) showOrganizationDialog("building");
+            });
+            QObject::connect(add_floor, &QAction::triggered, owner,
+                             [this] { showOrganizationDialog("floor"); });
+            QObject::connect(add_layer, &QAction::triggered, owner,
+                             [this] { showOrganizationDialog("layer"); });
+            QObject::connect(rename, &QAction::triggered, owner, [this, property_id] {
+                if (selectEntity(property_id)) showOrganizationDialog("rename");
+            });
+            add->setMenu(menu);
+            m_navigator->setItemWidget(items.at(id), 1, add);
         }
         // Annotation labels and symbols live inside one validated typed
         // entity. Expose their stable child IDs in the navigator so they can
@@ -19664,6 +19843,7 @@ private:
         const auto entity = selectedEntity();
         const auto editable = m_document->is_editable();
         const auto inspector_snapshot = m_document->snapshot();
+        if (m_inspector_heading) m_inspector_heading->setText(QStringLiteral("Properties"));
         m_dimension_edit_context.reset();
         m_dimension_properties_group->hide();
         m_dimension_error->hide();
@@ -19718,8 +19898,11 @@ private:
                         [&](const auto& value) { return value.id == wanted; });
                     if (symbol != state.symbols.end()) {
                         selected_annotation_symbol = *symbol;
-                        annotation_context = QStringLiteral("Symbol\n%1")
-                            .arg(QString::fromStdString(symbol->symbol_id));
+                        auto component_name = QString::fromStdString(symbol->symbol_id);
+                        component_name.remove(QRegularExpression(QStringLiteral("-w\\d+-d\\d+$")));
+                        component_name.replace(QLatin1Char('-'), QLatin1Char(' '));
+                        if (!component_name.isEmpty()) component_name[0] = component_name[0].toUpper();
+                        annotation_context = component_name;
                         break;
                     }
                 } catch (const std::exception&) {
@@ -19916,6 +20099,25 @@ private:
             m_project_details_group->setVisible(false);
             m_area_attributes_group->setVisible(false);
             m_inspector_context->setText(*annotation_context);
+            const bool text_label = selected_annotation_label.has_value();
+            if (m_inspector_heading)
+                m_inspector_heading->setText(text_label ? QStringLiteral("Text")
+                                                        : QStringLiteral("Component"));
+            m_delete_annotation_button->setText(text_label ? QStringLiteral("Delete text")
+                                                            : QStringLiteral("Delete component"));
+            m_apply_annotation_button->setText(text_label ? QStringLiteral("Apply text")
+                                                           : QStringLiteral("Apply component"));
+            m_annotation_group->setTitle(text_label ? QStringLiteral("Text properties")
+                                                    : QStringLiteral("Component properties"));
+            if (m_annotation_layout) {
+                m_annotation_layout->setRowVisible(m_annotation_content_edit, text_label);
+                m_annotation_layout->setRowVisible(m_annotation_font_edit, text_label);
+                m_annotation_layout->setRowVisible(m_annotation_text_height_edit, text_label);
+                m_annotation_layout->setRowVisible(m_annotation_stroke_color_edit, text_label);
+                m_annotation_layout->setRowVisible(m_annotation_fill_color_edit, text_label);
+                if (m_annotation_style_flags)
+                    m_annotation_layout->setRowVisible(m_annotation_style_flags, text_label);
+            }
             {
                 QSignalBlocker blocker(m_annotation_content_edit);
                 m_annotation_content_edit->setText(selected_annotation_label.has_value()
@@ -20245,6 +20447,44 @@ private:
         m_object_button->setEnabled(m_document->is_editable());
     }
 
+    void positionContextEditor() {
+        if (!m_inspector || !m_drawing_panel) return;
+        if (m_selected_id.isEmpty()) {
+            m_inspector->hide();
+            return;
+        }
+        auto* canvas = m_workspace == Workspace::measurement
+            ? m_measurementCanvas : m_architecturalCanvas;
+        const auto bounds = canvas ? canvas->selectionBounds() : std::optional<QRectF>{};
+        const auto available_height = std::max(180, m_drawing_panel->height() - 24);
+        if (m_inspector->widget() && m_inspector->widget()->layout())
+            m_inspector->widget()->layout()->activate();
+        const auto content_height = m_inspector->widget()
+            ? m_inspector->widget()->sizeHint().height() + 4 : 300;
+        m_inspector->setFixedHeight(std::min({430, available_height,
+                                              std::max(180, content_height)}));
+        QPoint anchor(m_drawing_panel->width() - m_inspector->width() - 12, 44);
+        if (canvas && bounds) {
+            const auto top_right = canvas->mapTo(
+                m_drawing_panel,
+                QPoint(qRound(bounds->right()), qRound(bounds->top())));
+            anchor = top_right + QPoint(12, 0);
+            if (anchor.x() + m_inspector->width() > m_drawing_panel->width() - 8) {
+                const auto top_left = canvas->mapTo(
+                    m_drawing_panel,
+                    QPoint(qRound(bounds->left()), qRound(bounds->top())));
+                anchor.setX(top_left.x() - m_inspector->width() - 12);
+            }
+        }
+        anchor.setX(std::clamp(anchor.x(), 8,
+                               std::max(8, m_drawing_panel->width() - m_inspector->width() - 8)));
+        anchor.setY(std::clamp(anchor.y(), 38,
+                               std::max(38, m_drawing_panel->height() - m_inspector->height() - 8)));
+        m_inspector->move(anchor);
+        m_inspector->show();
+        m_inspector->raise();
+    }
+
     void refreshTitle() {
         if (m_inspector) m_inspector->setVisible(!m_selected_id.isEmpty());
         const bool architectural = m_workspace == Workspace::architectural;
@@ -20292,12 +20532,16 @@ private:
         const auto value = item->data(0, Qt::UserRole);
         if (!value.isValid()) return;
         const auto id = value.toString();
+        const auto type = item->data(0, visibility_type_role).toString();
         const auto document = m_document;
         // Selection can rebuild the tree. Defer it until QTreeWidget has
         // finished delivering the click, and bind the callback to the
         // document that supplied this item.
-        QTimer::singleShot(0, owner, [this, id, document] {
-            if (m_document == document && !id.isEmpty() && id != m_selected_id &&
+        QTimer::singleShot(0, owner, [this, id, type, document] {
+            if (m_document != document || id.isEmpty()) return;
+            if (type == QStringLiteral("layer")) {
+                (void)setActiveLayer(id);
+            } else if (id != m_selected_id &&
                 (has_entity(*m_document, id) || annotation_parent_for_child(m_document->snapshot(), id.toStdString()))) {
                 selectEntity(id);
             }
@@ -20669,6 +20913,11 @@ private:
     void cancelTool() {
         if (!m_pending_symbol_id.isEmpty()) {
             cancelSymbolPlacement();
+            return;
+        }
+        if (!m_boundary_session && !m_pending_wall_start &&
+            m_tool == CanvasTool::select && !m_selected_id.isEmpty()) {
+            (void)selectEntity({});
             return;
         }
         if (!confirmDiscardBoundaryDraft()) return;
@@ -21685,8 +21934,12 @@ private:
     QComboBox* m_architecturalViewCombo{};
     QLabel* m_phase_heading{};
     QPushButton* m_manage_phases_button{};
-    QPointer<QDialog> m_symbol_library_dialog;
     QPointer<QLabel> m_symbol_library_status;
+    QComboBox* m_symbol_category{};
+    QComboBox* m_symbol_size{};
+    QLineEdit* m_symbol_search{};
+    SymbolLibraryList* m_symbol_list{};
+    std::map<std::string, std::string> m_symbol_variant_by_family;
     QString m_pending_symbol_id;
     double m_pending_symbol_scale{1.0};
     std::shared_ptr<Document> m_symbol_placement_document;
@@ -21720,6 +21973,7 @@ private:
 
     VisibilityTreeWidget* m_navigator{};
     QSplitter* m_workspace_splitter{};
+    QWidget* m_drawing_panel{};
     QSplitter* m_architectural_splitter{};
     QTabWidget* m_workspaceTabs{};
     PlanCanvas* m_measurementCanvas{};
@@ -21728,6 +21982,7 @@ private:
     std::weak_ptr<Document> m_native_geometry_document;
     std::optional<Revision> m_native_geometry_revision;
     QScrollArea* m_inspector{};
+    QLabel* m_inspector_heading{};
     QFormLayout* m_geometry_form{};
     QGroupBox* m_dimension_properties_group{};
     QLineEdit* m_dimension_x_edit{};
@@ -21820,6 +22075,8 @@ private:
     QPushButton* m_edit_layers_button{};
     QPushButton* m_delete_annotation_button{};
     QGroupBox* m_annotation_group{};
+    QFormLayout* m_annotation_layout{};
+    QWidget* m_annotation_style_flags{};
     QLineEdit* m_annotation_content_edit{};
     QLineEdit* m_annotation_x_edit{};
     QLineEdit* m_annotation_y_edit{};

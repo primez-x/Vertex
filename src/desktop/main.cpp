@@ -183,8 +183,14 @@ bool seed_smoke_document(sketch::desktop::MainWindow& window, bool architectural
     if (window.createStraightWall({4.0, 0.0}, {4.0, 8.0}, QStringLiteral("interior")).isEmpty()) {
         return false;
     }
-    return !window.createStraightWall({8.0, 0.0}, {8.0, 8.0}, QStringLiteral("interior")).isEmpty() &&
-           window.selectEntity(boundary_id);
+    if (window.createStraightWall({8.0, 0.0}, {8.0, 8.0}, QStringLiteral("interior")).isEmpty() ||
+        window.createAnnotationSymbol(QStringLiteral("sofa"), {2.0, 2.0}).isEmpty() ||
+        window.createAnnotationSymbol(QStringLiteral("double-bed"), {6.0, 2.0}).isEmpty() ||
+        window.createAnnotationSymbol(QStringLiteral("toilet"), {10.0, 2.0}).isEmpty() ||
+        window.createAnnotationSymbol(QStringLiteral("dining-table"), {6.0, 6.0}).isEmpty()) {
+        return false;
+    }
+    return window.selectEntity(boundary_id);
 }
 
 bool seed_smoke_reference(sketch::desktop::MainWindow& window) {

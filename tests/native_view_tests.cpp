@@ -10,6 +10,7 @@
 #include <QFileInfo>
 #include <QImage>
 #include <QMouseEvent>
+#include <QKeyEvent>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QWheelEvent>
@@ -91,6 +92,89 @@ void mouse(sketch::visualization::NativeModelView& view,QEvent::Type type,QPoint
     QApplication::sendEvent(&view,&event);
 }
 
+void check_gestures(sketch::visualization::NativeModelView& view, const QString& id,
+                    QTemporaryDir& temporary) {
+    int selections = 0, translations = 0, menus = 0;
+    view.onEntitySelected = [&](QString) { ++selections; };
+    view.onEntityTranslationRequested = [&](QString target, double, double, double) {
+        check(target == id, "Move must retain its explicit target");
+        ++translations;
+    };
+    QPoint menu_position;
+    view.onContextMenuRequested = [&](QPoint position) { ++menus; menu_position = position; };
+    const QPointF start(300, 230), end(330, 255);
+    check(!view.beginMove(QStringLiteral("missing-native-entity")) && !view.isMoveActive(),
+          "Move must reject absent targets without arming");
+    const auto before = capture(view, temporary.filePath("gesture-before.png"));
+    mouse(view, QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
+    mouse(view, QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton, Qt::ControlModifier);
+    mouse(view, QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
+    const auto panned = capture(view, temporary.filePath("ctrl-pan.png"));
+    check(panned.centre.x() > before.centre.x() + 5 && panned.centre.y() > before.centre.y() + 5 &&
+          selections == 0 && translations == 0, "Ctrl drag must pan without selection or document callbacks");
+    mouse(view, QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
+    mouse(view, QEvent::MouseButtonRelease, start, Qt::LeftButton, Qt::NoButton);
+    check(selections == 0 && translations == 0, "Ctrl click must not select or edit");
+
+    check(view.beginMove(id), "Visible entity must support explicit Move");
+    mouse(view, QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+    mouse(view, QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton);
+    mouse(view, QEvent::MouseButtonPress, end, Qt::RightButton, Qt::LeftButton | Qt::RightButton);
+    mouse(view, QEvent::MouseButtonRelease, end, Qt::RightButton, Qt::LeftButton);
+    check(translations == 0 && menus == 0 && view.isMoveActive(), "Mixed release cannot complete Move");
+    mouse(view, QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
+    mouse(view, QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
+    check(translations == 1 && !view.isMoveActive(), "Explicit Move must commit exactly once");
+
+    for (const auto type : {QEvent::KeyPress, QEvent::UngrabMouse, QEvent::Hide,
+                            QEvent::WindowDeactivate, QEvent::FocusOut, QEvent::User}) {
+        check(view.beginMove(id), "Move must rearm after completion");
+        mouse(view, QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+        mouse(view, QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton);
+        if (type == QEvent::KeyPress) {
+            QKeyEvent escape(type, Qt::Key_Escape, Qt::NoModifier);
+            QApplication::sendEvent(&view, &escape);
+        } else if (type == QEvent::User) {
+            view.cancelInteraction();
+        } else {
+            QEvent cancel(type);
+            QApplication::sendEvent(&view, &cancel);
+        }
+        mouse(view, QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
+        check(!view.isMoveActive() && translations == 1, "Cancellation must suppress later Move release");
+    }
+    mouse(view, QEvent::MouseMove, {2, 2}, Qt::NoButton, Qt::NoButton);
+    check(capture(view, temporary.filePath("cancelled-move.png")).image == panned.image,
+          "Cancelled Move must restore the original presentation");
+    mouse(view, QEvent::MouseButtonPress, start, Qt::RightButton, Qt::RightButton);
+    mouse(view, QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::RightButton | Qt::LeftButton);
+    mouse(view, QEvent::MouseButtonRelease, start, Qt::LeftButton, Qt::RightButton);
+    check(menus == 0 && selections == 0, "Extra left button must not steal right gesture");
+    mouse(view, QEvent::MouseButtonRelease, start, Qt::RightButton, Qt::NoButton);
+    check(menus == 1 && menu_position == view.mapToGlobal(start.toPoint()), "Right click must expose global context position");
+    mouse(view, QEvent::MouseButtonDblClick, start, Qt::RightButton, Qt::RightButton);
+    mouse(view, QEvent::MouseButtonRelease, start, Qt::RightButton, Qt::NoButton);
+    check(menus == 1, "Right double click must not open a duplicate context menu");
+    mouse(view, QEvent::MouseButtonPress, start, Qt::RightButton, Qt::RightButton);
+    mouse(view, QEvent::MouseMove, end, Qt::NoButton, Qt::RightButton);
+    mouse(view, QEvent::MouseButtonRelease, end, Qt::RightButton, Qt::NoButton);
+    check(menus == 1 && capture(view, temporary.filePath("orbit.png")).image != panned.image,
+          "Right drag must orbit without opening a menu");
+    mouse(view, QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+    mouse(view, QEvent::MouseButtonRelease, start, Qt::LeftButton, Qt::NoButton);
+    mouse(view, QEvent::MouseButtonDblClick, start, Qt::LeftButton, Qt::LeftButton);
+    mouse(view, QEvent::MouseButtonRelease, start, Qt::LeftButton, Qt::NoButton);
+    check(selections == 1 && translations == 1, "Double click must select only once");
+    check(view.beginMove(id), "Move must rearm for double click suppression");
+    mouse(view, QEvent::MouseButtonDblClick, start, Qt::LeftButton, Qt::LeftButton);
+    mouse(view, QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton);
+    mouse(view, QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
+    check(!view.isMoveActive() && translations == 1, "Double click must not start another Move");
+    view.onEntitySelected = {};
+    view.onEntityTranslationRequested = {};
+    view.onContextMenuRequested = {};
+}
+
 void check_publication_reuse(sketch::visualization::NativeModelView& view) {
     // Exercise actual AIS publication on the Windows driver. Counts express
     // bounded presentation work; recorded timings do not qualify production
@@ -166,8 +250,8 @@ int main(int argc,char** argv) {
     }
     const int scenario_index = arguments.indexOf(QStringLiteral("--scenario"));
     const QString scenario = scenario_index < 0 ? QStringLiteral("all") : arguments.value(scenario_index + 1);
-    if (scenario != "all" && scenario != "geometry" && scenario != "forms" && scenario != "publication") {
-        std::cerr << "Native scenario must be all, geometry, forms or publication\n";
+    if (scenario != "all" && scenario != "geometry" && scenario != "forms" && scenario != "publication" && scenario != "gestures") {
+        std::cerr << "Native scenario must be all, geometry, forms, publication or gestures\n";
         return 1;
     }
     QTemporaryDir temporary;
@@ -195,6 +279,12 @@ int main(int argc,char** argv) {
                 return;
             }
             check(ready_settled(view),"Native viewport must be ready");
+            if (scenario == "gestures") {
+                check_gestures(view, wall_id, temporary);
+                std::cout << "Native gesture checks passed at DPR " << ratio << '\n';
+                application.exit(0);
+                return;
+            }
             if (scenario == "publication") {
                 check_publication_reuse(view);
                 application.exit(0);
@@ -244,13 +334,19 @@ int main(int argc,char** argv) {
                 const auto wall_drag_end = wall_drag_start + QPointF(16.0, 10.0);
                 mouse(view, QEvent::MouseButtonPress, wall_drag_start, Qt::LeftButton,
                       Qt::LeftButton, Qt::ControlModifier);
+                mouse(view, QEvent::MouseButtonRelease, wall_drag_start, Qt::LeftButton,
+                      Qt::NoButton, Qt::ControlModifier);
+                check(selected.isEmpty(), "Ctrl+click must not select an object");
+                check(view.beginMove(wall_id), "Wall must support explicit Move");
+                mouse(view, QEvent::MouseButtonPress, wall_drag_start, Qt::LeftButton,
+                      Qt::LeftButton);
                 mouse(view, QEvent::MouseMove, wall_drag_end, Qt::NoButton,
-                      Qt::LeftButton, Qt::ControlModifier);
+                      Qt::LeftButton);
                 check(capture(view, temporary.filePath("wall-translation-preview.png")).image !=
                           first.image,
-                      "Ctrl+left-drag must preview a shared wall-solid translation");
+                      "Explicit Move must preview a shared wall-solid translation");
                 mouse(view, QEvent::MouseButtonRelease, wall_drag_end, Qt::LeftButton,
-                      Qt::NoButton, Qt::ControlModifier);
+                      Qt::NoButton);
                 mouse(view, QEvent::MouseButtonPress, {2, 2}, Qt::LeftButton,
                       Qt::LeftButton);
                 mouse(view, QEvent::MouseButtonRelease, {2, 2}, Qt::LeftButton,
@@ -543,6 +639,7 @@ int main(int argc,char** argv) {
                 view.setSnapshot(document.snapshot());
                 auto unassigned = capture(view,temporary.filePath("material-unassigned.png"));
                 check(unassigned.image == redone.image,"removing assignment restores default appearance");
+                check_gestures(view, wall_id, temporary);
             }
             if (scenario != "geometry") {
                 // Keep the same portrait context as the combined sequence, even
@@ -587,19 +684,18 @@ int main(int argc,char** argv) {
                             };
                         const auto start = frame.centre / view.devicePixelRatioF();
                         const auto end = start + QPointF(18.0, 12.0);
+                        check(view.beginMove(QString::fromStdString(entity.id)), "Column must support explicit Move");
                         mouse(view, QEvent::MouseButtonPress, start, Qt::LeftButton,
-                              Qt::LeftButton, Qt::ControlModifier);
+                              Qt::LeftButton);
                         mouse(view, QEvent::MouseMove, end, Qt::NoButton,
-                              Qt::LeftButton, Qt::ControlModifier);
+                              Qt::LeftButton);
                         const auto preview = capture(
                             view, temporary.filePath(QString::fromStdString(entity.id) + "-translation-preview.png"));
                         check(preview.image != frame.image,
-                              "Ctrl+left-drag must visibly preview the native translation");
+                              "Explicit Move must visibly preview the native translation");
                         mouse(view, QEvent::MouseButtonRelease, end, Qt::LeftButton,
-                              Qt::NoButton, Qt::ControlModifier);
-                        // The Ctrl press also selects the object. Clear that
-                        // presentation highlight before comparing the restored
-                        // frame with the pre-drag capture.
+                              Qt::NoButton);
+                        // Clear hover before comparing with the pre-drag capture.
                         mouse(view, QEvent::MouseButtonPress, {2, 2}, Qt::LeftButton,
                               Qt::LeftButton);
                         mouse(view, QEvent::MouseButtonRelease, {2, 2}, Qt::LeftButton,
@@ -609,7 +705,7 @@ int main(int argc,char** argv) {
                                   .image == frame.image,
                               "Releasing a native translation must clear the presentation preview");
                         check(translated_id == QString::fromStdString(entity.id),
-                              "Ctrl+left-drag must request translation of the selected architectural object");
+                              "Explicit Move must request translation of the selected architectural object");
                         check(std::isfinite(translated_x) && std::isfinite(translated_y) &&
                                   std::isfinite(translated_z) &&
                                   (std::abs(translated_x) > 1.0e-9 ||

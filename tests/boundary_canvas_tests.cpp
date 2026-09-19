@@ -357,6 +357,9 @@ void test_effective_cursor_matches_click() {
         QApplication::sendEvent(&canvas, &press);
         require(placed && preview && placed->x == preview->x && placed->y == preview->y,
                 "placed point must exactly match the effective cursor");
+        QMouseEvent release(QEvent::MouseButtonRelease, position, position, Qt::LeftButton,
+                            Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &release);
     };
     click();
     canvas.setSnapEnabled(false);
@@ -653,6 +656,9 @@ void test_paper_label_style_and_hit_testing() {
         QMouseEvent press(QEvent::MouseButtonPress, point, point, Qt::LeftButton,
                           Qt::LeftButton, Qt::NoModifier);
         QApplication::sendEvent(&canvas, &press);
+        QMouseEvent release(QEvent::MouseButtonRelease, point, point, Qt::LeftButton,
+                            Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &release);
     };
     click(center + QPointF(0, -far_offset));
     require(selected == label.id, "rotated styled label must be selectable across its painted extent");
@@ -1005,6 +1011,177 @@ void test_request_to_paint_telemetry() {
             "wheel zoom must measure input and navigation through paint");
 }
 
+void test_selection_frame_for_styled_geometry() {
+    PlanCanvas canvas;
+    canvas.resize(640, 480);
+    canvas.setGridEnabled(false);
+    canvas.setOverviewMapEnabled(false);
+    CanvasEntity symbol{QStringLiteral("symbol"), QStringLiteral("symbol"),
+                        Boundary{Segment{{-1.0, 0.0}, {1.0, 0.0}, 0.0}}};
+    symbol.stroke_color = QColor(110, 110, 110);
+    symbol.stroke_width_metres = 0.02;
+    canvas.setEntities({symbol});
+    const auto plain = render(canvas, false);
+    const auto output = render(canvas, true);
+    canvas.setSelectedId(symbol.id);
+    const auto bounds = canvas.selectionBounds();
+    require(bounds && bounds->contains(QPointF(240, 240)) && bounds->contains(QPointF(400, 240)),
+            "contextual selection bounds must enclose the selected geometry");
+    const auto selected = render(canvas, false);
+    require(differing_pixels(plain, selected, QRect(225, 225, 190, 30)) > 100,
+            "selection frame must remain visible when authored styles override selected strokes");
+    require(images_equal(output, render(canvas, true)),
+            "selection frame must not appear in fitted output");
+    canvas.zoomBy(0.000001, QPointF(320, 240));
+    const auto tiny_selected = render(canvas, false);
+    canvas.setSelectedId({});
+    require(!canvas.selectionBounds(), "cleared selection must have no contextual anchor");
+    require(differing_pixels(tiny_selected, render(canvas, false), QRect(300, 220, 40, 40)) > 80,
+            "selection markers must retain screen size when geometry shrinks below a pixel");
+
+    canvas.zoomBy(1000000000, QPointF(320, 240));
+    symbol.id = QStringLiteral("ordinary");
+    symbol.type = QStringLiteral("wall");
+    symbol.segments = {Segment{{-0.02, 0.0}, {0.02, 0.0}, 1.0}};
+    symbol.thickness_metres = 0.001;
+    canvas.setEntities({symbol});
+    const auto ordinary = render(canvas, false);
+    canvas.setSelectedId(symbol.id);
+    require(!images_equal(ordinary, render(canvas, false)),
+            "ordinary entities must also retain selection feedback at maximum zoom");
+    symbol.segments = {Segment{{-100.0, -100.0}, {100.0, 100.0}, 0.0}};
+    symbol.selected = false;
+    canvas.setEntities({symbol});
+    const auto oversized = render(canvas, false);
+    canvas.setSelectedId(symbol.id);
+    require(differing_pixels(oversized, render(canvas, false), QRect(0, 0, 640, 15)) > 100,
+            "a selection larger than the viewport must keep a visible frame at its edge");
+    const auto explicit_output = [&] {
+        QImage image(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+        QPainter painter(&image);
+        canvas.renderSceneAt(painter, image.rect(), 100, {}, background);
+        return image;
+    };
+    const auto selected_output = explicit_output();
+    canvas.setSelectedId({});
+    require(images_equal(selected_output, explicit_output()),
+            "explicit-scale output must suppress the selection frame");
+}
+
+void test_mouse_gesture_contract() {
+    PlanCanvas canvas;
+    canvas.resize(640, 480);
+    canvas.setOverviewMapEnabled(false);
+    canvas.setSnapEnabled(false);
+    int points = 0, selections = 0, rights = 0, finishes = 0, cursors = 0;
+    Vec2 right_point{}, cursor{};
+    QStringList hits;
+    bool additive = false;
+    canvas.setPointClicked([&](Vec2) { ++points; });
+    canvas.setEntitySelectionClicked([&](QString, bool) { ++selections; });
+    canvas.setEntitiesSelected([&](QStringList ids, bool add) {
+        ++selections; hits = ids; additive = add;
+    });
+    canvas.setRightClicked([&](Vec2 p) { ++rights; right_point = p; });
+    canvas.setFinishRequested([&] { ++finishes; });
+    canvas.setCursorMoved([&](Vec2 p) { ++cursors; cursor = p; });
+    const auto mouse = [&](QEvent::Type type, QPointF p, Qt::MouseButton button,
+                           Qt::MouseButtons buttons, Qt::KeyboardModifiers mods = Qt::NoModifier) {
+        QMouseEvent event(type, p, canvas.mapToGlobal(p.toPoint()), button, buttons, mods);
+        QApplication::sendEvent(&canvas, &event);
+    };
+    for (auto tool : {CanvasTool::select, CanvasTool::boundary, CanvasTool::wall, CanvasTool::sloped_wall}) {
+        canvas.setTool(tool);
+        canvas.fitView();
+        mouse(QEvent::MouseButtonPress, {320,240}, Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
+        mouse(QEvent::MouseButtonRelease, {320,240}, Qt::MiddleButton, Qt::LeftButton, Qt::ControlModifier);
+        mouse(QEvent::MouseMove, {360,260}, Qt::NoButton, Qt::LeftButton, Qt::ControlModifier);
+        mouse(QEvent::MouseButtonRelease, {360,260}, Qt::LeftButton, Qt::NoButton);
+        require(std::abs(canvas.viewCenter().x + 0.5) < 1e-9, "Ctrl-left must pan every tool");
+        mouse(QEvent::MouseButtonPress, {320,240}, Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
+        mouse(QEvent::MouseButtonRelease, {320,240}, Qt::LeftButton, Qt::NoButton);
+        mouse(QEvent::MouseButtonPress, {320,240}, Qt::MiddleButton, Qt::MiddleButton);
+        mouse(QEvent::MouseButtonPress, {320,240}, Qt::LeftButton, Qt::MiddleButton | Qt::LeftButton);
+        mouse(QEvent::MouseButtonRelease, {320,240}, Qt::LeftButton, Qt::MiddleButton);
+        mouse(QEvent::MouseMove, {360,240}, Qt::NoButton, Qt::MiddleButton);
+        require(std::abs(canvas.viewCenter().x + 1.0) < 1e-9, "unrelated left release must not stop middle pan");
+        mouse(QEvent::MouseButtonRelease, {360,240}, Qt::MiddleButton, Qt::NoButton);
+    }
+    require(points == 0 && selections == 0 && finishes == 0, "navigation must never author or select");
+    canvas.setTool(CanvasTool::boundary);
+    canvas.fitView();
+    mouse(QEvent::MouseButtonPress, {360,220}, Qt::RightButton, Qt::RightButton);
+    require(rights == 0 && finishes == 0, "right press must not dispatch actions");
+    mouse(QEvent::MouseButtonRelease, {360,220}, Qt::RightButton, Qt::NoButton);
+    require(rights == 1 && std::abs(right_point.x - 0.5) < 1e-9 &&
+            std::abs(right_point.y - 0.25) < 1e-9, "right release supplies effective plan point");
+    mouse(QEvent::MouseButtonPress, {360,220}, Qt::RightButton, Qt::RightButton);
+    mouse(QEvent::MouseMove, {400,260}, Qt::NoButton, Qt::RightButton);
+    mouse(QEvent::MouseButtonRelease, {360,220}, Qt::RightButton, Qt::NoButton);
+    require(rights == 1 && finishes == 0 && points == 0, "right drag returning to origin must not click");
+    for (auto tool : {CanvasTool::boundary, CanvasTool::select}) {
+        canvas.setTool(tool);
+        mouse(QEvent::MouseButtonPress, {320,240}, Qt::LeftButton, Qt::LeftButton, Qt::ShiftModifier);
+        mouse(QEvent::MouseButtonRelease, {320,240}, Qt::LeftButton, Qt::NoButton, Qt::ShiftModifier);
+        mouse(QEvent::MouseButtonDblClick, {320,240}, Qt::LeftButton, Qt::LeftButton, Qt::ShiftModifier);
+        mouse(QEvent::MouseButtonRelease, {320,240}, Qt::LeftButton, Qt::NoButton, Qt::ShiftModifier);
+    }
+    require(points == 1 && selections == 1, "double click must not duplicate authoring or toggle selection twice");
+    canvas.setEntities({{QStringLiteral("line"), QStringLiteral("symbol"),
+                         {Segment{{-1,0},{1,0},0}}}});
+    const auto marquee = [&](QPointF start, QPointF end, Qt::KeyboardModifiers mods = Qt::NoModifier) {
+        mouse(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton, mods);
+        mouse(QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton, mods);
+        mouse(QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton, mods);
+    };
+    marquee({300,220}, {420,260});
+    require(hits.isEmpty() && !additive, "left-to-right marquee requires full enclosure");
+    marquee({420,220}, {300,260}, Qt::ShiftModifier);
+    require(hits.contains(QStringLiteral("line")) && additive, "right-to-left marquee crosses and Shift adds");
+    marquee({220,220}, {420,260});
+    require(hits.contains(QStringLiteral("line")), "enclosed entity must select left-to-right");
+    const int before = selections;
+    mouse(QEvent::MouseButtonPress, {220,220}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonPress, {220,220}, Qt::MiddleButton, Qt::LeftButton | Qt::MiddleButton);
+    mouse(QEvent::MouseMove, {260,240}, Qt::NoButton, Qt::LeftButton | Qt::MiddleButton);
+    mouse(QEvent::MouseButtonRelease, {260,240}, Qt::MiddleButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, {260,240}, Qt::LeftButton, Qt::NoButton);
+    require(selections == before, "pan takeover must abandon marquee");
+    for (auto type : {QEvent::UngrabMouse, QEvent::Hide, QEvent::WindowDeactivate}) {
+        mouse(QEvent::MouseButtonPress, {220,220}, Qt::LeftButton, Qt::LeftButton);
+        QEvent cancel(type);
+        QApplication::sendEvent(&canvas, &cancel);
+        mouse(QEvent::MouseButtonRelease, {420,260}, Qt::LeftButton, Qt::NoButton);
+    }
+    require(selections == before, "lost gesture ownership must not complete selection");
+    mouse(QEvent::MouseButtonPress, {220,220}, Qt::LeftButton, Qt::LeftButton);
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &escape);
+    mouse(QEvent::MouseButtonRelease, {420,260}, Qt::LeftButton, Qt::NoButton);
+    require(selections == before, "Escape must abandon a pending marquee");
+    const int cursor_before = cursors;
+    canvas.zoomBy(2.0, {100,100});
+    require(cursors > cursor_before, "zoom must refresh effective cursor callback");
+    canvas.setSnapEnabled(true);
+    mouse(QEvent::MouseButtonPress, {337,231}, Qt::RightButton, Qt::RightButton);
+    mouse(QEvent::MouseButtonRelease, {337,231}, Qt::RightButton, Qt::NoButton);
+    require(right_point.x == cursor.x && right_point.y == cursor.y,
+            "right-click point must match snapped effective cursor");
+
+    canvas.setTool(CanvasTool::select);
+    canvas.setSnapEnabled(false);
+    canvas.fitView();
+    bool selection_saw_release_cursor = false;
+    canvas.setEntitySelectionClicked([&](QString, bool) {
+        selection_saw_release_cursor = true;
+        right_point = cursor;
+    });
+    mouse(QEvent::MouseButtonPress, {319,240}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, {321,240}, Qt::LeftButton, Qt::NoButton);
+    require(selection_saw_release_cursor && right_point.x == cursor.x && right_point.y == cursor.y,
+            "click callbacks must observe the effective release point when no move event occurs");
+}
+
 int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QApplication application(argc, argv);
@@ -1018,6 +1195,8 @@ int main(int argc, char** argv) {
         for (const auto character : QStringLiteral("2.00 m Draft boundary • place the next dimension")) {
             require(metrics.inFont(character), "capture font must contain each rendered character");
         }
+        test_selection_frame_for_styled_geometry();
+        test_mouse_gesture_contract();
         test_boundary_draft_rendering_and_history();
         test_request_to_paint_telemetry();
         test_effective_cursor_matches_click();

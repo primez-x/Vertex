@@ -272,9 +272,7 @@ void PlanCanvas::setEntities(std::vector<CanvasEntity> entities) {
 }
 
 void PlanCanvas::setTool(CanvasTool tool) {
-    m_selection_start.reset();
-    m_selection_dragging = false;
-    m_overview_dragging = false;
+    resetGesture();
     m_tool = tool;
     setCursor(tool == CanvasTool::select ? Qt::ArrowCursor : Qt::CrossCursor);
     setFocus();
@@ -477,6 +475,7 @@ void PlanCanvas::fitView() {
     if (!bounds) {
         m_view_center = {0.0, 0.0};
         m_scale = 80.0;
+        if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
         update();
         return;
     }
@@ -495,6 +494,7 @@ void PlanCanvas::fitView() {
                                             (height + padding * 2.0)
                                       : 80.0),
                         minimum_scale, maximum_scale);
+    if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
     update();
 }
 
@@ -510,6 +510,7 @@ void PlanCanvas::zoomBy(double factor, QPointF anchor) {
     m_scale = std::clamp(m_scale * factor, minimum_scale, maximum_scale);
     const auto after = toModel(anchor, rect());
     m_view_center = m_view_center + (before - after);
+    if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
     update();
 }
 
@@ -650,6 +651,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     drawLabels(painter, viewport, scale, view_center, output, background, paper_pixels_per_mm);
 
     if (!output) {
+        drawSelectionFrame(painter, viewport);
         drawCursorReadout(painter, viewport, background);
     }
 
@@ -823,6 +825,7 @@ bool PlanCanvas::navigateOverviewMap(QPointF position) {
                                    (world_min.y + world_max.y) * 0.5};
     m_view_center = {world_center.x + (position.x() - inner.center().x()) / map_scale,
                      world_center.y - (position.y() - inner.center().y()) / map_scale};
+    updateCursor(position);
     update();
     return true;
 }
@@ -901,9 +904,14 @@ void PlanCanvas::setDraftRedoRequested(std::function<void()> callback) {
 bool PlanCanvas::eventFilter(QObject* watched, QEvent* event) {
     if (event->type() == QEvent::Show) {
         const auto* dialog = qobject_cast<QDialog*>(watched);
-        if (dialog && dialog->isModal()) resetPerformanceMeasurements();
-    } else if (event->type() == QEvent::WindowBlocked && watched == window()) {
+        if (dialog && dialog->isModal()) {
+            resetPerformanceMeasurements();
+            resetGesture();
+        }
+    } else if ((event->type() == QEvent::WindowBlocked ||
+                event->type() == QEvent::WindowDeactivate) && watched == window()) {
         resetPerformanceMeasurements();
+        resetGesture();
     }
     return QWidget::eventFilter(watched, event);
 }
@@ -912,11 +920,13 @@ bool PlanCanvas::event(QEvent* event) {
     switch (event->type()) {
     case QEvent::Hide:
     case QEvent::WindowBlocked:
+    case QEvent::WindowDeactivate:
+    case QEvent::UngrabMouse:
         resetPerformanceMeasurements();
-        m_selection_start.reset();
-        m_selection_dragging = false;
-        m_overview_dragging = false;
-        m_panning = false;
+        resetGesture();
+        m_touch_active = false;
+        m_touch_id = -1;
+        m_tablet_active = false;
         break;
     case QEvent::TouchBegin:
     case QEvent::TouchUpdate:
@@ -967,11 +977,7 @@ bool PlanCanvas::event(QEvent* event) {
                 }
             }
             if (event->type() == QEvent::TouchCancel) {
-                m_selection_start.reset();
-                m_selection_dragging = false;
-                m_overview_dragging = false;
-                m_panning = false;
-                update();
+                resetGesture();
             } else {
                 pointerRelease(position, Qt::LeftButton);
             }
@@ -1010,21 +1016,26 @@ bool PlanCanvas::event(QEvent* event) {
 
 void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
                               Qt::KeyboardModifiers modifiers) {
-    if (button == Qt::MiddleButton ||
-        (button == Qt::LeftButton && (modifiers.testFlag(Qt::AltModifier) ||
-                                     overviewMapRect().contains(position))))
+    const bool pan = button == Qt::MiddleButton ||
+        (button == Qt::LeftButton && (modifiers.testFlag(Qt::ControlModifier) ||
+                                     modifiers.testFlag(Qt::AltModifier)));
+    // Navigation can take over a pending marquee, but additional buttons cannot
+    // steal an active navigation gesture or complete the abandoned selection.
+    if (m_gesture_button != Qt::NoButton && (m_panning || !pan)) return;
+    resetGesture();
+    if (pan || (button == Qt::LeftButton && overviewMapRect().contains(position)))
         beginPerformanceMeasurement(PerformanceMetric::navigation);
     setFocus();
     updateCursor(position);
-    if (button == Qt::MiddleButton ||
-        (button == Qt::LeftButton && modifiers.testFlag(Qt::AltModifier))) {
+    m_gesture_button = button;
+    if (pan) {
         m_panning = true;
         m_pan_start = position;
         m_pan_view_start = m_view_center;
         return;
     }
-    if (button == Qt::RightButton && m_tool == CanvasTool::boundary) {
-        if (m_finish_requested) m_finish_requested();
+    if (button == Qt::RightButton) {
+        m_right_start = position;
         return;
     }
     if (button != Qt::LeftButton) return;
@@ -1036,8 +1047,7 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
         m_selection_start = position;
         m_selection_end = position;
         m_selection_dragging = false;
-        m_selection_additive = modifiers.testFlag(Qt::ControlModifier) ||
-                               modifiers.testFlag(Qt::ShiftModifier);
+        m_selection_additive = modifiers.testFlag(Qt::ShiftModifier);
     } else if (closingAnchor(position) && m_finish_requested) {
         m_finish_requested();
     } else if (m_point_clicked) {
@@ -1047,6 +1057,9 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
 
 void PlanCanvas::pointerMove(QPointF position) {
     m_last_mouse_position = position;
+    if (m_gesture_button == Qt::RightButton &&
+        (position - m_right_start).manhattanLength() >= QApplication::startDragDistance())
+        m_right_dragging = true;
     if (m_overview_dragging) {
         (void)navigateOverviewMap(position);
         return;
@@ -1068,6 +1081,19 @@ void PlanCanvas::pointerMove(QPointF position) {
 }
 
 void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button) {
+    if (button != m_gesture_button) return;
+    // Publish the final effective point before any click callback. A normal
+    // click can cross a snap boundary between press and release without Qt
+    // delivering an intervening move event; authoring must use the release
+    // point the user actually chose.
+    updateCursor(position);
+    if (button == Qt::RightButton) {
+        const bool clicked = !m_right_dragging &&
+            (position - m_right_start).manhattanLength() < QApplication::startDragDistance();
+        resetGesture();
+        if (clicked && m_right_clicked) m_right_clicked(inputPoint(position));
+        return;
+    }
     if (button == Qt::LeftButton && m_selection_start) {
         const auto start = *m_selection_start;
         const bool dragging = m_selection_dragging ||
@@ -1075,7 +1101,7 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button) {
         m_selection_start.reset();
         m_selection_dragging = false;
         if (dragging) {
-            const auto ids = rectangleHits(QRectF(start, position).normalized());
+            const auto ids = rectangleHits(QRectF(start, position).normalized(), position.x() < start.x());
             if (m_entities_selected) m_entities_selected(ids, m_selection_additive);
         } else if (m_entity_selection_clicked) {
             m_entity_selection_clicked(hitTest(position), m_selection_additive);
@@ -1084,8 +1110,105 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button) {
         }
         update();
     }
-    if (button == Qt::LeftButton) m_overview_dragging = false;
-    if (button == Qt::MiddleButton || button == Qt::LeftButton) m_panning = false;
+    resetGesture();
+}
+
+void PlanCanvas::resetGesture() {
+    m_gesture_button = Qt::NoButton;
+    m_panning = false;
+    m_overview_dragging = false;
+    m_selection_start.reset();
+    m_selection_dragging = false;
+    m_right_dragging = false;
+    update();
+}
+
+void PlanCanvas::setRightClicked(std::function<void(Vec2)> callback) {
+    m_right_clicked = std::move(callback);
+}
+
+void PlanCanvas::mouseDoubleClickEvent(QMouseEvent* event) {
+    // Qt dispatches press/release/double-click/release. The first click already
+    // authored or selected; consuming the second press avoids duplicate points
+    // and Shift-selection toggles. Preserve any other button's navigation.
+    event->accept();
+}
+
+std::optional<QRectF> PlanCanvas::selectionBounds() const {
+    return selectionBounds(QRectF(rect()));
+}
+
+std::optional<QRectF> PlanCanvas::selectionBounds(const QRectF& viewport) const {
+    std::optional<QRectF> result;
+    const auto include = [&](const QRectF& bounds) {
+        if (!std::isfinite(bounds.left()) || !std::isfinite(bounds.right()) ||
+            !std::isfinite(bounds.top()) || !std::isfinite(bounds.bottom())) return;
+        // Explicit extrema retain zero-width/height geometry such as lines.
+        result = result ? QRectF(QPointF(std::min(result->left(), bounds.left()),
+                                         std::min(result->top(), bounds.top())),
+                                 QPointF(std::max(result->right(), bounds.right()),
+                                         std::max(result->bottom(), bounds.bottom())))
+                        : bounds;
+    };
+    for (const auto& entity : m_entities) {
+        if (!entity.selected) continue;
+        const auto width = entity.type == QStringLiteral("wall")
+            ? std::max(entity.thickness_metres, 0.04) : entity.stroke_width_metres;
+        const auto padding = std::isfinite(width) && width > 0.0 ? width * m_scale * 0.5 : 1.5;
+        for (const auto& segment : entity.segments) {
+            Vec2 minimum = segment.start;
+            Vec2 maximum = segment.end;
+            try {
+                const auto bounds = segment_bounds(segment);
+                minimum = bounds.minimum;
+                maximum = bounds.maximum;
+            } catch (const std::invalid_argument&) {
+                // Match the finite endpoint fallback used for view fitting.
+            }
+            include(QRectF(toScreen(minimum, viewport), toScreen(maximum, viewport))
+                        .normalized().adjusted(-padding, -padding, padding, padding));
+        }
+    }
+    for (const auto& label : m_labels) {
+        if (!label.selected || !drawable_label(label)) continue;
+        const auto layout = label_layout(label, font(), this, m_scale, logicalDpiY());
+        include(label_transform(label, toScreen(label.position, viewport)).mapRect(layout.bounds));
+    }
+    for (const auto& reference : m_references) {
+        if (!reference.selected || !reference.visible || reference.image.isNull()) continue;
+        const auto unit = reference.metres_per_source_unit * reference.scale;
+        if (!std::isfinite(unit) || unit <= 0.0) continue;
+        QTransform transform;
+        transform.translate(viewport.center().x(), viewport.center().y());
+        transform.scale(m_scale, -m_scale);
+        transform.translate(reference.position.x - m_view_center.x,
+                            reference.position.y - m_view_center.y);
+        if (std::isfinite(reference.rotation_degrees)) transform.rotate(reference.rotation_degrees);
+        const auto width = reference.image.width() * unit;
+        const auto height = reference.image.height() * unit;
+        include(transform.mapRect(QRectF(-width * 0.5, -height * 0.5, width, height)));
+    }
+    if (result) *result = result->adjusted(-6.0, -6.0, 6.0, 6.0);
+    return result;
+}
+
+void PlanCanvas::drawSelectionFrame(QPainter& painter, const QRectF& viewport) const {
+    const auto bounds = selectionBounds(viewport);
+    if (!bounds) return;
+    // Keep a frame visible when zooming into a large selected item. The API
+    // retains its true bounds; only the painted frame hugs the visible extent.
+    const auto frame = bounds->intersected(viewport.adjusted(5.0, 5.0, -5.0, -5.0));
+    if (frame.isEmpty()) return;
+    painter.save();
+    painter.setClipRect(viewport, Qt::IntersectClip);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setBrush(Qt::NoBrush);
+    // A white halo keeps the blue frame legible over dark fills and underlays.
+    painter.setPen(QPen(QColor(255, 255, 255, 235), 4.0));
+    painter.drawRect(frame);
+    painter.setPen(QPen(QColor(37, 99, 235), 1.5));
+    painter.drawRect(frame);
+    painter.restore();
 }
 
 void PlanCanvas::paintEvent(QPaintEvent* event) {
@@ -1188,12 +1311,8 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
         return;
     }
     if (event->key() == Qt::Key_Escape) {
-        if (m_selection_start || m_overview_dragging || m_panning) {
-            m_selection_start.reset();
-            m_selection_dragging = false;
-            m_overview_dragging = false;
-            m_panning = false;
-            update();
+        if (m_gesture_button != Qt::NoButton) {
+            resetGesture();
             event->accept();
             return;
         }
@@ -1220,6 +1339,7 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
 
 void PlanCanvas::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
+    if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
     update();
 }
 
@@ -1258,10 +1378,14 @@ Vec2 PlanCanvas::inputPoint(QPointF point) const {
     return snapped(toModel(point, rect()));
 }
 
-QStringList PlanCanvas::rectangleHits(const QRectF& rectangle) const {
+QStringList PlanCanvas::rectangleHits(const QRectF& rectangle, bool crossing) const {
     QStringList result;
     const auto add = [&](const QString& id) {
         if (!id.isEmpty() && !result.contains(id)) result.push_back(id);
+    };
+    const auto matches = [&](const QPainterPath& path) {
+        return !path.isEmpty() && (crossing ? path.intersects(rectangle)
+                                           : rectangle.contains(path.boundingRect()));
     };
     QTransform model_to_screen;
     model_to_screen.translate(QRectF(rect()).center().x(), QRectF(rect()).center().y());
@@ -1287,18 +1411,18 @@ QStringList PlanCanvas::rectangleHits(const QRectF& rectangle) const {
         stroker.setWidth(std::isfinite(width) ? std::max(3.0, width) : 3.0);
         // Stroke open paths before intersection so Qt cannot implicitly fill
         // an open chain and select empty space between unrelated segments.
-        bool hit = stroker.createStroke(model_to_screen.map(path)).intersects(rectangle);
-        if (!hit && entity.filled) {
+        auto screen_path = stroker.createStroke(model_to_screen.map(path));
+        if (entity.filled) {
             if (const auto fill = closed_entity_path(entity))
-                hit = model_to_screen.map(*fill).intersects(rectangle);
+                screen_path.addPath(model_to_screen.map(*fill));
         }
-        if (hit) add(entity.id);
+        if (matches(screen_path)) add(entity.id);
     }
     for (const auto& label : m_labels) {
         if (!drawable_label(label)) continue;
         QPainterPath path;
         path.addRect(label_layout(label, font(), this, m_scale, logicalDpiY()).bounds);
-        if (label_transform(label, toScreen(label.position, rect())).map(path).intersects(rectangle))
+        if (matches(label_transform(label, toScreen(label.position, rect())).map(path)))
             add(label.id);
     }
     for (const auto& reference : m_references) {
@@ -1313,7 +1437,7 @@ QStringList PlanCanvas::rectangleHits(const QRectF& rectangle) const {
         path.addRect(QRectF(-reference.image.width() * unit * 0.5,
                             -reference.image.height() * unit * 0.5,
                             reference.image.width() * unit, reference.image.height() * unit));
-        if (transform.map(path).intersects(rectangle)) add(reference.id);
+        if (matches(transform.map(path))) add(reference.id);
     }
     return result;
 }
@@ -1609,6 +1733,11 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
         // independent of the model-to-paper scale and avoid altering geometry.
         pen.setCosmetic(true);
         pen.setWidthF(std::max(0.1, paper_width));
+    } else if (!output && entity.type == QStringLiteral("symbol")) {
+        // Library components remain legible at normal plan zoom without
+        // turning their persisted geometry into model-space wall thickness.
+        pen.setCosmetic(true);
+        pen.setWidthF(std::max(1.15, entity.stroke_width_metres * m_scale));
     } else if (entity.type == QStringLiteral("wall")) {
         pen.setWidthF(std::max(entity.thickness_metres, 0.04));
     } else if (entity.stroke_width_metres > 0.0 &&
