@@ -108,6 +108,51 @@ class DistributionSbomTests(unittest.TestCase):
         altered["binaries"] = list(reversed(altered["binaries"]))
         self.assertEqual(first, sbom.build_sbom(altered, "b" * 64))
 
+    def test_retains_nested_source_provenance_without_treating_tree_hash_as_file(self):
+        inventory = self.inventory()
+        source = {
+            "kind": "planegcs", "upstream_commit": "1" * 40,
+            "provenance_path": "third_party/solver/SOURCE.md",
+            "provenance_sha256": digest(b"provenance"),
+            "source_paths": [
+                {"kind": "directory", "path": "third_party/solver", "sha256": digest(b"tree")},
+                {"kind": "file", "path": "third_party/solver/shim.h", "sha256": digest(b"shim")},
+            ],
+            "upstream_files": [
+                {"path": "third_party/solver/solver.cpp", "sha256": digest(b"solver")},
+                inventory["components"][1]["notices"][0],
+            ],
+        }
+        inventory["components"][1]["package"]["source"] = source
+        inventory["components"][1]["source_inputs"].append(
+            {"kind": "directory", "path": "third_party/component-tree", "sha256": digest(b"component-tree")})
+        inventory["static_inputs"][0]["source_inputs"].append(
+            {"kind": "directory", "path": "third_party/static-tree", "sha256": digest(b"static-tree")})
+        document = sbom.build_sbom(inventory)
+        package = next(row for row in document["packages"] if row["name"] == "Dependency")
+        self.assertEqual(json.loads(package["sourceInfo"]), source)
+        files = {row["fileName"]: row for row in document["files"]}
+        self.assertNotIn("third_party/solver", files)
+        self.assertNotIn("third_party/component-tree", files)
+        self.assertNotIn("third_party/static-tree", files)
+        for path in ("third_party/solver/SOURCE.md", "third_party/solver/shim.h",
+                     "third_party/solver/solver.cpp", "LICENSE"):
+            self.assertIn(files[path]["SPDXID"], package["hasFiles"])
+        self.assertEqual(len([row for row in document["files"] if row["fileName"] == "LICENSE"]), 1)
+
+    def test_nested_source_evidence_rejects_invalid_files(self):
+        for source in (
+            {"upstream_files": [{"path": "../escape.cpp", "sha256": "a" * 64}]},
+            {"upstream_files": [{"path": "source.cpp", "sha256": "bad"}]},
+            {"provenance_path": "SOURCE.md", "provenance_sha256": "bad"},
+            {"source_paths": [{"kind": "unknown", "path": "source", "sha256": "a" * 64}]},
+        ):
+            with self.subTest(source=source):
+                inventory = self.inventory()
+                inventory["components"][1]["package"]["source"] = source
+                with self.assertRaises(sbom.SbomError):
+                    sbom.build_sbom(inventory)
+
     def test_invalid_paths_and_hashes_fail_closed(self):
         for mutate in (
             lambda value: value["binaries"][0].update({"destination": "../escape.exe"}),

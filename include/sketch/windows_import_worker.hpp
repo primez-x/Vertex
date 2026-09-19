@@ -52,6 +52,8 @@ struct WindowsImportWorkerReport {
     bool proj_offline_applied{};
     std::uint32_t process_id{};
     std::uint32_t exit_code{};
+    // Win32 error captured immediately when CreateProcessW fails; zero otherwise.
+    std::uint32_t launch_error{};
     std::vector<std::byte> output;
     // Codes are stable and deliberately exclude paths, command lines and
     // worker-provided text.

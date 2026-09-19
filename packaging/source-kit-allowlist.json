@@ -307,6 +307,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/requirements/engineering-requirements-checklist.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/evidence/apx-anno-001.json"
     },
     {
@@ -772,6 +776,14 @@
     {
       "category": "docs",
       "path": "docs/requirements/README.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/user-feedback-2026-09-19.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/vertex-manual-testing-checklist.md"
     },
     {
       "category": "docs",
@@ -1436,6 +1448,14 @@
     {
       "category": "source",
       "path": "scripts/test-desktop.ps1"
+    },
+    {
+      "category": "source",
+      "path": "scripts/test-import-worker-independent.md"
+    },
+    {
+      "category": "source",
+      "path": "scripts/test-import-worker-independent.ps1"
     },
     {
       "category": "source",

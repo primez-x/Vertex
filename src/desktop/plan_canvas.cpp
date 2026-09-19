@@ -2,12 +2,19 @@
 
 #include <QApplication>
 #include <QDialog>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QMimeData>
 #include <QFontMetricsF>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPainterPathStroker>
 #include <QPaintEvent>
 #include <QTabletEvent>
 #include <QTouchEvent>
@@ -252,6 +259,7 @@ PlanCanvas::PlanCanvas(QWidget* parent) : QWidget(parent) {
     setFocusPolicy(Qt::StrongFocus);
     setMinimumSize(480, 360);
     setMouseTracking(true);
+    setAcceptDrops(true);
     setAttribute(Qt::WA_AcceptTouchEvents, true);
     setAttribute(Qt::WA_TabletTracking, true);
     setAutoFillBackground(false);
@@ -264,6 +272,9 @@ void PlanCanvas::setEntities(std::vector<CanvasEntity> entities) {
 }
 
 void PlanCanvas::setTool(CanvasTool tool) {
+    m_selection_start.reset();
+    m_selection_dragging = false;
+    m_overview_dragging = false;
     m_tool = tool;
     setCursor(tool == CanvasTool::select ? Qt::ArrowCursor : Qt::CrossCursor);
     setFocus();
@@ -700,9 +711,27 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
 void PlanCanvas::drawOverviewMap(QPainter& painter) const {
     const auto map = overviewMapRect();
     const auto bounds = contentBounds();
-    if (map.isEmpty() || !bounds) return;
+    if (map.isEmpty()) return;
+    const auto light = m_canvas_background.lightnessF() > 0.5;
+    painter.save();
+    painter.setPen(QPen(light ? QColor(128, 147, 173) : QColor(120, 143, 174), 1.0));
+    painter.setBrush(light ? QColor(255, 255, 255, 242) : QColor(17, 25, 38, 242));
+    painter.drawRoundedRect(map, 8.0, 8.0);
+    painter.setPen(light ? QColor(50, 65, 84) : QColor(220, 232, 246));
+    QFont map_font = painter.font();
+    map_font.setPixelSize(10);
+    painter.setFont(map_font);
+    painter.drawText(map.adjusted(8.0, 3.0, -8.0, -3.0), Qt::AlignTop | Qt::AlignLeft,
+                     tr("Overview · click or drag to pan"));
+    if (!bounds) {
+        painter.drawText(map.adjusted(8.0, 22.0, -8.0, -8.0), Qt::AlignCenter,
+                         tr("No drawing yet"));
+        painter.restore();
+        return;
+    }
+    painter.restore();
 
-    const auto inner = map.adjusted(8.0, 8.0, -8.0, -8.0);
+    const auto inner = map.adjusted(8.0, 22.0, -8.0, -8.0);
     if (inner.width() <= 0.0 || inner.height() <= 0.0) return;
     const auto minimum = bounds->first;
     const auto maximum = bounds->second;
@@ -721,12 +750,9 @@ void PlanCanvas::drawOverviewMap(QPainter& painter) const {
         return QPointF(inner.center().x() + (point.x - world_center.x) * map_scale,
                        inner.center().y() - (point.y - world_center.y) * map_scale);
     };
-    const auto light = m_canvas_background.lightnessF() > 0.5;
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setPen(QPen(light ? QColor(185, 198, 216, 235) : QColor(97, 113, 137, 235), 1.0));
-    painter.setBrush(light ? QColor(255, 255, 255, 232) : QColor(17, 25, 38, 236));
-    painter.drawRoundedRect(map, 8.0, 8.0);
+    painter.setBrush(Qt::NoBrush);
     painter.setClipRect(inner);
     for (const auto& entity : m_entities) {
         auto pen_color = color_for(entity);
@@ -762,8 +788,10 @@ void PlanCanvas::drawOverviewMap(QPainter& painter) const {
                       Qt::DashLine, Qt::RoundCap, Qt::RoundJoin);
     viewport_pen.setCosmetic(true);
     painter.setPen(viewport_pen);
-    painter.setBrush(Qt::NoBrush);
-    painter.drawRect(viewport_rect);
+    painter.setBrush(QColor(32, 139, 220, 28));
+    // Keep an enclosing viewport visible instead of clipping all four edges
+    // away when the full drawing is already in view.
+    painter.drawRect(viewport_rect.intersected(inner.adjusted(1.0, 1.0, -1.0, -1.0)));
     painter.restore();
 
     painter.save();
@@ -778,7 +806,7 @@ bool PlanCanvas::navigateOverviewMap(QPointF position) {
     if (map.isEmpty() || !map.contains(position)) return false;
     const auto bounds = contentBounds();
     if (!bounds) return true;
-    const auto inner = map.adjusted(8.0, 8.0, -8.0, -8.0);
+    const auto inner = map.adjusted(8.0, 22.0, -8.0, -8.0);
     const auto minimum = bounds->first;
     const auto maximum = bounds->second;
     const auto span_x = std::max(maximum.x - minimum.x, 0.1);
@@ -809,6 +837,41 @@ void PlanCanvas::setEntityClicked(std::function<void(QString)> callback) {
 
 void PlanCanvas::setEntitySelectionClicked(std::function<void(QString, bool)> callback) {
     m_entity_selection_clicked = std::move(callback);
+}
+
+void PlanCanvas::setEntitiesSelected(std::function<void(QStringList, bool)> callback) {
+    m_entities_selected = std::move(callback);
+}
+
+void PlanCanvas::setSymbolDropped(std::function<void(QString, double, Vec2)> callback) {
+    m_symbol_dropped = std::move(callback);
+}
+
+void PlanCanvas::dragEnterEvent(QDragEnterEvent* event) {
+    if (m_symbol_dropped && event->mimeData()->hasFormat("application/x-vertex-symbol") &&
+        event->mimeData()->data("application/x-vertex-symbol").size() <= 4096)
+        event->acceptProposedAction();
+}
+
+void PlanCanvas::dragMoveEvent(QDragMoveEvent* event) {
+    if (m_symbol_dropped && event->mimeData()->hasFormat("application/x-vertex-symbol")) {
+        updateCursor(event->position());
+        event->acceptProposedAction();
+    }
+}
+
+void PlanCanvas::dropEvent(QDropEvent* event) {
+    if (!m_symbol_dropped) return;
+    const auto payload = event->mimeData()->data("application/x-vertex-symbol");
+    if (payload.size() > 4096) return;
+    const auto document = QJsonDocument::fromJson(payload);
+    if (!document.isObject()) return;
+    const auto object = document.object();
+    const auto id = object.value("id").toString();
+    const auto scale = object.value("scale").toDouble(0.0);
+    if (id.isEmpty() || id.size() > 256 || !std::isfinite(scale) || scale <= 0.0 || scale > 100.0) return;
+    m_symbol_dropped(id, scale, snapped(toModel(event->position(), rect())));
+    event->acceptProposedAction();
 }
 
 void PlanCanvas::setCursorMoved(std::function<void(Vec2)> callback) {
@@ -850,6 +913,10 @@ bool PlanCanvas::event(QEvent* event) {
     case QEvent::Hide:
     case QEvent::WindowBlocked:
         resetPerformanceMeasurements();
+        m_selection_start.reset();
+        m_selection_dragging = false;
+        m_overview_dragging = false;
+        m_panning = false;
         break;
     case QEvent::TouchBegin:
     case QEvent::TouchUpdate:
@@ -899,7 +966,15 @@ bool PlanCanvas::event(QEvent* event) {
                     break;
                 }
             }
-            pointerRelease(position, Qt::LeftButton);
+            if (event->type() == QEvent::TouchCancel) {
+                m_selection_start.reset();
+                m_selection_dragging = false;
+                m_overview_dragging = false;
+                m_panning = false;
+                update();
+            } else {
+                pointerRelease(position, Qt::LeftButton);
+            }
             m_touch_active = false;
             m_touch_id = -1;
         }
@@ -948,19 +1023,40 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
         m_pan_view_start = m_view_center;
         return;
     }
+    if (button == Qt::RightButton && m_tool == CanvasTool::boundary) {
+        if (m_finish_requested) m_finish_requested();
+        return;
+    }
     if (button != Qt::LeftButton) return;
-    if (navigateOverviewMap(position)) return;
+    if (navigateOverviewMap(position)) {
+        m_overview_dragging = true;
+        return;
+    }
     if (m_tool == CanvasTool::select) {
-        if (m_entity_selection_clicked)
-            m_entity_selection_clicked(hitTest(position), modifiers.testFlag(Qt::ControlModifier));
-        else if (m_entity_clicked) m_entity_clicked(hitTest(position));
+        m_selection_start = position;
+        m_selection_end = position;
+        m_selection_dragging = false;
+        m_selection_additive = modifiers.testFlag(Qt::ControlModifier) ||
+                               modifiers.testFlag(Qt::ShiftModifier);
+    } else if (closingAnchor(position) && m_finish_requested) {
+        m_finish_requested();
     } else if (m_point_clicked) {
-        m_point_clicked(snapped(toModel(position, rect())));
+        m_point_clicked(inputPoint(position));
     }
 }
 
 void PlanCanvas::pointerMove(QPointF position) {
     m_last_mouse_position = position;
+    if (m_overview_dragging) {
+        (void)navigateOverviewMap(position);
+        return;
+    }
+    if (m_selection_start) {
+        m_selection_end = position;
+        if ((position - *m_selection_start).manhattanLength() >= QApplication::startDragDistance())
+            m_selection_dragging = true;
+        update();
+    }
     if (m_panning) {
         beginPerformanceMeasurement(PerformanceMetric::navigation);
         const auto delta = position - m_pan_start;
@@ -972,7 +1068,23 @@ void PlanCanvas::pointerMove(QPointF position) {
 }
 
 void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button) {
-    Q_UNUSED(position);
+    if (button == Qt::LeftButton && m_selection_start) {
+        const auto start = *m_selection_start;
+        const bool dragging = m_selection_dragging ||
+            (position - start).manhattanLength() >= QApplication::startDragDistance();
+        m_selection_start.reset();
+        m_selection_dragging = false;
+        if (dragging) {
+            const auto ids = rectangleHits(QRectF(start, position).normalized());
+            if (m_entities_selected) m_entities_selected(ids, m_selection_additive);
+        } else if (m_entity_selection_clicked) {
+            m_entity_selection_clicked(hitTest(position), m_selection_additive);
+        } else if (m_entity_clicked) {
+            m_entity_clicked(hitTest(position));
+        }
+        update();
+    }
+    if (button == Qt::LeftButton) m_overview_dragging = false;
     if (button == Qt::MiddleButton || button == Qt::LeftButton) m_panning = false;
 }
 
@@ -983,6 +1095,20 @@ void PlanCanvas::paintEvent(QPaintEvent* event) {
     {
         QPainter painter(this);
         renderScene(painter, QRectF(rect()));
+        if (m_selection_start && m_selection_dragging) {
+            painter.setPen(QPen(QColor(37, 99, 235), 1.5, Qt::DashLine));
+            painter.setBrush(QColor(37, 99, 235, 38));
+            painter.drawRect(QRectF(*m_selection_start, m_selection_end).normalized());
+        }
+        if (m_last_mouse_position) {
+            if (const auto anchor = closingAnchor(*m_last_mouse_position)) {
+                const auto screen = toScreen(*anchor, rect());
+                painter.setPen(QPen(QColor(22, 163, 74), 2.0));
+                painter.setBrush(QColor(22, 163, 74, 60));
+                painter.drawEllipse(screen, 10.0, 10.0);
+                painter.drawText(screen + QPointF(14.0, -12.0), tr("Click to close"));
+            }
+        }
     }
     const auto completed = PerformanceClock::now();
     const auto callback = m_performance_measured;
@@ -1062,6 +1188,15 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
         return;
     }
     if (event->key() == Qt::Key_Escape) {
+        if (m_selection_start || m_overview_dragging || m_panning) {
+            m_selection_start.reset();
+            m_selection_dragging = false;
+            m_overview_dragging = false;
+            m_panning = false;
+            update();
+            event->accept();
+            return;
+        }
         if (m_cancel_requested) {
             m_cancel_requested();
         }
@@ -1104,6 +1239,83 @@ Vec2 PlanCanvas::snapped(Vec2 point) const {
     }
     constexpr double grid = 0.25;
     return {std::round(point.x / grid) * grid, std::round(point.y / grid) * grid};
+}
+
+std::optional<Vec2> PlanCanvas::closingAnchor(QPointF point) const {
+    if (m_tool != CanvasTool::boundary || !m_boundary_draft_preview ||
+        !m_boundary_draft_preview->can_close_on_anchor ||
+        !m_boundary_draft_preview->anchor) return std::nullopt;
+    const auto anchor = *m_boundary_draft_preview->anchor;
+    const auto offset = point - toScreen(anchor, rect());
+    // A fixed pixel target remains easy to hit at any zoom and takes priority
+    // over grid rounding, including with grid snap disabled.
+    return std::hypot(offset.x(), offset.y()) <= 12.0
+        ? std::optional{anchor} : std::nullopt;
+}
+
+Vec2 PlanCanvas::inputPoint(QPointF point) const {
+    if (const auto anchor = closingAnchor(point)) return *anchor;
+    return snapped(toModel(point, rect()));
+}
+
+QStringList PlanCanvas::rectangleHits(const QRectF& rectangle) const {
+    QStringList result;
+    const auto add = [&](const QString& id) {
+        if (!id.isEmpty() && !result.contains(id)) result.push_back(id);
+    };
+    QTransform model_to_screen;
+    model_to_screen.translate(QRectF(rect()).center().x(), QRectF(rect()).center().y());
+    model_to_screen.scale(m_scale, -m_scale);
+    model_to_screen.translate(-m_view_center.x, -m_view_center.y);
+    for (const auto& entity : m_entities) {
+        QPainterPath path;
+        for (const auto& segment : entity.segments) {
+            path.moveTo(segment.start.x, segment.start.y);
+            if (segment.sweep_radians == 0.0) {
+                path.lineTo(segment.end.x, segment.end.y);
+            } else if (const auto arc = arc_info(segment)) {
+                path.arcTo(QRectF(arc->center.x - arc->radius, arc->center.y - arc->radius,
+                                 2.0 * arc->radius, 2.0 * arc->radius),
+                           -arc->start_angle * 180.0 / pi,
+                           -segment.sweep_radians * 180.0 / pi);
+            }
+        }
+        QPainterPathStroker stroker;
+        const auto width = entity.type == QStringLiteral("wall")
+            ? std::max(entity.thickness_metres, 0.04) * m_scale
+            : entity.stroke_width_metres * m_scale;
+        stroker.setWidth(std::isfinite(width) ? std::max(3.0, width) : 3.0);
+        // Stroke open paths before intersection so Qt cannot implicitly fill
+        // an open chain and select empty space between unrelated segments.
+        bool hit = stroker.createStroke(model_to_screen.map(path)).intersects(rectangle);
+        if (!hit && entity.filled) {
+            if (const auto fill = closed_entity_path(entity))
+                hit = model_to_screen.map(*fill).intersects(rectangle);
+        }
+        if (hit) add(entity.id);
+    }
+    for (const auto& label : m_labels) {
+        if (!drawable_label(label)) continue;
+        QPainterPath path;
+        path.addRect(label_layout(label, font(), this, m_scale, logicalDpiY()).bounds);
+        if (label_transform(label, toScreen(label.position, rect())).map(path).intersects(rectangle))
+            add(label.id);
+    }
+    for (const auto& reference : m_references) {
+        const auto unit = reference.metres_per_source_unit * reference.scale;
+        if (!reference.visible || reference.image.isNull() ||
+            !std::isfinite(reference.position.x) || !std::isfinite(reference.position.y) ||
+            !std::isfinite(reference.rotation_degrees) || !std::isfinite(unit) || unit <= 0.0) continue;
+        QTransform transform = model_to_screen;
+        transform.translate(reference.position.x, reference.position.y);
+        transform.rotate(reference.rotation_degrees);
+        QPainterPath path;
+        path.addRect(QRectF(-reference.image.width() * unit * 0.5,
+                            -reference.image.height() * unit * 0.5,
+                            reference.image.width() * unit, reference.image.height() * unit));
+        if (transform.map(path).intersects(rectangle)) add(reference.id);
+    }
+    return result;
 }
 
 QString PlanCanvas::hitTest(QPointF point) const {
@@ -1183,8 +1395,9 @@ QString PlanCanvas::hitTest(QPointF point) const {
 void PlanCanvas::updateCursor(QPointF point) {
     m_last_mouse_position = point;
     if (m_cursor_moved) {
-        m_cursor_moved(snapped(toModel(point, rect())));
+        m_cursor_moved(inputPoint(point));
     }
+    update();
 }
 
 void PlanCanvas::drawGrid(QPainter& painter, const QRectF& viewport, double scale,
@@ -1319,8 +1532,7 @@ void PlanCanvas::drawCursorReadout(QPainter& painter, const QRectF& viewport,
         !viewport.contains(*m_last_mouse_position)) {
         return;
     }
-    const auto raw_point = toModel(*m_last_mouse_position, viewport);
-    const auto point = snapped(raw_point);
+    const auto point = inputPoint(*m_last_mouse_position);
     if (!std::isfinite(point.x) || !std::isfinite(point.y)) return;
 
     QString text = QStringLiteral("X %1   Y %2")

@@ -118,6 +118,8 @@ struct BoundaryDraftPreview {
     std::optional<Vec2> pen_position;
     std::optional<Segment> rubber_band;
     QString instruction;
+    // Authoring owns phase/pen state; dimension placement must never close.
+    bool can_close_on_anchor{false};
 };
 
 class PlanCanvas final : public QWidget {
@@ -185,6 +187,9 @@ public:
     void setPointClicked(std::function<void(Vec2)> callback);
     void setEntityClicked(std::function<void(QString)> callback);
     void setEntitySelectionClicked(std::function<void(QString, bool)> callback);
+    // Rectangle selection replaces the selection, or adds to it with Ctrl/Shift.
+    void setEntitiesSelected(std::function<void(QStringList, bool)> callback);
+    void setSymbolDropped(std::function<void(QString, double, Vec2)> callback);
     void setCursorMoved(std::function<void(Vec2)> callback);
     void setFinishRequested(std::function<void()> callback);
     void setCancelRequested(std::function<void()> callback);
@@ -202,6 +207,9 @@ protected:
     void wheelEvent(QWheelEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dragMoveEvent(QDragMoveEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
 
 private:
     using PerformanceClock = std::chrono::steady_clock;
@@ -220,6 +228,9 @@ private:
     [[nodiscard]] Vec2 toModel(QPointF point, const QRectF& viewport) const;
     [[nodiscard]] Vec2 snapped(Vec2 point) const;
     [[nodiscard]] QString hitTest(QPointF point) const;
+    [[nodiscard]] QStringList rectangleHits(const QRectF& rectangle) const;
+    [[nodiscard]] std::optional<Vec2> closingAnchor(QPointF point) const;
+    [[nodiscard]] Vec2 inputPoint(QPointF point) const;
     void updateCursor(QPointF point);
     void drawGrid(QPainter& painter, const QRectF& viewport, double scale,
                   Vec2 view_center) const;
@@ -261,6 +272,11 @@ private:
     Vec2 m_view_center{0.0, 0.0};
     std::optional<QPointF> m_last_mouse_position;
     bool m_panning{false};
+    bool m_overview_dragging{false};
+    std::optional<QPointF> m_selection_start;
+    QPointF m_selection_end;
+    bool m_selection_dragging{false};
+    bool m_selection_additive{false};
     QPointF m_pan_start;
     Vec2 m_pan_view_start{};
     bool m_touch_active{false};
@@ -270,6 +286,8 @@ private:
     std::function<void(Vec2)> m_point_clicked;
     std::function<void(QString)> m_entity_clicked;
     std::function<void(QString, bool)> m_entity_selection_clicked;
+    std::function<void(QStringList, bool)> m_entities_selected;
+    std::function<void(QString, double, Vec2)> m_symbol_dropped;
     std::function<void(Vec2)> m_cursor_moved;
     std::function<void()> m_finish_requested;
     std::function<void()> m_cancel_requested;

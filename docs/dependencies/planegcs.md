@@ -42,6 +42,45 @@ being pulled into the DLL. There were no Eigen 5 API errors. The untouched
 upstream sources emitted seven MSVC C4267 `size_t`-to-`int` warnings in
 `GCS.cpp`; the vendored source is deliberately not edited to hide them.
 
+### Replacement build procedure and unverified handoff boundary
+
+In a separate copy of the source/build kit with the documented MSVC toolchain
+and prepared native prefix, build the shared library and its focused test:
+
+```powershell
+./scripts/build.ps1 -Configuration Release -SkipTests `
+  -Targets @('property_planegcs', 'constraints_tests')
+```
+
+Run `ctest --test-dir build/windows-release -R '^constraints$'
+--output-on-failure` using the CTest executable from the configured toolchain.
+The generated DLL is `build/windows-release/property_planegcs.dll`; the runtime
+inventory maps it to `bin/property_planegcs.dll`. An ABI-compatible replacement
+can be evaluated in a separate portable-package copy with the application
+closed. Preserve the original DLL and record both hashes. An intentional
+replacement makes the original package integrity manifest stale; a failed
+integrity check must not be presented as an unchanged, verified distribution.
+If exported interfaces or compiler ABI change, rebuild dependent application
+targets too. A replacement build and application launch have not been
+qualified by this documentation or by the SBOM exporter tests.
+
+The local build definition makes `property_planegcs` shared and
+`sketch_constraints` static; the latter is application-owned adapter code.
+Eigen and Boost headers contribute code to the solver build. The separate
+application SQLite amalgamation is also compiled statically and nlohmann JSON
+is header-only. Replacing a DLL does not replace these compiled contributions;
+their modification requires rebuilding the consuming targets. Source-kit
+allowlisting excludes dependency caches, so possession of that kit alone does
+not establish a complete offline rebuild environment.
+
+Remaining review evidence includes complete matching sources and build inputs
+for shipped dependencies (including Qt's embedded third-party contributions),
+verified replacement/rebuild results, notice completeness, and review of the
+applicable distribution terms. The local vendor SPDX may identify a source
+release tag rather than an immutable commit; the inventory must not relabel a
+vcpkg recipe revision as that upstream commit. This procedure describes the
+technical replacement boundary only and does not clear COMP-LIC-001.
+
 ## Application trust boundary
 
 PlaneGCS returns a candidate only. `solve_planar_constraints` independently:

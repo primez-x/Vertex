@@ -491,12 +491,15 @@
         "scripts/distribution_inventory.py",
         "scripts/distribution_sbom.py",
         "scripts/stage_portable_package.py",
+        "tests/test_distribution_sbom.py",
         "tests/test_stage_portable_package.py",
         "docs/dependencies/distribution-inventory.md",
+        "docs/dependencies/distribution-sbom.md",
+        "docs/dependencies/planegcs.md",
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "The inventory now produces a deterministic SPDX 2.3 document with package, notice, source, checksum, and dependency relationships, and portable staging fails closed unless every included component notice is explicitly allowlisted; exact revisions, legal review, relink evidence, and the production gate remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "The inventory produces a deterministic SPDX 2.3 document with package, notice, source, checksum, and dependency relationships, and portable staging fails closed unless every included component notice is explicitly allowlisted. The SBOM now retains each package's complete source-provenance record and exports validated file-level upstream/provenance inputs without treating directory tree digests as file hashes. PlaneGCS replacement-build instructions distinguish the shared DLL from statically compiled/header contributions. Complete matching dependency sources, live replacement/relink evidence, notice completeness, legal review, and the production gate remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "COMP-LIC-002",
@@ -2875,7 +2878,7 @@
       "implementation_status": "in_progress",
       "acceptance": "A worker security fixture verifies token/container policy, network denial, resource limits, path restrictions, and controlled parent termination.",
       "package": 8,
-      "blocker": "A live Windows AppContainer fixture must verify token isolation, network denial, limits, path restrictions, and controlled termination outside a parent Job Object.",
+      "blocker": "Production qualification still requires clean-machine installed-worker evidence, an externally observed network-denial attempt, an active parent-exit termination run, and immutable-module planting rejection.",
       "implementation_sources": [
         "include/sketch/import_worker_policy.hpp",
         "src/core/import_worker_policy.cpp",
@@ -2885,10 +2888,12 @@
         "tests/windows_import_worker_tests.cpp",
         "tests/windows_import_worker_probe.cpp",
         "docs/import-worker-security.md",
+        "scripts/test-import-worker-independent.ps1",
+        "scripts/test-import-worker-independent.md",
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Fail-closed worker policy and attestation/resource/path checks are implemented. The Windows broker now provisions an AppContainer profile, ACL-protected job directory, explicit handle list, controlled environment, suspended launch, Job Object limits, and post-launch token/network attestation; live clean-machine evidence remains required, and the runtime fixture skips when its host process is already inside a parent Job Object. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Fail-closed worker policy and attestation/resource/path checks are implemented. The Windows broker provisions an AppContainer profile, ACL-protected job directory, explicit handle list, broker-owned LOCALAPPDATA/TEMP paths, a controlled environment, suspended launch, Job Object limits, and post-launch token/network-capability attestation. A current-user WMI runner now launches the development fixtures outside the Codex parent Job Object; local Debug and Release runs verify the AppContainer token, absent network-capability SIDs, bounded output, stable binary provenance, and live watchdog termination. Active network denial, parent-exit kill-on-close, module-planting, installed-runtime, and clean-machine observations remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "SEC-WORKER-002",
@@ -2905,7 +2910,7 @@
       "implementation_status": "in_progress",
       "acceptance": "Adversarial fixtures terminate or reject safely, leave the core project usable, and produce actionable local diagnostics without network access.",
       "package": 8,
-      "blocker": "Adversarial live-worker fixtures must verify OS containment and project survival for malformed, timeout, crash, planting, and child-process escape cases.",
+      "blocker": "Clean-machine installed-worker fixtures must still verify project survival and OS containment for decoder crashes, module planting, child-process escape, active network attempts, and real malformed PDF/raster inputs.",
       "implementation_sources": [
         "include/sketch/import_worker_policy.hpp",
         "src/core/import_worker_policy.cpp",
@@ -2915,10 +2920,12 @@
         "tests/windows_import_worker_tests.cpp",
         "tests/windows_import_worker_probe.cpp",
         "docs/import-worker-security.md",
+        "scripts/test-import-worker-independent.ps1",
+        "scripts/test-import-worker-independent.md",
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Malformed input, traversal, expansion, timeout, child-process, crash, and module-path rejection decisions are covered by policy tests. The native broker rejects unsafe roots and limits output, terminates the whole Job Object on watchdog or output failure, and never returns partial output; adversarial clean-machine OS fixtures and project-survival evidence remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Malformed input, traversal, expansion, timeout, child-process, crash, and module-path rejection decisions are covered by policy tests. The native broker rejects unsafe roots and limits output, terminates the whole Job Object on watchdog or output failure, and never returns partial output. Job-free local Debug and Release fixtures now pass live echo, deadline termination, output-limit rejection, and malformed-image launch-error preservation. Decoder-crash, module-planting, child-process escape, installed PDF/raster, clean-machine, and project-survival evidence remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "SEC-PROJ-001",
@@ -2970,6 +2977,7 @@
         "include/sketch/performance_telemetry.hpp",
         "src/core/performance_telemetry.cpp",
         "tests/performance_telemetry_tests.cpp",
+        "tests/desktop_performance_tests.cpp",
         "src/desktop/main_window.cpp",
         "src/desktop/main.cpp",
         "scripts/test-desktop.ps1",
@@ -2978,7 +2986,7 @@
         "tests/test_performance_qualification.py",
         "docs/performance-qualification.md"
       ],
-      "implementation_note": "The desktop emits bounded process-local navigation timing reports and the benchmark harness provides deterministic p95 checks. A fail-closed qualification manifest now requires agreed-hardware identity, exact representative workload profiles, adequate sample counts, zero dropped samples, threshold results, and hash-bound raw reports. Representative navigation runs on agreed reference hardware remain open."
+      "implementation_note": "The desktop emits bounded process-local navigation timing reports and the benchmark harness provides deterministic p95 checks. An opt-in desktop runner now drives real plan-canvas zoom, pointer, and completed-paint paths for 100 bounded navigation samples while preserving source project bytes and document content. A fail-closed qualification manifest requires agreed-hardware identity, exact representative workload profiles, adequate sample counts, zero dropped samples, threshold results, and hash-bound raw reports. Native 3D, sheet presentation, all representative workloads, and agreed reference-hardware runs remain open."
     },
     {
       "id": "OPS-PERF-002",
@@ -3001,6 +3009,7 @@
         "include/sketch/performance_telemetry.hpp",
         "src/core/performance_telemetry.cpp",
         "tests/performance_telemetry_tests.cpp",
+        "tests/desktop_performance_tests.cpp",
         "src/desktop/main_window.cpp",
         "src/desktop/main.cpp",
         "scripts/test-desktop.ps1",
@@ -3009,7 +3018,7 @@
         "tests/test_performance_qualification.py",
         "docs/performance-qualification.md"
       ],
-      "implementation_note": "Input/edit percentile calculations, cancellable background regeneration, and source-revision ownership are implemented. The qualification manifest now binds adequate timing samples to a cancellation observation with stable document revision, stale-result discard, and valid-revision preservation. Representative hardware measurements and witnessed cancellation evidence remain open."
+      "implementation_note": "Input/edit percentile calculations, cancellable background regeneration, and source-revision ownership are implemented. An opt-in desktop runner now collects 100 real pointer/input and undo/redo edit samples through completed paints and verifies that the temporary probe restores entity and asset content without modifying the source project. The qualification manifest binds adequate timing samples to a cancellation observation with stable document revision, stale-result discard, and valid-revision preservation. Representative hardware measurements, broader ordinary-edit coverage, and witnessed integrated long-regeneration cancellation remain open."
     },
     {
       "id": "OPS-PERF-003",

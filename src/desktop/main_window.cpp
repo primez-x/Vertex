@@ -92,6 +92,9 @@
 #include <QLineEdit>
 #include <QKeySequenceEdit>
 #include <QListWidget>
+#include <QDrag>
+#include <QMimeData>
+#include <QPointer>
 #include <QMessageBox>
 #include <QMenu>
 #include <QPageSize>
@@ -116,6 +119,7 @@
 #include <QStyle>
 #include <QStyleFactory>
 #include <QStyleOptionViewItem>
+#include <QStyledItemDelegate>
 #include <QStatusBar>
 #include <QStandardPaths>
 #include <QSplitter>
@@ -1814,6 +1818,58 @@ bool is_visibility_container_item(const QTreeWidgetItem* item) {
 // check indicator. Keep that interaction distinguishable from a normal row
 // click without relying on the global cursor position (or on a stale deferred
 // event). The base widget still owns all selection and keyboard behavior.
+class SymbolLibraryList final : public QListWidget {
+public:
+    using QListWidget::QListWidget;
+protected:
+    void startDrag(Qt::DropActions) override {
+        if (!currentItem()) return;
+        const auto id = currentItem()->data(Qt::UserRole).toString();
+        if (id.isEmpty()) return;
+        auto* mime = new QMimeData;
+        mime->setData("application/x-vertex-symbol", QByteArray::fromStdString(
+            json{{"id", id.toStdString()}, {"scale", property("symbolScale").toDouble()}}.dump()));
+        QDrag drag(this);
+        drag.setMimeData(mime);
+        const auto ghost = currentItem()->icon().pixmap(64, 64);
+        drag.setPixmap(ghost);
+        drag.setHotSpot(QPoint(32, 32));
+        drag.exec(Qt::CopyAction);
+    }
+};
+
+class VisibilityEyeDelegate final : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+    void paint(QPainter* painter, const QStyleOptionViewItem& option,
+               const QModelIndex& index) const override {
+        QStyleOptionViewItem styled(option);
+        initStyleOption(&styled, index);
+        if (!(styled.features & QStyleOptionViewItem::HasCheckIndicator)) {
+            QStyledItemDelegate::paint(painter, option, index);
+            return;
+        }
+        auto* style = styled.widget ? styled.widget->style() : QApplication::style();
+        const auto rect = style->subElementRect(QStyle::SE_ItemViewItemCheckIndicator,
+                                               &styled, styled.widget);
+        // Retain Qt's check-state semantics and keyboard hit target, but draw
+        // a visibility eye instead of a form checkbox.
+        QStyledItemDelegate::paint(painter, option, index);
+        painter->save();
+        const bool selected = styled.state & QStyle::State_Selected;
+        painter->fillRect(rect.adjusted(-1, -1, 1, 1), styled.palette.brush(
+            selected ? QPalette::Highlight : QPalette::Base));
+        painter->setPen(QPen(styled.palette.color(selected ? QPalette::HighlightedText : QPalette::Text), 1.3));
+        painter->setBrush(Qt::NoBrush);
+        const auto eye = QRectF(rect).adjusted(1, 3, -1, -3);
+        painter->drawEllipse(eye);
+        painter->drawEllipse(eye.center(), 1.7, 1.7);
+        if (styled.checkState != Qt::Checked)
+            painter->drawLine(rect.topLeft() + QPoint(1, 1), rect.bottomRight() - QPoint(1, 1));
+        painter->restore();
+    }
+};
+
 class VisibilityTreeWidget final : public QTreeWidget {
 public:
     using QTreeWidget::QTreeWidget;
@@ -3195,11 +3251,11 @@ public:
             QWidget { font-size: 13px; }
             QDialog { background: $background; }
             QToolBar#primaryToolbar { background: $surface; border: 0; border-bottom: 1px solid $border;
-                       padding: 0 2px; spacing: 1px; min-height: 20px; max-height: 20px; }
+                       padding: 0 2px; spacing: 2px; min-height: 34px; max-height: 34px; }
             QToolBar::separator { background: $border; width: 1px; margin: 0 1px; }
             QPushButton, QToolButton { color: $foreground; background: $surface;
                 border: 1px solid $border; border-radius: 8px; padding: 8px 11px; }
-            QToolBar QToolButton { border-color: transparent; border-radius: 3px; padding: 1px 4px; min-height: 16px; max-height: 16px; }
+            QToolBar QToolButton { border-color: transparent; border-radius: 4px; padding: 3px 5px; min-height: 24px; max-height: 24px; }
             QToolBar QToolButton:hover { background: $selection; border-color: $selection; }
             QToolBar QToolButton:checked { background: $selection; color: $accent; border-color: $accent; }
             QWidget#toolPanel QToolButton { padding: 3px; min-height: 28px; max-height: 28px; }
@@ -3357,6 +3413,11 @@ public:
             const auto decode_splitter_sizes = [](QSplitter* splitter, const json& encoded,
                                                   const char* key) {
                 if (splitter == nullptr || !encoded.is_array()) return QList<int>{};
+                // Older profiles stored navigator, vertical tools, canvas and
+                // inspector separately. Preserve their useful width intent.
+                if (std::string_view(key) == "workspace_splitter" && splitter->count() == 2 && encoded.size() == 4)
+                    return QList<int>{encoded.at(0).get<int>(), encoded.at(1).get<int>() +
+                        encoded.at(2).get<int>() + encoded.at(3).get<int>()};
                 if (encoded.size() != static_cast<std::size_t>(splitter->count()))
                     throw std::invalid_argument(std::string("Workspace profile ") + key +
                                                 " does not match the current layout.");
@@ -7702,7 +7763,7 @@ public:
         }
     }
 
-    QString createAnnotationSymbol(const QString& symbol_id, Vec2 position) {
+    QString createAnnotationSymbol(const QString& symbol_id, Vec2 position, double scale = 1.0) {
         try {
             if (!m_document->is_editable()) {
                 throw std::invalid_argument("This document is read-only.");
@@ -7710,6 +7771,8 @@ public:
             if (!std::isfinite(position.x) || !std::isfinite(position.y)) {
                 throw std::invalid_argument("Annotation position must be finite.");
             }
+            if (!std::isfinite(scale) || scale <= 0.0 || scale > 100.0)
+                throw std::invalid_argument("Symbol scale must be greater than zero and no more than 100.");
             const auto source = authoringSnapshot();
             auto annotation = std::find_if(source.entities().begin(), source.entities().end(),
                                             [](const auto& entry) {
@@ -7745,6 +7808,7 @@ public:
             symbol.id = new_id("symbol");
             symbol.symbol_id = definition->id;
             symbol.placement.position = position;
+            symbol.placement.scale = scale;
             state.symbols.push_back(symbol);
             const auto command = ApplyEntityChanges{
                 source.revision(),
@@ -14368,11 +14432,20 @@ public:
     }
 
     void showAnnotationEditor() {
-        QDialog dialog(owner);
+        if (m_symbol_library_dialog) {
+            m_symbol_library_dialog->show();
+            m_symbol_library_dialog->raise();
+            return;
+        }
+        auto* library_dialog = new QDialog(owner, Qt::Tool);
+        m_symbol_library_dialog = library_dialog;
+        auto& dialog = *library_dialog;
+        dialog.setAttribute(Qt::WA_DeleteOnClose);
+        dialog.setObjectName(QStringLiteral("symbolLibraryDialog"));
         styleDialog(dialog);
-        dialog.setWindowTitle(QStringLiteral("Add annotations"));
-        dialog.setModal(true);
-        dialog.resize(520, 300);
+        dialog.setWindowTitle(QStringLiteral("Symbols & components library"));
+        dialog.setModal(false);
+        dialog.resize(460, 680);
         auto* layout = new QVBoxLayout(&dialog);
         auto* form = new QFormLayout;
         auto* label_template = new QComboBox(&dialog);
@@ -14404,6 +14477,14 @@ public:
         symbol_search->setObjectName(QStringLiteral("annotationSymbolSearch"));
         symbol_search->setAccessibleName(QStringLiteral("Search drawing symbols"));
         symbol_search->setPlaceholderText(QStringLiteral("Search family or category"));
+        auto* symbol_list = new SymbolLibraryList(&dialog);
+        symbol_list->setObjectName(QStringLiteral("symbolLibraryItems"));
+        symbol_list->setAccessibleName(QStringLiteral("Drag a symbol onto the plan"));
+        symbol_list->setDragEnabled(true);
+        symbol_list->setDragDropMode(QAbstractItemView::DragOnly);
+        symbol_list->setMinimumHeight(150);
+        symbol_list->setIconSize(QSize(48, 48));
+        symbol_list->setProperty("symbolScale", 1.0);
         const auto catalog = default_symbol_catalog();
         std::set<std::string> symbol_categories;
         for (const auto& definition : catalog) symbol_categories.insert(definition.category);
@@ -14411,24 +14492,48 @@ public:
         for (const auto& category : symbol_categories)
             symbol_category->addItem(QString::fromStdString(category),
                                      QString::fromStdString(category));
-        const auto populate_symbols = [symbol, symbol_category, symbol_search, catalog] {
+        const auto populate_symbols = [symbol, symbol_list, symbol_category, symbol_search, catalog] {
             const auto previous = symbol->currentData().toString();
             const auto query = symbol_search->text().trimmed().toLower().toStdString();
             const auto category = symbol_category->currentData().toString().toStdString();
             const auto filtered = filter_symbol_catalog(catalog, query, category);
             const QSignalBlocker blocker(*symbol);
             symbol->clear();
+            const QSignalBlocker list_blocker(symbol_list);
+            symbol_list->clear();
             for (const auto& definition : filtered) {
                 symbol->addItem(QStringLiteral("%1  (%2 × %3 m)")
                                      .arg(QString::fromStdString(definition.family))
                                      .arg(QString::number(definition.width_metres, 'g', 4))
                                      .arg(QString::number(definition.depth_metres, 'g', 4)),
                                  QString::fromStdString(definition.id));
+                auto* entry = new QListWidgetItem(symbol->itemText(symbol->count() - 1), symbol_list);
+                QPixmap thumbnail(64, 64);
+                thumbnail.fill(QColor(247, 250, 255));
+                QPainter painter(&thumbnail);
+                painter.setRenderHint(QPainter::Antialiasing);
+                painter.setPen(QPen(QColor(37, 75, 125), 1.6));
+                const double extent = std::max(definition.width_metres, definition.depth_metres);
+                const double factor = extent > 0.0 ? 52.0 / extent : 1.0;
+                for (const auto& stroke : definition.preview) {
+                    const auto point = [factor, &definition](Vec2 value) {
+                        return QPointF(32.0 + (value.x - definition.anchor.x) * factor,
+                                       32.0 - (value.y - definition.anchor.y) * factor);
+                    };
+                    painter.drawLine(point(stroke.start), point(stroke.end));
+                }
+                painter.end();
+                entry->setIcon(QIcon(thumbnail));
+                entry->setData(Qt::UserRole, QString::fromStdString(definition.id));
+                entry->setToolTip(QStringLiteral("Drag onto the plan to place. Dimensions shown are before the size multiplier."));
             }
             const auto restored = symbol->findData(previous);
             if (restored >= 0) symbol->setCurrentIndex(restored);
             else if (symbol->count() > 0) symbol->setCurrentIndex(0);
+            symbol_list->setCurrentRow(symbol->currentIndex());
         };
+        QObject::connect(symbol_list, &QListWidget::currentRowChanged, &dialog,
+                         [symbol](int row) { symbol->setCurrentIndex(row); });
         QObject::connect(symbol_category, &QComboBox::currentIndexChanged,
                          &dialog, populate_symbols);
         QObject::connect(symbol_search, &QLineEdit::textChanged, &dialog, populate_symbols);
@@ -14439,14 +14544,31 @@ public:
         symbol_y->setObjectName(QStringLiteral("annotationSymbolY"));
         form->addRow(QStringLiteral("Symbol category"), symbol_category);
         form->addRow(QStringLiteral("Find symbol"), symbol_search);
-        form->addRow(QStringLiteral("Symbol"), symbol);
+        form->addRow(QStringLiteral("Drag to plan"), symbol_list);
+        symbol->hide();
         form->addRow(QStringLiteral("Symbol X (m)"), symbol_x);
         form->addRow(QStringLiteral("Symbol Y (m)"), symbol_y);
+        auto* symbol_scale = new QDoubleSpinBox(&dialog);
+        symbol_scale->setObjectName(QStringLiteral("annotationSymbolScale"));
+        symbol_scale->setRange(0.001, 100.0);
+        symbol_scale->setDecimals(3);
+        symbol_scale->setValue(1.0);
+        symbol_scale->setSingleStep(0.1);
+        QObject::connect(symbol_scale, &QDoubleSpinBox::valueChanged, &dialog,
+                         [symbol_list](double value) { symbol_list->setProperty("symbolScale", value); });
+        form->addRow(QStringLiteral("Size multiplier"), symbol_scale);
+        auto* library_help = new QLabel(QStringLiteral(
+            "Drag a symbol onto the plan, or choose Place on canvas and click its position. Adjust the size multiplier before placing. Selection properties let you move, rotate or resize it later."), &dialog);
+        library_help->setWordWrap(true);
+        form->addRow(library_help);
         layout->addLayout(form);
 
         auto* actions = new QHBoxLayout;
         auto* add_label = new QPushButton(QStringLiteral("Add label"), &dialog);
-        auto* add_symbol = new QPushButton(QStringLiteral("Add symbol"), &dialog);
+        auto* add_symbol = new QPushButton(QStringLiteral("Place symbol at X / Y"), &dialog);
+        auto* place_on_canvas = new QPushButton(QStringLiteral("Place on canvas"), &dialog);
+        place_on_canvas->setObjectName(QStringLiteral("placeSymbolOnCanvas"));
+        layout->addWidget(place_on_canvas);
         add_label->setObjectName(QStringLiteral("addAnnotationLabel"));
         add_symbol->setObjectName(QStringLiteral("addAnnotationSymbol"));
         actions->addWidget(add_label);
@@ -14455,6 +14577,7 @@ public:
         layout->addLayout(actions);
         auto* status = new QLabel(&dialog);
         status->setObjectName(QStringLiteral("annotationEditorStatus"));
+        m_symbol_library_status = status;
         status->setWordWrap(true);
         layout->addWidget(status);
         auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
@@ -14470,7 +14593,7 @@ public:
             }
             return point;
         };
-        QObject::connect(add_label, &QPushButton::clicked, &dialog, [this, &dialog, label_template,
+        QObject::connect(add_label, &QPushButton::clicked, &dialog, [this, label_template,
                                                                       label_content, label_x, label_y,
                                                                       status, parse_position] {
             try {
@@ -14479,25 +14602,57 @@ public:
                                                        label_content->text(), position);
                 if (id.isEmpty()) throw std::invalid_argument(lastError().toStdString());
                 status->setText(QStringLiteral("Added label %1").arg(id));
-                Q_UNUSED(dialog);
             } catch (const std::exception& error) {
                 status->setText(QStringLiteral("Label: %1").arg(QString::fromUtf8(error.what())));
             }
         });
-        QObject::connect(add_symbol, &QPushButton::clicked, &dialog, [this, &dialog, symbol,
-                                                                       symbol_x, symbol_y, status,
+        QObject::connect(add_symbol, &QPushButton::clicked, &dialog, [this, symbol,
+                                                                       symbol_x, symbol_y, symbol_scale, status,
                                                                        parse_position] {
             try {
                 const auto position = parse_position(symbol_x, symbol_y);
-                const auto id = createAnnotationSymbol(symbol->currentData().toString(), position);
+                const auto id = createAnnotationSymbol(symbol->currentData().toString(), position, symbol_scale->value());
                 if (id.isEmpty()) throw std::invalid_argument(lastError().toStdString());
                 status->setText(QStringLiteral("Added symbol %1").arg(id));
-                Q_UNUSED(dialog);
             } catch (const std::exception& error) {
                 status->setText(QStringLiteral("Symbol: %1").arg(QString::fromUtf8(error.what())));
             }
         });
-        dialog.exec();
+        QObject::connect(place_on_canvas, &QPushButton::clicked, &dialog,
+                         [this, symbol, symbol_scale, status] {
+            if (symbol->currentData().toString().isEmpty()) {
+                status->setText(QStringLiteral("Choose a symbol first."));
+                return;
+            }
+            setTool(CanvasTool::select);
+            if (m_tool != CanvasTool::select) return;
+            m_pending_symbol_id = symbol->currentData().toString();
+            m_pending_symbol_scale = symbol_scale->value();
+            m_symbol_placement_document = m_document;
+            status->setText(QStringLiteral("Click the plan to place %1. Esc cancels.").arg(symbol->currentText()));
+            m_measurementCanvas->setCursor(Qt::CrossCursor);
+            m_architecturalCanvas->setCursor(Qt::CrossCursor);
+        });
+        QObject::connect(&dialog, &QDialog::finished, owner, [this] { cancelSymbolPlacement(); });
+        dialog.show();
+    }
+
+    void cancelSymbolPlacement() {
+        m_pending_symbol_id.clear();
+        m_symbol_placement_document.reset();
+        m_measurementCanvas->unsetCursor();
+        m_architecturalCanvas->unsetCursor();
+    }
+
+    void placeLibrarySymbol(const QString& id, double scale, Vec2 point) {
+        if (m_boundary_session) {
+            setError(QStringLiteral("Finish or cancel the active boundary before placing a symbol."));
+        } else {
+            const auto created = createAnnotationSymbol(id, point, scale);
+            if (m_symbol_library_status)
+                m_symbol_library_status->setText(created.isEmpty() ? lastError() :
+                    QStringLiteral("Symbol placed. Drag another from the library, or edit Selection properties."));
+        }
     }
 
     void showDimensionCreator() {
@@ -16569,20 +16724,16 @@ private:
         toolbar->setObjectName(QStringLiteral("primaryToolbar"));
         toolbar->setMovable(false);
         toolbar->setFloatable(false);
-        // Keep the command strip a single compact hit row. Labels remain on
-        // the actions for menus, keyboard navigation, and screen readers;
-        // the primary row presents the bundled glyphs and exposes the label
-        // through the tooltip/status tip instead of spending vertical space
-        // on clipped text beside every icon.
-        toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        toolbar->setIconSize(QSize(14, 14));
+        // Keep primary actions readable in one horizontal row.
+        toolbar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        toolbar->setIconSize(QSize(18, 18));
         toolbar->setContentsMargins(0, 0, 0, 0);
         if (auto* toolbar_layout = toolbar->layout()) {
             toolbar_layout->setContentsMargins(0, 0, 0, 0);
             toolbar_layout->setSpacing(1);
         }
         // One compact row with readable icons and usable mouse targets.
-        toolbar->setFixedHeight(20);
+        toolbar->setMinimumHeight(34);
         const auto add_toolbar_action = [this, toolbar](const QString& label, const char* icon_paths) {
             auto* action = toolbar->addAction(modern_toolbar_icon(icon_paths), label);
             action->setToolTip(label);
@@ -16600,13 +16751,15 @@ private:
         toolbar->addSeparator();
         m_measurement_action = toolbar->addAction(
             modern_toolbar_icon("<path d='M4 5h16v14H4z'/><path d='M8 9h8M8 13h5'/><path d='M17 17l3 3'/><path d='m17 17 2-2'/>"),
-            QStringLiteral("Measurement"));
+            QStringLiteral("2D"));
         m_measurement_action->setToolTip(QStringLiteral("Measurement workspace (Ctrl+1)"));
+        m_measurement_action->setObjectName(QStringLiteral("workspace2D"));
         m_measurement_action->setStatusTip(QStringLiteral("Measurement workspace (Ctrl+1)"));
         m_architectural_action = toolbar->addAction(
             modern_toolbar_icon("<path d='M4 20V9l8-5 8 5v11'/><path d='M8 20v-6h8v6'/><path d='M10 10h4'/>"),
-            QStringLiteral("Architectural"));
+            QStringLiteral("3D"));
         m_architectural_action->setToolTip(QStringLiteral("Architectural workspace (Ctrl+2)"));
+        m_architectural_action->setObjectName(QStringLiteral("workspace3D"));
         m_architectural_action->setStatusTip(QStringLiteral("Architectural workspace (Ctrl+2)"));
         toolbar->addSeparator();
         m_palette_action = add_toolbar_action(QStringLiteral("Commands"), "<path d='M5 5h5v5H5zM14 5h5v5h-5zM5 14h5v5H5zM14 14h5v5h-5z'/>");
@@ -16738,6 +16891,10 @@ private:
         m_detect_areas_action->setObjectName(QStringLiteral("detectClosedAreas"));
         m_terrain_action = new QAction(QStringLiteral("Create terrain surface…"), owner);
         m_terrain_action->setObjectName(QStringLiteral("createTerrainSurface"));
+        m_architectural_actions = {curved_wall_action, sloped_wall_action, m_view_action, m_remodel_action,
+            m_schedule_action, m_schedule_placement_action,
+            m_relationship_action, m_levels_action, m_reference_grid_action,
+            m_assembly_action, m_terrain_action};
         m_about_action = new QAction(QStringLiteral("About"), owner);
         m_about_action->setObjectName(QStringLiteral("aboutAction"));
         auto* user_guide_action = new QAction(QStringLiteral("User guide…"), owner);
@@ -16791,7 +16948,8 @@ private:
         more_button->setAccessibleName(QStringLiteral("More tools"));
         more_button->setAccessibleDescription(QStringLiteral(
             "Open secondary authoring and presentation commands"));
-        more_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        more_button->setText(QStringLiteral("Tools"));
+        more_button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
         more_button->setMenu(more_menu);
         more_button->setPopupMode(QToolButton::InstantPopup);
         toolbar->addWidget(more_button);
@@ -16846,7 +17004,13 @@ private:
         m_architecturalViewCombo->addItem(QStringLiteral("Section · 1.2 m"), static_cast<int>(BuildingViewKind::section));
         m_architecturalViewCombo->setToolTip(QStringLiteral(
             "Select the derived architectural plan, elevation, or horizontal section view"));
-        toolbar->addWidget(m_architecturalViewCombo);
+        m_architectural_view_control_action = toolbar->addWidget(m_architecturalViewCombo);
+        // Keep secondary actions compact so the 2D / 3D selector remains
+        // directly visible even at the minimum supported window width.
+        for (auto* action : {m_recover_action, m_save_as_action, shortcut_settings}) {
+            if (auto* button = qobject_cast<QToolButton*>(toolbar->widgetForAction(action)))
+                button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        }
 
         auto* workspace_group = new QActionGroup(owner);
         workspace_group->setExclusive(true);
@@ -16957,11 +17121,11 @@ private:
 
         auto* navigator_panel = new QWidget(splitter);
         navigator_panel->setObjectName(QStringLiteral("navigatorPanel"));
-        navigator_panel->setMinimumWidth(220);
-        navigator_panel->setMaximumWidth(300);
+        navigator_panel->setMinimumWidth(280);
+        navigator_panel->setMaximumWidth(520);
         auto* navigator_layout = new QVBoxLayout(navigator_panel);
-        navigator_layout->setContentsMargins(14, 15, 14, 14);
-        navigator_layout->setSpacing(10);
+        navigator_layout->setContentsMargins(10, 10, 10, 10);
+        navigator_layout->setSpacing(6);
         auto* drawing_layer_heading = new QLabel(QStringLiteral("DRAWING LAYER"), navigator_panel);
         drawing_layer_heading->setObjectName(QStringLiteral("panelHeading"));
         navigator_layout->addWidget(drawing_layer_heading);
@@ -16979,7 +17143,22 @@ private:
         m_drawing_context_label->setWordWrap(true);
         m_drawing_context_label->setTextFormat(Qt::PlainText);
         navigator_layout->addWidget(m_drawing_context_label);
+        auto* organize_button = new QToolButton(navigator_panel);
+        organize_button->setObjectName(QStringLiteral("organizeProject"));
+        organize_button->setText(QStringLiteral("Add building / floor / layer"));
+        organize_button->setToolButtonStyle(Qt::ToolButtonTextOnly);
+        organize_button->setPopupMode(QToolButton::InstantPopup);
+        auto* organize_menu = new QMenu(organize_button);
+        for (const auto& type : {"building", "floor", "layer"}) {
+            auto* action = organize_menu->addAction(QStringLiteral("Add %1…").arg(QString::fromUtf8(type)));
+            QObject::connect(action, &QAction::triggered, owner, [this, type] { showOrganizationDialog(type); });
+        }
+        auto* rename_action = organize_menu->addAction(QStringLiteral("Rename selected…"));
+        QObject::connect(rename_action, &QAction::triggered, owner, [this] { showOrganizationDialog("rename"); });
+        organize_button->setMenu(organize_menu);
+        navigator_layout->addWidget(organize_button);
         auto* phase_heading = new QLabel(QStringLiteral("DESIGN PHASE"), navigator_panel);
+        m_phase_heading = phase_heading;
         phase_heading->setObjectName(QStringLiteral("phaseHeading"));
         phase_heading->setStyleSheet(QStringLiteral("font-weight:600;"));
         navigator_layout->addWidget(phase_heading);
@@ -16990,27 +17169,17 @@ private:
         m_model_phase_combo->setToolTip(QStringLiteral(
             "Choose the existing model or a remodeling alternative. The selection is saved in the project and filters all shared views."));
         navigator_layout->addWidget(m_model_phase_combo);
-        auto* visibility_header = new QHBoxLayout();
-        auto* visibility_heading = new QLabel(QStringLiteral("VISIBILITY"), navigator_panel);
-        visibility_heading->setObjectName(QStringLiteral("panelHeading"));
-        visibility_heading->setStyleSheet(QStringLiteral("font-weight:600;"));
-        visibility_header->addWidget(visibility_heading);
-        visibility_header->addStretch();
-        m_show_all_button = new QPushButton(QStringLiteral("Show all"), navigator_panel);
-        m_show_all_button->setObjectName(QStringLiteral("showAllContainers"));
-        m_show_all_button->setToolTip(QStringLiteral(
-            "Clear the view-only floor and drawing-layer filters."));
-        m_show_all_button->setAutoDefault(false);
-        visibility_header->addWidget(m_show_all_button);
-        navigator_layout->addLayout(visibility_header);
-        m_visibility_label = new QLabel(navigator_panel);
-        m_visibility_label->setObjectName(QStringLiteral("visibilitySummary"));
-        m_visibility_label->setWordWrap(true);
-        m_visibility_label->setToolTip(QStringLiteral(
-            "View filters hide floors and drawing layers in plan and 3D. They never change area totals."));
-        navigator_layout->addWidget(m_visibility_label);
-        QObject::connect(m_show_all_button, &QPushButton::clicked, owner,
-                         [this] { showAllContainers(); });
+        auto* manage_phases = new QPushButton(QStringLiteral("Manage design phases…"), navigator_panel);
+        m_manage_phases_button = manage_phases;
+        manage_phases->setObjectName(QStringLiteral("manageDesignPhases"));
+        navigator_layout->addWidget(manage_phases);
+        QObject::connect(manage_phases, &QPushButton::clicked, owner,
+                         [this] { showRemodelingAlternatives(); });
+        auto* library = new QPushButton(QStringLiteral("Symbols && components…"), navigator_panel);
+        library->setObjectName(QStringLiteral("symbolLibrary"));
+        library->setToolTip(QStringLiteral("Search furniture, fixtures and drawing symbols; choose a size and placement."));
+        navigator_layout->addWidget(library);
+        QObject::connect(library, &QPushButton::clicked, owner, [this] { showAnnotationEditor(); });
         QObject::connect(m_drawing_layer_combo, &QComboBox::activated, owner, [this](int index) {
             setActiveLayer(m_drawing_layer_combo->itemData(index).toString());
         });
@@ -17025,10 +17194,11 @@ private:
         navigator_layout->addWidget(m_navigator, 1);
         m_navigator->setObjectName(QStringLiteral("projectNavigator"));
         m_navigator->setHeaderHidden(true);
+        m_navigator->setItemDelegate(new VisibilityEyeDelegate(m_navigator));
         m_navigator->setIndentation(14);
         m_navigator->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         m_navigator->setMinimumWidth(0);
-        m_navigator->setMaximumWidth(280);
+        m_navigator->setMinimumHeight(100);
         QObject::connect(m_navigator, &QTreeWidget::currentItemChanged, owner,
             [this](QTreeWidgetItem* item, QTreeWidgetItem*) {
                 if (m_refreshing || !item) return;
@@ -17045,7 +17215,7 @@ private:
                 // selection event; never retain a pointer to the old item.
                 QTimer::singleShot(0, owner, [this, id, document] {
                     if (m_document == document && !id.isEmpty() && id != m_selected_id &&
-                        has_entity(*m_document, id)) selectEntity(id);
+                        (has_entity(*m_document, id) || annotation_parent_for_child(m_document->snapshot(), id.toStdString()))) selectEntity(id);
                 });
             });
         QObject::connect(m_navigator, &QTreeWidget::itemClicked, owner,
@@ -17074,12 +17244,25 @@ private:
                              });
                          });
 
-        auto* tool_panel = new QWidget(splitter);
+        auto* drawing_panel = new QWidget(splitter);
+        auto* drawing_layout = new QVBoxLayout(drawing_panel);
+        drawing_layout->setContentsMargins(0, 0, 0, 0);
+        drawing_layout->setSpacing(3);
+        auto* tool_panel = new QWidget(drawing_panel);
         tool_panel->setObjectName(QStringLiteral("toolPanel"));
-        tool_panel->setFixedWidth(54);
-        auto* tool_layout = new QVBoxLayout(tool_panel);
-        tool_layout->setContentsMargins(4, 8, 4, 8);
+        auto* tool_layout = new QHBoxLayout(tool_panel);
+        tool_layout->setContentsMargins(4, 3, 4, 3);
         tool_layout->setSpacing(3);
+        drawing_layout->addWidget(tool_panel);
+        auto* toggle_sidebar = new QToolButton(tool_panel);
+        toggle_sidebar->setText(QStringLiteral("Panel"));
+        toggle_sidebar->setObjectName(QStringLiteral("toggleProjectPanel"));
+        toggle_sidebar->setToolTip(QStringLiteral("Show or hide layers and selection properties"));
+        toggle_sidebar->setCheckable(true);
+        toggle_sidebar->setChecked(true);
+        tool_layout->addWidget(toggle_sidebar);
+        QObject::connect(toggle_sidebar, &QToolButton::toggled, owner,
+                         [navigator_panel](bool visible) { navigator_panel->setVisible(visible); });
         m_select_button = addToolButton(tool_layout, QStringLiteral("Select"), CanvasTool::select, true);
         m_boundary_button = addToolButton(tool_layout, QStringLiteral("Boundary"), CanvasTool::boundary);
         m_boundary_button->setText(QStringLiteral("Draw first"));
@@ -17136,7 +17319,7 @@ private:
         m_snap_button = new QToolButton(tool_panel);
         m_snap_button->setText(QStringLiteral("Snap"));
         m_snap_button->setIcon(modern_toolbar_icon(
-            "<path d='M6 5v6a6 6 0 0 0 12 0V5'/><path d='M6 5h4M14 5h4'/>"));
+            "<path fill='#92a6be' d='M4 4h5v9a3 3 0 0 0 6 0V4h5v9a8 8 0 0 1-16 0z'/><path fill='#e9eef5' d='M4 4h5v4H4zM15 4h5v4h-5z'/>"));
         m_snap_button->setIconSize(QSize(18, 18));
         m_snap_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
         m_snap_button->setAccessibleName(QStringLiteral("Snap"));
@@ -17175,6 +17358,11 @@ private:
         m_overview_button->setMinimumWidth(0);
         m_overview_button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         tool_layout->addWidget(m_overview_button);
+        for (auto* button : {m_select_button, m_boundary_button, m_define_boundary_button,
+                m_wall_button, m_object_button, m_grid_button, m_snap_button, m_fit_button, m_overview_button}) {
+            button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+            button->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+        }
         QObject::connect(m_grid_button, &QToolButton::toggled, owner,
                          [this](bool enabled) { setGrid(enabled); });
         QObject::connect(m_snap_button, &QToolButton::toggled, owner,
@@ -17183,7 +17371,8 @@ private:
         QObject::connect(m_overview_button, &QToolButton::toggled, owner,
                          [this](bool enabled) { setOverviewMap(enabled); });
 
-        m_workspaceTabs = new QTabWidget(splitter);
+        m_workspaceTabs = new QTabWidget(drawing_panel);
+        drawing_layout->addWidget(m_workspaceTabs, 1);
         m_workspaceTabs->setObjectName(QStringLiteral("workspaceTabs"));
         m_workspaceTabs->setDocumentMode(true);
         m_workspaceTabs->setTabsClosable(false);
@@ -17248,16 +17437,18 @@ private:
                          [this](int index) {
                              m_workspace = index == 0 ? Workspace::measurement
                                                        : Workspace::architectural;
+                             if (m_inspector) refreshInspector();
                              refreshTitle();
                          });
         connectCanvas(m_measurementCanvas);
         connectCanvas(m_architecturalCanvas);
 
-        m_inspector = new QScrollArea(splitter);
+        m_inspector = new QScrollArea(navigator_panel);
+        navigator_layout->addWidget(m_inspector, 2);
         m_inspector->setWidgetResizable(true);
         m_inspector->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        m_inspector->setMinimumWidth(320);
-        m_inspector->setMaximumWidth(390);
+        m_inspector->setMinimumWidth(0);
+        m_inspector->setFrameShape(QFrame::NoFrame);
         auto* inspector_body = new QWidget(m_inspector);
         inspector_body->setObjectName(QStringLiteral("inspectorBody"));
         inspector_body->setMinimumWidth(0);
@@ -17265,7 +17456,7 @@ private:
         auto* inspector_layout = new QVBoxLayout(inspector_body);
         inspector_layout->setContentsMargins(16, 15, 16, 16);
         inspector_layout->setSpacing(12);
-        auto* heading = new QLabel(QStringLiteral("Inspector"), inspector_body);
+        auto* heading = new QLabel(QStringLiteral("Selection properties"), inspector_body);
         heading->setObjectName(QStringLiteral("inspectorHeading"));
         heading->setStyleSheet(QStringLiteral("font-size:16px; font-weight:600;"));
         inspector_layout->addWidget(heading);
@@ -17711,11 +17902,14 @@ private:
             }
         });
 
-        auto* keypad = new QPushButton(QStringLiteral("Measurement keypad…"), inspector_body);
+        auto* keypad = new QPushButton(QStringLiteral("Measure…"), tool_panel);
+        m_drawing_measurement_button = keypad;
         keypad->setObjectName(QStringLiteral("measurementKeypad"));
-        keypad->setAccessibleName(QStringLiteral("Open measurement keypad"));
-        inspector_layout->addWidget(keypad);
-        QObject::connect(keypad, &QPushButton::clicked, owner, [this] { showMeasurementKeypad(); });
+        keypad->setAccessibleName(QStringLiteral("Enter precise drawing measurement"));
+        keypad->setToolTip(QStringLiteral("Enter the next segment's exact length, angle or curve (D)"));
+        tool_layout->insertWidget(4, keypad);
+        keypad->hide();
+        QObject::connect(keypad, &QPushButton::clicked, owner, [this] { preciseBoundaryInput(); });
 
         auto* calculation_group = new QGroupBox(QStringLiteral("Area calculation"), inspector_body);
         m_calculation_group = calculation_group;
@@ -17887,14 +18081,15 @@ private:
                          });
 
         splitter->setStretchFactor(0, 0);
-        splitter->setStretchFactor(1, 0);
-        splitter->setStretchFactor(2, 1);
-        splitter->setStretchFactor(3, 0);
+        splitter->setStretchFactor(1, 1);
+        splitter->setCollapsible(0, true);
+        splitter->setCollapsible(1, false);
+        splitter->setSizes({340, 1000});
         owner->setCentralWidget(central);
         owner->statusBar()->clearMessage();
     }
 
-    QToolButton* addToolButton(QVBoxLayout* layout, const QString& label, CanvasTool tool,
+    QToolButton* addToolButton(QBoxLayout* layout, const QString& label, CanvasTool tool,
                                bool checked = false) {
         auto* button = new QToolButton(layout->parentWidget());
         button->setText(label);
@@ -17943,7 +18138,32 @@ private:
             onCanvasPoint(point);
         });
         canvas->setEntitySelectionClicked([this](QString id, bool toggle) {
+            if (!m_pending_symbol_id.isEmpty()) {
+                const auto symbol_id = m_pending_symbol_id;
+                const auto scale = m_pending_symbol_scale;
+                const bool same_document = m_symbol_placement_document == m_document;
+                cancelSymbolPlacement();
+                if (same_document) placeLibrarySymbol(symbol_id, scale, m_last_cursor);
+                return;
+            }
             selectEntity(id, toggle);
+        });
+        canvas->setSymbolDropped([this](QString id, double scale, Vec2 point) {
+            cancelSymbolPlacement();
+            placeLibrarySymbol(id, scale, point);
+        });
+        canvas->setEntitiesSelected([this](QStringList ids, bool additive) {
+            const auto snapshot = m_document->snapshot();
+            if (!additive) m_selected_ids.clear();
+            for (auto id : ids) {
+                if (const auto host = assembly_host_for_child(snapshot, id.toStdString()))
+                    id = id_from(*host);
+                if ((snapshot.entities().contains(id.toStdString()) ||
+                     annotation_parent_for_child(snapshot, id.toStdString())) &&
+                    !m_selected_ids.contains(id)) m_selected_ids.push_back(id);
+            }
+            m_selected_id = m_selected_ids.isEmpty() ? QString{} : m_selected_ids.back();
+            refresh();
         });
         canvas->setCursorMoved([this, canvas](Vec2 point) {
             // Snap toggles update both canvases; only the active workspace
@@ -18988,6 +19208,8 @@ private:
         }
         std::map<std::string, QTreeWidgetItem*, std::less<>> items;
         for (const auto& [id, node] : organization.nodes) {
+            if (node.type == kAnnotationEntityType || node.type == "model_phases" ||
+                node.type == "sheet_view_model") continue;
             const auto name = read_string(snapshot.entities().at(id).properties, "name");
             QString label = QString::fromStdString(name && !name->empty() ? *name : node.type);
             if (!name || name->empty()) {
@@ -19001,19 +19223,6 @@ private:
             const bool hidden_by_floor = node.type == "layer" && !node.context.floor_id.empty() &&
                 m_view_filter.hidden_floor_ids.contains(node.context.floor_id);
             const bool effective_visible = visible_ids.contains(id);
-            if (visibility_container) {
-                if (!effective_visible) {
-                    if (hidden_by_floor && own_hidden) {
-                        label += QStringLiteral(" (hidden by floor and layer)");
-                    } else if (hidden_by_floor) {
-                        label += QStringLiteral(" (hidden by floor)");
-                    } else {
-                        label += QStringLiteral(" (hidden)");
-                    }
-                } else if (own_hidden && !node.issues.empty()) {
-                    label += QStringLiteral(" (visible: unresolved)");
-                }
-            }
             auto* item = new QTreeWidgetItem(QStringList{label});
             item->setData(0, Qt::UserRole, id_from(id));
             item->setData(0, visibility_type_role, QString::fromStdString(node.type));
@@ -19037,13 +19246,17 @@ private:
                 }
             }
             item->setToolTip(0, tooltip);
+            if (visibility_container && !effective_visible)
+                item->setForeground(0, owner->palette().color(QPalette::Disabled, QPalette::Text));
             if (!node.issues.empty()) item->setForeground(0, QColor(170, 35, 35));
             items.emplace(id, item);
         }
         QTreeWidgetItem* unassigned = nullptr;
         for (const auto& [id, node] : organization.nodes) {
-            auto* item = items.at(id);
-            if (!node.parent_id.empty()) {
+            const auto found = items.find(id);
+            if (found == items.end()) continue;
+            auto* item = found->second;
+            if (!node.parent_id.empty() && items.contains(node.parent_id)) {
                 items.at(node.parent_id)->addChild(item);
             } else if (node.type == "property" && node.issues.empty()) {
                 m_navigator->addTopLevelItem(item);
@@ -19059,14 +19272,18 @@ private:
         // entity. Expose their stable child IDs in the navigator so they can
         // be selected, inspected, and removed without flattening the wire
         // format into renderer-only entities.
+        QTreeWidgetItem* annotations = nullptr;
         for (const auto& [id, entity] : snapshot.entities()) {
             if (entity.type != kAnnotationEntityType) continue;
-            const auto parent = items.find(id);
-            if (parent == items.end()) continue;
             try {
                 const auto state = decode_annotation_entity(entity);
+                if (state.labels.empty() && state.symbols.empty()) continue;
+                if (!annotations) {
+                    annotations = new QTreeWidgetItem(m_navigator, {QStringLiteral("Symbols & labels")});
+                    annotations->setExpanded(true);
+                }
                 for (const auto& label : state.labels) {
-                    auto* child = new QTreeWidgetItem(parent->second,
+                    auto* child = new QTreeWidgetItem(annotations,
                         {QStringLiteral("Label  •  %1").arg(QString::fromStdString(label.content))});
                     child->setData(0, Qt::UserRole, id_from(label.id));
                     child->setToolTip(0, QString::fromStdString(label.id));
@@ -19074,7 +19291,7 @@ private:
                     if (id_from(label.id) == m_selected_id) m_navigator->setCurrentItem(child);
                 }
                 for (const auto& symbol : state.symbols) {
-                    auto* child = new QTreeWidgetItem(parent->second,
+                    auto* child = new QTreeWidgetItem(annotations,
                         {QStringLiteral("Symbol  •  %1").arg(QString::fromStdString(symbol.symbol_id))});
                     child->setData(0, Qt::UserRole, id_from(symbol.id));
                     child->setToolTip(0, QString::fromStdString(symbol.id));
@@ -19105,7 +19322,7 @@ private:
             };
             const auto label = display(context->building_id) + QStringLiteral(" / ") +
                 display(context->floor_id) + QStringLiteral(" / ") + display(id);
-            m_drawing_layer_combo->addItem(label, id_from(id));
+            m_drawing_layer_combo->addItem(display(id), id_from(id));
             m_drawing_layer_combo->setItemData(m_drawing_layer_combo->count() - 1, label, Qt::ToolTipRole);
         }
         const auto active_index = m_drawing_layer_combo->findData(m_active_layer_id);
@@ -19113,17 +19330,12 @@ private:
         m_drawing_layer_combo->setPlaceholderText(QStringLiteral("Choose a drawing layer"));
         auto context_label = active_index < 0
             ? QStringLiteral("Choose a drawing layer")
-            : m_drawing_layer_combo->itemText(active_index);
+            : m_drawing_layer_combo->itemData(active_index, Qt::ToolTipRole).toString();
         if (active_index >= 0 && !visible_ids.contains(m_active_layer_id.toStdString())) {
             context_label += QStringLiteral(
                 "\nHidden by the view filter; drawing remains enabled on this layer.");
         }
         m_drawing_context_label->setText(context_label);
-        m_visibility_label->setText(
-            m_view_filter.hidden_floor_ids.empty() && m_view_filter.hidden_layer_ids.empty()
-                ? QStringLiteral("All visible")
-                : QStringLiteral("Filter active"));
-        m_show_all_button->setEnabled(true);
     }
 
     void refreshCalculationInspector(const std::optional<EntityValue>& selected) {
@@ -20034,6 +20246,22 @@ private:
     }
 
     void refreshTitle() {
+        if (m_inspector) m_inspector->setVisible(!m_selected_id.isEmpty());
+        const bool architectural = m_workspace == Workspace::architectural;
+        if (m_phase_heading) m_phase_heading->setVisible(architectural);
+        if (m_model_phase_combo) m_model_phase_combo->setVisible(architectural);
+        if (m_manage_phases_button) m_manage_phases_button->setVisible(architectural);
+        for (auto* action : m_architectural_actions) action->setVisible(architectural);
+        if (m_architectural_view_control_action) m_architectural_view_control_action->setVisible(architectural);
+        if (m_wall_button) m_wall_button->setVisible(architectural);
+        if (m_object_button) m_object_button->setVisible(architectural);
+        if (!architectural && m_inspector) {
+            for (QWidget* widget : {m_material_group, static_cast<QWidget*>(m_door_swing_button),
+                    static_cast<QWidget*>(m_opening_assembly_button), static_cast<QWidget*>(m_edit_object_button),
+                    static_cast<QWidget*>(m_edit_curve_button), static_cast<QWidget*>(m_edit_layers_button),
+                    static_cast<QWidget*>(m_roof_properties_group), static_cast<QWidget*>(m_building_properties_group)})
+                if (widget) widget->hide();
+        }
         auto title = m_file_path.empty()
             ? QStringLiteral("Untitled project")
             : QString::fromStdWString(m_file_path.filename().wstring());
@@ -20070,7 +20298,7 @@ private:
         // document that supplied this item.
         QTimer::singleShot(0, owner, [this, id, document] {
             if (m_document == document && !id.isEmpty() && id != m_selected_id &&
-                has_entity(*m_document, id)) {
+                (has_entity(*m_document, id) || annotation_parent_for_child(m_document->snapshot(), id.toStdString()))) {
                 selectEntity(id);
             }
         });
@@ -20122,6 +20350,11 @@ private:
     }
 
     void refreshBoundaryPreview() {
+        if (m_drawing_measurement_button) {
+            m_drawing_measurement_button->setVisible(m_tool == CanvasTool::boundary && m_boundary_session.has_value());
+            m_drawing_measurement_button->setEnabled(m_boundary_session &&
+                m_boundary_session->phase() == BoundaryAuthoringPhase::drawing);
+        }
         if (!m_boundary_session) {
             m_measurementCanvas->setBoundaryDraftPreview(std::nullopt);
             m_architecturalCanvas->setBoundaryDraftPreview(std::nullopt);
@@ -20145,6 +20378,8 @@ private:
             const auto& chain = *state.active_chain;
             append_chain(chain.segments, chain.dimensions);
             preview.anchor = chain.anchor;
+            preview.can_close_on_anchor = state.phase == BoundaryAuthoringPhase::drawing &&
+                state.pen_state == BoundaryPenState::down && chain.segments.size() >= 2;
             preview.pen_position = chain.segments.empty() ? chain.anchor : chain.segments.back().segment.end;
             if (state.phase == BoundaryAuthoringPhase::drawing && state.pen_state == BoundaryPenState::down &&
                 state.pointer && (state.pointer->x != preview.pen_position->x || state.pointer->y != preview.pen_position->y))
@@ -20167,7 +20402,7 @@ private:
         case BoundaryAuthoringPhase::awaiting_dimension:
             preview.instruction = mode + QStringLiteral("  •  Click to place this edge's dimension  •  Ctrl+Z undoes"); break;
         case BoundaryAuthoringPhase::drawing:
-            preview.instruction = mode + QStringLiteral("  •  Click an endpoint  •  D precise line/curve  •  Enter closes"); break;
+            preview.instruction = mode + QStringLiteral("  •  Click first corner or Enter to close  •  Right-click to finish  •  D precise line/curve"); break;
         case BoundaryAuthoringPhase::completed:
             preview.instruction = mode + QStringLiteral("  •  Enter defines and adds the area  •  Ctrl+Z revises it"); break;
         case BoundaryAuthoringPhase::cancelled: break;
@@ -20432,6 +20667,11 @@ private:
     }
 
     void cancelTool() {
+        if (!m_pending_symbol_id.isEmpty()) {
+            cancelSymbolPlacement();
+            return;
+        }
+        if (!confirmDiscardBoundaryDraft()) return;
         clearPreview();
         m_pending_wall_start.reset();
         m_redefine_boundary_id.reset();
@@ -20462,6 +20702,7 @@ private:
     }
 
     void setTool(CanvasTool tool) {
+        cancelSymbolPlacement();
         if (tool == CanvasTool::boundary) {
             if (m_boundary_session && m_tool == tool &&
                 m_boundary_session->mode() == BoundaryAuthoringMode::draw_first) return;
@@ -20477,6 +20718,11 @@ private:
     }
 
     void syncToolControls() {
+        if (m_drawing_measurement_button) {
+            m_drawing_measurement_button->setVisible(m_tool == CanvasTool::boundary && m_boundary_session.has_value());
+            m_drawing_measurement_button->setEnabled(m_boundary_session &&
+                m_boundary_session->phase() == BoundaryAuthoringPhase::drawing);
+        }
         m_measurementCanvas->setTool(m_tool);
         m_architecturalCanvas->setTool(m_tool);
         {
@@ -21437,10 +21683,18 @@ private:
     QComboBox* m_model_phase_combo{};
     QComboBox* m_pageSizeCombo{};
     QComboBox* m_architecturalViewCombo{};
+    QLabel* m_phase_heading{};
+    QPushButton* m_manage_phases_button{};
+    QPointer<QDialog> m_symbol_library_dialog;
+    QPointer<QLabel> m_symbol_library_status;
+    QString m_pending_symbol_id;
+    double m_pending_symbol_scale{1.0};
+    std::shared_ptr<Document> m_symbol_placement_document;
+    QPushButton* m_drawing_measurement_button{};
+    QAction* m_architectural_view_control_action{};
+    std::vector<QAction*> m_architectural_actions;
     QString m_output_sheet_id;
     QLabel* m_drawing_context_label{};
-    QLabel* m_visibility_label{};
-    QPushButton* m_show_all_button{};
     QString m_selected_id;
     QStringList m_selected_ids;
     QString m_last_error;

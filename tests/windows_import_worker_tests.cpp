@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -63,7 +65,8 @@ WindowsImportWorkerOptions base_options(const std::filesystem::path& worker = {}
     options.executable = worker.empty() ? command_shell() : worker;
     options.temporary_root = worker.empty() ? std::filesystem::temp_directory_path() : worker_profile_root() / "Temp";
     options.immutable_module_roots = {worker.empty() ? system_root() / "System32" : worker.parent_path()};
-    options.arguments = {L"/d", L"/c", L"type"};
+    options.arguments = worker.empty() ? std::vector<std::wstring>{L"/d", L"/c", L"type"} :
+                                        std::vector<std::wstring>{L"--echo"};
     options.input = {std::byte{'p'}, std::byte{'r'}, std::byte{'o'}, std::byte{'b'},
                      std::byte{'e'}, std::byte{'\r'}, std::byte{'\n'}};
     options.timeout_ms = 5'000;
@@ -73,6 +76,67 @@ WindowsImportWorkerOptions base_options(const std::filesystem::path& worker = {}
 }
 
 #ifdef _WIN32
+// Patch only this fixture executable's import slot, never the broker API or
+// system DLL. This injects the OS failure deterministically without shipping a
+// production environment-variable switch or bypass.
+class AssignmentFailure final {
+public:
+    AssignmentFailure() {
+        const auto image = reinterpret_cast<std::byte*>(GetModuleHandleW(nullptr));
+        const auto dos = reinterpret_cast<IMAGE_DOS_HEADER*>(image);
+        const auto nt = reinterpret_cast<IMAGE_NT_HEADERS*>(image + dos->e_lfanew);
+        const auto directory = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+        auto descriptor = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(image + directory.VirtualAddress);
+        for (; descriptor->Name && !slot_; ++descriptor) {
+            if (!descriptor->OriginalFirstThunk) continue;
+            auto name = reinterpret_cast<IMAGE_THUNK_DATA*>(image + descriptor->OriginalFirstThunk);
+            auto address = reinterpret_cast<IMAGE_THUNK_DATA*>(image + descriptor->FirstThunk);
+            for (; name->u1.AddressOfData; ++name, ++address) {
+                if (IMAGE_SNAP_BY_ORDINAL(name->u1.Ordinal)) continue;
+                const auto imported = reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(image + name->u1.AddressOfData);
+                if (std::strcmp(reinterpret_cast<const char*>(imported->Name), "AssignProcessToJobObject") == 0) {
+                    slot_ = reinterpret_cast<void**>(&address->u1.Function);
+                    break;
+                }
+            }
+        }
+        require(slot_ != nullptr, "assignment failure fixture must find the imported API");
+        DWORD protection = 0;
+        require(VirtualProtect(slot_, sizeof(*slot_), PAGE_READWRITE, &protection) != FALSE,
+                "assignment failure fixture must access its import slot");
+        original_ = InterlockedExchangePointer(slot_, reinterpret_cast<void*>(&fail));
+        DWORD ignored = 0;
+        VirtualProtect(slot_, sizeof(*slot_), protection, &ignored);
+    }
+    ~AssignmentFailure() {
+        DWORD protection = 0;
+        if (VirtualProtect(slot_, sizeof(*slot_), PAGE_READWRITE, &protection)) {
+            InterlockedExchangePointer(slot_, original_);
+            DWORD ignored = 0;
+            VirtualProtect(slot_, sizeof(*slot_), protection, &ignored);
+        }
+        if (process_) {
+            if (WaitForSingleObject(process_, 0) != WAIT_OBJECT_0) {
+                TerminateProcess(process_, 1);
+                WaitForSingleObject(process_, 5000);
+            }
+            CloseHandle(process_);
+            process_ = nullptr;
+        }
+    }
+    HANDLE process() const { return process_; }
+private:
+    static BOOL WINAPI fail(HANDLE, HANDLE process) {
+        if (!DuplicateHandle(GetCurrentProcess(), process, GetCurrentProcess(), &process_,
+                             SYNCHRONIZE | PROCESS_TERMINATE, FALSE, 0)) return FALSE;
+        SetLastError(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
+    inline static HANDLE process_{};
+    void** slot_{};
+    void* original_{};
+};
+
 std::vector<std::byte> current_user_sid_storage() {
     HANDLE token = nullptr;
     require(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token) != FALSE,
@@ -121,12 +185,16 @@ void make_immutable_module_root(const std::filesystem::path& root, const std::fi
     const auto worker_copy = root / "worker-probe.exe";
     std::filesystem::copy_file(worker, worker_copy, std::filesystem::copy_options::overwrite_existing, error);
     require(!error, "worker fixture executable must be copied into the protected module root");
+    {
+        std::ofstream invalid_image(root / "invalid-image.exe", std::ios::binary);
+        invalid_image << "not a PE executable";
+        require(invalid_image.good(), "malformed executable fixture must be written");
+    }
     auto user_storage = current_user_sid_storage();
     auto* user_sid = reinterpret_cast<PTOKEN_USER>(user_storage.data())->User.Sid;
     PSID app_sid = worker_app_container_sid();
     EXPLICIT_ACCESSW entries[2]{};
-    entries[0].grfAccessPermissions = DELETE | FILE_DELETE_CHILD | FILE_LIST_DIRECTORY | FILE_TRAVERSE |
-        FILE_READ_DATA | FILE_READ_ATTRIBUTES | READ_CONTROL;
+    entries[0].grfAccessPermissions = DELETE | FILE_DELETE_CHILD | GENERIC_READ | GENERIC_EXECUTE;
     entries[1].grfAccessPermissions = GENERIC_READ | GENERIC_EXECUTE;
     for (auto& entry : entries) {
         entry.grfAccessMode = SET_ACCESS;
@@ -143,7 +211,7 @@ void make_immutable_module_root(const std::filesystem::path& root, const std::fi
             "worker fixture module ACL must be applied");
     LocalFree(acl);
     EXPLICIT_ACCESSW file_entries[2]{};
-    file_entries[0].grfAccessPermissions = DELETE | FILE_READ_DATA | FILE_READ_ATTRIBUTES | READ_CONTROL;
+    file_entries[0].grfAccessPermissions = DELETE | GENERIC_READ | GENERIC_EXECUTE;
     file_entries[1].grfAccessPermissions = GENERIC_READ | GENERIC_EXECUTE;
     for (auto& entry : file_entries) entry.grfAccessMode = SET_ACCESS;
     BuildTrusteeWithSidW(&file_entries[0].Trustee, user_sid);
@@ -174,17 +242,8 @@ void invalid_requests_fail_closed() {
 
 void attested_echo_round_trip(const std::filesystem::path& worker) {
 #ifdef _WIN32
-    const auto profile_root = worker_profile_root();
-    std::error_code profile_error;
-    std::filesystem::create_directories(profile_root / "Temp", profile_error);
-    require(!profile_error, "worker fixture profile temp root must be created");
-    const auto module_root = profile_root /
-        ("windows-import-worker-modules-" + std::to_string(GetCurrentProcessId()));
-    make_immutable_module_root(module_root, worker);
-    const auto worker_copy = module_root / "worker-probe.exe";
-    const auto report = run_windows_import_worker(base_options(worker_copy));
-    std::error_code cleanup_error;
-    std::filesystem::remove_all(module_root, cleanup_error);
+    const auto report = run_windows_import_worker(base_options(worker));
+    std::cout << "attested_echo_round_trip: " << report.to_json().dump() << '\n';
     require(report.status == WindowsImportWorkerStatus::completed,
             "protected worker probe must complete in the AppContainer broker");
     require(report.launched && report.completed && !report.timed_out, "completed worker flags are inconsistent");
@@ -206,6 +265,7 @@ void deadline_terminates_whole_job(const std::filesystem::path& worker) {
     options.input.clear();
     options.timeout_ms = 100;
     const auto report = run_windows_import_worker(options);
+    std::cout << "deadline_terminates_whole_job: " << report.to_json().dump() << '\n';
     require(report.status == WindowsImportWorkerStatus::timed_out,
             "deadline probe must terminate the worker job");
     require(report.timed_out && report.launched && !report.completed, "timeout flags are inconsistent");
@@ -221,6 +281,7 @@ void output_limit_rejects_partial_result(const std::filesystem::path& worker) {
     options.arguments = {L"--echo"};
     options.max_output_bytes = 3;
     const auto report = run_windows_import_worker(options);
+    std::cout << "output_limit_rejects_partial_result: " << report.to_json().dump() << '\n';
     require(report.status == WindowsImportWorkerStatus::failed, "oversized output must fail the worker");
     require(!report.completed && report.output.empty(), "partial output must never be returned");
     require(has(report, "output_size_limit"), "output limit diagnostic missing");
@@ -229,12 +290,84 @@ void output_limit_rejects_partial_result(const std::filesystem::path& worker) {
 #endif
 }
 
+void malformed_image_preserves_launch_error(const std::filesystem::path& worker) {
+#ifdef _WIN32
+    auto options = base_options(worker.parent_path() / "invalid-image.exe");
+    const auto report = run_windows_import_worker(options);
+    std::cout << "malformed_image_preserves_launch_error: " << report.to_json().dump() << '\n';
+    require(report.status == WindowsImportWorkerStatus::launch_failed && !report.launched &&
+                !report.completed && report.output.empty(), "malformed executable must fail before launch");
+    require(has(report, "worker_launch_failed"), "malformed executable launch diagnostic missing");
+    require((report.launch_error == ERROR_BAD_EXE_FORMAT || report.launch_error == ERROR_EXE_MACHINE_TYPE_MISMATCH) &&
+                report.to_json().at("launch_error") == report.launch_error,
+            "native launch error must survive cleanup and JSON serialization");
+#else
+    (void)worker;
+#endif
+}
+
+void assignment_failure_terminates_suspended_worker(const std::filesystem::path& worker) {
+#ifdef _WIN32
+    AssignmentFailure failure;
+    const auto report = run_windows_import_worker(base_options(worker));
+    std::cout << "assignment_failure_terminates_suspended_worker: " << report.to_json().dump() << '\n';
+    require(failure.process() != nullptr, "assignment failure must capture the exact suspended process");
+    require(WaitForSingleObject(failure.process(), 0) == WAIT_OBJECT_0,
+            "failed job assignment must terminate the unassigned suspended worker before returning");
+    require(report.status == WindowsImportWorkerStatus::launch_failed && !report.completed && report.output.empty(),
+            "job assignment failure must reject all output");
+    require(has(report, "worker_job_assignment_failed") && !has(report, "worker_exit_unconfirmed"),
+            "assignment failure must report confirmed process cleanup");
+#else
+    (void)worker;
+#endif
+}
+
+void caller_secrets_are_not_inherited(const std::filesystem::path& worker) {
+#ifdef _WIN32
+    constexpr auto sentinel = L"VERTEX_WORKER_SENTINEL_SECRET";
+    require(GetEnvironmentVariableW(sentinel, nullptr, 0) == 0 && GetLastError() == ERROR_ENVVAR_NOT_FOUND,
+            "secret-inheritance fixture requires an unused sentinel name");
+    require(SetEnvironmentVariableW(sentinel, L"fixture-only-value-never-log") != FALSE,
+            "secret-inheritance fixture must set its sentinel");
+    struct Cleanup { ~Cleanup() { SetEnvironmentVariableW(L"VERTEX_WORKER_SENTINEL_SECRET", nullptr); } } cleanup;
+    auto options = base_options(worker);
+    options.arguments = {L"--assert-clean-environment"};
+    options.input.clear();
+    const auto report = run_windows_import_worker(options);
+    std::cout << "caller_secrets_are_not_inherited: " << report.to_json().dump() << '\n';
+    require(report.completed && report.exit_code == 0 && report.output.empty(),
+            "worker must omit caller secrets while retaining required runtime environment");
+#else
+    (void)worker;
+#endif
+}
+
 void run(const std::filesystem::path& worker) {
     invalid_requests_fail_closed();
 #ifdef _WIN32
-    attested_echo_round_trip(worker);
-    deadline_terminates_whole_job(worker);
-    output_limit_rejects_partial_result(worker);
+    const auto profile_root = worker_profile_root();
+    std::error_code profile_error;
+    std::filesystem::create_directories(profile_root / "Temp", profile_error);
+    require(!profile_error, "worker fixture profile temp root must be created");
+    const auto module_root = profile_root /
+        ("windows-import-worker-modules-" + std::to_string(GetCurrentProcessId()));
+    struct Cleanup {
+        std::filesystem::path root;
+        ~Cleanup() { std::error_code error; std::filesystem::remove_all(root, error); }
+    } cleanup{module_root};
+    make_immutable_module_root(module_root, worker);
+    const auto worker_copy = module_root / "worker-probe.exe";
+    const auto executable_access = CreateFileW(worker_copy.c_str(), GENERIC_READ | GENERIC_EXECUTE,
+        FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+    require(executable_access != INVALID_HANDLE_VALUE, "protected fixture must remain executable by the broker user");
+    CloseHandle(executable_access);
+    attested_echo_round_trip(worker_copy);
+    deadline_terminates_whole_job(worker_copy);
+    output_limit_rejects_partial_result(worker_copy);
+    malformed_image_preserves_launch_error(worker_copy);
+    assignment_failure_terminates_suspended_worker(worker_copy);
+    caller_secrets_are_not_inherited(worker_copy);
 #endif
 }
 

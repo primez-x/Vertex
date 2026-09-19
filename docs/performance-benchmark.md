@@ -92,6 +92,49 @@ Validate and hash a desktop report with:
 python scripts/performance_report.py measurement-performance.json
 ```
 
+### Repeatable interactive diagnostic capture
+
+The existing `desktop_performance_tests` executable has an opt-in capture mode:
+
+```powershell
+$env:QT_QPA_PLATFORM = 'offscreen'
+desktop_performance_tests --capture drawing.bldproj new-drawing-capture.json
+```
+
+Run it separately for each project created by `performance-workload`, with the
+same Qt/OCCT runtime paths used by the desktop tests. The output path must not
+exist. The runner loads the supplied project through ProjectStore, creates an
+in-memory window and collects exactly 100 samples each for navigation, input,
+and edits. It alternates small zoom operations, sends pointer-move events, and
+alternates redo/undo of a temporary boundary. Every operation waits for the
+application's own telemetry to observe completed painting before the next
+operation begins. Missing completion fails after a 30-second polling deadline;
+synchronous handlers themselves cannot be interrupted by this deadline.
+
+The runner does not save the source project. It checks exact entity and asset
+byte equality against the initially loaded snapshot after undoing the probe.
+History and revision numbers change in memory; this is content restoration,
+not identical snapshot/history preservation. Output records the source file
+hash, original authoring digest, final entity digest, before/after revisions,
+and the unmodified application report under `desktop_report`. An unsuccessful
+capture can leave an empty output file; only exit 0 yields a complete capture.
+
+This is an offscreen 1200x800 plan-canvas diagnostic, including when the input
+is an architectural or sheet project. It does not measure native 3D rendering,
+sheet page/image presentation, compositor/display latency, or interactive
+input hardware. Pointer events are programmatically delivered, not physical.
+Probe redo/undo characterizes that specific command, not all ordinary edits.
+Zero open/save samples and unknown triangle/project-byte values remain in the
+application report. No percentile is reconstructed from percentiles, and no
+missing measurement or qualification label is filled in. This wrapper is not
+a version-1 qualification desktop report and cannot complete qualification.
+
+The remaining capture integration requires real desktop open/save repetitions
+(new/open currently resets the telemetry), workload identity and measured
+triangle binding, a recorded long-regeneration cancel/discard observation,
+and operator-approved reference hardware. Existing queue fixtures establish
+unit-level cancellation behavior, not that runtime observation.
+
 This validator checks the bounded report's schema, metric consistency, and
 incomplete audit boundary. It does not authenticate measurements. Its desktop
 report format is distinct from the caller-supplied input format above.

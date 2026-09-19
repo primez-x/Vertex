@@ -139,7 +139,34 @@ def _file_records(inventory: Mapping[str, Any], components: list[Mapping[str, An
             for source_index, source in enumerate(values):
                 _require(isinstance(source, Mapping),
                          f"component {component_id}.{source_key}[{source_index}] must be an object")
-                add(component_id, source.get("path"), source.get("sha256"), kind="source")
+                source_kind = source.get("kind", "file")
+                _require(source_kind in ("file", "directory"),
+                         f"component {component_id}.{source_key}[{source_index}].kind is unknown")
+                if source_kind == "file":
+                    add(component_id, source.get("path"), source.get("sha256"), kind="source")
+
+        # The inventory keeps runtime source provenance under package.source.
+        # Tree digests describe an aggregate, not the bytes of an SPDX file.
+        provenance = component["package"].get("source", {})
+        _require(isinstance(provenance, Mapping),
+                 f"component {component_id}.package.source must be an object")
+        for key in ("upstream_files", "source_paths"):
+            values = provenance.get(key, [])
+            _require(isinstance(values, list), f"component {component_id}.source.{key} must be a list")
+            for index, value in enumerate(values):
+                field = f"component {component_id}.source.{key}[{index}]"
+                _require(isinstance(value, Mapping), f"{field} must be an object")
+                relative = _path(value.get("path"), f"{field}.path")
+                sha = _sha256(value.get("sha256"), f"{field}.sha256")
+                kind = value.get("kind", "file")
+                _require(kind in ("file", "directory"), f"{field}.kind is unknown")
+                if kind == "file":
+                    add(component_id, relative, sha, kind="source")
+        for path_key, hash_key in (("provenance_path", "provenance_sha256"),
+                                   ("spdx_path", "spdx_sha256"),
+                                   ("dependencies_path", "dependencies_sha256")):
+            if path_key in provenance or hash_key in provenance:
+                add(component_id, provenance.get(path_key), provenance.get(hash_key), kind="provenance")
 
     binaries = inventory.get("binaries", [])
     _require(isinstance(binaries, list), "inventory binaries must be a list")
@@ -163,7 +190,11 @@ def _file_records(inventory: Mapping[str, Any], components: list[Mapping[str, An
         for source_index, source in enumerate(values):
             _require(isinstance(source, Mapping),
                      f"{field}.source_inputs[{source_index}] must be an object")
-            add(component_id, source.get("path"), source.get("sha256"), kind="source")
+            source_kind = source.get("kind", "file")
+            _require(source_kind in ("file", "directory"),
+                     f"{field}.source_inputs[{source_index}].kind is unknown")
+            if source_kind == "file":
+                add(component_id, source.get("path"), source.get("sha256"), kind="source")
 
     records = []
     for row in sorted(by_key.values(), key=lambda value: (
@@ -222,6 +253,12 @@ def build_sbom(inventory: Mapping[str, Any], inventory_sha256: str | None = None
         }
         if package_files:
             package_row["hasFiles"] = sorted(package_files)
+        if isinstance(package.get("source"), Mapping):
+            # sourceInfo is SPDX free text. Keep the complete inventory evidence
+            # as canonical JSON, including exact revisions and aggregate hashes,
+            # without promoting upstream candidates into shipped packages.
+            package_row["sourceInfo"] = json.dumps(package["source"], ensure_ascii=False,
+                                                   sort_keys=True, separators=(",", ":"))
         packages.append(package_row)
 
     file_rows: list[dict[str, Any]] = []

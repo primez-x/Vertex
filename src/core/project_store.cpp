@@ -1873,8 +1873,12 @@ void publish_handle(HANDLE staging, const std::filesystem::path& destination,
 
 std::filesystem::path sibling_path(const std::filesystem::path& destination,
                                    std::string_view category) {
-    const auto name = destination.filename().wstring() + L"." +
-                      std::filesystem::path(category).wstring() + L"." +
+    // Keep private publication names independent of the user-selected filename.
+    // SQLite may append -journal/-wal/-shm while writing the staging database;
+    // repeating a long destination filename here can push those internal paths
+    // beyond the legacy Win32 path boundary even though the destination itself
+    // is valid.
+    const auto name = L".vertex-project-" + std::filesystem::path(category).wstring() + L"-" +
                       std::filesystem::path(make_stable_id()).wstring();
     return destination.parent_path() / name;
 }

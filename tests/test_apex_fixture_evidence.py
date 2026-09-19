@@ -3,6 +3,8 @@ import importlib.util
 import json
 import os
 import pathlib
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -78,6 +80,61 @@ class ApexFixtureEvidenceTests(unittest.TestCase):
             self.assertEqual(module.main([str(manifest), "--root", str(root),
                                           "--output", str(alias)]), 1)
             self.assertEqual(fixture.read_bytes(), b"irreplaceable apex fixture")
+
+    def _assert_cli_preserves_selected_inputs(self, alias_kind):
+        for selected_name in ("fixture", "manifest", "evidence"):
+            with self.subTest(alias_kind=alias_kind, selected=selected_name):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = pathlib.Path(directory)
+                    fixture = root / "sample.ax7"
+                    fixture.write_bytes(b"irreplaceable apex fixture\x00\xff")
+                    evidence = root / "evidence.txt"
+                    evidence.write_bytes(b"independent evidence\r\n\x00\xff")
+                    manifest = root / "manifest.json"
+                    data = _base_manifest(root, fixture)
+                    data["evidence_refs"] = [
+                        {"kind": "file", "value": evidence.name}
+                    ]
+                    manifest.write_text(json.dumps(data), encoding="utf-8")
+                    inputs = {
+                        "fixture": fixture,
+                        "manifest": manifest,
+                        "evidence": evidence,
+                    }
+                    originals = {name: path.read_bytes() for name, path in inputs.items()}
+                    selected = inputs[selected_name]
+                    if alias_kind == "hard_link":
+                        output = root / "capture.json"
+                        os.link(selected, output)
+                        self.assertTrue(output.samefile(selected))
+                    elif alias_kind == "resolved_path":
+                        subdirectory = root / "nested"
+                        subdirectory.mkdir()
+                        output = subdirectory / ".." / selected.name
+                        self.assertEqual(output.resolve(), selected.resolve())
+                    else:
+                        output = selected
+
+                    result = subprocess.run(
+                        [sys.executable, str(ROOT / "scripts" / "apex_fixture_evidence.py"),
+                         str(manifest), "--root", str(root), "--output", str(output)],
+                        capture_output=True, text=True, check=False,
+                    )
+
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertIn("Output path collides with input", result.stderr)
+                    for name, path in inputs.items():
+                        self.assertEqual(path.read_bytes(), originals[name], name)
+                    self.assertEqual(output.read_bytes(), originals[selected_name])
+
+    def test_cli_rejects_each_selected_input_as_output(self):
+        self._assert_cli_preserves_selected_inputs("direct")
+
+    def test_cli_rejects_resolved_alias_of_each_selected_input(self):
+        self._assert_cli_preserves_selected_inputs("resolved_path")
+
+    def test_cli_rejects_hard_link_alias_of_each_selected_input(self):
+        self._assert_cli_preserves_selected_inputs("hard_link")
 
     def test_output_created_as_input_alias_during_validation_is_not_truncated(self):
         with tempfile.TemporaryDirectory() as directory:

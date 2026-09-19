@@ -1443,10 +1443,34 @@ void test_journal_stage_failure_cleans_only_exact_temporary_sidecars() {
     require(ProjectStore::file_sha256(file) == original.file_sha256,
             "post-journal failure must preserve original project bytes");
     for (const auto& entry : std::filesystem::directory_iterator(temp.path)) {
-        const auto name = entry.path().filename().string();
-        require(name.find("journal-failure.psketch.tmp.") == std::string::npos,
+        require(entry.path() == file || entry.path() == unrelated,
                 "temporary database and exact SQLite sidecars must be removed");
     }
+}
+
+void test_save_uses_compact_staging_names_for_long_destination() {
+#ifdef _WIN32
+    TempDirectory temp;
+    const auto& directory = temp.path;
+    constexpr std::size_t target_length = 220;
+    constexpr auto extension = std::string_view(".bldproj");
+    require(directory.wstring().size() + 1 + extension.size() < target_length,
+            "temporary root is too long for the bounded long-filename fixture");
+    const auto filename_length = target_length - directory.wstring().size() - 1;
+    const auto destination = directory /
+        (std::string(filename_length - extension.size(), 'p') + std::string(extension));
+    require(destination.wstring().size() == target_length,
+            "long destination fixture must reproduce the installed-runtime path range");
+
+    const auto document = populated_document();
+    const auto receipt = ProjectStore::save(destination, document.snapshot());
+    require(std::filesystem::is_regular_file(destination) &&
+                ProjectStore::file_sha256(destination) == receipt.file_sha256,
+            "long destination must publish the exact saved project");
+    require(ProjectStore::load(destination).document.snapshot().entities() ==
+                document.snapshot().entities(),
+            "long destination must reopen with exact project entities");
+#endif
 }
 
 void test_reopen_preserves_redo_navigation_and_named_abandoned_branch() {
@@ -1531,6 +1555,7 @@ int main() {
         test_load_resource_limits_precede_large_allocations();
         test_aggregate_json_byte_and_value_budgets_are_enforced();
         test_journal_stage_failure_cleans_only_exact_temporary_sidecars();
+        test_save_uses_compact_staging_names_for_long_destination();
         test_validated_staging_handle_blocks_path_tampering_and_publishes_exact_bytes();
         test_destination_identity_is_rechecked_after_verified_backup();
         test_verified_backup_is_locked_through_publication();

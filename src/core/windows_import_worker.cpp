@@ -77,6 +77,7 @@ nlohmann::json WindowsImportWorkerReport::to_json() const {
         {"proj_offline_applied", proj_offline_applied},
         {"process_id", process_id},
         {"exit_code", exit_code},
+        {"launch_error", launch_error},
         {"output_bytes", output.size()},
         {"diagnostics", diagnostics},
         {"network_requests_permitted", false},
@@ -327,74 +328,34 @@ bool environment_block(const WindowsImportWorkerOptions& options,
         if (i) path.push_back(L';');
         path += options.immutable_module_roots[i].wstring();
     }
-    std::vector<std::wstring> values;
-    std::wstring system_root;
-    // Start with the host's environment shape so loader/runtime variables
-    // that Windows adds for the current user (especially per-drive entries)
-    // remain valid. Sensitive path and network settings are replaced below.
-    if (const auto inherited = GetEnvironmentStringsW()) {
-        for (const wchar_t* cursor = inherited; *cursor; cursor += std::wcslen(cursor) + 1) {
-            std::wstring entry(cursor);
-            const auto separator = entry.find(L'=');
-            if (separator == std::wstring::npos || separator == 0) {
-                if (separator == 0) values.emplace_back(std::move(entry));
-                continue;
-            }
-            std::wstring name = entry.substr(0, separator);
-            std::transform(name.begin(), name.end(), name.begin(), [](wchar_t c) {
-                return static_cast<wchar_t>(std::towlower(c));
-            });
-            if (name == L"systemroot") system_root = entry.substr(separator + 1);
-            if (name.starts_with(L"qt_") || name.starts_with(L"qml") ||
-                name == L"path" || name == L"temp" || name == L"tmp" || name == L"systemroot" ||
-                name == L"windir" || name == L"localappdata" || name == L"appdata" ||
-                name == L"userprofile" || name == L"homedrive" || name == L"homepath" ||
-                name == L"comspec" || name == L"proj_network" || name == L"proj_debug" ||
-                name == L"proj_data" || name == L"proj_lib" ||
-                name == L"proj_user_writable_directory" || name == L"proj_curl_ca_bundle" ||
-                name == L"curl_ca_bundle" ||
-                name == L"http_proxy" || name == L"https_proxy" || name == L"all_proxy" ||
-                name == L"no_proxy") continue;
-            values.emplace_back(std::move(entry));
-        }
-        FreeEnvironmentStringsW(inherited);
+    std::array<wchar_t, MAX_PATH> system_directory{};
+    const auto system_length = GetSystemWindowsDirectoryW(system_directory.data(),
+                                                          static_cast<UINT>(system_directory.size()));
+    if (system_length == 0 || system_length >= system_directory.size()) {
+        diagnostic(report, "worker_system_directory_unavailable");
+        return false;
     }
-    if (system_root.empty()) system_root = L"C:\\Windows";
-
-    auto set_value = [&](const std::wstring& name, std::wstring value) {
-        auto lower_name = name;
-        std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), [](wchar_t c) {
-            return static_cast<wchar_t>(std::towlower(c));
-        });
-        values.erase(std::remove_if(values.begin(), values.end(), [&](const auto& entry) {
-            const auto separator = entry.find(L'=');
-            if (separator == std::wstring::npos || separator == 0) return false;
-            auto existing = entry.substr(0, separator);
-            std::transform(existing.begin(), existing.end(), existing.begin(), [](wchar_t c) {
-                return static_cast<wchar_t>(std::towlower(c));
-            });
-            return existing == lower_name;
-        }), values.end());
-        values.emplace_back(name + L"=" + std::move(value));
+    const std::wstring system_root(system_directory.data(), system_length);
+    // Explicit allowlist: never copy the caller's environment, credentials,
+    // plugin settings, proxy configuration, or per-drive working directories.
+    // System paths come from Windows, not caller-controlled environment values.
+    std::vector<std::wstring> values{
+        L"PATH=" + path,
+        L"SystemRoot=" + system_root,
+        L"WINDIR=" + system_root,
+        L"SystemDrive=" + std::filesystem::path(system_root).root_name().wstring(),
+        L"TEMP=" + job_root.wstring(),
+        L"TMP=" + job_root.wstring(),
+        L"LOCALAPPDATA=" + job_root.wstring(),
+        L"PROJ_NETWORK=OFF",
+        L"PROJ_DEBUG=0",
     };
-    set_value(L"PATH", path);
-    set_value(L"SystemRoot", system_root);
-    set_value(L"WINDIR", system_root);
-    set_value(L"TEMP", job_root.wstring());
-    set_value(L"TMP", job_root.wstring());
-    set_value(L"PROJ_NETWORK", L"OFF");
-    set_value(L"PROJ_DEBUG", L"0");
-
-    // A custom Windows environment must retain the per-drive current
-    // directory entries (for example, `=C:=C:\\work`). Without one, the
-    // process loader can reject an otherwise valid environment block with
-    // ERROR_ENVVAR_NOT_FOUND. The worker's current directory is broker-owned.
+    // AppContainer process creation requires LOCALAPPDATA even with a custom
+    // environment. Keep it broker-owned instead of exposing the caller's path.
+    // Retain only the broker-owned drive's current-directory entry.
     const auto root_name = job_root.root_name().wstring();
     if (root_name.size() >= 2 && root_name[1] == L':') {
         const auto prefix = L"=" + root_name + L"=";
-        values.erase(std::remove_if(values.begin(), values.end(), [&](const auto& entry) {
-            return entry.starts_with(prefix);
-        }), values.end());
         values.emplace_back(prefix + job_root.wstring());
     }
 
@@ -591,9 +552,22 @@ bool token_attestation(HANDLE process, PSID expected_sid, WindowsImportWorkerRep
     report.restricted_token_verified = has_restrictions != FALSE || report.app_container_verified;
     if (!report.restricted_token_verified) diagnostic(report, "worker_token_not_restricted");
 
-    TOKEN_APPCONTAINER_INFORMATION container{};
-    if (!GetTokenInformation(token.get(), TokenAppContainerSid, &container, sizeof(container), &bytes) ||
-        !container.TokenAppContainer || !EqualSid(container.TokenAppContainer, expected_sid)) {
+    DWORD container_bytes = 0;
+    GetTokenInformation(token.get(), TokenAppContainerSid, nullptr, 0, &container_bytes);
+    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER ||
+        container_bytes < sizeof(TOKEN_APPCONTAINER_INFORMATION) || container_bytes > 1024 * 1024) {
+        diagnostic(report, "worker_app_container_identity_query_failed");
+        return false;
+    }
+    std::vector<std::byte> container_storage(container_bytes);
+    if (!GetTokenInformation(token.get(), TokenAppContainerSid, container_storage.data(),
+                             container_bytes, &container_bytes)) {
+        diagnostic(report, "worker_app_container_identity_query_failed");
+        return false;
+    }
+    const auto* container = reinterpret_cast<const TOKEN_APPCONTAINER_INFORMATION*>(container_storage.data());
+    if (!container->TokenAppContainer || !IsValidSid(container->TokenAppContainer) ||
+        !EqualSid(container->TokenAppContainer, expected_sid)) {
         diagnostic(report, "worker_app_container_identity_mismatch");
         return false;
     }
@@ -868,9 +842,10 @@ WindowsImportWorkerReport run_windows_import_worker(const WindowsImportWorkerOpt
     const BOOL launched = CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE,
                                          flags, environment.data(), job_root.c_str(), &startup.StartupInfo,
                                          &process_information);
+    const auto launch_error = launched ? ERROR_SUCCESS : GetLastError();
     DeleteProcThreadAttributeList(attributes);
     if (!launched) {
-        const auto launch_error = GetLastError();
+        report.launch_error = launch_error;
         if (launch_error == ERROR_NOT_SUPPORTED || launch_error == ERROR_CALL_NOT_IMPLEMENTED)
             diagnostic(report, "app_container_launch_not_supported");
         else if (launch_error == ERROR_ACCESS_DENIED)
@@ -889,7 +864,13 @@ WindowsImportWorkerReport run_windows_import_worker(const WindowsImportWorkerOpt
     child_output_write.close();
 
     if (!AssignProcessToJobObject(job.get(), process.get())) {
-        (void)terminate_job(job.get(), process.get(), report, "worker_job_assignment_failed");
+        diagnostic(report, "worker_job_assignment_failed");
+        // The suspended process never joined our job; terminating that empty
+        // job cannot stop it. Retain its handle until direct termination is
+        // confirmed, before returning or removing its temporary directory.
+        if (!TerminateProcess(process.get(), 1)) diagnostic(report, "worker_termination_failed");
+        if (WaitForSingleObject(process.get(), 5000) != WAIT_OBJECT_0)
+            diagnostic(report, "worker_exit_unconfirmed");
         report.status = WindowsImportWorkerStatus::launch_failed;
         (void)cleanup_job_directory(job_root);
         sort_diagnostics(report);

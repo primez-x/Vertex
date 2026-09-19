@@ -190,6 +190,7 @@ WORKFLOW_RULES.update({
             "include/sketch/workspace_regeneration_queue.hpp",
             "src/core/workspace_regeneration_queue.cpp",
             "tests/regeneration_queue_tests.cpp",
+            "tests/desktop_performance_tests.cpp",
             "docs/workspace-regeneration-queue.md",
             "docs/performance-benchmark.md",
         ),
@@ -201,11 +202,12 @@ WORKFLOW_RULES.update({
             "FIFO",
             "shutdown(false)",
         ),
-        "tests": ("workspace_regeneration_queue",),
+        "tests": ("workspace_regeneration_queue", "desktop_performance"),
         "qualification_boundary": (
             "This evidence covers the deterministic queue/cancellation implementation on the "
-            "development host. Integrated application regeneration, reference hardware latency, "
-            "representative workloads, and final production performance qualification remain open."
+            "development host, including bounded real canvas input/edit/paint capture. Integrated "
+            "long-regeneration cancellation, native 3D and sheet presentation, reference hardware "
+            "latency, representative workloads, and final production qualification remain open."
         ),
     },
 })
@@ -1551,12 +1553,13 @@ WORKFLOW_RULES.update({
         "acceptance": "Every shipped component has a pinned source or revision, build input, license record, notice path, and distribution inventory entry.",
         "sources": (
             "third_party/dependencies.json", "third_party/distribution-components.json", "scripts/distribution_inventory.py",
-            "scripts/distribution_sbom.py", "scripts/stage_portable_package.py", "tests/test_stage_portable_package.py",
-            "docs/dependencies/distribution-inventory.md",
+            "scripts/distribution_sbom.py", "scripts/stage_portable_package.py", "tests/test_distribution_sbom.py",
+            "tests/test_stage_portable_package.py", "docs/dependencies/distribution-inventory.md",
+            "docs/dependencies/distribution-sbom.md", "docs/dependencies/planegcs.md",
         ),
         "anchors": ("distribution", "inventory", "SBOM", "license", "source", "notice", "dependency"),
         "tests": ("packaging_distribution_inventory", "packaging_distribution_sbom", "packaging_stage_portable_package"),
-        "qualification_boundary": "This evidence covers declared component inventory and SPDX generation; final legal clearance and redistributability approval remain open.",
+        "qualification_boundary": "This evidence covers declared component inventory, file-level source provenance preservation, SPDX generation, and documented replacement-build boundaries. Complete matching sources, live relink/replacement proof, notice review, legal clearance, and redistributability approval remain open.",
     },
     "COMP-LIC-002": {
         "acceptance": "Original application paths and third-party paths have explicit ownership and provenance classifications suitable for private delivery or later licensing review.",
@@ -1977,17 +1980,17 @@ WORKFLOW_RULES.update({
     },
     "SEC-WORKER-001": {
         "acceptance": "The import-worker policy declares AppContainer isolation, network denial, Job Object limits, brokered inputs, controlled temporary storage, fixed search paths, and attestation requirements.",
-        "sources": ("include/sketch/import_worker_policy.hpp", "src/core/import_worker_policy.cpp", "tests/import_worker_policy_tests.cpp", "include/sketch/windows_import_worker.hpp", "src/core/windows_import_worker.cpp", "tests/windows_import_worker_tests.cpp", "tests/windows_import_worker_probe.cpp", "docs/import-worker-security.md"),
+        "sources": ("include/sketch/import_worker_policy.hpp", "src/core/import_worker_policy.cpp", "tests/import_worker_policy_tests.cpp", "include/sketch/windows_import_worker.hpp", "src/core/windows_import_worker.cpp", "tests/windows_import_worker_tests.cpp", "tests/windows_import_worker_probe.cpp", "docs/import-worker-security.md", "scripts/test-import-worker-independent.ps1", "scripts/test-import-worker-independent.md"),
         "anchors": ("AppContainer", "network", "Job", "attestation", "temporary", "search", "limits"),
         "tests": ("import_worker_policy",),
-        "qualification_boundary": "This evidence covers deterministic worker policy, path, resource, and attestation contracts. Live AppContainer/network-denial execution on a clean Windows host remains open.",
+        "qualification_boundary": "This evidence covers deterministic worker policy, path, resource, and attestation contracts and the source of a job-free development-host runner. Its local captures are not embedded here; active network, parent-exit, installed-runtime, and clean-machine qualification remain open.",
     },
     "SEC-WORKER-002": {
         "acceptance": "Malformed, traversal, decompression, module-planting, child-process, timeout, and crash fixtures fail closed with bounded diagnostics and no partial import result.",
-        "sources": ("include/sketch/import_worker_policy.hpp", "src/core/import_worker_policy.cpp", "tests/import_worker_policy_tests.cpp", "include/sketch/windows_import_worker.hpp", "src/core/windows_import_worker.cpp", "tests/windows_import_worker_tests.cpp", "tests/windows_import_worker_probe.cpp", "docs/import-worker-security.md"),
+        "sources": ("include/sketch/import_worker_policy.hpp", "src/core/import_worker_policy.cpp", "tests/import_worker_policy_tests.cpp", "include/sketch/windows_import_worker.hpp", "src/core/windows_import_worker.cpp", "tests/windows_import_worker_tests.cpp", "tests/windows_import_worker_probe.cpp", "docs/import-worker-security.md", "scripts/test-import-worker-independent.ps1", "scripts/test-import-worker-independent.md"),
         "anchors": ("traversal", "decompression", "timeout", "crash", "module", "partial", "Job"),
         "tests": ("import_worker_policy",),
-        "qualification_boundary": "This evidence covers deterministic adversarial policy decisions and bounded output rules. OS-level child containment and clean-machine worker survival remain open.",
+        "qualification_boundary": "This evidence covers deterministic adversarial policy decisions, bounded output rules, and the source of a job-free development-host runner. Decoder crash, module planting, child escape, project survival, installed-runtime, and clean-machine qualification remain open.",
     },
     "SEC-PROJ-001": {
         "acceptance": "Georeferencing and import-worker policy disable PROJ networking, require contained local resources, and report missing or mismatched resources locally without download attempts.",

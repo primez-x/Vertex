@@ -8,6 +8,17 @@
 #include <string_view>
 
 int wmain(int argc, wchar_t** argv) {
+    if (argc == 2 && std::wstring_view(argv[1]) == L"--assert-clean-environment") {
+        // Test only presence; never read or print the sentinel's value.
+        if (GetEnvironmentVariableW(L"VERTEX_WORKER_SENTINEL_SECRET", nullptr, 0) != 0 ||
+            GetLastError() != ERROR_ENVVAR_NOT_FOUND) return 10;
+        for (const auto* name : {L"SystemRoot", L"WINDIR", L"SystemDrive", L"PATH", L"LOCALAPPDATA", L"TEMP", L"TMP"}) {
+            if (GetEnvironmentVariableW(name, nullptr, 0) == 0) return 11;
+        }
+        wchar_t network[4]{};
+        if (GetEnvironmentVariableW(L"PROJ_NETWORK", network, 4) != 3 || std::wstring_view(network) != L"OFF") return 12;
+        return 0;
+    }
     if (argc == 3 && std::wstring_view(argv[1]) == L"--sleep-ms") {
         wchar_t* end = nullptr;
         const auto milliseconds = wcstoul(argv[2], &end, 10);
@@ -22,7 +33,10 @@ int wmain(int argc, wchar_t** argv) {
     std::array<unsigned char, 64 * 1024> buffer{};
     for (;;) {
         DWORD received = 0;
-        if (!ReadFile(input, buffer.data(), static_cast<DWORD>(buffer.size()), &received, nullptr)) return 3;
+        if (!ReadFile(input, buffer.data(), static_cast<DWORD>(buffer.size()), &received, nullptr)) {
+            if (GetLastError() == ERROR_BROKEN_PIPE) break; // The broker closed its completed input stream.
+            return 3;
+        }
         if (received == 0) break;
         DWORD offset = 0;
         while (offset < received) {

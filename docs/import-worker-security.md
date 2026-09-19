@@ -55,6 +55,18 @@ not runtime evidence: clean-machine AppContainer launch, network-denial,
 module-planting, parent-exit, and PROJ-resource observations remain required
 for the production gates.
 
+`scripts/test-import-worker-independent.ps1` supplies a bounded development-host
+path around that harness limitation. It uses current-user `Win32_Process.Create`
+to start a hidden PowerShell host outside the Codex parent Job Object and records
+binary hashes, host identity/job membership, process results, bounded output,
+and termination. Current Debug and Release captures pass live AppContainer echo,
+watchdog termination, output-limit rejection, and malformed-image launch-error
+preservation. The broker supplies required `LOCALAPPDATA`, `TEMP`, and `TMP`
+values from its ACL-protected per-job directory; it does not expose the caller's
+profile. The runner and its exact evidence boundary are documented in
+`scripts/test-import-worker-independent.md`. These developer-host captures do
+not replace installed-runtime or clean-machine qualification.
+
 The policy requires AppContainer, no network capabilities, brokered input
 handles, a private temporary root, immutable fixed module search roots, a
 single-process job with a memory ceiling and parent-exit termination, and
@@ -105,8 +117,9 @@ Decision JSON has schema version 1, sorted unique diagnostic codes, and no
 untrusted path or payload text. A rejection requests whole-worker termination;
 the actual adapter must perform and verify that action. Tests cover fail-closed
 attestation, hostile paths, size/ratio overflow, deadline, child process, malformed
-data, crash, PROJ offline resources and deterministic reports. Live Windows
-network denial, module planting, job termination, temp cleanup and project
-survival fixtures remain required at the adapter boundary. The native broker
-reports those controls only after successful runtime attestation; a launch
-failure or skipped host cannot be promoted to a passing production result.
+data, crash, PROJ offline resources and deterministic reports. Active Windows
+network attempts, module planting, parent-exit termination, decoder crashes,
+installed PDF/raster imports, clean-machine temp cleanup, and project-survival
+fixtures remain required at the adapter boundary. The native broker reports
+controls only after successful runtime attestation; a launch failure or skipped
+host cannot be promoted to a passing production result.
