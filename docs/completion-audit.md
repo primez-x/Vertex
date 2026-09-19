@@ -54,3 +54,41 @@ qualification. A pass proves that the named analytical fixture families have
 source anchors and passing Debug/Release CTest records. It does not prove Apex
 format fidelity, clean-machine behavior, physical print review, or third-party
 integration behavior.
+
+Workflow acceptance generation also requires source/build/test provenance.
+After finishing all source edits, use the normal compiler environment and the
+already configured Debug and Release build trees:
+
+```powershell
+python scripts/workflow_test_provenance.py --root .
+python scripts/generate_workflow_acceptance_evidence.py --root .
+```
+
+The runner reconfigures each tree, performs a clean rebuild, and runs the full
+CTest matrix before requiring every named workflow fixture to have passed exactly
+once. `--configuration windows-debug` or `windows-release` limits
+one invocation; both receipts are required for acceptance generation. Use
+`--cmake` and `--ctest` to specify tool executables if they are not on `PATH`.
+This run replaces `LastTest.log` with the complete enabled test matrix. It does
+not enable the separately disabled production gate or turn skipped host-dependent
+fixtures into production evidence.
+
+The runner writes `build/<configuration>/workflow-test-provenance.json` and an
+immutable `workflow-test-provenance.log` copy only after successful build and
+test commands and structured passing records for
+every requested fixture. It binds the unchanged source fingerprint, CMake cache,
+generated test inventories, compiled payload hashes, and exact CTest log.
+Acceptance generation checks these bindings before and after reading the
+immutable log and records the receipt hash. Later CTest inventory queries or
+unrelated test runs may replace CTest's working `LastTest.log` without destroying
+the receipt. Source edits, changed binaries, replaced provenance logs, missing
+receipts, or failed reruns require rebuilding and rerunning; existing logs cannot
+be retrospectively stamped as current. No file timestamp is used as proof of
+freshness.
+
+These local receipts prevent accidental stale evidence reuse. They are not
+signed attestations and assume trusted build tools and an otherwise quiescent
+workspace; they do not authenticate operators or protect against deliberate
+receipt forgery or changes reverted between fingerprint checks. External
+toolchains and dependencies outside the source/build trees remain outside this
+local provenance boundary.

@@ -108,10 +108,10 @@
       "requirement": "Drawing, editing, calculating, saving, recovering, printing, and exporting work with networking disabled.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "verified",
+      "implementation_status": "in_progress",
       "acceptance": "On a clean Windows machine with network adapters disabled, complete the full authoring and output workflow without a network error or account prompt.",
       "package": 8,
-      "blocker": null,
+      "blocker": "A clean Windows qualification run with networking disabled is still required.",
       "implementation_sources": [
         "include/sketch/offline_policy.hpp",
         "src/core/offline_policy.cpp",
@@ -129,10 +129,10 @@
       "requirement": "The application has no account, activation server, subscription, or online entitlement dependency.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "verified",
+      "implementation_status": "in_progress",
       "acceptance": "Static dependency review and a network-denied run show no entitlement check, sign-in requirement, or remote service needed for the required workflows.",
       "package": 8,
-      "blocker": null,
+      "blocker": "A production workflow run with networking denied is still required to validate the static no-entitlement implementation.",
       "implementation_sources": [
         "include/sketch/offline_policy.hpp",
         "src/core/offline_policy.cpp",
@@ -152,10 +152,10 @@
       "requirement": "Installation is offline-capable and bundles required runtime components, fonts, help, libraries, resources, and optional local-assistance assets.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "verified",
+      "implementation_status": "in_progress",
       "acceptance": "Install from the offline installer and portable package on a clean machine with networking disabled, then open bundled help and complete a project workflow.",
       "package": 8,
-      "blocker": null,
+      "blocker": "Offline install and workflow completion must be exercised on a clean Windows machine with networking disabled.",
       "implementation_sources": [
         "include/sketch/offline_policy.hpp",
         "scripts/stage_portable_package.py",
@@ -175,10 +175,10 @@
       "requirement": "Deliver the original application source privately with reproducible Windows build instructions, fixtures, and build configuration.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "verified",
+      "implementation_status": "in_progress",
       "acceptance": "The delivered source archive builds the shipped artifacts on a documented Windows environment from a clean checkout without a hosted build service.",
       "package": 8,
-      "blocker": null,
+      "blocker": "The delivered source kit must rebuild the shipped artifacts from a clean checkout on the documented Windows environment.",
       "implementation_sources": [
         "third_party/dependencies.json",
         "scripts/source_kit_manifest.py",
@@ -1700,9 +1700,12 @@
         "include/sketch/field_adapter_contract.hpp",
         "src/core/field_adapter_contract.cpp",
         "tests/field_adapter_contract_tests.cpp",
-        "docs/field-adapter-contracts.md"
+        "docs/field-adapter-contracts.md",
+        "include/sketch/appraisal_dispatcher.hpp",
+        "src/core/appraisal_dispatcher.cpp",
+        "tests/appraisal_dispatcher_tests.cpp"
       ],
-      "implementation_note": "Versioned appraisal field-mapping descriptors and deterministic one-way payload contracts are implemented; target applications, adapters, and exchange fixtures remain to be discovered and exercised."
+      "implementation_note": "Versioned appraisal field mappings, deterministic one-way payloads, and a preparation-only dispatcher are implemented. The dispatcher performs exact capability matching and fail-closed typed handling for offline, unavailable, unsupported, ambiguous, timeout, cancellation, worker failure, and uncertain replies. Actual target applications, isolated transports, field-fidelity fixtures, and real exchanges remain open."
     },
     {
       "id": "APX-INT-002",
@@ -1718,9 +1721,12 @@
         "include/sketch/field_adapter_contract.hpp",
         "src/core/field_adapter_contract.cpp",
         "tests/field_adapter_contract_tests.cpp",
-        "docs/field-adapter-contracts.md"
+        "docs/field-adapter-contracts.md",
+        "include/sketch/appraisal_dispatcher.hpp",
+        "src/core/appraisal_dispatcher.cpp",
+        "tests/appraisal_dispatcher_tests.cpp"
       ],
-      "implementation_note": "Caller identity/version/mapping compatibility and failure semantics are declared; real caller protocols, capability negotiation, timeout enforcement, isolation, and compatibility fixtures remain open."
+      "implementation_note": "Caller identity/version/mapping compatibility and a preparation-only polling dispatcher now enforce one shared deadline, cancellation checkpoints, correlation, exact payload acknowledgement, late-result rejection, and no commit after uncertain outcomes. A native isolated subprocess transport, real caller protocols, vendor error translation, and recorded compatibility fixtures remain open."
     },
     {
       "id": "APX-NATIVE-AX5-001",
@@ -2477,10 +2483,10 @@
       "requirement": "Provide optional offline dimension extraction from supported plans and references.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "verified",
+      "implementation_status": "in_progress",
       "acceptance": "Extracted dimensions are visibly provisional, include source location/confidence, and require acceptance before becoming document commands.",
       "package": 7,
-      "blocker": null,
+      "blocker": "Production AppContainer execution and representative supported-plan accuracy qualification remain required; raster and scanned-plan OCR is not included.",
       "implementation_sources": [
         "include/sketch/assistance_contract.hpp",
         "include/sketch/assistance_engine.hpp",
@@ -2492,9 +2498,14 @@
         "docs/assistance-contract.md",
         "assets/assistance/deterministic-engine-v1.json",
         "scripts/generate_workflow_acceptance_evidence.py",
-        "tests/test_workflow_acceptance_evidence.py"
+        "tests/test_workflow_acceptance_evidence.py",
+        "src/desktop/reference_import.hpp",
+        "src/desktop/reference_import.cpp",
+        "src/desktop/reference_import_worker.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/reference_import_tests.cpp"
       ],
-      "implementation_note": "Offline explicit-unit extraction now retains source text/offset/confidence and can atomically upgrade a legacy target boundary and create a typed dimension; plan-accuracy and production qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Supported PDF imports with embedded text now extract bounded UTF-8 text and real page-selection rectangles inside the isolated reference worker, persist validated metadata, and create provisional dimension proposals through the normal review/accept/undo path. Raster images and scanned PDFs intentionally have no bundled OCR. Production AppContainer execution and representative-plan accuracy qualification remain open."
     },
     {
       "id": "ASSIST-003",
@@ -2849,10 +2860,10 @@
         "appcontainer"
       ],
       "evidence_status": "documented",
-      "implementation_status": "verified",
+      "implementation_status": "in_progress",
       "acceptance": "A worker security fixture verifies token/container policy, network denial, resource limits, path restrictions, and controlled parent termination.",
       "package": 8,
-      "blocker": null,
+      "blocker": "A live Windows AppContainer fixture must verify token isolation, network denial, limits, path restrictions, and controlled termination outside a parent Job Object.",
       "implementation_sources": [
         "include/sketch/import_worker_policy.hpp",
         "src/core/import_worker_policy.cpp",
@@ -2879,10 +2890,10 @@
         "appcontainer"
       ],
       "evidence_status": "documented",
-      "implementation_status": "verified",
+      "implementation_status": "in_progress",
       "acceptance": "Adversarial fixtures terminate or reject safely, leave the core project usable, and produce actionable local diagnostics without network access.",
       "package": 8,
-      "blocker": null,
+      "blocker": "Adversarial live-worker fixtures must verify OS containment and project survival for malformed, timeout, crash, planting, and child-process escape cases.",
       "implementation_sources": [
         "include/sketch/import_worker_policy.hpp",
         "src/core/import_worker_policy.cpp",

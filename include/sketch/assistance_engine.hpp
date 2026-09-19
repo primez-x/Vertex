@@ -12,6 +12,12 @@
 
 namespace sketch {
 
+struct AssistanceTextRun {
+    std::size_t offset{}; // UTF-8 byte range in source_text.
+    std::size_t length{};
+    double x{}, y{}, width{}, height{}; // Normalized source page selection.
+};
+
 // A bounded grayscale view supplied by a local reference decoder. The engine
 // intentionally accepts pixels, rather than a file path, so it cannot reach
 // outside the project or introduce a hidden network dependency.
@@ -21,6 +27,7 @@ struct AssistanceRaster {
     std::size_t width{};
     std::size_t height{};
     std::vector<std::uint8_t> luminance;
+    std::vector<AssistanceTextRun> text_runs;
 };
 
 struct AssistanceEngineOptions {

@@ -36,7 +36,7 @@ each production requirement and one accessibility run at each of 100, 150, and
 | Field | Contract |
 | --- | --- |
 | `id` | Unique nonempty string |
-| `requirement` | `OPS-QA-002`, `OPS-QA-003`, or `OPS-QA-005` |
+| `requirement` | `OPS-QA-002`, `OPS-QA-003`, `OPS-QA-004`, or `OPS-QA-005` |
 | `evidence_kind` | `real` or `synthetic`; synthetic cannot complete evidence |
 | `operator` | Person who conducted the capture |
 | `recorded_at` | ISO 8601 timestamp with timezone |

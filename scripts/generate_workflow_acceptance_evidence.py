@@ -2103,13 +2103,18 @@ def _path_record(root: pathlib.Path, relative: str) -> dict[str, Any]:
     }
 
 
-def _workflow_test_records(root: pathlib.Path, configuration: str, test_names: tuple[str, ...], audit):
+def _workflow_test_records(root: pathlib.Path, configuration: str, test_names: tuple[str, ...], audit,
+                           log_path: pathlib.Path | None = None):
     build = root / "build" / configuration
     inventory_path = build / "CTestTestfile.cmake"
-    log_path = build / "Testing" / "Temporary" / "LastTest.log"
+    log_path = log_path or build / "Testing" / "Temporary" / "LastTest.log"
     inventory, inventory_errors = audit._ctest_inventory(build)
     if inventory is None:
         raise RuntimeError(f"{configuration}: invalid CTest inventory: {inventory_errors}")
+    if (inventory["source_directory"] is None or inventory["build_directory"] is None or
+            inventory["source_directory"].resolve() != root or
+            inventory["build_directory"].resolve() != build.resolve()):
+        raise RuntimeError(f"{configuration}: CTest inventory source/build directory mismatch")
     if not log_path.is_file():
         raise RuntimeError(f"{configuration}: CTest log is missing")
     try:
@@ -2134,12 +2139,14 @@ def _workflow_test_records(root: pathlib.Path, configuration: str, test_names: t
         if len(entries) != 1 or entries[0]["status"] != "passed":
             status = entries[0]["status"] if len(entries) == 1 else "missing_or_duplicate"
             raise RuntimeError(f"{configuration}: workflow test did not pass exactly once: {test_name} ({status})")
+        if not entries[0]["directory"] or pathlib.Path(entries[0]["directory"]).resolve() != build.resolve():
+            raise RuntimeError(f"{configuration}: workflow test execution directory mismatch: {test_name}")
         records.append({"name": test_name, "status": "passed"})
 
     return {
         "configuration": configuration,
         "inventory": _path_record(root, f"build/{configuration}/CTestTestfile.cmake"),
-        "log": _path_record(root, f"build/{configuration}/Testing/Temporary/LastTest.log"),
+        "log": _path_record(root, log_path.relative_to(root).as_posix()),
         "tests": records,
     }
 
@@ -2148,6 +2155,10 @@ def build_evidence(root: pathlib.Path) -> dict[str, dict[str, Any]]:
     root = root.resolve()
     audit = _load_module("vertex_completion_audit_for_workflow", SCRIPT_DIR / "completion_audit.py")
     requirement_audit = _load_module("vertex_requirement_audit_for_workflow", SCRIPT_DIR / "requirement_audit.py")
+    provenance = _load_module("vertex_workflow_test_provenance", SCRIPT_DIR / "workflow_test_provenance.py")
+    source_fingerprint = requirement_audit.source_fingerprint(root)
+    for configuration in ("windows-debug", "windows-release"):
+        provenance.verify(root, configuration, source_fingerprint)
     result: dict[str, dict[str, Any]] = {}
 
     for requirement_id, rule in WORKFLOW_RULES.items():
@@ -2163,14 +2174,18 @@ def build_evidence(root: pathlib.Path) -> dict[str, dict[str, Any]]:
             raise RuntimeError(f"{requirement_id}: source anchors are missing: {missing_anchors}")
 
         ctest = [
-            _workflow_test_records(root, configuration, rule["tests"], audit)
+            _workflow_test_records(root, configuration, rule["tests"], audit,
+                root / "build" / configuration / provenance.PROVENANCE_LOG_FILE)
             for configuration in ("windows-debug", "windows-release")
         ]
+        for test_record in ctest:
+            test_record["provenance"] = _path_record(
+                root, f"build/{test_record['configuration']}/{provenance.PROVENANCE_FILE}")
         result[requirement_id] = {
             "schema_version": 1,
             "requirement_id": requirement_id,
             "result": "pass",
-            "source_tree_sha256": requirement_audit.source_fingerprint(root),
+            "source_tree_sha256": source_fingerprint,
             "acceptance": rule["acceptance"],
             "source_files": source_records,
             "source_anchors": list(rule["anchors"]),
@@ -2178,6 +2193,10 @@ def build_evidence(root: pathlib.Path) -> dict[str, dict[str, Any]]:
             "ctest": ctest,
             "qualification_boundary": rule["qualification_boundary"],
         }
+    if requirement_audit.source_fingerprint(root) != source_fingerprint:
+        raise RuntimeError("source changed while generating workflow evidence")
+    for configuration in ("windows-debug", "windows-release"):
+        provenance.verify(root, configuration, source_fingerprint)
     return result
 
 

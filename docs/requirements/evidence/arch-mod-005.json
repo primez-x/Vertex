@@ -5,13 +5,18 @@
       "configuration": "windows-debug",
       "inventory": {
         "path": "build/windows-debug/CTestTestfile.cmake",
-        "sha256": "8c4c55d85981a1606c6243b67775ecac83a0c853dc1473467370701f2ebaf252",
-        "size": 89256
+        "sha256": "3044e82087030343daf0ac153a614ad86c38219840e36b6d4c93d1113bdc3388",
+        "size": 89722
       },
       "log": {
-        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
-        "sha256": "5c63e48e0f70c42654823670ee2c9c8f5f2686776b0c88d26259516f9cac63ae",
-        "size": 134832
+        "path": "build/windows-debug/workflow-test-provenance.log",
+        "sha256": "fc9c8766623eab2588eb063ad07594920141b03ad0385bfe1cddf8c79bb3495f",
+        "size": 135732
+      },
+      "provenance": {
+        "path": "build/windows-debug/workflow-test-provenance.json",
+        "sha256": "2cae1057091ecc456994b3c75f5baf53f3226e6eb067e5e3616b857eb89cc438",
+        "size": 34017
       },
       "tests": [
         {
@@ -36,13 +41,18 @@
       "configuration": "windows-release",
       "inventory": {
         "path": "build/windows-release/CTestTestfile.cmake",
-        "sha256": "52e1a914666010ddf46186c8f7a04e85e70750486db0a642d2d34ed1e4657260",
-        "size": 89330
+        "sha256": "882f98f6f11805cdbf07cbf67cdbd6a359e9c75ddbedc3db148a274fb7b1f4d6",
+        "size": 89798
       },
       "log": {
-        "path": "build/windows-release/Testing/Temporary/LastTest.log",
-        "sha256": "e6fb43cf5101f696c56ef559c1841b8975a8e72ca30223a5183c9df6fc281565",
-        "size": 135399
+        "path": "build/windows-release/workflow-test-provenance.log",
+        "sha256": "e9cd6a3c137bac9e0678629a5eac0607cbdae030854d810bcf544799362b2a4f",
+        "size": 136303
+      },
+      "provenance": {
+        "path": "build/windows-release/workflow-test-provenance.json",
+        "sha256": "abd06a8c6fad2de0d4c7a2ce6095676608068af06b2c9fe89c63d9a5e4a8a99c",
+        "size": 34264
       },
       "tests": [
         {
@@ -125,8 +135,8 @@
     },
     {
       "path": "src/desktop/main_window.cpp",
-      "sha256": "72583c0f58a61e48274e46ff824a65f0e5eaab32306f831feaa302b21299874b",
-      "size": 1254459
+      "sha256": "6c78a5d4157729f87d1260242e4fff265f75d73779e4204a891d566239a15c53",
+      "size": 1255991
     },
     {
       "path": "tests/building_object_tests.cpp",
@@ -154,7 +164,7 @@
       "size": 388712
     }
   ],
-  "source_tree_sha256": "1459b2f4edcad3100aca936b150c6afba0495423b52826f79617d440e31013de",
+  "source_tree_sha256": "6773c16b5c0e2d8b7f71695b1e57d15c950bf1aacc8a5ce080b45148b0e17886",
   "tests": [
     "building_objects",
     "roof_join",

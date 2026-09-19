@@ -30,6 +30,7 @@ sketch::AssistanceRaster fixture() {
     sketch::AssistanceRaster raster;
     raster.reference_id = "reference-1";
     raster.source_text = "Plan notes: exterior wall 12 ft, interior wall 3.5 m";
+    raster.text_runs = {{0, raster.source_text.size(), 0.2, 0.4, 0.6, 0.08}};
     raster.width = 24;
     raster.height = 16;
     raster.luminance.assign(raster.width * raster.height, 255);
@@ -97,6 +98,10 @@ int main() {
         }
 
         const auto dimensions = sketch::extract_dimensions(raster);
+        auto unlocated = raster;
+        unlocated.text_runs.clear();
+        require(sketch::extract_dimensions(unlocated).empty(),
+                "unlocated text must not invent a source rectangle");
         require(dimensions.size() == 2, "fixture should produce two dimension proposals");
         require(dimensions.front().preview.command_type == "add_dimension_suggestion",
                 "dimension command type changed");
@@ -106,8 +111,19 @@ int main() {
                          3.6576) < 1e-4,
                 "imperial dimension was not parsed exactly");
         for (const auto& proposal : dimensions) sketch::validate_assistance_proposal(proposal);
+        require(dimensions == sketch::extract_dimensions(raster), "dimensions must be deterministic");
+        require(dimensions.front().source.x == 0.2 && dimensions.front().source.y == 0.4 &&
+                    dimensions.front().source.width == 0.6 && dimensions.front().source.height == 0.08,
+                "dimension source rectangle must use the actual text run bounds");
+        auto invalid_bounds = raster;
+        invalid_bounds.text_runs.front().width = 1.0;
+        invalid([&] { (void)sketch::extract_dimensions(invalid_bounds); });
+        invalid_bounds = raster;
+        invalid_bounds.text_runs.front().length = raster.source_text.size() + 1;
+        invalid([&] { (void)sketch::extract_dimensions(invalid_bounds); });
         auto metric_raster = raster;
         metric_raster.source_text = "Reference dimension: 900 mm";
+        metric_raster.text_runs.front().length = metric_raster.source_text.size();
         const auto metric_dimensions = sketch::extract_dimensions(metric_raster);
         require(metric_dimensions.size() == 1 &&
                     std::abs(metric_dimensions.front().preview.arguments.at("length_metres").get<double>() -

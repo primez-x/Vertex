@@ -17,7 +17,13 @@ currently provides five proposal producers:
   ignored; the contour remains provisional until reviewed.
 - **Dimension extraction** recognizes explicit-unit text (`ft`, `in`, `m`,
   `cm`, and `mm`). Unqualified numbers are ignored. The original matched text,
-  character offset, parsed exact quantity and confidence remain visible.
+  UTF-8 byte offset, parsed exact quantity and confidence remain visible.
+  Normal PDF import extracts embedded page text inside the isolated reference
+  worker. Each proposal retains the actual normalized PDF selection rectangle
+  of the text line containing the match, not an estimated character position.
+  A line can contain several quantities sharing that line's selection bounds.
+  Text without validated selection bounds generates no dimensions. Raster-only
+  PDF pages and image imports have no OCR and yield no text dimensions.
 - **Label placement** turns named document anchors into note-label proposals.
 - **Natural language** supports the bounded commands `label <text> at x,y`,
   `set workspace measurement|architectural`, and `draw rectangle <width> x
@@ -52,6 +58,20 @@ no proposal or document change. The display-only default scale remains
 available for visual underlays and manual tracing; it does not authorize
 automated measurements.
 
+The reference worker uses the strict `PSIR0002` response: a 32-byte little-endian
+header, exact RGBA pixel extent, UTF-8 text, then fixed 40-byte selection records
+(byte offset, byte length, and four binary64 normalized coordinates). Page text
+is limited to 16 KiB and 512 ordered, nonoverlapping selection runs. The broker
+rejects unknown versions, trailing/truncated data, invalid UTF-8 including
+incomplete sequences, NULs, oversized metadata, byte ranges splitting UTF-8
+characters, and nonfinite, empty, or off-page selections. Image replies cannot
+carry text metadata. PDF parsing remains subject to the worker's process,
+memory, and deadline controls; unsupported or oversized text metadata fails the
+import rather than being silently truncated. The reference entity persists
+`source_text_version: 1`, `source_text`, and `source_text_runs`; reopened projects
+revalidate these runs before assistance uses them. The source coordinates remain
+relative to the original page, independent of display transforms.
+
 All document mutations run through `Document::preview_command`, the normal
 revision check, and the normal undo/redo transaction. Disabled assistance,
 unaccepted proposals, missing resources, malformed payloads, read-only
@@ -72,6 +92,14 @@ grammar and malformed inputs. `tests/assistance_workflow_tests.cpp` covers the
 Windows desktop integration, explicit acceptance, identified-boundary creation,
 connected-component tracing, the calibration provenance gate, legacy-boundary
 upgrade, undo and the disabled path.
+`tests/reference_import_tests.cpp` covers real embedded-text PDF extraction,
+distinct line positions, deterministic bounds, and malformed worker replies.
+The desktop workflow covers codec extraction through persisted metadata to a
+dimension proposal and project save/reopen. On source-build hosts that do not
+meet the installation sandbox gate, it explicitly asserts production rejection
+and seeds codec-validated test metadata for the downstream checks. Direct codec
+execution and seeded fixtures do not establish AppContainer qualification or
+production end-to-end import acceptance.
 
 These deterministic fixtures establish the local runtime contract. They do not
 certify contour accuracy on arbitrary architectural plans, physical pen/DISTO input,

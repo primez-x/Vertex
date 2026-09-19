@@ -345,6 +345,22 @@ void validate_assistance_raster(const AssistanceRaster& raster) {
     if (raster.source_text.size() > 16384 || raster.source_text.find('\0') != std::string::npos) {
         invalid("assistance raster source text is oversized or contains a NUL");
     }
+    if (raster.text_runs.size() > 512) invalid("assistance raster has too many text selections");
+    std::size_t previous_end = 0;
+    for (const auto& run : raster.text_runs) {
+        const auto boundary = [&](std::size_t at) {
+            return at == raster.source_text.size() ||
+                (static_cast<unsigned char>(raster.source_text[at]) & 0xc0) != 0x80;
+        };
+        if (run.offset < previous_end || run.offset > raster.source_text.size() || !run.length ||
+            run.length > raster.source_text.size() - run.offset ||
+            !boundary(run.offset) || !boundary(run.offset + run.length) ||
+            !std::isfinite(run.x) || !std::isfinite(run.y) || !std::isfinite(run.width) ||
+            !std::isfinite(run.height) || run.x < 0 || run.y < 0 || run.width <= 0 ||
+            run.height <= 0 || run.x + run.width > 1 || run.y + run.height > 1)
+            invalid("assistance raster text selection is invalid");
+        previous_end = run.offset + run.length;
+    }
     if (raster.width == 0 || raster.height == 0 || raster.width > maximum_raster_dimension ||
         raster.height > maximum_raster_dimension) {
         invalid("assistance raster dimensions are outside the supported range");
@@ -550,6 +566,12 @@ std::vector<AssistanceProposal> extract_dimensions(const AssistanceRaster& raste
 
     std::vector<AssistanceProposal> result;
     for (const auto& match : find_dimension_tokens(raster.source_text)) {
+        const auto run = std::find_if(raster.text_runs.begin(), raster.text_runs.end(),
+            [&](const AssistanceTextRun& candidate) {
+                return match.offset >= candidate.offset &&
+                    match.offset + match.text.size() <= candidate.offset + candidate.length;
+            });
+        if (run == raster.text_runs.end()) continue;
         const auto expression = normalized_quantity_expression(match.text);
         Quantity quantity;
         try {
@@ -558,11 +580,6 @@ std::vector<AssistanceProposal> extract_dimensions(const AssistanceRaster& raste
             continue;
         }
         if (!(quantity.metres > 0.0) || !std::isfinite(quantity.metres)) continue;
-        const auto start = static_cast<double>(match.offset) /
-                           static_cast<double>(raster.source_text.size());
-        const auto width = std::max(1.0 / static_cast<double>(raster.source_text.size()),
-                                    static_cast<double>(match.text.size()) /
-                                        static_cast<double>(raster.source_text.size()));
         const auto material = raster.reference_id + ":" + std::to_string(match.offset) + ":" +
                               match.text + ":" + target_boundary_id;
         const auto id = stable_id("assist-dimension", material);
@@ -574,7 +591,7 @@ std::vector<AssistanceProposal> extract_dimensions(const AssistanceRaster& raste
         if (!target_boundary_id.empty()) args["target_segment_id"] = "";
         result.push_back(proposal(
             id, AssistanceKind::dimension_extraction,
-            source_for(raster.reference_id, match.text, start, 0.0, std::min(width, 1.0), 0.12,
+            source_for(raster.reference_id, match.text, run->x, run->y, run->width, run->height,
                        0.86),
             {"add_dimension_suggestion", std::move(affected), std::move(args)}));
     }

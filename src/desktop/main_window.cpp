@@ -7958,6 +7958,15 @@ public:
             entity.properties["fidelity_mode"] = fidelity_mode;
             entity.properties["page_index"] = page_index;
             entity.properties["page_count"] = decoded.page_count;
+            entity.properties["source_text_version"] = 1;
+            entity.properties["source_text"] = decoded.source_text.toStdString();
+            entity.properties["source_text_runs"] = json::array();
+            for (const auto& run : decoded.text_runs) {
+                entity.properties["source_text_runs"].push_back({
+                    {"offset", run.offset}, {"length", run.length},
+                    {"x", run.bounds.x()}, {"y", run.bounds.y()},
+                    {"width", run.bounds.width()}, {"height", run.bounds.height()}});
+            }
             std::vector<AssetChange> asset_changes;
             asset_changes.push_back(AssetChange::upsert(std::move(asset)));
             asset_changes.push_back(AssetChange::upsert(std::move(render_asset)));
@@ -8127,6 +8136,20 @@ public:
         if (const auto source = found->second.properties.find("source_text");
             source != found->second.properties.end() && source->is_string()) {
             raster.source_text = source->get<std::string>();
+        }
+        if (const auto runs = found->second.properties.find("source_text_runs");
+            runs != found->second.properties.end()) {
+            if (found->second.properties.value("source_text_version", 0) != 1 ||
+                !runs->is_array() || runs->size() > 512)
+                throw std::invalid_argument("Reference text selection metadata is invalid.");
+            for (const auto& run : *runs) {
+                if (!run.is_object() || run.size() != 6 ||
+                    !run.at("offset").is_number_unsigned() || !run.at("length").is_number_unsigned())
+                    throw std::invalid_argument("Reference text selection metadata is invalid.");
+                raster.text_runs.push_back({run.at("offset").get<std::size_t>(),
+                    run.at("length").get<std::size_t>(), run.at("x").get<double>(),
+                    run.at("y").get<double>(), run.at("width").get<double>(), run.at("height").get<double>()});
+            }
         }
         raster.width = static_cast<std::size_t>(image.width());
         raster.height = static_cast<std::size_t>(image.height());

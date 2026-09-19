@@ -66,14 +66,62 @@ limited to 256 fields and supplied values to 2048 bytes each. Serialization uses
 sorted object keys and mappings for deterministic compact JSON.
 
 Validation failures throw `std::invalid_argument` and produce no payload or
-external mutation. Memory allocation failures propagate. The declared timeout
-is 1–120000 milliseconds; it is metadata, not an implemented scheduler. A future
-caller must enforce it, report timeout/offline/unsupported-version failures
-explicitly, avoid automatic writes after an uncertain response and retain the
-original input for diagnosis. Transport cancellation, retry policy, process
-isolation and vendor-specific error translation are not implemented here.
+external mutation. Memory allocation failures during local payload validation
+propagate. The declared timeout is 1–120000 milliseconds.
 
-The synthetic tests establish DTO validation, deterministic round trips,
-selected-field safety and mapping failure behavior only. Exact DISTO hardware,
-firmware and transport evidence, appraisal application exchanges, fidelity
-reports and real caller offline/timeout tests remain production acceptance gates.
+## Appraisal caller dispatcher
+
+`appraisal_dispatcher.hpp` adds a drawing-engine-independent, single-owner
+polling runtime around the mapping contract. It accepts the descriptor, original
+source values, a unique request ID, a cancellation token and an owned
+`AppraisalCallBoundary`. It retains the original input for diagnosis. There is
+no drawing/document dependency, destination handle, write callback or retry loop.
+
+The worker first advertises capabilities. Exactly one must match adapter ID,
+protocol major/minor, application and exact application version, exchange format,
+and every source/target/required field mapping. Mapping order is immaterial;
+provenance and timeout are local policy metadata, not negotiated capabilities.
+An empty/no-match advertisement is unsupported; duplicate exact matches are
+ambiguous. Malformed advertisements and more than 64 capabilities are uncertain.
+Only after successful negotiation does the dispatcher send the validated payload
+for **preparation**. A success acknowledgement must echo the request ID and exact
+payload, with no capability data. Wrong-stage, stale or inconsistent responses
+fail closed. This verifies correlation and byte agreement, not appraisal fidelity.
+
+One steady-clock deadline covers local payload preparation, negotiation and
+worker preparation. `poll()` checks cancellation and the deadline before and
+after transport calls and before accepting success. Equality with the deadline
+is timeout; cancellation wins if both signals are observed at a checkpoint.
+The budget is never reset after negotiation. Cancellation is sampled at these
+checkpoints, not asynchronously after a terminal success. Terminal results are
+immutable, the boundary is abandoned exactly once, and late replies cannot
+resurrect a timed-out or cancelled request. Destruction also abandons a pending
+session. Caller servicing of `poll()` is required; there is no background timer.
+
+Typed outcomes are success, offline, unavailable, unsupported, ambiguous,
+timeout, cancelled, worker failure and uncertain response. Transport exceptions
+map to worker failure unless cancellation/timeout already applies. Only success
+contains prepared data. No outcome authorizes a destination write. In particular,
+**timeout, cancellation and uncertain responses must never trigger a destination
+commit, automatic retry or delayed write**. All workers behind this boundary
+must be preparation-only and have no destination-write authority. Any eventual
+commit requires a separate, explicitly designed transaction/reconciliation path.
+
+The boundary is injectable and all its operations, including abandonment and
+destruction, must be nonblocking. The dispatcher enforces acceptance deadlines;
+it cannot interrupt a boundary implementation that blocks or prevent a dishonest
+worker from writing externally. No native subprocess launcher, IPC transport,
+OS sandbox, worker kill/reap implementation or vendor adapter is supplied here.
+The synthetic boundary is **not proof of process isolation**. A production
+transport must provide that isolation and bounded lifecycle independently, encode
+and validate wire replies, enforce preparation-only authority, and translate
+vendor-specific failures before it can be qualified.
+
+Synthetic tests establish DTO validation, deterministic round trips,
+selected-field safety, mapping failure behavior and the dispatcher state machine.
+Dispatcher fixtures cover exact negotiation/version mismatch, duplicate selection,
+success, offline/unavailable, deadline and cancellation before/during transport
+calls, launch/preparation/poll exceptions, malformed/stale/uncertain replies and
+late-result rejection. Exact DISTO hardware, firmware and transport evidence,
+appraisal application exchanges, fidelity reports and real isolated caller
+offline/timeout/crash tests remain production acceptance gates.

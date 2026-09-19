@@ -839,6 +839,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/appraisal_dispatcher.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/architectural_document_adapter.hpp"
     },
     {
@@ -1451,6 +1455,10 @@
     },
     {
       "category": "source",
+      "path": "scripts/workflow_test_provenance.py"
+    },
+    {
+      "category": "source",
       "path": "src/architecture/architectural_schedule.cpp"
     },
     {
@@ -1492,6 +1500,10 @@
     {
       "category": "source",
       "path": "src/core/annotation_entity_codec.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/appraisal_dispatcher.cpp"
     },
     {
       "category": "source",
@@ -1916,6 +1928,10 @@
     {
       "category": "source",
       "path": "tests/annotation_entity_codec_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/appraisal_dispatcher_tests.cpp"
     },
     {
       "category": "source",

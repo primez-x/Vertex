@@ -7,6 +7,7 @@
 #include <QPdfDocument>
 #include <QtEndian>
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -109,6 +110,8 @@ int main(int argc, char** argv) {
     if (!buffer.open(QIODevice::ReadOnly)) return 3;
     QImage image;
     int pages = 1;
+    QByteArray text;
+    std::vector<sketch::desktop::ReferenceTextRun> text_runs;
     if (args[1] == "pdf") {
         QPdfDocument pdf;
         pdf.load(&buffer);
@@ -123,6 +126,38 @@ int main(int argc, char** argv) {
         if (!std::isfinite(points.width()) || !std::isfinite(points.height()) ||
             points.width() <= 0 || points.height() <= 0) return 4;
         image = pdf.render(page, QSize(pixels(points.width()), pixels(points.height())));
+        // Page parsing stays inside the worker's memory/time limits; enforce
+        // the much smaller transport limit before constructing selection runs.
+        // Qt/PDFium indices are character indices, not UTF-8 byte offsets.
+        const auto selection = pdf.getAllText(page);
+        const auto page_text = selection.text();
+        text = page_text.toUtf8();
+        if (text.size() > sketch::desktop::referenceTextLimit || text.contains('\0')) return 4;
+        for (qsizetype begin = 0; begin < page_text.size();) {
+            auto end = begin;
+            while (end < page_text.size() && page_text[end] != '\r' && page_text[end] != '\n') ++end;
+            if (end > begin && !page_text.mid(begin, end - begin).trimmed().isEmpty()) {
+                if (text_runs.size() >= sketch::desktop::referenceTextRunLimit) return 4;
+                const auto run = pdf.getSelectionAtIndex(page, static_cast<int>(begin),
+                                                         static_cast<int>(end - begin));
+                // Do not attach a rectangle if the PDF's selection indexing
+                // cannot reproduce the corresponding text exactly.
+                if (!run.isValid() || run.text() != page_text.mid(begin, end - begin)) return 4;
+                // Qt preserves page rotation in the selection orientation and
+                // can therefore return negative width or height. Normalize the
+                // rectangle before mapping it into the rotated page extent.
+                const auto box = run.boundingRectangle().normalized();
+                const QRectF normalized(box.x() / points.width(), box.y() / points.height(),
+                                        box.width() / points.width(), box.height() / points.height());
+                if (!std::isfinite(normalized.x()) || !std::isfinite(normalized.y()) ||
+                    !std::isfinite(normalized.width()) || !std::isfinite(normalized.height()) ||
+                    normalized.x() < 0 || normalized.y() < 0 || normalized.width() <= 0 ||
+                    normalized.height() <= 0 || normalized.right() > 1 || normalized.bottom() > 1) return 4;
+                text_runs.push_back({static_cast<quint32>(page_text.left(begin).toUtf8().size()),
+                    static_cast<quint32>(run.text().toUtf8().size()), normalized});
+            }
+            begin = end + 1;
+        }
     } else {
         if (page != 0) return 2;
         auto format = args[1].toLatin1();
@@ -148,14 +183,27 @@ int main(int argc, char** argv) {
         image.height() > sketch::desktop::referenceDimensionLimit) return 4;
     image = image.convertToFormat(QImage::Format_RGBA8888);
     if (image.isNull()) return 4;
-    uchar header[24] = {'P', 'S', 'I', 'R', '0', '0', '0', '1'};
+    uchar header[32] = {'P', 'S', 'I', 'R', '0', '0', '0', '2'};
     qToLittleEndian<quint32>(static_cast<quint32>(image.width()), header + 8);
     qToLittleEndian<quint32>(static_cast<quint32>(image.height()), header + 12);
     qToLittleEndian<quint32>(static_cast<quint32>(pages), header + 16);
     qToLittleEndian<quint32>(static_cast<quint32>(page), header + 20);
+    qToLittleEndian<quint32>(static_cast<quint32>(text.size()), header + 24);
+    qToLittleEndian<quint32>(static_cast<quint32>(text_runs.size()), header + 28);
     if (std::fwrite(header, 1, sizeof(header), stdout) != sizeof(header)) return 5;
     const auto row_bytes = static_cast<std::size_t>(image.width()) * 4;
     for (int row = 0; row < image.height(); ++row)
         if (std::fwrite(image.constScanLine(row), 1, row_bytes, stdout) != row_bytes) return 5;
+    if (std::fwrite(text.constData(), 1, static_cast<std::size_t>(text.size()), stdout) !=
+        static_cast<std::size_t>(text.size())) return 5;
+    for (const auto& run : text_runs) {
+        uchar record[40]{};
+        qToLittleEndian<quint32>(run.offset, record);
+        qToLittleEndian<quint32>(run.length, record + 4);
+        const double values[]{run.bounds.x(), run.bounds.y(), run.bounds.width(), run.bounds.height()};
+        for (int i = 0; i < 4; ++i)
+            qToLittleEndian<quint64>(std::bit_cast<quint64>(values[i]), record + 8 + i * 8);
+        if (std::fwrite(record, 1, sizeof(record), stdout) != sizeof(record)) return 5;
+    }
     return std::fflush(stdout) == 0 ? 0 : 5;
 }

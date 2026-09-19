@@ -3,11 +3,14 @@
 #include "sketch/boundary_entity.hpp"
 #include "support/noninteractive_errors.hpp"
 #include "support/trusted_reference_fixture.hpp"
+#include "reference_import.hpp"
 
 #include <QApplication>
 #include <QImage>
 #include <QPainter>
 #include <QTemporaryDir>
+#include <QProcess>
+#include <QDir>
 #include <nlohmann/json.hpp>
 
 #include <cmath>
@@ -23,10 +26,110 @@ void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
 
+void pdf_dimension_import_workflow(const QString& directory) {
+    using namespace sketch;
+    using json = nlohmann::json;
+    QByteArray pdf("%PDF-1.4\n");
+    std::vector<int> offsets{0};
+    const QByteArray content("BT /F1 12 Tf 72 650 Td (Wall: 12 ft) Tj ET\n");
+    const std::vector<QByteArray> objects{
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        "<< /Length " + QByteArray::number(content.size()) + " >>\nstream\n" + content + "endstream"};
+    for (const auto& object : objects) {
+        offsets.push_back(static_cast<int>(pdf.size()));
+        pdf += QByteArray::number(offsets.size() - 1) + " 0 obj\n" + object + "\nendobj\n";
+    }
+    const auto xref = pdf.size();
+    pdf += "xref\n0 6\n0000000000 65535 f \n";
+    for (std::size_t i = 1; i < offsets.size(); ++i)
+        pdf += QByteArray::number(offsets[i]).rightJustified(10, '0') + " 00000 n \n";
+    pdf += "trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n" + QByteArray::number(xref) + "\n%%EOF\n";
+    const auto path = QDir(directory).filePath("dimensions.pdf");
+    QFile file(path);
+    require(file.open(QIODevice::WriteOnly) && file.write(pdf) == pdf.size(), "PDF text fixture must save");
+    file.close();
+
+    // Direct codec execution verifies extraction independently of installation
+    // qualification. The synthetic attestation below is ONLY a broker test seam.
+    QProcess worker;
+    worker.start(QDir(QCoreApplication::applicationDirPath()).filePath("property-studio-import-worker.exe"),
+                 {"pdf", "0"});
+    require(worker.waitForStarted(5000), "PDF text codec fixture must start");
+    require(worker.write(pdf) == pdf.size(), "PDF fixture must be queued");
+    worker.closeWriteChannel();
+    if (!worker.waitForFinished(10000)) {
+        worker.kill();
+        worker.waitForFinished(5000);
+        throw std::runtime_error("PDF text codec fixture exceeded its deadline");
+    }
+    require(worker.exitStatus() == QProcess::NormalExit && worker.exitCode() == 0,
+            "PDF text codec fixture must decode");
+    const auto bytes = worker.readAllStandardOutput();
+    WindowsImportWorkerReport report;
+    report.status = WindowsImportWorkerStatus::completed;
+    report.completed = report.launched = report.app_container_verified = report.restricted_token_verified =
+        report.network_denial_verified = report.job_limits_verified = report.parent_exit_kill_verified =
+        report.brokered_handles_verified = report.private_temporary_root_verified =
+        report.immutable_module_roots_verified = report.fixed_search_applied = report.proj_offline_applied = true;
+    report.output.resize(static_cast<std::size_t>(bytes.size()));
+    std::memcpy(report.output.data(), bytes.constData(), report.output.size());
+    const auto decoded = desktop::decodeReferenceBytes(pdf, "pdf", 0, {}, [&](const auto&) { return report; });
+    require(decoded.source_text == "Wall: 12 ft" && decoded.text_runs.size() == 1,
+            "normal PDF codec path must extract the dimension text and selection");
+
+    desktop::MainWindow window;
+    const auto original_revision = window.document().revision();
+    auto id = window.importReferenceImage(path);
+    const bool qualified_import = !id.isEmpty();
+    if (!qualified_import) {
+        require(window.lastError().contains("Isolated reference import is unavailable") &&
+                    window.document().revision() == original_revision,
+                "unqualified PDF import must fail closed before document mutation");
+        id = testing::importOrSeedTrustedReferenceFixture(window, path, decoded.image);
+    }
+    auto reference = window.document().snapshot().entities().at(id.toStdString());
+    json runs = json::array();
+    for (const auto& run : decoded.text_runs)
+        runs.push_back({{"offset", run.offset}, {"length", run.length}, {"x", run.bounds.x()},
+            {"y", run.bounds.y()}, {"width", run.bounds.width()}, {"height", run.bounds.height()}});
+    if (qualified_import) {
+        require(reference.properties.at("source_text") == decoded.source_text.toStdString() &&
+                    reference.properties.at("source_text_runs") == runs &&
+                    reference.properties.at("source_text_version") == 1,
+                "normal import must persist broker-validated PDF text metadata");
+    } else {
+        reference.properties["source_text"] = decoded.source_text.toStdString();
+        reference.properties["source_text_runs"] = runs;
+        reference.properties["source_text_version"] = 1;
+        window.document().apply(ApplyEntityChanges{window.document().revision(),
+            {EntityChange::upsert(reference)}, {}, "Seed codec-validated text fixture"});
+    }
+    window.setAssistanceEnabled(true);
+    require(window.calibrateReference(id, "0", "0", "100", "0", "1 m"),
+            "PDF dimension reference must calibrate");
+    const auto proposals = window.suggestReferenceAssistance(id, AssistanceKind::dimension_extraction);
+    require(proposals.size() == 1 && proposals.front().source.original_text == "12 ft" &&
+                std::abs(proposals.front().preview.arguments.at("length_metres").get<double>() - 3.6576) < 1e-9,
+            "imported PDF embedded text must produce a parsed dimension proposal");
+    const auto bounds = decoded.text_runs.front().bounds;
+    const auto& source = proposals.front().source;
+    require(source.x == bounds.x() && source.y == bounds.y() && source.width == bounds.width() &&
+                source.height == bounds.height(), "PDF proposal must preserve its real selection bounds");
+    const auto project = QDir(directory).filePath("dimensions.sketch");
+    require(window.saveProjectAs(project) && window.openProject(project), "PDF text metadata must round-trip");
+    window.setAssistanceEnabled(true);
+    require(window.suggestReferenceAssistance(id, AssistanceKind::dimension_extraction) == proposals,
+            "reopened PDF must reproduce deterministic source bounds and proposals");
+}
+
 sketch::AssistanceRaster dimension_fixture() {
     sketch::AssistanceRaster raster;
     raster.reference_id = "reference-1";
     raster.source_text = "Measured wall: 12 ft";
+    raster.text_runs = {{0, raster.source_text.size(), 0.1, 0.2, 0.4, 0.05}};
     raster.width = 8;
     raster.height = 8;
     raster.luminance.assign(raster.width * raster.height, 255);
@@ -49,6 +152,7 @@ int main(int argc, char** argv) {
 
         QTemporaryDir temporary;
         require(temporary.isValid(), "temporary directory must be available");
+        pdf_dimension_import_workflow(temporary.path());
         const auto image_path = std::filesystem::path(temporary.path().toStdWString()) / "plan.png";
         QImage image(80, 60, QImage::Format_ARGB32);
         image.fill(Qt::white);
@@ -80,6 +184,8 @@ int main(int argc, char** argv) {
         require_calibration_error();
         require(window.calibrateReference(reference_id, "0", "0", "40", "0", "4 m"),
                 "reference fixture must calibrate from a known distance");
+        require(window.suggestReferenceAssistance(reference_id, AssistanceKind::dimension_extraction).empty(),
+                "raster-only imported reference must yield no text dimension proposals");
         const auto calibrated = window.document().snapshot().entities().at(reference_id.toStdString());
         const auto replace_reference = [&](Entity replacement) {
             window.document().apply(ApplyEntityChanges{window.document().revision(),

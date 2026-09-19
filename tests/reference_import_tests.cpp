@@ -9,7 +9,10 @@
 #include <QTemporaryDir>
 #include <QFile>
 #include <QtEndian>
+#include <algorithm>
 #include <cstring>
+#include <bit>
+#include <limits>
 #include <iostream>
 #include <stdexcept>
 
@@ -29,15 +32,29 @@ sketch::WindowsImportWorkerReport successfulReply() {
         r.network_denial_verified = r.job_limits_verified = r.parent_exit_kill_verified =
         r.brokered_handles_verified = r.private_temporary_root_verified =
         r.immutable_module_roots_verified = r.fixed_search_applied = r.proj_offline_applied = true;
-    r.output.resize(28);
-    std::memcpy(r.output.data(), "PSIR0001", 8);
+    r.output.resize(36);
+    std::memcpy(r.output.data(), "PSIR0002", 8);
     auto* p = reinterpret_cast<uchar*>(r.output.data());
     qToLittleEndian<quint32>(1, p + 8);
     qToLittleEndian<quint32>(1, p + 12);
     qToLittleEndian<quint32>(1, p + 16);
     qToLittleEndian<quint32>(0, p + 20);
-    p[24] = 10; p[25] = 20; p[26] = 30; p[27] = 255;
+    p[32] = 10; p[33] = 20; p[34] = 30; p[35] = 255;
     return r;
+}
+sketch::WindowsImportWorkerReport textReply() {
+    auto reply = successfulReply();
+    reply.output.resize(36 + 5 + 40);
+    auto* p = reinterpret_cast<uchar*>(reply.output.data());
+    qToLittleEndian<quint32>(5, p + 24);
+    qToLittleEndian<quint32>(1, p + 28);
+    std::memcpy(p + 36, "12 ft", 5);
+    qToLittleEndian<quint32>(0, p + 41);
+    qToLittleEndian<quint32>(5, p + 45);
+    const double values[]{0.2, 0.3, 0.4, 0.05};
+    for (int i = 0; i < 4; ++i)
+        qToLittleEndian<quint64>(std::bit_cast<quint64>(values[i]), p + 49 + i * 8);
+    return reply;
 }
 }
 
@@ -53,7 +70,9 @@ int main(int argc, char** argv) {
             require(options.input.size() == 6 && options.arguments == std::vector<std::wstring>{L"png", L"0"},
                     "caller must broker source bytes and fixed arguments");
             require(options.timeout_ms == 30000 && options.max_active_processes == 1 &&
-                    options.proj_offline_required && options.max_output_bytes == 67108888,
+                    options.proj_offline_required && options.max_output_bytes ==
+                        referenceHeaderSize + 4ULL * referenceDimensionLimit * referenceDimensionLimit +
+                            referenceTextLimit + referenceTextRunLimit * referenceTextRunSize,
                     "caller must enforce bounded offline worker policy");
             return response;
         };
@@ -79,6 +98,53 @@ int main(int argc, char** argv) {
         rejects([&] { (void)decodeReferenceBytes({}, "png", 0, {}, broker); });
         rejects([&] { (void)decodeReferenceBytes("source", "png", -1, {}, broker); });
         require(calls == before, "invalid requests must be rejected before launch");
+        auto text_response = textReply();
+        const ReferenceBroker text_broker = [&](const auto&) { return text_response; };
+        const auto text_decoded = decodeReferenceBytes("pdf", "pdf", 0, {}, text_broker);
+        require(text_decoded.source_text == "12 ft" && text_decoded.text_runs.size() == 1 &&
+                    text_decoded.text_runs.front().bounds == QRectF(0.2, 0.3, 0.4, 0.05),
+                "broker must preserve exact validated selection metadata");
+        rejects([&] { (void)decodeReferenceBytes("png", "png", 0, {}, text_broker); });
+        const auto reject_text = [&] {
+            rejects([&] { (void)decodeReferenceBytes("pdf", "pdf", 0, {}, text_broker); });
+        };
+        for (const auto [offset, value] : std::vector<std::pair<int, quint32>>{
+                {24, referenceTextLimit + 1}, {28, referenceTextRunLimit + 1},
+                {41, 0xffffffff}, {45, 6}, {45, 0}}) {
+            text_response = textReply();
+            qToLittleEndian<quint32>(value, reinterpret_cast<uchar*>(text_response.output.data()) + offset);
+            reject_text();
+        }
+        for (const auto value : {std::numeric_limits<double>::quiet_NaN(),
+                                  std::numeric_limits<double>::infinity(), -0.1, 1.1}) {
+            text_response = textReply();
+            qToLittleEndian<quint64>(std::bit_cast<quint64>(value),
+                reinterpret_cast<uchar*>(text_response.output.data()) + 49);
+            reject_text();
+        }
+        for (const auto value : {0, 0xff, 0xc2}) {
+            text_response = textReply();
+            text_response.output[40] = static_cast<std::byte>(value);
+            reject_text();
+        }
+        text_response = textReply();
+        text_response.output[36] = std::byte{0xc3};
+        text_response.output[37] = std::byte{0xa9};
+        qToLittleEndian<quint32>(1, reinterpret_cast<uchar*>(text_response.output.data()) + 41);
+        qToLittleEndian<quint32>(4, reinterpret_cast<uchar*>(text_response.output.data()) + 45);
+        reject_text(); // A valid UTF-8 string, but a selection splits its first character.
+        text_response = textReply();
+        const auto first_record = std::vector<std::byte>(text_response.output.begin() + 41,
+                                                        text_response.output.end());
+        text_response.output.insert(text_response.output.end(), first_record.begin(), first_record.end());
+        qToLittleEndian<quint32>(2, reinterpret_cast<uchar*>(text_response.output.data()) + 28);
+        reject_text(); // Duplicate/overlapping ranges are not accepted.
+        text_response = textReply();
+        text_response.output.push_back(std::byte{});
+        reject_text();
+        text_response = textReply();
+        text_response.output[7] = std::byte{'1'};
+        reject_text();
         // Exercise the actual broker rejection, not just the injected response.
         sketch::WindowsImportWorkerOptions missing;
         QTemporaryDir temporary;
@@ -113,6 +179,8 @@ int main(int argc, char** argv) {
             }
             require(process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0,
                     "generated codec fixture must decode");
+            require(bytes.startsWith("PSIR0002"),
+                    "worker must return versioned text-and-selection metadata");
             auto reply = successfulReply();
             reply.output.resize(static_cast<std::size_t>(bytes.size()));
             std::memcpy(reply.output.data(), bytes.constData(), reply.output.size());
@@ -127,6 +195,8 @@ int main(int argc, char** argv) {
         const auto raster_result = run_codec(png, "png", 0, true);
         require(raster_result.image.size() == raster.size() &&
                 raster_result.image.pixelColor(1, 2) == QColor(10, 20, 30), "worker must preserve raster pixels");
+        require(raster_result.source_text.isEmpty() && raster_result.text_runs.empty(),
+                "raster-only import must not fabricate OCR text");
         (void)run_codec("not an image", "png", 0, false);
         (void)run_codec(png, "png", 1, false);
         QByteArray pdf;
@@ -142,6 +212,58 @@ int main(int argc, char** argv) {
         pdf_buffer.close();
         const auto pdf_result = run_codec(pdf, "pdf", 1, true);
         require(pdf_result.page_count == 2 && !pdf_result.image.isNull(), "worker must render selected PDF page");
+        require(pdf_result.source_text.isEmpty() && pdf_result.text_runs.empty(),
+                "PDF pages without embedded text must not fabricate dimensions");
+        const auto make_text_pdf = [](int rotation) {
+            QByteArray result("%PDF-1.4\n");
+            std::vector<int> offsets{0};
+            const QByteArray content(
+                "BT /F1 12 Tf 72 650 Td (Wall: 12 ft) Tj 100 -200 Td (Depth: 900 mm) Tj ET\n");
+            const auto rotation_entry = rotation ? " /Rotate " + QByteArray::number(rotation) : QByteArray{};
+            const std::vector<QByteArray> objects{
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792]" + rotation_entry +
+                    " /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+                "<< /Length " + QByteArray::number(content.size()) + " >>\nstream\n" + content + "endstream"};
+            for (const auto& object : objects) {
+                offsets.push_back(static_cast<int>(result.size()));
+                result += QByteArray::number(offsets.size() - 1) + " 0 obj\n" + object + "\nendobj\n";
+            }
+            const auto xref = result.size();
+            result += "xref\n0 6\n0000000000 65535 f \n";
+            for (std::size_t i = 1; i < offsets.size(); ++i)
+                result += QByteArray::number(offsets[i]).rightJustified(10, '0') + " 00000 n \n";
+            result += "trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n" +
+                QByteArray::number(xref) + "\n%%EOF\n";
+            return result;
+        };
+        const auto text_pdf = make_text_pdf(0);
+        const auto text_result = run_codec(text_pdf, "pdf", 0, true);
+        require(text_result.source_text.contains("12 ft") && text_result.source_text.contains("900 mm") &&
+                    text_result.text_runs.size() == 2,
+                "worker must extract embedded PDF text with a real selection");
+        const auto box = text_result.text_runs.front().bounds;
+        require(box.x() > 0.05 && box.x() < 0.2 && box.y() > 0.1 && box.y() < 0.3 &&
+                    box.width() > 0 && box.height() > 0 && box.height() < 0.1,
+                "PDF selection must follow the text placement on the page");
+        const auto second_box = text_result.text_runs.back().bounds;
+        require(second_box.x() > box.x() + 0.1 && second_box.y() > box.y() + 0.2 &&
+                    text_result.text_runs.back().offset > text_result.text_runs.front().offset,
+                "separate PDF text lines must retain their distinct page locations");
+        const auto repeat = run_codec(text_pdf, "pdf", 0, true);
+        require(repeat.source_text == text_result.source_text && repeat.text_runs.size() == 2 &&
+                    repeat.text_runs.front().bounds == box && repeat.text_runs.back().bounds == second_box,
+                "PDF extraction must produce deterministic text selection bounds");
+        for (const auto rotation : {90, 180, 270}) {
+            const auto rotated = run_codec(make_text_pdf(rotation), "pdf", 0, true);
+            require(rotated.source_text == text_result.source_text && rotated.text_runs.size() == 2 &&
+                        std::all_of(rotated.text_runs.begin(), rotated.text_runs.end(), [](const auto& run) {
+                            return run.bounds.x() >= 0 && run.bounds.y() >= 0 && run.bounds.width() > 0 &&
+                                run.bounds.height() > 0 && run.bounds.right() <= 1 && run.bounds.bottom() <= 1;
+                        }), "rotated PDF text must retain valid page-relative selection bounds");
+        }
         (void)run_codec(pdf, "pdf", 2, false);
         // Minimal little-endian, uncompressed RGB TIFF fixture. The worker
         // decodes it through the Windows Imaging Component path rather than
