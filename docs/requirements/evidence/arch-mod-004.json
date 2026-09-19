@@ -5,13 +5,13 @@
       "configuration": "windows-debug",
       "inventory": {
         "path": "build/windows-debug/CTestTestfile.cmake",
-        "sha256": "7ef80dc682c296f30000d61620ebf0cfd58e6268afc8b2a53f36e6bb50be9dfe",
-        "size": 82743
+        "sha256": "e4a70e83598fb3597d9e3e3ea9e2058c901f9af83fd55fce09da35e911e6dbf5",
+        "size": 88086
       },
       "log": {
         "path": "build/windows-debug/Testing/Temporary/LastTest.log",
-        "sha256": "1573f404b1831d77d7368b20d827ab880b402842d4d24900c4f34c27762f1275",
-        "size": 126415
+        "sha256": "422f4bbddb66ff7531a7848ac6094e4b947f66ad08c7114cb9e474a30d290f6f",
+        "size": 132404
       },
       "tests": [
         {
@@ -40,13 +40,13 @@
       "configuration": "windows-release",
       "inventory": {
         "path": "build/windows-release/CTestTestfile.cmake",
-        "sha256": "932f79ed2bcd6d3f826a1fad6fb6118307559ca879e59efe2f2e38e30b41f788",
-        "size": 82831
+        "sha256": "10e1c088b69110d2d66eaa87a4b29960dda06ce07f9caa9c22fb08dca537b4db",
+        "size": 88160
       },
       "log": {
         "path": "build/windows-release/Testing/Temporary/LastTest.log",
-        "sha256": "499ae581047c1477dd34890e309f25100b6e7d82c3d93d9faf77e429aeb2a3bb",
-        "size": 126953
+        "sha256": "9c59bb97da456f13f2413a972b00e69566adb3e4fef19e00043e323c52ab22d4",
+        "size": 132966
       },
       "tests": [
         {
@@ -113,8 +113,8 @@
     },
     {
       "path": "src/desktop/main_window.cpp",
-      "sha256": "77f1f3d095f4eb23869d62ec12fd87c02371813fda9abeb41888ccbd751c7812",
-      "size": 1246612
+      "sha256": "72583c0f58a61e48274e46ff824a65f0e5eaab32306f831feaa302b21299874b",
+      "size": 1254459
     },
     {
       "path": "tests/building_object_tests.cpp",
@@ -138,11 +138,11 @@
     },
     {
       "path": "tests/desktop_smoke.cpp",
-      "sha256": "d0b31508bd5a372edfa484bd2a50c20c7cea5e96731560f35b5ea231c1ad04a4",
-      "size": 388342
+      "sha256": "c6d92e8c5721ab41e30ad8fec54066aadcf2ee13e9d042447e6d8f95f03656b4",
+      "size": 388712
     }
   ],
-  "source_tree_sha256": "985fa0bf30d4e2384deff72814fa7210d6e7b6fe943c2aaf9f5e1856456c9f99",
+  "source_tree_sha256": "53410c553fff03d2124c24a592ed23db15b7185997aa60083bb05d912d4118c9",
   "tests": [
     "building_objects",
     "building_entities",

@@ -1,0 +1,86 @@
+{
+  "acceptance": "The owner-independent regeneration boundary runs derived work off the owner thread, cancels queued and running operations, discards cancelled receipts, captures failures, and preserves the valid source revision until the owner accepts a matching result.",
+  "ctest": [
+    {
+      "configuration": "windows-debug",
+      "inventory": {
+        "path": "build/windows-debug/CTestTestfile.cmake",
+        "sha256": "e4a70e83598fb3597d9e3e3ea9e2058c901f9af83fd55fce09da35e911e6dbf5",
+        "size": 88086
+      },
+      "log": {
+        "path": "build/windows-debug/Testing/Temporary/LastTest.log",
+        "sha256": "422f4bbddb66ff7531a7848ac6094e4b947f66ad08c7114cb9e474a30d290f6f",
+        "size": 132404
+      },
+      "tests": [
+        {
+          "name": "workspace_regeneration_queue",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "configuration": "windows-release",
+      "inventory": {
+        "path": "build/windows-release/CTestTestfile.cmake",
+        "sha256": "10e1c088b69110d2d66eaa87a4b29960dda06ce07f9caa9c22fb08dca537b4db",
+        "size": 88160
+      },
+      "log": {
+        "path": "build/windows-release/Testing/Temporary/LastTest.log",
+        "sha256": "9c59bb97da456f13f2413a972b00e69566adb3e4fef19e00043e323c52ab22d4",
+        "size": 132966
+      },
+      "tests": [
+        {
+          "name": "workspace_regeneration_queue",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "qualification_boundary": "This evidence covers the deterministic queue/cancellation implementation on the development host. Integrated application regeneration, reference hardware latency, representative workloads, and final production performance qualification remain open.",
+  "requirement_id": "OPS-PERF-002",
+  "result": "pass",
+  "schema_version": 1,
+  "source_anchors": [
+    "WorkspaceRegenerationQueue",
+    "RegenerationCancellationToken",
+    "cancel",
+    "source revision",
+    "FIFO",
+    "shutdown(false)"
+  ],
+  "source_files": [
+    {
+      "path": "include/sketch/workspace_regeneration_queue.hpp",
+      "sha256": "2bb164ad281f74390404b3b74aa3b0ea17d348a1734507ab971899c0c815d6cd",
+      "size": 3539
+    },
+    {
+      "path": "src/core/workspace_regeneration_queue.cpp",
+      "sha256": "39d09729745b115048da0804592d020d25ca12425da02459e087673d1574620f",
+      "size": 5203
+    },
+    {
+      "path": "tests/regeneration_queue_tests.cpp",
+      "sha256": "c3d1bf7684a610f3acdc0030ccd7eac6a484ed92c50dc06dc8b37c035deea4e3",
+      "size": 6403
+    },
+    {
+      "path": "docs/workspace-regeneration-queue.md",
+      "sha256": "d6c9d40ff91c57fa901363daf2774fa6505cb4eaa68f8886dab180b91636d0af",
+      "size": 1813
+    },
+    {
+      "path": "docs/performance-benchmark.md",
+      "sha256": "e87722e81363a4691656b625e68cfe599126ca8999e37b580ba538a43f3eede0",
+      "size": 8476
+    }
+  ],
+  "source_tree_sha256": "53410c553fff03d2124c24a592ed23db15b7185997aa60083bb05d912d4118c9",
+  "tests": [
+    "workspace_regeneration_queue"
+  ]
+}
