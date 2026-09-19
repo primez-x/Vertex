@@ -36,6 +36,7 @@ SOURCE_KIT_REQUIRED_ROOTS = (
     "docs/",
     "include/",
     "packaging/",
+    "resources/",
     "scripts/",
     "src/",
     "tests/",

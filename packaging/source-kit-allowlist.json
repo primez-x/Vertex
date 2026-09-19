@@ -1327,6 +1327,18 @@
     },
     {
       "category": "source",
+      "path": "resources/windows/vertex-cli.rc"
+    },
+    {
+      "category": "source",
+      "path": "resources/windows/vertex-import-worker.rc"
+    },
+    {
+      "category": "source",
+      "path": "resources/windows/vertex.rc"
+    },
+    {
+      "category": "source",
       "path": "scripts/apex_compatibility_matrix.py"
     },
     {
