@@ -227,6 +227,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/performance-qualification.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/phases-alternatives.md"
     },
     {
@@ -1367,6 +1371,10 @@
     },
     {
       "category": "source",
+      "path": "scripts/performance_qualification.py"
+    },
+    {
+      "category": "source",
       "path": "scripts/performance_report.py"
     },
     {
@@ -2432,6 +2440,10 @@
     {
       "category": "source",
       "path": "tests/test_performance_benchmark.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_performance_qualification.py"
     },
     {
       "category": "source",

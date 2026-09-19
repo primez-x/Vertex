@@ -2950,9 +2950,12 @@
         "src/desktop/main_window.cpp",
         "src/desktop/main.cpp",
         "scripts/test-desktop.ps1",
-        "scripts/test_installed_runtime.py"
+        "scripts/test_installed_runtime.py",
+        "scripts/performance_qualification.py",
+        "tests/test_performance_qualification.py",
+        "docs/performance-qualification.md"
       ],
-      "implementation_note": "The desktop now emits bounded process-local navigation timing reports and the benchmark harness provides deterministic p95 threshold checks; representative workloads, reference hardware runs, and final performance evidence remain open."
+      "implementation_note": "The desktop emits bounded process-local navigation timing reports and the benchmark harness provides deterministic p95 checks. A fail-closed qualification manifest now requires agreed-hardware identity, exact representative workload profiles, adequate sample counts, zero dropped samples, threshold results, and hash-bound raw reports. Representative navigation runs on agreed reference hardware remain open."
     },
     {
       "id": "OPS-PERF-002",
@@ -2978,9 +2981,12 @@
         "src/desktop/main_window.cpp",
         "src/desktop/main.cpp",
         "scripts/test-desktop.ps1",
-        "scripts/test_installed_runtime.py"
+        "scripts/test_installed_runtime.py",
+        "scripts/performance_qualification.py",
+        "tests/test_performance_qualification.py",
+        "docs/performance-qualification.md"
       ],
-      "implementation_note": "Input/edit percentile calculations and explicit threshold failures are implemented. The owner-independent WorkspaceRegenerationQueue now provides FIFO cancellable derived work, discards cancelled receipts, captures failures, and preserves source-revision ownership under a focused Debug/Release fixture. The desktop now emits bounded process-local input/edit timing reports from the real canvas paths; reference hardware measurements, representative workloads, and final performance evidence remain open."
+      "implementation_note": "Input/edit percentile calculations, cancellable background regeneration, and source-revision ownership are implemented. The qualification manifest now binds adequate timing samples to a cancellation observation with stable document revision, stale-result discard, and valid-revision preservation. Representative hardware measurements and witnessed cancellation evidence remain open."
     },
     {
       "id": "OPS-PERF-003",
@@ -3001,9 +3007,12 @@
         "tests/performance_telemetry_tests.cpp",
         "src/desktop/main_window.cpp",
         "src/desktop/main.cpp",
-        "scripts/test_installed_runtime.py"
+        "scripts/test_installed_runtime.py",
+        "scripts/performance_qualification.py",
+        "tests/test_performance_qualification.py",
+        "docs/performance-qualification.md"
       ],
-      "implementation_note": "The desktop now emits bounded process-local open/save timing reports from the real project paths, while the benchmark harness retains explicit workload and sample metadata. Representative project integrity, reference hardware, and clean-machine performance evidence remain open."
+      "implementation_note": "The desktop and representative workload runner emit open/save timing and round-trip integrity records. The qualification manifest now hash-binds the build, package manifest, raw timing/storage reports, projects, round trips, revision identity, semantic/snapshot/asset equality, and explicit manifest-validation claims. Agreed reference-hardware and independently reviewed production evidence remain open."
     },
     {
       "id": "OPS-QA-001",

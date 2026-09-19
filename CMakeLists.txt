@@ -616,7 +616,7 @@ if(BUILD_TESTING)
   add_test(NAME dependency_integrity COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s "${CMAKE_SOURCE_DIR}/tests" -p test_bootstrap.py)
   # These validate report parsing and threshold summaries, not production
   # performance qualification. Run them in both build configurations.
-  foreach(performance_test IN ITEMS benchmark report)
+  foreach(performance_test IN ITEMS benchmark report qualification)
     add_test(NAME "performance_${performance_test}_contract" COMMAND "${Python3_EXECUTABLE}" -m unittest discover
       -s "${CMAKE_SOURCE_DIR}/tests" -p "test_performance_${performance_test}.py")
   endforeach()

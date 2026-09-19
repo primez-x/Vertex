@@ -131,6 +131,13 @@ and production open/save revision, snapshot, asset and manifest integrity.
 Fixture generation and focused implementation checks do not complete these
 acceptance gates. All reports retain `audit_status: "incomplete"`.
 
+[`performance_qualification.py`](performance-qualification.md) validates those
+inputs as one hash-bound, fail-closed evidence manifest. It requires the three
+representative workload profiles, agreed-hardware metadata, adequate samples,
+cancellation preservation, and project/package integrity records. A complete
+manifest remains reviewable evidence and does not certify the hardware or the
+unified production gate.
+
 ## Development-host storage diagnostic, 2026-09-19
 
 The Release workload runner exposed a real save-path regression on the current
