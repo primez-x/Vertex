@@ -1,4 +1,4 @@
-# Vertex
+# Vertex is under active development and has not yet published it's first production-grade release. Do not attempt to use yet. I will publish a release once ready. :)
 
 Vertex is an independent, offline-first Windows application for property
 measurement and residential/light-commercial architectural work.
