@@ -84,6 +84,9 @@ public:
     static std::map<std::string, Revision, std::less<>>& names(DocumentSnapshot& snapshot) {
         return snapshot.named_revisions_;
     }
+    static Document restore_document(DocumentSnapshot snapshot) {
+        return Document::restore(std::move(snapshot));
+    }
 };
 
 namespace {
@@ -1083,8 +1086,8 @@ void put_metadata(sqlite3* database, Statement& statement, std::string_view key,
     statement.reset();
 }
 
-void write_database(const std::filesystem::path& path, const DocumentSnapshot& snapshot,
-                    SaveFaultStage fault_stage, const RecoveryLedger* recovery = nullptr) {
+std::string write_database(const std::filesystem::path& path, const DocumentSnapshot& snapshot,
+                           SaveFaultStage fault_stage, const RecoveryLedger* recovery = nullptr) {
     auto database = open_database(path, SQLITE_OPEN_READWRITE);
     execute(database.get(), "PRAGMA trusted_schema=OFF");
     execute(database.get(), "PRAGMA foreign_keys=ON");
@@ -1093,6 +1096,7 @@ void write_database(const std::filesystem::path& path, const DocumentSnapshot& s
     execute(database.get(), "PRAGMA locking_mode=EXCLUSIVE");
     execute(database.get(), "PRAGMA application_id=1347638340");
     const auto format = std::max(recovery ? 4U : 1U, ProjectStore::required_format_version(snapshot));
+    const auto requested_digest = logical_digest(snapshot, format, recovery);
     const auto user_version = "PRAGMA user_version=" + std::to_string(format);
     execute(database.get(), user_version.c_str());
     execute(database.get(), "BEGIN IMMEDIATE");
@@ -1151,7 +1155,7 @@ void write_database(const std::filesystem::path& path, const DocumentSnapshot& s
         put_metadata(database.get(), metadata, "saved_revision", recovery
             ? (snapshot.saved_revision_optional() ? std::to_string(*snapshot.saved_revision_optional()) : "null")
             : std::to_string(snapshot.revision()));
-        put_metadata(database.get(), metadata, "logical_digest", logical_digest(snapshot, format, recovery));
+        put_metadata(database.get(), metadata, "logical_digest", requested_digest);
 
         Statement revision_statement(
             database.get(),
@@ -1256,6 +1260,7 @@ void write_database(const std::filesystem::path& path, const DocumentSnapshot& s
         sqlite_error(database.get(), "cannot flush SQLite page cache");
     }
     database.close();
+    return requested_digest;
 }
 
 std::string required_metadata(sqlite3* database, std::string_view key) {
@@ -1497,7 +1502,8 @@ void verify_sqlite_content_integrity(sqlite3* database) {
     }
 }
 
-DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nullptr) {
+DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nullptr,
+                               std::string* verified_digest = nullptr) {
     const auto format = required_metadata(database, "format_version");
     if (format != "1" && format != "2" && format != "3" && format != "5" && format != "6" && !(recovery && format == "4")) {
         storage_error(StorageErrorCode::unsupported_format,
@@ -1690,10 +1696,12 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
             storage_error(StorageErrorCode::resource_limit, error.what());
         }
     }
-    if (logical_digest(snapshot, format_number, recovery) != expected_digest) {
+    const auto decoded_digest = logical_digest(snapshot, format_number, recovery);
+    if (decoded_digest != expected_digest) {
         storage_error(StorageErrorCode::integrity_failure,
                       "project logical SHA-256 does not match its stored content");
     }
+    if (verified_digest) *verified_digest = decoded_digest;
     return snapshot;
 }
 
@@ -2045,6 +2053,7 @@ std::string hash_handle_contents(HANDLE source) {
 struct DecodedProject {
     DocumentSnapshot snapshot;
     std::string file_sha256;
+    std::string logical_digest;
     RecoveryLedger ledger;
     RecoveryLedgerDecodeResult recovery;
 };
@@ -2059,7 +2068,8 @@ DecodedProject decode_project_under_lock(const std::filesystem::path& source, HA
     (void)enforce_preallocation_budgets(database.get(), is_archive);
     verify_sqlite_content_integrity(database.get());
     RecoveryLedger ledger;
-    auto snapshot = read_snapshot(database.get(), is_archive ? &ledger : nullptr);
+    std::string verified_digest;
+    auto snapshot = read_snapshot(database.get(), is_archive ? &ledger : nullptr, &verified_digest);
     RecoveryLedgerDecodeResult recovery;
     if (is_archive) {
         try {
@@ -2073,7 +2083,7 @@ DecodedProject decode_project_under_lock(const std::filesystem::path& source, HA
         }
     }
     database.close();
-    return DecodedProject{std::move(snapshot), hash_handle_contents(locked_file),
+    return DecodedProject{std::move(snapshot), hash_handle_contents(locked_file), std::move(verified_digest),
         std::move(ledger), std::move(recovery)};
 }
 #endif
@@ -2173,12 +2183,9 @@ SaveReceipt save_project(const std::filesystem::path& destination,
                 storage_error(StorageErrorCode::invalid_snapshot, error.what());
             }
         }
-        try {
-            (void)Document::fork(snapshot);
-        } catch (const DocumentError& error) {
-            storage_error(StorageErrorCode::invalid_snapshot,
-                          std::string("cannot save invalid document snapshot: ") + error.what());
-        }
+        // Bound caller-owned data before any I/O. Complete structural validation
+        // runs against the decoded staging file below, so the exact bytes to be
+        // published are validated once without first copying the whole snapshot.
         enforce_snapshot_budget(snapshot);
 
         std::error_code path_error;
@@ -2216,7 +2223,8 @@ SaveReceipt save_project(const std::filesystem::path& destination,
             }
 #ifdef _WIN32
             ReservedStagingFile reserved_staging(temporary);
-            write_database(temporary, snapshot, options.fault_stage, archive ? &archive->recovery() : nullptr);
+            const auto requested_digest = write_database(
+                temporary, snapshot, options.fault_stage, archive ? &archive->recovery() : nullptr);
             inject_if(options.fault_stage, SaveFaultStage::after_database_write);
             reserved_staging.flush_written_bytes();
 
@@ -2235,14 +2243,20 @@ SaveReceipt save_project(const std::filesystem::path& destination,
                 archive ? std::optional<ArchiveRole>(archive->role()) : std::nullopt);
             if (archive && !validation.recovery.supported())
                 storage_error(StorageErrorCode::integrity_failure, "staged recovery archive is not supported");
-            const auto archive_format = std::max(4U, ProjectStore::required_format_version(snapshot));
-            if (logical_digest(validation.snapshot, archive ? archive_format : 0U,
-                               archive ? &validation.ledger : nullptr) !=
-                logical_digest(snapshot, archive ? archive_format : 0U, archive ? &archive->recovery() : nullptr)) {
+            // Both digests were already needed to write and verify the staging
+            // file. Reuse them instead of rebuilding two full logical manifests.
+            if (validation.logical_digest != requested_digest) {
                 storage_error(StorageErrorCode::integrity_failure,
                               "validated project content differs from requested snapshot");
             }
-            auto validated_document = Document::fork(validation.snapshot);
+            Document validated_document = [&]() {
+                try {
+                    return ProjectStoreAccess::restore_document(std::move(validation.snapshot));
+                } catch (const DocumentError& error) {
+                    storage_error(StorageErrorCode::invalid_snapshot,
+                                  std::string("cannot save invalid document snapshot: ") + error.what());
+                }
+            }();
             if (validated_document.revision() != snapshot.revision()) {
                 storage_error(StorageErrorCode::integrity_failure,
                               "validated project revision differs from requested snapshot");

@@ -130,3 +130,29 @@ measurements, long-regeneration cancellation preserving the valid revision,
 and production open/save revision, snapshot, asset and manifest integrity.
 Fixture generation and focused implementation checks do not complete these
 acceptance gates. All reports retain `audit_status: "incomplete"`.
+
+## Development-host storage diagnostic, 2026-09-19
+
+The Release workload runner exposed a real save-path regression on the current
+development host (Ryzen 9 7950X3D, RTX 5090, 64 GiB RAM, Windows build 26100).
+At source revision `9730ad6`, the 50,000-entity drawing fixture opened in
+1,984-2,103 ms but saved in 6,604-6,707 ms, beyond the five-second target.
+
+ProjectStore was rebuilding the complete logical manifest four times and was
+copy-validating the caller snapshot before validating the exact staged bytes.
+The save path now retains the requested and decoded digests already used by
+write/read verification, then performs its full structural validation once on
+the decoded staging snapshot before publication. No digest, SQLite integrity,
+asset hash, publication-handle, CAS, or recovery-ledger check was removed.
+
+The same 50,000-entity fixture then opened in 1,981-2,206 ms and saved in
+3,606-3,669 ms. The 20-sheet fixture with 250,000,000 placed asset bytes opened
+in 627-652 ms and saved in 1,211-1,248 ms. Both fixtures preserved their
+authoring-source digest, decoded workload facts, file hash, and asset bytes
+through two save/open cycles. A 10,000-object architectural run produced
+5,000,000 measured OCCT triangles and remained well below the storage target.
+
+These are development-host diagnostics that demonstrate the defect and its
+correction. They do not designate agreed reference hardware, measure compositor
+presentation or interactive percentiles, establish statistical adequacy, or
+complete OPS-PERF-001/002/003.

@@ -242,6 +242,7 @@ public:
 
 private:
     friend class ProjectStore;
+    friend class ProjectStoreAccess;
 
     static Document restore(DocumentSnapshot snapshot);
     explicit Document(std::string document_id);
