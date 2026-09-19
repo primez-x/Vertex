@@ -86,7 +86,7 @@ function Resolve-InstallRoot([string]$SourceRoot, [string]$RequestedRoot) {
     return @{ Root = $resolved; Parent = $parent; Leaf = $leaf }
 }
 
-function Assert-RuntimeInstall([string]$RootPath, [string]$ManifestName) {
+function Assert-RuntimeInstall([string]$RootPath, [string]$ManifestName, [string]$ExpectedManifestPath) {
     $manifestPath = Resolve-SafeChildPath $RootPath $ManifestName 'installed runtime manifest path'
     $verifierPath = Resolve-SafeChildPath $RootPath 'verify-offline-bundle.ps1' 'installed verifier path'
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf) -or
@@ -101,12 +101,82 @@ function Assert-RuntimeInstall([string]$RootPath, [string]$ManifestName) {
     if ($manifest.manifest_kind -ne 'runtime' -or $manifest.audit_status -ne 'incomplete') {
         Fail 'installed runtime manifest is unsupported'
     }
+    # A marker alone is not proof of ownership. Bind it to the verified source
+    # bundle before using its entries to authorize replacement or removal.
+    if ((Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash -ne
+        (Get-FileHash -LiteralPath $ExpectedManifestPath -Algorithm SHA256).Hash) {
+        Fail 'installed runtime manifest does not match this bundle; use the original bundle'
+    }
+    $ownedFiles = @{}
+    $ownedDirectories = @{}
+    foreach ($relative in @($ManifestName, 'verify-offline-bundle.ps1') + @($manifest.files | ForEach-Object { $_.path })) {
+        $ownedPath = Resolve-SafeChildPath $RootPath $relative 'owned runtime path'
+        $ownedFiles[$ownedPath] = $true
+        $parent = Split-Path -Path $ownedPath -Parent
+        while (-not $parent.Equals($RootPath, [StringComparison]::OrdinalIgnoreCase)) {
+            $ownedDirectories[$parent] = $true
+            $parent = Split-Path -Path $parent -Parent
+        }
+    }
     foreach ($candidate in @(Get-ChildItem -LiteralPath $RootPath -Recurse -Force -ErrorAction Stop)) {
         if (($candidate.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
             Fail "installed runtime contains a symlink or junction: $($candidate.FullName)"
         }
+        if (($candidate.PSIsContainer -and -not $ownedDirectories.ContainsKey($candidate.FullName)) -or
+            (-not $candidate.PSIsContainer -and -not $ownedFiles.ContainsKey($candidate.FullName))) {
+            Fail "installed runtime contains unowned content; move it outside the install root before $Action`: $($candidate.FullName)"
+        }
     }
-    return @{ ManifestPath = $manifestPath; VerifierPath = $verifierPath }
+    return @{ ManifestPath = $manifestPath; VerifierPath = $verifierPath; Manifest = $manifest }
+}
+
+function Remove-OwnedRuntime([string]$RootPath, [string]$ManifestName, $Manifest) {
+    # Delete only declared runtime files. Nonrecursive directory removal leaves
+    # any content that appeared after validation intact and makes the caller
+    # handle the incomplete cleanup explicitly.
+    $files = @($Manifest.files | ForEach-Object {
+        Resolve-SafeChildPath $RootPath ([string]$_.path) 'owned runtime removal path'
+    }) + @(
+        (Resolve-SafeChildPath $RootPath $ManifestName 'owned runtime manifest removal path'),
+        (Resolve-SafeChildPath $RootPath 'verify-offline-bundle.ps1' 'owned verifier removal path')
+    )
+    $directories = @{}
+    foreach ($file in $files) {
+        $parent = Split-Path -Path $file -Parent
+        while (-not $parent.Equals($RootPath, [StringComparison]::OrdinalIgnoreCase)) {
+            $directories[$parent] = $true
+            $parent = Split-Path -Path $parent -Parent
+        }
+    }
+    $complete = $true
+    foreach ($file in $files) {
+        if (Test-Path -LiteralPath $file -PathType Leaf) {
+            try { [IO.File]::Delete($file) } catch { $complete = $false }
+        }
+    }
+    foreach ($directory in @($directories.Keys | Sort-Object { $_.Length } -Descending)) {
+        if (Test-Path -LiteralPath $directory -PathType Container) {
+            try { [IO.Directory]::Delete($directory, $false) } catch { $complete = $false }
+        }
+    }
+    if (Test-Path -LiteralPath $RootPath -PathType Container) {
+        try { [IO.Directory]::Delete($RootPath, $false) } catch { $complete = $false }
+    }
+    return $complete -and -not (Test-Path -LiteralPath $RootPath)
+}
+
+function Restore-OwnedRuntime([string]$SourceRoot, [string]$DestinationRoot,
+                               [string]$ManifestName, [string]$ManifestPath,
+                               [string]$VerifierPath, $Manifest) {
+    New-Item -ItemType Directory -Path $DestinationRoot -Force | Out-Null
+    foreach ($entry in @($Manifest.files)) {
+        $sourcePath = Resolve-SafeChildPath $SourceRoot ([string]$entry.path) 'runtime restore source path'
+        $destinationPath = Resolve-SafeChildPath $DestinationRoot ([string]$entry.path) 'runtime restore destination path'
+        New-Item -ItemType Directory -Path (Split-Path -Parent $destinationPath) -Force | Out-Null
+        Copy-Item -LiteralPath $sourcePath -Destination $destinationPath -Force
+    }
+    Copy-Item -LiteralPath $ManifestPath -Destination (Join-Path $DestinationRoot $ManifestName) -Force
+    Copy-Item -LiteralPath $VerifierPath -Destination (Join-Path $DestinationRoot 'verify-offline-bundle.ps1') -Force
 }
 
 try {
@@ -155,14 +225,19 @@ try {
         if (-not $targetInitiallyExists) {
             Fail 'install root does not exist'
         }
-        $installed = Assert-RuntimeInstall $targetRoot $runtimeManifestName
-        & $installed.VerifierPath -Root $targetRoot -ManifestName $runtimeManifestName
+        [void](Assert-RuntimeInstall $targetRoot $runtimeManifestName $runtimeManifestPath)
+        # Never execute a script from the tree being checked for tampering.
+        if ((Get-FileHash -LiteralPath (Join-Path $targetRoot 'verify-offline-bundle.ps1') -Algorithm SHA256).Hash -ne
+            (Get-FileHash -LiteralPath $sourceVerifier -Algorithm SHA256).Hash) {
+            Fail 'installed verifier does not match this bundle; repair before uninstalling'
+        }
+        & $sourceVerifier -Root $targetRoot -ManifestName $runtimeManifestName
         if ($LASTEXITCODE -ne 0) {
             Fail 'installed runtime verification failed; refusing to remove it'
         }
-        Remove-Item -LiteralPath $targetRoot -Recurse -Force
-        if (Test-Path -LiteralPath $targetRoot) {
-            Fail 'install root could not be removed'
+        $installed = Assert-RuntimeInstall $targetRoot $runtimeManifestName $runtimeManifestPath
+        if (-not (Remove-OwnedRuntime $targetRoot $runtimeManifestName $installed.Manifest)) {
+            Fail 'uninstall preserved content that appeared after validation; the install root was not removed'
         }
         Write-Output ("Removed the verified Vertex runtime from {0}." -f $targetRoot)
         exit 0
@@ -173,9 +248,9 @@ try {
             Fail 'repair target does not exist'
         }
         # A repair may replace damaged payload bytes, but it must still prove
-        # that the destination is an installation of this runtime family
+        # that the destination belongs to this exact bundle
         # before moving it aside.
-        [void](Assert-RuntimeInstall $targetRoot $runtimeManifestName)
+        [void](Assert-RuntimeInstall $targetRoot $runtimeManifestName $runtimeManifestPath)
     }
 
     $installToken = [Guid]::NewGuid().ToString('N')
@@ -204,8 +279,7 @@ try {
         Copy-Item -LiteralPath $runtimeManifestPath -Destination (Join-Path $stagingRoot $runtimeManifestName) -Force
         Copy-Item -LiteralPath $sourceVerifier -Destination (Join-Path $stagingRoot 'verify-offline-bundle.ps1') -Force
 
-        $stagingVerifier = Join-Path $stagingRoot 'verify-offline-bundle.ps1'
-        & $stagingVerifier -Root $stagingRoot -ManifestName $runtimeManifestName
+        & $sourceVerifier -Root $stagingRoot -ManifestName $runtimeManifestName
         if ($LASTEXITCODE -ne 0) {
             Fail 'staged runtime verification failed; no files were installed'
         }
@@ -216,33 +290,72 @@ try {
         if ($targetInitiallyExists) {
             Move-Item -LiteralPath $targetRoot -Destination $backupRoot
             $targetMovedToBackup = $true
+            if ($Action -eq 'Repair') {
+                # Close the scan-to-rename interval before publishing. A late
+                # user file rejects the repair and the catch path restores the
+                # untouched backup to its original name.
+                [void](Assert-RuntimeInstall $backupRoot $runtimeManifestName $runtimeManifestPath)
+            } elseif (@(Get-ChildItem -LiteralPath $backupRoot -Force -ErrorAction Stop).Count -ne 0) {
+                Fail 'install destination received content during publication; the original directory will be restored'
+            }
         }
         Move-Item -LiteralPath $stagingRoot -Destination $targetRoot
         $publishedRootCreated = $true
 
-        $targetVerifier = Join-Path $targetRoot 'verify-offline-bundle.ps1'
-        & $targetVerifier -Root $targetRoot -ManifestName $runtimeManifestName
+        & $sourceVerifier -Root $targetRoot -ManifestName $runtimeManifestName
         if ($LASTEXITCODE -ne 0) {
             Fail 'installed runtime verification failed'
         }
+        if (Test-Path -LiteralPath $backupRoot) {
+            if ($Action -eq 'Repair') {
+                $backup = Assert-RuntimeInstall $backupRoot $runtimeManifestName $runtimeManifestPath
+                if (-not (Remove-OwnedRuntime $backupRoot $runtimeManifestName $backup.Manifest)) {
+                    # Reconstitute the old runtime around the preserved late content
+                    # so rollback can return a usable installation at the same path.
+                    Restore-OwnedRuntime $sourceRoot $backupRoot $runtimeManifestName `
+                        $runtimeManifestPath $sourceVerifier $runtimeManifest
+                    Fail "repair preserved content that appeared during publication; the original runtime will be restored"
+                }
+            } else {
+                try { [IO.Directory]::Delete($backupRoot, $false) } catch { }
+            }
+        }
         $published = $true
     } catch {
+        $operationError = $_.Exception.Message
+        $rollbackMessage = $null
         if (Test-Path -LiteralPath $stagingRoot) {
             Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
         }
         if (-not $published) {
             if ($publishedRootCreated -and (Test-Path -LiteralPath $targetRoot)) {
-                Remove-Item -LiteralPath $targetRoot -Recurse -Force -ErrorAction SilentlyContinue
+                $publishedInstall = $null
+                try {
+                    $publishedInstall = Assert-RuntimeInstall $targetRoot $runtimeManifestName $runtimeManifestPath
+                } catch {
+                    # A changed publication may contain data created after the
+                    # rename. Never recursively erase it during rollback.
+                }
+                if ($null -ne $publishedInstall) {
+                    [void](Remove-OwnedRuntime $targetRoot $runtimeManifestName $publishedInstall.Manifest)
+                }
             }
             if ($targetMovedToBackup -and (Test-Path -LiteralPath $backupRoot) -and
                 -not (Test-Path -LiteralPath $targetRoot)) {
                 Move-Item -LiteralPath $backupRoot -Destination $targetRoot -Force
+            } elseif ($targetMovedToBackup -and (Test-Path -LiteralPath $backupRoot) -and
+                      (Test-Path -LiteralPath $targetRoot)) {
+                $rollbackMessage = ("rollback preserved both changed trees; published content: {0}; original runtime: {1}" -f `
+                    $targetRoot, $backupRoot)
             }
+        }
+        if ($null -ne $rollbackMessage) {
+            throw "$operationError; $rollbackMessage"
         }
         throw
     }
     if (Test-Path -LiteralPath $backupRoot) {
-        Remove-Item -LiteralPath $backupRoot -Recurse -Force -ErrorAction SilentlyContinue
+        Fail "verified backup cleanup was incomplete; preserved content remains at $backupRoot"
     }
     $verb = if ($Action -eq 'Repair') { 'Repaired' } else { 'Installed' }
     Write-Output ("{0} {1} runtime files to {2}; qualification remains incomplete." -f $verb, @($runtimeManifest.files).Count, $targetRoot)

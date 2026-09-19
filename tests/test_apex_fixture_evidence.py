@@ -1,5 +1,7 @@
 import hashlib
 import importlib.util
+import json
+import os
 import pathlib
 import tempfile
 import unittest
@@ -43,6 +45,62 @@ def _base_manifest(root: pathlib.Path, fixture: pathlib.Path):
 
 
 class ApexFixtureEvidenceTests(unittest.TestCase):
+    def _write_manifest(self, root, fixture):
+        manifest = root / "manifest.json"
+        manifest.write_text(json.dumps(_base_manifest(root, fixture)), encoding="utf-8")
+        return manifest
+
+    def test_output_must_not_overwrite_manifest_fixture_or_file_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            fixture = root / "sample.ax7"
+            fixture.write_bytes(b"irreplaceable apex fixture")
+            manifest = self._write_manifest(root, fixture)
+            original_fixture = fixture.read_bytes()
+            original_manifest = manifest.read_bytes()
+
+            self.assertEqual(module.main([str(manifest), "--root", str(root),
+                                          "--output", str(fixture)]), 1)
+            self.assertEqual(fixture.read_bytes(), original_fixture)
+            self.assertEqual(module.main([str(manifest), "--root", str(root),
+                                          "--output", str(manifest)]), 1)
+            self.assertEqual(manifest.read_bytes(), original_manifest)
+
+    def test_output_hard_link_alias_of_input_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            fixture = root / "sample.ax7"
+            fixture.write_bytes(b"irreplaceable apex fixture")
+            manifest = self._write_manifest(root, fixture)
+            alias = root / "capture.json"
+            os.link(fixture, alias)
+
+            self.assertEqual(module.main([str(manifest), "--root", str(root),
+                                          "--output", str(alias)]), 1)
+            self.assertEqual(fixture.read_bytes(), b"irreplaceable apex fixture")
+
+    def test_output_created_as_input_alias_during_validation_is_not_truncated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            fixture = root / "sample.ax7"
+            fixture.write_bytes(b"irreplaceable apex fixture")
+            manifest = self._write_manifest(root, fixture)
+            output = root / "capture.json"
+            original = module.validate_and_build
+
+            def interleaved(*args, **kwargs):
+                report = original(*args, **kwargs)
+                os.link(fixture, output)
+                return report
+
+            module.validate_and_build = interleaved
+            try:
+                self.assertEqual(module.main([str(manifest), "--root", str(root),
+                                              "--output", str(output)]), 1)
+            finally:
+                module.validate_and_build = original
+            self.assertEqual(fixture.read_bytes(), b"irreplaceable apex fixture")
+
     def test_valid_capture_keeps_native_unknown_and_defers_compatibility(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)

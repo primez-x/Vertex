@@ -1703,9 +1703,13 @@
         "docs/field-adapter-contracts.md",
         "include/sketch/appraisal_dispatcher.hpp",
         "src/core/appraisal_dispatcher.cpp",
-        "tests/appraisal_dispatcher_tests.cpp"
+        "tests/appraisal_dispatcher_tests.cpp",
+        "include/sketch/windows_appraisal_boundary.hpp",
+        "src/core/windows_appraisal_boundary.cpp",
+        "tests/windows_appraisal_boundary_tests.cpp",
+        "docs/appraisal-native-transport.md"
       ],
-      "implementation_note": "Versioned appraisal field mappings, deterministic one-way payloads, and a preparation-only dispatcher are implemented. The dispatcher performs exact capability matching and fail-closed typed handling for offline, unavailable, unsupported, ambiguous, timeout, cancellation, worker failure, and uncertain replies. Actual target applications, isolated transports, field-fidelity fixtures, and real exchanges remain open."
+      "implementation_note": "Versioned appraisal field mappings, deterministic one-way payloads, and a preparation-only dispatcher are implemented. The dispatcher performs exact capability matching and fail-closed typed handling for offline, unavailable, unsupported, ambiguous, timeout, cancellation, worker failure, and uncertain replies. A Windows no-window subprocess boundary now adds bounded framed IPC, environment and handle minimization, nonblocking caller operations, and process-tree cleanup. It remains an opt-in transport under the caller token, not an OS sandbox. Actual target applications, restricted-token deployment, field-fidelity fixtures, and real exchanges remain open."
     },
     {
       "id": "APX-INT-002",
@@ -1724,9 +1728,13 @@
         "docs/field-adapter-contracts.md",
         "include/sketch/appraisal_dispatcher.hpp",
         "src/core/appraisal_dispatcher.cpp",
-        "tests/appraisal_dispatcher_tests.cpp"
+        "tests/appraisal_dispatcher_tests.cpp",
+        "include/sketch/windows_appraisal_boundary.hpp",
+        "src/core/windows_appraisal_boundary.cpp",
+        "tests/windows_appraisal_boundary_tests.cpp",
+        "docs/appraisal-native-transport.md"
       ],
-      "implementation_note": "Caller identity/version/mapping compatibility and a preparation-only polling dispatcher now enforce one shared deadline, cancellation checkpoints, correlation, exact payload acknowledgement, late-result rejection, and no commit after uncertain outcomes. A native isolated subprocess transport, real caller protocols, vendor error translation, and recorded compatibility fixtures remain open."
+      "implementation_note": "Caller identity/version/mapping compatibility and a preparation-only polling dispatcher now enforce one shared deadline, cancellation checkpoints, correlation, exact payload acknowledgement, late-result rejection, and no commit after uncertain outcomes. The Windows transport implements bounded local framed IPC, no-window launch, inherited-handle allowlisting, sanitized environment, asynchronous cleanup, and Job Object descendant termination. Real caller protocols, OS-isolated vendor workers, vendor error translation, and recorded compatibility fixtures remain open."
     },
     {
       "id": "APX-NATIVE-AX5-001",
@@ -1740,10 +1748,12 @@
       "blocker": "Representative native Apex v5 files and format evidence are required; PDF tracing cannot satisfy this row.",
       "implementation_sources": [
         "scripts/apex_compatibility_matrix.py",
+        "scripts/apex_fixture_evidence.py",
         "tests/test_apex_compatibility_matrix.py",
+        "tests/test_apex_fixture_evidence.py",
         "docs/apex-compatibility-matrix.md"
       ],
-      "implementation_note": "Evidence schema and hash comparison tooling are implemented; native Apex v5 fixtures, parser/import/export behavior, and independent fidelity certification remain open."
+      "implementation_note": "Evidence schema, hash comparison, and input-preserving fixture capture tooling are implemented; capture refuses output aliases of manifests, evidence files, and source fixtures. Native Apex v5 fixtures, parser/import/export behavior, and independent fidelity certification remain open."
     },
     {
       "id": "APX-NATIVE-AX7-001",
@@ -1757,10 +1767,12 @@
       "blocker": "Representative native Apex v7 files and format evidence are required; PDF tracing cannot satisfy this row.",
       "implementation_sources": [
         "scripts/apex_compatibility_matrix.py",
+        "scripts/apex_fixture_evidence.py",
         "tests/test_apex_compatibility_matrix.py",
+        "tests/test_apex_fixture_evidence.py",
         "docs/apex-compatibility-matrix.md"
       ],
-      "implementation_note": "Evidence schema and hash comparison tooling are implemented; native Apex v7 fixtures, parser/import/export behavior, and independent fidelity certification remain open."
+      "implementation_note": "Evidence schema, hash comparison, and input-preserving fixture capture tooling are implemented; capture refuses output aliases of manifests, evidence files, and source fixtures. Native Apex v7 fixtures, parser/import/export behavior, and independent fidelity certification remain open."
     },
     {
       "id": "APX-NATIVE-LEGACY-001",
@@ -1877,7 +1889,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Hosted door/window cuts now use a single dimension editor with live unrolled elevation preview, complete host-opening semantic validation, revision/context fencing, and one-command undo/redo. Optional versioned handing and swing now drive creation, inspector edits, analytic plan leaf/arc geometry, and schedule cells, with save/reopen and geometry tests. Newly authored openings receive a strict version-1 opening_assembly profile; the shared OCCT kernel derives frame, leaf/sash, and glazing solids under the stable opening ID while preserving the authoritative wall cut, dimensions, and handedness. Legacy openings remain valid without the optional profile. The opening inspector now edits frame width/depth, panel or sash depth, glazing depth, and signed inset through one revision-checked command with preview and undo/redo coverage. Native DXF/IFC assembly export and complete export acceptance remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Hosted door/window cuts now use a single dimension editor with live unrolled elevation preview, complete host-opening semantic validation, revision/context fencing, and one-command undo/redo. Optional versioned handing and swing now drive creation, inspector edits, analytic plan leaf/arc geometry, and schedule cells, with save/reopen and geometry tests. Newly authored openings receive a strict version-1 opening_assembly profile; the shared OCCT kernel derives frame, leaf/sash, and glazing solids under the stable opening ID while preserving the authoritative wall cut, dimensions, and handedness. Legacy openings remain valid without the optional profile. The opening inspector now edits frame width/depth, panel or sash depth, glazing depth, and signed inset through one revision-checked command with preview and undo/redo coverage. Scaling a host wall scales its authoritative opening and assembly dimensions atomically, including negative inset, with OCCT volume, preview, undo/redo, and save/reopen checks. Native DXF/IFC assembly export and complete export acceptance remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "ARCH-MOD-003",
@@ -2301,7 +2313,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Architectural create/select/property-edit/transform/duplicate/delete intents are translated into one revision-fenced atomic Document command with preview, undo, and save/reopen coverage. Room volumes now support validated creation plus explicit height/elevation edits through the public workflow and command palette, while keeping their analytical boundary and native/projection state linked. Recognized building entities receive type-aware canonical transforms, and wall duplication/deletion carries or removes hosted openings with deterministic remapping. The Windows editor exposes scale, rotation, XYZ translation, clone, and preview controls for recognized building objects. Complete type schemas, cross-view relationship propagation, and user-observed output remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Architectural create/select/property-edit/transform/duplicate/delete intents are translated into one revision-fenced atomic Document command with preview, undo, and save/reopen coverage. Room volumes now support validated creation plus explicit height/elevation edits through the public workflow and command palette, while keeping their analytical boundary and native/projection state linked. Recognized building entities receive type-aware canonical transforms; wall scaling carries hosted opening and assembly geometry, and wall duplication/deletion carries or removes hosted openings with deterministic remapping. The Windows editor exposes scale, rotation, XYZ translation, clone, and preview controls for recognized building objects. Complete type schemas, cross-view relationship propagation, and user-observed output remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "ARCH-REL-001",
@@ -3144,12 +3156,15 @@
       "blocker": null,
       "implementation_sources": [
         "scripts/stage_portable_package.py",
+        "scripts/install-offline-bundle.ps1",
         "scripts/offline_static_audit.py",
         "tests/test_stage_portable_package.py",
+        "tests/test_stage_offline_bundle.py",
         "tests/test_offline_static_audit.py",
-        "docs/dependencies/portable-package.md"
+        "docs/dependencies/portable-package.md",
+        "docs/dependencies/offline-installer.md"
       ],
-      "implementation_note": "Portable staging now verifies explicit inventory hashes, allowlists, path safety, and emits an integrity manifest; the offline bundle installer provides guarded transactional Install, Repair, and Uninstall actions with fail-closed marker/hash checks. Signing, clean-machine/offline qualification, and package certification remain open."
+      "implementation_note": "Portable staging verifies explicit inventory hashes, allowlists, path safety, and emits an integrity manifest. The offline bundle installer provides guarded transactional Install, Repair, and Uninstall actions, binds lifecycle actions to the exact carried manifest, refuses unowned content, and never executes a verifier from the installed tree. Signing, clean-machine/offline qualification, and package certification remain open."
     },
     {
       "id": "OPS-PACK-002",

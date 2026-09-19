@@ -95,12 +95,26 @@ pwsh -NoProfile -NonInteractive `
   -ManifestName runtime-manifest.json
 ```
 
-Repair and uninstall are guarded operations against that same runtime marker.
+Repair and uninstall require the installed runtime manifest to match the
+carried bundle byte-for-byte. Retain the original bundle: these actions are
+for that exact package, not an upgrade or a migration from another version.
+Both actions refuse unowned files or directories before changing the target.
+Move user projects, settings, and other added content outside the installation
+directory first; runtime verification alone deliberately permits added files
+and therefore cannot authorize whole-directory removal.
+Deletion is limited to manifest-owned files and then-empty directories. A file
+that appears after validation is preserved: uninstall leaves the containing
+directory and reports failure, while repair restores the original runtime or
+retains the backup for recovery instead of recursively deleting it.
+
 Repair requires an existing destination containing the expected runtime
 manifest and verifier, then replaces the payload through the same staged,
-verified publication path. It does not trust the damaged installed payload.
-Uninstall requires the marker and a passing installed-byte verification before
-removing the directory; an unmarked or tampered directory is left untouched.
+verified publication path. It can restore damaged payload and verifier bytes.
+Uninstall requires a matching verifier and a passing installed-byte check
+before removing the directory. That check executes the verified bundle's
+verifier, including staging and post-publication checks, never the potentially
+damaged installed script. An unmarked,
+unowned, or tampered target is left untouched on rejection.
 Both operations reject bundle-child paths, reparse-point chains, and unsafe
 destinations, and neither action contacts a network service:
 

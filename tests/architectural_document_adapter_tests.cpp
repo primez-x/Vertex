@@ -262,6 +262,75 @@ void test_shared_solid_transforms_update_canonical_geometry() {
             "room transform must update footprint, height, elevation, and solid volume");
 }
 
+void test_hosted_assembly_scales_with_wall() {
+    using namespace sketch;
+    for (const auto kind : {OpeningAssemblyKind::door, OpeningAssemblyKind::window}) {
+        for (const double scale : {0.5, 1.0, 2.0}) {
+            auto wall = Entity::create("wall", {
+                {"baseline", segment_json(0.0, 0.0, 4.0, 0.0)},
+                {"thickness_m", 0.2}, {"height_m", 3.0}, {"elevation_m", 0.5}});
+            wall.id = "assembly-host";
+            auto assembly = default_opening_assembly(kind);
+            assembly.inset_m = -0.02;
+            auto opening = Entity::create("opening", {
+                {"wall_id", wall.id}, {"opening_kind", opening_assembly_kind_name(kind)},
+                {"offset_m", 1.0}, {"width_m", 0.9}, {"sill_m", 0.1}, {"height_m", 2.0},
+                {"opening_assembly", opening_assembly_json(assembly)}, {"mark", "preserved"}});
+            opening.id = "assembly-opening";
+            auto document = Document::create({wall, opening});
+            const auto original = document.snapshot();
+            ArchitecturalOperation excessive{ArchitecturalAction::transform, wall.id};
+            excessive.transform = ArchitecturalTransform{0.0, 0.0, 0.0, 0.0, 200.0};
+            const auto invalid_transaction = ArchitecturalTransaction::create(
+                "excessive-assembly", "r0", {wall.id, opening.id}, {excessive}, "Invalid assembly scale");
+            rejects([&] { (void)preview_architectural_transaction(original, invalid_transaction); });
+            rejects([&] { apply_architectural_transaction(document, invalid_transaction, document.revision()); });
+            require(document.revision() == original.revision() &&
+                        document.snapshot().entities() == original.entities(),
+                    "an out-of-range assembly scale must reject without partial host or opening edits");
+            Wall before;
+            std::string error;
+            require(read_document_wall(wall, {&opening}, before, error), "assembly host decode");
+            const auto before_volume = solid_volume(make_opening_assembly(
+                before, before.openings.front(), assembly));
+            ArchitecturalOperation transform{ArchitecturalAction::transform, wall.id};
+            transform.transform = ArchitecturalTransform{1.0, 2.0, 0.5, 0.25, scale};
+            const auto transaction = ArchitecturalTransaction::create(
+                "scale-assembly", "r0", {wall.id, opening.id}, {transform}, "Scale assembly host");
+            const auto preview = preview_architectural_transaction(original, transaction);
+            const auto& result = preview.entities().at(opening.id);
+            const auto scaled = parse_opening_assembly(result.properties.at("opening_assembly"));
+            require(scaled.kind == kind &&
+                        std::abs(scaled.frame_width_m - assembly.frame_width_m * scale) < 1e-10 &&
+                        std::abs(scaled.frame_depth_m - assembly.frame_depth_m * scale) < 1e-10 &&
+                        std::abs(scaled.panel_thickness_m - assembly.panel_thickness_m * scale) < 1e-10 &&
+                        std::abs(scaled.glazing_thickness_m - assembly.glazing_thickness_m * scale) < 1e-10 &&
+                        std::abs(scaled.inset_m - assembly.inset_m * scale) < 1e-10,
+                    "hosted assembly dimensions must scale with the wall");
+            Wall after;
+            require(read_document_wall(preview.entities().at(wall.id), {&result}, after, error),
+                    "scaled assembly host decode");
+            require(std::abs(solid_volume(make_opening_assembly(after, after.openings.front(), scaled)) -
+                             before_volume * scale * scale * scale) < 1e-8,
+                    "hosted assembly solid volume must scale cubically");
+            require(result.properties.at("mark") == "preserved" &&
+                        document.snapshot().entities() == original.entities(),
+                    "assembly preview preserves metadata and the source");
+            apply_architectural_transaction(document, transaction, document.revision());
+            require(document.snapshot().entities() == preview.entities(), "assembly scale commits preview");
+            document.undo(document.revision());
+            require(document.snapshot().entities() == original.entities(), "assembly scale undo");
+            document.redo(document.revision());
+            require(document.snapshot().entities() == preview.entities(), "assembly scale redo");
+            const auto path = std::filesystem::temp_directory_path() / "sketch-scaled-opening.bldproj";
+            (void)ProjectStore::save(path, document.snapshot());
+            require(ProjectStore::load(path).document.snapshot().entities() == preview.entities(),
+                    "scaled opening assembly survives save/reopen");
+            std::filesystem::remove(path);
+        }
+    }
+}
+
 void test_connected_stair_transform_preserves_links_and_rejects_scale() {
     using namespace sketch;
     auto graph = Entity::create("vertical_levels", {
@@ -341,6 +410,7 @@ int main() {
         test_building_transform_updates_canonical_geometry();
         test_railing_transform_updates_canonical_geometry();
         test_shared_solid_transforms_update_canonical_geometry();
+        test_hosted_assembly_scales_with_wall();
         test_connected_stair_transform_preserves_links_and_rejects_scale();
         test_wall_duplicate_and_delete_manage_hosted_openings();
         using namespace sketch;

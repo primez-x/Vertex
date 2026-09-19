@@ -279,6 +279,12 @@ Entity transform_wall_entity(EntityState& entities, const Entity& source,
     wall.elevation = wall.elevation * transform.scale + transform.z;
     if (wall.slope_rise.has_value()) *wall.slope_rise *= transform.scale;
     for (auto& layer : wall.layers) layer.thickness *= transform.scale;
+    for (auto& opening : wall.openings) {
+        opening.offset *= transform.scale;
+        opening.width *= transform.scale;
+        opening.sill *= transform.scale;
+        opening.height *= transform.scale;
+    }
     validate_wall_semantics(wall);
 
     Entity result = source;
@@ -307,6 +313,15 @@ Entity transform_wall_entity(EntityState& entities, const Entity& source,
         scale_property(opening.properties, "width_m", "width", transform.scale);
         scale_property(opening.properties, "sill_m", "sill", transform.scale);
         scale_property(opening.properties, "height_m", "height", transform.scale);
+        if (opening.properties.contains("opening_assembly")) {
+            auto assembly = parse_opening_assembly(opening.properties.at("opening_assembly"));
+            assembly.frame_width_m *= transform.scale;
+            assembly.frame_depth_m *= transform.scale;
+            assembly.panel_thickness_m *= transform.scale;
+            assembly.glazing_thickness_m *= transform.scale;
+            assembly.inset_m *= transform.scale;
+            opening.properties["opening_assembly"] = opening_assembly_json(assembly);
+        }
     }
     return result;
 }

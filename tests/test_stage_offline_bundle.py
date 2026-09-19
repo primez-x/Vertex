@@ -479,6 +479,88 @@ class StageOfflineBundleTests(unittest.TestCase):
         self.assertIn("Move-Item -LiteralPath $stagingRoot", installer)
         self.assertIn("$backupRoot", installer)
 
+    def lifecycle_fixture(self):
+        pwsh = shutil.which("pwsh")
+        if pwsh is None:
+            self.skipTest("PowerShell is unavailable")
+        fixture = self.fixture()
+        self.addCleanup(fixture[0].cleanup)
+        _, root, inventory, source_kit, allowlist, *_ = fixture
+        stage.stage_bundle(inventory, allowlist, source_kit, root, root / "out", "lifecycle")
+        bundle = root / "out" / "lifecycle"
+        target = root / "installed"
+
+        def run(action):
+            return subprocess.run(
+                [pwsh, "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+                 str(bundle / "install-offline-bundle.ps1"), "-InstallRoot", str(target),
+                 "-Action", action], capture_output=True, text=True, check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+
+        installed = run("Install")
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        return bundle, target, run
+
+    def test_lifecycle_rejects_unowned_files_without_losing_user_data(self):
+        for action, relative in ((a, p) for a in ("Repair", "Uninstall")
+                                 for p in ("projects/valuable.bldproj", "bin/valuable.bldproj")):
+            with self.subTest(action=action, path=relative):
+                _, target, run = self.lifecycle_fixture()
+                project = target / relative
+                project.parent.mkdir(exist_ok=True)
+                project.write_bytes(b"user project")
+                before = {p.relative_to(target): p.read_bytes()
+                          for p in target.rglob("*") if p.is_file()}
+                rejected = run(action)
+                self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+                self.assertIn("unowned", rejected.stderr)
+                self.assertEqual(before, {p.relative_to(target): p.read_bytes()
+                                         for p in target.rglob("*") if p.is_file()})
+
+    def test_lifecycle_rejects_a_modified_ownership_manifest(self):
+        for action in ("Repair", "Uninstall"):
+            with self.subTest(action=action):
+                _, target, run = self.lifecycle_fixture()
+                marker = target / "runtime-manifest.json"
+                manifest = json.loads(marker.read_text(encoding="utf-8"))
+                manifest["files"] = manifest["files"][:1]
+                write_json(marker, manifest)
+                before = marker.read_bytes()
+                rejected = run(action)
+                self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+                self.assertIn("manifest does not match", rejected.stderr)
+                self.assertEqual(marker.read_bytes(), before)
+
+    def test_uninstall_never_executes_the_installed_verifier(self):
+        _, target, run = self.lifecycle_fixture()
+        sentinel = target.parent / "executed.txt"
+        (target / "verify-offline-bundle.ps1").write_text(
+            "[IO.File]::WriteAllText((Join-Path (Split-Path $PSScriptRoot -Parent) "
+            "'executed.txt'), 'executed')\nexit 0\n", encoding="utf-8")
+        (target / "bin" / "property-studio.exe").write_bytes(b"damaged")
+        rejected = run("Uninstall")
+        self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+        self.assertFalse(sentinel.exists())
+        self.assertTrue(target.exists())
+        repaired = run("Repair")
+        self.assertEqual(repaired.returncode, 0, repaired.stderr)
+        self.assertFalse(sentinel.exists())
+        removed = run("Uninstall")
+        self.assertEqual(removed.returncode, 0, removed.stderr)
+        self.assertFalse(target.exists())
+
+    def test_lifecycle_preserves_unowned_empty_directories(self):
+        _, target, run = self.lifecycle_fixture()
+        empty = target / "user-created-empty-directory"
+        empty.mkdir()
+        for action in ("Repair", "Uninstall"):
+            with self.subTest(action=action):
+                rejected = run(action)
+                self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+                self.assertIn("unowned", rejected.stderr)
+                self.assertTrue(empty.is_dir())
+
     def test_strict_bundle_verifier_rejects_unlisted_files(self):
         fixture = self.fixture()
         self.addCleanup(fixture[0].cleanup)

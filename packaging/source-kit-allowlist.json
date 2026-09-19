@@ -55,6 +55,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/appraisal-native-transport.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/architectural-projections.md"
     },
     {
@@ -1223,6 +1227,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/windows_appraisal_boundary.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/windows_import_worker.hpp"
     },
     {
@@ -1804,6 +1812,10 @@
     {
       "category": "source",
       "path": "src/core/wall_semantics.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/windows_appraisal_boundary.cpp"
     },
     {
       "category": "source",
@@ -2536,6 +2548,14 @@
     {
       "category": "source",
       "path": "tests/wall_semantics_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/windows_appraisal_boundary_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/windows_appraisal_fixture.cpp"
     },
     {
       "category": "source",

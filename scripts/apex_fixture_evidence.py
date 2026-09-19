@@ -153,6 +153,28 @@ def file_sha256(path):
     return digest.hexdigest()
 
 
+def reject_output_input_collision(output, manifest_path, manifest, *, root):
+    """Refuse to overwrite any input, including an existing hard-link alias."""
+    output = output.resolve()
+    inputs = [manifest_path.resolve()]
+    for ref in manifest.get("evidence_refs", []):
+        if isinstance(ref, Mapping) and ref.get("kind") == "file":
+            inputs.append(safe_path(ref.get("value"), root=root))
+    for fixture in manifest.get("files", []):
+        if isinstance(fixture, Mapping) and "path" in fixture:
+            inputs.append(safe_path(str(fixture["path"]), root=root))
+
+    for input_path in inputs:
+        same_identity = output == input_path.resolve()
+        if not same_identity and output.exists() and input_path.exists():
+            try:
+                same_identity = output.samefile(input_path)
+            except OSError as error:
+                raise ValueError(f"Could not verify output identity: {output}") from error
+        if same_identity:
+            raise ValueError(f"Output path collides with input: {input_path}")
+
+
 def validate_and_build(manifest, *, root):
     if not isinstance(manifest, Mapping):
         raise ValueError("Manifest must be an object")
@@ -232,6 +254,8 @@ def main(argv=None):
     root = args.root.resolve()
     try:
         manifest = load_json_no_duplicates(args.manifest)
+        if args.output:
+            reject_output_input_collision(args.output, args.manifest, manifest, root=root)
         report = validate_and_build(manifest, root=root)
     except (ValueError, OSError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
@@ -239,7 +263,15 @@ def main(argv=None):
 
     payload = json.dumps(report, indent=None if args.compact else 2)
     if args.output:
-        args.output.write_text(payload + "\n", encoding="utf-8")
+        try:
+            # Exclusive creation closes the interval between the identity check
+            # and publication: an object introduced meanwhile is never opened
+            # with truncation semantics.
+            with args.output.open("x", encoding="utf-8") as destination:
+                destination.write(payload + "\n")
+        except OSError as error:
+            print(f"ERROR: Could not exclusively create output: {error}", file=sys.stderr)
+            return 1
     else:
         print(payload)
     return 0
