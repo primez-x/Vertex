@@ -356,7 +356,7 @@ void test_effective_cursor_matches_click() {
         QMouseEvent press(QEvent::MouseButtonPress, position, position, Qt::LeftButton,
                           Qt::LeftButton, Qt::NoModifier);
         QApplication::sendEvent(&canvas, &press);
-        require(!placed, "point authoring must wait for release so a drag can draw a segment");
+        require(!placed, "point authoring must wait for release so the same press can become navigation");
         QMouseEvent release(QEvent::MouseButtonRelease, position, position, Qt::LeftButton,
                             Qt::NoButton, Qt::NoModifier);
         QApplication::sendEvent(&canvas, &release);
@@ -1120,6 +1120,22 @@ void test_mouse_gesture_contract() {
     mouse(QEvent::MouseMove, {400,260}, Qt::NoButton, Qt::RightButton);
     mouse(QEvent::MouseButtonRelease, {360,220}, Qt::RightButton, Qt::NoButton);
     require(rights == 1 && finishes == 0 && points == 0, "right drag returning to origin must not click");
+
+    BoundaryDraftPreview closable;
+    closable.anchor = Vec2{0.0, 0.0};
+    closable.segments = {
+        Segment{{0.0, 0.0}, {2.0, 0.0}, 0.0},
+        Segment{{2.0, 0.0}, {2.0, 2.0}, 0.0},
+        Segment{{2.0, 2.0}, {0.0, 2.0}, 0.0},
+    };
+    closable.can_close_on_anchor = true;
+    canvas.setBoundaryDraftPreview(closable);
+    mouse(QEvent::MouseButtonPress, {320,240}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, {320,240}, Qt::LeftButton, Qt::NoButton);
+    require(finishes == 1 && points == 0,
+            "clicking the highlighted first node must close instead of adding another node");
+    canvas.setBoundaryDraftPreview(std::nullopt);
+
     for (auto tool : {CanvasTool::boundary, CanvasTool::select}) {
         canvas.setTool(tool);
         mouse(QEvent::MouseButtonPress, {320,240}, Qt::LeftButton, Qt::LeftButton, Qt::ShiftModifier);
@@ -1127,7 +1143,8 @@ void test_mouse_gesture_contract() {
         mouse(QEvent::MouseButtonDblClick, {320,240}, Qt::LeftButton, Qt::LeftButton, Qt::ShiftModifier);
         mouse(QEvent::MouseButtonRelease, {320,240}, Qt::LeftButton, Qt::NoButton, Qt::ShiftModifier);
     }
-    require(points == 1 && selections == 1, "double click must not duplicate authoring or toggle selection twice");
+    require(points == 2 && selections == 0,
+            "double click must not duplicate either boundary-mode or unified empty-canvas authoring");
     const int before = selections;
     mouse(QEvent::MouseButtonPress, {220,220}, Qt::LeftButton, Qt::LeftButton,
           Qt::ControlModifier);
@@ -1162,15 +1179,17 @@ void test_mouse_gesture_contract() {
     canvas.setTool(CanvasTool::select);
     canvas.setSnapEnabled(false);
     canvas.fitView();
-    bool selection_saw_release_cursor = false;
-    canvas.setEntitySelectionClicked([&](QString, bool) {
-        selection_saw_release_cursor = true;
+    bool point_saw_release_cursor = false;
+    canvas.setPointClicked([&](Vec2 point) {
+        point_saw_release_cursor = true;
         right_point = cursor;
+        require(point.x == cursor.x && point.y == cursor.y,
+                "drawing node must use the effective release cursor");
     });
     mouse(QEvent::MouseButtonPress, {319,240}, Qt::LeftButton, Qt::LeftButton);
     mouse(QEvent::MouseButtonRelease, {321,240}, Qt::LeftButton, Qt::NoButton);
-    require(selection_saw_release_cursor && right_point.x == cursor.x && right_point.y == cursor.y,
-            "click callbacks must observe the effective release point when no move event occurs");
+    require(point_saw_release_cursor && right_point.x == cursor.x && right_point.y == cursor.y,
+            "empty-canvas drawing click must observe the effective release point when no move event occurs");
 }
 
 void test_direct_canvas_manipulation_contract() {
@@ -1187,11 +1206,10 @@ void test_direct_canvas_manipulation_contract() {
     int selection_clicks = 0;
     int marquee_requests = 0;
     int move_requests = 0;
-    int direct_draw_requests = 0;
+    int point_clicks = 0;
     QStringList moved_ids;
     Vec2 moved_delta{};
-    Vec2 direct_draw_start{};
-    Vec2 direct_draw_end{};
+    Vec2 clicked_point{};
     QString context_target;
     QString double_clicked;
     canvas.setEntitySelectionClicked([&](QString id, bool toggle) {
@@ -1218,10 +1236,9 @@ void test_direct_canvas_manipulation_contract() {
         moved_delta = delta;
         return true;
     });
-    canvas.setDirectDrawRequested([&](Vec2 start, Vec2 end) {
-        ++direct_draw_requests;
-        direct_draw_start = start;
-        direct_draw_end = end;
+    canvas.setPointClicked([&](Vec2 point) {
+        ++point_clicks;
+        clicked_point = point;
     });
     canvas.setRightClicked([&](Vec2, QString id) { context_target = std::move(id); });
     canvas.setEntityDoubleClicked([&](QString id) { double_clicked = std::move(id); });
@@ -1244,6 +1261,8 @@ void test_direct_canvas_manipulation_contract() {
     mouse(QEvent::MouseButtonRelease, center, Qt::LeftButton, Qt::NoButton);
     require(selected == QStringList{QStringLiteral("component")} && selection_clicks == 1,
             "plain click must select the component under the pointer");
+    require(canvas.cursor().shape() == Qt::SizeAllCursor,
+            "a selected object must advertise direct movement");
 
     mouse(QEvent::MouseButtonPress, center, Qt::LeftButton, Qt::LeftButton);
     mouse(QEvent::MouseMove, center + QPointF(80, -40), Qt::NoButton, Qt::LeftButton);
@@ -1256,19 +1275,26 @@ void test_direct_canvas_manipulation_contract() {
                 std::abs(moved_delta.y - 0.5) < 1e-9,
             "selected component drag must request one model-space translation");
 
-    const auto before_draw = canvas.viewCenter();
+    const auto before_click = canvas.viewCenter();
+    mouse(QEvent::MouseButtonPress, {100, 100}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, {100, 100}, Qt::LeftButton, Qt::NoButton);
+    require(point_clicks == 1 &&
+                std::abs(clicked_point.x + 2.75) < 1e-9 &&
+                std::abs(clicked_point.y - 1.75) < 1e-9 &&
+                canvas.viewCenter().x == before_click.x &&
+                canvas.viewCenter().y == before_click.y,
+            "plain empty-canvas click must place a drawing node without moving the view");
+
+    const auto before_pan = canvas.viewCenter();
     mouse(QEvent::MouseButtonPress, {100, 100}, Qt::LeftButton, Qt::LeftButton);
     mouse(QEvent::MouseMove, {140, 120}, Qt::NoButton, Qt::LeftButton);
     mouse(QEvent::MouseButtonRelease, {140, 120}, Qt::LeftButton, Qt::NoButton);
-    require(direct_draw_requests == 1 &&
-                std::abs(direct_draw_start.x + 2.75) < 1e-9 &&
-                std::abs(direct_draw_start.y - 1.75) < 1e-9 &&
-                std::abs(direct_draw_end.x + 2.25) < 1e-9 &&
-                std::abs(direct_draw_end.y - 1.5) < 1e-9 &&
-                canvas.viewCenter().x == before_draw.x &&
-                canvas.viewCenter().y == before_draw.y && move_requests == 1,
-            "plain drag beginning on empty canvas must draw without panning");
+    require(canvas.viewCenter().x < before_pan.x - 0.4 &&
+                canvas.viewCenter().y > before_pan.y + 0.2 &&
+                point_clicks == 1 && move_requests == 1,
+            "plain drag beginning on empty canvas must pan without placing a node");
 
+    const auto before_space_pan = canvas.viewCenter();
     QKeyEvent space_press(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
     QApplication::sendEvent(&canvas, &space_press);
     require(canvas.cursor().shape() == Qt::OpenHandCursor,
@@ -1282,10 +1308,10 @@ void test_direct_canvas_manipulation_contract() {
     QApplication::sendEvent(&canvas, &space_release);
     require(canvas.cursor().shape() == Qt::CrossCursor,
             "releasing Space over empty canvas must restore the drawing cursor");
-    require(canvas.viewCenter().x < before_draw.x - 0.4 &&
-                canvas.viewCenter().y > before_draw.y + 0.2 &&
-                direct_draw_requests == 1,
-            "Space-left-drag must pan without drawing");
+    require(canvas.viewCenter().x < before_space_pan.x - 0.4 &&
+                canvas.viewCenter().y > before_space_pan.y + 0.2 &&
+                point_clicks == 1,
+            "Space-left-drag must pan without placing a drawing node");
 
     canvas.fitView();
     mouse(QEvent::MouseButtonPress, center, Qt::LeftButton, Qt::LeftButton,
@@ -1294,6 +1320,17 @@ void test_direct_canvas_manipulation_contract() {
           Qt::ControlModifier);
     require(selected.isEmpty(), "Ctrl-click must toggle the object in the retained selection");
 
+    const auto before_unselected_pan = canvas.viewCenter();
+    mouse(QEvent::MouseButtonPress, center, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, center + QPointF(40, 20), Qt::NoButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, center + QPointF(40, 20),
+          Qt::LeftButton, Qt::NoButton);
+    require((canvas.viewCenter().x != before_unselected_pan.x ||
+             canvas.viewCenter().y != before_unselected_pan.y) &&
+                move_requests == 1 && selected.isEmpty(),
+            "dragging from an unselected object must pan instead of moving or selecting it");
+
+    canvas.fitView();
     mouse(QEvent::MouseButtonPress, {390, 210}, Qt::LeftButton, Qt::LeftButton,
           Qt::ControlModifier);
     mouse(QEvent::MouseMove, {250, 270}, Qt::NoButton, Qt::LeftButton,

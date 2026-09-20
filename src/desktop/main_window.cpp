@@ -14721,6 +14721,10 @@ public:
         }
         setTool(CanvasTool::select);
         if (m_tool != CanvasTool::select) return;
+        // Placement owns the next stationary click anywhere on the plan. Clear
+        // selection so a click over the previously selected object cannot be
+        // interpreted as the start of an object-move gesture.
+        (void)selectEntity({}, false);
         m_pending_symbol_id = id;
         m_pending_symbol_scale = 1.0;
         m_symbol_placement_document = m_document;
@@ -18184,11 +18188,6 @@ private:
         canvas->setEntitiesMoveRequested([this](QStringList ids, Vec2 delta) {
             return moveSelectionBy(ids, delta);
         });
-        canvas->setDirectDrawRequested([this, canvas](Vec2 start, Vec2 end) {
-            const auto* active = m_workspace == Workspace::measurement
-                                     ? m_measurementCanvas : m_architecturalCanvas;
-            if (canvas == active) onDirectDrawSegment(start, end);
-        });
         canvas->setCursorMoved([this, canvas](Vec2 point) {
             // Snap toggles update both canvases; only the active workspace
             // owns the shared authoring pointer and cursor status.
@@ -20649,9 +20648,6 @@ private:
             preview.anchor = chain.anchor;
             preview.can_close_on_anchor = state.phase == BoundaryAuthoringPhase::drawing &&
                 state.pen_state == BoundaryPenState::down && chain.segments.size() >= 2;
-            preview.can_continue_from_endpoint =
-                state.phase == BoundaryAuthoringPhase::drawing &&
-                state.pen_state == BoundaryPenState::down;
             preview.pen_position = chain.segments.empty() ? chain.anchor : chain.segments.back().segment.end;
             if (state.phase == BoundaryAuthoringPhase::drawing && state.pen_state == BoundaryPenState::down &&
                 state.pointer && (state.pointer->x != preview.pen_position->x || state.pointer->y != preview.pen_position->y))
@@ -20670,11 +20666,11 @@ private:
         case BoundaryAuthoringPhase::awaiting_classification:
             preview.instruction = mode + QStringLiteral("  •  Choose an area classification"); break;
         case BoundaryAuthoringPhase::awaiting_anchor:
-            preview.instruction = mode + QStringLiteral("  •  Drag to draw the first edge  •  Esc cancels"); break;
+            preview.instruction = mode + QStringLiteral("  •  Click to place the first node  •  Esc cancels"); break;
         case BoundaryAuthoringPhase::awaiting_dimension:
             preview.instruction = mode + QStringLiteral("  •  Click to place this edge's dimension  •  Ctrl+Z undoes"); break;
         case BoundaryAuthoringPhase::drawing:
-            preview.instruction = mode + QStringLiteral("  •  Drag from the current endpoint  •  Enter closes  •  Right-click for actions  •  D precise input"); break;
+            preview.instruction = mode + QStringLiteral("  •  Click to place each node  •  Click the first node or press Enter to close  •  D precise input"); break;
         case BoundaryAuthoringPhase::completed:
             preview.instruction = mode + QStringLiteral("  •  Enter defines and adds the area  •  Ctrl+Z revises it"); break;
         case BoundaryAuthoringPhase::cancelled: break;
@@ -20776,6 +20772,26 @@ private:
     }
 
     void onCanvasPoint(Vec2 point) {
+        if (!m_pending_symbol_id.isEmpty()) {
+            const auto symbol_id = m_pending_symbol_id;
+            const auto scale = m_pending_symbol_scale;
+            const bool same_document = m_symbol_placement_document == m_document;
+            cancelSymbolPlacement();
+            if (same_document) placeLibrarySymbol(symbol_id, scale, point);
+            return;
+        }
+        if (m_tool == CanvasTool::select) {
+            if (m_workspace == Workspace::measurement) {
+                if (!beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, {})) return;
+                (void)selectEntity({}, false);
+            } else {
+                setTool(CanvasTool::wall);
+                if (m_tool != CanvasTool::wall) return;
+                (void)selectEntity({}, false);
+            }
+            onCanvasPoint(point);
+            return;
+        }
         if (m_tool == CanvasTool::boundary) {
             if (!m_boundary_session) return;
             try {
@@ -20840,57 +20856,6 @@ private:
                 clearPreview();
                 setTool(CanvasTool::select);
             }
-        }
-    }
-
-    void onDirectDrawSegment(Vec2 start, Vec2 end) {
-        if (!m_pending_symbol_id.isEmpty()) {
-            cancelSymbolPlacement();
-            if (m_symbol_library_status)
-                m_symbol_library_status->setText(QStringLiteral("Component placement cancelled."));
-            return;
-        }
-        if (!m_boundary_session && m_workspace == Workspace::architectural) {
-            const auto id = createStraightWall(start, end, QStringLiteral("interior"));
-            if (!id.isEmpty()) {
-                m_tool = CanvasTool::select;
-                syncToolControls();
-                clearError();
-            }
-            return;
-        }
-        if (!m_boundary_session &&
-            !beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, {})) return;
-        if (!m_boundary_session) return;
-        try {
-            auto candidate = *m_boundary_session;
-            if (candidate.phase() == BoundaryAuthoringPhase::awaiting_anchor) {
-                (void)candidate.anchor(start);
-            } else if (candidate.phase() == BoundaryAuthoringPhase::drawing) {
-                const auto chain = candidate.active_chain();
-                if (!chain) throw std::invalid_argument("the active boundary has no drawing chain");
-                const auto expected = chain->segments.empty()
-                    ? chain->anchor : chain->segments.back().segment.end;
-                if (std::hypot(start.x - expected.x, start.y - expected.y) > 1e-7) {
-                    throw std::invalid_argument(
-                        "continue from the current endpoint, or finish or cancel the active boundary");
-                }
-            } else if (candidate.phase() == BoundaryAuthoringPhase::awaiting_dimension) {
-                throw std::invalid_argument("place the pending dimension before drawing the next segment");
-            } else {
-                throw std::invalid_argument("finish or cancel the active boundary before drawing again");
-            }
-            (void)candidate.add_line_to(end);
-            const auto chain = candidate.active_chain();
-            const bool closes = chain && chain->segments.size() >= 3 &&
-                chain->segments.back().segment.end.x == chain->anchor.x &&
-                chain->segments.back().segment.end.y == chain->anchor.y;
-            m_boundary_session = std::move(candidate);
-            clearError();
-            boundaryDraftChanged();
-            if (closes) finishTool();
-        } catch (const std::exception& error) {
-            setError(QStringLiteral("Direct draw: %1").arg(QString::fromUtf8(error.what())));
         }
     }
 

@@ -74,7 +74,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U008 — Use the unified canvas pointer**
-  - Expected: There are no Select, Draw First or Define First mode toggles. Click selects, dragging a selected object moves it, empty-canvas drag draws, Ctrl-drag selects a region, and middle-drag or Space-left-drag pans.
+  - Expected: There are no Select, Draw First or Define First mode toggles. Click an object to select it, click empty canvas to draw, drag inside a selected object to move it, drag elsewhere to pan, and Ctrl-drag to select a region.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -184,18 +184,18 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 
 ## Draw rooms and measured boundaries
 
-- [ ] **U029 — Draw a rectangular room using connected drags**
-  - Expected: Drag each edge from the current endpoint; releasing the final drag near the starting corner closes and retains the room.
+- [ ] **U029 — Draw a rectangular room using node clicks**
+  - Expected: Click the four corners in order, then click the first corner; the final click closes and retains the room.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U030 — Draw an irregular room with more than four corners**
-  - Expected: Every connected drag is retained and the final closed shape matches the drawn outline.
+  - Expected: Every clicked node is retained and the final closed shape matches the clicked outline.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U031 — Draw a triangle**
-  - Expected: Three connected edge drags can form a valid closed area.
+  - Expected: Three clicked corners and a final click on the first corner form a valid closed area.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -210,7 +210,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U034 — Approach the first corner while drawing**
-  - Expected: A clear closing snap target appears while the final edge is dragged toward the first corner.
+  - Expected: A clear closing snap target appears as the pointer approaches the first corner.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -796,7 +796,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 ## Navigation and input
 
 - [ ] **U147 — Pan with the mouse**
-  - Expected: Middle-drag and Space-left-drag move the view smoothly without creating or editing geometry; ordinary empty-canvas left-drag draws.
+  - Expected: Ordinary left-drag outside a selected object, middle-drag, and Space-left-drag move the view smoothly without creating or editing geometry.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -844,7 +844,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 ## Walls, doors and windows in 3D mode
 
 - [ ] **U156 — Draw a straight architectural wall**
-  - Expected: Dragging on empty Architectural plan canvas creates a wall with editable length, height and thickness in plan and 3D.
+  - Expected: Clicking the start and end points on empty Architectural plan canvas creates a wall with editable length, height and thickness in plan and 3D.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

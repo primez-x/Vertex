@@ -869,10 +869,6 @@ void PlanCanvas::setEntitiesMoveRequested(std::function<bool(QStringList, Vec2)>
     m_entities_move_requested = std::move(callback);
 }
 
-void PlanCanvas::setDirectDrawRequested(std::function<void(Vec2, Vec2)> callback) {
-    m_direct_draw_requested = std::move(callback);
-}
-
 void PlanCanvas::setSymbolDropped(std::function<void(QString, double, Vec2)> callback) {
     m_symbol_dropped = std::move(callback);
 }
@@ -1088,30 +1084,18 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
         m_selection_additive = true;
         return;
     }
-    if (m_tool == CanvasTool::select) {
-        m_left_start = position;
-        m_left_dragging = false;
-        m_pressed_entity = hitTest(position);
-        if (m_pressed_entity.isEmpty()) {
-            m_left_gesture = LeftGesture::direct_draw;
-            m_direct_draw_preview = std::make_pair(inputPoint(position), inputPoint(position));
-        } else {
-            m_left_gesture = LeftGesture::object_move;
-            const auto already_selected = selectedIds().contains(m_pressed_entity);
-            if (!already_selected) {
-                if (m_entity_selection_clicked)
-                    m_entity_selection_clicked(m_pressed_entity, false);
-                else if (m_entity_clicked)
-                    m_entity_clicked(m_pressed_entity);
-            }
-            m_move_ids = selectedIds();
-            if (m_move_ids.isEmpty()) m_move_ids = {m_pressed_entity};
-        }
+    m_left_start = position;
+    m_left_dragging = false;
+    m_pressed_entity = hitTest(position);
+    if (m_tool == CanvasTool::select && !m_pressed_entity.isEmpty() &&
+        selectedIds().contains(m_pressed_entity)) {
+        m_left_gesture = LeftGesture::object_move;
+        m_move_ids = selectedIds();
+        if (m_move_ids.isEmpty()) m_move_ids = {m_pressed_entity};
     } else {
-        m_left_start = position;
-        m_left_dragging = false;
-        m_left_gesture = LeftGesture::direct_draw;
-        m_direct_draw_preview = std::make_pair(inputPoint(position), inputPoint(position));
+        m_left_gesture = LeftGesture::canvas_pan;
+        m_pan_start = position;
+        m_pan_view_start = m_view_center;
     }
 }
 
@@ -1130,15 +1114,12 @@ void PlanCanvas::pointerMove(QPointF position) {
             m_selection_dragging = true;
         update();
     }
-    if (m_left_gesture == LeftGesture::direct_draw) {
+    if (m_left_gesture == LeftGesture::canvas_pan) {
         if (!m_left_dragging &&
             (position - m_left_start).manhattanLength() >= QApplication::startDragDistance()) {
             m_left_dragging = true;
-            setCursor(Qt::CrossCursor);
-        }
-        if (m_left_dragging && m_direct_draw_preview) {
-            m_direct_draw_preview->second = inputPoint(position);
-            update();
+            m_panning = true;
+            setCursor(Qt::ClosedHandCursor);
         }
     } else if (m_left_gesture == LeftGesture::object_move) {
         if (!m_left_dragging &&
@@ -1185,8 +1166,8 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button) {
              (position - (selection_start ? *selection_start : start)).manhattanLength() >=
                  QApplication::startDragDistance());
         const auto move_ids = m_move_ids;
+        const auto pressed_entity = m_pressed_entity;
         const auto delta = dragDelta(position);
-        const auto draw_preview = m_direct_draw_preview;
         const auto closing = closingAnchor(position);
         resetGesture();
         if (gesture == LeftGesture::marquee && selection_start) {
@@ -1197,17 +1178,16 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button) {
             } else if (m_entity_selection_clicked) {
                 m_entity_selection_clicked(hitTest(position), true);
             }
-        } else if (gesture == LeftGesture::direct_draw) {
-            if (dragging && draw_preview && m_direct_draw_requested) {
-                const auto start_point = draw_preview->first;
-                const auto end_point = inputPoint(position);
-                if (distance(start_point, end_point) > 1e-12)
-                    m_direct_draw_requested(start_point, end_point);
-            } else if (m_tool != CanvasTool::select) {
-                if (closing && m_finish_requested) m_finish_requested();
-                else if (m_point_clicked) m_point_clicked(inputPoint(position));
-            } else if (m_entity_selection_clicked) {
-                m_entity_selection_clicked({}, false);
+        } else if (gesture == LeftGesture::canvas_pan && !dragging) {
+            if (m_tool == CanvasTool::select && !pressed_entity.isEmpty()) {
+                if (m_entity_selection_clicked)
+                    m_entity_selection_clicked(pressed_entity, false);
+                else if (m_entity_clicked)
+                    m_entity_clicked(pressed_entity);
+            } else if (closing && m_finish_requested) {
+                m_finish_requested();
+            } else if (m_point_clicked) {
+                m_point_clicked(inputPoint(position));
             }
         } else if (gesture == LeftGesture::object_move && dragging &&
                    m_entities_move_requested &&
@@ -1231,12 +1211,13 @@ void PlanCanvas::resetGesture() {
     m_pressed_entity.clear();
     m_move_ids.clear();
     m_move_preview_delta.reset();
-    m_direct_draw_preview.reset();
     if (m_space_pan_armed) {
         setCursor(Qt::OpenHandCursor);
     } else if (m_tool == CanvasTool::select && m_last_mouse_position) {
-        setCursor(hitTest(*m_last_mouse_position).isEmpty() ? Qt::CrossCursor
-                                                           : Qt::ArrowCursor);
+        const auto target = hitTest(*m_last_mouse_position);
+        setCursor(target.isEmpty() ? Qt::CrossCursor
+                                   : selectedIds().contains(target) ? Qt::SizeAllCursor
+                                                                    : Qt::ArrowCursor);
     } else {
         setCursor(Qt::CrossCursor);
     }
@@ -1365,29 +1346,6 @@ void PlanCanvas::paintEvent(QPaintEvent* event) {
             painter.setPen(QPen(QColor(37, 99, 235), 1.5, Qt::DashLine));
             painter.setBrush(QColor(37, 99, 235, 38));
             painter.drawRect(QRectF(*m_selection_start, m_selection_end).normalized());
-        }
-        if (m_direct_draw_preview && m_left_dragging) {
-            const auto start = toScreen(m_direct_draw_preview->first, rect());
-            const auto end = toScreen(m_direct_draw_preview->second, rect());
-            painter.setRenderHint(QPainter::Antialiasing, true);
-            painter.setPen(QPen(QColor(37, 99, 235), 2.0));
-            painter.setBrush(QColor(255, 255, 255));
-            painter.drawLine(start, end);
-            painter.drawEllipse(start, 4.0, 4.0);
-            painter.drawEllipse(end, 4.0, 4.0);
-            const auto length = distance(m_direct_draw_preview->first,
-                                         m_direct_draw_preview->second);
-            const auto label = display_cursor_length(length, m_metric_units);
-            const auto midpoint = (start + end) * 0.5;
-            const auto bounds = QFontMetricsF(painter.font()).boundingRect(label)
-                                    .adjusted(-5.0, -3.0, 5.0, 3.0);
-            auto label_rect = bounds;
-            label_rect.moveCenter(midpoint + QPointF(0.0, -15.0));
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(QColor(255, 255, 255, 235));
-            painter.drawRoundedRect(label_rect, 4.0, 4.0);
-            painter.setPen(QColor(30, 64, 175));
-            painter.drawText(label_rect, Qt::AlignCenter, label);
         }
         if (m_last_mouse_position) {
             if (const auto anchor = closingAnchor(*m_last_mouse_position)) {
@@ -1560,13 +1518,6 @@ std::optional<Vec2> PlanCanvas::closingAnchor(QPointF point) const {
 
 Vec2 PlanCanvas::inputPoint(QPointF point) const {
     if (const auto anchor = closingAnchor(point)) return *anchor;
-    if (m_tool == CanvasTool::boundary && m_boundary_draft_preview &&
-        m_boundary_draft_preview->can_continue_from_endpoint &&
-        !m_boundary_draft_preview->segments.empty()) {
-        const auto endpoint = m_boundary_draft_preview->segments.back().end;
-        const auto offset = point - toScreen(endpoint, rect());
-        if (std::hypot(offset.x(), offset.y()) <= 12.0) return endpoint;
-    }
     return snapped(toModel(point, rect()));
 }
 
@@ -1750,7 +1701,10 @@ void PlanCanvas::updateCursor(QPointF point) {
     } else if (m_space_pan_armed && m_gesture_button == Qt::NoButton) {
         setCursor(Qt::OpenHandCursor);
     } else if (m_tool == CanvasTool::select && m_gesture_button == Qt::NoButton) {
-        setCursor(hitTest(point).isEmpty() ? Qt::CrossCursor : Qt::ArrowCursor);
+        const auto target = hitTest(point);
+        setCursor(target.isEmpty() ? Qt::CrossCursor
+                                   : selectedIds().contains(target) ? Qt::SizeAllCursor
+                                                                    : Qt::ArrowCursor);
     } else if (m_tool != CanvasTool::select && m_gesture_button == Qt::NoButton) {
         setCursor(Qt::CrossCursor);
     }

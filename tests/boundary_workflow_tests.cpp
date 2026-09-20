@@ -969,7 +969,7 @@ void test_off_grid_define_first_pending_dimension_preview_and_placement() {
             const auto placed = preview(*active_canvas);
             require(placed.segments.size() == 1 && placed.labels.size() == 1 &&
                         same_point(placed.labels.front().position, expected_placement) &&
-                        placed.instruction.contains(QStringLiteral("Drag from the current endpoint")),
+                        placed.instruction.contains(QStringLiteral("Click to place each node")),
                     "Define First manual placement must exactly retain the displayed label position");
             require_same_document(before, window.document().snapshot(),
                                   "Define First preview and dimension placement must not mutate the document");
@@ -1156,7 +1156,7 @@ void test_receipt_boundary_offset_copy() {
         "in-place rotation and dimensions must save, reopen, undo and redo exactly");
 }
 
-void test_unified_pointer_draws_without_tool_modes() {
+void test_unified_pointer_clicks_to_draw_and_drags_to_pan() {
     {
         MainWindow window;
         prepare_window(window);
@@ -1167,15 +1167,40 @@ void test_unified_pointer_draws_without_tool_modes() {
                 "the primary canvas toolbar must not expose competing Select, Draw First, or Define First modes");
 
         const auto before = window.document().snapshot();
-        send_drag(*measurement, {0.0, 0.0}, {2.0, 0.0});
+        send_click(*measurement, {0.0, 0.0});
+        const auto anchored = preview(*measurement);
+        require(anchored.anchor.has_value() && same_point(*anchored.anchor, {0.0, 0.0}) &&
+                    anchored.segments.empty(),
+                "the first empty-canvas click must start a measured boundary on the unified pointer surface");
+        send_click(*measurement, {2.0, 0.0});
         const auto draft = preview(*measurement);
-        require(draft.anchor.has_value() && same_point(*draft.anchor, {0.0, 0.0}) &&
-                    draft.segments.size() == 1 &&
+        require(draft.segments.size() == 1 &&
                     same_point(draft.segments.front().start, {0.0, 0.0}) &&
                     same_point(draft.segments.front().end, {2.0, 0.0}),
-                "empty-canvas left drag must start a measured boundary on the unified pointer surface");
+                "the next click must drop a node and retain the measured edge");
+        const auto before_pan = measurement->viewCenter();
+        send_drag(*measurement, {-2.0, -2.0}, {-1.0, -1.0});
+        const auto after_pan = measurement->viewCenter();
+        require(after_pan.x != before_pan.x && after_pan.y != before_pan.y &&
+                    preview(*measurement).segments.size() == 1,
+                "empty-canvas drag must pan without adding a boundary node");
         require_same_document(before, window.document().snapshot(),
-                              "an open drag-authored boundary must remain a transient draft");
+                              "an open click-authored boundary must remain a transient draft");
+
+        send_key(*measurement, Qt::Key_Escape);
+        require(!measurement->boundaryDraftPreview().has_value(),
+                "Escape must cancel the temporary unified-pointer draft");
+        require(window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first,
+                                            QStringLiteral("living")),
+                "close-node fixture must start with a known classification");
+        send_click(*measurement, {0.0, 0.0});
+        send_click(*measurement, {2.0, 0.0});
+        send_click(*measurement, {2.0, 2.0});
+        send_click(*measurement, {0.0, 2.0});
+        send_click(*measurement, {0.0, 0.0});
+        require(!measurement->boundaryDraftPreview().has_value() &&
+                    window.document().snapshot().revision() == before.revision() + 1,
+                "clicking the highlighted first node must close and commit the measured area");
     }
 
     {
@@ -1185,16 +1210,17 @@ void test_unified_pointer_draws_without_tool_modes() {
         process_events();
         auto* architectural = canvas(window, QStringLiteral("architecturalPlanCanvas"));
         const auto wall_before = window.document().snapshot();
-        send_drag(*architectural, {-2.0, -1.0}, {2.0, -1.0});
+        send_click(*architectural, {-2.0, -1.0});
+        send_click(*architectural, {2.0, -1.0});
         const auto wall_after = window.document().snapshot();
         require(wall_after.revision() == wall_before.revision() + 1,
-                "empty-canvas left drag in the architectural workspace must commit one wall command");
+                "two empty-canvas clicks in the architectural workspace must commit one wall command");
         const auto wall_count = static_cast<std::size_t>(std::count_if(
             wall_after.entities().begin(), wall_after.entities().end(), [](const auto& entry) {
                 return entry.second.type == "wall";
             }));
         require(wall_count == 1,
-                "architectural direct drawing must create a real wall rather than a canvas-only stroke");
+                "architectural click drawing must create a real wall rather than a canvas-only stroke");
     }
 }
 
@@ -1348,7 +1374,7 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
         install_test_font();
-        test_unified_pointer_draws_without_tool_modes();
+        test_unified_pointer_clicks_to_draw_and_drags_to_pan();
         test_draw_first_events_commit_receipts_labels_and_visibility();
         test_define_first_events_place_manual_dimensions_and_close();
         test_workspace_switch_preserves_draft_and_uses_architectural_events();

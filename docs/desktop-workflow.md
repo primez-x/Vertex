@@ -203,12 +203,14 @@ PDF geometry remain future work.
 ## Interaction and persistence
 
 The left navigator expands project, building, floor, and layer nodes. The compact
-canvas bar provides Object, Grid, Snap, Fit, and overview controls. Selection and
-drawing share one pointer surface: click an object to select it, drag a selected
-object to move it, and drag empty canvas to draw. In the Measurement workspace an
-empty drag creates or continues a measured-boundary segment; in the Architectural
-workspace it creates a straight wall. Ctrl-drag creates a selection marquee,
-while middle-drag or Space-left-drag pans. Enter closes an active boundary and
+canvas bar provides Object, Grid, Snap, Fit, and overview controls. Selection,
+drawing, and navigation share one pointer surface: click an object to select it,
+drag inside a selected object to move it, click empty canvas to start or continue
+drawing, and drag anywhere outside the selected object to pan. In the Measurement
+workspace each empty click places a measured-boundary node and clicking the first
+node closes the area. In the Architectural workspace two empty clicks create a
+straight wall. Ctrl-drag creates a selection marquee, while middle-drag and
+Space-left-drag also pan. Enter closes an active boundary and
 `D` opens distance/direction input such as `10 ft @ 90 deg`. **Draw curved wall**
 opens a compact endpoint and construction editor with sweep-angle, arc-length,
 and arc-height modes. Entries such as `90 deg`, `5 ft`, and `1 ft` are retained

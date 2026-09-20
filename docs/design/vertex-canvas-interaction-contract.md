@@ -15,10 +15,10 @@ classification and manual dimension placement before the outline is complete.
 | Gesture | Measurement plan | Architectural plan | 3D |
 |---|---|---|---|
 | Left click on object | Select the top visible hit | Select the top visible hit | Select the visible object |
-| Left click on empty canvas | Clear selection; during precise boundary entry, place the requested point | Clear selection | Clear selection |
-| Left drag from empty canvas | Draw a measured-boundary segment with a live length preview | Create a straight architectural wall with a live length preview | No model edit |
+| Left click on empty canvas | Start a measured boundary or place its next node; clicking the first node closes it | Start a wall or place its end point | Clear selection |
+| Left drag from empty canvas | Pan without placing a node | Pan without placing a wall point | No model edit |
 | Left drag from selected object | Move the selected object or compatible selected group in one undoable transaction | Move the selected object or compatible selected group in one undoable transaction | Reserved for an explicitly armed Move command |
-| Left drag from unselected object | Select and move that object in one gesture | Select and move that object in one gesture | Select only |
+| Left drag from unselected object | Pan; click first if the object should move | Pan; click first if the object should move | Select only |
 | Ctrl + left click | Toggle the hit object in the selection | Toggle the hit object in the selection | Reserved for later additive-selection support |
 | Ctrl + left drag | Add a directional marquee result to the selection | Add a directional marquee result to the selection | Pan |
 | Left-to-right Ctrl marquee | Add fully enclosed objects | Add fully enclosed objects | Planned |
@@ -53,8 +53,8 @@ presentation. A later mouse release cannot commit a cancelled move.
 - Every new symbol or label stores its owning layer ID and is listed beneath that layer.
 - Selected objects receive a blue contrast outline. A compact `Selected` or `N selected` badge reports selection without opening Properties.
 - Dragging a movable selection shows a transient preview; release creates one undoable command. An unsupported mixed group is rejected as a unit.
-- Empty-canvas drawing shows a blue segment, endpoint markers, and its live length before release.
-- A measured boundary continues only when the next drag starts at its current endpoint. Dragging back to the highlighted first anchor closes a valid outline.
+- After the first drawing click, the pending edge follows the pointer with its live length.
+- Each click places the next measured-boundary node. Clicking the highlighted first node closes a valid outline.
 - Component placement is a distinct pending state. Escape or the drawing context menu cancels it.
 - Wall previews follow the effective snapped pointer after the first endpoint.
 - Right click is evaluated on stationary release. Crossing the drag threshold prevents the menu.
@@ -84,7 +84,7 @@ presentation. A later mouse release cannot commit a cancelled move.
 ## Acceptance sequences
 
 Focused interaction checks cover click selection, object drag with one commit,
-empty-canvas direct drawing, Space and middle-button pan, Ctrl-click toggle, directional Ctrl marquee, mixed-button
+empty-canvas click drawing, plain-drag pan, Space and middle-button pan, Ctrl-click toggle, directional Ctrl marquee, mixed-button
 release, stationary right click versus right drag, double-click properties and authoring suppression,
 Escape and capture cancellation, explicit 3D Move exactly-once commit, selection
 visibility at zoom extremes, and exclusion of transient feedback from output.

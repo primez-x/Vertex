@@ -120,7 +120,6 @@ struct BoundaryDraftPreview {
     QString instruction;
     // Authoring owns phase/pen state; dimension placement must never close.
     bool can_close_on_anchor{false};
-    bool can_continue_from_endpoint{false};
 };
 
 class PlanCanvas final : public QWidget {
@@ -201,9 +200,6 @@ public:
     // Commits one model-space translation after the interactive preview ends.
     // Returning false rejects the preview without leaving canvas-only geometry.
     void setEntitiesMoveRequested(std::function<bool(QStringList, Vec2)> callback);
-    // Empty-canvas left drag on the unified pointer surface. The callback
-    // receives snapped model-space endpoints after the live segment preview.
-    void setDirectDrawRequested(std::function<void(Vec2, Vec2)> callback);
     void setSymbolDropped(std::function<void(QString, double, Vec2)> callback);
     void setCursorMoved(std::function<void(Vec2)> callback);
     // Emitted only on a stationary right-button release. The target is the
@@ -297,14 +293,13 @@ private:
     Vec2 m_view_center{0.0, 0.0};
     std::optional<QPointF> m_last_mouse_position;
     bool m_panning{false};
-    enum class LeftGesture { none, direct_draw, object_move, marquee, space_pan };
+    enum class LeftGesture { none, canvas_pan, object_move, marquee, space_pan };
     LeftGesture m_left_gesture{LeftGesture::none};
     QPointF m_left_start;
     bool m_left_dragging{false};
     QString m_pressed_entity;
     QStringList m_move_ids;
     std::optional<Vec2> m_move_preview_delta;
-    std::optional<std::pair<Vec2, Vec2>> m_direct_draw_preview;
     bool m_space_pan_armed{false};
     Qt::MouseButton m_gesture_button{Qt::NoButton};
     QPointF m_right_start;
@@ -326,7 +321,6 @@ private:
     std::function<void(QString, bool)> m_entity_selection_clicked;
     std::function<void(QStringList, bool)> m_entities_selected;
     std::function<bool(QStringList, Vec2)> m_entities_move_requested;
-    std::function<void(Vec2, Vec2)> m_direct_draw_requested;
     std::function<void(QString, double, Vec2)> m_symbol_dropped;
     std::function<void(Vec2)> m_cursor_moved;
     std::function<void(Vec2, QString)> m_right_clicked;
