@@ -21,6 +21,8 @@ REQUIRED_CATEGORIES = frozenset({
 })
 REQUIRED_REPRESENTATIVES = frozenset({"toilet", "sofa", "checkout-counter"})
 BED_REPRESENTATIVES = frozenset({"single-bed", "double-bed"})
+MINIMUM_DISTINCT_FAMILIES = 300
+MINIMUM_CATALOG_ENTRIES = 600
 
 
 def _number(value):
@@ -67,8 +69,8 @@ def validate_manifest(manifest):
     filtered_entry_count = manifest.get("filtered_entry_count", entry_count)
     if type(filtered_entry_count) is not int or filtered_entry_count != len(entries):
         errors.append("filtered_entry_count must equal the entries array length")
-    if len(entries) < 200:
-        errors.append("catalog must contain at least 200 entries")
+    if len(entries) < MINIMUM_CATALOG_ENTRIES:
+        errors.append(f"catalog must contain at least {MINIMUM_CATALOG_ENTRIES} entries")
 
     computed_categories = {}
     computed_families = {}
@@ -165,6 +167,9 @@ def validate_manifest(manifest):
         errors.append("families must contain unique ids sorted lexicographically")
     if type(manifest.get("family_count")) is not int or manifest["family_count"] != len(computed_families):
         errors.append("family_count must match the entries")
+    if len(computed_families) < MINIMUM_DISTINCT_FAMILIES:
+        errors.append(
+            f"catalog must contain at least {MINIMUM_DISTINCT_FAMILIES} distinct families")
     expected_families = [computed_families[key] for key in sorted(computed_families)]
     if declared_families != expected_families:
         errors.append("families must match entry family/category/variant counts")

@@ -121,9 +121,207 @@ std::vector<SymbolDefinition> default_symbol_catalog() {
         Family{"north-arrow","site",0.3,0.3,14}, Family{"tree","site",3.0,3.0,15},
         Family{"column-symbol","structural",0.3,0.3,16}, Family{"stair-symbol","structural",1.0,2.0,17},
         Family{"checkout-counter","commercial",1.8,0.7,18}, Family{"service-counter","commercial",2.4,0.8,18},
-        Family{"display-case","commercial",1.5,0.6,4}, Family{"pallet-rack","commercial",2.7,1.1,4}};
+        Family{"display-case","commercial",1.5,0.6,4}, Family{"pallet-rack","commercial",2.7,1.1,4},
+
+        // Expanded plan library. These are distinct real-world component
+        // families; only the original compact catalog above carries nine
+        // preset footprints. Expanded families ship at a standard footprint
+        // and remain continuously size-adjustable after placement.
+        Family{"loveseat","furniture",1.6,0.9,19}, Family{"sectional-sofa","furniture",2.8,2.0,19},
+        Family{"chaise-lounge","furniture",0.9,1.7,19}, Family{"recliner","furniture",0.9,1.0,19},
+        Family{"rocking-chair","furniture",0.75,0.9,20}, Family{"dining-chair","furniture",0.5,0.55,20},
+        Family{"office-chair","furniture",0.65,0.65,20}, Family{"task-chair","furniture",0.6,0.6,20},
+        Family{"bar-stool","furniture",0.45,0.45,20}, Family{"counter-stool","furniture",0.45,0.45,20},
+        Family{"ottoman","furniture",0.75,0.6,19}, Family{"pouf","furniture",0.55,0.55,19},
+        Family{"sofa-table","furniture",1.4,0.4,21}, Family{"console-table","furniture",1.2,0.4,21},
+        Family{"end-table","furniture",0.55,0.55,21}, Family{"round-dining-table","furniture",1.2,1.2,21},
+        Family{"square-dining-table","furniture",1.1,1.1,21}, Family{"oval-dining-table","furniture",1.8,1.0,21},
+        Family{"conference-table","furniture",3.0,1.2,37}, Family{"folding-table","furniture",1.8,0.75,21},
+        Family{"writing-desk","furniture",1.2,0.6,37}, Family{"executive-desk","furniture",1.8,0.9,37},
+        Family{"corner-desk","furniture",1.8,1.8,37}, Family{"computer-desk","furniture",1.4,0.7,37},
+        Family{"credenza","furniture",1.8,0.5,23}, Family{"dresser","furniture",1.5,0.5,23},
+        Family{"nightstand","furniture",0.55,0.45,23}, Family{"chest-of-drawers","furniture",0.9,0.5,23},
+        Family{"vanity-table","furniture",1.2,0.5,23}, Family{"media-console","furniture",1.8,0.45,23},
+        Family{"tv-stand","furniture",1.4,0.45,23}, Family{"piano","furniture",1.5,0.65,24},
+        Family{"grand-piano","furniture",1.5,1.8,24}, Family{"crib","furniture",0.75,1.35,22},
+        Family{"bunk-bed","furniture",1.0,2.0,22}, Family{"queen-bed","furniture",1.52,2.03,22},
+        Family{"king-bed","furniture",1.93,2.03,22}, Family{"murphy-bed","furniture",1.55,0.55,22},
+        Family{"daybed","furniture",1.0,2.0,22}, Family{"futon","furniture",1.9,0.9,19},
+
+        Family{"linen-cabinet","storage",0.6,0.45,23}, Family{"base-cabinet","storage",0.9,0.6,23},
+        Family{"wall-cabinet","storage",0.9,0.35,23}, Family{"tall-cabinet","storage",0.6,0.6,23},
+        Family{"corner-cabinet","storage",0.9,0.9,23}, Family{"pantry-cabinet","storage",0.75,0.6,23},
+        Family{"filing-cabinet","storage",0.5,0.65,23}, Family{"lateral-file","storage",0.9,0.5,23},
+        Family{"locker-single","storage",0.3,0.45,23}, Family{"locker-bank","storage",1.8,0.45,23},
+        Family{"coat-rack","storage",0.5,0.5,23}, Family{"shoe-rack","storage",1.0,0.35,23},
+        Family{"utility-shelving","storage",1.2,0.5,23}, Family{"closet-organizer","storage",1.8,0.55,23},
+        Family{"gun-safe","storage",0.8,0.65,23},
+
+        Family{"pedestal-sink","fixtures",0.55,0.5,26}, Family{"wall-hung-sink","fixtures",0.55,0.5,26},
+        Family{"vanity-sink","fixtures",0.9,0.55,26}, Family{"corner-sink","fixtures",0.65,0.65,26},
+        Family{"utility-sink","fixtures",0.65,0.6,26}, Family{"mop-sink","fixtures",0.75,0.75,26},
+        Family{"kitchen-island-sink","fixtures",0.85,0.55,26}, Family{"soaking-tub","fixtures",0.85,1.8,26},
+        Family{"corner-tub","fixtures",1.5,1.5,26}, Family{"whirlpool-tub","fixtures",1.0,1.9,26},
+        Family{"shower-tub-combo","fixtures",0.85,1.75,26}, Family{"neo-angle-shower","fixtures",1.0,1.0,26},
+        Family{"walk-in-shower","fixtures",1.5,1.0,26}, Family{"drinking-fountain","fixtures",0.45,0.45,26},
+        Family{"eyewash-station","fixtures",0.6,0.55,26}, Family{"laundry-tub","fixtures",0.65,0.6,26},
+        Family{"service-sink","fixtures",0.8,0.65,26}, Family{"wall-hung-toilet","fixtures",0.4,0.65,26},
+        Family{"tankless-toilet","fixtures",0.4,0.65,26}, Family{"baby-changing-station","fixtures",0.9,0.55,26},
+
+        Family{"cooktop","appliances",0.75,0.6,25}, Family{"wall-oven","appliances",0.75,0.65,25},
+        Family{"double-wall-oven","appliances",0.75,0.65,25}, Family{"microwave","appliances",0.75,0.45,25},
+        Family{"range-hood","appliances",0.9,0.5,25}, Family{"freezer","appliances",0.8,0.75,25},
+        Family{"undercounter-refrigerator","appliances",0.6,0.6,25}, Family{"wine-cooler","appliances",0.6,0.6,25},
+        Family{"ice-maker","appliances",0.45,0.6,25}, Family{"trash-compactor","appliances",0.4,0.6,25},
+        Family{"garbage-disposal","appliances",0.3,0.3,25}, Family{"beverage-center","appliances",0.9,0.6,25},
+        Family{"coffee-maker","appliances",0.35,0.45,25}, Family{"toaster-oven","appliances",0.45,0.4,25},
+        Family{"chest-freezer","appliances",1.0,0.75,25}, Family{"upright-freezer","appliances",0.8,0.75,25},
+        Family{"stack-washer-dryer","appliances",0.7,0.75,39}, Family{"laundry-center","appliances",0.75,0.8,39},
+        Family{"furnace","mechanical",0.9,0.8,27}, Family{"boiler","mechanical",0.9,0.9,27},
+        Family{"heat-pump","mechanical",1.0,0.45,27}, Family{"air-handler","mechanical",1.2,0.75,27},
+        Family{"condenser-unit","mechanical",1.0,1.0,27}, Family{"electrical-panel","electrical",0.45,0.15,28},
+
+        Family{"pendant-light","lighting",0.3,0.3,28}, Family{"chandelier","lighting",0.8,0.8,28},
+        Family{"track-light","lighting",1.2,0.15,28}, Family{"floor-lamp","lighting",0.45,0.45,28},
+        Family{"table-lamp","lighting",0.3,0.3,28}, Family{"strip-light","lighting",1.2,0.1,28},
+        Family{"emergency-light","lighting",0.45,0.15,28}, Family{"exit-sign","electrical",0.35,0.1,28},
+        Family{"smoke-detector","electrical",0.15,0.15,28}, Family{"carbon-monoxide-detector","electrical",0.15,0.15,28},
+        Family{"occupancy-sensor","electrical",0.12,0.12,28}, Family{"thermostat","electrical",0.12,0.04,28},
+        Family{"duplex-outlet","electrical",0.1,0.04,28}, Family{"quad-outlet","electrical",0.15,0.04,28},
+        Family{"floor-outlet","electrical",0.12,0.12,28}, Family{"data-outlet","electrical",0.1,0.04,28},
+        Family{"wall-switch","electrical",0.1,0.04,28}, Family{"dimmer-switch","electrical",0.1,0.04,28},
+        Family{"junction-box","electrical",0.15,0.15,28}, Family{"speaker-ceiling","electrical",0.2,0.2,28},
+        Family{"security-camera","electrical",0.25,0.15,28}, Family{"fire-alarm-pull","safety",0.12,0.05,35},
+        Family{"fire-alarm-horn","safety",0.2,0.08,35}, Family{"sprinkler-head","safety",0.12,0.12,35},
+        Family{"exhaust-fan","mechanical",0.35,0.35,27},
+
+        Family{"pocket-door","doors_windows",0.9,0.12,29}, Family{"bifold-door","doors_windows",0.9,0.12,29},
+        Family{"barn-door","doors_windows",1.0,0.12,29}, Family{"revolving-door","doors_windows",1.8,1.8,29},
+        Family{"overhead-door","doors_windows",2.7,0.2,29}, Family{"rolling-door","doors_windows",2.4,0.2,29},
+        Family{"storefront-door","doors_windows",0.9,0.12,29}, Family{"glass-door","doors_windows",0.9,0.12,29},
+        Family{"french-door","doors_windows",1.5,0.12,29}, Family{"dutch-door","doors_windows",0.9,0.12,29},
+        Family{"casement-window","doors_windows",1.2,0.15,29}, Family{"awning-window","doors_windows",1.0,0.15,29},
+        Family{"double-hung-window","doors_windows",1.0,0.15,29}, Family{"sliding-window","doors_windows",1.5,0.15,29},
+        Family{"fixed-window","doors_windows",1.2,0.15,29}, Family{"clerestory-window","doors_windows",1.5,0.15,29},
+        Family{"corner-window","doors_windows",1.8,0.15,29}, Family{"skylight","doors_windows",1.0,1.2,29},
+        Family{"storefront-window","doors_windows",2.4,0.15,29}, Family{"louver","doors_windows",0.9,0.15,29},
+
+        Family{"round-column","structural",0.4,0.4,30}, Family{"square-column","structural",0.4,0.4,30},
+        Family{"steel-column","structural",0.35,0.35,30}, Family{"pilaster","structural",0.5,0.25,30},
+        Family{"footing","structural",0.9,0.9,30}, Family{"pier","structural",0.5,0.5,30},
+        Family{"beam-symbol","structural",2.4,0.3,30}, Family{"joist-direction","structural",1.5,0.3,30},
+        Family{"truss-symbol","structural",3.0,0.4,30}, Family{"elevator","circulation",1.8,1.8,30},
+        Family{"escalator","circulation",1.2,4.5,30}, Family{"straight-stair","circulation",1.0,3.0,30},
+        Family{"l-stair","circulation",2.0,2.5,30}, Family{"u-stair","circulation",2.2,3.0,30},
+        Family{"spiral-stair","circulation",1.8,1.8,30}, Family{"ramp","circulation",1.2,4.0,30},
+        Family{"ladder","circulation",0.5,1.8,30}, Family{"guardrail","circulation",2.0,0.1,30},
+        Family{"handrail","circulation",2.0,0.08,30}, Family{"expansion-joint","structural",1.5,0.15,30},
+
+        Family{"deciduous-tree","site",4.0,4.0,31}, Family{"evergreen-tree","site",3.0,3.0,31},
+        Family{"shrub","site",1.0,1.0,31}, Family{"hedge","site",2.0,0.6,31},
+        Family{"planter","site",1.2,0.6,31}, Family{"bollard","site",0.2,0.2,31},
+        Family{"light-pole","site",0.3,0.3,31}, Family{"fire-hydrant","site",0.4,0.4,31},
+        Family{"mailbox","site",0.4,0.3,31}, Family{"dumpster","site",2.0,1.2,31},
+        Family{"trash-enclosure","site",3.0,2.0,31}, Family{"bike-rack","site",1.8,0.6,31},
+        Family{"picnic-table","site",1.8,1.5,31}, Family{"site-bench","site",1.8,0.6,31},
+        Family{"fountain","site",2.0,2.0,31}, Family{"swimming-pool","site",8.0,4.0,31},
+        Family{"hot-tub","site",2.2,2.2,31}, Family{"playground-set","site",5.0,4.0,31},
+        Family{"fence-gate","site",1.2,0.15,31}, Family{"property-monument","site",0.2,0.2,31},
+        Family{"compact-car","site",1.75,4.1,32}, Family{"sedan","site",1.8,4.7,32},
+        Family{"suv","site",1.95,4.9,32}, Family{"pickup-truck","site",2.0,5.4,32},
+        Family{"van","site",2.0,5.2,32}, Family{"delivery-truck","site",2.5,7.0,32},
+        Family{"motorcycle","site",0.8,2.1,32}, Family{"bicycle","site",0.65,1.8,32},
+        Family{"accessible-parking","accessibility",3.6,5.5,36}, Family{"loading-zone","site",3.0,8.0,32},
+
+        Family{"retail-shelf","commercial",1.2,0.45,33}, Family{"gondola-single","commercial",2.4,0.6,33},
+        Family{"gondola-double","commercial",2.4,1.2,33}, Family{"wall-display","commercial",1.8,0.45,33},
+        Family{"clothing-rack","commercial",1.2,0.6,33}, Family{"round-clothing-rack","commercial",1.2,1.2,33},
+        Family{"cash-wrap","commercial",2.0,0.75,33}, Family{"kiosk","commercial",2.0,2.0,33},
+        Family{"shopping-cart","commercial",0.65,1.0,33}, Family{"display-table","commercial",1.8,0.9,33},
+        Family{"refrigerated-case","commercial",2.4,0.9,33}, Family{"freezer-case","commercial",2.0,0.9,33},
+        Family{"produce-bin","commercial",1.2,0.9,33}, Family{"bakery-case","commercial",1.8,0.8,33},
+        Family{"deli-case","commercial",2.4,0.9,33}, Family{"pharmacy-counter","commercial",2.4,0.8,33},
+        Family{"reception-desk","commercial",2.4,1.2,37}, Family{"waiting-chair","commercial",0.65,0.65,20},
+        Family{"salon-chair","commercial",0.75,0.75,20}, Family{"barber-chair","commercial",0.75,0.75,20},
+        Family{"exam-table","commercial",0.75,1.9,34}, Family{"treatment-chair","commercial",0.8,1.8,34},
+        Family{"dental-chair","commercial",0.8,1.9,34}, Family{"hospital-bed","commercial",1.0,2.2,34},
+        Family{"restaurant-booth","commercial",1.8,1.5,34}, Family{"bar-counter","commercial",2.4,0.75,34},
+        Family{"hostess-stand","commercial",0.6,0.6,34}, Family{"commercial-range","commercial",1.2,0.9,34},
+        Family{"prep-table","commercial",1.8,0.75,34}, Family{"three-compartment-sink","commercial",2.1,0.75,34},
+
+        Family{"wheelchair-turning-circle","accessibility",1.5,1.5,36}, Family{"transfer-space","accessibility",0.9,1.5,36},
+        Family{"accessible-lavatory","accessibility",0.8,0.6,36}, Family{"accessible-bathtub","accessibility",0.9,1.8,36},
+        Family{"accessible-parking-sign","accessibility",0.3,0.15,36}, Family{"tactile-warning","accessibility",0.9,0.6,36},
+        Family{"platform-lift","accessibility",1.2,1.5,36}, Family{"stair-lift","accessibility",0.7,1.5,36},
+        Family{"fire-extinguisher","safety",0.25,0.15,35}, Family{"fire-hose-cabinet","safety",0.75,0.2,35},
+        Family{"fire-department-connection","safety",0.4,0.2,35}, Family{"first-aid-cabinet","safety",0.45,0.15,35},
+        Family{"defibrillator","safety",0.4,0.15,35}, Family{"emergency-shower","safety",0.8,0.8,35},
+        Family{"refuge-area","accessibility",1.5,1.5,36},
+
+        Family{"single-workstation","furniture",1.5,0.75,37}, Family{"double-workstation","furniture",1.8,1.5,37},
+        Family{"quad-workstation","furniture",3.0,3.0,37}, Family{"office-cubicle","furniture",2.0,2.0,37},
+        Family{"drafting-table","furniture",1.5,0.9,37}, Family{"printer-stand","furniture",0.75,0.65,23},
+        Family{"office-copier","office_equipment",0.7,0.75,24}, Family{"office-printer","office_equipment",0.5,0.45,24},
+        Family{"paper-shredder","office_equipment",0.4,0.4,24}, Family{"server-rack","office_equipment",0.6,1.1,40},
+        Family{"mail-sorter","office_equipment",1.2,0.45,23}, Family{"training-table","furniture",1.8,0.6,37},
+        Family{"lectern","furniture",0.6,0.5,24}, Family{"whiteboard","office_equipment",1.8,0.08,24},
+        Family{"floor-screen","furniture",1.8,0.15,23},
+
+        Family{"outdoor-grill","site",1.2,0.65,25}, Family{"patio-chair","site",0.65,0.65,20},
+        Family{"patio-table","site",1.2,1.2,21}, Family{"umbrella-table","site",1.5,1.5,21},
+        Family{"outdoor-lounge-chair","site",0.75,1.8,19}, Family{"fire-pit","site",1.2,1.2,31},
+        Family{"gazebo","site",3.5,3.5,31}, Family{"pergola","site",4.0,3.0,31},
+        Family{"basketball-hoop","site",1.2,1.5,38}, Family{"goal-post","site",2.0,0.4,38},
+
+        Family{"janitor-cart","commercial",0.65,1.2,33}, Family{"mop-bucket","commercial",0.5,0.65,39},
+        Family{"vending-machine","commercial",1.0,0.85,33}, Family{"atm","commercial",0.75,0.75,33},
+        Family{"turnstile","commercial",1.0,1.0,33}, Family{"queue-stanchion","commercial",0.35,0.35,33},
+        Family{"parcel-locker","commercial",1.8,0.6,33}, Family{"commercial-dishwasher","commercial",0.9,0.9,25},
+        Family{"walk-in-cooler","commercial",3.0,2.5,40}, Family{"walk-in-freezer","commercial",3.0,2.5,40},
+        Family{"pizza-oven","commercial",1.2,1.2,34}, Family{"deep-fryer","commercial",0.5,0.8,34},
+        Family{"commercial-griddle","commercial",0.9,0.8,34}, Family{"steam-table","commercial",1.8,0.75,34},
+        Family{"conveyor-counter","commercial",2.4,0.7,34},
+
+        Family{"pool-table","recreation",2.5,1.4,38}, Family{"ping-pong-table","recreation",2.74,1.525,38},
+        Family{"foosball-table","recreation",1.4,0.75,38}, Family{"treadmill","recreation",0.9,2.0,38},
+        Family{"elliptical-trainer","recreation",0.75,1.8,38}, Family{"exercise-bike","recreation",0.65,1.2,38},
+        Family{"weight-bench","recreation",0.65,1.5,38}, Family{"rowing-machine","recreation",0.65,2.4,38},
+        Family{"arcade-cabinet","recreation",0.75,0.9,38}, Family{"activity-table","recreation",1.2,0.8,38},
+
+        Family{"shower-base","fixtures",0.9,0.9,26}, Family{"fold-down-shower-seat","accessibility",0.6,0.45,36},
+        Family{"wall-mount-urinal","fixtures",0.4,0.4,26}, Family{"trough-urinal","fixtures",1.5,0.45,26},
+        Family{"hand-dryer","fixtures",0.3,0.2,26}, Family{"paper-towel-dispenser","fixtures",0.35,0.15,26},
+        Family{"soap-dispenser","fixtures",0.12,0.1,26}, Family{"toilet-paper-holder","fixtures",0.18,0.1,26},
+        Family{"floor-sink","plumbing",0.45,0.45,27}, Family{"grease-interceptor","plumbing",1.2,0.8,27},
+
+        Family{"wheelchair","medical",0.75,1.1,36}, Family{"gurney","medical",0.75,2.1,34},
+        Family{"stretcher","medical",0.65,2.0,34}, Family{"imaging-table","medical",0.8,2.2,34},
+        Family{"xray-equipment","medical",1.2,1.2,24}, Family{"lab-bench","medical",1.8,0.75,34},
+        Family{"fume-hood","medical",1.5,0.9,34}, Family{"nurses-station","medical",2.4,1.2,37},
+        Family{"privacy-screen","medical",1.8,0.15,23}, Family{"medical-cart","medical",0.65,0.9,33},
+
+        Family{"fireplace","furniture",1.5,0.5,24}, Family{"gas-fireplace","furniture",1.2,0.45,24},
+        Family{"wood-stove","furniture",0.75,0.75,24}, Family{"kitchen-island","furniture",1.8,0.9,21},
+        Family{"breakfast-bar","furniture",2.1,0.75,21}, Family{"kitchen-cart","furniture",0.9,0.55,21},
+        Family{"ironing-board","furniture",0.4,1.4,21}, Family{"sewing-table","furniture",1.2,0.6,21},
+        Family{"pet-bed","furniture",0.9,0.7,19}, Family{"dog-crate","furniture",0.9,0.6,23},
+        Family{"aquarium","furniture",1.2,0.45,24}, Family{"grandfather-clock","furniture",0.55,0.35,24},
+        Family{"floor-mirror","furniture",0.75,0.15,24}, Family{"wall-mirror","fixtures",0.9,0.08,26},
+        Family{"coat-closet","storage",1.2,0.6,23}, Family{"linen-closet","storage",0.9,0.55,23},
+        Family{"radiator","mechanical",1.2,0.2,27}, Family{"baseboard-heater","mechanical",1.5,0.15,27},
+        Family{"ceiling-register","mechanical",0.6,0.3,27}, Family{"floor-register","mechanical",0.4,0.2,27},
+        Family{"return-air-grille","mechanical",0.6,0.3,27}, Family{"mini-split","mechanical",0.9,0.25,27},
+        Family{"dish-rack","furniture",0.5,0.4,23}, Family{"recycling-bin","furniture",0.45,0.45,23},
+        Family{"trash-can","furniture",0.45,0.45,23}, Family{"broom-closet","storage",0.6,0.55,23},
+        Family{"vacuum-cleaner","appliances",0.35,0.45,25}, Family{"dehumidifier","mechanical",0.45,0.35,27},
+        Family{"humidifier","mechanical",0.4,0.35,27}, Family{"sump-pump","mechanical",0.35,0.35,27},
+        Family{"utility-pump","mechanical",0.5,0.4,27}, Family{"standby-generator","mechanical",1.2,0.75,27}};
     std::vector<SymbolDefinition> result;
-    for (const auto& f : families) for (int w = 0; w < 3; ++w) for (int d = 0; d < 3; ++d) {
+    for (const auto& f : families) {
+      const int preset_count = f.shape <= 18 ? 3 : 1;
+      for (int wi = 0; wi < preset_count; ++wi) for (int di = 0; di < preset_count; ++di) {
+        const int w = preset_count == 1 ? 1 : wi;
+        const int d = preset_count == 1 ? 1 : di;
         SymbolDefinition s;
         s.id = std::string(f.id) + "-w" + std::to_string(w+1) + "-d" + std::to_string(d+1);
         s.family = f.id; s.category = f.category;
@@ -182,7 +380,8 @@ std::vector<SymbolDefinition> default_symbol_catalog() {
         const std::string_view family_id = f.id;
         // Hard casework has a rectangular footprint. Soft furniture and bowls
         // supply their own silhouette, with no superimposed bounding rectangle.
-        if (f.shape == 4 || (f.shape == 6 && family_id != "water-heater") || f.shape >= 8)
+        if (f.shape == 4 || (f.shape == 6 && family_id != "water-heater") ||
+            (f.shape >= 8 && f.shape <= 18))
             rect(-1, -1, 1, 1);
         if (f.shape == 8) { line(-0.8,0,0.8,0); line(-0.8,-0.35,-0.8,0.35); line(0.8,-0.35,0.8,0.35); }
         if (f.shape == 9) { line(-0.7,0,0.7,0); line(0,-0.7,0,0.7); line(-0.5,-0.5,0.5,0.5); line(-0.5,0.5,0.5,-0.5); }
@@ -463,8 +662,145 @@ std::vector<SymbolDefinition> default_symbol_catalog() {
                 line(-0.82, y_value, 0.82, y_value);
             line(-0.72, -0.82, -0.72, 0.82);
             line(0.72, -0.82, 0.72, 0.82);
+        } else if (f.shape == 19) { // upholstered seating
+            rounded(-1, -1, 1, 1, 0.16, 0.18);
+            rounded(-0.9, -0.82, 0.9, 0.38, 0.12, 0.14);
+            rounded(-0.9, 0.48, 0.9, 0.9, 0.12, 0.1);
+            line(-0.72, -0.82, -0.72, 0.78);
+            line(0.72, -0.82, 0.72, 0.78);
+        } else if (f.shape == 20) { // chair or stool
+            rounded(-0.74, -0.68, 0.74, 0.46, 0.18, 0.18);
+            rounded(-0.72, 0.56, 0.72, 0.95, 0.16, 0.1);
+            line(-0.55, -0.68, -0.72, -0.96);
+            line(0.55, -0.68, 0.72, -0.96);
+            circle(0, -0.08, 0.12);
+        } else if (f.shape == 21) { // table
+            if (family_id.find("round") != std::string_view::npos ||
+                family_id.find("oval") != std::string_view::npos) {
+                ellipse(0, 0, 0.96, family_id.find("oval") != std::string_view::npos ? 0.72 : 0.96);
+                ellipse(0, 0, 0.84, family_id.find("oval") != std::string_view::npos ? 0.62 : 0.84);
+            } else {
+                rounded(-1, -1, 1, 1, 0.1, 0.1);
+                rounded(-0.88, -0.82, 0.88, 0.82, 0.08, 0.08);
+            }
+            line(0, -0.82, 0, 0.82);
+        } else if (f.shape == 22) { // bed or crib
+            rounded(-1, -1, 1, 1, 0.08, 0.06);
+            rounded(-0.9, -0.9, 0.9, 0.86, 0.12, 0.08);
+            line(-0.9, 0.92, 0.9, 0.92);
+            rounded(-0.72, 0.5, -0.04, 0.78, 0.1, 0.08);
+            rounded(0.04, 0.5, 0.72, 0.78, 0.1, 0.08);
+            line(-0.9, 0.34, 0.9, 0.34);
+        } else if (f.shape == 23) { // storage and casework
+            rounded(-1, -1, 1, 1, 0.04, 0.04);
+            line(0, -0.9, 0, 0.9);
+            for (const double level : {-0.55, 0.0, 0.55}) line(-0.9, level, 0.9, level);
+            circle(-0.12, 0.27, 0.045);
+            circle(0.12, 0.27, 0.045);
+        } else if (f.shape == 24) { // office or musical equipment
+            rounded(-1, -1, 1, 1, 0.12, 0.12);
+            rounded(-0.82, -0.7, 0.82, 0.48, 0.08, 0.08);
+            for (int key = -4; key <= 4; ++key)
+                line(key * 0.16, 0.48, key * 0.16, 0.86);
+        } else if (f.shape == 25) { // appliance
+            rounded(-1, -1, 1, 1, 0.06, 0.06);
+            line(-0.88, 0.62, 0.88, 0.62);
+            circle(-0.55, 0.8, 0.08);
+            circle(0.0, 0.8, 0.08);
+            circle(0.55, 0.8, 0.08);
+            rounded(-0.7, -0.7, 0.7, 0.38, 0.1, 0.1);
+        } else if (f.shape == 26) { // plumbing fixture
+            rounded(-1, -1, 1, 1, 0.16, 0.16);
+            ellipse(0, -0.1, 0.72, 0.62);
+            circle(0, -0.1, 0.08);
+            polyline({{-0.1, 0.82}, {-0.1, 0.48}, {0.1, 0.48}, {0.1, 0.82}});
+        } else if (f.shape == 27) { // mechanical equipment
+            rounded(-1, -1, 1, 1, 0.06, 0.06);
+            circle(0, 0, 0.62);
+            circle(0, 0, 0.18);
+            line(-0.8, 0, 0.8, 0);
+            line(0, -0.8, 0, 0.8);
+        } else if (f.shape == 28) { // lighting and electrical
+            circle(0, 0, 0.72);
+            line(-0.5, -0.5, 0.5, 0.5);
+            line(-0.5, 0.5, 0.5, -0.5);
+            rect(-0.16, -0.16, 0.16, 0.16);
+        } else if (f.shape == 29) { // doors and windows
+            line(-1, -0.78, 1, -0.78);
+            line(-1, 0.78, 1, 0.78);
+            line(-0.86, -0.78, -0.86, 0.78);
+            line(0.86, -0.78, 0.86, 0.78);
+            line(-0.82, -0.7, 0.66, 0.56);
+            arc(-0.82, -0.7, 1.5, 1.3, 0, std::numbers::pi / 2, 10);
+        } else if (f.shape == 30) { // structure and circulation
+            rect(-1, -1, 1, 1);
+            rect(-0.78, -0.78, 0.78, 0.78);
+            line(-0.78, -0.78, 0.78, 0.78);
+            line(-0.78, 0.78, 0.78, -0.78);
+            for (const double level : {-0.48, -0.16, 0.16, 0.48})
+                line(-0.62, level, 0.62, level);
+        } else if (f.shape == 31) { // site and landscape
+            ellipse(0, 0, 0.9, 0.9);
+            ellipse(-0.25, 0.18, 0.48, 0.42);
+            ellipse(0.3, 0.08, 0.46, 0.5);
+            line(-0.12, -0.58, -0.12, -0.95);
+            line(0.12, -0.58, 0.12, -0.95);
+        } else if (f.shape == 32) { // vehicle or marked bay
+            rounded(-0.78, -1, 0.78, 1, 0.26, 0.18);
+            rounded(-0.62, -0.45, 0.62, 0.48, 0.16, 0.14);
+            line(-0.78, -0.55, 0.78, -0.55);
+            line(-0.78, 0.62, 0.78, 0.62);
+            line(0, -0.45, 0, 0.48);
+        } else if (f.shape == 33) { // retail and display
+            rounded(-1, -1, 1, 1, 0.04, 0.04);
+            for (const double level : {-0.62, -0.2, 0.22, 0.64})
+                line(-0.9, level, 0.9, level);
+            line(-0.72, -0.86, -0.72, 0.86);
+            line(0.72, -0.86, 0.72, 0.86);
+        } else if (f.shape == 34) { // hospitality and clinical
+            rounded(-1, -1, 1, 1, 0.14, 0.12);
+            rounded(-0.86, -0.8, 0.86, 0.34, 0.12, 0.12);
+            rounded(-0.72, 0.48, 0.72, 0.86, 0.1, 0.08);
+            line(-0.82, 0.4, 0.82, 0.4);
+        } else if (f.shape == 35) { // life safety
+            rounded(-0.86, -1, 0.86, 1, 0.12, 0.12);
+            line(-0.58, 0, 0.58, 0);
+            line(0, -0.58, 0, 0.58);
+            circle(0, 0, 0.72);
+        } else if (f.shape == 36) { // accessibility
+            circle(-0.12, 0.52, 0.18);
+            circle(0.02, -0.28, 0.58);
+            polyline({{-0.08, 0.34}, {0.04, 0.02}, {0.5, 0.02}, {0.72, -0.46}});
+            line(-0.04, 0.0, -0.4, -0.58);
+            line(-0.4, -0.58, 0.36, -0.58);
+        } else if (f.shape == 37) { // desk and meeting table
+            rounded(-1, -0.72, 1, 0.72, 0.1, 0.12);
+            rounded(-0.46, -0.5, 0.46, 0.5, 0.08, 0.08);
+            for (const double seat : {-0.68, 0.0, 0.68}) {
+                rounded(seat - 0.18, 0.78, seat + 0.18, 1.0, 0.05, 0.05);
+                rounded(seat - 0.18, -1.0, seat + 0.18, -0.78, 0.05, 0.05);
+            }
+        } else if (f.shape == 38) { // recreation
+            ellipse(0, 0, 0.96, 0.96);
+            line(-0.92, 0, 0.92, 0);
+            line(0, -0.92, 0, 0.92);
+            circle(0, 0, 0.18);
+        } else if (f.shape == 39) { // laundry and utility
+            rounded(-1, -1, 1, 1, 0.05, 0.05);
+            circle(0, -0.12, 0.58);
+            circle(0, -0.12, 0.46);
+            line(-0.86, 0.62, 0.86, 0.62);
+            circle(-0.58, 0.8, 0.07);
+            circle(0.58, 0.8, 0.07);
+        } else if (f.shape == 40) { // warehouse
+            rect(-1, -1, 1, 1);
+            for (const double level : {-0.66, -0.22, 0.22, 0.66})
+                line(-0.9, level, 0.9, level);
+            for (const double upright : {-0.72, 0.0, 0.72})
+                line(upright, -0.9, upright, 0.9);
         }
         result.push_back(std::move(s));
+      }
     }
     return result;
 }

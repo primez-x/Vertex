@@ -22,7 +22,8 @@ drag cannot change the operation.
 | Right click | Select an unselected hit, preserve a selected group member, then open object or canvas actions | Open Finish, Undo last, Precise, or Cancel actions appropriate to the active command | Open object or view actions |
 | Right drag | No model action and no context menu | No model action and no context menu | Orbit |
 | Wheel | Zoom about the pointer | Zoom without changing the draft | Zoom |
-| Double click | One selection result only | Never inserts or places a duplicate | One selection result only |
+| Double click on object | Preserve an existing selected group member, otherwise select the target, then open contextual properties once | Never opens properties or inserts/places a duplicate | Open contextual properties for the selected object |
+| Double click on empty canvas | No special action | Never inserts or places a duplicate | No special action |
 
 Ctrl is the 2D selection modifier. Selection marquees do not replace an existing
 selection. A left-to-right marquee uses enclosure rules; a right-to-left marquee
@@ -49,7 +50,7 @@ presentation. A later mouse release cannot commit a cancelled move.
 - Component placement is a distinct pending state. Escape or the drawing context menu cancels it.
 - Wall previews follow the effective snapped pointer after the first endpoint.
 - Right click is evaluated on stationary release. Crossing the drag threshold prevents the menu.
-- Double click consumes the second press so it cannot add a duplicate point, toggle twice, or place two components.
+- An unmodified Select-mode double click opens the same contextual editor as right click → Properties. Ctrl-double-click only performs the first selection toggle. Drawing and placement consume the second press so they cannot add a duplicate point or place two components.
 - Pan, zoom, fit, and overview navigation refresh the effective cursor position used by measurements and contextual UI.
 - Selection and move previews are screen-only and never appear in print or export.
 
@@ -77,7 +78,7 @@ presentation. A later mouse release cannot commit a cancelled move.
 
 Focused interaction checks cover click selection, object drag with one commit,
 empty-canvas drag pan, Ctrl-click toggle, directional Ctrl marquee, mixed-button
-release, stationary right click versus right drag, double-click suppression,
+release, stationary right click versus right drag, double-click properties and authoring suppression,
 Escape and capture cancellation, explicit 3D Move exactly-once commit, selection
 visibility at zoom extremes, and exclusion of transient feedback from output.
 

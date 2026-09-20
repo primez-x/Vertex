@@ -14665,6 +14665,11 @@ public:
         }
         if (!m_symbol_list->currentItem() && m_symbol_list->count() > 0)
             m_symbol_list->setCurrentRow(0);
+        if (m_symbol_library_status) {
+            m_symbol_library_status->setText(
+                QStringLiteral("%1 components • Drag onto the plan or double-click to place.")
+                    .arg(rendered_families.size()));
+        }
         populateSymbolVariants(m_symbol_list->currentItem());
     }
 
@@ -17215,9 +17220,12 @@ private:
         std::set<std::string> symbol_categories;
         for (const auto& definition : catalog) symbol_categories.insert(definition.category);
         m_symbol_category->addItem(QStringLiteral("All categories"), QString{});
-        for (const auto& category : symbol_categories)
-            m_symbol_category->addItem(QString::fromStdString(category),
-                                       QString::fromStdString(category));
+        for (const auto& category : symbol_categories) {
+            auto label = QString::fromStdString(category);
+            label.replace(QLatin1Char('_'), QLatin1Char(' '));
+            if (!label.isEmpty()) label[0] = label[0].toUpper();
+            m_symbol_category->addItem(label, QString::fromStdString(category));
+        }
         QObject::connect(m_symbol_category, &QComboBox::currentIndexChanged, owner,
                          [this] { populateSymbolLibrary(); });
         QObject::connect(m_symbol_search, &QLineEdit::textChanged, owner,
@@ -18202,6 +18210,15 @@ private:
                 return;
             }
             selectEntity(id, toggle);
+        });
+        canvas->setEntityDoubleClicked([this](QString id) {
+            if (!m_pending_symbol_id.isEmpty() || m_boundary_session || m_pending_wall_start)
+                return;
+            // Preserve a retained group when the double-clicked item already
+            // belongs to it. A target outside the group becomes the sole
+            // selection before opening the same editor used by Properties.
+            if (!m_selected_ids.contains(id) && !selectEntity(id, false)) return;
+            positionContextEditor();
         });
         canvas->setSymbolDropped([this](QString id, double scale, Vec2 point) {
             cancelSymbolPlacement();

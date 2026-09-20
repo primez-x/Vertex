@@ -20,12 +20,12 @@ class SymbolCatalogManifestTests(unittest.TestCase):
             ("double-bed", "furniture"),
             ("sofa", "furniture"),
             ("checkout-counter", "commercial"),
-        ] + [(f"family-{index:02d}", categories[index % len(categories)])
-             for index in range(21)]
+        ] + [(f"family-{index:03d}", categories[index % len(categories)])
+             for index in range(296)]
         entries = []
         for family, category in families:
-            for variant in range(8):
-                identifier = f"{family}-w{variant // 4 + 1}-d{variant % 4 + 1}"
+            for variant in range(2):
+                identifier = f"{family}-w{variant + 1}-d2"
                 entries.append({
                     "id": identifier,
                     "family": family,
@@ -73,7 +73,7 @@ class SymbolCatalogManifestTests(unittest.TestCase):
     def test_valid_manifest_covers_threshold_categories_and_representatives(self):
         report = validation.validate_manifest(self.make_manifest())
         self.assertTrue(report["valid"], report["errors"])
-        self.assertEqual(report["entry_count"], 200)
+        self.assertEqual(report["entry_count"], 600)
 
     def test_missing_category_and_representative_are_rejected(self):
         manifest = self.make_manifest()

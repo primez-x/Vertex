@@ -23,7 +23,7 @@ template<class F> void rejected(F f) {
 int main() {
     using namespace sketch;
     const auto catalog = default_symbol_catalog();
-    require(catalog.size() == 468,"Expected 52 families with nine dimension variants");
+    require(catalog.size() >= 600,"Expected the expanded production symbol catalog");
     validate_symbol_catalog(catalog);
     const std::set<std::string> required_categories{
         "plumbing", "furniture", "fixtures", "appliances", "accessibility",
@@ -40,14 +40,14 @@ int main() {
     }
     for (const auto& category : required_categories)
         require(categories.contains(category), "Required symbol category is missing");
-    require(families.size() == 52, "Every symbol family must have a stable identity");
+    require(families.size() >= 300, "Catalog must expose at least 300 distinct component families");
     const auto plumbing = filter_symbol_catalog(catalog, "", "plumbing");
-    require(plumbing.size() == 36, "Category filtering must return all plumbing variants");
+    require(plumbing.size() >= 36, "Category filtering must return all plumbing variants");
     require(filter_symbol_catalog(catalog, "", "PLUMBING").size() == plumbing.size(),
             "Symbol category filtering must be case-insensitive for field use");
     const auto toilets = filter_symbol_catalog(catalog, "toilet");
-    require(toilets.size() == 18, "Query filtering must match toilet families and variants");
-    require(filter_symbol_catalog(catalog, "TOILET").size() == 18,
+    require(toilets.size() >= 18, "Query filtering must match toilet families and variants");
+    require(filter_symbol_catalog(catalog, "TOILET").size() == toilets.size(),
             "Symbol search must be case-insensitive for field use");
     const auto has_family = [&](const char* family) {
         return std::any_of(catalog.begin(), catalog.end(), [&](const auto& definition) {
@@ -133,12 +133,17 @@ int main() {
     require(manifest.at("entry_count") == catalog.size() && manifest.at("family_count") == families.size() &&
                 manifest.at("entries").size() == catalog.size(),
             "Symbol catalog manifest must enumerate every entry and family");
-    require(manifest.at("category_counts").at("fixtures") == 63 &&
-                manifest.at("category_counts").at("commercial") == 36,
+    require(manifest.at("category_counts").at("fixtures") >= 63 &&
+                manifest.at("category_counts").at("commercial") >= 36,
             "Symbol catalog manifest must retain category coverage");
-    require(manifest.at("families").at(0).at("id") == "accessible-shower" &&
-                manifest.at("families").at(0).at("variant_count") == 9,
+    const auto& manifest_families = manifest.at("families");
+    require(manifest_families.at(0).at("id") == "accessible-bathtub" &&
+                manifest_families.at(0).at("variant_count") == 1,
             "Symbol catalog manifest families must be stable and sorted");
+    const auto legacy_family = std::find_if(manifest_families.begin(), manifest_families.end(),
+        [](const auto& value) { return value.at("id") == "accessible-shower"; });
+    require(legacy_family != manifest_families.end() && legacy_family->at("variant_count") == 9,
+            "Existing preset families must retain all nine size variants");
     require(manifest == encode_symbol_catalog_manifest(repeated),
             "Symbol catalog manifest must be deterministic");
     require(manifest.at("entries").at(0).at("preview").size() >= 5,

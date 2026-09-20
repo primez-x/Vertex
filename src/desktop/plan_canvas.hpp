@@ -190,6 +190,10 @@ public:
 
     void setPointClicked(std::function<void(Vec2)> callback);
     void setEntityClicked(std::function<void(QString)> callback);
+    // Unmodified left-button double-click in Select mode. The first click has
+    // already applied ordinary selection; this callback requests the object's
+    // contextual editor without replaying a second selection/authoring press.
+    void setEntityDoubleClicked(std::function<void(QString)> callback);
     void setEntitySelectionClicked(std::function<void(QString, bool)> callback);
     // Ctrl-drag rectangle selection adds to the retained selection.
     void setEntitiesSelected(std::function<void(QStringList, bool)> callback);
@@ -311,6 +315,7 @@ private:
 
     std::function<void(Vec2)> m_point_clicked;
     std::function<void(QString)> m_entity_clicked;
+    std::function<void(QString)> m_entity_double_clicked;
     std::function<void(QString, bool)> m_entity_selection_clicked;
     std::function<void(QStringList, bool)> m_entities_selected;
     std::function<bool(QStringList, Vec2)> m_entities_move_requested;

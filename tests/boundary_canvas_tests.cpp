@@ -1183,6 +1183,7 @@ void test_direct_canvas_manipulation_contract() {
     QStringList moved_ids;
     Vec2 moved_delta{};
     QString context_target;
+    QString double_clicked;
     canvas.setEntitySelectionClicked([&](QString id, bool toggle) {
         ++selection_clicks;
         if (id.isEmpty()) {
@@ -1208,6 +1209,7 @@ void test_direct_canvas_manipulation_contract() {
         return true;
     });
     canvas.setRightClicked([&](Vec2, QString id) { context_target = std::move(id); });
+    canvas.setEntityDoubleClicked([&](QString id) { double_clicked = std::move(id); });
 
     const auto mouse = [&](QEvent::Type type, QPointF p, Qt::MouseButton button,
                            Qt::MouseButtons buttons,
@@ -1262,6 +1264,26 @@ void test_direct_canvas_manipulation_contract() {
     mouse(QEvent::MouseButtonRelease, center, Qt::RightButton, Qt::NoButton);
     require(context_target == QStringLiteral("component"),
             "stationary right-click must identify the object under the pointer");
+
+    double_clicked.clear();
+    mouse(QEvent::MouseButtonDblClick, center, Qt::LeftButton, Qt::LeftButton);
+    require(double_clicked == QStringLiteral("component") && selection_clicks == 2,
+            "unmodified double-click must request properties without replaying selection");
+    double_clicked.clear();
+    mouse(QEvent::MouseButtonDblClick, center, Qt::LeftButton, Qt::LeftButton,
+          Qt::ControlModifier);
+    require(double_clicked.isEmpty() && selection_clicks == 2,
+            "Ctrl-double-click must not open properties or replay selection");
+    double_clicked.clear();
+    mouse(QEvent::MouseButtonDblClick, {100, 100}, Qt::LeftButton, Qt::LeftButton);
+    require(double_clicked.isEmpty(), "empty-canvas double-click must have no special action");
+
+    canvas.setTool(CanvasTool::boundary);
+    int points = 0;
+    canvas.setPointClicked([&](Vec2) { ++points; });
+    mouse(QEvent::MouseButtonDblClick, center, Qt::LeftButton, Qt::LeftButton);
+    require(points == 0 && double_clicked.isEmpty(),
+            "authoring double-click must suppress the second point and properties");
 }
 
 int main(int argc, char** argv) {

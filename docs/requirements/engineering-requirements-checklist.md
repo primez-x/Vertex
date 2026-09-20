@@ -506,9 +506,9 @@ Build/version tested: ____________________  Date: ____________________
 
   **Steps, issues, screenshots, or notes:** ____________________
 
-- [ ] **056 — APX-SYM-001**: Provide a comprehensive, editable, size-adjustable symbol library for residential and light-commercial drawings, with more than 200 usable entries spanning plumbing, furniture, fixtures, appliances, accessibility, lighting, doors/windows, structural/site, and commercial equipment.
+- [ ] **056 — APX-SYM-001**: Provide a comprehensive, editable, size-adjustable symbol library for residential and light-commercial drawings, with at least 300 distinct usable families spanning plumbing, furniture, fixtures, appliances, accessibility, lighting, doors/windows, structural/site, and commercial equipment.
 
-  **Expected result / acceptance:** The catalog contains at least 200 deterministic symbol entries across every required category; each entry has dimensional metadata, a validated preview, an anchor, and scale limits; each placed instance supports arbitrary rotation and visibility; persisted annotation state pins the catalog revision and any changed definitions require an explicit migration; representative residential and light-commercial symbols can be resized, placed, saved/reopened, printed, and exported without geometry or visual loss.
+  **Expected result / acceptance:** The catalog contains at least 300 distinct named symbol families and at least 600 deterministic entries across every required category; size variants do not count as separate families. Each entry has dimensional metadata, a validated preview, an anchor, and scale limits; each placed instance supports arbitrary rotation and visibility; persisted annotation state pins the catalog revision and any changed definitions require an explicit migration; representative residential and light-commercial symbols can be resized, placed, saved/reopened, printed, and exported without geometry or visual loss.
 
   **Your result:** Not tested
 

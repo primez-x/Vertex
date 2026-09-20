@@ -69,7 +69,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U007 — Select an object and inspect its properties**
-  - Expected: Relevant editable properties appear; an empty selection does not leave a large useless panel.
+  - Expected: One click selects without opening a panel. Double-clicking the object or choosing Properties from its right-click menu opens the same compact contextual properties panel once. Double-clicking empty canvas does nothing.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -597,7 +597,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 ## Symbols, furniture and component library
 
 - [ ] **U109 — Open the visible component library**
-  - Expected: You can browse symbols without searching through unrelated menus.
+  - Expected: You can browse symbols without searching through unrelated menus, and All categories reports at least 300 distinct named components.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -607,7 +607,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U111 — Browse library categories**
-  - Expected: Plumbing, furniture, appliances and other categories are easy to distinguish.
+  - Expected: Plumbing, furniture, appliances, accessibility, lighting, electrical, mechanical, doors/windows, structure, circulation, site, office, medical, recreation, safety and commercial categories are easy to distinguish.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

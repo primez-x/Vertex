@@ -853,6 +853,10 @@ void PlanCanvas::setEntityClicked(std::function<void(QString)> callback) {
     m_entity_clicked = std::move(callback);
 }
 
+void PlanCanvas::setEntityDoubleClicked(std::function<void(QString)> callback) {
+    m_entity_double_clicked = std::move(callback);
+}
+
 void PlanCanvas::setEntitySelectionClicked(std::function<void(QString, bool)> callback) {
     m_entity_selection_clicked = std::move(callback);
 }
@@ -1208,8 +1212,15 @@ void PlanCanvas::setRightClicked(std::function<void(Vec2, QString)> callback) {
 
 void PlanCanvas::mouseDoubleClickEvent(QMouseEvent* event) {
     // Qt dispatches press/release/double-click/release. The first click already
-    // authored or selected; consuming the second press avoids duplicate points
-    // and Shift-selection toggles. Preserve any other button's navigation.
+    // authored or selected. In Select mode an unmodified left double-click
+    // opens contextual properties for the stable hit target. Every other mode
+    // consumes the second press so a double-click cannot add a duplicate point
+    // or replay Ctrl-selection.
+    if (event->button() == Qt::LeftButton && event->modifiers() == Qt::NoModifier &&
+        m_tool == CanvasTool::select && m_entity_double_clicked) {
+        const auto target = hitTest(event->position());
+        if (!target.isEmpty()) m_entity_double_clicked(target);
+    }
     event->accept();
 }
 

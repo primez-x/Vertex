@@ -12,12 +12,14 @@ later instance edits do not alter the library. Empty content is allowed. Styles
 support font family, physical text height/stroke width, RGB colors, bold/italic,
 and none/solid/hatch fills. Font availability and hatch rendering are not checked.
 
-The current deterministic catalog contains **468 parametric footprint entries:
-52 named families times nine width/depth combinations** (80%, 100%, 120% of each
-family’s nominal dimensions). IDs encode family and dimension indices. The
+The current deterministic catalog contains **809 parametric footprint entries
+across 393 distinct named families**. The original 52 families retain nine
+width/depth presets (80%, 100%, 120% of each nominal dimension); the expanded
+families ship at their standard physical footprint and remain continuously
+size-adjustable after placement. IDs encode family and dimension indices. The
 families cover plumbing, furniture, storage, fixtures, appliances, accessibility,
-lighting, doors/windows, structural/site, and light-commercial equipment. These
-entries are a working vector foundation, not the final production artwork.
+lighting, electrical, mechanical, doors/windows, structure, circulation, site,
+office, medical, recreation, safety, and light-commercial equipment.
 Named appliance, storage, plumbing, furniture, and commercial families retain
 distinct plan motifs (for example burners, drum/controls, shelves, fixtures,
 and counter layouts) so the catalog cannot satisfy its count with duplicate
@@ -26,7 +28,8 @@ beds, furniture, and commercial entries at multiple scales and rotations using
 the exact placement transform.
 The production release criterion expands this catalog across plumbing, furniture,
 fixtures, appliances, accessibility, lighting, doors/windows, structural/site,
-and light-commercial equipment, while retaining at least 200 validated entries.
+and light-commercial equipment, while retaining at least 300 distinct named
+families and at least 600 validated entries.
 The production qualification contract requires this coverage in both the
 residential and light-commercial runs through mandatory `symbol_library`,
 `symbol_resize`, and `symbol_output` observations. Those observations still
@@ -56,7 +59,7 @@ so release reviewers and downstream tooling can inspect the shipped library
 without opening a project or contacting a service.
 The complete unfiltered manifest can be checked independently with
 `python scripts/validate_symbol_catalog.py <manifest.json>`; that validator
-enforces the 200-entry threshold, every required category, representative
+enforces the 300-family and 600-entry thresholds, every required category, representative
 toilet/bed/sofa/commercial families, deterministic counts/order, and preview
 strokes contained within each declared physical footprint.
 
