@@ -319,7 +319,7 @@ void inspect_committed_boundary(const DocumentSnapshot& snapshot,
         if (automatic_dimensions) {
             require(dimension.placement == BoundaryDimensionPlacement::automatic &&
                         dimension.automatic_placement_version.has_value() &&
-                        *dimension.automatic_placement_version == 1,
+                        *dimension.automatic_placement_version == 2,
                     "Draw First dimensions must retain deterministic automatic placement");
         } else {
             require(dimension.placement == BoundaryDimensionPlacement::manual &&
@@ -766,7 +766,7 @@ void inspect_off_grid_point_commit(const DocumentSnapshot& before,
     for (const auto& dimension : dimensions) {
         require(dimension.placement == BoundaryDimensionPlacement::automatic &&
                     dimension.automatic_placement_version.has_value() &&
-                    *dimension.automatic_placement_version == 1,
+                    *dimension.automatic_placement_version == 2,
                 "off-grid Draw First dimensions must remain deterministic automatic placements");
     }
 }

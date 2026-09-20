@@ -146,6 +146,10 @@ public:
     void setCanvasBackground(QColor background);
     void setSelectedId(const QString& entity_id);
     void setSelectedIds(const QStringList& entity_ids);
+    // Screen-only retained selection caption. It is painted inside the canvas
+    // and is intentionally excluded from print/export rendering.
+    void setSelectionCaption(QString caption);
+    void setSelectionTransformEnabled(bool resize_enabled, bool rotate_enabled);
     void setLabels(std::vector<CanvasLabel> labels);
     [[nodiscard]] const std::vector<CanvasLabel>& labels() const noexcept { return m_labels; }
     void setReference(std::optional<CanvasReference> reference);
@@ -200,6 +204,9 @@ public:
     // Commits one model-space translation after the interactive preview ends.
     // Returning false rejects the preview without leaving canvas-only geometry.
     void setEntitiesMoveRequested(std::function<bool(QStringList, Vec2)> callback);
+    // Commits a single-selection transform after the interactive preview.
+    // Scale is relative and uniform; rotation is a relative radian delta.
+    void setEntityTransformRequested(std::function<bool(QString, double, double)> callback);
     void setSymbolDropped(std::function<void(QString, double, Vec2)> callback);
     void setCursorMoved(std::function<void(Vec2)> callback);
     // Emitted only on a stationary right-button release. The target is the
@@ -240,7 +247,15 @@ private:
     void resetGesture();
     [[nodiscard]] std::optional<std::pair<Vec2, Vec2>> contentBounds() const;
     [[nodiscard]] std::optional<QRectF> selectionBounds(const QRectF& viewport) const;
+    [[nodiscard]] std::optional<QRectF> selectionFrame(const QRectF& viewport) const;
+    enum class SelectionHandle { none, resize, rotate };
+    [[nodiscard]] SelectionHandle selectionHandleAt(QPointF point,
+                                                     const QRectF& viewport) const;
+    [[nodiscard]] QPointF rotationHandlePoint(const QRectF& frame,
+                                              const QRectF& viewport) const;
     void drawSelectionFrame(QPainter& painter, const QRectF& viewport) const;
+    void drawSelectionCaption(QPainter& painter, const QRectF& viewport,
+                              QColor background) const;
     [[nodiscard]] bool navigateOverviewMap(QPointF position);
     void drawOverviewMap(QPainter& painter) const;
     [[nodiscard]] QPointF toScreen(Vec2 point, const QRectF& viewport) const;
@@ -252,6 +267,7 @@ private:
     [[nodiscard]] QStringList rectangleHits(const QRectF& rectangle, bool crossing) const;
     [[nodiscard]] std::optional<Vec2> closingAnchor(QPointF point) const;
     [[nodiscard]] Vec2 inputPoint(QPointF point) const;
+    void updatePointerCursor(QPointF point);
     void updateCursor(QPointF point);
     void drawGrid(QPainter& painter, const QRectF& viewport, double scale,
                   Vec2 view_center) const;
@@ -280,6 +296,7 @@ private:
     std::vector<CanvasLabel> m_labels;
     std::vector<CanvasReference> m_references;
     std::vector<CanvasReferenceGrid> m_reference_grids;
+    QString m_selection_caption;
     std::vector<Vec2> m_boundary_preview;
     std::optional<std::pair<Vec2, Vec2>> m_wall_preview;
     std::optional<BoundaryDraftPreview> m_boundary_draft_preview;
@@ -293,13 +310,22 @@ private:
     Vec2 m_view_center{0.0, 0.0};
     std::optional<QPointF> m_last_mouse_position;
     bool m_panning{false};
-    enum class LeftGesture { none, canvas_pan, object_move, marquee, space_pan };
+    enum class LeftGesture {
+        none, canvas_pan, object_move, selection_resize, selection_rotate, marquee, space_pan
+    };
     LeftGesture m_left_gesture{LeftGesture::none};
     QPointF m_left_start;
     bool m_left_dragging{false};
     QString m_pressed_entity;
     QStringList m_move_ids;
     std::optional<Vec2> m_move_preview_delta;
+    bool m_selection_resize_enabled{};
+    bool m_selection_rotate_enabled{};
+    std::optional<QRectF> m_transform_frame_start;
+    QPointF m_transform_center;
+    QPointF m_transform_start;
+    double m_transform_scale_preview{1.0};
+    double m_transform_rotation_preview{};
     bool m_space_pan_armed{false};
     Qt::MouseButton m_gesture_button{Qt::NoButton};
     QPointF m_right_start;
@@ -321,6 +347,7 @@ private:
     std::function<void(QString, bool)> m_entity_selection_clicked;
     std::function<void(QStringList, bool)> m_entities_selected;
     std::function<bool(QStringList, Vec2)> m_entities_move_requested;
+    std::function<bool(QString, double, double)> m_entity_transform_requested;
     std::function<void(QString, double, Vec2)> m_symbol_dropped;
     std::function<void(Vec2)> m_cursor_moved;
     std::function<void(Vec2, QString)> m_right_clicked;

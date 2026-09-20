@@ -1043,7 +1043,7 @@ void test_selection_frame_for_styled_geometry() {
     const auto tiny_selected = render(canvas, false);
     canvas.setSelectedId({});
     require(!canvas.selectionBounds(), "cleared selection must have no contextual anchor");
-    require(differing_pixels(tiny_selected, render(canvas, false), QRect(300, 220, 40, 40)) > 80,
+    require(differing_pixels(tiny_selected, render(canvas, false), QRect(290, 210, 60, 60)) > 80,
             "selection markers must retain screen size when geometry shrinks below a pixel");
 
     canvas.zoomBy(1000000000, QPointF(320, 240));
@@ -1278,12 +1278,19 @@ void test_direct_canvas_manipulation_contract() {
     const auto before_click = canvas.viewCenter();
     mouse(QEvent::MouseButtonPress, {100, 100}, Qt::LeftButton, Qt::LeftButton);
     mouse(QEvent::MouseButtonRelease, {100, 100}, Qt::LeftButton, Qt::NoButton);
+    require(selected.isEmpty() && point_clicks == 0 &&
+                canvas.viewCenter().x == before_click.x &&
+                canvas.viewCenter().y == before_click.y,
+            "the first empty-canvas click after a selection must only clear the selection");
+
+    mouse(QEvent::MouseButtonPress, {100, 100}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, {100, 100}, Qt::LeftButton, Qt::NoButton);
     require(point_clicks == 1 &&
                 std::abs(clicked_point.x + 2.75) < 1e-9 &&
                 std::abs(clicked_point.y - 1.75) < 1e-9 &&
                 canvas.viewCenter().x == before_click.x &&
                 canvas.viewCenter().y == before_click.y,
-            "plain empty-canvas click must place a drawing node without moving the view");
+            "an empty-canvas click with no selection must place a drawing node without moving the view");
 
     const auto before_pan = canvas.viewCenter();
     mouse(QEvent::MouseButtonPress, {100, 100}, Qt::LeftButton, Qt::LeftButton);
@@ -1314,6 +1321,10 @@ void test_direct_canvas_manipulation_contract() {
             "Space-left-drag must pan without placing a drawing node");
 
     canvas.fitView();
+    mouse(QEvent::MouseButtonPress, center, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, center, Qt::LeftButton, Qt::NoButton);
+    require(selected == QStringList{QStringLiteral("component")},
+            "plain click must restore the component selection before toggle testing");
     mouse(QEvent::MouseButtonPress, center, Qt::LeftButton, Qt::LeftButton,
           Qt::ControlModifier);
     mouse(QEvent::MouseButtonRelease, center, Qt::LeftButton, Qt::NoButton,
@@ -1346,14 +1357,16 @@ void test_direct_canvas_manipulation_contract() {
     require(context_target == QStringLiteral("component"),
             "stationary right-click must identify the object under the pointer");
 
+    const auto selection_clicks_before_double = selection_clicks;
     double_clicked.clear();
     mouse(QEvent::MouseButtonDblClick, center, Qt::LeftButton, Qt::LeftButton);
-    require(double_clicked == QStringLiteral("component") && selection_clicks == 2,
+    require(double_clicked == QStringLiteral("component") &&
+                selection_clicks == selection_clicks_before_double,
             "unmodified double-click must request properties without replaying selection");
     double_clicked.clear();
     mouse(QEvent::MouseButtonDblClick, center, Qt::LeftButton, Qt::LeftButton,
           Qt::ControlModifier);
-    require(double_clicked.isEmpty() && selection_clicks == 2,
+    require(double_clicked.isEmpty() && selection_clicks == selection_clicks_before_double,
             "Ctrl-double-click must not open properties or replay selection");
     double_clicked.clear();
     mouse(QEvent::MouseButtonDblClick, {100, 100}, Qt::LeftButton, Qt::LeftButton);
@@ -1365,6 +1378,158 @@ void test_direct_canvas_manipulation_contract() {
     mouse(QEvent::MouseButtonDblClick, center, Qt::LeftButton, Qt::LeftButton);
     require(points == 0 && double_clicked.isEmpty(),
             "authoring double-click must suppress the second point and properties");
+}
+
+void test_selected_boundary_is_the_move_hit_target() {
+    PlanCanvas canvas;
+    canvas.resize(640, 480);
+    canvas.setGridEnabled(false);
+    canvas.setOverviewMapEnabled(false);
+    canvas.setSnapEnabled(false);
+    canvas.setTool(CanvasTool::select);
+
+    CanvasEntity room{
+        QStringLiteral("room"), QStringLiteral("measurement_boundary"),
+        Boundary{
+            Segment{{-1.0, -1.0}, {1.0, -1.0}, 0.0},
+            Segment{{1.0, -1.0}, {1.0, 1.0}, 0.0},
+            Segment{{1.0, 1.0}, {-1.0, 1.0}, 0.0},
+            Segment{{-1.0, 1.0}, {-1.0, -1.0}, 0.0},
+        }};
+    CanvasEntity overlapping{
+        QStringLiteral("overlap"), QStringLiteral("wall"),
+        Boundary{Segment{{-0.2, 0.0}, {0.2, 0.0}, 0.0}}};
+    canvas.setEntities({room, overlapping});
+
+    QStringList selected;
+    int move_requests = 0;
+    int point_clicks = 0;
+    QStringList moved_ids;
+    Vec2 moved_delta{};
+    canvas.setEntitySelectionClicked([&](QString id, bool) {
+        selected = id.isEmpty() ? QStringList{} : QStringList{id};
+        canvas.setSelectedIds(selected);
+    });
+    canvas.setEntitiesMoveRequested([&](QStringList ids, Vec2 delta) {
+        ++move_requests;
+        moved_ids = std::move(ids);
+        moved_delta = delta;
+        return true;
+    });
+    canvas.setPointClicked([&](Vec2) { ++point_clicks; });
+
+    const auto mouse = [&](QEvent::Type type, QPointF point, Qt::MouseButton button,
+                           Qt::MouseButtons buttons) {
+        QMouseEvent event(type, point, canvas.mapToGlobal(point.toPoint()), button,
+                          buttons, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &event);
+    };
+
+    const QPointF top_edge{320, 160};
+    const QPointF interior{320, 240};
+    mouse(QEvent::MouseButtonPress, top_edge, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, top_edge, Qt::LeftButton, Qt::NoButton);
+    require(selected == QStringList{QStringLiteral("room")},
+            "fixture must select the room from its visible edge");
+    const auto selection = canvas.selectionBounds();
+    require(selection && selection->contains(interior),
+            "visible selection boundary must contain the room interior");
+
+    const QPointF empty_in_frame{270, 240};
+    mouse(QEvent::MouseButtonPress, empty_in_frame, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, empty_in_frame, Qt::LeftButton, Qt::NoButton);
+    require(selected.isEmpty() && point_clicks == 0,
+            "an empty click within the selection frame must deselect before drawing");
+    mouse(QEvent::MouseButtonPress, top_edge, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, top_edge, Qt::LeftButton, Qt::NoButton);
+    require(selected == QStringList{QStringLiteral("room")},
+            "the room must remain directly selectable after a deselection click");
+
+    mouse(QEvent::MouseMove, interior, Qt::NoButton, Qt::NoButton);
+    require(canvas.cursor().shape() == Qt::SizeAllCursor,
+            "any point inside the selection boundary must advertise movement");
+    const auto view_before_move = canvas.viewCenter();
+    mouse(QEvent::MouseButtonPress, interior, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, interior + QPointF(40, -20), Qt::NoButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, interior + QPointF(40, -20),
+          Qt::LeftButton, Qt::NoButton);
+    require(move_requests == 1 && moved_ids == QStringList{QStringLiteral("room")} &&
+                std::abs(moved_delta.x - 0.5) < 1e-9 &&
+                std::abs(moved_delta.y - 0.25) < 1e-9 &&
+                canvas.viewCenter().x == view_before_move.x &&
+                canvas.viewCenter().y == view_before_move.y,
+            "drag inside the selection boundary must move the retained selection even over another object");
+
+    const QPointF outside{560, 420};
+    mouse(QEvent::MouseButtonPress, outside, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, outside, Qt::LeftButton, Qt::NoButton);
+    require(selected.isEmpty() && point_clicks == 0,
+            "first empty click outside a selected object must only clear selection");
+    mouse(QEvent::MouseButtonPress, outside, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, outside, Qt::LeftButton, Qt::NoButton);
+    require(point_clicks == 1,
+            "empty click after deselection must be available for drawing input");
+
+    const auto view_before_pan = canvas.viewCenter();
+    mouse(QEvent::MouseButtonPress, interior, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, interior + QPointF(40, 20), Qt::NoButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, interior + QPointF(40, 20),
+          Qt::LeftButton, Qt::NoButton);
+    require(move_requests == 1 &&
+                (canvas.viewCenter().x != view_before_pan.x ||
+                 canvas.viewCenter().y != view_before_pan.y),
+            "the same drag must pan after the selection boundary is cleared");
+}
+
+void test_single_selection_transform_handles() {
+    PlanCanvas canvas;
+    canvas.resize(640, 480);
+    canvas.setGridEnabled(false);
+    canvas.setOverviewMapEnabled(false);
+    canvas.setTool(CanvasTool::select);
+    canvas.setEntities({CanvasEntity{
+        QStringLiteral("symbol"), QStringLiteral("annotation_symbol"),
+        Boundary{Segment{{-0.5, -0.35}, {0.5, -0.35}, 0.0},
+                 Segment{{0.5, -0.35}, {0.5, 0.35}, 0.0},
+                 Segment{{0.5, 0.35}, {-0.5, 0.35}, 0.0},
+                 Segment{{-0.5, 0.35}, {-0.5, -0.35}, 0.0}}}});
+    canvas.setSelectedId(QStringLiteral("symbol"));
+    canvas.setSelectionTransformEnabled(true, true);
+
+    int transforms = 0;
+    double scale = 1.0;
+    double rotation = 0.0;
+    canvas.setEntityTransformRequested([&](QString id, double next_scale, double next_rotation) {
+        require(id == QStringLiteral("symbol"), "transform handle must retain selected identity");
+        ++transforms;
+        scale = next_scale;
+        rotation = next_rotation;
+        return true;
+    });
+    const auto mouse = [&](QEvent::Type type, QPointF point, Qt::MouseButton button,
+                           Qt::MouseButtons buttons) {
+        QMouseEvent event(type, point, canvas.mapToGlobal(point.toPoint()), button,
+                          buttons, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &event);
+    };
+
+    const auto frame = canvas.selectionBounds();
+    require(frame.has_value(), "selected symbol must expose a transform frame");
+    const auto resize = frame->bottomRight();
+    mouse(QEvent::MouseButtonPress, resize, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, resize + QPointF(48, 36), Qt::NoButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, resize + QPointF(48, 36),
+          Qt::LeftButton, Qt::NoButton);
+    require(transforms == 1 && scale > 1.1 && std::abs(rotation) < 1e-9,
+            "corner handle must commit a larger uniform scale");
+
+    const auto rotate = QPointF(frame->center().x(), frame->top() - 24.0);
+    const auto target = frame->center() + QPointF(80.0, 0.0);
+    mouse(QEvent::MouseButtonPress, rotate, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, target, Qt::NoButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, target, Qt::LeftButton, Qt::NoButton);
+    require(transforms == 2 && std::abs(rotation) > 0.5,
+            "rotation handle must commit an angular transform");
 }
 
 int main(int argc, char** argv) {
@@ -1382,6 +1547,8 @@ int main(int argc, char** argv) {
         }
         test_selection_frame_for_styled_geometry();
         test_direct_canvas_manipulation_contract();
+        test_selected_boundary_is_the_move_hit_target();
+        test_single_selection_transform_handles();
         test_mouse_gesture_contract();
         test_boundary_draft_rendering_and_history();
         test_request_to_paint_telemetry();

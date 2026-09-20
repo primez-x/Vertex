@@ -52,7 +52,10 @@ struct BoundaryAuthoringOptions {
     std::string segment_id_prefix{"segment"};
     std::string dimension_id_prefix{"dimension"};
     bool automatic_dimension_placement{};
-    std::uint32_t automatic_placement_version{1};
+    // Version 2 retains deterministic provisional placement while drawing,
+    // then moves automatic dimensions to the exterior when the cycle closes.
+    // Version 1 remains readable for existing recovery histories.
+    std::uint32_t automatic_placement_version{2};
     double geometry_tolerance_metres{default_geometry_tolerance_metres};
     bool operator==(const BoundaryAuthoringOptions&) const = default;
 };
@@ -336,7 +339,7 @@ public:
     // Define First requires an explicit dimension phase for every edge unless
     // automatic placement is enabled. Draw First measured linework has no
     // pending dimensions by default; enabling automatic placement emits the
-    // deterministic version-one dimension for each edge.
+    // deterministic automatic dimension for each edge.
     [[nodiscard]] BoundaryDimension place_manual_dimension(Vec2 world_position);
     [[nodiscard]] BoundaryDimension place_automatic_dimension();
 

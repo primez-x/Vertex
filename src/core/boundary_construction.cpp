@@ -15,7 +15,11 @@
 namespace sketch {
 namespace {
 
-constexpr std::uint32_t automatic_placement_version = 1;
+constexpr std::uint32_t automatic_placement_version = 2;
+
+bool supported_automatic_placement_version(std::uint32_t version) noexcept {
+    return version == 1 || version == automatic_placement_version;
+}
 
 [[noreturn]] void invalid(std::string message) {
     throw std::invalid_argument(std::move(message));
@@ -58,8 +62,8 @@ void require_options(const BoundaryAuthoringOptions& options) {
         !(options.geometry_tolerance_metres > 0.0)) {
         invalid("geometry tolerance must be finite and positive");
     }
-    if (options.automatic_placement_version != automatic_placement_version) {
-        invalid("only automatic dimension placement version one is supported");
+    if (!supported_automatic_placement_version(options.automatic_placement_version)) {
+        invalid("automatic dimension placement version is unsupported");
     }
 }
 
@@ -100,7 +104,7 @@ Vec2 arc_point_at(const Segment& segment, double parameter) {
             arc.center.y + arc.radius * std::sin(angle)};
 }
 
-Vec2 automatic_dimension_position(const Segment& segment) {
+Vec2 automatic_dimension_position(const Segment& segment, double normal_side = 1.0) {
     const auto length = segment_length(segment);
     if (!std::isfinite(length) || !(length > 0.0)) invalid("cannot place a degenerate dimension");
     double tangent = 0.0;
@@ -118,8 +122,8 @@ Vec2 automatic_dimension_position(const Segment& segment) {
                                                                : -std::numbers::pi / 2.0);
     }
     const auto offset = std::max(0.25, length * 0.1);
-    const Vec2 result{midpoint.x - std::sin(tangent) * offset,
-                      midpoint.y + std::cos(tangent) * offset};
+    const Vec2 result{midpoint.x - std::sin(tangent) * offset * normal_side,
+                      midpoint.y + std::cos(tangent) * offset * normal_side};
     require_point(result, "automatic dimension position");
     return result;
 }
@@ -162,16 +166,24 @@ void validate_dimension(const BoundaryDimension& dimension,
                 invalid("manual dimension cannot carry an automatic placement version");
             }
             break;
-        case BoundaryDimensionPlacement::automatic:
+        case BoundaryDimensionPlacement::automatic: {
             if (!dimension.automatic_placement_version.has_value() ||
-                *dimension.automatic_placement_version != automatic_placement_version) {
-                invalid("automatic dimension requires placement version one");
+                !supported_automatic_placement_version(*dimension.automatic_placement_version)) {
+                invalid("automatic dimension placement version is unsupported");
+            }
+            double side = 1.0;
+            if (*dimension.automatic_placement_version == 2) {
+                const auto area = signed_area(boundary_geometry(source.boundary));
+                if (!std::isfinite(area) || area == 0.0)
+                    invalid("automatic dimension boundary orientation is undefined");
+                side = area > 0.0 ? -1.0 : 1.0;
             }
             if (!same_point(dimension.text_position,
-                            automatic_dimension_position(found->segment))) {
-                invalid("automatic dimension position does not match version one placement");
+                            automatic_dimension_position(found->segment, side))) {
+                invalid("automatic dimension position does not match its placement version");
             }
             break;
+        }
         default:
             invalid("dimension placement kind is unsupported");
     }

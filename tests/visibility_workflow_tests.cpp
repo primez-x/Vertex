@@ -497,12 +497,11 @@ void test_visibility_workflow() {
     require(upper_layer_item && upper_layer_item->checkState(0) == Qt::Checked,
             "hiding a floor must not cascade into its layer check state");
     auto* visibility_label = window.findChild<QLabel*>(QStringLiteral("visibilitySummary"));
-    require(visibility_label && visibility_label->text() == QStringLiteral("Filter active") &&
-                visibility_label->toolTip().contains(QStringLiteral("never change area totals")),
-            "visibility summary must expose its state and explain that filters leave totals unchanged on demand");
-    require(upper_layer_item->text(0).contains(QStringLiteral("hidden by floor")) &&
+    require(visibility_label == nullptr,
+            "visibility state must remain in the hierarchy eye controls without a redundant summary label");
+    require(!upper_layer_item->text(0).contains(QStringLiteral("hidden"), Qt::CaseInsensitive) &&
                 upper_layer_item->toolTip(0).contains(QStringLiteral("Effective state: hidden by its floor filter.")),
-            "a layer row must expose its effective hidden-by-floor state");
+            "a layer row must keep its compact name while explaining inherited visibility on demand");
     require(!canvas_contains(measurement, upper_wall) && !canvas_contains(architectural, upper_wall) &&
                 canvas_contains(measurement, ground_wall),
             "the same floor/layer mask must drive both plan canvases");

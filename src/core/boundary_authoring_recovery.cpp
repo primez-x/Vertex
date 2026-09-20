@@ -332,8 +332,9 @@ Json write_dimension(const BoundaryDimension& dimension) {
         }
     } else {
         if (!dimension.automatic_placement_version ||
-            *dimension.automatic_placement_version != 1) {
-            invalid("automatic dimension requires placement version one");
+            (*dimension.automatic_placement_version != 1 &&
+             *dimension.automatic_placement_version != 2)) {
+            invalid("automatic dimension placement version is unsupported");
         }
         result["automatic_placement_version"] = *dimension.automatic_placement_version;
     }
@@ -359,7 +360,8 @@ BoundaryDimension read_dimension(const Json& value) {
     if (placement == BoundaryDimensionPlacement::automatic) {
         automatic_version = read_uint32(value.at("automatic_placement_version"),
                                          "automatic placement version");
-        if (*automatic_version != 1) invalid("automatic placement version is unsupported");
+        if (*automatic_version != 1 && *automatic_version != 2)
+            invalid("automatic placement version is unsupported");
     }
     BoundaryDimension result{
         read_string(value.at("id"), "dimension id"),

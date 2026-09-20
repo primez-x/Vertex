@@ -2,11 +2,14 @@
 
 #include "support/noninteractive_errors.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <numbers>
+#include <numeric>
 #include <stdexcept>
 #include <string_view>
 
@@ -106,13 +109,53 @@ void test_automatic_dimension_placement_is_deterministic() {
     require(first_view.active_chain->dimensions.front().placement ==
                 BoundaryDimensionPlacement::automatic &&
                 first_view.active_chain->dimensions.front().automatic_placement_version ==
-                    std::uint32_t{1},
-            "automatic placement must use version one semantics");
+                    std::uint32_t{2},
+            "new automatic placement must use exterior-aware version two semantics");
     require(first_view.active_chain->dimensions.front().text_position.x ==
                 second_view.active_chain->dimensions.front().text_position.x &&
                 first_view.active_chain->dimensions.front().text_position.y ==
                 second_view.active_chain->dimensions.front().text_position.y,
             "automatic dimension position must be deterministic");
+}
+
+void test_closed_triangle_dimensions_are_always_exterior() {
+    const auto verify = [](std::array<Vec2, 3> vertices) {
+        BoundaryAuthoringOptions options;
+        options.automatic_dimension_placement = true;
+        BoundaryAuthoringSession session(BoundaryAuthoringMode::draw_first, options);
+        (void)session.anchor(vertices[0]);
+        (void)session.add_line_to(vertices[1]);
+        (void)session.add_line_to(vertices[2]);
+        (void)session.add_line_to(vertices[0]);
+        const auto accepted = session.close_chain();
+        require(accepted.dimensions.size() == 3,
+                "closed triangle must retain one automatic dimension per edge");
+        const Vec2 centroid{(vertices[0].x + vertices[1].x + vertices[2].x) / 3.0,
+                            (vertices[0].y + vertices[1].y + vertices[2].y) / 3.0};
+        for (const auto& dimension : accepted.dimensions) {
+            const auto edge = std::find_if(accepted.boundary.segments.begin(),
+                accepted.boundary.segments.end(), [&](const auto& candidate) {
+                    return candidate.segment_id == dimension.segment_id;
+                });
+            require(edge != accepted.boundary.segments.end(),
+                    "dimension target must remain in the accepted triangle");
+            const auto& segment = edge->segment;
+            const Vec2 midpoint{std::midpoint(segment.start.x, segment.end.x),
+                                std::midpoint(segment.start.y, segment.end.y)};
+            const Vec2 direction{segment.end.x - segment.start.x,
+                                 segment.end.y - segment.start.y};
+            const auto side = [&](Vec2 point) {
+                return direction.x * (point.y - midpoint.y) -
+                       direction.y * (point.x - midpoint.x);
+            };
+            require(side(centroid) * side(dimension.text_position) < 0.0,
+                    "automatic triangle dimension must lie opposite the interior");
+            require(dimension.automatic_placement_version == std::optional<std::uint32_t>{2},
+                    "exterior dimension must retain version two provenance");
+        }
+    };
+    verify({Vec2{0.0, 0.0}, Vec2{4.0, 0.0}, Vec2{0.0, 3.0}});
+    verify({Vec2{0.0, 0.0}, Vec2{0.0, 3.0}, Vec2{4.0, 0.0}});
 }
 
 void test_draw_first_classifies_after_measured_linework_and_supports_pen_up() {
@@ -357,6 +400,7 @@ int main() {
     try {
         test_define_first_classification_and_dimension_phase();
         test_automatic_dimension_placement_is_deterministic();
+        test_closed_triangle_dimensions_are_always_exterior();
         test_draw_first_classifies_after_measured_linework_and_supports_pen_up();
         test_line_inputs_and_exact_receipts();
         test_all_analytic_arc_forms_retain_independent_geometry();

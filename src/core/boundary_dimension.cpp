@@ -246,8 +246,9 @@ void validate_model(const BoundaryDimension& dimension) {
             return;
         case BoundaryDimensionPlacement::automatic:
             if (!dimension.automatic_placement_version.has_value() ||
-                *dimension.automatic_placement_version != 1) {
-                invalid("automatic dimension requires placement version one");
+                (*dimension.automatic_placement_version != 1 &&
+                 *dimension.automatic_placement_version != 2)) {
+                invalid("automatic dimension placement version is unsupported");
             }
             return;
     }
@@ -439,7 +440,7 @@ BoundaryDimensionDecodeResult decode_boundary_dimension_entity(const Entity& ent
         }
         const auto parsed = json_uint32(
             *automatic_field, "automatic placement version must be a positive integer");
-        if (parsed != 1) {
+        if (parsed != 1 && parsed != 2) {
             invalid("automatic placement version is unsupported");
         }
         automatic_version = parsed;
@@ -529,7 +530,8 @@ Entity encode_boundary_dimension_entity(const BoundaryDimension& dimension,
     properties["placement_origin"] =
         std::string(boundary_dimension_placement_name(dimension.placement));
     if (dimension.placement == BoundaryDimensionPlacement::automatic) {
-        properties["automatic_placement_version"] = 1;
+        properties["automatic_placement_version"] =
+            *dimension.automatic_placement_version;
     } else {
         properties.erase("automatic_placement_version");
     }

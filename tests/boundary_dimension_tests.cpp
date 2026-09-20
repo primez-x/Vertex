@@ -183,8 +183,15 @@ void test_automatic_and_manual_placement_semantics_are_strict() {
     rejected([&] { (void)sketch::encode_boundary_dimension_entity(manual_with_version); },
              "manual model must reject a conflicting automatic placement version");
 
+    auto exterior_automatic = automatic;
+    exterior_automatic.automatic_placement_version = 2;
+    const auto exterior_entity = sketch::encode_boundary_dimension_entity(exterior_automatic);
+    require(exterior_entity.properties.at("automatic_placement_version") == 2 &&
+                sketch::decode_boundary_dimension_entity(exterior_entity).dimension == exterior_automatic,
+            "exterior-aware automatic placement must round-trip as version two");
+
     auto automatic_wrong_version = automatic_entity;
-    automatic_wrong_version.properties["automatic_placement_version"] = 2;
+    automatic_wrong_version.properties["automatic_placement_version"] = 3;
     rejected([&] { (void)sketch::decode_boundary_dimension_entity(automatic_wrong_version); },
              "automatic placement must reject unsupported placement versions");
 

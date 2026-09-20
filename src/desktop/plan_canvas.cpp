@@ -268,13 +268,15 @@ PlanCanvas::PlanCanvas(QWidget* parent) : QWidget(parent) {
 
 void PlanCanvas::setEntities(std::vector<CanvasEntity> entities) {
     m_entities = std::move(entities);
+    if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     update();
 }
 
 void PlanCanvas::setTool(CanvasTool tool) {
     resetGesture();
     m_tool = tool;
-    setCursor(tool == CanvasTool::select ? Qt::ArrowCursor : Qt::CrossCursor);
+    if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
+    else setCursor(tool == CanvasTool::select ? Qt::ArrowCursor : Qt::CrossCursor);
     setFocus();
     update();
 }
@@ -358,11 +360,28 @@ void PlanCanvas::setSelectedIds(const QStringList& entity_ids) {
     }
     for (auto& label : m_labels) label.selected = entity_ids.contains(label.id);
     for (auto& reference : m_references) reference.selected = entity_ids.contains(reference.id);
+    if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
+    update();
+}
+
+void PlanCanvas::setSelectionCaption(QString caption) {
+    if (m_selection_caption == caption) return;
+    m_selection_caption = std::move(caption);
+    update();
+}
+
+void PlanCanvas::setSelectionTransformEnabled(bool resize_enabled, bool rotate_enabled) {
+    if (m_selection_resize_enabled == resize_enabled &&
+        m_selection_rotate_enabled == rotate_enabled) return;
+    m_selection_resize_enabled = resize_enabled;
+    m_selection_rotate_enabled = rotate_enabled;
+    if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     update();
 }
 
 void PlanCanvas::setLabels(std::vector<CanvasLabel> labels) {
     m_labels = std::move(labels);
+    if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     update();
 }
 
@@ -374,6 +393,7 @@ void PlanCanvas::setReference(std::optional<CanvasReference> reference) {
 
 void PlanCanvas::setReferences(std::vector<CanvasReference> references) {
     m_references = std::move(references);
+    if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     update();
 }
 
@@ -667,6 +687,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
 
     if (!output) {
         drawSelectionFrame(painter, viewport);
+        drawSelectionCaption(painter, viewport, background);
         drawCursorReadout(painter, viewport, background);
     }
 
@@ -1086,12 +1107,25 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
     }
     m_left_start = position;
     m_left_dragging = false;
-    m_pressed_entity = hitTest(position);
-    if (m_tool == CanvasTool::select && !m_pressed_entity.isEmpty() &&
-        selectedIds().contains(m_pressed_entity)) {
-        m_left_gesture = LeftGesture::object_move;
+    const auto handle = selectionHandleAt(position, QRectF(rect()));
+    if (handle != SelectionHandle::none) {
         m_move_ids = selectedIds();
-        if (m_move_ids.isEmpty()) m_move_ids = {m_pressed_entity};
+        m_transform_frame_start = selectionFrame(QRectF(rect()));
+        m_transform_center = m_transform_frame_start->center();
+        m_transform_start = position;
+        m_transform_scale_preview = 1.0;
+        m_transform_rotation_preview = 0.0;
+        m_left_gesture = handle == SelectionHandle::resize
+            ? LeftGesture::selection_resize : LeftGesture::selection_rotate;
+        return;
+    }
+    m_pressed_entity = hitTest(position);
+    const auto retained_selection = selectedIds();
+    const auto frame = selectionFrame(QRectF(rect()));
+    if (m_tool == CanvasTool::select && !retained_selection.isEmpty() && frame &&
+        frame->contains(position)) {
+        m_left_gesture = LeftGesture::object_move;
+        m_move_ids = retained_selection;
     } else {
         m_left_gesture = LeftGesture::canvas_pan;
         m_pan_start = position;
@@ -1131,6 +1165,28 @@ void PlanCanvas::pointerMove(QPointF position) {
             m_move_preview_delta = dragDelta(position);
             update();
         }
+    } else if (m_left_gesture == LeftGesture::selection_resize ||
+               m_left_gesture == LeftGesture::selection_rotate) {
+        if (!m_left_dragging &&
+            (position - m_left_start).manhattanLength() >= QApplication::startDragDistance())
+            m_left_dragging = true;
+        if (m_left_dragging) {
+            const auto start = m_transform_start - m_transform_center;
+            const auto current = position - m_transform_center;
+            if (m_left_gesture == LeftGesture::selection_resize) {
+                const auto initial_distance = std::hypot(start.x(), start.y());
+                const auto current_distance = std::hypot(current.x(), current.y());
+                if (initial_distance > 1e-6 && std::isfinite(current_distance))
+                    m_transform_scale_preview = std::clamp(current_distance / initial_distance,
+                                                           0.05, 20.0);
+                setCursor(Qt::SizeFDiagCursor);
+            } else {
+                m_transform_rotation_preview = std::atan2(current.y(), current.x()) -
+                                               std::atan2(start.y(), start.x());
+                setCursor(Qt::CrossCursor);
+            }
+            update();
+        }
     }
     if (m_panning) {
         beginPerformanceMeasurement(PerformanceMetric::navigation);
@@ -1168,6 +1224,8 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button) {
         const auto move_ids = m_move_ids;
         const auto pressed_entity = m_pressed_entity;
         const auto delta = dragDelta(position);
+        const auto transform_scale = m_transform_scale_preview;
+        const auto transform_rotation = m_transform_rotation_preview;
         const auto closing = closingAnchor(position);
         resetGesture();
         if (gesture == LeftGesture::marquee && selection_start) {
@@ -1184,15 +1242,40 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button) {
                     m_entity_selection_clicked(pressed_entity, false);
                 else if (m_entity_clicked)
                     m_entity_clicked(pressed_entity);
+            } else if (m_tool == CanvasTool::select && !selectedIds().isEmpty()) {
+                // An empty click outside the retained selection is an explicit
+                // deselect. Do not also interpret it as the first drawing node;
+                // the next empty click begins authoring once selection is clear.
+                if (m_entity_selection_clicked) m_entity_selection_clicked({}, false);
             } else if (closing && m_finish_requested) {
                 m_finish_requested();
             } else if (m_point_clicked) {
                 m_point_clicked(inputPoint(position));
             }
-        } else if (gesture == LeftGesture::object_move && dragging &&
-                   m_entities_move_requested &&
-                   (std::abs(delta.x) > 1e-12 || std::abs(delta.y) > 1e-12)) {
-            (void)m_entities_move_requested(move_ids, delta);
+        } else if (gesture == LeftGesture::object_move) {
+            if (dragging && m_entities_move_requested &&
+                (std::abs(delta.x) > 1e-12 || std::abs(delta.y) > 1e-12)) {
+                (void)m_entities_move_requested(move_ids, delta);
+            } else if (!dragging) {
+                // The frame owns a drag after the platform threshold, but a
+                // stationary click still resolves the exact painted target.
+                // Empty space within that frame is outside the painted object,
+                // so the first click clears the retained selection without
+                // also creating a drawing node.
+                if (!pressed_entity.isEmpty() && !move_ids.contains(pressed_entity)) {
+                    if (m_entity_selection_clicked)
+                        m_entity_selection_clicked(pressed_entity, false);
+                    else if (m_entity_clicked)
+                        m_entity_clicked(pressed_entity);
+                } else if (pressed_entity.isEmpty() && m_entity_selection_clicked) {
+                    m_entity_selection_clicked({}, false);
+                }
+            }
+        } else if ((gesture == LeftGesture::selection_resize ||
+                    gesture == LeftGesture::selection_rotate) && dragging &&
+                   move_ids.size() == 1 && m_entity_transform_requested) {
+            (void)m_entity_transform_requested(move_ids.front(), transform_scale,
+                                               transform_rotation);
         }
         updateCursor(position);
     }
@@ -1211,13 +1294,13 @@ void PlanCanvas::resetGesture() {
     m_pressed_entity.clear();
     m_move_ids.clear();
     m_move_preview_delta.reset();
+    m_transform_frame_start.reset();
+    m_transform_scale_preview = 1.0;
+    m_transform_rotation_preview = 0.0;
     if (m_space_pan_armed) {
         setCursor(Qt::OpenHandCursor);
-    } else if (m_tool == CanvasTool::select && m_last_mouse_position) {
-        const auto target = hitTest(*m_last_mouse_position);
-        setCursor(target.isEmpty() ? Qt::CrossCursor
-                                   : selectedIds().contains(target) ? Qt::SizeAllCursor
-                                                                    : Qt::ArrowCursor);
+    } else if (m_last_mouse_position) {
+        updatePointerCursor(*m_last_mouse_position);
     } else {
         setCursor(Qt::CrossCursor);
     }
@@ -1243,7 +1326,7 @@ void PlanCanvas::mouseDoubleClickEvent(QMouseEvent* event) {
 }
 
 std::optional<QRectF> PlanCanvas::selectionBounds() const {
-    return selectionBounds(QRectF(rect()));
+    return selectionFrame(QRectF(rect()));
 }
 
 std::optional<QRectF> PlanCanvas::selectionBounds(const QRectF& viewport) const {
@@ -1316,22 +1399,110 @@ std::optional<QRectF> PlanCanvas::selectionBounds(const QRectF& viewport) const 
     return result;
 }
 
-void PlanCanvas::drawSelectionFrame(QPainter& painter, const QRectF& viewport) const {
-    const auto bounds = selectionBounds(viewport);
-    if (!bounds) return;
-    // Keep a frame visible when zooming into a large selected item. The API
-    // retains its true bounds; only the painted frame hugs the visible extent.
+std::optional<QRectF> PlanCanvas::selectionFrame(const QRectF& viewport) const {
+    auto bounds = selectionBounds(viewport);
+    if (!bounds) return std::nullopt;
+    // The painted frame is also the move hit target. A 44 px minimum keeps
+    // thin lines and small symbols usable with touch or a pen without adding
+    // an invisible halo outside the feedback the user can see.
+    constexpr qreal minimum_target = 44.0;
+    if (bounds->width() < minimum_target) {
+        const auto expansion = (minimum_target - bounds->width()) * 0.5;
+        bounds->adjust(-expansion, 0.0, expansion, 0.0);
+    }
+    if (bounds->height() < minimum_target) {
+        const auto expansion = (minimum_target - bounds->height()) * 0.5;
+        bounds->adjust(0.0, -expansion, 0.0, expansion);
+    }
     const auto frame = bounds->intersected(viewport.adjusted(5.0, 5.0, -5.0, -5.0));
-    if (frame.isEmpty()) return;
+    return frame.isEmpty() ? std::nullopt : std::optional<QRectF>{frame};
+}
+
+QPointF PlanCanvas::rotationHandlePoint(const QRectF& frame, const QRectF& viewport) const {
+    const auto outside = QPointF(frame.center().x(), frame.top() - 24.0);
+    if (viewport.adjusted(12.0, 12.0, -12.0, -12.0).contains(outside)) return outside;
+    return QPointF(frame.center().x(), std::min(frame.bottom() - 10.0, frame.top() + 24.0));
+}
+
+PlanCanvas::SelectionHandle PlanCanvas::selectionHandleAt(
+    QPointF point, const QRectF& viewport) const {
+    if (selectedIds().size() != 1) return SelectionHandle::none;
+    const auto frame = selectionFrame(viewport);
+    if (!frame) return SelectionHandle::none;
+    constexpr qreal hit_size = 24.0;
+    const auto hit = [&](QPointF center) {
+        return QRectF(center.x() - hit_size * 0.5, center.y() - hit_size * 0.5,
+                      hit_size, hit_size).contains(point);
+    };
+    if (m_selection_rotate_enabled && hit(rotationHandlePoint(*frame, viewport)))
+        return SelectionHandle::rotate;
+    if (m_selection_resize_enabled &&
+        (hit(frame->topLeft()) || hit(frame->topRight()) ||
+         hit(frame->bottomLeft()) || hit(frame->bottomRight())))
+        return SelectionHandle::resize;
+    return SelectionHandle::none;
+}
+
+void PlanCanvas::drawSelectionFrame(QPainter& painter, const QRectF& viewport) const {
+    const auto frame = selectionFrame(viewport);
+    if (!frame) return;
     painter.save();
     painter.setClipRect(viewport, Qt::IntersectClip);
     painter.setRenderHint(QPainter::Antialiasing, true);
+    if (m_transform_frame_start &&
+        (m_left_gesture == LeftGesture::selection_resize ||
+         m_left_gesture == LeftGesture::selection_rotate)) {
+        painter.translate(m_transform_center);
+        painter.rotate(m_transform_rotation_preview * 180.0 / std::numbers::pi);
+        painter.scale(m_transform_scale_preview, m_transform_scale_preview);
+        painter.translate(-m_transform_center);
+    }
     painter.setBrush(Qt::NoBrush);
     // A white halo keeps the blue frame legible over dark fills and underlays.
     painter.setPen(QPen(QColor(255, 255, 255, 235), 4.0));
-    painter.drawRect(frame);
+    painter.drawRect(*frame);
+    if (selectedIds().size() == 1 &&
+        (m_selection_resize_enabled || m_selection_rotate_enabled)) {
+        painter.setBrush(QColor(255, 255, 255));
+        painter.setPen(QPen(QColor(37, 99, 235), 1.5));
+        if (m_selection_resize_enabled) {
+            for (const auto point : {frame->topLeft(), frame->topRight(),
+                                     frame->bottomLeft(), frame->bottomRight()})
+                painter.drawRect(QRectF(point.x() - 4.0, point.y() - 4.0, 8.0, 8.0));
+        }
+        if (m_selection_rotate_enabled) {
+            const auto handle = rotationHandlePoint(*frame, viewport);
+            painter.drawLine(QPointF(frame->center().x(), frame->top()), handle);
+            painter.drawEllipse(handle, 5.0, 5.0);
+        }
+    }
     painter.setPen(QPen(QColor(37, 99, 235), 1.5));
-    painter.drawRect(frame);
+    painter.drawRect(*frame);
+    painter.restore();
+}
+
+void PlanCanvas::drawSelectionCaption(QPainter& painter, const QRectF& viewport,
+                                      QColor background) const {
+    if (m_selection_caption.isEmpty() || viewport.width() < 100.0 || viewport.height() < 60.0)
+        return;
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    auto caption_font = font();
+    caption_font.setPointSizeF(std::max(8.0, caption_font.pointSizeF() - 1.0));
+    caption_font.setWeight(QFont::DemiBold);
+    painter.setFont(caption_font);
+    const QFontMetricsF metrics(caption_font);
+    const auto maximum_width = std::max<qreal>(72.0, viewport.width() * 0.42);
+    const auto text = metrics.elidedText(m_selection_caption, Qt::ElideRight,
+                                         qFloor(maximum_width - 20.0));
+    auto badge = metrics.boundingRect(text).adjusted(-10.0, -5.0, 10.0, 5.0);
+    badge.moveTopRight(viewport.topRight() + QPointF(-12.0, 12.0));
+    const bool dark = background.lightnessF() < 0.45;
+    painter.setPen(QPen(dark ? QColor(125, 179, 255) : QColor(37, 99, 235), 1.0));
+    painter.setBrush(dark ? QColor(27, 52, 87, 238) : QColor(239, 246, 255, 244));
+    painter.drawRoundedRect(badge, 8.0, 8.0);
+    painter.setPen(dark ? QColor(223, 235, 255) : QColor(29, 78, 216));
+    painter.drawText(badge, Qt::AlignCenter, text);
     painter.restore();
 }
 
@@ -1691,23 +1862,41 @@ Vec2 PlanCanvas::dragDelta(QPointF position) const {
     return {snapped_end.x - snapped_start.x, snapped_end.y - snapped_start.y};
 }
 
-void PlanCanvas::updateCursor(QPointF point) {
-    m_last_mouse_position = point;
-    if (m_cursor_moved) {
-        m_cursor_moved(inputPoint(point));
-    }
+void PlanCanvas::updatePointerCursor(QPointF point) {
     if (m_panning || (m_left_gesture == LeftGesture::object_move && m_left_dragging)) {
         setCursor(Qt::ClosedHandCursor);
     } else if (m_space_pan_armed && m_gesture_button == Qt::NoButton) {
         setCursor(Qt::OpenHandCursor);
     } else if (m_tool == CanvasTool::select && m_gesture_button == Qt::NoButton) {
+        const auto handle = selectionHandleAt(point, QRectF(rect()));
+        if (handle != SelectionHandle::none) {
+            setCursor(handle == SelectionHandle::resize ? Qt::SizeFDiagCursor
+                                                        : Qt::CrossCursor);
+            return;
+        }
+        const auto frame = selectionFrame(QRectF(rect()));
+        if (frame && frame->contains(point)) {
+            setCursor(Qt::SizeAllCursor);
+            return;
+        }
         const auto target = hitTest(point);
-        setCursor(target.isEmpty() ? Qt::CrossCursor
-                                   : selectedIds().contains(target) ? Qt::SizeAllCursor
-                                                                    : Qt::ArrowCursor);
+        setCursor(target.isEmpty() ? Qt::CrossCursor : Qt::ArrowCursor);
     } else if (m_tool != CanvasTool::select && m_gesture_button == Qt::NoButton) {
         setCursor(Qt::CrossCursor);
     }
+}
+
+void PlanCanvas::setEntityTransformRequested(
+    std::function<bool(QString, double, double)> callback) {
+    m_entity_transform_requested = std::move(callback);
+}
+
+void PlanCanvas::updateCursor(QPointF point) {
+    m_last_mouse_position = point;
+    if (m_cursor_moved) {
+        m_cursor_moved(inputPoint(point));
+    }
+    updatePointerCursor(point);
     update();
 }
 

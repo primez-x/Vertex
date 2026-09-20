@@ -165,15 +165,20 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
                     measurement_canvas->testAttribute(Qt::WA_TabletTracking) &&
                     architectural_canvas->testAttribute(Qt::WA_TabletTracking),
                 "both workspace canvases must accept explicit touch and active-pen events");
-        auto* tool_panel = window.findChild<QWidget*>(QStringLiteral("toolPanel"));
+        auto* sidebar_tabs = window.findChild<QTabWidget*>(QStringLiteral("sidebarTabs"));
+        auto* status_controls = window.findChild<QWidget*>(QStringLiteral("canvasStatusControls"));
         auto* object_tool = window.findChild<QToolButton*>(QStringLiteral("createBuildingObject"));
-        require(tool_panel && tool_panel->height() <= 48 &&
+        require(window.findChild<QWidget*>(QStringLiteral("toolPanel")) == nullptr &&
+                    window.findChild<QToolButton*>(QStringLiteral("toggleProjectPanel")) == nullptr &&
+                    sidebar_tabs && sidebar_tabs->count() == 2 &&
+                    sidebar_tabs->tabText(0) == QStringLiteral("Layers") &&
+                    sidebar_tabs->tabText(1) == QStringLiteral("Symbols") && status_controls &&
                     object_tool && object_tool->toolButtonStyle() == Qt::ToolButtonTextBesideIcon &&
-                    object_tool->iconSize() == QSize(18, 18) &&
+                    object_tool->iconSize() == QSize(16, 16) &&
                     window.findChild<QToolButton*>(QStringLiteral("selectTool")) == nullptr &&
                     window.findChild<QToolButton*>(QStringLiteral("drawFirstBoundary")) == nullptr &&
                     window.findChild<QToolButton*>(QStringLiteral("defineFirstBoundary")) == nullptr,
-                "the compact canvas bar must use one pointer surface without Select, Draw First, or Define First toggles");
+                "the canvas must have no top tool strip, use Layers/Symbols sidebar tabs, and retain one pointer surface");
         auto* settings = window.findChild<QAction*>(QStringLiteral("keyboardShortcutSettings"));
         auto* user_guide = window.findChild<QAction*>(QStringLiteral("userGuide"));
         auto* about = window.findChild<QAction*>(QStringLiteral("aboutAction"));
@@ -585,7 +590,61 @@ void test_plan_canvas_native_pointer_events() {
                               Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
     QCoreApplication::sendEvent(&canvas, &plain_press);
     QCoreApplication::sendEvent(&canvas, &plain_release);
-    require(selection_clicks == 2 && !toggle_selection, "plain click requests replacement selection");
+    require(selection_clicks == 1 && point_clicks == 3,
+            "plain empty click with no retained selection must request a drawing point");
+}
+
+void test_canvas_symbol_transform_persistence() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    const auto symbol_id = window.createAnnotationSymbol(
+        QStringLiteral("sofa"), {0.0, 0.0});
+    require(!symbol_id.isEmpty() && window.selectEntity(symbol_id),
+            "canvas transform fixture must select a symbol");
+    auto* canvas = dynamic_cast<desktop::PlanCanvas*>(
+        window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    require(canvas != nullptr, "canvas transform fixture needs the measurement canvas");
+    canvas->resize(800, 600);
+    canvas->fitView();
+    QApplication::processEvents();
+    const auto frame = canvas->selectionBounds();
+    require(frame.has_value(), "selected symbol must expose its transform frame");
+
+    const auto before = decode_annotation_entity(
+        window.document().snapshot().entities().at("annotations-1"));
+    const auto before_symbol = std::find_if(before.symbols.begin(), before.symbols.end(),
+        [&](const auto& value) { return value.id == symbol_id.toStdString(); });
+    require(before_symbol != before.symbols.end(), "selected symbol must exist before resizing");
+    const auto before_scale = before_symbol->placement.scale;
+    const auto before_revision = window.document().revision();
+    const auto start = frame->bottomRight();
+    const auto end = start + QPointF(60.0, 45.0);
+    const auto mouse = [&](QEvent::Type type, QPointF point, Qt::MouseButton button,
+                           Qt::MouseButtons buttons) {
+        QMouseEvent event(type, point, canvas->mapToGlobal(point.toPoint()), button,
+                          buttons, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &event);
+    };
+    mouse(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
+
+    const auto after = decode_annotation_entity(
+        window.document().snapshot().entities().at("annotations-1"));
+    const auto after_symbol = std::find_if(after.symbols.begin(), after.symbols.end(),
+        [&](const auto& value) { return value.id == symbol_id.toStdString(); });
+    require(after_symbol != after.symbols.end() &&
+                after_symbol->placement.scale > before_scale * 1.05 &&
+                window.document().revision() == before_revision + 1,
+            "dragging a symbol resize handle must persist one model transform command");
+    require(window.undoCommand(), "canvas symbol transform must be undoable");
+    const auto restored = decode_annotation_entity(
+        window.document().snapshot().entities().at("annotations-1"));
+    const auto restored_symbol = std::find_if(restored.symbols.begin(), restored.symbols.end(),
+        [&](const auto& value) { return value.id == symbol_id.toStdString(); });
+    require(restored_symbol != restored.symbols.end() &&
+                std::abs(restored_symbol->placement.scale - before_scale) < 1e-12,
+            "undo must restore the symbol scale changed from the canvas");
 }
 
 void test_external_project_change_blocks_save() {
@@ -628,11 +687,17 @@ void test_workspace_profiles() {
         window.setMetricUnits(true);
         auto* grid = window.findChild<QToolButton*>(QStringLiteral("gridTool"));
         auto* snap = window.findChild<QToolButton*>(QStringLiteral("snapTool"));
+        auto* fit = window.findChild<QToolButton*>(QStringLiteral("fitViewTool"));
         auto* overview = window.findChild<QToolButton*>(QStringLiteral("overviewMapTool"));
+        auto* status_controls = window.findChild<QWidget*>(QStringLiteral("canvasStatusControls"));
         auto* workspace_splitter = window.findChild<QSplitter*>(QStringLiteral("workspaceSplitter"));
         auto* architectural_splitter = window.findChild<QSplitter*>(QStringLiteral("architecturalSplitter"));
-        require(grid && snap && overview && workspace_splitter && architectural_splitter,
-                "profile fixture needs controls and splitter state");
+        require(grid && snap && fit && overview && status_controls &&
+                    grid->parentWidget() == status_controls && snap->parentWidget() == status_controls &&
+                    fit->parentWidget() == status_controls && overview->parentWidget() == status_controls &&
+                    grid->toolButtonStyle() == Qt::ToolButtonIconOnly &&
+                    workspace_splitter && architectural_splitter,
+                "profile fixture needs compact status-bar canvas controls and splitter state");
         window.resize(1400, 900);
         window.show();
         QApplication::processEvents();
@@ -1710,10 +1775,14 @@ void test_organization_context() {
     require(!second_floor.isEmpty(), "create a floor with a default layer atomically");
     const auto layer = window.activeLayerId();
     require(!layer.isEmpty() && layer != "layer-1", "new floor activates its own drawing layer");
-    auto* drawing_context = window.findChild<QLabel*>(QStringLiteral("drawingContext"));
-    require(drawing_context && drawing_context->wordWrap() &&
-                drawing_context->text().contains("Workshop") && drawing_context->text().contains("Upper floor"),
-            "the full active drawing context must remain readable beside a narrow layer selector");
+    auto* active_layer_item = navigator_item(window, layer);
+    require(active_layer_item && active_layer_item->font(0).bold() &&
+                active_layer_item->text(1) == QStringLiteral("●") &&
+                active_layer_item->toolTip(0).contains(QStringLiteral("Active layer")) &&
+                active_layer_item->parent() && active_layer_item->parent()->text(0) == QStringLiteral("Upper floor") &&
+                active_layer_item->parent()->parent() &&
+                active_layer_item->parent()->parent()->text(0) == QStringLiteral("Workshop"),
+            "the project hierarchy must identify the active layer within its floor and building");
     const auto wall = window.createStraightWall({1.0, 2.0}, {6.0, 2.0});
     require(!wall.isEmpty(), "draw on the selected floor");
     const auto snapshot = window.document().snapshot();
@@ -1943,6 +2012,7 @@ void test_contextual_building_dimension_inspector(const QString& capture_directo
     using namespace sketch;
     desktop::MainWindow window;
     window.setMetricUnits(true);
+    window.setWorkspace(desktop::Workspace::architectural);
     const std::vector<BuildingObject> objects{
         RectangularColumn{"inspector-column", {1, 2.123456789012345, 0}, 0.4, 0.6, 3.0, 0.23456789012345},
         CircularColumn{"inspector-round", {3, 2, 0}, 0.25, 3.0},
@@ -2116,6 +2186,7 @@ void test_contextual_building_dimension_inspector(const QString& capture_directo
 void test_material_assignment_inspector(const QString& capture_directory) {
     using namespace sketch;
     desktop::MainWindow window;
+    window.setWorkspace(desktop::Workspace::architectural);
     auto catalog = Entity::create("assembly_model", {{"version", 1},
         {"model", AssemblyModel::create({{"timber", "Timber"}, {"steel", "Steel"}}, {}, {}).to_json()}});
     window.document().apply(ApplyEntityChanges{window.document().revision(), {EntityChange::upsert(catalog)}, {}, "create materials"});
@@ -2281,6 +2352,7 @@ void test_roof_opening_authoring(const QString& capture_directory) {
 void test_hip_roof_authoring(const QString& capture_directory) {
     using namespace sketch;
     desktop::MainWindow window;
+    window.setWorkspace(desktop::Workspace::architectural);
     desktop::BuildingObjectDialog dialog(std::nullopt, true);
     auto* type = dialog.findChild<QComboBox*>("buildingObjectType");
     type->setCurrentIndex(type->findData("roof"));
@@ -2328,6 +2400,7 @@ void test_hip_roof_authoring(const QString& capture_directory) {
 void test_contextual_roof_dimension_inspector() {
     using namespace sketch;
     desktop::MainWindow window;
+    window.setWorkspace(desktop::Workspace::architectural);
     const SlopedRoofPanel flat_roof{
         "context-roof", {0.0, 0.0, 4.0}, 0.0, 4.0, 3.0, 0.0, 0.0, 0.2, 0.1};
     const auto source = encode_building_entity(flat_roof, {{"fixture_metadata", "retained"}});
@@ -2423,6 +2496,7 @@ void test_contextual_roof_dimension_inspector() {
 void test_contextual_gable_roof_inspector(const QString& capture_directory) {
     using namespace sketch;
     desktop::MainWindow window;
+    window.setWorkspace(desktop::Workspace::architectural);
     auto source = encode_building_entity(GableRoof{
         "context-gable", {1, 2, 4}, 0.2, 6, 4, 1, std::atan(0.5), 0.2, 0.1},
         {{"future_roof_metadata", "retain"}});
@@ -4292,6 +4366,11 @@ int main(int argc, char** argv) {
         return 0;
     }
     test_plan_canvas_native_pointer_events();
+    test_canvas_symbol_transform_persistence();
+    if (argc == 2 && std::string_view(argv[1]) == "--canvas-transform-only") {
+        std::cout << "Canvas transform workflow tests passed\n";
+        return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--selection-clipboard-only") {
         test_multiple_selection_clipboard_workflow();
         test_selection_clipboard_workflow();
@@ -5208,9 +5287,13 @@ int main(int argc, char** argv) {
             "new building object must be selectable through the project navigator");
     auto* create_object_button = window.findChild<QToolButton*>(QStringLiteral("createBuildingObject"));
     auto* edit_object_button = window.findChild<QPushButton*>(QStringLiteral("editBuildingObject"));
-    require(create_object_button && create_object_button->isEnabled() &&
-                edit_object_button && !edit_object_button->isHidden() && edit_object_button->isEnabled(),
-            "building object tools must be available for the current editable selection");
+    require(create_object_button && create_object_button->isHidden() &&
+                edit_object_button && edit_object_button->isHidden(),
+            "the 2D workspace must hide architectural object authoring controls");
+    window.setWorkspace(sketch::desktop::Workspace::architectural);
+    require(!create_object_button->isHidden() && create_object_button->isEnabled() &&
+                !edit_object_button->isHidden() && edit_object_button->isEnabled(),
+            "building object tools must be available in the architectural workspace");
     auto* plan_widget = window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas"));
     auto* plan = dynamic_cast<sketch::desktop::PlanCanvas*>(plan_widget);
     require(plan != nullptr, "measurement canvas must expose its derived drawing geometry");

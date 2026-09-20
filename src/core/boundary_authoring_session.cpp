@@ -19,7 +19,11 @@ namespace sketch {
 
 namespace {
 
-constexpr std::uint32_t automatic_placement_version = 1;
+constexpr std::uint32_t automatic_placement_version = 2;
+
+bool supported_automatic_placement_version(std::uint32_t version) noexcept {
+    return version == 1 || version == automatic_placement_version;
+}
 
 // Returned same-type copy prvalues use mandatory elision. PublishOnSuccess
 // commits only after their construction, including Debug iterator proxies.
@@ -130,7 +134,7 @@ Vec2 arc_point_at(const Segment& segment, double parameter) {
             arc.center.y + arc.radius * std::sin(angle)};
 }
 
-Vec2 automatic_dimension_position(const Segment& segment) {
+Vec2 automatic_dimension_position(const Segment& segment, double normal_side = 1.0) {
     const auto length = segment_length(segment);
     if (!std::isfinite(length) || !(length > 0.0)) invalid("cannot place a degenerate dimension");
     double tangent = 0.0;
@@ -148,8 +152,8 @@ Vec2 automatic_dimension_position(const Segment& segment) {
                                                                : -std::numbers::pi / 2.0);
     }
     const auto offset = std::max(0.25, length * 0.1);
-    const Vec2 result{midpoint.x - std::sin(tangent) * offset,
-                      midpoint.y + std::cos(tangent) * offset};
+    const Vec2 result{midpoint.x - std::sin(tangent) * offset * normal_side,
+                      midpoint.y + std::cos(tangent) * offset * normal_side};
     require_point(result, "automatic dimension position");
     return result;
 }
@@ -382,7 +386,7 @@ std::string BoundaryAuthoringSession::append_edge(SemanticRoot& semantic, IdCoun
         chain.dimensions.push_back(
             {dimension_id, *chain.boundary_id,
              segment_id, text_position, BoundaryDimensionPlacement::automatic,
-             automatic_placement_version});
+             options.automatic_placement_version});
     } else if (mode == BoundaryAuthoringMode::define_first) {
         chain.pending_dimensions.push_back({*chain.boundary_id, segment_id});
     }
@@ -644,8 +648,8 @@ BoundaryAuthoringSession::BoundaryAuthoringSession(BoundaryAuthoringMode mode,
         !(options_.geometry_tolerance_metres > 0.0)) {
         invalid("geometry tolerance must be finite and positive");
     }
-    if (options_.automatic_placement_version != automatic_placement_version) {
-        invalid("only automatic dimension placement version one is supported");
+    if (!supported_automatic_placement_version(options_.automatic_placement_version)) {
+        invalid("automatic dimension placement version is unsupported");
     }
     require_identifier_prefix(options_.boundary_id_prefix, "boundary id prefix");
     require_identifier_prefix(options_.vertex_id_prefix, "vertex id prefix");
@@ -1431,7 +1435,7 @@ BoundaryDimension BoundaryAuthoringSession::place_automatic_dimension() {
         pending.segment_id,
         text_position,
         BoundaryDimensionPlacement::automatic,
-        automatic_placement_version};
+        options_.automatic_placement_version};
     chain.pending_dimensions.pop_front();
     chain.dimensions.push_back(dimension);
     semantic.phase = chain.pending_dimensions.empty() ? BoundaryAuthoringPhase::drawing
@@ -1471,6 +1475,32 @@ AcceptedBoundaryChain BoundaryAuthoringSession::close_chain() {
     detail::validate_authoring_usage(closure_usage, resource_policy_);
     const auto public_draft = materialize(chain);
     validate_strict_chain(public_draft, options_.geometry_tolerance_metres);
+    if (options_.automatic_placement_version == 2 && !chain.dimensions.empty()) {
+        Boundary geometry;
+        geometry.reserve(public_draft.segments.size());
+        for (const auto& edge : public_draft.segments) geometry.push_back(edge.segment);
+        const auto area = signed_area(geometry);
+        if (!std::isfinite(area) || std::abs(area) <= options_.geometry_tolerance_metres)
+            invalid("closed boundary orientation is undefined");
+        // Positive signed area is counter-clockwise, where the polygon
+        // interior lies to the left of each directed edge. The exterior is
+        // therefore the right normal; clockwise cycles use the left normal.
+        const auto exterior_side = area > 0.0 ? -1.0 : 1.0;
+        auto dimensions = chain.dimensions.materialize();
+        for (auto& dimension : dimensions) {
+            if (dimension.placement != BoundaryDimensionPlacement::automatic ||
+                dimension.automatic_placement_version != std::optional<std::uint32_t>{2})
+                continue;
+            const auto edge = std::find_if(public_draft.segments.begin(), public_draft.segments.end(),
+                [&](const auto& candidate) { return candidate.segment_id == dimension.segment_id; });
+            if (edge == public_draft.segments.end())
+                invalid("automatic dimension target disappeared during closure");
+            dimension.text_position = automatic_dimension_position(edge->segment, exterior_side);
+        }
+        Sequence<BoundaryDimension> exterior_dimensions;
+        for (auto& dimension : dimensions) exterior_dimensions.push_back(std::move(dimension));
+        chain.dimensions = std::move(exterior_dimensions);
+    }
     CompactAcceptedChain compact;
     compact.anchor = chain.anchor;
     compact.boundary_id = chain.boundary_id;
