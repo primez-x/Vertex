@@ -9,8 +9,8 @@ to be discovered and implemented.
 
 ## Desktop local reading path
 
-The Windows desktop exposes **Import DISTO reading…** from the overflow menu,
-command palette, and quick access. It accepts a version 1.0 JSON envelope from a
+The Windows desktop exposes **Import DISTO reading…** from the overflow menu and
+command palette. It accepts a version 1.0 JSON envelope from a
 local file or clipboard paste and requires an explicitly selected compatible
 field. The current supported targets are wall length/height/thickness/elevation,
 opening width/height, slab thickness/elevation, and room height/elevation. The

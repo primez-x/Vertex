@@ -62,7 +62,7 @@ geometry for other views. View filtering also closes hosted-opening references
 to their wall and includes placed-assembly previews when their host is selected,
 so a dependency cannot disappear from an elevation, section, or plan.
 The Windows field-input path now exposes a local DISTO JSON adapter from the
-overflow menu, command palette, and quick access. It applies a versioned reading
+overflow menu and command palette. It applies a versioned reading
 only to an explicitly selected compatible dimension, retains the original unit
 and capture provenance in the entity extension, and rejects occupied targets or
 entity mismatches without mutation. This remains a local adapter boundary;

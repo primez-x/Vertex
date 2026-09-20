@@ -116,19 +116,29 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
         QUuid::createUuid().toString(QUuid::WithoutBraces));
     const auto settings_directory = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
     const auto settings_path = settings_directory + QStringLiteral("/keyboard-shortcuts.json");
-    const auto quick_access_path = settings_directory + QStringLiteral("/quick-access.json");
     {
         sketch::desktop::MainWindow window;
         auto* toolbar = window.findChild<QToolBar*>(QStringLiteral("primaryToolbar"));
+            auto* symbol_library =
+                window.findChild<QListWidget*>(QStringLiteral("symbolLibraryItems"));
+            require(symbol_library && symbol_library->count() > 0 &&
+                        symbol_library->dragDropMode() == QAbstractItemView::DragOnly &&
+                        symbol_library->dragEnabled() &&
+                        symbol_library->item(0)->flags().testFlag(Qt::ItemIsDragEnabled),
+                    "component library items must initiate an external drag onto the plan");
             auto* more_tools = window.findChild<QToolButton*>(QStringLiteral("moreTools"));
             auto* theme_menu = window.findChild<QToolButton*>(QStringLiteral("themeMenu"));
-            require(toolbar != nullptr && toolbar->minimumHeight() == 20 && toolbar->maximumHeight() == 20 &&
-                    toolbar->height() == 20 &&
-                    toolbar->toolButtonStyle() == Qt::ToolButtonIconOnly &&
-                    toolbar->iconSize() == QSize(14, 14) && more_tools && theme_menu &&
-                    more_tools->toolButtonStyle() == Qt::ToolButtonIconOnly &&
+            auto* page_size = window.findChild<QComboBox*>(QStringLiteral("outputPageSize"));
+            require(toolbar != nullptr && toolbar->minimumHeight() == 28 && toolbar->maximumHeight() == 28 &&
+                    toolbar->height() == 28 &&
+                    toolbar->toolButtonStyle() == Qt::ToolButtonTextBesideIcon &&
+                    toolbar->iconSize() == QSize(18, 18) && more_tools && theme_menu &&
+                    more_tools->toolButtonStyle() == Qt::ToolButtonTextBesideIcon &&
                     theme_menu->toolButtonStyle() == Qt::ToolButtonIconOnly &&
                     !more_tools->accessibleName().isEmpty() && !theme_menu->accessibleName().isEmpty() &&
+                    window.findChild<QToolButton*>(QStringLiteral("quickAccess")) == nullptr &&
+                    page_size && !page_size->isVisible() &&
+                    toolbar->widgetForAction(toolbar->actions().back()) == theme_menu &&
                     window.findChild<QWidget*>(QStringLiteral("workspaceTabs")) != nullptr &&
                     window.findChild<QWidget*>(QStringLiteral("workspaceHeader")) == nullptr &&
                     window.findChild<QLabel*>(QStringLiteral("appMark")) == nullptr &&
@@ -157,25 +167,21 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
                 "both workspace canvases must accept explicit touch and active-pen events");
         auto* tool_panel = window.findChild<QWidget*>(QStringLiteral("toolPanel"));
         auto* select_tool = window.findChild<QToolButton*>(QStringLiteral("selectTool"));
-        require(tool_panel && tool_panel->minimumWidth() <= 60 && tool_panel->maximumWidth() <= 60 &&
-                    select_tool && select_tool->toolButtonStyle() == Qt::ToolButtonIconOnly &&
+        require(tool_panel && tool_panel->height() <= 48 &&
+                    select_tool && select_tool->toolButtonStyle() == Qt::ToolButtonTextBesideIcon &&
                     select_tool->iconSize() == QSize(18, 18),
-                "drawing tool rail must stay compact and icon-first");
+                "drawing tools must stay in one compact horizontal canvas bar");
         auto* settings = window.findChild<QAction*>(QStringLiteral("keyboardShortcutSettings"));
         auto* user_guide = window.findChild<QAction*>(QStringLiteral("userGuide"));
-        auto* quick_access = window.findChild<QToolButton*>(QStringLiteral("quickAccess"));
-        auto* quick_access_settings = window.findChild<QAction*>(QStringLiteral("quickAccessSettings"));
         auto* about = window.findChild<QAction*>(QStringLiteral("aboutAction"));
         auto* assistance = window.findChild<QAction*>(QStringLiteral("assistanceAction"));
         auto* export_image = window.findChild<QAction*>(QStringLiteral("exportDraftImage"));
         auto* curved_wall_action = window.findChild<QAction*>(QStringLiteral("curvedWall"));
         auto* disto_action = window.findChild<QAction*>(QStringLiteral("distoImport"));
-        require(settings && user_guide && quick_access && quick_access->menu() &&
-                    quick_access_settings && about && about->text() == QStringLiteral("About") &&
+        require(settings && user_guide && about && about->text() == QStringLiteral("About") &&
                     assistance && assistance->text() == QStringLiteral("Assistance…") &&
-                    export_image && curved_wall_action && disto_action &&
-                    !quick_access->accessibleName().isEmpty(),
-                "shortcut editor, quick-access menu, draft image export, DISTO input, curved-wall authoring, and local user guide must be discoverable");
+                    export_image && curved_wall_action && disto_action,
+                "shortcut editor, draft image export, DISTO input, curved-wall authoring, and local user guide must be discoverable");
         const auto* copy = window.findChild<QAction*>(QStringLiteral("copySelection"));
         const auto* cut = window.findChild<QAction*>(QStringLiteral("cutSelection"));
         const auto* paste = window.findChild<QAction*>(QStringLiteral("pasteSelection"));
@@ -235,46 +241,6 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
         });
         settings->trigger();
         require(define->shortcut() == QKeySequence("F4"), "cancel must preserve active bindings");
-
-        QTimer::singleShot(0, &window, [&] {
-            auto* dialog = window.findChild<QDialog*>(QStringLiteral("quickAccessDialog"));
-            require(dialog, "quick-access editor must open");
-            auto* list = dialog->findChild<QListWidget*>(QStringLiteral("quickAccessList"));
-            auto* buttons = dialog->findChild<QDialogButtonBox*>(QStringLiteral("quickAccessButtons"));
-            auto* status = dialog->findChild<QLabel*>(QStringLiteral("quickAccessStatus"));
-            require(list && buttons && status, "quick-access controls must exist");
-            bool found_annotations = false;
-            for (int row = 0; row < list->count(); ++row) {
-                auto* item = list->item(row);
-                if (item->text() == QStringLiteral("Annotations")) {
-                    item->setCheckState(Qt::Checked);
-                    found_annotations = true;
-                    break;
-                }
-            }
-            require(found_annotations, "quick-access editor must expose annotations");
-            if (!capture_directory.isEmpty())
-                require(dialog->grab().save(capture_directory + QStringLiteral("/quick-access.png")),
-                        "quick-access capture");
-            buttons->button(QDialogButtonBox::Save)->click();
-            require(dialog->result() == QDialog::Accepted && status->text().isEmpty(),
-                    "quick-access selection must save cleanly");
-        });
-        quick_access_settings->trigger();
-        require(QFile::exists(quick_access_path), "quick-access commands must be saved locally");
-        bool annotations_pinned = false;
-        for (auto* action : quick_access->menu()->actions()) {
-            if (action->text() == QStringLiteral("Annotations")) annotations_pinned = true;
-        }
-        require(annotations_pinned, "saved quick-access commands must be available from the menu");
-        sketch::desktop::MainWindow quick_access_reopened;
-        bool reopened_annotations_pinned = false;
-        if (auto* reopened_button = quick_access_reopened.findChild<QToolButton*>(QStringLiteral("quickAccess"))) {
-            for (auto* action : reopened_button->menu()->actions()) {
-                if (action->text() == QStringLiteral("Annotations")) reopened_annotations_pinned = true;
-            }
-        }
-        require(reopened_annotations_pinned, "quick-access commands must survive a new workspace window");
 
         const auto curved_revision = window.document().revision();
         QTimer::singleShot(0, &window, [&] {
@@ -384,8 +350,8 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
 
         const auto wall = window.createStraightWall({0, 0}, {4, 0});
         require(!wall.isEmpty() && window.selectEntity(wall), "keypad fixture wall must be selectable");
-        auto* keypad = window.findChild<QPushButton*>(QStringLiteral("measurementKeypad"));
-        require(keypad, "inspector keypad must be discoverable");
+        auto* keypad = window.findChild<QAction*>(QStringLiteral("measurementKeypad"));
+        require(keypad, "precise dimension editor must be discoverable");
         const auto revision = window.document().revision();
         const auto original_height = window.document().snapshot().entities().at(wall.toStdString()).properties.at("height_m");
         QTimer::singleShot(0, &window, [&] {
@@ -409,9 +375,17 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
             dialog->findChild<QPushButton*>(QStringLiteral("measurementKeypadToken15"))->click();
             require(input->text() == QStringLiteral("3m"), "on-screen keys must compose an explicit-unit quantity");
             buttons->button(QDialogButtonBox::Apply)->click();
+            require(!dialog->isVisible(),
+                    "valid keypad height must apply and close the temporary editor");
+            require(window.document().revision() == revision + 1,
+                    "valid keypad height must create exactly one document revision");
         });
-        keypad->click();
-        require(window.document().snapshot().entities().at(wall.toStdString()).properties.at("height_m") == 3.0,
+        keypad->trigger();
+        const auto keypad_height = window.document().snapshot().entities().at(wall.toStdString())
+                                       .properties.at("height_m").get<double>();
+        if (std::abs(keypad_height - 3.0) >= 1e-12)
+            std::cerr << "desktop_smoke: observed keypad height " << keypad_height << '\n';
+        require(std::abs(keypad_height - 3.0) < 1e-12,
                 "keypad must commit the exact selected dimension through the document command");
         require(window.undoCommand() &&
                 window.document().snapshot().entities().at(wall.toStdString()).properties.at("height_m") == original_height,
@@ -423,7 +397,7 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
             dialog->findChild<QLineEdit*>(QStringLiteral("measurementKeypadValue"))->setText(QStringLiteral("20m"));
             dialog->reject();
         });
-        keypad->click();
+        keypad->trigger();
         require(window.document().revision() == cancel_revision, "canceling keypad must not modify geometry");
         QTimer::singleShot(0, &window, [&] {
             auto* dialog = window.findChild<QDialog*>(QStringLiteral("measurementKeypadDialog"));
@@ -435,7 +409,7 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
                     "stale keypad must not apply an expression to a changed document or selection");
             dialog->reject();
         });
-        keypad->click();
+        keypad->trigger();
 
         require(QFile::remove(settings_path) && QDir().mkdir(settings_path), "create blocked settings path fixture");
         QTimer::singleShot(0, &window, [&] {
@@ -457,7 +431,6 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
         require(fallback.findChild<QAction*>(QStringLiteral("defineAreaShortcut"))->shortcut() == QKeySequence("Ctrl+Shift+D"),
                 "corrupt settings must fail closed to the complete default preset");
     }
-    require(QFile::remove(quick_access_path), "test quick-access settings must be removed");
     require(QFile::remove(settings_path), "test shortcut settings must be removed");
     QDir().rmdir(settings_directory);
     QCoreApplication::setApplicationName(original_name);
@@ -595,13 +568,20 @@ void test_plan_canvas_native_pointer_events() {
         ++selection_clicks;
         toggle_selection = toggle;
     });
-    QMouseEvent control_click(QEvent::MouseButtonPress, QPointF(200, 200), QPointF(200, 200),
+    QMouseEvent control_press(QEvent::MouseButtonPress, QPointF(200, 200), QPointF(200, 200),
                               Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
-    QCoreApplication::sendEvent(&canvas, &control_click);
-    require(selection_clicks == 1 && toggle_selection, "Ctrl-click requests additive toggle selection");
-    QMouseEvent plain_click(QEvent::MouseButtonPress, QPointF(200, 200), QPointF(200, 200),
+    QMouseEvent control_release(QEvent::MouseButtonRelease, QPointF(200, 200), QPointF(200, 200),
+                                Qt::LeftButton, Qt::NoButton, Qt::ControlModifier);
+    QCoreApplication::sendEvent(&canvas, &control_press);
+    QCoreApplication::sendEvent(&canvas, &control_release);
+    require(selection_clicks == 1 && toggle_selection,
+            "Ctrl-click requests additive toggle selection");
+    QMouseEvent plain_press(QEvent::MouseButtonPress, QPointF(200, 200), QPointF(200, 200),
                             Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-    QCoreApplication::sendEvent(&canvas, &plain_click);
+    QMouseEvent plain_release(QEvent::MouseButtonRelease, QPointF(200, 200), QPointF(200, 200),
+                              Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(&canvas, &plain_press);
+    QCoreApplication::sendEvent(&canvas, &plain_release);
     require(selection_clicks == 2 && !toggle_selection, "plain click requests replacement selection");
 }
 
@@ -4459,6 +4439,25 @@ int main(int argc, char** argv) {
         window.document().snapshot().entities().at("annotations-1"));
     require(annotation_state.labels.size() == 1 && annotation_state.symbols.size() == 5,
             "annotation authoring should update the typed annotation entity");
+    const auto annotation_layer = annotation_state.labels.front().placement.layer_id;
+    require(!annotation_layer.empty() &&
+                std::all_of(annotation_state.symbols.begin(), annotation_state.symbols.end(),
+                    [&](const auto& symbol) {
+                        return symbol.placement.layer_id == annotation_layer;
+                    }),
+            "new labels and symbols must belong to the active drawing layer");
+    const auto* symbol_item = navigator_item(window, symbol_id);
+    require(symbol_item && symbol_item->parent() && symbol_item->parent()->parent() &&
+                symbol_item->parent()->text(0) == QStringLiteral("Symbols & labels") &&
+                symbol_item->parent()->parent()->data(0, Qt::UserRole).toString() ==
+                    QString::fromStdString(annotation_layer),
+            "the navigator must nest symbols and labels beneath their owning layer");
+    auto* component_heading =
+        window.findChild<QLabel*>(QStringLiteral("componentLibraryHeading"));
+    require(component_heading &&
+                component_heading->text().contains(QStringLiteral("Default layer")) &&
+                component_heading->text().contains(QStringLiteral("Symbols & labels")),
+            "the component library must identify the active layer it will place into");
     const auto alias_symbol = [&](const QString& id, const char* family) {
         const auto found = std::find_if(annotation_state.symbols.begin(), annotation_state.symbols.end(),
             [&](const auto& value) { return value.id == id.toStdString(); });

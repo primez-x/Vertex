@@ -113,8 +113,8 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
-- [ ] **U016 — Customize quick-access commands**
-  - Expected: Added commands remain accessible after restarting the app.
+- [ ] **U016 — Find and run a command**
+  - Expected: Commands finds and runs supported actions without duplicating New, Open, Save, Undo, or Redo in another toolbar menu.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

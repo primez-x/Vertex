@@ -20,6 +20,7 @@ void placement(const AnnotationPlacement& p) {
     point(p.position);
     check(std::isfinite(p.rotation_radians) && std::isfinite(p.scale) && p.scale > 0,
           "Invalid annotation placement");
+    check(p.layer_id.size() <= 256, "Invalid annotation layer ID");
 }
 void color(const std::string& c) {
     check(c.size() == 7 && c[0] == '#' && c.find_first_not_of("0123456789abcdefABCDEF", 1) == std::string::npos,
@@ -44,10 +45,15 @@ AnnotationStyle decode_style(const json& j) {
         j.at("bold").get<bool>(),j.at("italic").get<bool>()};
 }
 json encode_placement(const AnnotationPlacement& p) {
-    return {{"x",p.position.x},{"y",p.position.y},{"rotation_radians",p.rotation_radians},{"scale",p.scale}};
+    auto result = json{{"x",p.position.x},{"y",p.position.y},
+        {"rotation_radians",p.rotation_radians},{"scale",p.scale}};
+    if (!p.layer_id.empty()) result["layer_id"] = p.layer_id;
+    return result;
 }
 AnnotationPlacement decode_placement(const json& j) {
-    return {{j.at("x").get<double>(),j.at("y").get<double>()},j.at("rotation_radians").get<double>(),j.at("scale").get<double>()};
+    return {{j.at("x").get<double>(),j.at("y").get<double>()},
+        j.at("rotation_radians").get<double>(),j.at("scale").get<double>(),
+        j.contains("layer_id") ? j.at("layer_id").get<std::string>() : std::string{}};
 }
 void unique_id(std::set<std::string>& ids, const std::string& id) {
     check(!id.empty() && id.size() <= 256 && ids.insert(id).second, "Empty, oversized, or duplicate annotation ID");

@@ -17,7 +17,9 @@ sketch::AnnotationState fixture() {
     sketch::AnnotationState state;
     state.labels.push_back(sketch::instantiate_label(labels.front(), "label-1"));
     state.labels.front().placement.position = {2.0, 3.0};
-    state.symbols.push_back({"symbol-1", catalog.front().id, {{4.0, 5.0}, 0.25, 1.5}, {}, true});
+    state.labels.front().placement.layer_id = "layer-ground";
+    state.symbols.push_back({"symbol-1", catalog.front().id,
+                             {{4.0, 5.0}, 0.25, 1.5, "layer-ground"}, {}, true});
     state.overrides.push_back({"area", "area-1", {}, false});
     return state;
 }
@@ -42,6 +44,9 @@ int main() {
         auto entity = sketch::make_annotation_entity("annotations", state);
         sketch::validate_annotation_entity(entity);
         const auto decoded = sketch::decode_annotation_entity(entity);
+        require(decoded.labels.front().placement.layer_id == "layer-ground" &&
+                    decoded.symbols.front().placement.layer_id == "layer-ground",
+                "annotation drawing-layer ownership changed during entity decode");
         require(sketch::encode_annotation_state(decoded, sketch::default_symbol_catalog()) ==
                     sketch::encode_annotation_state(state, sketch::default_symbol_catalog()),
                 "annotation state changed during entity decode");

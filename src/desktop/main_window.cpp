@@ -3288,7 +3288,7 @@ public:
                 selection-color: $selectedText; padding: 4px; }
             QMenu::item { padding: 8px 20px; }
             QMenu::item:selected { background: $selection; color: $selectedText; }
-            QLabel#panelHeading { color: $muted; font-size: 10px; font-weight: 700;
+            QLabel#panelHeading, QLabel#componentLibraryHeading { color: $muted; font-size: 10px; font-weight: 700;
                 letter-spacing: 1px; }
             QLabel#inspectorHeading { color: $foreground; font-size: 18px; font-weight: 700; }
             QWidget#navigatorPanel, QWidget#toolPanel, QWidget#inspectorBody { background: $surface; }
@@ -7736,6 +7736,8 @@ public:
             if (!std::isfinite(position.x) || !std::isfinite(position.y)) {
                 throw std::invalid_argument("Annotation position must be finite.");
             }
+            const auto context = requireDrawingContext();
+            if (!context) return {};
             const auto source = authoringSnapshot();
             auto annotation = std::find_if(source.entities().begin(), source.entities().end(),
                                             [](const auto& entry) {
@@ -7758,6 +7760,7 @@ public:
                 label.content = content.toStdString();
             }
             label.placement.position = position;
+            label.placement.layer_id = context->layer_id;
             state.labels.push_back(label);
             const auto command = ApplyEntityChanges{
                 source.revision(),
@@ -7785,6 +7788,8 @@ public:
             }
             if (!std::isfinite(scale) || scale <= 0.0 || scale > 100.0)
                 throw std::invalid_argument("Symbol scale must be greater than zero and no more than 100.");
+            const auto context = requireDrawingContext();
+            if (!context) return {};
             const auto source = authoringSnapshot();
             auto annotation = std::find_if(source.entities().begin(), source.entities().end(),
                                             [](const auto& entry) {
@@ -7821,6 +7826,7 @@ public:
             symbol.symbol_id = definition->id;
             symbol.placement.position = position;
             symbol.placement.scale = scale;
+            symbol.placement.layer_id = context->layer_id;
             state.symbols.push_back(symbol);
             const auto command = ApplyEntityChanges{
                 source.revision(),
@@ -9974,19 +9980,27 @@ public:
         const auto snapshot = m_document->snapshot();
         QString selection_id = entity_id;
         bool annotation_child = false;
+        std::string annotation_layer;
         if (!has_entity(*m_document, selection_id)) {
             for (const auto& [id, entity] : snapshot.entities()) {
                 (void)id;
                 if (entity.type != kAnnotationEntityType) continue;
                 try {
                     const auto state = decode_annotation_entity(entity);
-                    annotation_child = std::any_of(
-                        state.labels.begin(), state.labels.end(), [&](const auto& label) {
-                            return label.id == selection_id.toStdString();
-                        }) || std::any_of(
-                        state.symbols.begin(), state.symbols.end(), [&](const auto& symbol) {
-                            return symbol.id == selection_id.toStdString();
-                        });
+                    const auto wanted = selection_id.toStdString();
+                    if (const auto label = std::find_if(
+                            state.labels.begin(), state.labels.end(),
+                            [&](const auto& candidate) { return candidate.id == wanted; });
+                        label != state.labels.end()) {
+                        annotation_child = true;
+                        annotation_layer = label->placement.layer_id;
+                    } else if (const auto symbol = std::find_if(
+                                   state.symbols.begin(), state.symbols.end(),
+                                   [&](const auto& candidate) { return candidate.id == wanted; });
+                               symbol != state.symbols.end()) {
+                        annotation_child = true;
+                        annotation_layer = symbol->placement.layer_id;
+                    }
                 } catch (const std::exception&) {
                     annotation_child = false;
                 }
@@ -10013,6 +10027,8 @@ public:
         m_selected_id = selection_id;
         const auto organization = organize_project(snapshot);
         if (annotation_child) {
+            if (!annotation_layer.empty() && organization.drawing_context(annotation_layer))
+                m_active_layer_id = id_from(annotation_layer);
             refresh();
             return true;
         }
@@ -10038,6 +10054,135 @@ public:
         }
         refresh();
         return true;
+    }
+
+    bool moveSelectionBy(const QStringList& requested_ids, Vec2 delta) {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        try {
+            if (m_boundary_session || m_pending_wall_start || !m_pending_symbol_id.isEmpty()) {
+                throw std::invalid_argument(
+                    "Finish or cancel the active drawing command before moving selected objects.");
+            }
+            if (!std::isfinite(delta.x) || !std::isfinite(delta.y))
+                throw std::invalid_argument("Move distance must be finite.");
+            if (std::abs(delta.x) <= 1e-12 && std::abs(delta.y) <= 1e-12) return true;
+
+            QStringList ids;
+            for (const auto& id : requested_ids)
+                if (!id.isEmpty() && !ids.contains(id)) ids.push_back(id);
+            if (ids.isEmpty()) throw std::invalid_argument("Select an object to move.");
+            const auto source = authoringSnapshot();
+
+            auto annotation = std::find_if(source.entities().begin(), source.entities().end(),
+                [](const auto& entry) { return entry.second.type == kAnnotationEntityType; });
+            if (annotation != source.entities().end()) {
+                auto state = decode_annotation_entity(annotation->second);
+                std::size_t moved = 0;
+                for (auto& label : state.labels) {
+                    if (!ids.contains(id_from(label.id))) continue;
+                    label.placement.position.x += delta.x;
+                    label.placement.position.y += delta.y;
+                    ++moved;
+                }
+                for (auto& symbol : state.symbols) {
+                    if (!ids.contains(id_from(symbol.id))) continue;
+                    symbol.placement.position.x += delta.x;
+                    symbol.placement.position.y += delta.y;
+                    ++moved;
+                }
+                if (moved == static_cast<std::size_t>(ids.size())) {
+                    const auto command = ApplyEntityChanges{
+                        source.revision(),
+                        {EntityChange::upsert(make_annotation_entity(annotation->second.id, state))},
+                        {}, ids.size() == 1 ? "Move annotation" : "Move annotations"};
+                    (void)Document::preview_command(source, command);
+                    applyDocumentCommand(command);
+                    clearError();
+                    refresh();
+                    return true;
+                }
+                if (moved != 0) {
+                    throw std::invalid_argument(
+                        "Move annotations separately from model objects so the edit remains atomic.");
+                }
+            }
+
+            bool all_architectural = true;
+            std::vector<std::string> roots;
+            std::vector<ArchitecturalOperation> operations;
+            roots.reserve(ids.size());
+            operations.reserve(ids.size());
+            for (const auto& id : ids) {
+                const auto found = source.entities().find(id.toStdString());
+                if (found == source.entities().end() ||
+                    !can_transform_architectural_entity_type(found->second.type)) {
+                    all_architectural = false;
+                    break;
+                }
+                roots.push_back(found->first);
+                ArchitecturalOperation operation{ArchitecturalAction::transform, found->first};
+                operation.transform = ArchitecturalTransform{delta.x, delta.y, 0.0, 0.0, 1.0};
+                operations.push_back(std::move(operation));
+            }
+            if (all_architectural) {
+                const auto transaction = ArchitecturalTransaction::create(
+                    new_id("architectural-tx"), std::to_string(source.revision()),
+                    std::move(roots), std::move(operations),
+                    ids.size() == 1 ? "Move architectural object" : "Move architectural objects");
+                const auto command = architectural_transaction_command(
+                    source, transaction, source.revision());
+                (void)Document::preview_command(source, Command{command});
+                applyDocumentCommand(Command{command});
+                clearError();
+                refresh();
+                return true;
+            }
+
+            if (ids.size() == 1) {
+                const auto found = source.entities().find(ids.front().toStdString());
+                if (found != source.entities().end() &&
+                    is_closed_boundary_entity(found->second.type)) {
+                    const auto metres = [](double value) {
+                        return QString::number(value, 'g', 17) + QStringLiteral(" m");
+                    };
+                    const auto [command, root] = makeBoundaryTransformCommand(
+                        source, found->second, {}, false, false,
+                        metres(delta.x), metres(delta.y), false);
+                    (void)Document::preview_command(source, command);
+                    applyDocumentCommand(command);
+                    m_selected_id = id_from(root);
+                    clearError();
+                    refresh();
+                    return true;
+                }
+                if (found != source.entities().end() && found->second.type == "reference_asset") {
+                    auto candidate = found->second;
+                    const auto position = read_point(candidate.properties.value(
+                        "position_m", json::array()));
+                    if (!position) throw std::invalid_argument(
+                        "The selected reference has no valid position.");
+                    candidate.properties["position_m"] =
+                        json::array({position->x + delta.x, position->y + delta.y});
+                    const auto command = ApplyEntityChanges{
+                        source.revision(), {EntityChange::upsert(std::move(candidate))}, {},
+                        "Move reference"};
+                    (void)Document::preview_command(source, command);
+                    applyDocumentCommand(command);
+                    clearError();
+                    refresh();
+                    return true;
+                }
+            }
+            throw std::invalid_argument(
+                "This selection cannot be moved as one group yet. Select compatible drawing objects.");
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Move: %1").arg(QString::fromUtf8(error.what())));
+            refresh();
+            return false;
+        }
     }
 
     std::vector<Entity> clipboardSelectionGraph(const DocumentSnapshot& snapshot) const {
@@ -14975,188 +15120,6 @@ public:
         dialog.exec();
     }
 
-    struct QuickAccessBinding {
-        QString id;
-        QAction* action{};
-    };
-
-    QString quickAccessSettingsPath() const {
-        return QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) +
-               QStringLiteral("/quick-access.json");
-    }
-
-    QString validateQuickAccess(const std::vector<QString>& ids) const {
-        if (ids.size() > 12) return QStringLiteral("Pin at most 12 commands.");
-        std::vector<QString> seen;
-        seen.reserve(ids.size());
-        for (const auto& id : ids) {
-            const auto binding = std::find_if(
-                m_quick_access_bindings.begin(), m_quick_access_bindings.end(),
-                [&](const QuickAccessBinding& candidate) { return candidate.id == id; });
-            if (binding == m_quick_access_bindings.end() || binding->action == nullptr)
-                return QStringLiteral("Quick-access command '%1' is unavailable.").arg(id);
-            if (std::find(seen.begin(), seen.end(), id) != seen.end())
-                return QStringLiteral("A quick-access command is pinned more than once.");
-            seen.push_back(id);
-        }
-        return {};
-    }
-
-    void rebuildQuickAccessMenu() {
-        if (m_quick_access_menu == nullptr) return;
-        m_quick_access_menu->clear();
-        std::size_t added = 0;
-        for (const auto& id : m_quick_access_ids) {
-            const auto binding = std::find_if(
-                m_quick_access_bindings.begin(), m_quick_access_bindings.end(),
-                [&](const QuickAccessBinding& candidate) { return candidate.id == id; });
-            if (binding == m_quick_access_bindings.end() || binding->action == nullptr) continue;
-            m_quick_access_menu->addAction(binding->action);
-            ++added;
-        }
-        if (added == 0) {
-            auto* empty = m_quick_access_menu->addAction(QStringLiteral("No pinned commands"));
-            empty->setEnabled(false);
-        }
-        m_quick_access_menu->addSeparator();
-        m_quick_access_menu->addAction(m_quick_access_settings_action);
-    }
-
-    void initializeQuickAccess() {
-        m_quick_access_bindings.clear();
-        const auto add = [this](QString id, QAction* action) {
-            if (action != nullptr) m_quick_access_bindings.push_back({std::move(id), action});
-        };
-        add(QStringLiteral("new"), m_new_action);
-        add(QStringLiteral("open"), m_open_action);
-        add(QStringLiteral("recover"), m_recover_action);
-        add(QStringLiteral("save"), m_save_action);
-        add(QStringLiteral("save-as"), m_save_as_action);
-        add(QStringLiteral("undo"), m_undo_action);
-        add(QStringLiteral("redo"), m_redo_action);
-        add(QStringLiteral("measurement"), m_measurement_action);
-        add(QStringLiteral("architectural"), m_architectural_action);
-        add(QStringLiteral("commands"), m_palette_action);
-        add(QStringLiteral("disto-import"), m_disto_action);
-        add(QStringLiteral("annotations"), m_annotation_action);
-        add(QStringLiteral("reference"), m_reference_action);
-        add(QStringLiteral("project-resources"), m_project_resources_action);
-        add(QStringLiteral("schedules"), m_schedule_action);
-        add(QStringLiteral("sheet-settings"), m_sheet_action);
-        add(QStringLiteral("architectural-view"), m_view_action);
-        add(QStringLiteral("design-phases"), m_remodel_action);
-        add(QStringLiteral("room-relationships"), m_relationship_action);
-        add(QStringLiteral("levels"), m_levels_action);
-        add(QStringLiteral("reference-grids"), m_reference_grid_action);
-        add(QStringLiteral("assemblies"), m_assembly_action);
-        add(QStringLiteral("assistance"), m_assistance_action);
-        add(QStringLiteral("calculation-profile"), m_calculation_profile_action);
-        add(QStringLiteral("workspace-profiles"), m_workspace_profiles_action);
-        add(QStringLiteral("revisions"), m_revisions_action);
-        add(QStringLiteral("transform"), m_transform_action);
-        add(QStringLiteral("redefine"), m_redefine_action);
-        add(QStringLiteral("detect-areas"), m_detect_areas_action);
-        add(QStringLiteral("terrain"), m_terrain_action);
-
-        const std::vector<QString> defaults{
-            QStringLiteral("new"), QStringLiteral("open"), QStringLiteral("save"),
-            QStringLiteral("undo"), QStringLiteral("redo"), QStringLiteral("commands")};
-        m_quick_access_ids = defaults;
-        QFile file(quickAccessSettingsPath());
-        if (file.exists()) {
-            try {
-                if (!file.open(QIODevice::ReadOnly) || file.size() > 64 * 1024)
-                    throw std::runtime_error("Quick-access settings cannot be read.");
-                const auto document = json::parse(file.readAll().toStdString());
-                if (!document.is_object() || document.size() != 3 ||
-                    document.at("schema") != "sketch.quick-access" ||
-                    document.at("version") != 1 || !document.at("pinned").is_array() ||
-                    document.at("pinned").size() > 12) {
-                    throw std::runtime_error("Unsupported quick-access settings.");
-                }
-                std::vector<QString> ids;
-                ids.reserve(document.at("pinned").size());
-                for (const auto& value : document.at("pinned")) {
-                    if (!value.is_string()) throw std::runtime_error("Invalid quick-access command.");
-                    ids.push_back(QString::fromStdString(value.get<std::string>()));
-                }
-                const auto error = validateQuickAccess(ids);
-                if (!error.isEmpty()) throw std::runtime_error(error.toStdString());
-                m_quick_access_ids = std::move(ids);
-            } catch (const std::exception& error) {
-                m_quick_access_load_error = QStringLiteral(
-                    "Saved quick-access commands were ignored: %1. Defaults are active.")
-                    .arg(QString::fromUtf8(error.what()));
-            }
-        }
-        rebuildQuickAccessMenu();
-    }
-
-    void showQuickAccessSettings() {
-        QDialog dialog(owner);
-        styleDialog(dialog);
-        dialog.setObjectName(QStringLiteral("quickAccessDialog"));
-        dialog.setWindowTitle(QStringLiteral("Quick access"));
-        dialog.resize(500, 520);
-        auto* layout = new QVBoxLayout(&dialog);
-        auto* help = new QLabel(QStringLiteral(
-            "Pin the commands you use most. The selection and order are stored locally on this PC."),
-            &dialog);
-        help->setWordWrap(true);
-        layout->addWidget(help);
-        auto* list = new QListWidget(&dialog);
-        list->setObjectName(QStringLiteral("quickAccessList"));
-        list->setSelectionMode(QAbstractItemView::NoSelection);
-        for (const auto& binding : m_quick_access_bindings) {
-            auto* item = new QListWidgetItem(binding.action->text(), list);
-            item->setData(Qt::UserRole, binding.id);
-            item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
-            item->setCheckState(std::find(m_quick_access_ids.begin(), m_quick_access_ids.end(),
-                                          binding.id) != m_quick_access_ids.end()
-                                    ? Qt::Checked : Qt::Unchecked);
-        }
-        layout->addWidget(list, 1);
-        auto* status = new QLabel(m_quick_access_load_error, &dialog);
-        status->setObjectName(QStringLiteral("quickAccessStatus"));
-        status->setWordWrap(true);
-        layout->addWidget(status);
-        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel,
-                                             &dialog);
-        buttons->setObjectName(QStringLiteral("quickAccessButtons"));
-        layout->addWidget(buttons);
-        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-        QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
-            std::vector<QString> ids;
-            for (int row = 0; row < list->count(); ++row) {
-                auto* item = list->item(row);
-                if (item->checkState() == Qt::Checked)
-                    ids.push_back(item->data(Qt::UserRole).toString());
-            }
-            const auto error = validateQuickAccess(ids);
-            if (!error.isEmpty()) {
-                status->setText(error);
-                return;
-            }
-            json document{{"schema", "sketch.quick-access"}, {"version", 1},
-                          {"pinned", json::array()}};
-            for (const auto& id : ids) document["pinned"].push_back(id.toStdString());
-            const auto bytes = QByteArray::fromStdString(document.dump(2));
-            QSaveFile file(quickAccessSettingsPath());
-            if (!QDir().mkpath(QFileInfo(file.fileName()).absolutePath()) ||
-                !file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() ||
-                !file.commit()) {
-                status->setText(QStringLiteral(
-                    "Could not save quick-access commands. Existing pins remain active."));
-                return;
-            }
-            m_quick_access_ids = std::move(ids);
-            m_quick_access_load_error.clear();
-            rebuildQuickAccessMenu();
-            dialog.accept();
-        });
-        dialog.exec();
-    }
-
     void showMeasurementKeypad() {
         QDialog dialog(owner);
         styleDialog(dialog);
@@ -15168,8 +15131,22 @@ public:
         target->setAccessibleName(QStringLiteral("Dimension to edit"));
         const std::array<QLineEdit*, 3> fields{m_length_edit, m_height_edit, m_thickness_edit};
         const std::array<QString, 3> names{QStringLiteral("Length"), QStringLiteral("Height"), QStringLiteral("Thickness")};
+        const auto selected = selectedEntity();
+        const bool wall = selected && selected->type == "wall";
+        const bool opening = selected && selected->type == "opening";
+        const bool slab = selected && selected->type == "slab";
+        const bool room = selected && selected->type == "room";
+        const bool closed_boundary = selected && is_closed_boundary_entity(selected->type);
+        const std::array<bool, 3> relevant{
+            wall || opening || slab || closed_boundary,
+            wall || opening || room,
+            wall || slab,
+        };
         for (std::size_t index = 0; index < fields.size(); ++index) {
-            if (fields[index]->isEnabled() && !fields[index]->isReadOnly() && !fields[index]->isHidden())
+            // The properties panel is opt-in and may remain closed. Field
+            // relevance comes from the selected model object, not whether the
+            // panel has ever been painted.
+            if (relevant[index] && !fields[index]->isReadOnly())
                 target->addItem(names[index], static_cast<int>(index));
         }
         layout->addWidget(target);
@@ -15230,7 +15207,6 @@ public:
                 status->setText(QStringLiteral("The selection or document changed. Reopen the keypad.")); return;
             }
             const auto index = target->currentData().toInt();
-            if (!fields[static_cast<std::size_t>(index)]->isEnabled()) return;
             const auto entity = selectedEntity();
             wall_length = index == 0 && entity && entity->type == "wall";
             if (wall_length) {
@@ -15484,7 +15460,6 @@ public:
         std::vector<Command> commands{
             {QStringLiteral("Open user guide"), [this] { showUserGuide(); }},
             {QStringLiteral("Customize keyboard shortcuts"), [this] { showShortcutSettings(); }},
-            {QStringLiteral("Customize quick access"), [this] { showQuickAccessSettings(); }},
             {QStringLiteral("Measurement keypad"), [this] { showMeasurementKeypad(); }},
             {QStringLiteral("Import DISTO reading"), [this] { showDistoImport(); }},
             {QStringLiteral("New project"), [this] { createNewProject(); }},
@@ -16717,27 +16692,6 @@ private:
         auto* shortcut_settings = add_toolbar_action(QStringLiteral("Shortcuts"), "<rect x='3' y='6' width='18' height='12' rx='2'/><path d='M7 10h2M11 10h2M15 10h2M7 14h10'/>");
         shortcut_settings->setObjectName(QStringLiteral("keyboardShortcutSettings"));
 
-        m_quick_access_menu = new QMenu(owner);
-        m_quick_access_menu->setObjectName(QStringLiteral("quickAccessMenu"));
-        m_quick_access_settings_action = new QAction(QStringLiteral("Customize quick access…"), owner);
-        m_quick_access_settings_action->setObjectName(QStringLiteral("quickAccessSettings"));
-        owner->addAction(m_quick_access_settings_action);
-        QObject::connect(m_quick_access_settings_action, &QAction::triggered, owner,
-                         [this] { showQuickAccessSettings(); });
-        m_quick_access_button = new QToolButton(toolbar);
-        m_quick_access_button->setObjectName(QStringLiteral("quickAccess"));
-        m_quick_access_button->setIcon(modern_toolbar_icon(
-            "<path d='m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-2.8-5.6 2.8 1.1-6.2L3 9.6l6.2-.9z'/><path d='M12 7v6'/>"));
-        m_quick_access_button->setToolTip(QStringLiteral("Quick access commands"));
-        m_quick_access_button->setStatusTip(QStringLiteral("Quick access commands"));
-        m_quick_access_button->setAccessibleName(QStringLiteral("Quick access"));
-        m_quick_access_button->setAccessibleDescription(QStringLiteral(
-            "Open locally pinned commands or customize the quick-access list"));
-        m_quick_access_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        m_quick_access_button->setMenu(m_quick_access_menu);
-        m_quick_access_button->setPopupMode(QToolButton::InstantPopup);
-        toolbar->addWidget(m_quick_access_button);
-
         // Keep the canvas-facing toolbar focused. Secondary authoring and
         // presentation commands remain one click away in an overflow menu,
         // while their QAction identities and shortcuts stay stable.
@@ -16830,6 +16784,10 @@ private:
         m_assistance_action->setObjectName(QStringLiteral("assistanceAction"));
         m_calculation_profile_action = new QAction(QStringLiteral("Calculation profile…"), owner);
         m_calculation_profile_action->setObjectName(QStringLiteral("calculationProfile"));
+        auto* measurement_keypad_action = new QAction(QStringLiteral("Edit dimensions…"), owner);
+        measurement_keypad_action->setObjectName(QStringLiteral("measurementKeypad"));
+        measurement_keypad_action->setToolTip(QStringLiteral(
+            "Edit a selected object's length, height, or thickness with precise units"));
         m_workspace_profiles_action = new QAction(QStringLiteral("Workspace profiles…"), owner);
         m_workspace_profiles_action->setObjectName(QStringLiteral("workspaceProfiles"));
         m_revisions_action = new QAction(QStringLiteral("Named revisions…"), owner);
@@ -16850,11 +16808,11 @@ private:
         m_about_action->setObjectName(QStringLiteral("aboutAction"));
         auto* user_guide_action = new QAction(QStringLiteral("User guide…"), owner);
         user_guide_action->setObjectName(QStringLiteral("userGuide"));
-        const std::array<QAction*, 23> secondary_actions{
+        const std::array<QAction*, 24> secondary_actions{
             m_annotation_action, m_reference_action, m_project_resources_action, m_schedule_action, m_sheet_action,
             m_viewport_action, m_schedule_placement_action, m_view_action, m_remodel_action,
             m_relationship_action, m_levels_action, m_reference_grid_action, m_assembly_action, m_assistance_action,
-            m_calculation_profile_action,
+            m_calculation_profile_action, measurement_keypad_action,
             m_workspace_profiles_action, m_revisions_action, m_transform_action, m_redefine_action,
             m_detect_areas_action,
             m_terrain_action,
@@ -16925,13 +16883,15 @@ private:
         theme_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
         theme_button->setMenu(theme_menu);
         theme_button->setPopupMode(QToolButton::InstantPopup);
-        toolbar->addWidget(theme_button);
         m_unitsCombo = new QComboBox(toolbar);
         m_unitsCombo->setObjectName(QStringLiteral("unitSystem"));
         m_unitsCombo->addItems({QStringLiteral("Imperial"), QStringLiteral("Metric")});
         m_unitsCombo->setToolTip(QStringLiteral("Units for dimensions and calculations"));
         toolbar->addWidget(m_unitsCombo);
-        m_pageSizeCombo = new QComboBox(toolbar);
+        // The fallback page preset belongs to output configuration. Keep its
+        // state available to print/export code without putting a sheet control
+        // in the application command bar.
+        m_pageSizeCombo = new QComboBox(owner);
         m_pageSizeCombo->setObjectName(QStringLiteral("outputPageSize"));
         const std::vector<std::pair<QString, QPageSize::PageSizeId>> page_sizes{
             {QStringLiteral("Letter"), QPageSize::Letter},
@@ -16947,7 +16907,7 @@ private:
         m_pageSizeCombo->setToolTip(QStringLiteral(
             "Fallback paper size for documents without drawing sheets. "
             "Choose the output page and its dimensions in Drawing sheets."));
-        toolbar->addWidget(m_pageSizeCombo);
+        m_pageSizeCombo->hide();
         m_architecturalViewCombo = new QComboBox(toolbar);
         m_architecturalViewCombo->setObjectName(QStringLiteral("architecturalView"));
         m_architecturalViewCombo->addItem(QStringLiteral("Plan"), static_cast<int>(BuildingViewKind::plan));
@@ -16956,6 +16916,10 @@ private:
         m_architecturalViewCombo->setToolTip(QStringLiteral(
             "Select the derived architectural plan, elevation, or horizontal section view"));
         m_architectural_view_control_action = toolbar->addWidget(m_architecturalViewCombo);
+        auto* toolbar_spacer = new QWidget(toolbar);
+        toolbar_spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        toolbar->addWidget(toolbar_spacer);
+        toolbar->addWidget(theme_button);
         // Keep secondary actions compact so the 2D / 3D selector remains
         // directly visible even at the minimum supported window width.
         for (auto* action : {m_recover_action, m_save_as_action, shortcut_settings}) {
@@ -17016,6 +16980,8 @@ private:
                          [this] { showAssistance(); });
         QObject::connect(m_calculation_profile_action, &QAction::triggered, owner,
                          [this] { showCalculationProfileEditor(); });
+        QObject::connect(measurement_keypad_action, &QAction::triggered, owner,
+                         [this] { showMeasurementKeypad(); });
         QObject::connect(m_workspace_profiles_action, &QAction::triggered, owner,
                          [this] { showWorkspaceProfiles(); });
         QObject::connect(m_revisions_action, &QAction::triggered, owner,
@@ -17045,7 +17011,6 @@ private:
                              }
                          });
         initializeShortcuts();
-        initializeQuickAccess();
         applyTheme(WorkspaceTheme::light);
 
         auto* central = new QWidget(owner);
@@ -17181,8 +17146,10 @@ private:
         auto* components_header_layout = new QHBoxLayout(components_header);
         components_header_layout->setContentsMargins(0, 4, 0, 0);
         components_header_layout->setSpacing(4);
-        auto* components_heading = new QLabel(QStringLiteral("COMPONENTS"), components_header);
-        components_heading->setObjectName(QStringLiteral("panelHeading"));
+        auto* components_heading = new QLabel(QStringLiteral("Symbols & labels"), components_header);
+        m_component_library_heading = components_heading;
+        components_heading->setAccessibleName(QStringLiteral("Active layer symbol and label library"));
+        components_heading->setObjectName(QStringLiteral("componentLibraryHeading"));
         components_header_layout->addWidget(components_heading);
         components_header_layout->addStretch();
         auto* text_button = new QToolButton(components_header);
@@ -17220,11 +17187,15 @@ private:
         m_symbol_list = new SymbolLibraryList(navigator_panel);
         m_symbol_list->setObjectName(QStringLiteral("symbolLibraryItems"));
         m_symbol_list->setAccessibleName(QStringLiteral("Drag a component onto the plan"));
-        m_symbol_list->setDragEnabled(true);
-        m_symbol_list->setDragDropMode(QAbstractItemView::DragOnly);
         m_symbol_list->setViewMode(QListView::IconMode);
         m_symbol_list->setResizeMode(QListView::Adjust);
-        m_symbol_list->setMovement(QListView::Static);
+        // QListView::Static disables drag initiation. Free movement is required
+        // for an external drag; DragOnly and acceptDrops(false) keep the
+        // catalog layout fixed because items cannot be dropped back into it.
+        m_symbol_list->setMovement(QListView::Free);
+        m_symbol_list->setDragDropMode(QAbstractItemView::DragOnly);
+        m_symbol_list->setDragEnabled(true);
+        m_symbol_list->setAcceptDrops(false);
         m_symbol_list->setUniformItemSizes(true);
         m_symbol_list->setWordWrap(true);
         m_symbol_list->setIconSize(QSize(68, 54));
@@ -17327,6 +17298,15 @@ private:
         QObject::connect(m_object_button, &QToolButton::clicked, owner,
                          [this] { showBuildingObjectDialog(false); });
         tool_layout->addStretch();
+        m_selection_badge = new QLabel(tool_panel);
+        m_selection_badge->setObjectName(QStringLiteral("selectionStatus"));
+        m_selection_badge->setStyleSheet(QStringLiteral(
+            "QLabel#selectionStatus { color:#1d4ed8; background:#eff6ff; "
+            "border:1px solid #bfdbfe; border-radius:9px; padding:2px 8px; "
+            "font-size:11px; font-weight:600; }"));
+        m_selection_badge->setAccessibleName(QStringLiteral("Selection status"));
+        m_selection_badge->hide();
+        tool_layout->addWidget(m_selection_badge);
         m_grid_button = new QToolButton(tool_panel);
         m_grid_button->setText(QStringLiteral("Grid"));
         m_grid_button->setIcon(modern_toolbar_icon(
@@ -17532,7 +17512,7 @@ private:
         heading_row->addWidget(close_inspector);
         inspector_layout->addLayout(heading_row);
         QObject::connect(close_inspector, &QToolButton::clicked, owner,
-                         [this] { (void)selectEntity({}); });
+                         [this] { m_inspector->hide(); });
         m_inspector_context = new QLabel(inspector_body);
         m_inspector_context->setWordWrap(true);
         inspector_layout->addWidget(m_inspector_context);
@@ -17979,7 +17959,7 @@ private:
 
         auto* keypad = new QPushButton(QStringLiteral("Measure…"), tool_panel);
         m_drawing_measurement_button = keypad;
-        keypad->setObjectName(QStringLiteral("measurementKeypad"));
+        keypad->setObjectName(QStringLiteral("preciseBoundaryInput"));
         keypad->setAccessibleName(QStringLiteral("Enter precise drawing measurement"));
         keypad->setToolTip(QStringLiteral("Enter the next segment's exact length, angle or curve (D)"));
         tool_layout->insertWidget(4, keypad);
@@ -18246,6 +18226,9 @@ private:
             m_selected_id = m_selected_ids.isEmpty() ? QString{} : m_selected_ids.back();
             refresh();
         });
+        canvas->setEntitiesMoveRequested([this](QStringList ids, Vec2 delta) {
+            return moveSelectionBy(ids, delta);
+        });
         canvas->setCursorMoved([this, canvas](Vec2 point) {
             // Snap toggles update both canvases; only the active workspace
             // owns the shared authoring pointer and cursor status.
@@ -18265,9 +18248,22 @@ private:
             }
             if (m_inspector && m_inspector->isVisible()) positionContextEditor();
         });
-        canvas->setRightClicked([this](Vec2 point) {
+        canvas->setRightClicked([this](Vec2 point, QString target) {
             if (m_boundary_session) {
-                finishTool();
+                QMenu menu(owner);
+                auto* finish = menu.addAction(QStringLiteral("Finish boundary"));
+                QObject::connect(finish, &QAction::triggered, owner, [this] { finishTool(); });
+                auto* undo = menu.addAction(QStringLiteral("Undo last point"));
+                undo->setEnabled(m_boundary_session->can_undo());
+                QObject::connect(undo, &QAction::triggered, owner,
+                                 [this] { (void)undoCommand(); });
+                auto* precise = menu.addAction(QStringLiteral("Precise input…"));
+                QObject::connect(precise, &QAction::triggered, owner,
+                                 [this] { preciseBoundaryInput(); });
+                menu.addSeparator();
+                auto* cancel = menu.addAction(QStringLiteral("Cancel drawing"));
+                QObject::connect(cancel, &QAction::triggered, owner, [this] { cancelTool(); });
+                menu.exec(QCursor::pos());
                 return;
             }
             if (!m_pending_symbol_id.isEmpty()) {
@@ -18277,12 +18273,29 @@ private:
                 return;
             }
             if (m_pending_wall_start) {
-                cancelTool();
-                owner->statusBar()->showMessage(QStringLiteral("Wall placement cancelled."), 2500);
+                QMenu menu(owner);
+                auto* cancel = menu.addAction(QStringLiteral("Cancel wall"));
+                QObject::connect(cancel, &QAction::triggered, owner, [this] { cancelTool(); });
+                menu.exec(QCursor::pos());
                 return;
+            }
+            if (!target.isEmpty() && !m_selected_ids.contains(target)) {
+                (void)selectEntity(target, false);
             }
             QMenu menu(owner);
             if (!m_selected_id.isEmpty()) {
+                auto* selection = menu.addAction(m_selected_ids.size() > 1
+                    ? QStringLiteral("%1 selected").arg(m_selected_ids.size())
+                    : QStringLiteral("Selected"));
+                selection->setEnabled(false);
+                if (m_selected_ids.size() == 1) {
+                    const auto entity = selectedEntity();
+                    if (entity && entity->type == "wall") {
+                        auto* length = menu.addAction(QStringLiteral("Change length…"));
+                        QObject::connect(length, &QAction::triggered, owner,
+                                         [this] { showConstraintEditor(); });
+                    }
+                }
                 auto* properties = menu.addAction(QStringLiteral("Properties"));
                 QObject::connect(properties, &QAction::triggered, owner,
                                  [this] { positionContextEditor(); });
@@ -18292,6 +18305,9 @@ private:
                 auto* remove = menu.addAction(QStringLiteral("Delete"));
                 QObject::connect(remove, &QAction::triggered, owner,
                                  [this] { (void)deleteSelection(); });
+                auto* deselect = menu.addAction(QStringLiteral("Deselect"));
+                QObject::connect(deselect, &QAction::triggered, owner,
+                                 [this] { (void)selectEntity({}); });
                 menu.addSeparator();
             }
             auto* add_text = menu.addAction(QStringLiteral("Add text here…"));
@@ -18342,7 +18358,6 @@ private:
         refreshActions();
         refreshTitle();
         m_refreshing = false;
-        QTimer::singleShot(0, owner, [this] { positionContextEditor(); });
     }
 
     void refreshCanvases() {
@@ -18671,7 +18686,7 @@ private:
         // Presentation annotations are kept in a typed entity, but their
         // child IDs are still rendered as ordinary retained canvas values so
         // both interactive and persisted output use the same vector path.
-        std::vector<std::string> annotation_child_ids;
+        std::vector<std::pair<std::string, std::string>> annotation_child_layers;
         for (const auto& [id, entity] : snapshot.entities()) {
             if (entity.type != kAnnotationEntityType) continue;
             try {
@@ -18679,7 +18694,7 @@ private:
                 const auto catalog = default_symbol_catalog();
                 for (const auto& label : state.labels) {
                     if (!label.visible) continue;
-                    annotation_child_ids.push_back(label.id);
+                    annotation_child_layers.emplace_back(label.id, label.placement.layer_id);
                     CanvasLabel canvas_label{id_from(label.id), label.placement.position,
                                              QString::fromStdString(label.content),
                                              id_from(label.id) == m_selected_id,
@@ -18706,7 +18721,7 @@ private:
                     for (const auto& stroke : placed_symbol_preview(*definition, symbol.placement)) {
                         preview.push_back({stroke.start, stroke.end, 0.0});
                     }
-                    annotation_child_ids.push_back(symbol.id);
+                    annotation_child_layers.emplace_back(symbol.id, symbol.placement.layer_id);
                     CanvasEntity canvas_symbol{id_from(symbol.id), QStringLiteral("symbol"),
                                                std::move(preview), 0.0,
                                                id_from(symbol.id) == m_selected_id};
@@ -19189,10 +19204,12 @@ private:
         for (const auto& [child_id, host_id] : assembly_child_hosts) {
             if (visible_ids.contains(host_id)) visible_ids.insert(child_id);
         }
-        // Annotation children are presentation records nested under the
-        // validated annotation entity rather than standalone Document
-        // entities, so they inherit the parent's fail-open visibility.
-        for (const auto& id : annotation_child_ids) visible_ids.insert(id);
+        // Annotation children inherit their drawing layer's visibility. Empty
+        // layer IDs are legacy/imported values and remain fail-open until the
+        // next user edit assigns an explicit active layer.
+        for (const auto& [id, layer_id] : annotation_child_layers) {
+            if (layer_id.empty() || visible_ids.contains(layer_id)) visible_ids.insert(id);
+        }
         std::vector<CanvasEntity> geometry;
         std::array<std::vector<CanvasEntity>, 3> visible_view_geometry;
         geometry.reserve(all_geometry.size());
@@ -19447,22 +19464,57 @@ private:
             add->setMenu(menu);
             m_navigator->setItemWidget(items.at(id), 1, add);
         }
-        // Annotation labels and symbols live inside one validated typed
-        // entity. Expose their stable child IDs in the navigator so they can
-        // be selected, inspected, and removed without flattening the wire
-        // format into renderer-only entities.
-        QTreeWidgetItem* annotations = nullptr;
+        // Labels and components are drawing content owned by a layer. Keep the
+        // typed annotation entity internal and present its children beneath
+        // their actual layer instead of as a project-level peer.
+        std::string fallback_annotation_layer;
+        if (!m_active_layer_id.isEmpty() &&
+            items.contains(m_active_layer_id.toStdString())) {
+            fallback_annotation_layer = m_active_layer_id.toStdString();
+        } else {
+            for (const auto& [id, node] : organization.nodes) {
+                if (node.type == "layer" && items.contains(id)) {
+                    fallback_annotation_layer = id;
+                    break;
+                }
+            }
+        }
+        std::map<std::string, QTreeWidgetItem*, std::less<>> annotation_groups;
+        // Keep the active layer's content bucket visible even when it is
+        // empty. The hierarchy therefore communicates where a library drop
+        // will be stored before the first component is placed.
+        if (!fallback_annotation_layer.empty() && items.contains(fallback_annotation_layer)) {
+            auto* group = new QTreeWidgetItem({QStringLiteral("Symbols & labels")});
+            items.at(fallback_annotation_layer)->insertChild(0, group);
+            group->setData(0, Qt::UserRole,
+                           QStringLiteral("layer-annotations:") +
+                               id_from(fallback_annotation_layer));
+            group->setExpanded(true);
+            annotation_groups.emplace(fallback_annotation_layer, group);
+        }
+        const auto group_for = [&](const AnnotationPlacement& placement) -> QTreeWidgetItem* {
+            auto layer_id = placement.layer_id;
+            if (layer_id.empty() || !items.contains(layer_id)) layer_id = fallback_annotation_layer;
+            if (layer_id.empty() || !items.contains(layer_id)) return nullptr;
+            if (const auto found = annotation_groups.find(layer_id);
+                found != annotation_groups.end()) return found->second;
+            auto* group = new QTreeWidgetItem({QStringLiteral("Symbols & labels")});
+            items.at(layer_id)->insertChild(0, group);
+            group->setData(0, Qt::UserRole,
+                           QStringLiteral("layer-annotations:") + id_from(layer_id));
+            group->setExpanded(true);
+            annotation_groups.emplace(layer_id, group);
+            return group;
+        };
         for (const auto& [id, entity] : snapshot.entities()) {
             if (entity.type != kAnnotationEntityType) continue;
             try {
                 const auto state = decode_annotation_entity(entity);
                 if (state.labels.empty() && state.symbols.empty()) continue;
-                if (!annotations) {
-                    annotations = new QTreeWidgetItem(m_navigator, {QStringLiteral("Symbols & labels")});
-                    annotations->setExpanded(true);
-                }
                 for (const auto& label : state.labels) {
-                    auto* child = new QTreeWidgetItem(annotations,
+                    auto* parent = group_for(label.placement);
+                    if (!parent) continue;
+                    auto* child = new QTreeWidgetItem(parent,
                         {QStringLiteral("Label  •  %1").arg(QString::fromStdString(label.content))});
                     child->setData(0, Qt::UserRole, id_from(label.id));
                     child->setToolTip(0, QString::fromStdString(label.id));
@@ -19470,7 +19522,9 @@ private:
                     if (id_from(label.id) == m_selected_id) m_navigator->setCurrentItem(child);
                 }
                 for (const auto& symbol : state.symbols) {
-                    auto* child = new QTreeWidgetItem(annotations,
+                    auto* parent = group_for(symbol.placement);
+                    if (!parent) continue;
+                    auto* child = new QTreeWidgetItem(parent,
                         {QStringLiteral("Symbol  •  %1").arg(QString::fromStdString(symbol.symbol_id))});
                     child->setData(0, Qt::UserRole, id_from(symbol.id));
                     child->setToolTip(0, QString::fromStdString(symbol.id));
@@ -19507,6 +19561,12 @@ private:
         const auto active_index = m_drawing_layer_combo->findData(m_active_layer_id);
         m_drawing_layer_combo->setCurrentIndex(active_index);
         m_drawing_layer_combo->setPlaceholderText(QStringLiteral("Choose a drawing layer"));
+        if (m_component_library_heading) {
+            m_component_library_heading->setText(active_index < 0
+                ? QStringLiteral("Choose a layer / Symbols & labels")
+                : QStringLiteral("%1 / Symbols & labels")
+                      .arg(m_drawing_layer_combo->itemText(active_index)));
+        }
         auto context_label = active_index < 0
             ? QStringLiteral("Choose a drawing layer")
             : m_drawing_layer_combo->itemData(active_index, Qt::ToolTipRole).toString();
@@ -20486,7 +20546,13 @@ private:
     }
 
     void refreshTitle() {
-        if (m_inspector) m_inspector->setVisible(!m_selected_id.isEmpty());
+        if (m_inspector && m_selected_id.isEmpty()) m_inspector->hide();
+        if (m_selection_badge) {
+            m_selection_badge->setText(m_selected_ids.size() > 1
+                ? QStringLiteral("%1 selected").arg(m_selected_ids.size())
+                : QStringLiteral("Selected"));
+            m_selection_badge->setVisible(!m_selected_ids.isEmpty());
+        }
         const bool architectural = m_workspace == Workspace::architectural;
         if (m_phase_heading) m_phase_heading->setVisible(architectural);
         if (m_model_phase_combo) m_model_phase_combo->setVisible(architectural);
@@ -20498,7 +20564,7 @@ private:
         if (!architectural && m_inspector) {
             for (QWidget* widget : {m_material_group, static_cast<QWidget*>(m_door_swing_button),
                     static_cast<QWidget*>(m_opening_assembly_button), static_cast<QWidget*>(m_edit_object_button),
-                    static_cast<QWidget*>(m_edit_curve_button), static_cast<QWidget*>(m_edit_layers_button),
+                    static_cast<QWidget*>(m_edit_layers_button),
                     static_cast<QWidget*>(m_roof_properties_group), static_cast<QWidget*>(m_building_properties_group)})
                 if (widget) widget->hide();
         }
@@ -21935,6 +22001,7 @@ private:
     QLabel* m_phase_heading{};
     QPushButton* m_manage_phases_button{};
     QPointer<QLabel> m_symbol_library_status;
+    QPointer<QLabel> m_component_library_heading;
     QComboBox* m_symbol_category{};
     QComboBox* m_symbol_size{};
     QLineEdit* m_symbol_search{};
@@ -22107,6 +22174,7 @@ private:
     QToolButton* m_snap_button{};
     QToolButton* m_fit_button{};
     QToolButton* m_overview_button{};
+    QLabel* m_selection_badge{};
     QAction* m_new_action{};
     QAction* m_open_action{};
     QAction* m_recover_action{};
@@ -22128,12 +22196,6 @@ private:
     QAction* m_terrain_action{};
     std::vector<ShortcutBinding> m_shortcuts;
     QString m_shortcut_load_error;
-    std::vector<QuickAccessBinding> m_quick_access_bindings;
-    std::vector<QString> m_quick_access_ids;
-    QString m_quick_access_load_error;
-    QMenu* m_quick_access_menu{};
-    QAction* m_quick_access_settings_action{};
-    QToolButton* m_quick_access_button{};
     QAction* m_annotation_action{};
     QAction* m_reference_action{};
     QAction* m_project_resources_action{};
@@ -22807,10 +22869,6 @@ bool MainWindow::showPrintPreview() {
 
 void MainWindow::showCommandPalette() {
     m_impl->showCommandPalette();
-}
-
-void MainWindow::showQuickAccessSettings() {
-    m_impl->showQuickAccessSettings();
 }
 
 void MainWindow::showDistoImport() {

@@ -191,12 +191,16 @@ public:
     void setPointClicked(std::function<void(Vec2)> callback);
     void setEntityClicked(std::function<void(QString)> callback);
     void setEntitySelectionClicked(std::function<void(QString, bool)> callback);
-    // Rectangle selection replaces the selection, or adds to it with Shift.
+    // Ctrl-drag rectangle selection adds to the retained selection.
     void setEntitiesSelected(std::function<void(QStringList, bool)> callback);
+    // Commits one model-space translation after the interactive preview ends.
+    // Returning false rejects the preview without leaving canvas-only geometry.
+    void setEntitiesMoveRequested(std::function<bool(QStringList, Vec2)> callback);
     void setSymbolDropped(std::function<void(QString, double, Vec2)> callback);
     void setCursorMoved(std::function<void(Vec2)> callback);
-    // Emitted only on a stationary right-button release, using effective snapping.
-    void setRightClicked(std::function<void(Vec2)> callback);
+    // Emitted only on a stationary right-button release. The target is the
+    // painted entity under the pointer, or an empty string for canvas space.
+    void setRightClicked(std::function<void(Vec2, QString)> callback);
     void setFinishRequested(std::function<void()> callback);
     void setCancelRequested(std::function<void()> callback);
     void setPreciseInputRequested(std::function<void()> callback);
@@ -238,6 +242,8 @@ private:
     [[nodiscard]] Vec2 toModel(QPointF point, const QRectF& viewport) const;
     [[nodiscard]] Vec2 snapped(Vec2 point) const;
     [[nodiscard]] QString hitTest(QPointF point) const;
+    [[nodiscard]] QStringList selectedIds() const;
+    [[nodiscard]] Vec2 dragDelta(QPointF position) const;
     [[nodiscard]] QStringList rectangleHits(const QRectF& rectangle, bool crossing) const;
     [[nodiscard]] std::optional<Vec2> closingAnchor(QPointF point) const;
     [[nodiscard]] Vec2 inputPoint(QPointF point) const;
@@ -282,6 +288,13 @@ private:
     Vec2 m_view_center{0.0, 0.0};
     std::optional<QPointF> m_last_mouse_position;
     bool m_panning{false};
+    enum class LeftGesture { none, empty_pan, object_move, marquee };
+    LeftGesture m_left_gesture{LeftGesture::none};
+    QPointF m_left_start;
+    bool m_left_dragging{false};
+    QString m_pressed_entity;
+    QStringList m_move_ids;
+    std::optional<Vec2> m_move_preview_delta;
     Qt::MouseButton m_gesture_button{Qt::NoButton};
     QPointF m_right_start;
     bool m_right_dragging{false};
@@ -300,9 +313,10 @@ private:
     std::function<void(QString)> m_entity_clicked;
     std::function<void(QString, bool)> m_entity_selection_clicked;
     std::function<void(QStringList, bool)> m_entities_selected;
+    std::function<bool(QStringList, Vec2)> m_entities_move_requested;
     std::function<void(QString, double, Vec2)> m_symbol_dropped;
     std::function<void(Vec2)> m_cursor_moved;
-    std::function<void(Vec2)> m_right_clicked;
+    std::function<void(Vec2, QString)> m_right_clicked;
     std::function<void()> m_finish_requested;
     std::function<void()> m_cancel_requested;
     std::function<void()> m_precise_input_requested;

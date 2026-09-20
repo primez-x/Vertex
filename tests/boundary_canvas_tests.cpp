@@ -1082,7 +1082,7 @@ void test_mouse_gesture_contract() {
     canvas.setEntitiesSelected([&](QStringList ids, bool add) {
         ++selections; hits = ids; additive = add;
     });
-    canvas.setRightClicked([&](Vec2 p) { ++rights; right_point = p; });
+    canvas.setRightClicked([&](Vec2 p, QString) { ++rights; right_point = p; });
     canvas.setFinishRequested([&] { ++finishes; });
     canvas.setCursorMoved([&](Vec2 p) { ++cursors; cursor = p; });
     const auto mouse = [&](QEvent::Type type, QPointF p, Qt::MouseButton button,
@@ -1093,18 +1093,12 @@ void test_mouse_gesture_contract() {
     for (auto tool : {CanvasTool::select, CanvasTool::boundary, CanvasTool::wall, CanvasTool::sloped_wall}) {
         canvas.setTool(tool);
         canvas.fitView();
-        mouse(QEvent::MouseButtonPress, {320,240}, Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
-        mouse(QEvent::MouseButtonRelease, {320,240}, Qt::MiddleButton, Qt::LeftButton, Qt::ControlModifier);
-        mouse(QEvent::MouseMove, {360,260}, Qt::NoButton, Qt::LeftButton, Qt::ControlModifier);
-        mouse(QEvent::MouseButtonRelease, {360,260}, Qt::LeftButton, Qt::NoButton);
-        require(std::abs(canvas.viewCenter().x + 0.5) < 1e-9, "Ctrl-left must pan every tool");
-        mouse(QEvent::MouseButtonPress, {320,240}, Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
-        mouse(QEvent::MouseButtonRelease, {320,240}, Qt::LeftButton, Qt::NoButton);
         mouse(QEvent::MouseButtonPress, {320,240}, Qt::MiddleButton, Qt::MiddleButton);
         mouse(QEvent::MouseButtonPress, {320,240}, Qt::LeftButton, Qt::MiddleButton | Qt::LeftButton);
         mouse(QEvent::MouseButtonRelease, {320,240}, Qt::LeftButton, Qt::MiddleButton);
         mouse(QEvent::MouseMove, {360,240}, Qt::NoButton, Qt::MiddleButton);
-        require(std::abs(canvas.viewCenter().x + 1.0) < 1e-9, "unrelated left release must not stop middle pan");
+        require(std::abs(canvas.viewCenter().x + 0.5) < 1e-9,
+                "middle drag must pan every tool and ignore unrelated buttons");
         mouse(QEvent::MouseButtonRelease, {360,240}, Qt::MiddleButton, Qt::NoButton);
     }
     require(points == 0 && selections == 0 && finishes == 0, "navigation must never author or select");
@@ -1127,34 +1121,24 @@ void test_mouse_gesture_contract() {
         mouse(QEvent::MouseButtonRelease, {320,240}, Qt::LeftButton, Qt::NoButton, Qt::ShiftModifier);
     }
     require(points == 1 && selections == 1, "double click must not duplicate authoring or toggle selection twice");
-    canvas.setEntities({{QStringLiteral("line"), QStringLiteral("symbol"),
-                         {Segment{{-1,0},{1,0},0}}}});
-    const auto marquee = [&](QPointF start, QPointF end, Qt::KeyboardModifiers mods = Qt::NoModifier) {
-        mouse(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton, mods);
-        mouse(QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton, mods);
-        mouse(QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton, mods);
-    };
-    marquee({300,220}, {420,260});
-    require(hits.isEmpty() && !additive, "left-to-right marquee requires full enclosure");
-    marquee({420,220}, {300,260}, Qt::ShiftModifier);
-    require(hits.contains(QStringLiteral("line")) && additive, "right-to-left marquee crosses and Shift adds");
-    marquee({220,220}, {420,260});
-    require(hits.contains(QStringLiteral("line")), "enclosed entity must select left-to-right");
     const int before = selections;
-    mouse(QEvent::MouseButtonPress, {220,220}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonPress, {220,220}, Qt::LeftButton, Qt::LeftButton,
+          Qt::ControlModifier);
     mouse(QEvent::MouseButtonPress, {220,220}, Qt::MiddleButton, Qt::LeftButton | Qt::MiddleButton);
     mouse(QEvent::MouseMove, {260,240}, Qt::NoButton, Qt::LeftButton | Qt::MiddleButton);
     mouse(QEvent::MouseButtonRelease, {260,240}, Qt::MiddleButton, Qt::LeftButton);
     mouse(QEvent::MouseButtonRelease, {260,240}, Qt::LeftButton, Qt::NoButton);
     require(selections == before, "pan takeover must abandon marquee");
     for (auto type : {QEvent::UngrabMouse, QEvent::Hide, QEvent::WindowDeactivate}) {
-        mouse(QEvent::MouseButtonPress, {220,220}, Qt::LeftButton, Qt::LeftButton);
+        mouse(QEvent::MouseButtonPress, {220,220}, Qt::LeftButton, Qt::LeftButton,
+              Qt::ControlModifier);
         QEvent cancel(type);
         QApplication::sendEvent(&canvas, &cancel);
         mouse(QEvent::MouseButtonRelease, {420,260}, Qt::LeftButton, Qt::NoButton);
     }
     require(selections == before, "lost gesture ownership must not complete selection");
-    mouse(QEvent::MouseButtonPress, {220,220}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonPress, {220,220}, Qt::LeftButton, Qt::LeftButton,
+          Qt::ControlModifier);
     QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
     QApplication::sendEvent(&canvas, &escape);
     mouse(QEvent::MouseButtonRelease, {420,260}, Qt::LeftButton, Qt::NoButton);
@@ -1182,6 +1166,104 @@ void test_mouse_gesture_contract() {
             "click callbacks must observe the effective release point when no move event occurs");
 }
 
+void test_direct_canvas_manipulation_contract() {
+    PlanCanvas canvas;
+    canvas.resize(640, 480);
+    canvas.setGridEnabled(false);
+    canvas.setOverviewMapEnabled(false);
+    canvas.setSnapEnabled(false);
+    canvas.setTool(CanvasTool::select);
+    canvas.setEntities({{QStringLiteral("component"), QStringLiteral("symbol"),
+                         {Segment{{-1, 0}, {1, 0}, 0}}}});
+
+    QStringList selected;
+    int selection_clicks = 0;
+    int marquee_requests = 0;
+    int move_requests = 0;
+    QStringList moved_ids;
+    Vec2 moved_delta{};
+    QString context_target;
+    canvas.setEntitySelectionClicked([&](QString id, bool toggle) {
+        ++selection_clicks;
+        if (id.isEmpty()) {
+            if (!toggle) selected.clear();
+        } else if (toggle && selected.contains(id)) {
+            selected.removeAll(id);
+        } else {
+            if (!toggle) selected.clear();
+            if (!selected.contains(id)) selected.push_back(id);
+        }
+        canvas.setSelectedIds(selected);
+    });
+    canvas.setEntitiesSelected([&](QStringList ids, bool additive) {
+        ++marquee_requests;
+        require(additive, "Ctrl-drag marquee must add to the current selection");
+        for (const auto& id : ids) if (!selected.contains(id)) selected.push_back(id);
+        canvas.setSelectedIds(selected);
+    });
+    canvas.setEntitiesMoveRequested([&](QStringList ids, Vec2 delta) {
+        ++move_requests;
+        moved_ids = std::move(ids);
+        moved_delta = delta;
+        return true;
+    });
+    canvas.setRightClicked([&](Vec2, QString id) { context_target = std::move(id); });
+
+    const auto mouse = [&](QEvent::Type type, QPointF p, Qt::MouseButton button,
+                           Qt::MouseButtons buttons,
+                           Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        QMouseEvent event(type, p, canvas.mapToGlobal(p.toPoint()), button, buttons, modifiers);
+        QApplication::sendEvent(&canvas, &event);
+    };
+
+    const auto center = QPointF(320, 240);
+    mouse(QEvent::MouseButtonPress, center, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, center, Qt::LeftButton, Qt::NoButton);
+    require(selected == QStringList{QStringLiteral("component")} && selection_clicks == 1,
+            "plain click must select the component under the pointer");
+
+    mouse(QEvent::MouseButtonPress, center, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, center + QPointF(80, -40), Qt::NoButton, Qt::LeftButton);
+    require(canvas.selectionBounds() && canvas.selectionBounds()->center().x() > center.x() + 70,
+            "dragging a selected component must show a live move preview");
+    mouse(QEvent::MouseButtonRelease, center + QPointF(80, -40),
+          Qt::LeftButton, Qt::NoButton);
+    require(move_requests == 1 && moved_ids == selected &&
+                std::abs(moved_delta.x - 1.0) < 1e-9 &&
+                std::abs(moved_delta.y - 0.5) < 1e-9,
+            "selected component drag must request one model-space translation");
+
+    const auto before_pan = canvas.viewCenter();
+    mouse(QEvent::MouseButtonPress, {100, 100}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, {140, 120}, Qt::NoButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, {140, 120}, Qt::LeftButton, Qt::NoButton);
+    require(canvas.viewCenter().x < before_pan.x - 0.4 &&
+                canvas.viewCenter().y > before_pan.y + 0.2 && move_requests == 1,
+            "plain drag beginning on empty canvas must pan without moving geometry");
+
+    canvas.fitView();
+    mouse(QEvent::MouseButtonPress, center, Qt::LeftButton, Qt::LeftButton,
+          Qt::ControlModifier);
+    mouse(QEvent::MouseButtonRelease, center, Qt::LeftButton, Qt::NoButton,
+          Qt::ControlModifier);
+    require(selected.isEmpty(), "Ctrl-click must toggle the object in the retained selection");
+
+    mouse(QEvent::MouseButtonPress, {390, 210}, Qt::LeftButton, Qt::LeftButton,
+          Qt::ControlModifier);
+    mouse(QEvent::MouseMove, {250, 270}, Qt::NoButton, Qt::LeftButton,
+          Qt::ControlModifier);
+    mouse(QEvent::MouseButtonRelease, {250, 270}, Qt::LeftButton, Qt::NoButton,
+          Qt::ControlModifier);
+    require(marquee_requests == 1 && selected.contains(QStringLiteral("component")) &&
+                move_requests == 1,
+            "Ctrl-drag must marquee-select even when the window crosses an object");
+
+    mouse(QEvent::MouseButtonPress, center, Qt::RightButton, Qt::RightButton);
+    mouse(QEvent::MouseButtonRelease, center, Qt::RightButton, Qt::NoButton);
+    require(context_target == QStringLiteral("component"),
+            "stationary right-click must identify the object under the pointer");
+}
+
 int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QApplication application(argc, argv);
@@ -1196,6 +1278,7 @@ int main(int argc, char** argv) {
             require(metrics.inFont(character), "capture font must contain each rendered character");
         }
         test_selection_frame_for_styled_geometry();
+        test_direct_canvas_manipulation_contract();
         test_mouse_gesture_contract();
         test_boundary_draft_rendering_and_history();
         test_request_to_paint_telemetry();

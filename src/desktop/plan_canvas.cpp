@@ -577,7 +577,15 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     painter.translate(-view_center.x, -view_center.y);
 
     for (const auto& reference : m_references) {
-        if (reference.visible) drawReference(painter, reference);
+        if (!reference.visible) continue;
+        if (!output && m_move_preview_delta && m_move_ids.contains(reference.id)) {
+            painter.save();
+            painter.translate(m_move_preview_delta->x, m_move_preview_delta->y);
+            drawReference(painter, reference);
+            painter.restore();
+        } else {
+            drawReference(painter, reference);
+        }
     }
 
     if (m_grid_enabled && !output) {
@@ -585,7 +593,14 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     }
     drawReferenceGrids(painter);
     for (const auto& entity : m_entities) {
-        drawEntity(painter, entity, output, background, paper_pixels_per_mm);
+        if (!output && m_move_preview_delta && m_move_ids.contains(entity.id)) {
+            painter.save();
+            painter.translate(m_move_preview_delta->x, m_move_preview_delta->y);
+            drawEntity(painter, entity, output, background, paper_pixels_per_mm);
+            painter.restore();
+        } else {
+            drawEntity(painter, entity, output, background, paper_pixels_per_mm);
+        }
     }
 
     // Transient overlays belong to the interactive canvas only. Both fitted
@@ -846,6 +861,10 @@ void PlanCanvas::setEntitiesSelected(std::function<void(QStringList, bool)> call
     m_entities_selected = std::move(callback);
 }
 
+void PlanCanvas::setEntitiesMoveRequested(std::function<bool(QStringList, Vec2)> callback) {
+    m_entities_move_requested = std::move(callback);
+}
+
 void PlanCanvas::setSymbolDropped(std::function<void(QString, double, Vec2)> callback) {
     m_symbol_dropped = std::move(callback);
 }
@@ -1016,22 +1035,21 @@ bool PlanCanvas::event(QEvent* event) {
 
 void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
                               Qt::KeyboardModifiers modifiers) {
-    const bool pan = button == Qt::MiddleButton ||
-        (button == Qt::LeftButton && (modifiers.testFlag(Qt::ControlModifier) ||
-                                     modifiers.testFlag(Qt::AltModifier)));
-    // Navigation can take over a pending marquee, but additional buttons cannot
-    // steal an active navigation gesture or complete the abandoned selection.
-    if (m_gesture_button != Qt::NoButton && (m_panning || !pan)) return;
+    const bool middle_pan = button == Qt::MiddleButton;
+    // Middle navigation can take over a pending left gesture. Other extra
+    // buttons cannot retarget or complete the gesture that owns the press.
+    if (m_gesture_button != Qt::NoButton && (m_panning || !middle_pan)) return;
     resetGesture();
-    if (pan || (button == Qt::LeftButton && overviewMapRect().contains(position)))
+    if (middle_pan || (button == Qt::LeftButton && overviewMapRect().contains(position)))
         beginPerformanceMeasurement(PerformanceMetric::navigation);
     setFocus();
     updateCursor(position);
     m_gesture_button = button;
-    if (pan) {
+    if (middle_pan) {
         m_panning = true;
         m_pan_start = position;
         m_pan_view_start = m_view_center;
+        setCursor(Qt::ClosedHandCursor);
         return;
     }
     if (button == Qt::RightButton) {
@@ -1043,11 +1061,35 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
         m_overview_dragging = true;
         return;
     }
-    if (m_tool == CanvasTool::select) {
+    const bool control = modifiers.testFlag(Qt::ControlModifier);
+    if (control) {
+        m_left_gesture = LeftGesture::marquee;
         m_selection_start = position;
         m_selection_end = position;
         m_selection_dragging = false;
-        m_selection_additive = modifiers.testFlag(Qt::ShiftModifier);
+        m_selection_additive = true;
+        return;
+    }
+    if (m_tool == CanvasTool::select) {
+        m_left_start = position;
+        m_left_dragging = false;
+        m_pressed_entity = hitTest(position);
+        if (m_pressed_entity.isEmpty()) {
+            m_left_gesture = LeftGesture::empty_pan;
+            m_pan_start = position;
+            m_pan_view_start = m_view_center;
+        } else {
+            m_left_gesture = LeftGesture::object_move;
+            const auto already_selected = selectedIds().contains(m_pressed_entity);
+            if (!already_selected) {
+                if (m_entity_selection_clicked)
+                    m_entity_selection_clicked(m_pressed_entity, false);
+                else if (m_entity_clicked)
+                    m_entity_clicked(m_pressed_entity);
+            }
+            m_move_ids = selectedIds();
+            if (m_move_ids.isEmpty()) m_move_ids = {m_pressed_entity};
+        }
     } else if (closingAnchor(position) && m_finish_requested) {
         m_finish_requested();
     } else if (m_point_clicked) {
@@ -1064,11 +1106,29 @@ void PlanCanvas::pointerMove(QPointF position) {
         (void)navigateOverviewMap(position);
         return;
     }
-    if (m_selection_start) {
+    if (m_left_gesture == LeftGesture::marquee && m_selection_start) {
         m_selection_end = position;
         if ((position - *m_selection_start).manhattanLength() >= QApplication::startDragDistance())
             m_selection_dragging = true;
         update();
+    }
+    if (m_left_gesture == LeftGesture::empty_pan) {
+        if (!m_left_dragging &&
+            (position - m_left_start).manhattanLength() >= QApplication::startDragDistance()) {
+            m_left_dragging = true;
+            m_panning = true;
+            setCursor(Qt::ClosedHandCursor);
+        }
+    } else if (m_left_gesture == LeftGesture::object_move) {
+        if (!m_left_dragging &&
+            (position - m_left_start).manhattanLength() >= QApplication::startDragDistance()) {
+            m_left_dragging = true;
+            setCursor(Qt::ClosedHandCursor);
+        }
+        if (m_left_dragging) {
+            m_move_preview_delta = dragDelta(position);
+            update();
+        }
     }
     if (m_panning) {
         beginPerformanceMeasurement(PerformanceMetric::navigation);
@@ -1090,27 +1150,40 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button) {
     if (button == Qt::RightButton) {
         const bool clicked = !m_right_dragging &&
             (position - m_right_start).manhattanLength() < QApplication::startDragDistance();
+        const auto target = clicked ? hitTest(position) : QString{};
         resetGesture();
-        if (clicked && m_right_clicked) m_right_clicked(inputPoint(position));
+        if (clicked && m_right_clicked) m_right_clicked(inputPoint(position), target);
         return;
     }
-    if (button == Qt::LeftButton && m_selection_start) {
-        const auto start = *m_selection_start;
-        const bool dragging = m_selection_dragging ||
-            (position - start).manhattanLength() >= QApplication::startDragDistance();
-        m_selection_start.reset();
-        m_selection_dragging = false;
-        if (dragging) {
-            const auto ids = rectangleHits(QRectF(start, position).normalized(), position.x() < start.x());
-            if (m_entities_selected) m_entities_selected(ids, m_selection_additive);
-        } else if (m_entity_selection_clicked) {
-            m_entity_selection_clicked(hitTest(position), m_selection_additive);
-        } else if (m_entity_clicked) {
-            m_entity_clicked(hitTest(position));
+    if (button == Qt::LeftButton) {
+        const auto gesture = m_left_gesture;
+        const auto start = m_left_start;
+        const auto selection_start = m_selection_start;
+        const bool dragging = m_left_dragging || m_selection_dragging ||
+            (gesture != LeftGesture::none &&
+             (position - (selection_start ? *selection_start : start)).manhattanLength() >=
+                 QApplication::startDragDistance());
+        const auto move_ids = m_move_ids;
+        const auto delta = dragDelta(position);
+        resetGesture();
+        if (gesture == LeftGesture::marquee && selection_start) {
+            if (dragging) {
+                const auto ids = rectangleHits(QRectF(*selection_start, position).normalized(),
+                                               position.x() < selection_start->x());
+                if (m_entities_selected) m_entities_selected(ids, true);
+            } else if (m_entity_selection_clicked) {
+                m_entity_selection_clicked(hitTest(position), true);
+            }
+        } else if (gesture == LeftGesture::empty_pan) {
+            if (!dragging && m_entity_selection_clicked) m_entity_selection_clicked({}, false);
+        } else if (gesture == LeftGesture::object_move && dragging &&
+                   m_entities_move_requested &&
+                   (std::abs(delta.x) > 1e-12 || std::abs(delta.y) > 1e-12)) {
+            (void)m_entities_move_requested(move_ids, delta);
         }
-        update();
+        updateCursor(position);
     }
-    resetGesture();
+    if (m_gesture_button != Qt::NoButton) resetGesture();
 }
 
 void PlanCanvas::resetGesture() {
@@ -1120,10 +1193,16 @@ void PlanCanvas::resetGesture() {
     m_selection_start.reset();
     m_selection_dragging = false;
     m_right_dragging = false;
+    m_left_gesture = LeftGesture::none;
+    m_left_dragging = false;
+    m_pressed_entity.clear();
+    m_move_ids.clear();
+    m_move_preview_delta.reset();
+    setCursor(m_tool == CanvasTool::select ? Qt::ArrowCursor : Qt::CrossCursor);
     update();
 }
 
-void PlanCanvas::setRightClicked(std::function<void(Vec2)> callback) {
+void PlanCanvas::setRightClicked(std::function<void(Vec2, QString)> callback) {
     m_right_clicked = std::move(callback);
 }
 
@@ -1152,6 +1231,8 @@ std::optional<QRectF> PlanCanvas::selectionBounds(const QRectF& viewport) const 
     };
     for (const auto& entity : m_entities) {
         if (!entity.selected) continue;
+        const auto preview = m_move_preview_delta && m_move_ids.contains(entity.id)
+            ? *m_move_preview_delta : Vec2{};
         const auto width = entity.type == QStringLiteral("wall")
             ? std::max(entity.thickness_metres, 0.04) : entity.stroke_width_metres;
         const auto padding = std::isfinite(width) && width > 0.0 ? width * m_scale * 0.5 : 1.5;
@@ -1165,6 +1246,10 @@ std::optional<QRectF> PlanCanvas::selectionBounds(const QRectF& viewport) const 
             } catch (const std::invalid_argument&) {
                 // Match the finite endpoint fallback used for view fitting.
             }
+            minimum.x += preview.x;
+            minimum.y += preview.y;
+            maximum.x += preview.x;
+            maximum.y += preview.y;
             include(QRectF(toScreen(minimum, viewport), toScreen(maximum, viewport))
                         .normalized().adjusted(-padding, -padding, padding, padding));
         }
@@ -1172,7 +1257,12 @@ std::optional<QRectF> PlanCanvas::selectionBounds(const QRectF& viewport) const 
     for (const auto& label : m_labels) {
         if (!label.selected || !drawable_label(label)) continue;
         const auto layout = label_layout(label, font(), this, m_scale, logicalDpiY());
-        include(label_transform(label, toScreen(label.position, viewport)).mapRect(layout.bounds));
+        auto position = label.position;
+        if (m_move_preview_delta && m_move_ids.contains(label.id)) {
+            position.x += m_move_preview_delta->x;
+            position.y += m_move_preview_delta->y;
+        }
+        include(label_transform(label, toScreen(position, viewport)).mapRect(layout.bounds));
     }
     for (const auto& reference : m_references) {
         if (!reference.selected || !reference.visible || reference.image.isNull()) continue;
@@ -1181,8 +1271,13 @@ std::optional<QRectF> PlanCanvas::selectionBounds(const QRectF& viewport) const 
         QTransform transform;
         transform.translate(viewport.center().x(), viewport.center().y());
         transform.scale(m_scale, -m_scale);
-        transform.translate(reference.position.x - m_view_center.x,
-                            reference.position.y - m_view_center.y);
+        auto position = reference.position;
+        if (m_move_preview_delta && m_move_ids.contains(reference.id)) {
+            position.x += m_move_preview_delta->x;
+            position.y += m_move_preview_delta->y;
+        }
+        transform.translate(position.x - m_view_center.x,
+                            position.y - m_view_center.y);
         if (std::isfinite(reference.rotation_degrees)) transform.rotate(reference.rotation_degrees);
         const auto width = reference.image.width() * unit;
         const auto height = reference.image.height() * unit;
@@ -1447,10 +1542,13 @@ QString PlanCanvas::hitTest(QPointF point) const {
     QString result;
     auto best = std::numeric_limits<double>::max();
     for (const auto& entity : m_entities) {
+        QPainterPath painted_footprint;
         for (const auto& segment : entity.segments) {
             const auto start = toScreen(segment.start, rect());
+            painted_footprint.moveTo(start);
             if (segment.sweep_radians == 0.0) {
                 const auto end = toScreen(segment.end, rect());
+                painted_footprint.lineTo(end);
                 const auto candidate = point_segment_distance(point, start, end);
                 if (candidate < best) {
                     best = candidate;
@@ -1467,6 +1565,7 @@ QString PlanCanvas::hitTest(QPointF point) const {
             for (int index = 1; index <= samples; ++index) {
                 const auto current = toScreen(
                     arc_point(segment, *arc, static_cast<double>(index) / samples), rect());
+                painted_footprint.lineTo(current);
                 const auto candidate = point_segment_distance(point, previous, current);
                 if (candidate < best) {
                     best = candidate;
@@ -1474,6 +1573,14 @@ QString PlanCanvas::hitTest(QPointF point) const {
                 }
                 previous = current;
             }
+        }
+        // Plan components are picked by their complete painted footprint, not
+        // only by a thin stroke. This keeps an empty-looking seat cushion or
+        // appliance centre from being misclassified as canvas space and panned.
+        if (entity.type == QStringLiteral("symbol") && !painted_footprint.isEmpty() &&
+            painted_footprint.boundingRect().adjusted(-4.0, -4.0, 4.0, 4.0).contains(point)) {
+            best = 0.0;
+            result = entity.id;
         }
     }
     // Measure the same font and padded rotated rectangle as interactive paint.
@@ -1516,10 +1623,37 @@ QString PlanCanvas::hitTest(QPointF point) const {
     return {};
 }
 
+QStringList PlanCanvas::selectedIds() const {
+    QStringList result;
+    const auto add = [&](const QString& id) {
+        if (!id.isEmpty() && !result.contains(id)) result.push_back(id);
+    };
+    for (const auto& entity : m_entities) if (entity.selected) add(entity.id);
+    for (const auto& label : m_labels) if (label.selected) add(label.id);
+    for (const auto& reference : m_references) if (reference.selected) add(reference.id);
+    return result;
+}
+
+Vec2 PlanCanvas::dragDelta(QPointF position) const {
+    const auto start = toModel(m_left_start, rect());
+    const auto end = toModel(position, rect());
+    if (!m_snap_enabled) return {end.x - start.x, end.y - start.y};
+    const auto snapped_start = snapped(start);
+    const auto snapped_end = snapped(end);
+    return {snapped_end.x - snapped_start.x, snapped_end.y - snapped_start.y};
+}
+
 void PlanCanvas::updateCursor(QPointF point) {
     m_last_mouse_position = point;
     if (m_cursor_moved) {
         m_cursor_moved(inputPoint(point));
+    }
+    if (m_panning || (m_left_gesture == LeftGesture::object_move && m_left_dragging)) {
+        setCursor(Qt::ClosedHandCursor);
+    } else if (m_tool == CanvasTool::select && m_gesture_button == Qt::NoButton) {
+        setCursor(hitTest(point).isEmpty() ? Qt::OpenHandCursor : Qt::SizeAllCursor);
+    } else if (m_tool != CanvasTool::select && m_gesture_button == Qt::NoButton) {
+        setCursor(Qt::CrossCursor);
     }
     update();
 }
@@ -1849,7 +1983,12 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
                                           metrics_device, scale, dpi);
         painter.setFont(layout.font);
         const auto& bounds = layout.bounds;
-        const auto center = to_screen(label.position);
+        auto position = label.position;
+        if (!output && m_move_preview_delta && m_move_ids.contains(label.id)) {
+            position.x += m_move_preview_delta->x;
+            position.y += m_move_preview_delta->y;
+        }
+        const auto center = to_screen(position);
         painter.save();
         painter.setTransform(label_transform(label, center), true);
         if (!output && label.selected) {

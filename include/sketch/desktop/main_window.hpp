@@ -561,7 +561,6 @@ public:
     [[nodiscard]] bool showPrintPreview();
 
     void showCommandPalette();
-    void showQuickAccessSettings();
     void showDistoImport();
     void showAnnotationEditor();
     void showReferenceImport();

@@ -1,5 +1,5 @@
 {
-  "acceptance": "Commands are searchable, quick-access actions and shortcut bindings are editable and persisted locally, and Measurement and Architectural tabs remain available.",
+  "acceptance": "Commands are searchable, shortcut bindings are editable and persisted locally, primary toolbar commands are not duplicated in another menu, and Measurement and Architectural tabs remain available.",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -58,13 +58,13 @@
       ]
     }
   ],
-  "qualification_boundary": "This evidence covers local command discovery, shortcut persistence, quick access, and workspace tabs. Physical keyboard coverage and the unified production gate remain open.",
+  "qualification_boundary": "This evidence covers local command discovery, shortcut persistence, nonduplicated toolbar commands, and workspace tabs. Physical keyboard coverage and the unified production gate remain open.",
   "requirement_id": "APX-UI-003",
   "result": "pass",
   "schema_version": 1,
   "source_anchors": [
     "showCommandPalette",
-    "quickAccess",
+    "keyboardShortcutSettings",
     "keyboardShortcut",
     "workspaceTabs",
     "Customize",

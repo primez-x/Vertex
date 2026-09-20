@@ -33,6 +33,9 @@ struct AnnotationPlacement {
     Vec2 position;
     double rotation_radians{};
     double scale{1.0};
+    // Empty only for legacy/imported records that predate drawing-context
+    // ownership. New desktop placements always retain their drawing layer.
+    std::string layer_id;
 };
 
 struct LabelTemplate {

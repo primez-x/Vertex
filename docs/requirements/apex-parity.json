@@ -1588,7 +1588,7 @@
     {
       "id": "APX-UI-003",
       "area": "workspace",
-      "requirement": "Provide a searchable command palette, customizable quick-access commands, shortcut editing, and view tabs.",
+      "requirement": "Provide a searchable command palette, shortcut editing, and view tabs without duplicating primary commands in a second toolbar menu.",
       "source_urls": [],
       "evidence_status": "documented",
       "implementation_status": "verified",
@@ -1600,7 +1600,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "The desktop exposes a searchable command palette, a compact Quick access menu, and a locally persisted checklist editor for supported commands. Invalid settings fail closed to bounded defaults; full command coverage, physical shortcut verification, and production acceptance remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "The desktop exposes a searchable command palette, locally persisted shortcut editing, and direct workspace tabs. Primary commands appear once on the compact toolbar; secondary commands remain in Tools and Commands. Full command coverage, physical shortcut verification, and production acceptance remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-INPUT-001",

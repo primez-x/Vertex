@@ -580,7 +580,7 @@ Build/version tested: ____________________  Date: ____________________
 
   **Steps, issues, screenshots, or notes:** ____________________
 
-- [ ] **065 — APX-UI-003**: Provide a searchable command palette, customizable quick-access commands, shortcut editing, and view tabs.
+- [ ] **065 — APX-UI-003**: Provide a searchable command palette, shortcut editing, and view tabs without duplicating primary commands in a second toolbar menu.
 
   **Expected result / acceptance:** Every exposed command is searchable, can be bound where supported, reports conflicts, and remains available from keyboard and pointer paths.
 
