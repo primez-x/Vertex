@@ -166,11 +166,14 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
                     architectural_canvas->testAttribute(Qt::WA_TabletTracking),
                 "both workspace canvases must accept explicit touch and active-pen events");
         auto* tool_panel = window.findChild<QWidget*>(QStringLiteral("toolPanel"));
-        auto* select_tool = window.findChild<QToolButton*>(QStringLiteral("selectTool"));
+        auto* object_tool = window.findChild<QToolButton*>(QStringLiteral("createBuildingObject"));
         require(tool_panel && tool_panel->height() <= 48 &&
-                    select_tool && select_tool->toolButtonStyle() == Qt::ToolButtonTextBesideIcon &&
-                    select_tool->iconSize() == QSize(18, 18),
-                "drawing tools must stay in one compact horizontal canvas bar");
+                    object_tool && object_tool->toolButtonStyle() == Qt::ToolButtonTextBesideIcon &&
+                    object_tool->iconSize() == QSize(18, 18) &&
+                    window.findChild<QToolButton*>(QStringLiteral("selectTool")) == nullptr &&
+                    window.findChild<QToolButton*>(QStringLiteral("drawFirstBoundary")) == nullptr &&
+                    window.findChild<QToolButton*>(QStringLiteral("defineFirstBoundary")) == nullptr,
+                "the compact canvas bar must use one pointer surface without Select, Draw First, or Define First toggles");
         auto* settings = window.findChild<QAction*>(QStringLiteral("keyboardShortcutSettings"));
         auto* user_guide = window.findChild<QAction*>(QStringLiteral("userGuide"));
         auto* about = window.findChild<QAction*>(QStringLiteral("aboutAction"));
@@ -514,29 +517,31 @@ void test_plan_canvas_native_pointer_events() {
     canvas.setTool(sketch::desktop::CanvasTool::boundary);
     canvas.setSnapEnabled(false);
     int point_clicks = 0;
+    int direct_draws = 0;
     canvas.setPointClicked([&](sketch::Vec2) { ++point_clicks; });
+    canvas.setDirectDrawRequested([&](sketch::Vec2, sketch::Vec2) { ++direct_draws; });
 
     QList<QEventPoint> touch_points;
     touch_points.append(QEventPoint(7, QEventPoint::Pressed, QPointF(120, 130),
                                     QPointF(120, 130)));
     QTouchEvent touch_begin(QEvent::TouchBegin, nullptr, Qt::NoModifier, touch_points);
     QCoreApplication::sendEvent(&canvas, &touch_begin);
-    require(touch_begin.isAccepted() && point_clicks == 1,
-            "a primary touch press must use the same precision point command as a mouse press");
+    require(touch_begin.isAccepted() && point_clicks == 0 && direct_draws == 0,
+            "a primary touch press must wait to distinguish a click from direct drawing");
 
-    touch_points[0] = QEventPoint(7, QEventPoint::Updated, QPointF(160, 150),
-                                  QPointF(160, 150));
+    touch_points[0] = QEventPoint(7, QEventPoint::Updated, QPointF(120, 130),
+                                  QPointF(120, 130));
     QTouchEvent touch_update(QEvent::TouchUpdate, nullptr, Qt::NoModifier, touch_points);
     QCoreApplication::sendEvent(&canvas, &touch_update);
-    require(touch_update.isAccepted() && point_clicks == 1,
+    require(touch_update.isAccepted() && point_clicks == 0 && direct_draws == 0,
             "touch motion must update the canvas without creating extra geometry points");
 
-    touch_points[0] = QEventPoint(7, QEventPoint::Released, QPointF(160, 150),
-                                  QPointF(160, 150));
+    touch_points[0] = QEventPoint(7, QEventPoint::Released, QPointF(120, 130),
+                                  QPointF(120, 130));
     QTouchEvent touch_end(QEvent::TouchEnd, nullptr, Qt::NoModifier, touch_points);
     QCoreApplication::sendEvent(&canvas, &touch_end);
-    require(touch_end.isAccepted() && point_clicks == 1,
-            "touch release must close the pointer transaction without a duplicate point");
+    require(touch_end.isAccepted() && point_clicks == 1 && direct_draws == 0,
+            "stationary touch release must request one precise point without a duplicate");
 
     QPointingDevice tablet_device(QStringLiteral("test-tablet"), 91,
                                   QInputDevice::DeviceType::Stylus,
@@ -548,19 +553,19 @@ void test_plan_canvas_native_pointer_events() {
                               QPointF(200, 180), 0.35, 0.0, 0.0, 0.0, 0.0, 0.0,
                               Qt::NoModifier, Qt::LeftButton, Qt::LeftButton);
     QCoreApplication::sendEvent(&canvas, &tablet_press);
-    require(tablet_press.isAccepted() && point_clicks == 2,
-            "an active-pen press must use the same precision point command as a mouse press");
-    QTabletEvent tablet_move(QEvent::TabletMove, &tablet_device, QPointF(220, 190),
-                             QPointF(220, 190), 0.05, 0.0, 0.0, 0.0, 0.0, 0.0,
+    require(tablet_press.isAccepted() && point_clicks == 1 && direct_draws == 0,
+            "an active-pen press must wait to distinguish a click from direct drawing");
+    QTabletEvent tablet_move(QEvent::TabletMove, &tablet_device, QPointF(200, 180),
+                             QPointF(200, 180), 0.05, 0.0, 0.0, 0.0, 0.0, 0.0,
                              Qt::NoModifier, Qt::NoButton, Qt::NoButton);
     QCoreApplication::sendEvent(&canvas, &tablet_move);
     require(tablet_move.isAccepted(), "active-pen motion must be accepted by the canvas");
-    QTabletEvent tablet_release(QEvent::TabletRelease, &tablet_device, QPointF(220, 190),
-                                QPointF(220, 190), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    QTabletEvent tablet_release(QEvent::TabletRelease, &tablet_device, QPointF(200, 180),
+                                QPointF(200, 180), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                                 Qt::NoModifier, Qt::LeftButton, Qt::NoButton);
     QCoreApplication::sendEvent(&canvas, &tablet_release);
-    require(tablet_release.isAccepted() && point_clicks == 2,
-            "active-pen release must close the pointer transaction without a duplicate point");
+    require(tablet_release.isAccepted() && point_clicks == 2 && direct_draws == 0,
+            "stationary active-pen release must request one precise point without a duplicate");
     canvas.setTool(sketch::desktop::CanvasTool::select);
     int selection_clicks = 0;
     bool toggle_selection = false;

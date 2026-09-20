@@ -15542,11 +15542,12 @@ public:
             {QStringLiteral("Edit reusable assemblies"),
              [this] { showAssemblies(); }},
             {QStringLiteral("Assistance"), [this] { showAssistance(); }},
-            {QStringLiteral("Select tool"), [this] { setTool(CanvasTool::select); }},
-            {QStringLiteral("Draw measurement boundary"), [this] { setTool(CanvasTool::boundary); }},
-            {QStringLiteral("Define area before drawing"),
+            {QStringLiteral("Start measured boundary with point input"),
+             [this] { setTool(CanvasTool::boundary); }},
+            {QStringLiteral("Start Define First measured boundary"),
              [this] { (void)beginBoundaryDrawing(BoundaryAuthoringMode::define_first, {}); }},
-            {QStringLiteral("Draw straight wall"), [this] { setTool(CanvasTool::wall); }},
+            {QStringLiteral("Start straight wall with two-point input"),
+             [this] { setTool(CanvasTool::wall); }},
             {QStringLiteral("Draw curved wall"), [this] { showCurvedWallDialog(); }},
             {QStringLiteral("Create door opening"),
              [this] { createOpeningFromDialog(QStringLiteral("door")); }},
@@ -17268,29 +17269,6 @@ private:
         tool_layout->addWidget(toggle_sidebar);
         QObject::connect(toggle_sidebar, &QToolButton::toggled, owner,
                          [navigator_panel](bool visible) { navigator_panel->setVisible(visible); });
-        m_select_button = addToolButton(tool_layout, QStringLiteral("Select"), CanvasTool::select, true);
-        m_boundary_button = addToolButton(tool_layout, QStringLiteral("Boundary"), CanvasTool::boundary);
-        m_boundary_button->setText(QStringLiteral("Draw first"));
-        m_boundary_button->setObjectName(QStringLiteral("drawFirstBoundary"));
-        m_boundary_button->setToolTip(QStringLiteral("Draw measured linework, then choose its area classification"));
-        m_define_boundary_button = new QToolButton(tool_panel);
-        m_define_boundary_button->setText(QStringLiteral("Define first"));
-        m_define_boundary_button->setIcon(modern_toolbar_icon(
-            "<path d='M5 6h14M5 12h14M5 18h14'/><path d='M8 4v16M16 4v16'/>"));
-        m_define_boundary_button->setIconSize(QSize(18, 18));
-        m_define_boundary_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        m_define_boundary_button->setAccessibleName(QStringLiteral("Define first"));
-        m_define_boundary_button->setObjectName(QStringLiteral("defineFirstBoundary"));
-        m_define_boundary_button->setToolTip(QStringLiteral("Choose an area classification before drawing and place each dimension"));
-        m_define_boundary_button->setCheckable(true);
-        m_define_boundary_button->setAutoRaise(true);
-        m_define_boundary_button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-        tool_layout->addWidget(m_define_boundary_button);
-        QObject::connect(m_define_boundary_button, &QToolButton::clicked, owner,
-                         [this] {
-                             if (!beginBoundaryDrawing(BoundaryAuthoringMode::define_first, {})) syncToolControls();
-                         });
-        m_wall_button = addToolButton(tool_layout, QStringLiteral("Wall"), CanvasTool::wall);
         m_object_button = new QToolButton(tool_panel);
         m_object_button->setText(QStringLiteral("Object…"));
         m_object_button->setIcon(modern_toolbar_icon(
@@ -17372,8 +17350,8 @@ private:
         m_overview_button->setMinimumWidth(0);
         m_overview_button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         tool_layout->addWidget(m_overview_button);
-        for (auto* button : {m_select_button, m_boundary_button, m_define_boundary_button,
-                m_wall_button, m_object_button, m_grid_button, m_snap_button, m_fit_button, m_overview_button}) {
+        for (auto* button : {m_object_button, m_grid_button, m_snap_button,
+                m_fit_button, m_overview_button}) {
             button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
             button->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
         }
@@ -18152,46 +18130,6 @@ private:
         owner->statusBar()->clearMessage();
     }
 
-    QToolButton* addToolButton(QBoxLayout* layout, const QString& label, CanvasTool tool,
-                               bool checked = false) {
-        auto* button = new QToolButton(layout->parentWidget());
-        button->setText(label);
-        switch (tool) {
-        case CanvasTool::select:
-            button->setIcon(modern_toolbar_icon(
-                "<path d='M6 3l12 9-6 1-3 7L6 3z'/><path d='m11 16 3 3'/>"));
-            button->setObjectName(QStringLiteral("selectTool"));
-            break;
-        case CanvasTool::boundary:
-            button->setIcon(modern_toolbar_icon(
-                "<path d='M5 5h14v14H5z'/><path d='M5 12h14M12 5v14'/>"));
-            button->setObjectName(QStringLiteral("drawFirstTool"));
-            break;
-        case CanvasTool::wall:
-            button->setIcon(modern_toolbar_icon(
-                "<path d='M5 4v16M19 4v16M5 8h14M5 16h14'/>"));
-            button->setObjectName(QStringLiteral("wallTool"));
-            break;
-        case CanvasTool::sloped_wall:
-            button->setIcon(modern_toolbar_icon(
-                "<path d='M5 18 19 6M5 12h14M5 18h14'/>"));
-            button->setObjectName(QStringLiteral("slopedWallTool"));
-            break;
-        }
-        button->setIconSize(QSize(18, 18));
-        button->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        button->setAccessibleName(label);
-        button->setToolTip(tool_name(tool));
-        button->setCheckable(true);
-        button->setChecked(checked);
-        button->setAutoRaise(true);
-        button->setMinimumWidth(0);
-        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-        layout->addWidget(button);
-        QObject::connect(button, &QToolButton::clicked, owner, [this, tool] { setTool(tool); });
-        return button;
-    }
-
     void connectCanvas(PlanCanvas* canvas) {
         canvas->setPerformanceMeasured([this](PerformanceMetric metric,
                                               std::chrono::steady_clock::duration elapsed) {
@@ -18245,6 +18183,11 @@ private:
         });
         canvas->setEntitiesMoveRequested([this](QStringList ids, Vec2 delta) {
             return moveSelectionBy(ids, delta);
+        });
+        canvas->setDirectDrawRequested([this, canvas](Vec2 start, Vec2 end) {
+            const auto* active = m_workspace == Workspace::measurement
+                                     ? m_measurementCanvas : m_architecturalCanvas;
+            if (canvas == active) onDirectDrawSegment(start, end);
         });
         canvas->setCursorMoved([this, canvas](Vec2 point) {
             // Snap toggles update both canvases; only the active workspace
@@ -20576,7 +20519,6 @@ private:
         if (m_manage_phases_button) m_manage_phases_button->setVisible(architectural);
         for (auto* action : m_architectural_actions) action->setVisible(architectural);
         if (m_architectural_view_control_action) m_architectural_view_control_action->setVisible(architectural);
-        if (m_wall_button) m_wall_button->setVisible(architectural);
         if (m_object_button) m_object_button->setVisible(architectural);
         if (!architectural && m_inspector) {
             for (QWidget* widget : {m_material_group, static_cast<QWidget*>(m_door_swing_button),
@@ -20707,6 +20649,9 @@ private:
             preview.anchor = chain.anchor;
             preview.can_close_on_anchor = state.phase == BoundaryAuthoringPhase::drawing &&
                 state.pen_state == BoundaryPenState::down && chain.segments.size() >= 2;
+            preview.can_continue_from_endpoint =
+                state.phase == BoundaryAuthoringPhase::drawing &&
+                state.pen_state == BoundaryPenState::down;
             preview.pen_position = chain.segments.empty() ? chain.anchor : chain.segments.back().segment.end;
             if (state.phase == BoundaryAuthoringPhase::drawing && state.pen_state == BoundaryPenState::down &&
                 state.pointer && (state.pointer->x != preview.pen_position->x || state.pointer->y != preview.pen_position->y))
@@ -20725,11 +20670,11 @@ private:
         case BoundaryAuthoringPhase::awaiting_classification:
             preview.instruction = mode + QStringLiteral("  •  Choose an area classification"); break;
         case BoundaryAuthoringPhase::awaiting_anchor:
-            preview.instruction = mode + QStringLiteral("  •  Click to anchor the drawing  •  Esc cancels"); break;
+            preview.instruction = mode + QStringLiteral("  •  Drag to draw the first edge  •  Esc cancels"); break;
         case BoundaryAuthoringPhase::awaiting_dimension:
             preview.instruction = mode + QStringLiteral("  •  Click to place this edge's dimension  •  Ctrl+Z undoes"); break;
         case BoundaryAuthoringPhase::drawing:
-            preview.instruction = mode + QStringLiteral("  •  Click first corner or Enter to close  •  Right-click to finish  •  D precise line/curve"); break;
+            preview.instruction = mode + QStringLiteral("  •  Drag from the current endpoint  •  Enter closes  •  Right-click for actions  •  D precise input"); break;
         case BoundaryAuthoringPhase::completed:
             preview.instruction = mode + QStringLiteral("  •  Enter defines and adds the area  •  Ctrl+Z revises it"); break;
         case BoundaryAuthoringPhase::cancelled: break;
@@ -20898,6 +20843,57 @@ private:
         }
     }
 
+    void onDirectDrawSegment(Vec2 start, Vec2 end) {
+        if (!m_pending_symbol_id.isEmpty()) {
+            cancelSymbolPlacement();
+            if (m_symbol_library_status)
+                m_symbol_library_status->setText(QStringLiteral("Component placement cancelled."));
+            return;
+        }
+        if (!m_boundary_session && m_workspace == Workspace::architectural) {
+            const auto id = createStraightWall(start, end, QStringLiteral("interior"));
+            if (!id.isEmpty()) {
+                m_tool = CanvasTool::select;
+                syncToolControls();
+                clearError();
+            }
+            return;
+        }
+        if (!m_boundary_session &&
+            !beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, {})) return;
+        if (!m_boundary_session) return;
+        try {
+            auto candidate = *m_boundary_session;
+            if (candidate.phase() == BoundaryAuthoringPhase::awaiting_anchor) {
+                (void)candidate.anchor(start);
+            } else if (candidate.phase() == BoundaryAuthoringPhase::drawing) {
+                const auto chain = candidate.active_chain();
+                if (!chain) throw std::invalid_argument("the active boundary has no drawing chain");
+                const auto expected = chain->segments.empty()
+                    ? chain->anchor : chain->segments.back().segment.end;
+                if (std::hypot(start.x - expected.x, start.y - expected.y) > 1e-7) {
+                    throw std::invalid_argument(
+                        "continue from the current endpoint, or finish or cancel the active boundary");
+                }
+            } else if (candidate.phase() == BoundaryAuthoringPhase::awaiting_dimension) {
+                throw std::invalid_argument("place the pending dimension before drawing the next segment");
+            } else {
+                throw std::invalid_argument("finish or cancel the active boundary before drawing again");
+            }
+            (void)candidate.add_line_to(end);
+            const auto chain = candidate.active_chain();
+            const bool closes = chain && chain->segments.size() >= 3 &&
+                chain->segments.back().segment.end.x == chain->anchor.x &&
+                chain->segments.back().segment.end.y == chain->anchor.y;
+            m_boundary_session = std::move(candidate);
+            clearError();
+            boundaryDraftChanged();
+            if (closes) finishTool();
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Direct draw: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
     void finishTool(QString commit_message = {}) {
         if (m_tool != CanvasTool::boundary || !m_boundary_session) return;
         try {
@@ -21003,7 +20999,6 @@ private:
             (void)selectEntity({});
             return;
         }
-        if (!confirmDiscardBoundaryDraft()) return;
         clearPreview();
         m_pending_wall_start.reset();
         m_redefine_boundary_id.reset();
@@ -21057,18 +21052,6 @@ private:
         }
         m_measurementCanvas->setTool(m_tool);
         m_architecturalCanvas->setTool(m_tool);
-        {
-            QSignalBlocker first(m_select_button);
-            QSignalBlocker second(m_boundary_button);
-            QSignalBlocker third(m_wall_button);
-            QSignalBlocker fourth(m_define_boundary_button);
-            m_select_button->setChecked(m_tool == CanvasTool::select);
-            m_boundary_button->setChecked(m_tool == CanvasTool::boundary && m_boundary_session &&
-                m_boundary_session->mode() == BoundaryAuthoringMode::draw_first);
-            m_define_boundary_button->setChecked(m_tool == CanvasTool::boundary && m_boundary_session &&
-                m_boundary_session->mode() == BoundaryAuthoringMode::define_first);
-            m_wall_button->setChecked(m_tool == CanvasTool::wall);
-        }
     }
 
     void setGrid(bool enabled) {
@@ -22051,7 +22034,6 @@ private:
     bool m_restored_boundary_navigation{};
     AssistanceSession m_assistance_session;
     QString m_last_boundary_classification{QStringLiteral("measurement")};
-    QToolButton* m_define_boundary_button{};
     std::optional<Vec2> m_pending_wall_start;
     BuildingViewKind m_architectural_view_kind{BuildingViewKind::plan};
 
@@ -22150,9 +22132,6 @@ private:
     QLineEdit* m_factor_edit{};
     QCheckBox* m_include_building_check{};
     QCheckBox* m_include_living_check{};
-    QToolButton* m_select_button{};
-    QToolButton* m_boundary_button{};
-    QToolButton* m_wall_button{};
     QToolButton* m_object_button{};
     QPushButton* m_edit_object_button{};
     QPushButton* m_edit_curve_button{};

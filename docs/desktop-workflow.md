@@ -202,10 +202,14 @@ PDF geometry remain future work.
 
 ## Interaction and persistence
 
-The left navigator expands project, building, floor, and layer nodes. The tool
-rail provides Select, Boundary, Wall, Object, Grid, Snap, and Fit. Boundary drawing
-accepts clicks, Enter closes the path, and `D` opens a distance/direction input
-such as `10 ft @ 90 deg`. Wall drawing accepts two clicks. **Draw curved wall**
+The left navigator expands project, building, floor, and layer nodes. The compact
+canvas bar provides Object, Grid, Snap, Fit, and overview controls. Selection and
+drawing share one pointer surface: click an object to select it, drag a selected
+object to move it, and drag empty canvas to draw. In the Measurement workspace an
+empty drag creates or continues a measured-boundary segment; in the Architectural
+workspace it creates a straight wall. Ctrl-drag creates a selection marquee,
+while middle-drag or Space-left-drag pans. Enter closes an active boundary and
+`D` opens distance/direction input such as `10 ft @ 90 deg`. **Draw curved wall**
 opens a compact endpoint and construction editor with sweep-angle, arc-length,
 and arc-height modes. Entries such as `90 deg`, `5 ft`, and `1 ft` are retained
 beside the analytical arc; a signed arc length selects clockwise orientation.
@@ -216,8 +220,7 @@ exposes **Edit assembly…** for the versioned layer stack; wall layers run
 through wall-opening validation, while slab/floor/ceiling/foundation layers
 run through lower-to-upper thickness, hole, and compound-solid validation.
 Material catalog links, shared geometry, and undo/redo use the same document
-command path. Select and the
-navigator select existing semantic objects, so edits and history operate on
+command path. The unified canvas pointer and the navigator select existing semantic objects, so edits and history operate on
 the same document in either workspace tab. Walls display their opening gaps in
 the plan canvas; the OCCT architectural view derives the corresponding cut
 solids from the wall and opening entities. Command search provides `Draw curved
@@ -252,7 +255,7 @@ owners. Cut and delete remove owned hosted children in one guarded Document
 command, so undo and redo restore the complete graph. Unsupported, malformed,
 oversized, or referenced records fail before mutation.
 
-In the Select tool, **Ctrl-click** adds or toggles a root in an ordered selection;
+On the unified canvas pointer, **Ctrl-click** adds or toggles a root in an ordered selection;
 plain clicking replaces it, and Ctrl-clicking empty space keeps it. Both plan
 canvases highlight every selected root. The last selected root remains the
 inspector context, so existing property editors still edit that one object.

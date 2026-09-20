@@ -352,14 +352,16 @@ void test_effective_cursor_matches_click() {
     require(preview && preview->x == 0.25 && preview->y == -0.5,
             "off-grid cursor must preview the snapped point");
     const auto click = [&] {
+        placed.reset();
         QMouseEvent press(QEvent::MouseButtonPress, position, position, Qt::LeftButton,
                           Qt::LeftButton, Qt::NoModifier);
         QApplication::sendEvent(&canvas, &press);
-        require(placed && preview && placed->x == preview->x && placed->y == preview->y,
-                "placed point must exactly match the effective cursor");
+        require(!placed, "point authoring must wait for release so a drag can draw a segment");
         QMouseEvent release(QEvent::MouseButtonRelease, position, position, Qt::LeftButton,
                             Qt::NoButton, Qt::NoModifier);
         QApplication::sendEvent(&canvas, &release);
+        require(placed && preview && placed->x == preview->x && placed->y == preview->y,
+                "released point must exactly match the effective cursor");
     };
     click();
     canvas.setSnapEnabled(false);
@@ -370,19 +372,24 @@ void test_effective_cursor_matches_click() {
     require(preview && preview->x == 0.25 && preview->y == -0.5,
             "enabling snap must refresh the stationary cursor");
     click();
-    // A press can arrive without an intervening move (for example pen input).
-    // The coordinate shown to the tool must already agree inside its callback.
+    // A click can arrive without an intervening move (for example pen input).
+    // The coordinate shown to the tool must agree inside its release callback.
     canvas.setPointClicked([&](Vec2 point) {
         require(preview && preview->x == point.x && preview->y == point.y,
-                "press must publish its effective cursor before placing the point");
+                "release must publish its effective cursor before placing the point");
         placed = point;
     });
+    placed.reset();
     const auto next_position = QRectF(canvas.rect()).center() + QPointF(-47.0, -53.0);
     QMouseEvent next_press(QEvent::MouseButtonPress, next_position, next_position,
                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(&canvas, &next_press);
+    require(!placed, "press without motion must remain eligible to become a direct-draw drag");
+    QMouseEvent next_release(QEvent::MouseButtonRelease, next_position, next_position,
+                             Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &next_release);
     require(placed && placed->x == -0.5 && placed->y == 0.75,
-            "press without preceding motion must use its own snapped coordinates");
+            "release without preceding motion must use its own snapped coordinates");
 }
 
 void test_cursor_measurement_readout_is_transient_and_contextual() {
@@ -1180,8 +1187,11 @@ void test_direct_canvas_manipulation_contract() {
     int selection_clicks = 0;
     int marquee_requests = 0;
     int move_requests = 0;
+    int direct_draw_requests = 0;
     QStringList moved_ids;
     Vec2 moved_delta{};
+    Vec2 direct_draw_start{};
+    Vec2 direct_draw_end{};
     QString context_target;
     QString double_clicked;
     canvas.setEntitySelectionClicked([&](QString id, bool toggle) {
@@ -1208,6 +1218,11 @@ void test_direct_canvas_manipulation_contract() {
         moved_delta = delta;
         return true;
     });
+    canvas.setDirectDrawRequested([&](Vec2 start, Vec2 end) {
+        ++direct_draw_requests;
+        direct_draw_start = start;
+        direct_draw_end = end;
+    });
     canvas.setRightClicked([&](Vec2, QString id) { context_target = std::move(id); });
     canvas.setEntityDoubleClicked([&](QString id) { double_clicked = std::move(id); });
 
@@ -1219,6 +1234,12 @@ void test_direct_canvas_manipulation_contract() {
     };
 
     const auto center = QPointF(320, 240);
+    mouse(QEvent::MouseMove, {100, 100}, Qt::NoButton, Qt::NoButton);
+    require(canvas.cursor().shape() == Qt::CrossCursor,
+            "empty canvas must show a drawing cursor on the unified pointer surface");
+    mouse(QEvent::MouseMove, center, Qt::NoButton, Qt::NoButton);
+    require(canvas.cursor().shape() == Qt::ArrowCursor,
+            "an object under the pointer must show the selection cursor");
     mouse(QEvent::MouseButtonPress, center, Qt::LeftButton, Qt::LeftButton);
     mouse(QEvent::MouseButtonRelease, center, Qt::LeftButton, Qt::NoButton);
     require(selected == QStringList{QStringLiteral("component")} && selection_clicks == 1,
@@ -1235,13 +1256,36 @@ void test_direct_canvas_manipulation_contract() {
                 std::abs(moved_delta.y - 0.5) < 1e-9,
             "selected component drag must request one model-space translation");
 
-    const auto before_pan = canvas.viewCenter();
+    const auto before_draw = canvas.viewCenter();
     mouse(QEvent::MouseButtonPress, {100, 100}, Qt::LeftButton, Qt::LeftButton);
     mouse(QEvent::MouseMove, {140, 120}, Qt::NoButton, Qt::LeftButton);
     mouse(QEvent::MouseButtonRelease, {140, 120}, Qt::LeftButton, Qt::NoButton);
-    require(canvas.viewCenter().x < before_pan.x - 0.4 &&
-                canvas.viewCenter().y > before_pan.y + 0.2 && move_requests == 1,
-            "plain drag beginning on empty canvas must pan without moving geometry");
+    require(direct_draw_requests == 1 &&
+                std::abs(direct_draw_start.x + 2.75) < 1e-9 &&
+                std::abs(direct_draw_start.y - 1.75) < 1e-9 &&
+                std::abs(direct_draw_end.x + 2.25) < 1e-9 &&
+                std::abs(direct_draw_end.y - 1.5) < 1e-9 &&
+                canvas.viewCenter().x == before_draw.x &&
+                canvas.viewCenter().y == before_draw.y && move_requests == 1,
+            "plain drag beginning on empty canvas must draw without panning");
+
+    QKeyEvent space_press(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &space_press);
+    require(canvas.cursor().shape() == Qt::OpenHandCursor,
+            "holding Space must advertise canvas navigation before dragging");
+    mouse(QEvent::MouseButtonPress, {100, 100}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, {140, 120}, Qt::NoButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, {140, 120}, Qt::LeftButton, Qt::NoButton);
+    require(canvas.cursor().shape() == Qt::OpenHandCursor,
+            "Space navigation must remain armed between drags while Space is held");
+    QKeyEvent space_release(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &space_release);
+    require(canvas.cursor().shape() == Qt::CrossCursor,
+            "releasing Space over empty canvas must restore the drawing cursor");
+    require(canvas.viewCenter().x < before_draw.x - 0.4 &&
+                canvas.viewCenter().y > before_draw.y + 0.2 &&
+                direct_draw_requests == 1,
+            "Space-left-drag must pan without drawing");
 
     canvas.fitView();
     mouse(QEvent::MouseButtonPress, center, Qt::LeftButton, Qt::LeftButton,

@@ -151,6 +151,22 @@ void send_click(PlanCanvas& canvas, Vec2 model) {
     send_click_at_screen(canvas, model_to_canvas(canvas, model));
 }
 
+void send_drag(PlanCanvas& canvas, Vec2 start, Vec2 end,
+               Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+    const QPointF from(model_to_canvas(canvas, start));
+    const QPointF to(model_to_canvas(canvas, end));
+    QMouseEvent press(QEvent::MouseButtonPress, from, from, Qt::LeftButton,
+                      Qt::LeftButton, modifiers);
+    QApplication::sendEvent(&canvas, &press);
+    QMouseEvent move(QEvent::MouseMove, to, to, Qt::NoButton,
+                     Qt::LeftButton, modifiers);
+    QApplication::sendEvent(&canvas, &move);
+    QMouseEvent release(QEvent::MouseButtonRelease, to, to, Qt::LeftButton,
+                        Qt::NoButton, modifiers);
+    QApplication::sendEvent(&canvas, &release);
+    process_events();
+}
+
 void send_move_at_screen(PlanCanvas& canvas, QPoint point) {
     require(canvas.rect().adjusted(1, 1, -1, -1).contains(point),
             "workflow fixture cursor point must be inside the plan canvas");
@@ -953,7 +969,7 @@ void test_off_grid_define_first_pending_dimension_preview_and_placement() {
             const auto placed = preview(*active_canvas);
             require(placed.segments.size() == 1 && placed.labels.size() == 1 &&
                         same_point(placed.labels.front().position, expected_placement) &&
-                        placed.instruction.contains(QStringLiteral("Click an endpoint")),
+                        placed.instruction.contains(QStringLiteral("Drag from the current endpoint")),
                     "Define First manual placement must exactly retain the displayed label position");
             require_same_document(before, window.document().snapshot(),
                                   "Define First preview and dimension placement must not mutate the document");
@@ -1140,6 +1156,48 @@ void test_receipt_boundary_offset_copy() {
         "in-place rotation and dimensions must save, reopen, undo and redo exactly");
 }
 
+void test_unified_pointer_draws_without_tool_modes() {
+    {
+        MainWindow window;
+        prepare_window(window);
+        auto* measurement = canvas(window, QStringLiteral("measurementPlanCanvas"));
+        require(window.findChild<QWidget*>(QStringLiteral("selectTool")) == nullptr &&
+                    window.findChild<QWidget*>(QStringLiteral("drawFirstBoundary")) == nullptr &&
+                    window.findChild<QWidget*>(QStringLiteral("defineFirstBoundary")) == nullptr,
+                "the primary canvas toolbar must not expose competing Select, Draw First, or Define First modes");
+
+        const auto before = window.document().snapshot();
+        send_drag(*measurement, {0.0, 0.0}, {2.0, 0.0});
+        const auto draft = preview(*measurement);
+        require(draft.anchor.has_value() && same_point(*draft.anchor, {0.0, 0.0}) &&
+                    draft.segments.size() == 1 &&
+                    same_point(draft.segments.front().start, {0.0, 0.0}) &&
+                    same_point(draft.segments.front().end, {2.0, 0.0}),
+                "empty-canvas left drag must start a measured boundary on the unified pointer surface");
+        require_same_document(before, window.document().snapshot(),
+                              "an open drag-authored boundary must remain a transient draft");
+    }
+
+    {
+        MainWindow window;
+        prepare_window(window);
+        window.setWorkspace(Workspace::architectural);
+        process_events();
+        auto* architectural = canvas(window, QStringLiteral("architecturalPlanCanvas"));
+        const auto wall_before = window.document().snapshot();
+        send_drag(*architectural, {-2.0, -1.0}, {2.0, -1.0});
+        const auto wall_after = window.document().snapshot();
+        require(wall_after.revision() == wall_before.revision() + 1,
+                "empty-canvas left drag in the architectural workspace must commit one wall command");
+        const auto wall_count = static_cast<std::size_t>(std::count_if(
+            wall_after.entities().begin(), wall_after.entities().end(), [](const auto& entry) {
+                return entry.second.type == "wall";
+            }));
+        require(wall_count == 1,
+                "architectural direct drawing must create a real wall rather than a canvas-only stroke");
+    }
+}
+
 void test_dimension_presentation_editing() {
     MainWindow window;
     prepare_window(window);
@@ -1290,6 +1348,7 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
         install_test_font();
+        test_unified_pointer_draws_without_tool_modes();
         test_draw_first_events_commit_receipts_labels_and_visibility();
         test_define_first_events_place_manual_dimensions_and_close();
         test_workspace_switch_preserves_draft_and_uses_architectural_events();
