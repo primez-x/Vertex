@@ -45,10 +45,14 @@ struct CanvasEntity {
     // Optional presentation overrides from semantic annotation/style records.
     // An invalid color or non-positive width keeps the canvas default.
     QColor stroke_color{};
+    // Semantic defaults may provide a second high-contrast screen color for
+    // dark canvases. User-authored overrides intentionally leave this unset.
+    QColor dark_stroke_color{};
     double stroke_width_metres{};
     // Fixed paper-space line weight for fitted or explicitly scaled output.
     // Zero keeps the normal model-space or cosmetic canvas default.
     double output_stroke_width_mm{};
+    bool dimension_end_ticks{false};
 };
 
 // A retained document annotation. Unlike BoundaryDraftPreview, labels are
@@ -75,6 +79,16 @@ struct CanvasLabel {
     // in interactive and fitted/output scenes.
     QColor fill_color{};
     QString fill_pattern{QStringLiteral("none")};
+    // Dimension callouts use a compact surface for legibility. Plan labels
+    // and floor titles render directly on the drawing like conventional
+    // architectural annotations.
+    bool show_background{true};
+    // Automatically derived room/area labels may shift within their owning
+    // boundary to avoid covering placed furniture and fixtures.
+    bool avoid_components{false};
+    // Room names and floor titles belong to plan views. Explicit annotation
+    // labels remain available to elevation/section presentation.
+    bool plan_only{false};
 };
 
 // A raster underlay is a retained presentation value sourced from a

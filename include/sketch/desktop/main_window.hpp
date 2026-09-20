@@ -3,8 +3,10 @@
 #include "sketch/document.hpp"
 #include "sketch/document_schedule_adapter.hpp"
 #include "sketch/geometry.hpp"
+#include "sketch/door_operation.hpp"
 #include "sketch/boundary_authoring_session.hpp"
 #include "sketch/assistance_engine.hpp"
+#include "sketch/workspace_accessibility.hpp"
 
 #include <QMainWindow>
 #include <QString>
@@ -134,6 +136,7 @@ public:
 
     [[nodiscard]] Workspace workspace() const noexcept;
     void setWorkspace(Workspace workspace);
+    void setWorkspaceTheme(WorkspaceTheme theme);
     [[nodiscard]] bool workspaceDocumentsShareDocument() const noexcept;
 
     [[nodiscard]] bool metricUnits() const noexcept;
@@ -309,7 +312,8 @@ public:
         QString width,
         QString sill,
         QString height,
-        std::optional<Revision> expected_revision = std::nullopt);
+        std::optional<Revision> expected_revision = std::nullopt,
+        std::optional<DoorOperation> door_operation = std::nullopt);
     // Creates a slab from the currently selected closed boundary. The direct
     // boundary overload is used by deterministic visual smoke fixtures while
     // keeping the interactive selected-boundary workflow on the same command.
@@ -408,6 +412,12 @@ public:
     [[nodiscard]] bool editBoundaryDimension(const QString& id, const QString& x,
         const QString& y, const QString& height_mm, const QString& color,
         bool bold, bool italic, bool visible, const QString& rotation_degrees);
+    // Creates a segment-length dimension from a stable identified edge. The
+    // displayed value continues to resolve from the current boundary geometry.
+    [[nodiscard]] QString createLengthDimension(const QString& boundary_id,
+                                                const QString& segment_id,
+                                                Vec2 text_position,
+                                                std::optional<Revision> expected_revision = std::nullopt);
     // Creates a semantic angle dimension from two identified boundary edges
     // and their shared vertex. The analytical angle is resolved from current
     // geometry; the text position is stored in model metres.

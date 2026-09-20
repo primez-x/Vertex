@@ -239,6 +239,21 @@ std::map<std::string, std::string, std::less<>> label_texts(const PlanCanvas& ca
     return result;
 }
 
+std::map<std::string, std::string, std::less<>> straight_dimension_label_texts(
+    const PlanCanvas& canvas) {
+    std::set<QString> ids;
+    for (const auto& entity : canvas.entities()) {
+        if (entity.type == QStringLiteral("dimension_line")) ids.insert(entity.id);
+    }
+    std::map<std::string, std::string, std::less<>> result;
+    for (const auto& label : canvas.labels()) {
+        if (ids.contains(label.id)) {
+            result.emplace(label.id.toStdString(), label.text.toStdString());
+        }
+    }
+    return result;
+}
+
 void require_rectangle(const IdentifiedBoundary& boundary) {
     const std::array<Vec2, 4> starts{{{0.0, 0.0}, {2.0, 0.0}, {2.0, 2.0}, {0.0, 2.0}}};
     const std::array<Vec2, 4> ends{{{2.0, 0.0}, {2.0, 2.0}, {0.0, 2.0}, {0.0, 0.0}}};
@@ -332,9 +347,28 @@ void inspect_committed_boundary(const DocumentSnapshot& snapshot,
 void require_both_canvas_labels(MainWindow& window, std::size_t count) {
     const auto* measurement = canvas(window, QStringLiteral("measurementPlanCanvas"));
     const auto* architectural = canvas(window, QStringLiteral("architecturalPlanCanvas"));
-    require(measurement->labels().size() == count && architectural->labels().size() == count,
+    const auto dimension_ids = [](const PlanCanvas& value) {
+        std::set<QString> ids;
+        for (const auto& entity : value.entities()) {
+            if (entity.type == QStringLiteral("dimension_line")) ids.insert(entity.id);
+        }
+        return ids;
+    };
+    const auto dimension_label_texts = [](const PlanCanvas& value,
+                                          const std::set<QString>& ids) {
+        std::multiset<QString> texts;
+        for (const auto& label : value.labels()) {
+            if (ids.contains(label.id)) texts.insert(label.text);
+        }
+        return texts;
+    };
+    const auto measurement_ids = dimension_ids(*measurement);
+    const auto architectural_ids = dimension_ids(*architectural);
+    require(dimension_label_texts(*measurement, measurement_ids).size() == count &&
+                dimension_label_texts(*architectural, architectural_ids).size() == count,
             "committed dimension labels must appear in both workspace canvases");
-    require(label_texts(*measurement) == label_texts(*architectural),
+    require(dimension_label_texts(*measurement, measurement_ids) ==
+                dimension_label_texts(*architectural, architectural_ids),
             "both workspace canvases must display the same dimension label values");
     const auto dimension_line_count = [](const PlanCanvas& value) {
         return static_cast<std::size_t>(std::count_if(
@@ -393,10 +427,10 @@ void test_draw_first_events_commit_receipts_labels_and_visibility() {
             "committed boundary must become the selected entity");
     require_both_canvas_labels(window, 4);
 
-    const auto imperial_labels = label_texts(*measurement);
+    const auto imperial_labels = straight_dimension_label_texts(*measurement);
     window.setMetricUnits(true);
     process_events();
-    const auto metric_labels = label_texts(*measurement);
+    const auto metric_labels = straight_dimension_label_texts(*measurement);
     require(metric_labels != imperial_labels,
             "switching metric units must update committed dimension label text");
     for (const auto& [id, text] : metric_labels) {
@@ -1354,8 +1388,38 @@ void test_semantic_angle_and_area_dimension_creation() {
         }));
     require(angle_line_count == 5,
             "angle dimensions must add one semantic overlay while areas remain label-only");
+    const auto angle_overlay = std::find_if(target->entities().begin(), target->entities().end(),
+        [&](const auto& entity) { return entity.id == angle_id; });
+    require(angle_overlay != target->entities().end() && !angle_overlay->dimension_end_ticks,
+            "angle dimensions must not receive segment-length endpoint ticks");
+    require(std::count_if(target->entities().begin(), target->entities().end(),
+                [](const auto& entity) { return entity.dimension_end_ticks; }) == 4,
+            "only the four automatic segment-length dimensions should render endpoint ticks");
     require(window.undoCommand() && window.redoCommand(),
             "semantic dimension creation must use normal undo and redo history");
+}
+
+void test_concave_room_label_stays_inside_room() {
+    MainWindow window;
+    prepare_window(window);
+    const Boundary concave_room{
+        {{0.0, 0.0}, {6.0, 0.0}, 0.0},
+        {{6.0, 0.0}, {6.0, 2.0}, 0.0},
+        {{6.0, 2.0}, {2.0, 2.0}, 0.0},
+        {{2.0, 2.0}, {2.0, 6.0}, 0.0},
+        {{2.0, 6.0}, {0.0, 6.0}, 0.0},
+        {{0.0, 6.0}, {0.0, 0.0}, 0.0},
+    };
+    const auto room_id = window.createRoomBoundary(concave_room, QStringLiteral("L Room"));
+    require(!room_id.isEmpty(), "concave room fixture must be creatable");
+    const auto* target = canvas(window, QStringLiteral("measurementPlanCanvas"));
+    const auto label = std::find_if(target->labels().begin(), target->labels().end(),
+        [&](const auto& candidate) { return candidate.id == room_id; });
+    require(label != target->labels().end() && label->text == QStringLiteral("L Room") &&
+                label->plan_only && !label->show_background,
+            "room projection must create a plain plan-owned label");
+    require(!(label->position.x > 2.0 && label->position.y > 2.0),
+            "concave room label must not be placed in the missing corner of its bounds");
 }
 
 void install_test_font() {
@@ -1387,6 +1451,7 @@ int main(int argc, char** argv) {
         test_receipt_boundary_offset_copy();
         test_dimension_presentation_editing();
         test_semantic_angle_and_area_dimension_creation();
+        test_concave_room_label_stays_inside_room();
         std::cout << "Boundary workflow event tests passed\n";
         return 0;
     } catch (const std::exception& error) {

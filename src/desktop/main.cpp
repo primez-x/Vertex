@@ -14,7 +14,9 @@
 #include <QSize>
 #include <QTimer>
 #include <QUuid>
+#include <array>
 #include <cstring>
+#include <utility>
 
 namespace {
 
@@ -66,6 +68,14 @@ QString smoke_market(const QStringList& arguments) {
         return arguments.at(index + 1).trimmed().toLower();
     }
     return QStringLiteral("residential");
+}
+
+QString smoke_theme(const QStringList& arguments) {
+    const auto index = arguments.indexOf(QStringLiteral("--smoke-theme"));
+    if (index >= 0 && index + 1 < arguments.size() && !arguments.at(index + 1).isEmpty()) {
+        return arguments.at(index + 1).trimmed().toLower();
+    }
+    return QStringLiteral("light");
 }
 
 bool architectural_smoke(const QStringList& arguments) {
@@ -176,21 +186,92 @@ bool seed_smoke_document(sketch::desktop::MainWindow& window, bool architectural
         {{12.0, 0.0}, {12.0, 8.0}, 0.0},
         {{12.0, 8.0}, {0.0, 8.0}, 0.0},
         {{0.0, 8.0}, {0.0, 0.0}, 0.0},
-    });
+    }, QStringLiteral("living_area"));
     if (boundary_id.isEmpty()) {
         return false;
     }
-    if (window.createStraightWall({4.0, 0.0}, {4.0, 8.0}, QStringLiteral("interior")).isEmpty()) {
+    const auto boundary_snapshot = window.document().snapshot();
+    const auto boundary_found = boundary_snapshot.entities().find(boundary_id.toStdString());
+    if (boundary_found == boundary_snapshot.entities().end() ||
+        !boundary_found->second.properties.contains("segments") ||
+        boundary_found->second.properties.at("segments").size() != 4) {
         return false;
     }
-    if (window.createStraightWall({8.0, 0.0}, {8.0, 8.0}, QStringLiteral("interior")).isEmpty() ||
-        window.createAnnotationSymbol(QStringLiteral("sofa"), {2.0, 2.0}).isEmpty() ||
-        window.createAnnotationSymbol(QStringLiteral("double-bed"), {6.0, 2.0}).isEmpty() ||
-        window.createAnnotationSymbol(QStringLiteral("toilet"), {10.0, 2.0}).isEmpty() ||
-        window.createAnnotationSymbol(QStringLiteral("dining-table"), {6.0, 6.0}).isEmpty()) {
+    const std::array dimension_positions{
+        sketch::Vec2{6.0, -0.55}, sketch::Vec2{12.55, 4.0},
+        sketch::Vec2{6.0, 8.55}, sketch::Vec2{-0.55, 4.0},
+    };
+    for (std::size_t index = 0; index < dimension_positions.size(); ++index) {
+        const auto& encoded = boundary_found->second.properties.at("segments").at(index);
+        if (!encoded.contains("segment_id") || !encoded.at("segment_id").is_string() ||
+            window.createLengthDimension(boundary_id,
+                QString::fromStdString(encoded.at("segment_id").get<std::string>()),
+                dimension_positions[index]).isEmpty()) {
+            return false;
+        }
+    }
+    const auto rectangle = [](double left, double bottom, double right, double top) {
+        return sketch::Boundary{
+            {{left, bottom}, {right, bottom}, 0.0},
+            {{right, bottom}, {right, top}, 0.0},
+            {{right, top}, {left, top}, 0.0},
+            {{left, top}, {left, bottom}, 0.0},
+        };
+    };
+    const std::array rooms{
+        std::pair{QStringLiteral("Bedroom"), rectangle(0.0, 4.0, 4.0, 8.0)},
+        std::pair{QStringLiteral("Dining"), rectangle(4.0, 4.0, 8.0, 8.0)},
+        std::pair{QStringLiteral("Kitchen"), rectangle(8.0, 4.0, 12.0, 8.0)},
+        std::pair{QStringLiteral("Bedroom"), rectangle(0.0, 0.0, 4.0, 4.0)},
+        std::pair{QStringLiteral("Living Room"), rectangle(4.0, 0.0, 8.0, 4.0)},
+        std::pair{QStringLiteral("Bath"), rectangle(8.0, 0.0, 12.0, 4.0)},
+    };
+    for (const auto& [name, room] : rooms) {
+        if (window.createRoomBoundary(room, name).isEmpty()) return false;
+    }
+    if (window.createBoundary(rectangle(8.0, -6.0, 16.0, 0.0),
+                              QStringLiteral("Garage")).isEmpty() ||
+        window.createBoundary(rectangle(0.0, -2.0, 5.0, 0.0),
+                              QStringLiteral("Porch")).isEmpty() ||
+        window.createBoundary(rectangle(5.0, 8.0, 8.0, 10.0),
+                              QStringLiteral("Patio")).isEmpty()) {
         return false;
     }
-    return window.selectEntity(boundary_id);
+    const auto exterior_wall = window.createStraightWall(
+        {0.0, 8.0}, {12.0, 8.0}, QStringLiteral("exterior"));
+    if (exterior_wall.isEmpty() || !window.selectEntity(exterior_wall) ||
+        window.createHostedOpening(QStringLiteral("window"), QStringLiteral("2 m"),
+                                   QStringLiteral("1.6 m"), QStringLiteral("0.9 m"),
+                                   QStringLiteral("1.2 m")).isEmpty()) {
+        return false;
+    }
+    const auto interior_wall = window.createStraightWall(
+        {8.0, 0.0}, {8.0, 8.0}, QStringLiteral("interior"));
+    if (interior_wall.isEmpty() || !window.selectEntity(interior_wall) ||
+        window.createHostedOpening(QStringLiteral("door"), QStringLiteral("1.2 m"),
+                                   QStringLiteral("0.9 m"), QStringLiteral("0 m"),
+                                   QStringLiteral("2.1 m"), std::nullopt,
+                                   sketch::DoorOperation{false, true, 90.0}).isEmpty()) {
+        return false;
+    }
+    const std::array symbols{
+        std::pair{QStringLiteral("double-bed"), sketch::Vec2{2.0, 6.0}},
+        std::pair{QStringLiteral("double-bed"), sketch::Vec2{2.0, 2.0}},
+        std::pair{QStringLiteral("dining-table"), sketch::Vec2{6.0, 6.0}},
+        std::pair{QStringLiteral("sofa"), sketch::Vec2{6.0, 2.0}},
+        std::pair{QStringLiteral("refrigerator"), sketch::Vec2{9.0, 7.0}},
+        std::pair{QStringLiteral("range"), sketch::Vec2{10.2, 7.0}},
+        std::pair{QStringLiteral("kitchen-island-sink"), sketch::Vec2{10.0, 5.5}},
+        std::pair{QStringLiteral("toilet"), sketch::Vec2{9.0, 2.7}},
+        std::pair{QStringLiteral("bathtub"), sketch::Vec2{10.7, 1.2}},
+        std::pair{QStringLiteral("sink"), sketch::Vec2{11.0, 3.0}},
+    };
+    for (const auto& [symbol, position] : symbols) {
+        if (window.createAnnotationSymbol(symbol, position).isEmpty()) return false;
+    }
+    // End with a non-canvas container selected so the visual smoke output is
+    // a clean production plan rather than a selection-state demonstration.
+    return window.selectEntity(QStringLiteral("property-1"));
 }
 
 bool seed_smoke_reference(sketch::desktop::MainWindow& window) {
@@ -234,6 +315,7 @@ int main(int argc, char** argv) {
     const auto smoke = application.arguments().contains(QStringLiteral("--smoke"));
     const auto architectural = architectural_smoke(application.arguments());
     const auto market = smoke_market(application.arguments());
+    const auto theme = smoke_theme(application.arguments());
     if (smoke && !smoke_workspace_is_valid(application.arguments())) {
         qCritical() << "Vertex: --smoke-workspace must be measurement or architectural";
         return 2;
@@ -241,6 +323,11 @@ int main(int argc, char** argv) {
     if (smoke && market != QStringLiteral("residential") &&
         market != QStringLiteral("light-commercial")) {
         qCritical() << "Vertex: --smoke-market must be residential or light-commercial";
+        return 2;
+    }
+    if (smoke && theme != QStringLiteral("light") && theme != QStringLiteral("dark") &&
+        theme != QStringLiteral("high-contrast")) {
+        qCritical() << "Vertex: --smoke-theme must be light, dark, or high-contrast";
         return 2;
     }
     if (!font_loaded) {
@@ -277,6 +364,11 @@ int main(int argc, char** argv) {
             qCritical() << "Vertex: reference underlay smoke fixture failed";
             return 2;
         }
+        window.setWorkspaceTheme(theme == QStringLiteral("dark")
+            ? sketch::WorkspaceTheme::dark
+            : theme == QStringLiteral("high-contrast")
+                ? sketch::WorkspaceTheme::high_contrast
+                : sketch::WorkspaceTheme::light);
         window.fitView();
     }
     window.show();

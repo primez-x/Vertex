@@ -158,32 +158,37 @@ double point_segment_distance(QPointF point, QPointF start, QPointF end) {
                       point.y() - (start.y() + projection * dy));
 }
 
-QColor color_for(const CanvasEntity& entity) {
+QColor color_for(const CanvasEntity& entity, bool light_surface) {
     if (entity.selected) {
-        return QColor(75, 210, 255);
+        return light_surface ? QColor(37, 99, 235) : QColor(75, 210, 255);
     }
     if (entity.type == QStringLiteral("wall")) {
-        return QColor(235, 164, 71);
+        return light_surface ? QColor(35, 77, 113) : QColor(143, 198, 245);
     }
     if (entity.type == QStringLiteral("room_boundary")) {
-        return QColor(103, 203, 141);
+        return light_surface ? QColor(48, 91, 128) : QColor(139, 199, 244);
     }
     if (entity.type == QStringLiteral("measurement_boundary")) {
-        return QColor(86, 159, 232);
+        return light_surface ? QColor(37, 91, 145) : QColor(128, 194, 246);
     }
     if (entity.type == QStringLiteral("boundary")) {
-        return QColor(86, 159, 232);
+        return light_surface ? QColor(37, 91, 145) : QColor(128, 194, 246);
     }
     if (entity.type == QStringLiteral("slab")) {
-        return QColor(112, 183, 211);
+        return light_surface ? QColor(69, 102, 129) : QColor(152, 195, 226);
     }
     if (entity.type == QStringLiteral("terrain_surface")) {
         return QColor(119, 164, 113);
     }
     if (entity.type == QStringLiteral("dimension_line")) {
-        return QColor(196, 203, 214);
+        return light_surface ? QColor(82, 101, 121) : QColor(190, 207, 225);
     }
-    return QColor(182, 191, 205);
+    if (entity.type == QStringLiteral("opening") ||
+        entity.type == QStringLiteral("window") ||
+        entity.type == QStringLiteral("symbol")) {
+        return light_surface ? QColor(57, 70, 84) : QColor(210, 226, 239);
+    }
+    return light_surface ? QColor(83, 99, 116) : QColor(188, 205, 222);
 }
 
 Qt::BrushStyle hatch_style(QString pattern) {
@@ -793,7 +798,7 @@ void PlanCanvas::drawOverviewMap(QPainter& painter) const {
     painter.setBrush(Qt::NoBrush);
     painter.setClipRect(inner);
     for (const auto& entity : m_entities) {
-        auto pen_color = color_for(entity);
+        auto pen_color = color_for(entity, light);
         pen_color.setAlpha(light ? 235 : 220);
         QPen pen(pen_color, entity.selected ? 2.0 : 1.0,
                  Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
@@ -1913,24 +1918,28 @@ void PlanCanvas::drawGrid(QPainter& painter, const QRectF& viewport, double scal
     const auto min_y = std::min(top_left.y, bottom_right.y);
     const auto max_y = std::max(top_left.y, bottom_right.y);
 
-    double step = 0.25;
-    const auto desired_world_spacing = 38.0 / scale;
+    // Fine graph-paper subdivisions make small rooms and fixtures easier to
+    // judge without allowing the grid to collapse into visual noise. Every
+    // fourth adaptive subdivision is emphasized as the major construction
+    // grid, keeping the hierarchy stable through zooming.
+    double step = 0.125;
+    const auto desired_world_spacing = 14.0 / scale;
     while (step < desired_world_spacing) {
         step *= 2.0;
     }
     const bool light_surface = m_canvas_background.lightnessF() > 0.5;
-    QPen minor(light_surface ? QColor(229, 235, 243) : QColor(45, 53, 65), 0.0);
-    QPen major(light_surface ? QColor(207, 218, 232) : QColor(57, 67, 81), 0.0);
+    QPen minor(light_surface ? QColor(232, 237, 243) : QColor(43, 51, 62), 0.0);
+    QPen major(light_surface ? QColor(207, 217, 229) : QColor(58, 68, 82), 0.0);
     const auto first_x = std::floor(min_x / step) * step;
     const auto first_y = std::floor(min_y / step) * step;
     for (auto x = first_x; x <= max_x + step; x += step) {
         const auto index = std::round(x / step);
-        painter.setPen(std::fmod(std::abs(index), 5.0) < 0.001 ? major : minor);
+        painter.setPen(std::fmod(std::abs(index), 4.0) < 0.001 ? major : minor);
         painter.drawLine(QLineF(x, min_y, x, max_y));
     }
     for (auto y = first_y; y <= max_y + step; y += step) {
         const auto index = std::round(y / step);
-        painter.setPen(std::fmod(std::abs(index), 5.0) < 0.001 ? major : minor);
+        painter.setPen(std::fmod(std::abs(index), 4.0) < 0.001 ? major : minor);
         painter.drawLine(QLineF(min_x, y, max_x, y));
     }
 }
@@ -2091,10 +2100,15 @@ void PlanCanvas::drawCursorReadout(QPainter& painter, const QRectF& viewport,
 void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool output,
                            QColor background,
                            std::optional<double> paper_pixels_per_mm) const {
+    const auto light_surface = background.lightnessF() > 0.5;
     const auto default_color = output
         ? (background.lightnessF() > 0.5 ? QColor(25, 25, 25) : QColor(235, 235, 235))
-        : color_for(entity);
-    const auto color = entity.stroke_color.isValid() ? entity.stroke_color : default_color;
+        : color_for(entity, light_surface);
+    const auto color = !output && entity.selected
+        ? default_color
+        : !output && !light_surface && entity.dark_stroke_color.isValid()
+            ? entity.dark_stroke_color
+            : entity.stroke_color.isValid() ? entity.stroke_color : default_color;
     QPen pen(color, 0.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
     const auto paper_width = output && std::isfinite(entity.output_stroke_width_mm) &&
                              entity.output_stroke_width_mm > 0.0
@@ -2165,9 +2179,7 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
             continue;
         }
         const auto arc = arc_info(segment);
-        if (!arc.has_value()) {
-            return;
-        }
+        if (!arc.has_value()) continue;
         const QRectF bounds(arc->center.x - arc->radius, arc->center.y - arc->radius,
                            arc->radius * 2.0, arc->radius * 2.0);
         // QPainterPath defines arc angles with a screen-style inverted Y.
@@ -2177,6 +2189,27 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
     }
     if (!entity.segments.empty()) {
         painter.drawPath(path);
+    }
+    if (entity.dimension_end_ticks && entity.segments.size() >= 3) {
+        const auto& dimension = entity.segments.back();
+        const auto dx = dimension.end.x - dimension.start.x;
+        const auto dy = dimension.end.y - dimension.start.y;
+        const auto length = std::hypot(dx, dy);
+        const auto device_scale = std::max(std::abs(painter.transform().m11()),
+                                           std::abs(painter.transform().m22()));
+        if (length > 1e-9 && device_scale > 1e-9 && std::isfinite(length) &&
+            std::isfinite(device_scale)) {
+            const auto half_tick = 4.5 / device_scale;
+            const Vec2 normal{-dy / length * half_tick, dx / length * half_tick};
+            painter.drawLine(QLineF(dimension.start.x - normal.x,
+                                    dimension.start.y - normal.y,
+                                    dimension.start.x + normal.x,
+                                    dimension.start.y + normal.y));
+            painter.drawLine(QLineF(dimension.end.x - normal.x,
+                                    dimension.end.y - normal.y,
+                                    dimension.end.x + normal.x,
+                                    dimension.end.y + normal.y));
+        }
     }
 }
 
@@ -2255,8 +2288,12 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
             fill.setAlpha(output ? 220 : 238);
             brush.setColor(fill);
         }
-        painter.setBrush(brush);
-        painter.drawRoundedRect(bounds, 3.0, 3.0);
+        if (label.show_background || custom_fill) {
+            painter.setBrush(brush);
+            painter.drawRoundedRect(bounds, 2.0, 2.0);
+        } else {
+            painter.setBrush(Qt::NoBrush);
+        }
         painter.setPen(label.color.isValid() ? label.color
                        : output ? (background.lightnessF() > 0.5 ? QColor(25, 25, 25)
                                                                 : QColor(255, 239, 172))
