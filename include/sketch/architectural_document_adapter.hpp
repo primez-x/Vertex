@@ -8,6 +8,21 @@ namespace sketch {
 
 enum class RoomFootprintAnchor { first_corner, center, opposite_corner };
 
+enum class ArchitecturalJoinKind { wall, roof };
+
+// Admit the derived fused geometry before returning one revision-fenced command.
+// Source members and their hosted objects remain authoritative and unchanged.
+[[nodiscard]] ApplyEntityChanges architectural_join_create_command(
+    const DocumentSnapshot& source, const std::string& join_id,
+    const std::vector<std::string>& member_ids, ArchitecturalJoinKind kind,
+    Revision expected_revision);
+
+// Selection may contain source members, join IDs, or both, of the specified
+// kind. Every selected ID must resolve to a join; each join is erased once.
+[[nodiscard]] ApplyEntityChanges architectural_join_remove_command(
+    const DocumentSnapshot& source, const std::vector<std::string>& selected_ids,
+    ArchitecturalJoinKind kind, Revision expected_revision);
+
 // Width follows boundary segment 0; depth follows segment 1. Supply both
 // dimensions to resize a rectangular, hole-free footprint, or neither to
 // change only height/elevation on any valid room. All lengths are metres.

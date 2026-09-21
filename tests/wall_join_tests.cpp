@@ -94,6 +94,53 @@ void test_fused_join_requires_connected_walls_and_returns_real_solid() {
              "disconnected walls must not be accepted as a join");
 }
 
+void test_join_rejects_two_disconnected_pairs() {
+    const std::vector<Wall> walls{
+        wall("wall-a", 0.0, 0.0, 4.0, 0.0),
+        wall("wall-b", 4.0, 0.0, 4.0, 3.0),
+        wall("wall-c", 20.0, 0.0, 24.0, 0.0),
+        wall("wall-d", 24.0, 0.0, 24.0, 3.0)};
+    const WallJoin join{"join-pairs", {"wall-a", "wall-b", "wall-c", "wall-d"},
+                        WallJoinStyle::fused};
+    rejected([&] { (void)sketch::make_wall_join(join, walls); },
+             "two disconnected wall pairs must not be accepted as one join");
+}
+
+void test_join_accepts_chain_in_nonadjacent_order() {
+    const std::vector<Wall> walls{
+        wall("wall-a", 0.0, 0.0, 4.0, 0.0),
+        wall("wall-b", 4.0, 0.0, 4.0, 3.0),
+        wall("wall-c", 4.0, 3.0, 8.0, 3.0)};
+    const WallJoin join{"join-chain", {"wall-a", "wall-c", "wall-b"}, WallJoinStyle::fused};
+    const auto shape = sketch::make_wall_join(join, walls);
+    const auto volume = sketch::solid_volume(shape);
+    require(!shape.IsNull() && std::isfinite(volume) && volume > 0.0,
+            "transitively connected wall chain must produce a solid regardless of member order");
+}
+
+void test_sloped_join_requires_contact_at_the_shared_endpoint() {
+    auto sloped = wall("wall-sloped", 0.0, 0.0, 4.0, 0.0);
+    sloped.height = 1.0;
+    sloped.slope_rise = 9.0;
+    auto separated = wall("wall-separated", 0.0, 0.0, 0.0, 4.0);
+    separated.height = 1.0;
+    separated.elevation = 5.0;
+    rejected([&] {
+        (void)sketch::make_wall_join(
+            WallJoin{"join-separated-slope", {sloped.id, separated.id}, WallJoinStyle::fused},
+            std::vector<Wall>{sloped, separated});
+    }, "sloped walls separated at their shared endpoint must not join");
+
+    auto touching = separated;
+    touching.id = "wall-touching";
+    touching.baseline = {{4.0, 0.0}, {4.0, 4.0}, 0.0};
+    const auto result = sketch::make_wall_join(
+        WallJoin{"join-touching-slope", {sloped.id, touching.id}, WallJoinStyle::fused},
+        std::vector<Wall>{sloped, touching});
+    require(!result.IsNull() && sketch::solid_volume(result) > 0.0,
+            "sloped walls that physically meet at their shared endpoint must join");
+}
+
 void test_document_validates_join_references_and_persists_record() {
     const auto first = wall("wall-a", 0.0, 0.0, 4.0, 0.0);
     const auto second = wall("wall-b", 4.0, 0.0, 4.0, 3.0);
@@ -121,6 +168,9 @@ int main() {
     try {
         test_join_codec_is_versioned_and_lossless();
         test_fused_join_requires_connected_walls_and_returns_real_solid();
+        test_join_accepts_chain_in_nonadjacent_order();
+        test_join_rejects_two_disconnected_pairs();
+        test_sloped_join_requires_contact_at_the_shared_endpoint();
         test_document_validates_join_references_and_persists_record();
         std::cout << "Wall join tests passed\n";
         return 0;

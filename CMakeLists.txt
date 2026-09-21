@@ -207,6 +207,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
 endif()
 add_library(sketch_project_organization src/core/project_organization.cpp)
 target_link_libraries(sketch_project_organization PUBLIC sketch_document)
+target_link_libraries(sketch_architectural_document_adapter PUBLIC sketch_project_organization)
 add_library(sketch_project_visibility src/core/project_visibility.cpp)
 target_link_libraries(sketch_project_visibility PUBLIC sketch_project_organization
   PRIVATE sketch_wall_semantics sketch_roof_join_semantics)

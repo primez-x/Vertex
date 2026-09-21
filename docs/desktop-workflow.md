@@ -279,6 +279,15 @@ annotation groups rather than their individual labels/symbols; ordinary single
 annotation-child deletion retains its existing behavior. Selection filtering and
 broader linked-object ownership policies remain open qualification work.
 
+In the Architectural workspace, Ctrl-click the source walls or roofs and choose
+**Join selected walls** or **Join selected roofs** from the canvas context menu,
+Architectural menu, or command search. Vertex resolves building levels and hosted
+openings, checks that all selected members form one connected component, and
+creates the fused presentation in one undoable command. Disconnected clusters,
+mixed object types, duplicate membership and stale edits leave the project
+unchanged and show an error. Select any joined source or the derived join and use
+the corresponding **Unjoin** command; the editable source walls or roofs remain.
+
 Paste remaps documented relationship fields and local boundary/annotation
 identities only. Names, descriptions, label content, template and symbol catalog
 identities, unknown property metadata, and extension records retain their exact

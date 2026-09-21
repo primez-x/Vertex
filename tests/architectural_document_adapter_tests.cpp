@@ -38,6 +38,166 @@ nlohmann::json rectangle_json(double width, double height) {
 }
 }
 
+void test_typed_join_commands() {
+    using namespace sketch;
+    auto a = Entity::create("wall", {{"baseline", segment_json(0, 0, 4, 0)},
+        {"height_m", 3.0}, {"thickness_m", 0.2}, {"elevation_m", 0.0}});
+    a.id = "join-wall-a";
+    auto b = a;
+    b.id = "join-wall-b";
+    b.properties["baseline"] = segment_json(4, 0, 4, 3);
+    auto far = a;
+    far.id = "join-wall-far";
+    far.properties["baseline"] = segment_json(20, 0, 24, 0);
+    auto label = Entity::create("label");
+    label.id = "join-label";
+    auto opening = Entity::create("opening", {{"wall_id", a.id}, {"opening_kind", "door"},
+        {"offset_m", 1.0}, {"width_m", 0.9}, {"sill_m", 0.0}, {"height_m", 2.0}});
+    opening.id = "join-door";
+    auto roof_a = encode_building_entity(SlopedRoofPanel{.id = "join-roof-a",
+        .run = 4, .span = 3, .rise = 1, .pitch_radians = std::atan(0.25), .thickness = 0.2});
+    auto roof_b = encode_building_entity(SlopedRoofPanel{.id = "join-roof-b",
+        .base_position = {0, 2, 0}, .run = 4, .span = 3, .rise = 1,
+        .pitch_radians = std::atan(0.25), .thickness = 0.2});
+    auto document = Document::create({a, b, far, label, opening, roof_a, roof_b});
+    const auto before = document.snapshot();
+    const auto create = [&](std::vector<std::string> ids, ArchitecturalJoinKind kind = ArchitecturalJoinKind::wall) {
+        return architectural_join_create_command(document.snapshot(), "typed-join", ids, kind, document.revision());
+    };
+    rejects([&] { (void)create({}); });
+    rejects([&] { (void)create({a.id}); });
+    rejects([&] { (void)create({a.id, a.id}); });
+    rejects([&] { (void)create({a.id, label.id}); });
+    rejects([&] { (void)create({a.id, roof_a.id}); });
+    rejects([&] { (void)create({a.id, "missing"}); });
+    rejects([&] { (void)create({a.id, far.id}); });
+    rejects([&] { (void)create({a.id, b.id}, static_cast<ArchitecturalJoinKind>(99)); });
+    rejects([&] { (void)architectural_join_create_command(before, "typed-join", {a.id, b.id}, ArchitecturalJoinKind::wall, 99); });
+    rejects([&] { (void)architectural_join_create_command(before, a.id, {a.id, b.id}, ArchitecturalJoinKind::wall, before.revision()); });
+    const auto command = create({a.id, b.id});
+    require(command.entity_changes.size() == 1 && command.expected_revision == before.revision(), "join creation must be one fenced change");
+    require(document.snapshot().entities() == before.entities(), "join admission changed source");
+    document.apply(command);
+    require(document.revision() == before.revision() + 1, "join must create one revision");
+    for (const auto& [id, entity] : before.entities())
+        require(document.snapshot().entities().at(id) == entity, "join changed a source object");
+    rejects([&] { (void)architectural_join_create_command(document.snapshot(), "other-join", {a.id, b.id}, ArchitecturalJoinKind::wall, document.revision()); });
+    rejects([&] { document.apply(command); });
+    const auto joined = document.snapshot();
+    document.undo(document.revision());
+    require(document.snapshot().entities() == before.entities(), "join undo failed");
+    document.redo(document.revision());
+    require(document.snapshot().entities() == joined.entities(), "join redo failed");
+    const auto remove = [&](std::vector<std::string> ids) {
+        return architectural_join_remove_command(document.snapshot(), ids, ArchitecturalJoinKind::wall, document.revision());
+    };
+    rejects([&] { (void)remove({}); });
+    rejects([&] { (void)remove({far.id}); });
+    rejects([&] { (void)remove({a.id, label.id}); });
+    rejects([&] { (void)remove({a.id, roof_a.id}); });
+    rejects([&] { (void)architectural_join_remove_command(document.snapshot(), {a.id}, ArchitecturalJoinKind::wall, 99); });
+    require(remove({a.id}).entity_changes.size() == 1, "member selection must remove join");
+    require(remove({"typed-join"}).entity_changes.size() == 1, "join selection must remove join");
+    const auto removal = remove({a.id, b.id, "typed-join", a.id});
+    require(removal.entity_changes.size() == 1, "removal must deduplicate joins");
+    document.apply(removal);
+    require(document.snapshot().entities() == before.entities(), "removal must preserve every source");
+    document.undo(document.revision());
+    require(document.snapshot().entities() == joined.entities(), "removal undo failed");
+    document.redo(document.revision());
+    require(document.snapshot().entities() == before.entities(), "removal redo failed");
+    document.apply(create({roof_a.id, roof_b.id}, ArchitecturalJoinKind::roof));
+    require(document.snapshot().entities().at("typed-join").type == "roof_join", "roof command must create roof join");
+    document.apply(architectural_join_remove_command(document.snapshot(), {roof_b.id, "typed-join"}, ArchitecturalJoinKind::roof, document.revision()));
+    require(document.snapshot().entities() == before.entities(), "roof removal changed sources");
+
+    // A malformed hosted cut must fail admission even though its host alone
+    // can be fused. The generic Document permits incomplete opening geometry.
+    auto invalid_opening = opening;
+    invalid_opening.properties["width_m"] = -1;
+    const auto invalid_host = Document::create({a, b, invalid_opening});
+    rejects([&] { (void)architectural_join_create_command(invalid_host.snapshot(), "bad-cut",
+        {a.id, b.id}, ArchitecturalJoinKind::wall, invalid_host.revision()); });
+
+    auto distant_roof = roof_b;
+    distant_roof.properties["base_position_m"] = {0, 20, 0};
+    const auto disconnected_roofs = Document::create({roof_a, distant_roof});
+    rejects([&] { (void)architectural_join_create_command(disconnected_roofs.snapshot(), "bad-roofs",
+        {roof_a.id, roof_b.id}, ArchitecturalJoinKind::roof, disconnected_roofs.revision()); });
+
+    // Raw sources touch, but valid organization places the second pair on an
+    // upper level. Prove the resolved separation itself, not an invalid-tree
+    // rejection, and retain same-level acceptance coverage.
+    const VerticalLevelGraph graph({{"ground", 0}, {"upper", 10}}, {{"storey", "ground", "upper"}});
+    auto levels = Entity::create("vertical_levels", {{"model", nlohmann::json::parse(graph.serialize())}});
+    levels.id = "join-levels";
+    auto property = Entity::create("property"); property.id = "join-property";
+    auto building = Entity::create("building", {{"property_id", property.id}}); building.id = "join-building";
+    const auto floor = [&](std::string id, std::string level_id) {
+        auto entity = Entity::create("floor", {{"building_id", building.id},
+            {"vertical_level_binding", {{"version", 1}, {"graph_id", levels.id}, {"level_id", std::move(level_id)}}}});
+        entity.id = std::move(id);
+        return entity;
+    };
+    const auto ground_floor = floor("join-ground-floor", "ground");
+    const auto upper_floor = floor("join-upper-floor", "upper");
+    auto ground_layer = Entity::create("layer", {{"floor_id", ground_floor.id}}); ground_layer.id = "join-ground-layer";
+    auto upper_layer = Entity::create("layer", {{"floor_id", upper_floor.id}}); upper_layer.id = "join-upper-layer";
+    const auto place = [&](Entity entity, const std::string& layer_id) {
+        entity.properties["layer_id"] = layer_id;
+        entity.properties["vertical_placement"] = {{"version", 1}, {"mode", "level"}, {"offset_m", 0.0}};
+        return entity;
+    };
+    const auto hierarchy = std::vector<Entity>{property, building, ground_floor, upper_floor,
+        ground_layer, upper_layer, levels};
+    auto placed_entities = hierarchy;
+    placed_entities.insert(placed_entities.end(), {
+        place(a, ground_layer.id), place(b, upper_layer.id),
+        place(roof_a, ground_layer.id), place(roof_b, upper_layer.id)});
+    const auto placed = Document::create(std::move(placed_entities));
+    const auto placed_snapshot = placed.snapshot();
+    const auto resolved_upper_wall = resolve_vertical_placement(
+        placed_snapshot, placed_snapshot.entities().at(b.id));
+    const auto resolved_upper_roof = resolve_vertical_placement(
+        placed_snapshot, placed_snapshot.entities().at(roof_b.id));
+    require(std::abs(resolved_upper_wall.properties.at("elevation_m").get<double>() - 10.0) < 1e-9,
+        "upper wall fixture must resolve to the bound level");
+    require(std::abs(resolved_upper_roof.properties.at("base_position_m").at(2).get<double>() - 10.0) < 1e-9,
+        "upper roof fixture must resolve to the bound level");
+    rejects([&] { (void)architectural_join_create_command(placed_snapshot, "bad-level-walls",
+        {a.id, b.id}, ArchitecturalJoinKind::wall, placed.revision()); });
+    rejects([&] { (void)architectural_join_create_command(placed_snapshot, "bad-level-roofs",
+        {roof_a.id, roof_b.id}, ArchitecturalJoinKind::roof, placed.revision()); });
+
+    auto same_level_entities = hierarchy;
+    same_level_entities.insert(same_level_entities.end(), {
+        place(a, ground_layer.id), place(b, ground_layer.id),
+        place(roof_a, ground_layer.id), place(roof_b, ground_layer.id)});
+    const auto same_level = Document::create(std::move(same_level_entities));
+    require(architectural_join_create_command(same_level.snapshot(), "same-level-walls",
+                {a.id, b.id}, ArchitecturalJoinKind::wall, same_level.revision()).entity_changes.size() == 1,
+        "same-level connected walls must remain joinable after placement resolution");
+    require(architectural_join_create_command(same_level.snapshot(), "same-level-roofs",
+                {roof_a.id, roof_b.id}, ArchitecturalJoinKind::roof, same_level.revision()).entity_changes.size() == 1,
+        "same-level touching roofs must remain joinable after placement resolution");
+
+    auto c = a;
+    c.id = "join-wall-c";
+    c.properties["baseline"] = segment_json(20, 0, 20, 4);
+    auto multiple = Document::create({a, b, far, c});
+    multiple.apply(architectural_join_create_command(multiple.snapshot(), "join-one",
+        {a.id, b.id}, ArchitecturalJoinKind::wall, multiple.revision()));
+    multiple.apply(architectural_join_create_command(multiple.snapshot(), "join-two",
+        {far.id, c.id}, ArchitecturalJoinKind::wall, multiple.revision()));
+    const auto multiple_revision = multiple.revision();
+    const auto remove_multiple = architectural_join_remove_command(multiple.snapshot(),
+        {a.id, "join-one", "join-two", c.id}, ArchitecturalJoinKind::wall, multiple_revision);
+    require(remove_multiple.entity_changes.size() == 2, "selection must remove both joins once");
+    multiple.apply(remove_multiple);
+    require(multiple.revision() == multiple_revision + 1 && multiple.snapshot().entities().size() == 4,
+        "multiple join removal must be atomic and retain all members");
+}
+
 void test_material_assignments() {
     using namespace sketch;
     auto catalog = Entity::create("assembly_model", {{"version", 1},
@@ -534,6 +694,7 @@ void test_room_volume_dimensions() {
 
 int main() {
     try {
+        test_typed_join_commands();
         test_room_volume_dimensions();
         test_material_assignments();
         test_building_transform_updates_canonical_geometry();

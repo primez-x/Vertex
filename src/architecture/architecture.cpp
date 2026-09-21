@@ -41,6 +41,23 @@ namespace sketch {
 namespace {
 constexpr double tolerance = default_geometry_tolerance_metres;
 
+template <typename Adjacent>
+bool members_form_connected_component(std::size_t count, Adjacent&& adjacent) {
+    if (count == 0) return false;
+    std::vector<bool> reached(count, false);
+    std::vector<std::size_t> pending{0};
+    reached[0] = true;
+    for (std::size_t next = 0; next < pending.size(); ++next) {
+        for (std::size_t candidate = 0; candidate < count; ++candidate) {
+            if (!reached[candidate] && adjacent(pending[next], candidate)) {
+                reached[candidate] = true;
+                pending.push_back(candidate);
+            }
+        }
+    }
+    return pending.size() == count;
+}
+
 void positive(double value, const char* what) {
     if (!std::isfinite(value) || value <= tolerance) throw std::invalid_argument(what);
 }
@@ -325,20 +342,6 @@ double endpoint_distance(const Vec2& first, const Vec2& second) {
     return distance;
 }
 
-bool vertical_intersection(const Wall& first, const Wall& second) {
-    const auto first_bottom = first.elevation;
-    const auto first_top = first.elevation +
-                           std::max(first.height,
-                                    first.height + first.slope_rise.value_or(0.0));
-    const auto second_bottom = second.elevation;
-    const auto second_top = second.elevation +
-                            std::max(second.height,
-                                     second.height + second.slope_rise.value_or(0.0));
-    if (!std::isfinite(first_top) || !std::isfinite(second_top)) return false;
-    return std::max(first_bottom, second_bottom) <=
-           std::min(first_top, second_top) + tolerance;
-}
-
 TopoDS_Shape fuse_wall_shapes(const TopoDS_Shape& first, const TopoDS_Shape& second) {
     BRepAlgoAPI_Fuse operation(first, second);
     operation.Build();
@@ -352,7 +355,7 @@ TopoDS_Shape fuse_wall_shapes(const TopoDS_Shape& first, const TopoDS_Shape& sec
 bool shapes_touch(const TopoDS_Shape& first, const TopoDS_Shape& second) {
     BRepExtrema_DistShapeShape distance(first, second);
     if (!distance.IsDone() || !std::isfinite(distance.Value())) {
-        throw std::invalid_argument("Roof join shape connectivity is unresolved");
+        throw std::invalid_argument("Architectural join shape connectivity is unresolved");
     }
     return distance.Value() <= tolerance;
 }
@@ -635,10 +638,14 @@ TopoDS_Shape make_wall_join(const WallJoin& join, std::span<const Wall> walls) {
         resolved.push_back(found->second);
     }
 
-    for (const auto* wall : resolved) validate_wall_semantics(*wall);
-    std::vector<bool> connected(resolved.size(), false);
-    for (std::size_t first = 0; first < resolved.size(); ++first) {
-        for (std::size_t second = first + 1; second < resolved.size(); ++second) {
+    std::vector<TopoDS_Shape> wall_shapes;
+    wall_shapes.reserve(resolved.size());
+    for (const auto* wall : resolved) {
+        validate_wall_semantics(*wall);
+        wall_shapes.push_back(make_wall(*wall));
+    }
+    const bool connected = members_form_connected_component(
+        resolved.size(), [&](std::size_t first, std::size_t second) {
             const auto& left = *resolved[first];
             const auto& right = *resolved[second];
             const std::array<Vec2, 2> left_endpoints{left.baseline.start, left.baseline.end};
@@ -651,20 +658,16 @@ TopoDS_Shape make_wall_join(const WallJoin& join, std::span<const Wall> walls) {
                     }
                 }
             }
-            if (touches && vertical_intersection(left, right)) {
-                connected[first] = true;
-                connected[second] = true;
-            }
-        }
-    }
-    if (std::find(connected.begin(), connected.end(), false) != connected.end()) {
+            return touches && shapes_touch(wall_shapes[first], wall_shapes[second]);
+        });
+    if (!connected) {
         throw std::invalid_argument("Wall join walls must share connected endpoints");
     }
 
     try {
-        auto result = make_wall(*resolved.front());
+        auto result = wall_shapes.front();
         for (std::size_t index = 1; index < resolved.size(); ++index) {
-            result = fuse_wall_shapes(result, make_wall(*resolved[index]));
+            result = fuse_wall_shapes(result, wall_shapes[index]);
         }
         if (result.IsNull() || !BRepCheck_Analyzer(result).IsValid() ||
             solid_volume(result) <= tolerance * tolerance * tolerance) {
@@ -689,17 +692,12 @@ TopoDS_Shape make_roof_join(const RoofJoin& join, std::span<const TopoDS_Shape> 
         }
     }
 
-    std::vector<bool> connected(roofs.size(), false);
-    for (std::size_t first = 0; first < roofs.size(); ++first) {
-        for (std::size_t second = first + 1; second < roofs.size(); ++second) {
-            if (shapes_touch(roofs[first], roofs[second])) {
-                connected[first] = true;
-                connected[second] = true;
-            }
-        }
-    }
-    if (std::find(connected.begin(), connected.end(), false) != connected.end()) {
-        throw std::invalid_argument("Roof join roofs must touch another member");
+    const bool connected = members_form_connected_component(
+        roofs.size(), [&](std::size_t first, std::size_t second) {
+            return shapes_touch(roofs[first], roofs[second]);
+        });
+    if (!connected) {
+        throw std::invalid_argument("Roof join roofs must form one connected component");
     }
 
     try {

@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-278 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+281 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -36,6 +36,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - Optional assistance — when available (7 tasks)
 - Complete a real job (5 tasks)
 - Appraisal square-foot workflow (13 tasks)
+- Architectural joins and named views (3 tasks)
 
 ## Start a project and arrange the workspace
 
@@ -1500,6 +1501,23 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 
 - [ ] **U278 — Print the automatic appraisal area summary**
   - Expected: Create and qualify a 10 ft × 10 ft above-grade finished dwelling boundary. Open **Sheet layout...**, add **Appraisal area summary**, and export the drawing set to PDF. The sheet shows Qualified under the declared Vertex policy, Above-grade finished (GLA) at 100.00 ft², and matching property/building/floor totals. Remove a required appraisal fact and export again; the sheet says **Unqualified - automatic totals withheld** and contains no appraisal area values.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
+## Architectural joins and named views
+
+- [ ] **U279 — Join and unjoin connected walls**
+  - Expected: In Architectural workspace, draw three connected walls, Ctrl-click all three and choose **Join selected walls**. The 3D view shows one fused result while the source walls remain editable. Undo and redo each change the join in one step; save/reopen preserves it. Unjoin from either a source wall or the fused join and confirm no source wall or hosted opening is deleted. Repeating the command with two separate connected wall pairs is rejected without changing the project.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
+- [ ] **U280 — Join and unjoin touching roofs**
+  - Expected: Create touching roof panels, select them and choose **Join selected roofs**. The 3D view shows one fused roof while the original roof parameters and openings remain editable. Undo, redo and save/reopen preserve the result. Unjoin keeps every source roof. Attempting to join two disconnected roof groups is rejected without changing the project.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
+- [ ] **U281 — Create and edit named elevations and sections**
+  - Expected: Open **Named elevations and sections...**, create at least two elevations and one vertical section with distinct names, origins, directions and depth limits. Place the views on sheets, edit one frame, and confirm its other sheet references stay linked. Undo/redo and save/reopen preserve every named view and its distinct projected geometry.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

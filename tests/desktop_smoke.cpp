@@ -5016,20 +5016,21 @@ void test_architectural_authoring_commands() {
     require(!first.isEmpty() && !second.isEmpty(), "wall fixture must be valid");
     require(window.selectEntity(first) && window.selectEntity(second, true), "select wall pair");
     const auto before = window.document().revision();
-    window.findChild<QAction*>(QStringLiteral("joinWalls"))->trigger();
+    const auto created_join = window.joinSelectedWalls(before);
     auto snapshot = window.document().snapshot();
-    std::string join_id;
+    const auto join_id = created_join.toStdString();
     for (const auto& [id, entity] : snapshot.entities()) {
         if (entity.type == "wall_join") {
-            join_id = id;
+            require(id == join_id, "join API must return the committed wall join identity");
             require(entity.properties.at("wall_ids").size() == 2, "join must retain both source walls");
         }
     }
     require(!join_id.empty() && window.document().revision() == before + 1,
             "join action must atomically create semantic wall join");
-    window.findChild<QAction*>(QStringLiteral("joinWalls"))->trigger();
+    require(window.joinSelectedWalls().isEmpty(), "duplicate wall join must be rejected");
     require(window.document().revision() == before + 1, "duplicate join membership must be rejected atomically");
-    window.findChild<QAction*>(QStringLiteral("unjoinWalls"))->trigger();
+    require(window.selectEntity(created_join) && window.unjoinSelectedWalls(),
+            "a selected join identity must remove the derived wall join");
     snapshot = window.document().snapshot();
     require(!snapshot.entities().contains(join_id) && snapshot.entities().contains(first.toStdString()) &&
                 snapshot.entities().contains(second.toStdString()), "unjoin must preserve source walls");
@@ -5038,22 +5039,37 @@ void test_architectural_authoring_commands() {
     require(window.redoCommand(), "unjoin must redo");
     require(window.selectEntity(first), "select lone wall");
     const auto invalid_revision = window.document().revision();
-    window.findChild<QAction*>(QStringLiteral("joinWalls"))->trigger();
+    require(window.joinSelectedWalls().isEmpty(), "a lone wall cannot form a join");
     require(window.document().revision() == invalid_revision && !window.lastError().isEmpty(),
             "invalid join selection must leave document unchanged");
+    const auto far_first = window.createStraightWall({20, 0}, {24, 0}, QStringLiteral("living"));
+    const auto far_second = window.createStraightWall({24, 0}, {24, 3}, QStringLiteral("living"));
+    require(window.selectEntity(first) && window.selectEntity(second, true) &&
+                window.selectEntity(far_first, true) && window.selectEntity(far_second, true),
+            "select two disconnected wall pairs");
+    const auto disconnected_revision = window.document().revision();
+    require(window.joinSelectedWalls(disconnected_revision).isEmpty() &&
+                window.document().revision() == disconnected_revision,
+            "disconnected wall clusters must be rejected before document mutation");
+    require(window.selectEntity(first) && window.selectEntity(second, true) &&
+                window.joinSelectedWalls(disconnected_revision - 1).isEmpty() &&
+                window.document().revision() == disconnected_revision,
+            "stale wall join requests must not change the document");
     const auto roof_a = window.commitBuildingObject(sketch::encode_building_entity(sketch::SlopedRoofPanel{
         "command-roof-a", {0, 0, 3}, 0, 4, 3, 0, 0, 0.2, 0.1}), window.document().revision());
     const auto roof_b = window.commitBuildingObject(sketch::encode_building_entity(sketch::SlopedRoofPanel{
         "command-roof-b", {3, 0, 3}, 0, 4, 3, 0, 0, 0.2, 0.1}), window.document().revision());
     require(!roof_a.isEmpty() && !roof_b.isEmpty() && window.selectEntity(roof_a) && window.selectEntity(roof_b, true),
             "select roof pair");
-    window.findChild<QAction*>(QStringLiteral("joinRoofs"))->trigger();
+    const auto roof_join_id = window.joinSelectedRoofs();
     const auto joined_roofs = window.document().snapshot();
     const auto roof_join = std::find_if(joined_roofs.entities().begin(), joined_roofs.entities().end(),
         [](const auto& entry) { return entry.second.type == "roof_join"; });
-    require(roof_join != joined_roofs.entities().end() && roof_join->second.properties.at("roof_ids").size() == 2,
+    require(!roof_join_id.isEmpty() && roof_join != joined_roofs.entities().end() &&
+                roof_join->first == roof_join_id.toStdString() &&
+                roof_join->second.properties.at("roof_ids").size() == 2,
             "roof join must retain both semantic sources");
-    window.findChild<QAction*>(QStringLiteral("unjoinRoofs"))->trigger();
+    require(window.unjoinSelectedRoofs(), "selected roof members must remove their derived join");
     require(!window.document().snapshot().entities().contains(roof_join->first), "roof unjoin removes the join");
     for (const auto* type : {"Roof", "Stair", "Column", "Beam"}) {
         QTimer::singleShot(0, &window, [&window, type] {
@@ -5098,6 +5114,31 @@ void test_architectural_authoring_commands() {
     require(found_view, "named view persists its direction and kind");
     require(window.findChild<QComboBox*>("architecturalView")->currentText() == "East elevation",
             "saved named view becomes the selected architectural projection");
+
+    sketch::desktop::MainWindow action_window;
+    const auto action_first = action_window.createStraightWall({0, 0}, {4, 0}, QStringLiteral("living"));
+    const auto action_second = action_window.createStraightWall({4, 0}, {4, 3}, QStringLiteral("living"));
+    require(action_window.selectEntity(action_first) && action_window.selectEntity(action_second, true),
+            "join action fixture selection");
+    const auto action_revision = action_window.document().revision();
+    action_window.findChild<QAction*>(QStringLiteral("joinWalls"))->trigger();
+    const auto action_snapshot = action_window.document().snapshot();
+    require(action_window.document().revision() == action_revision + 1 &&
+                std::any_of(action_snapshot.entities().begin(), action_snapshot.entities().end(),
+                    [](const auto& entry) { return entry.second.type == "wall_join"; }),
+            "wall join QAction must route through the geometry-admitted command");
+
+    sketch::desktop::MainWindow read_only;
+    const auto read_only_first = read_only.createStraightWall({0, 0}, {4, 0}, QStringLiteral("living"));
+    const auto read_only_second = read_only.createStraightWall({4, 0}, {4, 3}, QStringLiteral("living"));
+    require(read_only.selectEntity(read_only_first) && read_only.selectEntity(read_only_second, true),
+            "read-only join fixture selection");
+    const auto read_only_revision = read_only.document().revision();
+    read_only.document().mark_read_only("join fixture");
+    require(read_only.joinSelectedWalls().isEmpty() &&
+                read_only.document().revision() == read_only_revision &&
+                read_only.lastError().contains(QStringLiteral("read-only")),
+            "read-only projects must reject wall joins without mutation");
 }
 
 void test_section_overlay_workflow() {

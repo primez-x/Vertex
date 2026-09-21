@@ -88,6 +88,30 @@ void test_fused_join_requires_touching_roofs_and_returns_real_solid() {
     }, "disconnected roofs must not be accepted as a join");
 }
 
+void test_join_rejects_two_disconnected_pairs() {
+    const std::vector<TopoDS_Shape> roofs{
+        sketch::make_building_shape(panel("roof-a", 0.0)),
+        sketch::make_building_shape(panel("roof-b", 1.9)),
+        sketch::make_building_shape(panel("roof-c", 20.0)),
+        sketch::make_building_shape(panel("roof-d", 21.9))};
+    const RoofJoin join{"join-pairs", {"roof-a", "roof-b", "roof-c", "roof-d"},
+                        RoofJoinStyle::fused};
+    rejected([&] { (void)sketch::make_roof_join(join, roofs); },
+             "two disconnected roof pairs must not be accepted as one join");
+}
+
+void test_join_accepts_chain_in_nonadjacent_order() {
+    const std::vector<TopoDS_Shape> roofs{
+        sketch::make_building_shape(panel("roof-a", 0.0)),
+        sketch::make_building_shape(panel("roof-c", 3.8)),
+        sketch::make_building_shape(panel("roof-b", 1.9))};
+    const RoofJoin join{"join-chain", {"roof-a", "roof-c", "roof-b"}, RoofJoinStyle::fused};
+    const auto shape = sketch::make_roof_join(join, roofs);
+    const auto volume = sketch::solid_volume(shape);
+    require(!shape.IsNull() && std::isfinite(volume) && volume > 0.0,
+            "transitively connected roof chain must produce a solid regardless of member order");
+}
+
 void test_document_validates_join_references_and_persists_record() {
     const auto first = sketch::encode_building_entity(panel("roof-a", 0.0));
     const auto second = sketch::encode_building_entity(panel("roof-b", 1.9));
@@ -115,6 +139,8 @@ int main() {
     try {
         test_join_codec_is_versioned_and_lossless();
         test_fused_join_requires_touching_roofs_and_returns_real_solid();
+        test_join_accepts_chain_in_nonadjacent_order();
+        test_join_rejects_two_disconnected_pairs();
         test_document_validates_join_references_and_persists_record();
         std::cout << "Roof join tests passed\n";
         return 0;

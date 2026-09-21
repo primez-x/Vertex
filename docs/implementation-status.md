@@ -1,5 +1,21 @@
 # Implementation status
 
+## Geometry-admitted wall and roof joins (2026-09-21)
+
+The Windows architectural workflow now routes menu, command-search and canvas
+context actions through typed, revision-fenced wall and roof join commands. A
+join is committed only after its resolved level placement, hosted wall openings
+and derived OCCT geometry validate. Every member must belong to one connected
+component; two disconnected pairs are rejected before document history changes.
+Unjoin accepts selected source members or the derived join, removes each matching
+join once, and preserves the editable source objects. Both operations remain one
+undoable command and are available through the public desktop workflow API.
+
+The geometry, adapter and desktop checks cover connected multi-member chains,
+disconnected clusters, duplicate membership, stale revisions, read-only projects,
+undo/redo and source preservation. Miter-specific profiles, curved junctions,
+roof material propagation and production compatibility qualification remain open.
+
 ## Declared appraisal workflow (2026-09-21)
 
 Residential and light-commercial appraisal policies now derive categories from
@@ -121,7 +137,7 @@ history; physical-device qualification and richer multi-touch gestures remain
 open.
 Version-1 `wall_join` entities now preserve source wall identities and hosted
 openings while validating member references and unique ownership at the
-Document boundary. The architecture kernel validates endpoint connectivity and
+Document boundary. The architecture kernel validates one connected graph of shared endpoints whose resolved solids physically touch and
 fuses the source wall solids into one OCCT union, and the native 3D view
 displays that union once while retaining the source walls for schedules and
 edits. Codec, document-reference, geometry, and native build coverage pass in
@@ -129,7 +145,7 @@ the current Debug and Release builds; miter-specific profiles, curved-top
 sloped joins, and production qualification remain open.
 Version-1 `roof_join` entities now preserve source roof identities while
 validating typed references and unique ownership at the Document boundary.
-The native 3D path validates touching source solids and presents one derived
+The native 3D path validates one connected component of touching source solids and presents one derived
 OCCT union without replacing roof parameters, openings, or quantities; codec,
 document, and solid regression coverage is included in the next Debug/Release
 matrix. Roof material propagation, mitered/curved roof junctions, and

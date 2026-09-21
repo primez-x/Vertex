@@ -370,6 +370,16 @@ public:
     [[nodiscard]] bool selectEntity(const QString& entity_id, bool toggle = false);
     [[nodiscard]] QString selectedEntityId() const;
     [[nodiscard]] QStringList selectedEntityIds() const;
+    // Creates or removes one derived fused presentation while preserving the
+    // selected source objects. Geometry is admitted before document mutation.
+    [[nodiscard]] QString joinSelectedWalls(
+        std::optional<Revision> expected_revision = std::nullopt);
+    [[nodiscard]] bool unjoinSelectedWalls(
+        std::optional<Revision> expected_revision = std::nullopt);
+    [[nodiscard]] QString joinSelectedRoofs(
+        std::optional<Revision> expected_revision = std::nullopt);
+    [[nodiscard]] bool unjoinSelectedRoofs(
+        std::optional<Revision> expected_revision = std::nullopt);
     // Copies the selected geometry graph to the local system clipboard using
     // a bounded, versioned JSON payload. Clipboard operations never contact a
     // service and do not change document history until paste or cut commits.

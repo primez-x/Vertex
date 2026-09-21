@@ -2,6 +2,7 @@
 #include "sketch/building_entity.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/project_organization.hpp"
 #include "sketch/slab_semantics.hpp"
 #include "sketch/wall_semantics.hpp"
 
@@ -16,6 +17,25 @@ namespace sketch {
 namespace {
 
 using EntityState = std::map<std::string, Entity, std::less<>>;
+
+std::string join_member_type(ArchitecturalJoinKind kind) {
+    switch (kind) {
+    case ArchitecturalJoinKind::wall: return "wall";
+    case ArchitecturalJoinKind::roof: return "roof";
+    }
+    throw std::invalid_argument("unknown architectural join kind");
+}
+
+void check_join_revision(const DocumentSnapshot& source, Revision expected_revision) {
+    if (source.revision() != expected_revision)
+        throw DocumentError(DocumentErrorCode::stale_revision, "architectural join source revision is stale");
+}
+
+std::vector<std::string> join_members(const Entity& entity, ArchitecturalJoinKind kind) {
+    return kind == ArchitecturalJoinKind::wall
+        ? parse_wall_join(entity.properties, entity.id).wall_ids
+        : parse_roof_join(entity.properties, entity.id).roof_ids;
+}
 
 Entity semantic_entity(const DocumentSnapshot& source, const std::string& id,
                        std::string_view expected_type, Revision expected_revision) {
@@ -555,6 +575,89 @@ ApplyEntityChanges make_command(const DocumentSnapshot& source, const Architectu
 }
 
 }  // namespace
+
+ApplyEntityChanges architectural_join_create_command(const DocumentSnapshot& source,
+    const std::string& join_id, const std::vector<std::string>& member_ids,
+    ArchitecturalJoinKind kind, Revision expected_revision) {
+    check_join_revision(source, expected_revision);
+    const auto member_type = join_member_type(kind);
+    const auto join_type = member_type + "_join";
+    if (source.entities().contains(join_id))
+        throw std::invalid_argument("architectural join identity already exists");
+    const auto properties = kind == ArchitecturalJoinKind::wall
+        ? wall_join_json(WallJoin{join_id, member_ids})
+        : roof_join_json(RoofJoin{join_id, member_ids});
+    // The semantic serializers check count and uniqueness before geometry work.
+    for (const auto& member_id : member_ids)
+        (void)semantic_entity(source, member_id, member_type, expected_revision);
+    const std::set<std::string> selected(member_ids.begin(), member_ids.end());
+    for (const auto& [id, entity] : source.entities()) {
+        if (entity.type != join_type) continue;
+        for (const auto& member : join_members(entity, kind)) {
+            if (selected.contains(member))
+                throw std::invalid_argument("architectural source already belongs to a join: " + member);
+        }
+    }
+    if (kind == ArchitecturalJoinKind::wall) {
+        std::vector<Wall> walls;
+        for (const auto& member_id : member_ids) {
+            const auto resolved = resolve_vertical_placement(source, source.entities().at(member_id));
+            std::vector<const Entity*> openings;
+            for (const auto& opening_id : hosted_opening_ids(source.entities(), member_id))
+                openings.push_back(&source.entities().at(opening_id));
+            Wall wall;
+            std::string error;
+            if (!read_document_wall(resolved, openings, wall, error))
+                throw std::invalid_argument(error);
+            walls.push_back(std::move(wall));
+        }
+        (void)make_wall_join(WallJoin{join_id, member_ids}, walls);
+    } else {
+        std::vector<TopoDS_Shape> roofs;
+        for (const auto& member_id : member_ids) {
+            const auto resolved = resolve_vertical_placement(source, source.entities().at(member_id));
+            roofs.push_back(make_building_shape(decode_building_entity(resolved)));
+        }
+        (void)make_roof_join(RoofJoin{join_id, member_ids}, roofs);
+    }
+    auto entity = Entity::create(join_type, properties);
+    entity.id = join_id;
+    ApplyEntityChanges command{expected_revision, {EntityChange::upsert(std::move(entity))}, {},
+        "Join " + member_type + "s"};
+    (void)Document::preview_command(source, Command{command});
+    return command;
+}
+
+ApplyEntityChanges architectural_join_remove_command(const DocumentSnapshot& source,
+    const std::vector<std::string>& selected_ids, ArchitecturalJoinKind kind,
+    Revision expected_revision) {
+    check_join_revision(source, expected_revision);
+    const auto member_type = join_member_type(kind);
+    const auto join_type = member_type + "_join";
+    if (selected_ids.empty()) throw std::invalid_argument("architectural join selection is empty");
+    std::map<std::string, std::string> membership;
+    for (const auto& [id, entity] : source.entities()) {
+        if (entity.type != join_type) continue;
+        for (const auto& member : join_members(entity, kind)) membership.emplace(member, id);
+    }
+    std::set<std::string> erase_ids;
+    for (const auto& selected_id : selected_ids) {
+        const auto found = source.entities().find(selected_id);
+        if (found == source.entities().end())
+            throw std::invalid_argument("architectural join selection target is missing");
+        if (found->second.type == join_type) {
+            erase_ids.insert(selected_id);
+        } else if (found->second.type == member_type && membership.contains(selected_id)) {
+            erase_ids.insert(membership.at(selected_id));
+        } else {
+            throw std::invalid_argument("architectural join selection contains an unrelated object");
+        }
+    }
+    ApplyEntityChanges command{expected_revision, {}, {}, "Remove " + member_type + " joins"};
+    for (const auto& id : erase_ids) command.entity_changes.push_back(EntityChange::erase(id));
+    (void)Document::preview_command(source, Command{command});
+    return command;
+}
 
 Entity resized_room_volume_entity(const Entity& source, const RoomDimensionEdit& edit) {
     if (source.type != "room")

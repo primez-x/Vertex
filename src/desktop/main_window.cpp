@@ -2646,6 +2646,8 @@ std::optional<json> merged_quantity_entries(const Entity* original, const Entity
 }  // namespace
 
 class MainWindow::Impl {
+    friend class MainWindow;
+
 public:
     Impl(MainWindow* window, std::shared_ptr<Document> document)
         : owner(window), m_document(std::move(document)) {
@@ -17728,10 +17730,10 @@ public:
             {QStringLiteral("Edit architectural view settings"),
              [this] { showArchitecturalViewSettings(); }},
             {QStringLiteral("Create or edit named elevations and sections"), [this] { showNamedViews(); }},
-            {QStringLiteral("Join selected walls"), [this] { changeSelectedJoin(false, false); }},
-            {QStringLiteral("Unjoin selected walls"), [this] { changeSelectedJoin(false, true); }},
-            {QStringLiteral("Join selected roofs"), [this] { changeSelectedJoin(true, false); }},
-            {QStringLiteral("Unjoin selected roofs"), [this] { changeSelectedJoin(true, true); }},
+            {QStringLiteral("Join selected walls"), [this] { (void)joinSelected(ArchitecturalJoinKind::wall); }},
+            {QStringLiteral("Unjoin selected walls"), [this] { (void)unjoinSelected(ArchitecturalJoinKind::wall); }},
+            {QStringLiteral("Join selected roofs"), [this] { (void)joinSelected(ArchitecturalJoinKind::roof); }},
+            {QStringLiteral("Unjoin selected roofs"), [this] { (void)unjoinSelected(ArchitecturalJoinKind::roof); }},
             {QStringLiteral("Design phases and remodeling alternatives"),
              [this] { showRemodelingAlternatives(); }},
             {QStringLiteral("Room and boundary relationships"),
@@ -18946,13 +18948,13 @@ private:
         }
         architecture_menu->addSeparator();
         authoring_action("joinWalls", QStringLiteral("Join selected walls"),
-                         [this] { changeSelectedJoin(false, false); });
+                         [this] { (void)joinSelected(ArchitecturalJoinKind::wall); });
         authoring_action("unjoinWalls", QStringLiteral("Unjoin selected walls"),
-                         [this] { changeSelectedJoin(false, true); });
+                         [this] { (void)unjoinSelected(ArchitecturalJoinKind::wall); });
         authoring_action("joinRoofs", QStringLiteral("Join selected roofs"),
-                         [this] { changeSelectedJoin(true, false); });
+                         [this] { (void)joinSelected(ArchitecturalJoinKind::roof); });
         authoring_action("unjoinRoofs", QStringLiteral("Unjoin selected roofs"),
-                         [this] { changeSelectedJoin(true, true); });
+                         [this] { (void)unjoinSelected(ArchitecturalJoinKind::roof); });
         authoring_action("manageNamedViews", QStringLiteral("Named elevations and sections…"),
                          [this] { showNamedViews(); });
         auto* dimension_action = more_menu->addAction(QStringLiteral("Add angle or area dimension…"));
@@ -24876,49 +24878,56 @@ private:
         dialog.exec();
     }
 
-    void changeSelectedJoin(bool roofs, bool removing) {
+    QString joinSelected(ArchitecturalJoinKind kind,
+                         std::optional<Revision> expected_revision = std::nullopt) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
-            return;
+            return {};
         }
         try {
-            const auto source = m_document->snapshot();
-            const std::string member_type = roofs ? "roof" : "wall";
-            const std::string join_type = member_type + "_join";
+            const auto source = authoringSnapshot();
+            const auto revision = expected_revision.value_or(source.revision());
             std::vector<std::string> members;
-            std::vector<EntityChange> changes;
+            members.reserve(m_selected_ids.size());
             for (const auto& selected : m_selected_ids) {
-                const auto found = source.entities().find(selected.toStdString());
-                if (found == source.entities().end() ||
-                    (found->second.type != member_type && !(removing && found->second.type == join_type)))
-                    throw std::invalid_argument("Select only walls or only roofs for this operation.");
-                members.push_back(found->first);
+                members.push_back(selected.toStdString());
             }
-            if (removing) {
-                for (const auto& [id, entity] : source.entities()) {
-                    if (entity.type != join_type) continue;
-                    const auto ids = roofs ? parse_roof_join(entity.properties, id).roof_ids
-                                           : parse_wall_join(entity.properties, id).wall_ids;
-                    if (std::find(members.begin(), members.end(), id) != members.end() ||
-                        std::any_of(ids.begin(), ids.end(), [&](const auto& member) {
-                            return std::find(members.begin(), members.end(), member) != members.end();
-                        })) changes.push_back(EntityChange::erase(id));
-                }
-                if (changes.empty()) throw std::invalid_argument("Select a joined object to unjoin.");
-            } else {
-                const auto id = new_id(join_type.c_str());
-                const auto properties = roofs ? roof_join_json(RoofJoin{id, members})
-                                              : wall_join_json(WallJoin{id, members});
-                changes.push_back(EntityChange::upsert(Entity{id, join_type, properties, false, json::object()}));
-            }
-            const ApplyEntityChanges command{source.revision(), changes, {},
-                removing ? "Unjoin selected objects" : "Join selected objects"};
-            (void)Document::preview_command(source, command);
+            const auto join_id = new_id(kind == ArchitecturalJoinKind::roof ? "roof_join" : "wall_join");
+            const auto command = architectural_join_create_command(
+                source, join_id, members, kind, revision);
             applyDocumentCommand(command);
             clearError();
             refresh();
+            return QString::fromStdString(join_id);
         } catch (const std::exception& error) {
             setError(QStringLiteral("Architectural join: %1").arg(QString::fromUtf8(error.what())));
+            return {};
+        }
+    }
+
+    bool unjoinSelected(ArchitecturalJoinKind kind,
+                        std::optional<Revision> expected_revision = std::nullopt) {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        try {
+            const auto source = authoringSnapshot();
+            const auto revision = expected_revision.value_or(source.revision());
+            std::vector<std::string> selected_ids;
+            selected_ids.reserve(m_selected_ids.size());
+            for (const auto& selected : m_selected_ids) {
+                selected_ids.push_back(selected.toStdString());
+            }
+            const auto command = architectural_join_remove_command(
+                source, selected_ids, kind, revision);
+            applyDocumentCommand(command);
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Architectural join: %1").arg(QString::fromUtf8(error.what())));
+            return false;
         }
     }
 
@@ -25836,6 +25845,22 @@ QString MainWindow::createTerrainSurfaceFromSelectedBoundary(
 
 bool MainWindow::selectEntity(const QString& entity_id, bool toggle) {
     return m_impl->selectEntity(entity_id, toggle);
+}
+
+QString MainWindow::joinSelectedWalls(std::optional<Revision> expected_revision) {
+    return m_impl->joinSelected(ArchitecturalJoinKind::wall, expected_revision);
+}
+
+bool MainWindow::unjoinSelectedWalls(std::optional<Revision> expected_revision) {
+    return m_impl->unjoinSelected(ArchitecturalJoinKind::wall, expected_revision);
+}
+
+QString MainWindow::joinSelectedRoofs(std::optional<Revision> expected_revision) {
+    return m_impl->joinSelected(ArchitecturalJoinKind::roof, expected_revision);
+}
+
+bool MainWindow::unjoinSelectedRoofs(std::optional<Revision> expected_revision) {
+    return m_impl->unjoinSelected(ArchitecturalJoinKind::roof, expected_revision);
 }
 
 QStringList MainWindow::selectedEntityIds() const {
