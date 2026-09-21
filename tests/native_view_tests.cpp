@@ -100,6 +100,7 @@ void mouse(sketch::visualization::NativeModelView& view,QEvent::Type type,QPoint
 
 void check_gestures(sketch::visualization::NativeModelView& view, const QString& id,
                     QTemporaryDir& temporary) {
+    view.setSelectedEntity({});
     int selections = 0, translations = 0, menus = 0;
     view.onEntitySelected = [&](QString) { ++selections; };
     view.onEntityTranslationRequested = [&](QString target, double, double, double) {
@@ -154,6 +155,7 @@ void check_gestures(sketch::visualization::NativeModelView& view, const QString&
     mouse(view, QEvent::MouseButtonDblClick, edit_point, Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
     mouse(view, QEvent::MouseButtonRelease, edit_point, Qt::LeftButton, Qt::NoButton);
     check(edits == 1, "Modified double click must not request editing");
+    view.setSelectedEntity({});
     mouse(view, QEvent::MouseButtonPress, edit_point, Qt::LeftButton, Qt::LeftButton);
     mouse(view, QEvent::MouseButtonRelease, edit_point, Qt::LeftButton, Qt::NoButton);
     mouse(view, QEvent::MouseButtonDblClick, edit_point, Qt::LeftButton, Qt::LeftButton);
@@ -299,6 +301,8 @@ void check_desktop_room_activation(QTemporaryDir& temporary) {
     view->fitAll();
     const auto hit = capture(*view, temporary.filePath("desktop-room-activation.png")).centre /
                      view->devicePixelRatioF();
+    check(window.selectEntity(room_id) && view->transformControlsVisible(),
+          "Plan or navigator selection must synchronize native room transform controls");
     const auto before = window.document().snapshot();
     bool opened = false;
     QTimer::singleShot(0, &window, [&] {
@@ -430,6 +434,20 @@ int main(int argc,char** argv) {
                 return;
             }
             check(ready_settled(view),"Native viewport must be ready");
+            view.setSelectedEntity(wall_id);
+            check(view.transformControlsVisible(),
+                  "A selected transformable solid must expose native transform controls");
+            const auto selected_export = capture(
+                view, temporary.filePath("selected-export-without-controls.png"));
+            check(view.transformControlsVisible(),
+                  "Framebuffer export must restore selected-object transform controls");
+            view.setSelectedEntity({});
+            check(capture(view, temporary.filePath("unselected-export.png")).image ==
+                      selected_export.image,
+                  "Exported 3D imagery must omit editing transform controls");
+            view.setSelectedEntity(QStringLiteral("missing-native-entity"));
+            check(!view.transformControlsVisible(),
+                  "Native transform controls must reject a missing semantic target");
             if (scenario == "gestures") {
                 check_gestures(view, wall_id, temporary);
                 int hidden_edits = 0, hidden_selections = 0;

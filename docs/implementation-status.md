@@ -194,9 +194,12 @@ no CRT dialog in the captured run. The current Release PE inspection covers 45
 component binaries with no unresolved static imports; the staged offline bundle
 verified 709 declared files, installed 79 runtime files into a task-owned
 temporary directory, and passed the installed-runtime smoke for both workspaces
-with exit code 0. The native 3D viewport now supports Ctrl+left-drag previews
-and one-command world-space translation requests for supported architectural
-objects, committed by the desktop shell through the existing typed history.
+with exit code 0. The native 3D viewport now synchronizes single selection from
+the plan and navigator and attaches direct XYZ-translation, Z-rotation and
+uniform-scale controls to supported architectural objects. Handle release and
+the retained touch-friendly Move action commit through the existing typed
+history; numeric Transform remains available for exact entry, and 3D export
+excludes the editing controls.
 The installed-runtime harness now records a saved and reopened `.bldproj` for
 the measurement workspace and for both residential and light-commercial
 architectural profiles, validates the SQLite project container, and binds both

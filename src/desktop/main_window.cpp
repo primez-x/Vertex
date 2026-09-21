@@ -19448,6 +19448,18 @@ private:
                     (void)transformSelectedArchitecturalObject(
                         {}, metres(x), metres(y), metres(z), {}, false);
                 });
+            m_nativeModelView->setEntityTransformRequestedCallback(
+                [this](QString id, double x, double y, double z,
+                       double rotation_z_radians, double uniform_scale) {
+                    if (!selectEntity(id)) return;
+                    const auto metres = [](double value) {
+                        return QString::number(value, 'g', 15) + QStringLiteral(" m");
+                    };
+                    const auto degrees = rotation_z_radians * 180.0 / std::numbers::pi;
+                    (void)transformSelectedArchitecturalObject(
+                        QString::number(degrees, 'g', 15), metres(x), metres(y), metres(z),
+                        QString::number(uniform_scale, 'g', 15), false);
+                });
             m_nativeModelView->setErrorCallback([this](QString error) {
                 setError(QStringLiteral("3D view: %1").arg(error));
             });
@@ -19465,6 +19477,9 @@ private:
                         QObject::connect(dimensions, &QAction::triggered, owner,
                                          [this] { editRoomVolumeFromDialog(); });
                     }
+                    auto* transform = menu.addAction(QStringLiteral("Transform…"));
+                    QObject::connect(transform, &QAction::triggered, owner,
+                                     [this] { showArchitecturalObjectTransformEditor(); });
                     auto* move = menu.addAction(QStringLiteral("Move object"));
                     QObject::connect(move, &QAction::triggered, owner, [this] {
                         if (!m_nativeModelView->beginMove(m_selected_id)) {
@@ -21766,6 +21781,8 @@ private:
             native_visible_ids.insert(visible_ids.begin(), visible_ids.end());
             m_native_visible_ids = native_visible_ids;
             m_nativeModelView->setSnapshot(snapshot, native_visible_ids);
+            m_nativeModelView->setSelectedEntity(
+                m_selected_ids.size() == 1 ? m_selected_id : QString{});
             m_native_geometry_document = m_document;
             m_native_geometry_revision = snapshot.revision();
         }

@@ -5,6 +5,8 @@
 #include "sketch/document.hpp"
 
 #include <AIS_InteractiveContext.hxx>
+#include <AIS_Manipulator.hxx>
+#include <AIS_ManipulatorMode.hxx>
 #include <AIS_SelectionScheme.hxx>
 #include <AIS_Shape.hxx>
 #include <Aspect_DisplayConnection.hxx>
@@ -152,10 +154,14 @@ public:
     occ::handle<V3d_Viewer> viewer;
     occ::handle<V3d_View> view;
     occ::handle<AIS_InteractiveContext> context;
+    occ::handle<AIS_Manipulator> manipulator;
     occ::handle<WNT_Window> window;
     std::map<std::string, CachedSolid, std::less<>> solids;
+    std::optional<std::string> selected_entity_id;
+    std::optional<std::string> manipulator_entity_id;
+    std::optional<gp_Trsf> manipulation_transform;
 
-    enum class Gesture { none, select, edit, pan, orbit, move };
+    enum class Gesture { none, select, edit, pan, orbit, move, manipulate };
     Gesture gesture = Gesture::none;
     Qt::MouseButton initiating_button = Qt::NoButton;
     QPoint navigation_start;
@@ -330,6 +336,7 @@ public:
             // A pending edit cannot move a stale displayed object in the new
             // snapshot. Reset any preview before updating the scene.
             clear_translation_preview();
+            detach_manipulator();
             try {
                 for (const auto& [id, solid] : replacement) {
                     const auto old = solids.find(id);
@@ -379,6 +386,7 @@ public:
                     } catch (...) {}
                 }
                 has_fit = previously_fit;
+                try { attach_manipulator(); } catch (...) {}
                 try { viewer->Redraw(); } catch (...) {}
                 throw;
             }
@@ -389,6 +397,21 @@ public:
                 std::chrono::steady_clock::now() - publication_started).count();
             publication_metrics = metrics;
             show_status(QString());
+            try {
+                attach_manipulator();
+            } catch (const Standard_Failure& error) {
+                detach_manipulator();
+                show_operation_error(QStringLiteral("3D transform controls unavailable: ") +
+                                     exception_text(error));
+            } catch (const std::exception& error) {
+                detach_manipulator();
+                show_operation_error(QStringLiteral("3D transform controls unavailable: ") +
+                                     exception_text(error));
+            } catch (...) {
+                detach_manipulator();
+                show_operation_error(
+                    QStringLiteral("3D transform controls unavailable: unknown failure"));
+            }
         } catch (const Standard_Failure& error) {
             preparation_timer->stop();
             prepared_geometry.reset();
@@ -493,6 +516,106 @@ public:
         const auto found = snapshot->entities().find(id.toStdString());
         return found != snapshot->entities().end() &&
                can_transform_architectural_entity_type(found->second.type);
+    }
+
+    bool supports_direct_transform(const std::string& id) const {
+        if (!snapshot.has_value() || id.empty()) return false;
+        const auto found = snapshot->entities().find(id);
+        return found != snapshot->entities().end() &&
+               can_transform_architectural_entity_type(found->second.type);
+    }
+
+    void detach_manipulator() noexcept {
+        manipulation_transform.reset();
+        if (!manipulator.IsNull()) {
+            try {
+                if (manipulator->HasActiveTransformation())
+                    manipulator->StopTransform(false);
+                manipulator->DeactivateCurrentMode();
+                if (manipulator->IsAttached()) manipulator->Detach();
+            } catch (...) {
+            }
+        }
+        manipulator_entity_id.reset();
+    }
+
+    void attach_manipulator() {
+        if (!selected_entity_id.has_value() || !supports_direct_transform(*selected_entity_id) ||
+            !native_ready || !geometry_prepared || regenerator.is_pending() || prepared_geometry ||
+            !geometry_status.isEmpty() || context.IsNull() || viewer.IsNull()) {
+            detach_manipulator();
+            return;
+        }
+        const auto found = solids.find(*selected_entity_id);
+        if (found == solids.end() || found->second.presentation.IsNull() ||
+            !context->IsDisplayed(found->second.presentation)) {
+            detach_manipulator();
+            return;
+        }
+        if (manipulator_entity_id == selected_entity_id && !manipulator.IsNull() &&
+            manipulator->IsAttached()) return;
+
+        detach_manipulator();
+        if (manipulator.IsNull()) {
+            manipulator = occ::handle<AIS_Manipulator>(new AIS_Manipulator());
+            manipulator->SetModeActivationOnDetection(true);
+            manipulator->SetZoomPersistence(true);
+            manipulator->SetSkinMode(AIS_Manipulator::ManipulatorSkin_Flat);
+            manipulator->SetSize(80.0f);
+            manipulator->SetGap(6.0f);
+            // Architectural document transforms support world translation,
+            // signed rotation around Z, and uniform scaling. Hide operations
+            // the authoritative model cannot reproduce exactly.
+            manipulator->SetPart(0, AIS_MM_Rotation, false);
+            manipulator->SetPart(1, AIS_MM_Rotation, false);
+            manipulator->SetPart(2, AIS_MM_Rotation, true);
+            manipulator->SetPart(AIS_MM_TranslationPlane, false);
+        }
+        AIS_Manipulator::OptionsForAttach options;
+        options.SetAdjustPosition(true).SetAdjustSize(false).SetEnableModes(true);
+        manipulator->Attach(found->second.presentation, options);
+        manipulator_entity_id = selected_entity_id;
+        context->ClearSelected(false);
+        context->AddOrRemoveSelected(found->second.presentation, false);
+        viewer->Redraw();
+    }
+
+    bool begin_manipulation(const NativeInputPoint point) {
+        if (manipulator.IsNull() || !manipulator->IsAttached() ||
+            manipulator_entity_id != selected_entity_id || context.IsNull() || view.IsNull())
+            return false;
+        try {
+            context->MoveTo(point.x, point.y, view, false);
+            if (!manipulator->HasActiveMode()) return false;
+            manipulator->StartTransform(point.x, point.y, view);
+            manipulation_transform.reset();
+            return true;
+        } catch (const Standard_Failure& error) {
+            show_operation_error(QStringLiteral("3D transform could not start: ") +
+                                 exception_text(error));
+        } catch (const std::exception& error) {
+            show_operation_error(QStringLiteral("3D transform could not start: ") +
+                                 exception_text(error));
+        } catch (...) {
+            show_operation_error(QStringLiteral("3D transform could not start: unknown failure"));
+        }
+        return false;
+    }
+
+    void preview_manipulation(const NativeInputPoint point) {
+        if (manipulator.IsNull() || !manipulator->HasActiveTransformation() || view.IsNull()) return;
+        try {
+            manipulation_transform = manipulator->Transform(point.x, point.y, view);
+            if (!viewer.IsNull()) viewer->RedrawImmediate();
+        } catch (const Standard_Failure& error) {
+            show_operation_error(QStringLiteral("3D transform preview failed: ") +
+                                 exception_text(error));
+        } catch (const std::exception& error) {
+            show_operation_error(QStringLiteral("3D transform preview failed: ") +
+                                 exception_text(error));
+        } catch (...) {
+            show_operation_error(QStringLiteral("3D transform preview failed: unknown failure"));
+        }
     }
 
     std::optional<WorldPoint> world_point(const NativeInputPoint point) const {
@@ -601,24 +724,43 @@ public:
             return false;
         }
         const QByteArray encoded_path = path.toUtf8();
+        const bool restore_manipulator = !manipulator.IsNull() && manipulator->IsAttached();
+        const auto highlighted_id = selected_entity_id;
+        detach_manipulator();
+        if (!context.IsNull()) context->ClearSelected(false);
+        const auto restore_controls = [this, restore_manipulator, highlighted_id] {
+            if (highlighted_id.has_value() && !context.IsNull()) {
+                const auto found = solids.find(*highlighted_id);
+                if (found != solids.end() && context->IsDisplayed(found->second.presentation))
+                    context->AddOrRemoveSelected(found->second.presentation, false);
+            }
+            if (restore_manipulator) {
+                try { attach_manipulator(); } catch (...) {}
+            }
+        };
         try {
             if (!view->Dump(encoded_path.constData(), Graphic3d_BT_RGB)) {
+                restore_controls();
                 show_operation_error(QStringLiteral(
                     "OCCT could not export the 3D framebuffer (check the path and image codec)"));
                 return false;
             }
         } catch (const Standard_Failure& error) {
+            restore_controls();
             show_operation_error(QStringLiteral("OCCT 3D framebuffer export failed: ") +
                                  exception_text(error));
             return false;
         } catch (const std::exception& error) {
+            restore_controls();
             show_operation_error(QStringLiteral("3D framebuffer export failed: ") +
                                  exception_text(error));
             return false;
         } catch (...) {
+            restore_controls();
             show_operation_error(QStringLiteral("3D framebuffer export failed: unknown failure"));
             return false;
         }
+        restore_controls();
         operation_error.clear();
         refresh_status_label();
         return true;
@@ -649,6 +791,7 @@ NativeModelView::NativeModelView(QWidget* parent)
 NativeModelView::~NativeModelView() {
     m_impl->preparation_timer->stop();
     m_impl->regenerator.shutdown();
+    m_impl->detach_manipulator();
     if (m_impl->native_ready && !m_impl->context.IsNull()) {
         m_impl->context->RemoveAll(false);
     }
@@ -672,7 +815,9 @@ void NativeModelView::setSnapshot(const DocumentSnapshot& snapshot,
         same_snapshot_content(*m_impl->snapshot, snapshot)) {
         return;
     }
+
     cancelInteraction();
+    m_impl->detach_manipulator();
     m_impl->visible_ids = std::move(visible_ids);
     m_impl->snapshot = snapshot;
     m_impl->rebuild_snapshot();
@@ -691,6 +836,40 @@ void NativeModelView::fitAll() {
         return;
     }
     m_impl->fit_all();
+}
+
+void NativeModelView::setSelectedEntity(const QString& entity_id) {
+    const auto id = entity_id.trimmed().toStdString();
+    if (id.empty() || !m_impl->supports_direct_transform(id)) {
+        m_impl->selected_entity_id.reset();
+        m_impl->detach_manipulator();
+        if (m_impl->native_ready && !m_impl->context.IsNull())
+            m_impl->context->ClearSelected(false);
+        if (m_impl->native_ready && !m_impl->viewer.IsNull()) m_impl->viewer->Redraw();
+        return;
+    }
+    m_impl->selected_entity_id = id;
+    try {
+        m_impl->attach_manipulator();
+    } catch (const Standard_Failure& error) {
+        m_impl->detach_manipulator();
+        m_impl->show_operation_error(QStringLiteral("3D transform controls unavailable: ") +
+                                     exception_text(error));
+    } catch (const std::exception& error) {
+        m_impl->detach_manipulator();
+        m_impl->show_operation_error(QStringLiteral("3D transform controls unavailable: ") +
+                                     exception_text(error));
+    } catch (...) {
+        m_impl->detach_manipulator();
+        m_impl->show_operation_error(
+            QStringLiteral("3D transform controls unavailable: unknown failure"));
+    }
+}
+
+bool NativeModelView::transformControlsVisible() const noexcept {
+    return m_impl->selected_entity_id.has_value() &&
+           m_impl->manipulator_entity_id == m_impl->selected_entity_id &&
+           !m_impl->manipulator.IsNull() && m_impl->manipulator->IsAttached();
 }
 
 bool NativeModelView::exportViewImage(const QString& path) {
@@ -750,6 +929,11 @@ void NativeModelView::setEntityTranslationRequestedCallback(
     onEntityTranslationRequested = std::move(callback);
 }
 
+void NativeModelView::setEntityTransformRequestedCallback(
+    std::function<void(QString, double, double, double, double, double)> callback) {
+    onEntityTransformRequested = std::move(callback);
+}
+
 void NativeModelView::setErrorCallback(std::function<void(QString)> callback) {
     onError = std::move(callback);
 }
@@ -760,6 +944,8 @@ bool NativeModelView::beginMove(const QString& entity_id) {
     const auto found = m_impl->solids.find(entity_id.toStdString());
     if (found == m_impl->solids.end() ||
         !m_impl->context->IsDisplayed(found->second.presentation)) return false;
+    m_impl->selected_entity_id = entity_id.toStdString();
+    m_impl->detach_manipulator();
     m_impl->translation_entity_id = entity_id.toStdString();
     setCursor(Qt::SizeAllCursor);
     return true;
@@ -770,12 +956,22 @@ bool NativeModelView::isMoveActive() const noexcept {
 }
 
 void NativeModelView::cancelInteraction() {
+    if (!m_impl->manipulator.IsNull()) {
+        try {
+            if (m_impl->manipulator->HasActiveTransformation())
+                m_impl->manipulator->StopTransform(false);
+            m_impl->manipulator->DeactivateCurrentMode();
+        } catch (...) {
+        }
+    }
+    m_impl->manipulation_transform.reset();
     m_impl->clear_translation_preview();
     m_impl->gesture = Impl::Gesture::none;
     m_impl->initiating_button = Qt::NoButton;
     m_impl->left_moved = false;
     m_impl->translation_entity_id.reset();
     m_impl->translation_start.reset();
+    try { m_impl->attach_manipulator(); } catch (...) { m_impl->detach_manipulator(); }
     unsetCursor();
     if (m_impl->native_ready && !m_impl->view.IsNull()) m_impl->view->Redraw();
 }
@@ -851,6 +1047,12 @@ void NativeModelView::mousePressEvent(QMouseEvent* event) {
             return;
         }
         m_impl->initiating_button = Qt::LeftButton;
+        if (!isMoveActive() && m_impl->begin_manipulation(point)) {
+            m_impl->gesture = Impl::Gesture::manipulate;
+            setCursor(Qt::SizeAllCursor);
+            event->accept();
+            return;
+        }
         m_impl->gesture = isMoveActive() ? Impl::Gesture::move : Impl::Gesture::select;
         m_impl->translation_start.reset();
         if (m_impl->gesture == Impl::Gesture::move)
@@ -870,6 +1072,10 @@ void NativeModelView::mouseDoubleClickEvent(QMouseEvent* event) {
                           m_impl->initiating_button == Qt::NoButton;
     cancelInteraction();
     if (can_edit) {
+        // The manipulator origin commonly overlaps the object's centre. Hide it
+        // for the semantic edit pick so a real double-click never targets the
+        // derived control instead of its document object.
+        m_impl->detach_manipulator();
         m_impl->gesture = Impl::Gesture::edit;
         m_impl->initiating_button = Qt::LeftButton;
         m_impl->left_press = event->position();
@@ -907,6 +1113,9 @@ void NativeModelView::mouseMoveEvent(QMouseEvent* event) {
         return;
     }
     if (m_impl->initiating_button == Qt::LeftButton) {
+        if (m_impl->gesture == Impl::Gesture::manipulate && m_impl->left_moved) {
+            m_impl->preview_manipulation(point);
+        }
         if (m_impl->gesture == Impl::Gesture::move && m_impl->left_moved &&
             m_impl->translation_entity_id.has_value()) {
             if (const auto current = m_impl->world_point(point)) {
@@ -954,15 +1163,23 @@ void NativeModelView::mouseReleaseEvent(QMouseEvent* event) {
         const auto was_translation = m_impl->gesture == Impl::Gesture::move && m_impl->left_moved &&
                                      m_impl->translation_entity_id.has_value() &&
                                      m_impl->translation_start.has_value();
+        const auto was_manipulation = m_impl->gesture == Impl::Gesture::manipulate &&
+                                      m_impl->left_moved &&
+                                      m_impl->manipulator_entity_id.has_value();
         std::optional<NativeModelView::Impl::WorldPoint> end_world;
         if (was_translation) {
             end_world = m_impl->world_point(point);
         }
         const auto translation_id = m_impl->translation_entity_id;
         const auto translation_start = m_impl->translation_start;
+        if (was_manipulation) m_impl->preview_manipulation(point);
+        const auto manipulation_id = m_impl->manipulator_entity_id;
+        const auto manipulation_transform = m_impl->manipulation_transform;
         cancelInteraction();
         if (was_edit && isReady()) {
+            m_impl->detach_manipulator();
             m_impl->select_at(point, true);
+            try { m_impl->attach_manipulator(); } catch (...) { m_impl->detach_manipulator(); }
             event->accept();
             return;
         }
@@ -976,6 +1193,39 @@ void NativeModelView::mouseReleaseEvent(QMouseEvent* event) {
                 (std::abs(dx) > epsilon || std::abs(dy) > epsilon || std::abs(dz) > epsilon) &&
                 onEntityTranslationRequested) {
                 onEntityTranslationRequested(QString::fromStdString(*translation_id), dx, dy, dz);
+            }
+        }
+        if (was_manipulation && manipulation_id.has_value() &&
+            manipulation_transform.has_value() && onEntityTransformRequested) {
+            const auto& transform = *manipulation_transform;
+            const auto translation = transform.TranslationPart();
+            const auto scale = transform.ScaleFactor();
+            gp_XYZ rotation_axis;
+            double rotation = 0.0;
+            if (transform.GetRotation(rotation_axis, rotation) && rotation_axis.Z() < 0.0)
+                rotation = -rotation;
+            constexpr double epsilon = 1.0e-9;
+            const bool finite = std::isfinite(translation.X()) &&
+                                std::isfinite(translation.Y()) &&
+                                std::isfinite(translation.Z()) &&
+                                std::isfinite(rotation) && std::isfinite(scale) && scale > 0.0;
+            const bool changed = std::abs(translation.X()) > epsilon ||
+                                 std::abs(translation.Y()) > epsilon ||
+                                 std::abs(translation.Z()) > epsilon ||
+                                 std::abs(rotation) > epsilon ||
+                                 std::abs(scale - 1.0) > epsilon;
+            // X/Y rotation controls are disabled, but fail closed if an OCCT
+            // transform ever reports a materially different rotation axis.
+            const bool supported_axis = std::abs(rotation) <= epsilon ||
+                                        (std::abs(rotation_axis.X()) <= epsilon &&
+                                         std::abs(rotation_axis.Y()) <= epsilon &&
+                                         std::abs(std::abs(rotation_axis.Z()) - 1.0) <= epsilon);
+            if (finite && changed && supported_axis) {
+                onEntityTransformRequested(QString::fromStdString(*manipulation_id),
+                    translation.X(), translation.Y(), translation.Z(), rotation, scale);
+            } else if (finite && changed && !supported_axis) {
+                m_impl->show_operation_error(
+                    QStringLiteral("Vertex supports direct 3D rotation around the vertical axis only."));
             }
         }
         if (was_click) {

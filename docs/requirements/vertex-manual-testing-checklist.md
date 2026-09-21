@@ -1069,7 +1069,8 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U198 — Select an object in 3D**
-  - Expected: The correct object highlights and its properties become available.
+  - Steps: Select a supported wall, room, slab, column, beam, stair, railing or roof from the plan or navigator, then select a different object directly in 3D. Drag an axis handle, the vertical rotation ring and a scale handle in separate undoable edits. Open the object's right-click **Transform…** action and enter an exact value.
+  - Expected: The same object is selected in every view and receives visible move, vertical-rotation and uniform-scale controls. Each released drag changes the shared semantic object once; plan, 3D and applicable elevation/section/schedule/calculation views refresh. Undo and redo restore each state. Exact numeric entry matches the handle behavior, while exported 3D imagery contains no editing controls.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

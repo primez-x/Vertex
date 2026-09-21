@@ -2194,7 +2194,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Native 3D now hit-tests the object under a stationary double-click or context click and opens a shared room-dimension workflow. Rectangular hole-free rooms support local width/depth resizing from first-corner, center, or opposite-corner anchors; every valid room supports height/elevation edits. The detached preview, exact untouched values, revision-fenced command, undo/redo, level-relative local/resolved placement, linked plan/elevation/section projections, schedule area/volume, and save/reopen paths use the same semantic room entity. Direct resize/rotate gizmos, equivalent native editors for the remaining object types, and complete production 3D qualification remain open, so the requirement remains in progress."
+      "implementation_note": "Native 3D hit-tests the object under a stationary double-click or context click and opens the shared semantic editor. Single selection synchronized from plan, navigator or 3D attaches native XYZ-translation, Z-rotation and uniform-scale controls to supported objects; release restores the preview and commits one typed document transform, while exact numeric Transform remains available and export omits controls. Rectangular hole-free rooms also support anchored width/depth resizing and every valid room supports height/elevation edits. Linked plan/elevation/section projections, schedule area/volume, undo/redo and save/reopen use the same semantic entities. A complete native-handle gesture fixture across every object type and production 3D qualification remain open, so the requirement remains in progress."
     },
     {
       "id": "ARCH-VIEW-001",

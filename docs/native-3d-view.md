@@ -32,11 +32,11 @@ coordinates. The native test checks the actual framebuffer, picking and camera
 restoration at three display scales. Floor/layer controls are connected
 separately; this adapter alone is not the completed visibility workflow.
 
-Right-drag orbits, middle-drag pans, the mouse wheel zooms at the cursor, and a
-left click selects the first AIS object under the pointer. The selected object
-is mapped back to the stable document entity ID and delivered through
-`onEntitySelected`. A click on empty space delivers an empty `QString`, which
-lets the inspector clear its selection.
+Right-drag orbits, middle-drag or Ctrl+left-drag pans, the mouse wheel zooms at
+the cursor, and a left click selects the first AIS object under the pointer.
+The selected object is mapped back to the stable document entity ID and
+delivered through `onEntitySelected`. A click on empty space delivers an empty
+`QString`, which lets the inspector clear its selection.
 
 A stationary plain-left double-click hit-tests, selects, and then emits one
 `onEntityEditRequested` callback for the visible semantic entity. Dragging,
@@ -59,18 +59,26 @@ project base and placement offset. Untouched fields retain their exact source
 values even when display text is rounded. Invalid input, cancellation, or stale
 context restores the authoritative view without adding history.
 
-Ctrl+left-drag directly translates a native architectural object. The press
-selects a supported wall, fused wall join, slab, room, column, beam, stair, railing, roof, or fused roof join,
-converts the cursor to the current view projection plane, and previews the
-world-space movement on the derived AIS presentation. Release clears the preview and emits one
-`onEntityTranslationRequested` callback with the stable entity ID and the
-finite X/Y/Z delta in metres. The desktop shell commits that request through
-the existing typed architectural transform transaction, so the document gets
-one normal undo/redo entry and the viewport is rebuilt from the authoritative
-snapshot. Hosted openings follow their wall's canonical baseline and local
-dimensions. A drag never mutates a presentation without a successful document
-command; placed assembly children remain selectable but continue to resolve to
-their persisted host rather than becoming independent transform targets.
+Single selection from the plan, navigator, or native view attaches an OCCT
+manipulator to a visible supported wall, fused wall join, slab, room, column,
+beam, stair, railing, roof, or fused roof join. Its axis handles preview XYZ
+translation, its Z ring previews vertical rotation, and its scale handles apply
+a uniform positive scale. X/Y rotation and plane-translation controls are
+disabled because the semantic document contract cannot reproduce them exactly.
+Release restores the derived presentation and emits one
+`onEntityTransformRequested` callback containing the stable ID, translation,
+signed Z rotation, and scale. The desktop converts this into the existing typed
+architectural transaction, giving the edit one normal undo/redo entry and then
+rebuilding every view from the authoritative snapshot. The right-click
+**Transform…** action provides exact numeric entry for the same operations.
+
+The context-menu **Move object** action remains a larger touch-friendly fallback
+for one world-space drag. It previews on the derived presentation, restores the
+preview on release, and emits one `onEntityTranslationRequested` request. Hosted
+openings follow their wall's canonical baseline and local dimensions. Neither
+path commits a presentation-only mutation; placed assembly children remain
+selectable but continue to resolve to their persisted host rather than becoming
+independent transform targets.
 
 Placed assembly children report their synthetic child ID; the desktop shell
 resolves that ID back to the persisted host before updating the inspector, so
@@ -95,7 +103,9 @@ after a late layout or DPI resize before framing the cached solids.
 
 `exportViewImage(path)` captures the OCCT framebuffer with
 `V3d_View::Dump`; it does not call `QWidget::grab()`, because the latter cannot
-capture a native OCCT surface. The method returns `false`, reports through
+capture a native OCCT surface. Editing manipulators are temporarily detached so
+they never appear in exported project imagery, then restored to the selection.
+The method returns `false`, reports through
 `lastError()`/`onError`, and keeps the error overlay visible when the destination
 path or OCCT image codec is unavailable.
 

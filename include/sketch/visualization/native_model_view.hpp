@@ -35,6 +35,11 @@ public:
     void setSnapshot(const DocumentSnapshot& snapshot,
                      std::optional<VisibleEntityIds> visible_ids = std::nullopt);
     void fitAll();
+    // Synchronize the shell's single semantic selection into the native view.
+    // Transformable visible solids receive an OCCT manipulator; empty, hidden,
+    // missing, or unsupported IDs clear it without changing the document.
+    void setSelectedEntity(const QString& entity_id);
+    [[nodiscard]] bool transformControlsVisible() const noexcept;
     // Export the OCCT framebuffer directly. This deliberately does not use
     // QWidget::grab(), which cannot capture the native OCCT child surface.
     [[nodiscard]] bool exportViewImage(const QString& path);
@@ -75,6 +80,11 @@ public:
     // metres. The desktop shell owns the authoritative document transaction;
     // this view only previews the derived presentation and emits the request.
     std::function<void(QString, double, double, double)> onEntityTranslationRequested;
+    // Direct manipulator commit: stable entity ID, world-space translation in
+    // metres, signed Z rotation in radians, and a positive uniform scale. The
+    // desktop shell applies one authoritative undoable document transaction.
+    std::function<void(QString, double, double, double, double, double)>
+        onEntityTransformRequested;
     // Stationary right release: hit entity ID (empty for background), followed
     // by global Qt logical pixels. Hit selection is notified before the menu.
     std::function<void(QString, QPoint)> onContextMenuRequested;
@@ -84,6 +94,8 @@ public:
     void setEntityEditRequestedCallback(std::function<void(QString)> callback);
     void setEntityTranslationRequestedCallback(
         std::function<void(QString, double, double, double)> callback);
+    void setEntityTransformRequestedCallback(
+        std::function<void(QString, double, double, double, double, double)> callback);
     void setErrorCallback(std::function<void(QString)> callback);
     // Arm one plain left drag of the supplied visible architectural entity.
     // Ctrl+left and middle always pan; right always orbits or opens context actions.

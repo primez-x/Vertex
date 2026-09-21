@@ -685,6 +685,11 @@ native 3D capture. The normal application workspace keeps the 3D pane visible.
 On native Windows the Architectural tab contains the shared semantic plan
 canvas beside the real OCCT `NativeModelView`. Snapshot refreshes, stable-ID
 selection, errors, and Fit are wired to the same `Document`. Native geometry
+selection is synchronized from the plan and navigator. A selected supported
+object exposes direct XYZ translation, vertical-rotation and uniform-scale
+handles; releasing a handle commits the same typed, undoable architectural
+transaction used by the numeric **Transform…** action. Exported 3D images omit
+the editing controls. Native geometry
 preparation builds fresh topology on a worker from captured snapshots, then
 transfers completed candidates to the owner thread for presentation. New
 requests supersede stale candidates, even at equal revisions. Cancellation
