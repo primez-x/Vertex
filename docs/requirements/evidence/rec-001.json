@@ -1,5 +1,7 @@
 {
-  "acceptance": "Autosave fixtures distinguish edited, autosaved, and saved generations, debounce quiet periods, retry failures, and preserve recovery state through queued local saves.",
+  "acceptance": "Crash and power-interruption fixtures recover the last valid revision, identify the session and checksum, and never silently overwrite the saved source.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -74,10 +76,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Autosave fixtures distinguish edited, autosaved, and saved generations, debounce quiet periods, retry failures, and preserve recovery state through queued local saves.",
   "qualification_boundary": "This evidence covers deterministic local autosave scheduling, queued snapshots, and recovery discovery. Power-loss and clean-machine fault injection remain open.",
+  "requirement": "Provide local autosave, recoverable history, and crash/power-loss recovery with explicit edited, autosaved, and saved states.",
   "requirement_id": "REC-001",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "WorkspaceAutosaveScheduler",
     "edited_generation",
@@ -165,5 +176,6 @@
     "workspace_save_queue",
     "recovery_discovery",
     "desktop_workspace_recovery"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

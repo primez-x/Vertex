@@ -1,5 +1,7 @@
 {
   "acceptance": "The calculation inspector identifies every contributing object and applies the same-type Auto-Subtract rule from the compatibility fixture, with no hidden deduction.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -58,10 +60,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "The calculation inspector identifies every contributing object and applies the same-type Auto-Subtract rule from the compatibility fixture, with no hidden deduction.",
   "qualification_boundary": "This evidence covers inspectable deduction contributions, profile provenance, factors, rounding deltas, and contained-boundary handling. Documented same-type Apex compatibility fixtures and production certification remain open.",
+  "requirement": "Make every total inspectable through boundary, deduction, classification, factor, rounding, and provenance details, including documented Auto-Subtract behavior.",
   "requirement_id": "APX-AREA-004",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "deduction",
     "provenance",
@@ -101,5 +112,6 @@
   "tests": [
     "calculations",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

@@ -1,5 +1,7 @@
 {
-  "acceptance": "DXF and IFC project exchanges run through isolated local adapters, preserve supported content, and report unsupported or failed reconstruction explicitly.",
+  "acceptance": "Worker versions, formats, capabilities, resources, and failure behavior are recorded; worker failure leaves the core project usable.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -82,10 +84,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "DXF and IFC project exchanges run through isolated local adapters, preserve supported content, and report unsupported or failed reconstruction explicitly.",
   "qualification_boundary": "This evidence covers the bounded local DXF and IFC adapters and desktop workflows. Broad native-file fidelity, clean-machine adapter discovery, and production qualification remain open.",
+  "requirement": "Use isolated local workers for reviewed IFC and DXF parsing/export components, with adapter manifests and no dependency on a hosted service.",
   "requirement_id": "COMP-IO-001",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "InterchangeProfile",
     "isolated",
@@ -166,5 +177,6 @@
     "ifc_project_exchange",
     "dxf_desktop_workflow",
     "ifc_desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

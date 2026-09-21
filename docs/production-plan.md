@@ -35,7 +35,7 @@ connection. Installation must work offline as well: the installer bundles the
 runtime, fonts, help, libraries, resources, and any optional local assistance
 assets required by the selected installation.
 
-Deliver the original application source privately, with reproducible Windows
+Deliver the original application source publicly under GPL-3.0-or-later, with reproducible Windows
 build instructions, pinned dependency sources and notices, a software bill of
 materials, test fixtures, and a documented project format. The source and
 project format must remain practical to open-source or commercially distribute
@@ -191,7 +191,7 @@ failure-injection tests; clean-machine networking-disabled installation and
 workflow tests; AppContainer/import security tests; accessibility and real
 pen/touch tests; performance measurements; and artifact/license verification.
 
-The final handoff contains the private source, reproducible Windows build kit,
+The final handoff contains the public GPL-3.0-or-later source, reproducible Windows build kit,
 dependency sources/notices/SBOM, offline installer and portable package,
 project-format and migration documentation, adapter contracts, offline help,
 representative fixtures, and completed capability/compatibility/quality reports.

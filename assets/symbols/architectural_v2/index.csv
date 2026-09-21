@@ -1,0 +1,321 @@
+id,name,category,file
+basin-oval,Basin Oval,01_bathroom,symbols/01_bathroom/basin-oval.svg
+basin-pedestal,Basin Pedestal,01_bathroom,symbols/01_bathroom/basin-pedestal.svg
+basin-rectangular,Basin Rectangular,01_bathroom,symbols/01_bathroom/basin-rectangular.svg
+basin-round,Basin Round,01_bathroom,symbols/01_bathroom/basin-round.svg
+bidet,Bidet,01_bathroom,symbols/01_bathroom/bidet.svg
+shower-quadrant,Shower Quadrant,01_bathroom,symbols/01_bathroom/shower-quadrant.svg
+shower-rectangular,Shower Rectangular,01_bathroom,symbols/01_bathroom/shower-rectangular.svg
+shower-square,Shower Square,01_bathroom,symbols/01_bathroom/shower-square.svg
+shower-walk-in,Shower Walk In,01_bathroom,symbols/01_bathroom/shower-walk-in.svg
+toilet-back-to-wall,Toilet Back To Wall,01_bathroom,symbols/01_bathroom/toilet-back-to-wall.svg
+toilet-close-coupled,Toilet Close Coupled,01_bathroom,symbols/01_bathroom/toilet-close-coupled.svg
+toilet-compact,Toilet Compact,01_bathroom,symbols/01_bathroom/toilet-compact.svg
+toilet-open-seat,Toilet Open Seat,01_bathroom,symbols/01_bathroom/toilet-open-seat.svg
+toilet-wall-hung,Toilet Wall Hung,01_bathroom,symbols/01_bathroom/toilet-wall-hung.svg
+towel-rail,Towel Rail,01_bathroom,symbols/01_bathroom/towel-rail.svg
+towel-warmer,Towel Warmer,01_bathroom,symbols/01_bathroom/towel-warmer.svg
+tub-alcove,Tub Alcove,01_bathroom,symbols/01_bathroom/tub-alcove.svg
+tub-compact,Tub Compact,01_bathroom,symbols/01_bathroom/tub-compact.svg
+tub-corner,Tub Corner,01_bathroom,symbols/01_bathroom/tub-corner.svg
+tub-freestanding-oval,Tub Freestanding Oval,01_bathroom,symbols/01_bathroom/tub-freestanding-oval.svg
+tub-shower-combination,Tub Shower Combination,01_bathroom,symbols/01_bathroom/tub-shower-combination.svg
+tub-whirlpool,Tub Whirlpool,01_bathroom,symbols/01_bathroom/tub-whirlpool.svg
+urinal,Urinal,01_bathroom,symbols/01_bathroom/urinal.svg
+vanity-600,Vanity 600,01_bathroom,symbols/01_bathroom/vanity-600.svg
+vanity-900,Vanity 900,01_bathroom,symbols/01_bathroom/vanity-900.svg
+vanity-double,Vanity Double,01_bathroom,symbols/01_bathroom/vanity-double.svg
+base-cabinet-600,Base Cabinet 600,02_kitchen,symbols/02_kitchen/base-cabinet-600.svg
+base-cabinet-900,Base Cabinet 900,02_kitchen,symbols/02_kitchen/base-cabinet-900.svg
+cooktop-domino,Cooktop Domino,02_kitchen,symbols/02_kitchen/cooktop-domino.svg
+cooktop-gas-five,Cooktop Gas Five,02_kitchen,symbols/02_kitchen/cooktop-gas-five.svg
+cooktop-gas-four,Cooktop Gas Four,02_kitchen,symbols/02_kitchen/cooktop-gas-four.svg
+cooktop-induction,Cooktop Induction,02_kitchen,symbols/02_kitchen/cooktop-induction.svg
+counter-corner-left,Counter Corner Left,02_kitchen,symbols/02_kitchen/counter-corner-left.svg
+counter-corner-right,Counter Corner Right,02_kitchen,symbols/02_kitchen/counter-corner-right.svg
+dishwasher,Dishwasher,02_kitchen,symbols/02_kitchen/dishwasher.svg
+fridge-french-door,Fridge French Door,02_kitchen,symbols/02_kitchen/fridge-french-door.svg
+fridge-side-by-side,Fridge Side By Side,02_kitchen,symbols/02_kitchen/fridge-side-by-side.svg
+fridge-single,Fridge Single,02_kitchen,symbols/02_kitchen/fridge-single.svg
+kitchen-island-seating,Kitchen Island Seating,02_kitchen,symbols/02_kitchen/kitchen-island-seating.svg
+kitchen-island-sink,Kitchen Island Sink,02_kitchen,symbols/02_kitchen/kitchen-island-sink.svg
+kitchen-island,Kitchen Island,02_kitchen,symbols/02_kitchen/kitchen-island.svg
+microwave,Microwave,02_kitchen,symbols/02_kitchen/microwave.svg
+oven-built-in,Oven Built In,02_kitchen,symbols/02_kitchen/oven-built-in.svg
+range-hood,Range Hood,02_kitchen,symbols/02_kitchen/range-hood.svg
+range-standard,Range Standard,02_kitchen,symbols/02_kitchen/range-standard.svg
+range-wide,Range Wide,02_kitchen,symbols/02_kitchen/range-wide.svg
+sink-farmhouse,Sink Farmhouse,02_kitchen,symbols/02_kitchen/sink-farmhouse.svg
+sink-stainless-double,Sink Stainless Double,02_kitchen,symbols/02_kitchen/sink-stainless-double.svg
+sink-stainless-single,Sink Stainless Single,02_kitchen,symbols/02_kitchen/sink-stainless-single.svg
+sink-with-drainer,Sink With Drainer,02_kitchen,symbols/02_kitchen/sink-with-drainer.svg
+wine-fridge,Wine Fridge,02_kitchen,symbols/02_kitchen/wine-fridge.svg
+air-handler,Air Handler,03_laundry_utility,symbols/03_laundry_utility/air-handler.svg
+dryer-front-load,Dryer Front Load,03_laundry_utility,symbols/03_laundry_utility/dryer-front-load.svg
+electrical-panel,Electrical Panel,03_laundry_utility,symbols/03_laundry_utility/electrical-panel.svg
+freezer-chest,Freezer Chest,03_laundry_utility,symbols/03_laundry_utility/freezer-chest.svg
+heat-pump-condenser,Heat Pump Condenser,03_laundry_utility,symbols/03_laundry_utility/heat-pump-condenser.svg
+ironing-board,Ironing Board,03_laundry_utility,symbols/03_laundry_utility/ironing-board.svg
+laundry-basket,Laundry Basket,03_laundry_utility,symbols/03_laundry_utility/laundry-basket.svg
+laundry-sink,Laundry Sink,03_laundry_utility,symbols/03_laundry_utility/laundry-sink.svg
+radiator,Radiator,03_laundry_utility,symbols/03_laundry_utility/radiator.svg
+washer-front-load,Washer Front Load,03_laundry_utility,symbols/03_laundry_utility/washer-front-load.svg
+washer-top-load,Washer Top Load,03_laundry_utility,symbols/03_laundry_utility/washer-top-load.svg
+water-heater,Water Heater,03_laundry_utility,symbols/03_laundry_utility/water-heater.svg
+armchair,Armchair,04_living,symbols/04_living/armchair.svg
+coffee-table-nested,Coffee Table Nested,04_living,symbols/04_living/coffee-table-nested.svg
+coffee-table-rectangular,Coffee Table Rectangular,04_living,symbols/04_living/coffee-table-rectangular.svg
+coffee-table-round,Coffee Table Round,04_living,symbols/04_living/coffee-table-round.svg
+fireplace,Fireplace,04_living,symbols/04_living/fireplace.svg
+floor-lamp,Floor Lamp,04_living,symbols/04_living/floor-lamp.svg
+media-console,Media Console,04_living,symbols/04_living/media-console.svg
+ottoman-rectangular,Ottoman Rectangular,04_living,symbols/04_living/ottoman-rectangular.svg
+ottoman-round,Ottoman Round,04_living,symbols/04_living/ottoman-round.svg
+recliner,Recliner,04_living,symbols/04_living/recliner.svg
+rug-rectangular,Rug Rectangular,04_living,symbols/04_living/rug-rectangular.svg
+rug-round,Rug Round,04_living,symbols/04_living/rug-round.svg
+sectional-left,Sectional Left,04_living,symbols/04_living/sectional-left.svg
+sectional-right,Sectional Right,04_living,symbols/04_living/sectional-right.svg
+side-table,Side Table,04_living,symbols/04_living/side-table.svg
+sofa-four-seat,Sofa Four Seat,04_living,symbols/04_living/sofa-four-seat.svg
+sofa-pillow,Sofa Pillow,04_living,symbols/04_living/sofa-pillow.svg
+sofa-three-seat,Sofa Three Seat,04_living,symbols/04_living/sofa-three-seat.svg
+sofa-two-seat,Sofa Two Seat,04_living,symbols/04_living/sofa-two-seat.svg
+television,Television,04_living,symbols/04_living/television.svg
+tub-chair,Tub Chair,04_living,symbols/04_living/tub-chair.svg
+bed-bunk,Bed Bunk,05_bedroom,symbols/05_bedroom/bed-bunk.svg
+bed-california-king,Bed California King,05_bedroom,symbols/05_bedroom/bed-california-king.svg
+bed-daybed,Bed Daybed,05_bedroom,symbols/05_bedroom/bed-daybed.svg
+bed-full,Bed Full,05_bedroom,symbols/05_bedroom/bed-full.svg
+bed-king,Bed King,05_bedroom,symbols/05_bedroom/bed-king.svg
+bed-queen,Bed Queen,05_bedroom,symbols/05_bedroom/bed-queen.svg
+bed-twin-xl,Bed Twin Xl,05_bedroom,symbols/05_bedroom/bed-twin-xl.svg
+bed-twin,Bed Twin,05_bedroom,symbols/05_bedroom/bed-twin.svg
+bedroom-bench,Bedroom Bench,05_bedroom,symbols/05_bedroom/bedroom-bench.svg
+crib,Crib,05_bedroom,symbols/05_bedroom/crib.svg
+dresser-six-drawer,Dresser Six Drawer,05_bedroom,symbols/05_bedroom/dresser-six-drawer.svg
+nightstand,Nightstand,05_bedroom,symbols/05_bedroom/nightstand.svg
+bar-stool-round,Bar Stool Round,06_dining,symbols/06_dining/bar-stool-round.svg
+bar-stool-square,Bar Stool Square,06_dining,symbols/06_dining/bar-stool-square.svg
+dining-armchair,Dining Armchair,06_dining,symbols/06_dining/dining-armchair.svg
+dining-chair-upholstered,Dining Chair Upholstered,06_dining,symbols/06_dining/dining-chair-upholstered.svg
+dining-chair-wood,Dining Chair Wood,06_dining,symbols/06_dining/dining-chair-wood.svg
+dining-set-four,Dining Set Four,06_dining,symbols/06_dining/dining-set-four.svg
+dining-set-round,Dining Set Round,06_dining,symbols/06_dining/dining-set-round.svg
+dining-set-six,Dining Set Six,06_dining,symbols/06_dining/dining-set-six.svg
+dining-table-eight,Dining Table Eight,06_dining,symbols/06_dining/dining-table-eight.svg
+dining-table-four,Dining Table Four,06_dining,symbols/06_dining/dining-table-four.svg
+dining-table-oval,Dining Table Oval,06_dining,symbols/06_dining/dining-table-oval.svg
+dining-table-round,Dining Table Round,06_dining,symbols/06_dining/dining-table-round.svg
+dining-table-six,Dining Table Six,06_dining,symbols/06_dining/dining-table-six.svg
+desk-corner,Desk Corner,07_office,symbols/07_office/desk-corner.svg
+desk-drafting,Desk Drafting,07_office,symbols/07_office/desk-drafting.svg
+desk-dual-monitor,Desk Dual Monitor,07_office,symbols/07_office/desk-dual-monitor.svg
+desk-laptop,Desk Laptop,07_office,symbols/07_office/desk-laptop.svg
+desk-plain,Desk Plain,07_office,symbols/07_office/desk-plain.svg
+desk-reception,Desk Reception,07_office,symbols/07_office/desk-reception.svg
+desk-workstation,Desk Workstation,07_office,symbols/07_office/desk-workstation.svg
+keyboard,Keyboard,07_office,symbols/07_office/keyboard.svg
+laptop,Laptop,07_office,symbols/07_office/laptop.svg
+meeting-table,Meeting Table,07_office,symbols/07_office/meeting-table.svg
+monitor,Monitor,07_office,symbols/07_office/monitor.svg
+office-chair-armless,Office Chair Armless,07_office,symbols/07_office/office-chair-armless.svg
+office-chair,Office Chair,07_office,symbols/07_office/office-chair.svg
+office-pedestal,Office Pedestal,07_office,symbols/07_office/office-pedestal.svg
+printer,Printer,07_office,symbols/07_office/printer.svg
+server-rack,Server Rack,07_office,symbols/07_office/server-rack.svg
+wastebasket,Wastebasket,07_office,symbols/07_office/wastebasket.svg
+bookcase-small,Bookcase Small,08_storage,symbols/08_storage/bookcase-small.svg
+bookcase-wide,Bookcase Wide,08_storage,symbols/08_storage/bookcase-wide.svg
+coat-rack,Coat Rack,08_storage,symbols/08_storage/coat-rack.svg
+filing-cabinet,Filing Cabinet,08_storage,symbols/08_storage/filing-cabinet.svg
+locker-bank,Locker Bank,08_storage,symbols/08_storage/locker-bank.svg
+shelf-open,Shelf Open,08_storage,symbols/08_storage/shelf-open.svg
+shoe-cabinet,Shoe Cabinet,08_storage,symbols/08_storage/shoe-cabinet.svg
+sideboard,Sideboard,08_storage,symbols/08_storage/sideboard.svg
+storage-chest,Storage Chest,08_storage,symbols/08_storage/storage-chest.svg
+wardrobe-double,Wardrobe Double,08_storage,symbols/08_storage/wardrobe-double.svg
+wardrobe-single,Wardrobe Single,08_storage,symbols/08_storage/wardrobe-single.svg
+wardrobe-triple,Wardrobe Triple,08_storage,symbols/08_storage/wardrobe-triple.svg
+door-barn,Door Barn,09_doors,symbols/09_doors/door-barn.svg
+door-bifold,Door Bifold,09_doors,symbols/09_doors/door-bifold.svg
+door-double,Door Double,09_doors,symbols/09_doors/door-double.svg
+door-garage,Door Garage,09_doors,symbols/09_doors/door-garage.svg
+door-hinged-760-left,Door Hinged 760 Left,09_doors,symbols/09_doors/door-hinged-760-left.svg
+door-hinged-760-right,Door Hinged 760 Right,09_doors,symbols/09_doors/door-hinged-760-right.svg
+door-hinged-810-left,Door Hinged 810 Left,09_doors,symbols/09_doors/door-hinged-810-left.svg
+door-hinged-810-right,Door Hinged 810 Right,09_doors,symbols/09_doors/door-hinged-810-right.svg
+door-hinged-910-left,Door Hinged 910 Left,09_doors,symbols/09_doors/door-hinged-910-left.svg
+door-hinged-910-right,Door Hinged 910 Right,09_doors,symbols/09_doors/door-hinged-910-right.svg
+door-pocket,Door Pocket,09_doors,symbols/09_doors/door-pocket.svg
+door-sliding-glass,Door Sliding Glass,09_doors,symbols/09_doors/door-sliding-glass.svg
+skylight,Skylight,10_windows,symbols/10_windows/skylight.svg
+window-bay,Window Bay,10_windows,symbols/10_windows/window-bay.svg
+window-casement,Window Casement,10_windows,symbols/10_windows/window-casement.svg
+window-double,Window Double,10_windows,symbols/10_windows/window-double.svg
+window-fixed-1200,Window Fixed 1200,10_windows,symbols/10_windows/window-fixed-1200.svg
+window-fixed-600,Window Fixed 600,10_windows,symbols/10_windows/window-fixed-600.svg
+window-sliding,Window Sliding,10_windows,symbols/10_windows/window-sliding.svg
+window-triple,Window Triple,10_windows,symbols/10_windows/window-triple.svg
+elevator,Elevator,11_circulation,symbols/11_circulation/elevator.svg
+ramp,Ramp,11_circulation,symbols/11_circulation/ramp.svg
+stairs-l,Stairs L,11_circulation,symbols/11_circulation/stairs-l.svg
+stairs-spiral,Stairs Spiral,11_circulation,symbols/11_circulation/stairs-spiral.svg
+stairs-straight,Stairs Straight,11_circulation,symbols/11_circulation/stairs-straight.svg
+stairs-u,Stairs U,11_circulation,symbols/11_circulation/stairs-u.svg
+stairs-wide,Stairs Wide,11_circulation,symbols/11_circulation/stairs-wide.svg
+stairs-with-landing,Stairs With Landing,11_circulation,symbols/11_circulation/stairs-with-landing.svg
+hedge-section,Hedge Section,12_landscape,symbols/12_landscape/hedge-section.svg
+landscape-rock,Landscape Rock,12_landscape,symbols/12_landscape/landscape-rock.svg
+plant-potted,Plant Potted,12_landscape,symbols/12_landscape/plant-potted.svg
+plant-succulent,Plant Succulent,12_landscape,symbols/12_landscape/plant-succulent.svg
+planter-rectangular,Planter Rectangular,12_landscape,symbols/12_landscape/planter-rectangular.svg
+shrub-round,Shrub Round,12_landscape,symbols/12_landscape/shrub-round.svg
+stepping-stone,Stepping Stone,12_landscape,symbols/12_landscape/stepping-stone.svg
+tree-conifer,Tree Conifer,12_landscape,symbols/12_landscape/tree-conifer.svg
+tree-deciduous-large,Tree Deciduous Large,12_landscape,symbols/12_landscape/tree-deciduous-large.svg
+tree-deciduous-medium,Tree Deciduous Medium,12_landscape,symbols/12_landscape/tree-deciduous-medium.svg
+tree-deciduous-small,Tree Deciduous Small,12_landscape,symbols/12_landscape/tree-deciduous-small.svg
+tree-palm,Tree Palm,12_landscape,symbols/12_landscape/tree-palm.svg
+barbecue-grill,Barbecue Grill,13_outdoor,symbols/13_outdoor/barbecue-grill.svg
+fence-section,Fence Section,13_outdoor,symbols/13_outdoor/fence-section.svg
+fire-pit,Fire Pit,13_outdoor,symbols/13_outdoor/fire-pit.svg
+garden-fountain,Garden Fountain,13_outdoor,symbols/13_outdoor/garden-fountain.svg
+garden-gate,Garden Gate,13_outdoor,symbols/13_outdoor/garden-gate.svg
+hot-tub,Hot Tub,13_outdoor,symbols/13_outdoor/hot-tub.svg
+outdoor-bench,Outdoor Bench,13_outdoor,symbols/13_outdoor/outdoor-bench.svg
+outdoor-lounger,Outdoor Lounger,13_outdoor,symbols/13_outdoor/outdoor-lounger.svg
+patio-chair,Patio Chair,13_outdoor,symbols/13_outdoor/patio-chair.svg
+patio-table,Patio Table,13_outdoor,symbols/13_outdoor/patio-table.svg
+patio-umbrella,Patio Umbrella,13_outdoor,symbols/13_outdoor/patio-umbrella.svg
+pergola,Pergola,13_outdoor,symbols/13_outdoor/pergola.svg
+picnic-table,Picnic Table,13_outdoor,symbols/13_outdoor/picnic-table.svg
+swimming-pool,Swimming Pool,13_outdoor,symbols/13_outdoor/swimming-pool.svg
+bicycle,Bicycle,14_vehicles,symbols/14_vehicles/bicycle.svg
+car-sedan,Car Sedan,14_vehicles,symbols/14_vehicles/car-sedan.svg
+car-suv,Car Suv,14_vehicles,symbols/14_vehicles/car-suv.svg
+motorcycle,Motorcycle,14_vehicles,symbols/14_vehicles/motorcycle.svg
+pickup-truck,Pickup Truck,14_vehicles,symbols/14_vehicles/pickup-truck.svg
+van,Van,14_vehicles,symbols/14_vehicles/van.svg
+bollard,Bollard,15_structure_access,symbols/15_structure_access/bollard.svg
+column-round,Column Round,15_structure_access,symbols/15_structure_access/column-round.svg
+column-square,Column Square,15_structure_access,symbols/15_structure_access/column-square.svg
+column-steel-i,Column Steel I,15_structure_access,symbols/15_structure_access/column-steel-i.svg
+railing-section,Railing Section,15_structure_access,symbols/15_structure_access/railing-section.svg
+wall-corner,Wall Corner,15_structure_access,symbols/15_structure_access/wall-corner.svg
+wall-cross,Wall Cross,15_structure_access,symbols/15_structure_access/wall-cross.svg
+wall-straight,Wall Straight,15_structure_access,symbols/15_structure_access/wall-straight.svg
+wall-tee,Wall Tee,15_structure_access,symbols/15_structure_access/wall-tee.svg
+wheelchair,Wheelchair,15_structure_access,symbols/15_structure_access/wheelchair.svg
+arched-opening,Arched Opening,16_walls_openings,symbols/16_walls_openings/arched-opening.svg
+column-round,Column Round,16_walls_openings,symbols/16_walls_openings/column-round.svg
+column-square,Column Square,16_walls_openings,symbols/16_walls_openings/column-square.svg
+exterior-wall,Exterior Wall,16_walls_openings,symbols/16_walls_openings/exterior-wall.svg
+half-wall,Half Wall,16_walls_openings,symbols/16_walls_openings/half-wall.svg
+interior-wall,Interior Wall,16_walls_openings,symbols/16_walls_openings/interior-wall.svg
+opening,Opening,16_walls_openings,symbols/16_walls_openings/opening.svg
+partition-wall,Partition Wall,16_walls_openings,symbols/16_walls_openings/partition-wall.svg
+structural-post,Structural Post,16_walls_openings,symbols/16_walls_openings/structural-post.svg
+baluster-railing,Baluster Railing,17_railings,symbols/17_railings/baluster-railing.svg
+glass-railing,Glass Railing,17_railings,symbols/17_railings/glass-railing.svg
+guardrail,Guardrail,17_railings,symbols/17_railings/guardrail.svg
+newel-post,Newel Post,17_railings,symbols/17_railings/newel-post.svg
+railing,Railing,17_railings,symbols/17_railings/railing.svg
+chimney,Chimney,18_fireplace,symbols/18_fireplace/chimney.svg
+fireplace-corner,Fireplace Corner,18_fireplace,symbols/18_fireplace/fireplace-corner.svg
+fireplace-double-sided,Fireplace Double Sided,18_fireplace,symbols/18_fireplace/fireplace-double-sided.svg
+fireplace-linear,Fireplace Linear,18_fireplace,symbols/18_fireplace/fireplace-linear.svg
+fireplace-outdoor,Fireplace Outdoor,18_fireplace,symbols/18_fireplace/fireplace-outdoor.svg
+fireplace-standard,Fireplace Standard,18_fireplace,symbols/18_fireplace/fireplace-standard.svg
+hearth,Hearth,18_fireplace,symbols/18_fireplace/hearth.svg
+wood-stove,Wood Stove,18_fireplace,symbols/18_fireplace/wood-stove.svg
+ceiling-fan,Ceiling Fan,19_lighting_electrical,symbols/19_lighting_electrical/ceiling-fan.svg
+ceiling-light,Ceiling Light,19_lighting_electrical,symbols/19_lighting_electrical/ceiling-light.svg
+chandelier,Chandelier,19_lighting_electrical,symbols/19_lighting_electrical/chandelier.svg
+doorbell,Doorbell,19_lighting_electrical,symbols/19_lighting_electrical/doorbell.svg
+duplex-outlet,Duplex Outlet,19_lighting_electrical,symbols/19_lighting_electrical/duplex-outlet.svg
+exterior-light,Exterior Light,19_lighting_electrical,symbols/19_lighting_electrical/exterior-light.svg
+floor-outlet,Floor Outlet,19_lighting_electrical,symbols/19_lighting_electrical/floor-outlet.svg
+gfci-outlet,Gfci Outlet,19_lighting_electrical,symbols/19_lighting_electrical/gfci-outlet.svg
+landscape-light,Landscape Light,19_lighting_electrical,symbols/19_lighting_electrical/landscape-light.svg
+light-switch,Light Switch,19_lighting_electrical,symbols/19_lighting_electrical/light-switch.svg
+pendant-light,Pendant Light,19_lighting_electrical,symbols/19_lighting_electrical/pendant-light.svg
+post-light,Post Light,19_lighting_electrical,symbols/19_lighting_electrical/post-light.svg
+recessed-light,Recessed Light,19_lighting_electrical,symbols/19_lighting_electrical/recessed-light.svg
+security-camera,Security Camera,19_lighting_electrical,symbols/19_lighting_electrical/security-camera.svg
+smoke-detector,Smoke Detector,19_lighting_electrical,symbols/19_lighting_electrical/smoke-detector.svg
+wall-sconce,Wall Sconce,19_lighting_electrical,symbols/19_lighting_electrical/wall-sconce.svg
+ac-condenser,Ac Condenser,20_hvac_plumbing,symbols/20_hvac_plumbing/ac-condenser.svg
+boiler,Boiler,20_hvac_plumbing,symbols/20_hvac_plumbing/boiler.svg
+cleanout,Cleanout,20_hvac_plumbing,symbols/20_hvac_plumbing/cleanout.svg
+floor-drain,Floor Drain,20_hvac_plumbing,symbols/20_hvac_plumbing/floor-drain.svg
+gas-line,Gas Line,20_hvac_plumbing,symbols/20_hvac_plumbing/gas-line.svg
+heat-pump,Heat Pump,20_hvac_plumbing,symbols/20_hvac_plumbing/heat-pump.svg
+hose-bib,Hose Bib,20_hvac_plumbing,symbols/20_hvac_plumbing/hose-bib.svg
+radiator,Radiator,20_hvac_plumbing,symbols/20_hvac_plumbing/radiator.svg
+return-vent,Return Vent,20_hvac_plumbing,symbols/20_hvac_plumbing/return-vent.svg
+sprinkler-head,Sprinkler Head,20_hvac_plumbing,symbols/20_hvac_plumbing/sprinkler-head.svg
+sump-pump,Sump Pump,20_hvac_plumbing,symbols/20_hvac_plumbing/sump-pump.svg
+supply-vent,Supply Vent,20_hvac_plumbing,symbols/20_hvac_plumbing/supply-vent.svg
+thermostat,Thermostat,20_hvac_plumbing,symbols/20_hvac_plumbing/thermostat.svg
+water-line,Water Line,20_hvac_plumbing,symbols/20_hvac_plumbing/water-line.svg
+diving-board,Diving Board,21_swimming_pools,symbols/21_swimming_pools/diving-board.svg
+pool-cover,Pool Cover,21_swimming_pools,symbols/21_swimming_pools/pool-cover.svg
+pool-equipment-pad,Pool Equipment Pad,21_swimming_pools,symbols/21_swimming_pools/pool-equipment-pad.svg
+pool-fence,Pool Fence,21_swimming_pools,symbols/21_swimming_pools/pool-fence.svg
+pool-freeform,Pool Freeform,21_swimming_pools,symbols/21_swimming_pools/pool-freeform.svg
+pool-infinity-edge,Pool Infinity Edge,21_swimming_pools,symbols/21_swimming_pools/pool-infinity-edge.svg
+pool-l-shaped,Pool L Shaped,21_swimming_pools,symbols/21_swimming_pools/pool-l-shaped.svg
+pool-ladder,Pool Ladder,21_swimming_pools,symbols/21_swimming_pools/pool-ladder.svg
+pool-oval,Pool Oval,21_swimming_pools,symbols/21_swimming_pools/pool-oval.svg
+pool-rectangular,Pool Rectangular,21_swimming_pools,symbols/21_swimming_pools/pool-rectangular.svg
+pool-round,Pool Round,21_swimming_pools,symbols/21_swimming_pools/pool-round.svg
+pool-steps,Pool Steps,21_swimming_pools,symbols/21_swimming_pools/pool-steps.svg
+spa-round,Spa Round,21_swimming_pools,symbols/21_swimming_pools/spa-round.svg
+spa-square,Spa Square,21_swimming_pools,symbols/21_swimming_pools/spa-square.svg
+bollard-light,Bollard Light,22_site_elements,symbols/22_site_elements/bollard-light.svg
+deck,Deck,22_site_elements,symbols/22_site_elements/deck.svg
+driveway,Driveway,22_site_elements,symbols/22_site_elements/driveway.svg
+fence-panel,Fence Panel,22_site_elements,symbols/22_site_elements/fence-panel.svg
+fire-hydrant,Fire Hydrant,22_site_elements,symbols/22_site_elements/fire-hydrant.svg
+gate-double,Gate Double,22_site_elements,symbols/22_site_elements/gate-double.svg
+gate-single,Gate Single,22_site_elements,symbols/22_site_elements/gate-single.svg
+gazebo,Gazebo,22_site_elements,symbols/22_site_elements/gazebo.svg
+lamp-post,Lamp Post,22_site_elements,symbols/22_site_elements/lamp-post.svg
+mailbox,Mailbox,22_site_elements,symbols/22_site_elements/mailbox.svg
+patio,Patio,22_site_elements,symbols/22_site_elements/patio.svg
+pergola,Pergola,22_site_elements,symbols/22_site_elements/pergola.svg
+property-line,Property Line,22_site_elements,symbols/22_site_elements/property-line.svg
+retaining-wall,Retaining Wall,22_site_elements,symbols/22_site_elements/retaining-wall.svg
+stepping-stones,Stepping Stones,22_site_elements,symbols/22_site_elements/stepping-stones.svg
+walkway,Walkway,22_site_elements,symbols/22_site_elements/walkway.svg
+bench-outdoor,Bench Outdoor,23_misc_residential,symbols/23_misc_residential/bench-outdoor.svg
+bird-bath,Bird Bath,23_misc_residential,symbols/23_misc_residential/bird-bath.svg
+compost-bin,Compost Bin,23_misc_residential,symbols/23_misc_residential/compost-bin.svg
+dog-house,Dog House,23_misc_residential,symbols/23_misc_residential/dog-house.svg
+ev-charger,Ev Charger,23_misc_residential,symbols/23_misc_residential/ev-charger.svg
+generator,Generator,23_misc_residential,symbols/23_misc_residential/generator.svg
+playground,Playground,23_misc_residential,symbols/23_misc_residential/playground.svg
+rain-barrel,Rain Barrel,23_misc_residential,symbols/23_misc_residential/rain-barrel.svg
+recycling-bin,Recycling Bin,23_misc_residential,symbols/23_misc_residential/recycling-bin.svg
+satellite-dish,Satellite Dish,23_misc_residential,symbols/23_misc_residential/satellite-dish.svg
+shed,Shed,23_misc_residential,symbols/23_misc_residential/shed.svg
+solar-panel,Solar Panel,23_misc_residential,symbols/23_misc_residential/solar-panel.svg
+trampoline,Trampoline,23_misc_residential,symbols/23_misc_residential/trampoline.svg
+trash-can,Trash Can,23_misc_residential,symbols/23_misc_residential/trash-can.svg
+antenna,Antenna,24_roof_site,symbols/24_roof_site/antenna.svg
+downspout,Downspout,24_roof_site,symbols/24_roof_site/downspout.svg
+gutter,Gutter,24_roof_site,symbols/24_roof_site/gutter.svg
+roof-drain,Roof Drain,24_roof_site,symbols/24_roof_site/roof-drain.svg
+roof-vent,Roof Vent,24_roof_site,symbols/24_roof_site/roof-vent.svg
+skylight,Skylight,24_roof_site,symbols/24_roof_site/skylight.svg
+solar-array,Solar Array,24_roof_site,symbols/24_roof_site/solar-array.svg
+weather-vane,Weather Vane,24_roof_site,symbols/24_roof_site/weather-vane.svg
+detail-marker,Detail Marker,25_drafting_symbols,symbols/25_drafting_symbols/detail-marker.svg
+elevation-marker,Elevation Marker,25_drafting_symbols,symbols/25_drafting_symbols/elevation-marker.svg
+north-arrow,North Arrow,25_drafting_symbols,symbols/25_drafting_symbols/north-arrow.svg
+property-pin,Property Pin,25_drafting_symbols,symbols/25_drafting_symbols/property-pin.svg
+revision-cloud,Revision Cloud,25_drafting_symbols,symbols/25_drafting_symbols/revision-cloud.svg
+scale-bar,Scale Bar,25_drafting_symbols,symbols/25_drafting_symbols/scale-bar.svg
+section-marker,Section Marker,25_drafting_symbols,symbols/25_drafting_symbols/section-marker.svg
+spot-elevation,Spot Elevation,25_drafting_symbols,symbols/25_drafting_symbols/spot-elevation.svg

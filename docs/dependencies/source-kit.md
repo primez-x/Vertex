@@ -74,7 +74,7 @@ python scripts/stage_offline_bundle.py `
 
 This creates an installer bundle and a separate `runtime-manifest.json`. The
 PowerShell installer copies the runtime subset only; source-kit files remain
-available for a private handoff and are not silently presented as a successful
+available for a reproducible public-source build and are not silently presented as a successful
 clean-checkout rebuild. Bundle-level and installed-runtime verification use
 the self-contained `verify-offline-bundle.ps1` script and retain the same
 incomplete qualification status.

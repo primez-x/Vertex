@@ -1,5 +1,7 @@
 {
-  "acceptance": "Failed geometric edits leave the previous valid document state unchanged and return a reversible, understandable error result.",
+  "acceptance": "Injected solver failures and impossible dimensions leave geometry, calculations, history, and saved revision unchanged.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -74,10 +76,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Failed geometric edits leave the previous valid document state unchanged and return a reversible, understandable error result.",
   "qualification_boundary": "This evidence covers local atomic failure behavior and history safety; production stress and crash qualification remain open.",
+  "requirement": "Failed geometric edits preserve the previous valid document state and produce a reversible error result.",
   "requirement_id": "GEO-CON-005",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "rejected_unchanged",
     "previous",
@@ -145,5 +156,6 @@
     "constraint_authoring",
     "constraint_dialog",
     "document_commands"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

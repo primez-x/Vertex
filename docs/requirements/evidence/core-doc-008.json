@@ -1,5 +1,7 @@
 {
   "acceptance": "Each schema migration preserves the source fixture, reports unsupported content, and can be validated or rolled back without data loss.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -66,10 +68,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Each schema migration preserves the source fixture, reports unsupported content, and can be validated or rolled back without data loss.",
   "qualification_boundary": "This evidence covers copy-based version markers, opaque preservation, unsupported required content, and rollback fixtures. The complete migration matrix and production release qualification remain open.",
+  "requirement": "Migrations are copy-based and reversible, preserve originals and unknown data, and block unsafe editing or authoritative output for unsupported required features.",
   "requirement_id": "CORE-DOC-008",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "migration",
     "unknown",
@@ -105,5 +116,6 @@
     "project_storage",
     "project_archive",
     "project_exchange"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

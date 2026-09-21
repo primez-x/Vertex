@@ -1,5 +1,7 @@
 {
   "acceptance": "A mixed command sequence returns byte-equivalent semantic state after undo-all and redo-all, including derived recalculation state.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -66,10 +68,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "A mixed command sequence returns byte-equivalent semantic state after undo-all and redo-all, including derived recalculation state.",
   "qualification_boundary": "This evidence covers typed history for classification, calibration, geometry, annotation, architectural, compound, and persisted edits in Debug and Release. Complete mixed-command crash-recovery replay and production qualification remain open.",
+  "requirement": "Every committed operation, including classification, calibration, and compound edits, supports complete undo and redo.",
   "requirement_id": "APX-EDIT-005",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "undo",
     "redo",
@@ -120,5 +131,6 @@
     "document_commands",
     "project_storage",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

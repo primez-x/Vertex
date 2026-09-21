@@ -1,5 +1,7 @@
 {
-  "acceptance": "Measurement and Architectural workspaces expose distinct task surfaces while editing one shared project and document model.",
+  "acceptance": "A project created in Measurement can be opened in Architectural, and edits, calculations, links, and saved revisions remain consistent in both workspaces.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -58,10 +60,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Measurement and Architectural workspaces expose distinct task surfaces while editing one shared project and document model.",
   "qualification_boundary": "This evidence covers the two workspace surfaces, shared document binding, and local navigation controls on the development host. Clean-machine input and production UI qualification remain open.",
+  "requirement": "Measurement and Architectural are separate workspaces over one shared project and authoritative document model.",
   "requirement_id": "CORE-SCOPE-002",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "Measurement",
     "Architectural",
@@ -92,5 +103,6 @@
   "tests": [
     "desktop_workflow",
     "workspace_navigation"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

@@ -1,5 +1,7 @@
 {
-  "acceptance": "Named revision and comparison fixtures retain semantic, geometric, calculation, and presentation history and restore selected revisions without contaminating later work.",
+  "acceptance": "Two named revisions can be compared and restored without losing later work or changing the original revision.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -58,10 +60,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Named revision and comparison fixtures retain semantic, geometric, calculation, and presentation history and restore selected revisions without contaminating later work.",
   "qualification_boundary": "This evidence covers local named revisions, comparison controls, and history restoration. Production project-scale comparison and native Apex compatibility remain open.",
+  "requirement": "Provide named revisions and comparison views for semantic, geometric, calculation, and presentation changes.",
   "requirement_id": "REC-002",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "named revision",
     "restore",
@@ -102,5 +113,6 @@
   "tests": [
     "desktop_workflow",
     "document_commands"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

@@ -1,6 +1,9 @@
 #include "sketch/desktop/main_window.hpp"
 
 #include "sketch/building_entity.hpp"
+#include "sketch/annotation_entity_codec.hpp"
+#include "sketch/assembly_model.hpp"
+#include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/project_store.hpp"
 #include "support/noninteractive_errors.hpp"
@@ -8,6 +11,7 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QComboBox>
 #include <QDir>
 #include <QFileInfo>
 #include <QFont>
@@ -663,6 +667,68 @@ void test_visibility_workflow() {
             "failed open must preserve the replacement filter state");
 }
 
+void test_hidden_presentation_dependencies_stay_out_of_views() {
+    using namespace sketch;
+    auto host = Entity::create("wall", {
+        {"baseline", {{"start", {0, 0}}, {"end", {10, 0}}, {"sweep_radians", 0}}},
+        {"height_m", 3}, {"thickness_m", 0.2}, {"elevation_m", 0}});
+    host.id = "host-wall";
+    auto opening = Entity::create("opening", {{"wall_id", host.id},
+        {"offset_m", 2}, {"width_m", 1}, {"height_m", 2}, {"sill_m", 0}});
+    opening.id = "hosted-opening";
+    auto catalog = Entity::create("assembly_model", {{"model", AssemblyModel::create(
+        {{"steel", "Steel", "#d08030"}},
+        {AssemblyType{"lintel", "Lintel", {}, {{"finish", "steel"}}, {}}},
+        {AssemblyInstance{"lintel-1", "lintel", {}, {}, {},
+            AssemblyPlacement{host.id, {1, 2}, 0, 1}}}).to_json()}});
+    catalog.id = "assembly-catalog";
+    for (const auto hidden : {std::string("hosted-opening"), std::string("host-wall"),
+                              std::string("assembly-catalog:instance:lintel-1")}) {
+        AnnotationState annotations;
+        annotations.overrides.push_back({"object", hidden, {}, false});
+        std::vector<CoordinatedView> views;
+        for (int kind = 0; kind < 3; ++kind) {
+            for (int copy = 0; copy < 2; ++copy) {
+                CoordinatedView view;
+                view.id = "view-" + std::to_string(kind) + "-" + std::to_string(copy);
+                view.name = view.id;
+                view.kind = static_cast<CoordinatedViewKind>(kind);
+                if (kind != 0) { view.direction = {0, 1, 0}; view.up = {0, 0, 1}; }
+                view.presentation.cut_depth_m = 0;
+                view.object_ids = {opening.id};
+                views.push_back(view);
+            }
+        }
+        auto document = std::make_shared<Document>(Document::create({host, opening, catalog,
+            make_annotation_entity("annotations", annotations),
+            make_sheet_view_entity("sheets", SheetViewModel::create(views, {}))}));
+        MainWindow window(document);
+        auto* combo = window.findChild<QComboBox*>(QStringLiteral("architecturalView"));
+        auto* target = dynamic_cast<PlanCanvas*>(window.findChild<QWidget*>(
+            QStringLiteral("architecturalPlanCanvas")));
+        require(combo && target && combo->count() == 9,
+                "dependency fixture must expose canonical and coordinated views");
+        for (int index = 0; index < combo->count(); ++index) {
+            combo->setCurrentIndex(index);
+            process_events();
+            const auto has = [&](const std::string& id) {
+                return std::any_of(target->entities().begin(), target->entities().end(),
+                    [&](const auto& value) { return value.id.toStdString() == id; });
+            };
+            require(!has(hidden), "presentation-hidden targets must stay out of every view");
+            if (hidden == opening.id) {
+                require(target->entities().empty(),
+                        "a hidden selected opening must not admit its host or assembly dependencies");
+            } else if (hidden == host.id) {
+                require(!has("assembly-catalog:instance:lintel-1"),
+                        "a hidden host must not reintroduce its assembly child");
+            } else {
+                require(has(host.id), "hiding an assembly child must preserve the visible host");
+            }
+        }
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -670,6 +736,8 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     install_capture_font();
     try {
+        test_hidden_presentation_dependencies_stay_out_of_views();
+        if (application.arguments().contains(QStringLiteral("--presentation-dependencies-only"))) return 0;
         test_output_refreshes_current_document_head();
         test_queued_navigator_events_do_not_cross_project_replacement();
         test_visibility_workflow();

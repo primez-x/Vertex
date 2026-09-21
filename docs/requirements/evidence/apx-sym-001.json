@@ -1,5 +1,7 @@
 {
-  "acceptance": "The local symbol catalog contains at least 468 scaled residential and light-commercial entries with deterministic previews, filtering, resizing, rotation, and output metadata.",
+  "acceptance": "The catalog contains at least 300 distinct named symbol families and at least 600 deterministic entries across every required category; size variants do not count as separate families. Each entry has dimensional metadata, a validated preview, an anchor, and scale limits; each placed instance supports arbitrary rotation and visibility; persisted annotation state pins the catalog revision and any changed definitions require an explicit migration; representative residential and light-commercial symbols can be resized, placed, saved/reopened, printed, and exported without geometry or visual loss.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -90,10 +92,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "The local symbol catalog contains at least 468 scaled residential and light-commercial entries with deterministic previews, filtering, resizing, rotation, and output metadata.",
   "qualification_boundary": "This evidence covers the deterministic local symbol library and manifest checks. Final print/export legibility and complete Apex catalog certification remain open.",
+  "requirement": "Provide a comprehensive, editable, size-adjustable symbol library for residential and light-commercial drawings, with at least 300 distinct usable families spanning plumbing, furniture, fixtures, appliances, accessibility, lighting, doors/windows, structural/site, and commercial equipment.",
   "requirement_id": "APX-SYM-001",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "468",
     "scale",
@@ -176,5 +187,6 @@
     "project_cli",
     "packaging_symbol_catalog_manifest",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

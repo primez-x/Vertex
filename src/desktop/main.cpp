@@ -157,7 +157,8 @@ bool seed_smoke_document(sketch::desktop::MainWindow& window, bool architectural
         if (wall_id.isEmpty() || !window.selectEntity(wall_id) ||
             window.createHostedOpening(QStringLiteral("door"), QStringLiteral("3 ft"),
                                        QStringLiteral("3 ft"), QStringLiteral("0 in"),
-                                       QStringLiteral("7 ft"))
+                                       QStringLiteral("7 ft"), std::nullopt,
+                                       sketch::DoorOperation{false, true, 90.0})
                 .isEmpty()) {
             return false;
         }

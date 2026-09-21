@@ -1,5 +1,7 @@
 {
-  "acceptance": "Every shipped component has a pinned source or revision, build input, license record, notice path, and distribution inventory entry.",
+  "acceptance": "A signed-off dependency inventory includes source hashes, SPDX licenses, notices, corresponding source or relink instructions, and an SBOM for each installer and portable package.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -66,10 +68,19 @@
       ]
     }
   ],
-  "qualification_boundary": "This evidence covers declared component inventory and SPDX generation; final legal clearance and redistributability approval remain open.",
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Every shipped component has a pinned source or revision, build input, license record, notice path, and distribution inventory entry.",
+  "qualification_boundary": "This evidence covers declared component inventory, file-level source provenance preservation, SPDX generation, and documented replacement-build boundaries. Complete matching sources, live relink/replacement proof, notice review, legal clearance, and redistributability approval remain open.",
+  "requirement": "Qualify exact source revisions, build options, transitive dependencies, and distribution obligations for every shipped component before release.",
   "requirement_id": "COMP-LIC-001",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "distribution",
     "inventory",
@@ -121,5 +132,6 @@
     "packaging_distribution_inventory",
     "packaging_distribution_sbom",
     "packaging_stage_portable_package"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

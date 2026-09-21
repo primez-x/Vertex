@@ -1,5 +1,7 @@
 {
-  "acceptance": "Malformed, traversal, decompression, module-planting, child-process, timeout, and crash fixtures fail closed with bounded diagnostics and no partial import result.",
+  "acceptance": "Adversarial fixtures terminate or reject safely, leave the core project usable, and produce actionable local diagnostics without network access.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -50,10 +52,19 @@
       ]
     }
   ],
-  "qualification_boundary": "This evidence covers deterministic adversarial policy decisions and bounded output rules. OS-level child containment and clean-machine worker survival remain open.",
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Malformed, traversal, decompression, module-planting, child-process, timeout, and crash fixtures fail closed with bounded diagnostics and no partial import result.",
+  "qualification_boundary": "This evidence covers deterministic adversarial policy decisions, bounded output rules, and the source of a job-free development-host runner. Decoder crash, module planting, child escape, project survival, installed-runtime, and clean-machine qualification remain open.",
+  "requirement": "Contain malformed imports, path traversal, decompression bombs, DLL/module planting, child-process escape, timeouts, and worker crashes.",
   "requirement_id": "SEC-WORKER-002",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "traversal",
     "decompression",
@@ -108,5 +119,6 @@
   "source_tree_sha256": "b89bdba6cef5fd26b8d83708b44086edb733aed72a63c060eb658c9ad75ad6cf",
   "tests": [
     "import_worker_policy"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

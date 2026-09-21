@@ -12,7 +12,8 @@ later instance edits do not alter the library. Empty content is allowed. Styles
 support font family, physical text height/stroke width, RGB colors, bold/italic,
 and none/solid/hatch fills. Font availability and hatch rendering are not checked.
 
-The current deterministic catalog contains **809 parametric footprint entries
+The current deterministic catalog contains **1,129 entries**: 320 supplied SVG
+symbols across 25 source categories, plus **809 legacy parametric footprint entries
 across 393 distinct named families**. The original 52 families retain nine
 width/depth presets (80%, 100%, 120% of each nominal dimension); the expanded
 families ship at their standard physical footprint and remain continuously
@@ -20,6 +21,49 @@ size-adjustable after placement. IDs encode family and dimension indices. The
 families cover plumbing, furniture, storage, fixtures, appliances, accessibility,
 lighting, electrical, mechanical, doors/windows, structure, circulation, site,
 office, medical, recreation, safety, and light-commercial equipment.
+
+The SVG library is preserved byte-for-byte under
+`assets/symbols/architectural_v2/`, together with its original indexes and README.
+`SOURCE.md` records provenance, the absence of a separate archive license, and
+the project owner's direction to include these first-party assets under Vertex's
+GPL-3.0-or-later license. No unidentified third-party rights are inferred. Run
+`python scripts/generate_architectural_svg_catalog.py --check` to validate all
+320 indexed paths and the checked-in deterministic C++ metadata. Run without
+`--check` to regenerate after an intentional source update. The core catalog
+does not parse files or depend on a working directory at runtime.
+
+SVG IDs and families use `svg-v2-<source-category>-<source-id>`, for example
+`svg-v2-01_bathroom-basin-oval`. Category qualification distinguishes duplicate
+source IDs (radiator, skylight, pergola, column-round, column-square). All legacy
+IDs, dimensions, previews and order remain intact; the SVG entries append in
+category/ID order. This additive change retains catalog revision 1 and existing
+saved-project compatibility. Names are searchable case-insensitively along with
+IDs, families and categories. Consumers may present SVG entries first without
+changing the underlying catalog or saved IDs.
+
+`SymbolDefinition::svg_asset` supplies an asset-root-relative path, native
+`view_box`, `footprint_view_box`, and `dimensions_are_nominal`. In 208 assets the
+SVG description supplies nominal millimetres, converted to metres. Their
+footprint bounds exclude the surrounding artwork padding. The remaining 112
+assets have no physical-size claim: their editable default footprint has a
+one-metre longest side and follows the viewBox aspect ratio. The flag is false
+for those defaults; it must not be presented as a measured or certified size.
+
+The Windows desktop embeds every SVG in its Qt resource bundle and presents the
+SVG entries first, with source names and cleaned category labels. Library
+thumbnails and placed components use the original SVG document. The canvas maps
+the declared footprint bounds—not the padded viewBox—to the physical
+width/depth centred on the placement anchor, retains the artwork padding, and
+accounts for the SVG Y-down axis before applying model-space rotation. The same
+retained SVG renderer feeds interactive views, fitted sheets, PDF, SVG and image
+output. Save/reopen stores the stable catalog ID and placement; it reloads the
+bundled artwork without an external path or archive dependency.
+Legacy strokes remain unchanged for old symbols. New SVG entries reuse an exact
+name-matched legacy family as a scaled fallback when available, otherwise a
+footprint rectangle. These fallback/DXF strokes are **not SVG tessellation** and
+do not reproduce the detailed supplied artwork. Offline manifests include the
+human name and SVG metadata where present; project instances continue storing
+stable catalog IDs, not filesystem paths.
 Named appliance, storage, plumbing, furniture, and commercial families retain
 distinct plan motifs (for example burners, drum/controls, shelves, fixtures,
 and counter layouts) so the catalog cannot satisfy its count with duplicate
@@ -90,9 +134,12 @@ bold/italic emphasis, and symbol stroke width now flow into the same renderer
 for interactive views and fitted sheet/export scenes.
 
 This is a bounded semantic and authoring slice for APX-ANNO-001, APX-ANNO-003
-and APX-SYM-001, **not completed parity**. Polished assets, visibility/override
-inspectors, and production visual QA remain open.
+and APX-SYM-001, **not completed parity**. The supplied detailed assets are now
+the primary desktop library; full human artwork review, visibility/override
+inspectors, and production print qualification remain open.
 Headless tests check every catalog preview, instance edits and JSON roundtrip,
 typed Document admission, save/reopen, category/query filtering, placement mathematics,
 deterministic IDs, physical-footprint bounds, independent resize behavior, and
-malformed-data rejection.
+malformed-data rejection. `symbol_svg_desktop` additionally verifies the supplied
+three-seat sofa's searchable name, detailed thumbnail, retained SVG payload,
+interior canvas detail, exact physical footprint and identical save/reopen render.

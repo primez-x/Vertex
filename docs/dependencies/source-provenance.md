@@ -1,6 +1,6 @@
 # Source provenance boundary
 
-The private application source and the third-party records needed for later
+The public GPL-3.0-or-later application source and the third-party records needed for
 distribution review are kept in separate ownership classes. The checked-in
 policy is [`third_party/source-provenance.json`](../../third_party/source-provenance.json):
 
@@ -32,6 +32,6 @@ the dependency inventory, SBOM, and production qualification records. The
 manifest is therefore a source-ownership control, not a legal opinion.
 
 The source-kit allowlist and manifest are separate handoff controls. The
-allowlist identifies the files intended for a private build handoff, while this
+allowlist identifies the files intended for a reproducible source/build kit, while this
 audit checks the ownership boundary for the complete tracked checkout. Both
 must pass before a source package is considered reviewable.

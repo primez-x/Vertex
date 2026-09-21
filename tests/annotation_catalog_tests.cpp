@@ -23,6 +23,46 @@ template<class F> void rejected(F f) {
 int main() {
     using namespace sketch;
     const auto catalog = default_symbol_catalog();
+    require(catalog.size() == 1129, "Preserve 809 legacy symbols and add all 320 SVG symbols");
+    const auto svg_toilets = filter_symbol_catalog(catalog, "Toilet Close Coupled", "01_bathroom");
+    require(svg_toilets.size() == 1 &&
+                svg_toilets.front().id == "svg-v2-01_bathroom-toilet-close-coupled",
+            "SVG human names must be searchable with category-qualified stable IDs");
+    std::size_t svg_count = 0, nominal_count = 0;
+    std::set<std::string> svg_categories, svg_paths;
+    for (const auto& definition : catalog) {
+        if (!definition.svg_asset) continue;
+        ++svg_count;
+        const auto& asset = *definition.svg_asset;
+        nominal_count += asset.dimensions_are_nominal ? 1 : 0;
+        svg_categories.insert(definition.category);
+        require(svg_paths.insert(asset.relative_path).second, "Every SVG must retain its own asset");
+        require(!definition.name.empty() && asset.view_box[2] > 0 && asset.view_box[3] > 0,
+                "SVG renderers require human names and positive intrinsic bounds");
+    }
+    require(svg_count == 320 && nominal_count == 208 && svg_categories.size() == 25,
+            "Import complete SVG category coverage without inventing nominal dimensions");
+    AnnotationState every_symbol;
+    for (const auto& definition : catalog)
+        every_symbol.symbols.push_back({"instance-" + definition.id, definition.id, {}, {}, true});
+    const auto every_symbol_encoded = encode_annotation_state(every_symbol, catalog);
+    require(encode_annotation_state(decode_annotation_state(every_symbol_encoded, catalog), catalog) ==
+                every_symbol_encoded,
+            "Every legacy and SVG ID must survive project annotation serialization");
+    require(filter_symbol_catalog(catalog, "svg-v2-03_laundry_utility-radiator").size() == 1 &&
+                filter_symbol_catalog(catalog, "svg-v2-20_hvac_plumbing-radiator").size() == 1,
+            "Repeated source IDs in different categories must not overwrite one another");
+    const auto basin = filter_symbol_catalog(catalog, "svg-v2-01_bathroom-basin-oval").front();
+    require(basin.width_metres == 0.55 && basin.depth_metres == 0.44 &&
+                basin.svg_asset->footprint_view_box == std::array<double, 4>{0, 0, 550, 440},
+            "Source nominal millimetres must map to metres without artwork padding");
+    auto invalid_svg = basin;
+    invalid_svg.svg_asset->relative_path = "../escape.svg";
+    rejected([&]{validate_symbol_catalog({invalid_svg});});
+    invalid_svg = basin; invalid_svg.svg_asset->view_box[2] = 0;
+    rejected([&]{validate_symbol_catalog({invalid_svg});});
+    invalid_svg = basin; invalid_svg.svg_asset->footprint_view_box[0] = std::numeric_limits<double>::infinity();
+    rejected([&]{validate_symbol_catalog({invalid_svg});});
     require(catalog.size() >= 600,"Expected the expanded production symbol catalog");
     validate_symbol_catalog(catalog);
     const std::set<std::string> required_categories{
@@ -122,10 +162,15 @@ int main() {
         require(!placed_symbol_preview(catalog[i],{}).empty(),"Every catalog entry must produce preview strokes");
         require(normalized_preview(catalog[i]) == normalized_preview(repeated[i]),
                 "All vector coordinates must be deterministic");
-        require(normalized_preview(catalog[i]) == normalized_preview(nominal(catalog[i].family.c_str())),
+        require(catalog[i].svg_asset || normalized_preview(catalog[i]) == normalized_preview(nominal(catalog[i].family.c_str())),
                 "Dimension variants must retain their family structure");
     }
     const auto manifest = encode_symbol_catalog_manifest(catalog);
+    const auto svg_manifest = encode_symbol_catalog_manifest({basin});
+    require(svg_manifest.at("entries").at(0).at("svg_asset").at("relative_path") ==
+                "symbols/architectural_v2/symbols/01_bathroom/basin-oval.svg" &&
+                svg_manifest.at("entries").at(0).at("name") == "Basin Oval",
+            "Offline manifest must preserve renderer metadata and human names");
     require(manifest.at("schema_version") == 1 && manifest.at("catalog_id") == "vertex.symbol-catalog",
             "Symbol catalog manifest must identify its schema");
     require(manifest.at("catalog_revision") == kSymbolCatalogRevision,

@@ -1,5 +1,7 @@
 {
-  "acceptance": "Multipage sheets expose print preview and PDF/image output using independent presentation scale and the shared output scene.",
+  "acceptance": "Layout fixtures preview and export at the selected page size and scale, and output fingerprints identify all influencing inputs.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -66,10 +68,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Multipage sheets expose print preview and PDF/image output using independent presentation scale and the shared output scene.",
   "qualification_boundary": "This evidence covers local output scene and presentation controls; printer calibration and production output certification remain open.",
+  "requirement": "Provide page layouts, print preview, PDF output, and image output with independent output scale.",
   "requirement_id": "APX-DOC-003",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "print",
     "preview",
@@ -117,5 +128,6 @@
     "sheet_output_scene",
     "output_fingerprint",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

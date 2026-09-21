@@ -351,12 +351,22 @@ void test_live_boundary_recovery() {
     require(!restored->boundaryDraftPreview() && recovered.document().snapshot().entities().size() > entities.size(),
         "recovered live draft continues and commits");
     const auto await_retirement = [](desktop::MainWindow& window) {
+        std::optional<std::filesystem::file_time_type> inspected_write_time;
+        bool retired = false;
         wait_until([&] {
+            if (retired) return true;
             if (window.recoveryCopyPath().isEmpty()) return false;
             const auto path = std::filesystem::path(window.recoveryCopyPath().toStdWString());
             if (!std::filesystem::exists(path)) return false;
+            const auto write_time = std::filesystem::last_write_time(path);
+            if (inspected_write_time == write_time) return false;
+            // Loading holds a Windows read lock that denies replacement. Inspect
+            // each publication once so polling an old active checkpoint cannot
+            // repeatedly block the worker from publishing its retired successor.
             const auto archive = ProjectStore::load_archive(path, ArchiveRole::recovery_copy);
-            return archive.supported() && !archive.recovery.decoded->active;
+            inspected_write_time = write_time;
+            retired = archive.supported() && !archive.recovery.decoded->active;
+            return retired;
         }, "automatic recovery retires finished or discarded input");
     };
     await_retirement(recovered);

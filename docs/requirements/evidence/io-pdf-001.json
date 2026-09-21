@@ -1,5 +1,7 @@
 {
-  "acceptance": "PDF and raster references persist source identity, page selection, calibration, transforms, and explicit traceable versus editable fidelity modes.",
+  "acceptance": "Import reports whether content is editable, traceable, or image-only and preserves calibration and source provenance.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -58,10 +60,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "PDF and raster references persist source identity, page selection, calibration, transforms, and explicit traceable versus editable fidelity modes.",
   "qualification_boundary": "This evidence covers local reference asset semantics and calibration. Editable PDF extraction and production visual qualification remain open.",
+  "requirement": "Treat PDF and raster underlays as calibrated reference assets, and distinguish editable extraction from simple tracing or image display.",
   "requirement_id": "IO-PDF-001",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "ReferenceAsset",
     "editable_extraction",
@@ -107,5 +118,6 @@
   "tests": [
     "reference_assets",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

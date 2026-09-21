@@ -1,5 +1,7 @@
 {
-  "acceptance": "Assistance proposals remain visibly unverified until accepted, cannot silently change measurements or classifications, and disabling assistance leaves deterministic workflows unchanged.",
+  "acceptance": "Assistance-off and malformed-suggestion tests complete draw/edit/calculate/save/print/export, and unaccepted suggestions leave no semantic changes.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -66,10 +68,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Assistance proposals remain visibly unverified until accepted, cannot silently change measurements or classifications, and disabling assistance leaves deterministic workflows unchanged.",
   "qualification_boundary": "This evidence covers local fail-closed proposal acceptance and the assistance-disabled path. End-user review and production workflow qualification remain open.",
+  "requirement": "Assistance never silently invents measurements, changes classifications, or modifies accepted geometry; disabling it does not affect deterministic workflows.",
   "requirement_id": "ASSIST-004",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "AssistanceSession",
     "requires_permission_check",
@@ -131,5 +142,6 @@
     "assistance_contract",
     "assistance_engine",
     "assistance_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

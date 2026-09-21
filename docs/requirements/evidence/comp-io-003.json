@@ -1,5 +1,7 @@
 {
-  "acceptance": "Offline georeferencing binds declared PROJ resources, disables network callbacks, and validates identity transforms without silently using remote data.",
+  "acceptance": "Required coordinate operations complete from bundled resources while a network monitor confirms no download or remote callback.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -66,10 +68,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Offline georeferencing binds declared PROJ resources, disables network callbacks, and validates identity transforms without silently using remote data.",
   "qualification_boundary": "This evidence covers declared local PROJ resources and network-disabled runtime checks. Coordinate-system breadth and production field qualification remain open.",
+  "requirement": "Use PROJ with bundled local resources and networking disabled for georeferencing.",
   "requirement_id": "COMP-IO-003",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "proj_network_disabled",
     "proj_network_callbacks_disabled",
@@ -126,5 +137,6 @@
     "interchange_profile",
     "georeferencing_runtime",
     "georeferencing_contract"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

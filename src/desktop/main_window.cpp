@@ -6,6 +6,7 @@
 
 #include "sketch/architecture.hpp"
 #include "sketch/opening_assembly.hpp"
+#include "sketch/roof_join_semantics.hpp"
 #include <QColorDialog>
 #include <QDoubleSpinBox>
 #include "sketch/architectural_schedule.hpp"
@@ -18,6 +19,7 @@
 #include "sketch/desktop/building_object_dialog.hpp"
 #include "sketch/desktop/constraint_dialog.hpp"
 #include "sketch/desktop/boundary_input_dialog.hpp"
+#include "sketch/desktop/sheet_layout_dialog.hpp"
 #include "sketch/boundary_commit.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_receipt.hpp"
@@ -80,10 +82,12 @@
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QFontMetrics>
+#include <QFontMetricsF>
 #include <QGuiApplication>
 #include <QGroupBox>
 #include <QGridLayout>
 #include <QHeaderView>
+#include <QHash>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QImage>
@@ -170,6 +174,10 @@
 #include <utility>
 
 #include <nlohmann/json.hpp>
+
+static void initialize_vertex_symbol_resources() {
+    Q_INIT_RESOURCE(vertex_architectural_symbols);
+}
 
 namespace sketch::desktop {
 namespace {
@@ -724,37 +732,6 @@ Vec2 plan_label_anchor(const Boundary& boundary) {
     const auto bounds = boundary_bounds(boundary);
     return {std::midpoint(bounds.minimum.x, bounds.maximum.x),
             std::midpoint(bounds.minimum.y, bounds.maximum.y)};
-}
-
-bool plan_boundary_contains(const Boundary& boundary, Vec2 point) {
-    if (boundary.empty() || !std::isfinite(point.x) || !std::isfinite(point.y)) return false;
-    std::vector<Vec2> polygon;
-    polygon.reserve(boundary.size() * 4);
-    polygon.push_back(boundary.front().start);
-    for (const auto& segment : boundary) {
-        const auto samples = segment.sweep_radians == 0.0
-            ? 1
-            : std::clamp(static_cast<int>(std::ceil(
-                  std::abs(segment.sweep_radians) / (std::numbers::pi / 16.0))), 2, 64);
-        for (int index = 1; index <= samples; ++index) {
-            const auto sample = point_at_segment(
-                segment, static_cast<double>(index) / static_cast<double>(samples));
-            if (!sample) return false;
-            polygon.push_back(*sample);
-        }
-    }
-    bool inside = false;
-    for (std::size_t current = 0, previous = polygon.size() - 1;
-         current < polygon.size(); previous = current++) {
-        const auto& a = polygon[current];
-        const auto& b = polygon[previous];
-        const auto crosses = (a.y > point.y) != (b.y > point.y);
-        if (!crosses) continue;
-        const auto intersection_x = (b.x - a.x) * (point.y - a.y) /
-                                        (b.y - a.y) + a.x;
-        if (point.x < intersection_x) inside = !inside;
-    }
-    return inside;
 }
 
 Boundary window_plan_symbol(const Segment& baseline, double offset, double width,
@@ -1314,6 +1291,151 @@ CalculationProfile default_calculation_profile() {
          {"party", ClassificationRule{true, false}}}};
 }
 
+QString symbol_svg_resource_path(const SymbolSvgAsset& asset) {
+    const auto relative = QString::fromStdString(asset.relative_path);
+    const auto catalog_prefix = QStringLiteral("symbols/architectural_v2/");
+    if (!relative.startsWith(catalog_prefix) || relative.contains(QStringLiteral(".."))) {
+        throw std::invalid_argument("Symbol SVG asset path is outside the bundled catalog.");
+    }
+    return QStringLiteral(":/symbols/architectural_v2/") + relative.mid(catalog_prefix.size());
+}
+
+QByteArray load_symbol_svg(const SymbolSvgAsset& asset) {
+    static QHash<QString, QByteArray> cache;
+    const auto resource_path = symbol_svg_resource_path(asset);
+    if (const auto found = cache.constFind(resource_path); found != cache.cend()) return *found;
+    QFile file(resource_path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        throw std::runtime_error("Bundled symbol SVG could not be opened.");
+    }
+    const auto document = file.readAll();
+    QSvgRenderer renderer(document);
+    if (document.isEmpty() || !renderer.isValid()) {
+        throw std::runtime_error("Bundled symbol SVG is invalid.");
+    }
+    cache.insert(resource_path, document);
+    return document;
+}
+
+QString symbol_category_label(const std::string& category) {
+    auto label = QString::fromStdString(category);
+    label.remove(QRegularExpression(QStringLiteral("^\\d+[_ -]+")));
+    label.replace(QLatin1Char('_'), QLatin1Char(' '));
+    label.replace(QLatin1Char('-'), QLatin1Char(' '));
+    bool capitalize = true;
+    for (auto& character : label) {
+        if (character.isSpace()) {
+            capitalize = true;
+        } else if (capitalize) {
+            character = character.toUpper();
+            capitalize = false;
+        }
+    }
+    return label;
+}
+
+const std::vector<SymbolDefinition>& desktop_symbol_catalog() {
+    static const auto catalog = default_symbol_catalog();
+    return catalog;
+}
+
+QIcon symbol_library_thumbnail(const SymbolDefinition& definition) {
+    static QHash<QString, QIcon> cache;
+    const auto cache_key = QString::fromStdString(definition.id);
+    if (const auto found = cache.constFind(cache_key); found != cache.cend()) return *found;
+
+    QPixmap thumbnail(136, 108);
+    thumbnail.setDevicePixelRatio(2.0);
+    thumbnail.fill(QColor(248, 250, 253));
+    QPainter painter(&thumbnail);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    painter.setPen(QPen(QColor(42, 61, 82), 1.25,
+                        Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    bool rendered_svg = false;
+    if (definition.svg_asset.has_value()) {
+        try {
+            QSvgRenderer renderer(load_symbol_svg(*definition.svg_asset));
+            if (renderer.isValid()) {
+                renderer.render(&painter, QRectF(5.0, 5.0, 58.0, 44.0));
+                rendered_svg = true;
+            }
+        } catch (const std::exception&) {
+            // Retain the validated line preview as a local fallback if an
+            // installed resource is damaged or incomplete.
+        }
+    }
+    if (!rendered_svg) {
+        double left = std::numeric_limits<double>::infinity();
+        double right = -std::numeric_limits<double>::infinity();
+        double bottom = std::numeric_limits<double>::infinity();
+        double top = -std::numeric_limits<double>::infinity();
+        for (const auto& stroke : definition.preview) {
+            for (const auto point : {stroke.start, stroke.end}) {
+                left = std::min(left, point.x);
+                right = std::max(right, point.x);
+                bottom = std::min(bottom, point.y);
+                top = std::max(top, point.y);
+            }
+        }
+        if (!std::isfinite(left) || right <= left || top <= bottom) {
+            left = -definition.width_metres * 0.5;
+            right = definition.width_metres * 0.5;
+            bottom = -definition.depth_metres * 0.5;
+            top = definition.depth_metres * 0.5;
+        }
+        const auto factor = std::min(58.0 / (right - left), 44.0 / (top - bottom));
+        const auto centre_x = (left + right) * 0.5;
+        const auto centre_y = (bottom + top) * 0.5;
+        const auto point = [factor, centre_x, centre_y](Vec2 value) {
+            return QPointF(34.0 + (value.x - centre_x) * factor,
+                           27.0 - (value.y - centre_y) * factor);
+        };
+        for (const auto& stroke : definition.preview)
+            painter.drawLine(point(stroke.start), point(stroke.end));
+    }
+    painter.end();
+    const QIcon icon(thumbnail);
+    cache.insert(cache_key, icon);
+    return icon;
+}
+
+std::string calculation_workflow_name(const json& properties) {
+    if (!properties.contains("calculation_workflow")) return "measurement";
+    const auto& value = properties.at("calculation_workflow");
+    if (!value.is_string()) {
+        throw std::invalid_argument("Calculation workflow must be a string");
+    }
+    const auto workflow = value.get<std::string>();
+    if (workflow != "measurement" && workflow != "appraisal") {
+        throw std::invalid_argument("Calculation workflow must be measurement or appraisal");
+    }
+    return workflow;
+}
+
+std::optional<std::string> area_classification_for_workflow(
+    const json& properties, std::string_view workflow) {
+    if (workflow == "appraisal") {
+        if (const auto category = read_string(properties, "appraisal_category");
+            category.has_value() && !category->empty()) {
+            return category;
+        }
+        // Compatibility for projects written by the first appraisal preview,
+        // which stored the appraisal category in the shared classification
+        // field. New edits keep both workflows' meanings independently.
+        if (const auto legacy = read_string(properties, "classification");
+            legacy.has_value() && parse_appraisal_category(*legacy).has_value()) {
+            return legacy;
+        }
+        return std::nullopt;
+    }
+    if (const auto measurement = read_string(properties, "measurement_classification");
+        measurement.has_value() && !measurement->empty()) {
+        return measurement;
+    }
+    return read_string(properties, "classification");
+}
+
 std::string area_unit_name(AreaUnit unit) {
     switch (unit) {
     case AreaUnit::square_metre:
@@ -1387,9 +1509,24 @@ CalculationProfile read_calculation_profile(const json& properties) {
                 !rule.at("living_total").is_boolean()) {
                 throw std::invalid_argument("Calculation classification rules must contain boolean totals");
             }
+            auto appraisal_category = AppraisalAreaCategory::none;
+            if (rule.contains("appraisal_category")) {
+                if (!rule.at("appraisal_category").is_string()) {
+                    throw std::invalid_argument(
+                        "Calculation appraisal categories must be strings");
+                }
+                const auto parsed = parse_appraisal_category(
+                    rule.at("appraisal_category").get<std::string>());
+                if (!parsed.has_value()) {
+                    throw std::invalid_argument(
+                        "Calculation appraisal category is unknown");
+                }
+                appraisal_category = *parsed;
+            }
             profile.classifications.emplace(
                 name, ClassificationRule{rule.at("building_total").get<bool>(),
-                                         rule.at("living_total").get<bool>()});
+                                         rule.at("living_total").get<bool>(),
+                                         appraisal_category});
         }
     }
     return profile;
@@ -1399,7 +1536,9 @@ json calculation_profile_json(const CalculationProfile& profile) {
     json classifications = json::object();
     for (const auto& [name, rule] : profile.classifications) {
         classifications[name] = json{{"building_total", rule.building_total},
-                                     {"living_total", rule.living_total}};
+                                     {"living_total", rule.living_total},
+                                     {"appraisal_category",
+                                      appraisal_category_name(rule.appraisal_category)}};
     }
     return json{{"id", profile.id},
                 {"version", profile.version},
@@ -2104,6 +2243,7 @@ void ensure_project_scaffold(Document& document) {
                                                                {"address", ""},
                                                                {"reference", ""},
                                                                {"attributes", json::object()}}},
+                                             {"calculation_workflow", "measurement"},
                                              {"calculation_profile",
                                               calculation_profile_json(default_calculation_profile())}},
                                         false,
@@ -2225,6 +2365,7 @@ class MainWindow::Impl {
 public:
     Impl(MainWindow* window, std::shared_ptr<Document> document)
         : owner(window), m_document(std::move(document)) {
+        initialize_vertex_symbol_resources();
         // The product contract is local-first.  Declare the four required
         // capabilities explicitly at the native application boundary and
         // fail closed if a future integration weakens that declaration.
@@ -3798,6 +3939,20 @@ public:
             setError(QStringLiteral("This document is read-only."));
             return;
         }
+        try {
+            const auto property = propertyEntity();
+            if (property.has_value() &&
+                calculation_workflow_name(property->properties) == "appraisal") {
+                setError(QStringLiteral(
+                    "The built-in appraisal profile is versioned and read-only. "
+                    "Switch to Measurement to edit a custom profile."));
+                return;
+            }
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Calculation profile: %1")
+                         .arg(QString::fromUtf8(error.what())));
+            return;
+        }
         QDialog dialog(owner);
         styleDialog(dialog);
         dialog.setObjectName(QStringLiteral("calculationProfileDialog"));
@@ -3808,7 +3963,8 @@ public:
         auto* layout = new QVBoxLayout(&dialog);
         auto* help = new QLabel(QStringLiteral(
             "Profiles are stored in the project and versioned with every change. "
-            "A classification rule controls whether an area contributes to building and living totals."),
+            "A classification rule controls building and living totals. Its appraisal category is "
+            "explicit; Vertex never guesses GLA from a label."),
             &dialog);
         help->setWordWrap(true);
         layout->addWidget(help);
@@ -3836,10 +3992,10 @@ public:
 
         auto* classifications = new QTableWidget(&dialog);
         classifications->setObjectName(QStringLiteral("calculationProfileClassifications"));
-        classifications->setColumnCount(3);
+        classifications->setColumnCount(4);
         classifications->setHorizontalHeaderLabels(
             {QStringLiteral("Classification"), QStringLiteral("Building total"),
-             QStringLiteral("Living total")});
+             QStringLiteral("Living total"), QStringLiteral("Appraisal category")});
         classifications->setSelectionBehavior(QAbstractItemView::SelectRows);
         classifications->setSelectionMode(QAbstractItemView::SingleSelection);
         classifications->setAlternatingRowColors(true);
@@ -3912,6 +4068,11 @@ public:
                 auto* living_item = new QTableWidgetItem;
                 set_check_cell(living_item, rule.living_total);
                 classifications->setItem(row, 2, living_item);
+                classifications->setItem(
+                    row, 3,
+                    new QTableWidgetItem(QString::fromLatin1(
+                        appraisal_category_name(rule.appraisal_category).data(),
+                        static_cast<qsizetype>(appraisal_category_name(rule.appraisal_category).size()))));
             }
             if (classifications->rowCount() > 0) classifications->selectRow(0);
         };
@@ -3928,6 +4089,7 @@ public:
             auto* living_item = new QTableWidgetItem;
             set_check_cell(living_item, false);
             classifications->setItem(row, 2, living_item);
+            classifications->setItem(row, 3, new QTableWidgetItem(QStringLiteral("none")));
             classifications->selectRow(row);
             classifications->editItem(name_item);
         });
@@ -3964,14 +4126,23 @@ public:
                     const auto* name_item = classifications->item(row, 0);
                     const auto* building_item = classifications->item(row, 1);
                     const auto* living_item = classifications->item(row, 2);
-                    if (!name_item || !building_item || !living_item)
-                        throw std::invalid_argument("Each classification needs a name and two total rules.");
+                    const auto* appraisal_item = classifications->item(row, 3);
+                    if (!name_item || !building_item || !living_item || !appraisal_item)
+                        throw std::invalid_argument(
+                            "Each classification needs a name, two total rules, and an appraisal category.");
                     const auto name = name_item->text().trimmed().toStdString();
                     if (name.empty() || name.size() > 128 || name.find('\0') != std::string::npos)
                         throw std::invalid_argument("Classification names must contain 1-128 characters.");
+                    const auto appraisal_category = parse_appraisal_category(
+                        appraisal_item->text().trimmed().toStdString());
+                    if (!appraisal_category.has_value()) {
+                        throw std::invalid_argument(
+                            "Appraisal category must be none or a supported appraisal category ID.");
+                    }
                     if (!next.classifications.emplace(
                             name, ClassificationRule{building_item->checkState() == Qt::Checked,
-                                                     living_item->checkState() == Qt::Checked})
+                                                     living_item->checkState() == Qt::Checked,
+                                                     *appraisal_category})
                              .second) {
                         throw std::invalid_argument("Classification names must be unique.");
                     }
@@ -7960,7 +8131,7 @@ public:
             if (annotation == source.entities().end()) {
                 throw std::invalid_argument("The project has no annotation state entity.");
             }
-            const auto catalog = default_symbol_catalog();
+            const auto& catalog = desktop_symbol_catalog();
             const auto wanted = symbol_id.trimmed().toStdString();
             auto definition = std::find_if(
                 catalog.begin(), catalog.end(),
@@ -8785,6 +8956,16 @@ public:
                                   {"factor_denominator", 1}},
                              false,
                              std::move(extensions)};
+        if (const auto property = propertyEntity(); property.has_value() &&
+            calculation_workflow_name(property->properties) == "appraisal" &&
+            parse_appraisal_category(classification.toStdString()).has_value()) {
+            entity.properties["appraisal_category"] = classification.toStdString();
+            entity.properties["measurement_classification"] = "measurement";
+            entity.properties["classification"] = "measurement";
+        } else {
+            entity.properties["measurement_classification"] =
+                classification.toStdString();
+        }
         // New authoring starts with stable segment/vertex identities so every
         // later edit can remain a single undoable semantic command. The
         // upgrade helper preserves the entered geometry and all metadata.
@@ -12021,7 +12202,34 @@ public:
             auto updated = encode_identified_boundary_entity(replacement, &found->second);
             const auto name = classification.trimmed();
             if (!name.isEmpty()) {
-                updated.properties["classification"] = name.toStdString();
+                const auto property = propertyEntity();
+                const auto appraisal = property.has_value() &&
+                    calculation_workflow_name(property->properties) == "appraisal";
+                if (appraisal) {
+                    const auto category = parse_appraisal_category(name.toStdString());
+                    if (!category.has_value() || *category == AppraisalAreaCategory::none) {
+                        throw std::invalid_argument(
+                            "Redefinition requires a defined appraisal area category.");
+                    }
+                    if (!read_string(updated.properties,
+                                     "measurement_classification").has_value()) {
+                        const auto existing = read_string(updated.properties,
+                                                          "classification");
+                        updated.properties["measurement_classification"] =
+                            existing.has_value() &&
+                                    !parse_appraisal_category(*existing).has_value()
+                                ? *existing
+                                : "measurement";
+                    }
+                    updated.properties["appraisal_category"] = name.toStdString();
+                    updated.properties["classification"] =
+                        read_string(updated.properties, "measurement_classification")
+                            .value_or("measurement");
+                } else {
+                    updated.properties["classification"] = name.toStdString();
+                    updated.properties["measurement_classification"] =
+                        name.toStdString();
+                }
                 if (updated.type == "room_boundary") updated.properties["name"] = name.toStdString();
             }
             if (updated.properties.contains("boundary")) {
@@ -12062,8 +12270,39 @@ public:
             setError(QStringLiteral("An opening classification must be Door or Window."));
             return false;
         }
+        bool appraisal_area = false;
+        if (is_closed_boundary_entity(entity->type)) {
+            const auto property = propertyEntity();
+            appraisal_area = property.has_value() &&
+                calculation_workflow_name(property->properties) == "appraisal";
+            if (appraisal_area) {
+                const auto parsed = parse_appraisal_category(value.toStdString());
+                if (!parsed.has_value() || *parsed == AppraisalAreaCategory::none) {
+                    setError(QStringLiteral("Choose a defined appraisal area category."));
+                    return false;
+                }
+            }
+        }
         return editSelected([&](json& properties) {
-            properties["classification"] = value.toStdString();
+            if (appraisal_area) {
+                if (!read_string(properties, "measurement_classification").has_value()) {
+                    const auto existing = read_string(properties, "classification");
+                    properties["measurement_classification"] =
+                        existing.has_value() &&
+                                !parse_appraisal_category(*existing).has_value()
+                            ? *existing
+                            : "measurement";
+                }
+                properties["appraisal_category"] = value.toStdString();
+                properties["classification"] =
+                    read_string(properties, "measurement_classification")
+                        .value_or("measurement");
+            } else {
+                properties["classification"] = value.toStdString();
+                if (is_closed_boundary_entity(entity->type)) {
+                    properties["measurement_classification"] = value.toStdString();
+                }
+            }
             if (entity->type == "opening") {
                 properties["opening_kind"] = value.toStdString();
                 if (properties.contains("opening_assembly")) {
@@ -12404,13 +12643,18 @@ public:
             if (!building_id.has_value() || building_id->empty()) {
                 throw std::invalid_argument("The selected boundary has no building reference.");
             }
-            const auto classification = read_string(entity->properties, "classification");
-            if (!classification.has_value() || classification->empty()) {
-                throw std::invalid_argument("Assign a classification before editing deductions.");
-            }
             const auto property = propertyEntity();
             if (!property.has_value()) {
                 throw std::invalid_argument("The calculation profile is unavailable.");
+            }
+            const auto workflow = calculation_workflow_name(property->properties);
+            const auto classification = area_classification_for_workflow(
+                entity->properties, workflow);
+            if (!classification.has_value() || classification->empty()) {
+                throw std::invalid_argument(
+                    workflow == "appraisal"
+                        ? "Assign an appraisal category before editing deductions."
+                        : "Assign a measurement classification before editing deductions.");
             }
             const auto profile = read_calculation_profile(property->properties);
             const auto base = read_boundary(entity->properties);
@@ -12485,9 +12729,18 @@ public:
             return false;
         }
         try {
+            if (calculation_workflow_name(property->properties) == "appraisal") {
+                setError(QStringLiteral(
+                    "The built-in appraisal rules are fixed. Choose an appraisal classification instead."));
+                return false;
+            }
             auto profile = read_calculation_profile(property->properties);
-            const auto next_rule = ClassificationRule{include_in_building, include_in_living};
             const auto found = profile.classifications.find(*classification);
+            const auto appraisal_category = found == profile.classifications.end()
+                ? AppraisalAreaCategory::none
+                : found->second.appraisal_category;
+            const auto next_rule = ClassificationRule{
+                include_in_building, include_in_living, appraisal_category};
             if (found != profile.classifications.end() && found->second.building_total ==
                                                         next_rule.building_total &&
                 found->second.living_total == next_rule.living_total) {
@@ -14061,10 +14314,25 @@ public:
 
             std::vector<EntityChange> changes;
             std::vector<std::string> imported_ids;
+            std::map<std::string, std::string, std::less<>> identities;
+            auto diagnostics = mapped.diagnostics;
+            std::size_t rejected_entity_count = 0;
             for (const auto& candidate : mapped.entities) {
-                if (candidate.type != "boundary") continue;
+                if (candidate.type != "boundary" && candidate.type != "wall" &&
+                    candidate.type != "slab" && candidate.type != "opening") {
+                    ++rejected_entity_count;
+                    diagnostics.push_back({candidate.id, candidate.type, "desktop_entity_type_unsupported"});
+                    continue;
+                }
+                if (!identities.emplace(candidate.id, new_id(candidate.type)).second)
+                    throw std::invalid_argument("IFC mapping produced duplicate entity identities.");
+            }
+            for (const auto& candidate : mapped.entities) {
+                const auto identity = identities.find(candidate.id);
+                if (identity == identities.end()) continue;
                 auto imported = candidate;
-                imported.id = new_id("boundary");
+                imported.id = identity->second;
+                remap_entity_references(imported, identities);
                 imported.properties["floor_id"] = floor_id;
                 imported.properties["layer_id"] = layer_id;
                 imported_ids.push_back(imported.id);
@@ -14074,17 +14342,21 @@ public:
             std::vector<std::byte> source_bytes;
             source_bytes.reserve(static_cast<std::size_t>(raw.size()));
             for (const auto value : raw) source_bytes.push_back(static_cast<std::byte>(value));
-            auto asset = Asset::create(asset_id, "application/step", std::move(source_bytes),
-                {{"format", "IFC4 STEP"}, {"source_path", info.fileName().toStdString()},
-                 {"mapped_entity_count", mapped.entities.size()},
-                 {"source_retention_required", mapped.source_retention_required}});
-            auto source_entity = Entity::create("ifc_source",
-                {{"asset_id", asset_id}, {"format", "IFC4 STEP"},
-                 {"source_path", info.fileName().toStdString()},
-                 {"mapped_entity_count", mapped.entities.size()}, {"diagnostics", json::array()}});
-            for (const auto& item : mapped.diagnostics)
-                source_entity.properties["diagnostics"].push_back({{"source_id", item.source_id},
+            // Keep mapper coverage separate from the objects committed by this adapter.
+            json report{{"format", "IFC4 STEP"}, {"mapped_entity_count", mapped.entities.size()},
+                        {"inserted_entity_count", imported_ids.size()},
+                        {"rejected_entity_count", rejected_entity_count},
+                        {"source_retention_required", mapped.source_retention_required || rejected_entity_count != 0},
+                        {"diagnostics", json::array()}};
+            for (const auto& item : diagnostics)
+                report["diagnostics"].push_back({{"source_id", item.source_id},
                     {"source_kind", item.source_kind}, {"code", item.code}});
+            auto provenance = report;
+            provenance["source_path"] = info.fileName().toStdString();
+            auto asset = Asset::create(asset_id, "application/step", std::move(source_bytes),
+                provenance);
+            provenance["asset_id"] = asset_id;
+            auto source_entity = Entity::create("ifc_source", std::move(provenance));
             changes.push_back(EntityChange::upsert(std::move(source_entity)));
             const auto command = ApplyEntityChanges{source.revision(), std::move(changes),
                 {AssetChange::upsert(std::move(asset))}, "Import IFC"};
@@ -14096,18 +14368,14 @@ public:
             refresh();
             const auto report_path = path + QStringLiteral(".fidelity.json");
             QSaveFile report_file(report_path);
-            json report{{"format", "IFC4 STEP"}, {"mapped_entity_count", mapped.entities.size()},
-                        {"source_retention_required", mapped.source_retention_required},
-                        {"diagnostics", json::array()}};
-            for (const auto& item : mapped.diagnostics)
-                report["diagnostics"].push_back({{"source_id", item.source_id},
-                    {"source_kind", item.source_kind}, {"code", item.code}});
             const auto report_bytes = QByteArray::fromStdString(report.dump(2));
             if (report_file.open(QIODevice::WriteOnly) && report_file.write(report_bytes) == report_bytes.size())
                 report_file.commit();
             owner->statusBar()->showMessage(
-                mapped.diagnostics.empty() ? QStringLiteral("IFC imported locally.")
-                                            : QStringLiteral("IFC imported with fidelity diagnostics."),
+                QStringLiteral("IFC imported: %1 objects inserted, %2 rejected; %3 fidelity diagnostics.")
+                    .arg(static_cast<qulonglong>(imported_ids.size()))
+                    .arg(static_cast<qulonglong>(rejected_entity_count))
+                    .arg(static_cast<qulonglong>(diagnostics.size())),
                 5000);
             return true;
         } catch (const std::exception& error) {
@@ -14680,105 +14948,227 @@ public:
         }
     }
 
-    void showViewportSettings() {
+    void showSheetLayoutManager() {
         const auto context = captureModalContext();
-        const auto source = authoringSnapshot();
-        const auto sheet_entity = std::find_if(source.entities().begin(), source.entities().end(),
-            [](const auto& entry) { return entry.second.type == kSheetViewEntityType; });
-        if (sheet_entity == source.entities().end()) {
-            setError(QStringLiteral("No typed drawing sheet is available."));
-            return;
-        }
         try {
-            const auto model = decode_sheet_view_entity(sheet_entity->second);
-            if (model.sheets().empty() || model.sheets().front().viewports.empty())
-                throw std::invalid_argument("no sheet viewport is defined");
-            const auto& sheet = model.sheets().front();
-            const auto& viewport = sheet.viewports.front();
-            const auto number = [](double value) {
-                return QString::number(value, 'g', 12);
-            };
-            QDialog dialog(owner);
+            const auto source = authoringSnapshot();
+            const auto record = decode_sheet_model(source);
+            if (!record || record->model.sheets().empty())
+                throw std::invalid_argument("No typed drawing sheet is available.");
+            SheetLayoutDialog dialog(record->model, outputSheetId(), owner);
             styleDialog(dialog);
-            dialog.setWindowTitle(QStringLiteral("Viewport settings"));
-            dialog.setModal(true);
-            auto* form = new QFormLayout(&dialog);
-            auto* x = new QLineEdit(number(viewport.bounds.x_mm), &dialog);
-            auto* y = new QLineEdit(number(viewport.bounds.y_mm), &dialog);
-            auto* width = new QLineEdit(number(viewport.bounds.width_mm), &dialog);
-            auto* height = new QLineEdit(number(viewport.bounds.height_mm), &dialog);
-            auto* scale = new QLineEdit(number(viewport.scale_denominator), &dialog);
-            x->setObjectName(QStringLiteral("viewportX"));
-            y->setObjectName(QStringLiteral("viewportY"));
-            width->setObjectName(QStringLiteral("viewportWidth"));
-            height->setObjectName(QStringLiteral("viewportHeight"));
-            scale->setObjectName(QStringLiteral("viewportScale"));
-            form->addRow(QStringLiteral("X (mm)"), x);
-            form->addRow(QStringLiteral("Y (mm)"), y);
-            form->addRow(QStringLiteral("Width (mm)"), width);
-            form->addRow(QStringLiteral("Height (mm)"), height);
-            form->addRow(QStringLiteral("Scale denominator"), scale);
-            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-            form->addRow(buttons);
-            QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-            QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-            if (dialog.exec() != QDialog::Accepted || !modalContextUnchanged(context)) return;
-            (void)editSheetViewport(QString::fromStdString(sheet.id),
-                                    QString::fromStdString(viewport.id), x->text(), y->text(),
-                                    width->text(), height->text(), scale->text());
+            if (dialog.exec() != QDialog::Accepted || !modalContextUnchanged(context) ||
+                !dialog.acceptedModel()) return;
+            const auto selected_sheet = dialog.selectedSheetId();
+            const auto replacement = *dialog.acceptedModel();
+            if (!applySheetModelMutation(QStringLiteral("Edit sheet layout"), selected_sheet,
+                                         [replacement](const SheetViewModel&) {
+                                             return replacement;
+                                         })) {
+                return;
+            }
+            if (!selected_sheet.isEmpty()) (void)selectOutputSheet(selected_sheet);
         } catch (const std::exception& error) {
-            setError(QStringLiteral("Viewport settings: %1").arg(QString::fromUtf8(error.what())));
+            setError(QStringLiteral("Sheet layout: %1").arg(QString::fromUtf8(error.what())));
         }
     }
 
-    void showSchedulePlacementSettings() {
+    void showNamedViews() {
         const auto context = captureModalContext();
         const auto source = authoringSnapshot();
-        const auto sheet_entity = std::find_if(source.entities().begin(), source.entities().end(),
-            [](const auto& entry) { return entry.second.type == kSheetViewEntityType; });
-        if (sheet_entity == source.entities().end()) {
-            setError(QStringLiteral("No typed drawing sheet is available."));
-            return;
+        const auto record = decode_sheet_model(source);
+        if (!record) { setError(QStringLiteral("No drawing views are defined.")); return; }
+        QDialog dialog(owner);
+        dialog.setObjectName(QStringLiteral("namedViewsDialog"));
+        dialog.setWindowTitle(QStringLiteral("Named elevations and sections"));
+        styleDialog(dialog);
+        auto* form = new QFormLayout(&dialog);
+        auto* selection = new QComboBox(&dialog);
+        selection->setObjectName(QStringLiteral("namedViewSelection"));
+        selection->addItem(QStringLiteral("New view"), QString{});
+        for (const auto& view : record->model.views())
+            selection->addItem(QString::fromStdString(view.name), QString::fromStdString(view.id));
+        auto* name = new QLineEdit(&dialog); name->setObjectName(QStringLiteral("namedViewName"));
+        auto* kind = new QComboBox(&dialog); kind->setObjectName(QStringLiteral("namedViewKind"));
+        kind->addItem(QStringLiteral("Elevation"), static_cast<int>(CoordinatedViewKind::elevation));
+        kind->addItem(QStringLiteral("Section"), static_cast<int>(CoordinatedViewKind::section));
+        kind->addItem(QStringLiteral("Plan"), static_cast<int>(CoordinatedViewKind::plan));
+        auto* origin = new QLineEdit(&dialog); origin->setObjectName(QStringLiteral("namedViewOrigin"));
+        auto* direction = new QLineEdit(&dialog); direction->setObjectName(QStringLiteral("namedViewDirection"));
+        auto* up = new QLineEdit(&dialog); up->setObjectName(QStringLiteral("namedViewUp"));
+        auto* cut = new QLineEdit(&dialog); cut->setObjectName(QStringLiteral("namedViewCut"));
+        auto* far = new QLineEdit(&dialog); far->setObjectName(QStringLiteral("namedViewFar"));
+        form->addRow(QStringLiteral("View"), selection);
+        form->addRow(QStringLiteral("Name"), name);
+        form->addRow(QStringLiteral("Kind"), kind);
+        form->addRow(QStringLiteral("Origin X, Y, Z (m)"), origin);
+        form->addRow(QStringLiteral("Look direction X, Y, Z"), direction);
+        form->addRow(QStringLiteral("Up direction X, Y, Z"), up);
+        form->addRow(QStringLiteral("Section cut depth (m)"), cut);
+        form->addRow(QStringLiteral("Far depth (m)"), far);
+        auto* hint = new QLabel(QStringLiteral("Direction and up must be perpendicular unit vectors. "
+            "Saved views are available in the view selector and drawing-sheet layout."), &dialog);
+        hint->setWordWrap(true); form->addRow(hint);
+        auto* error = new QLabel(&dialog); error->setWordWrap(true);
+        error->setObjectName(QStringLiteral("namedViewError")); form->addRow(error);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
+        buttons->button(QDialogButtonBox::Save)->setObjectName(QStringLiteral("saveNamedView"));
+        form->addRow(buttons);
+        const auto populate = [&] {
+            CoordinatedView value;
+            value.name = "New elevation"; value.kind = CoordinatedViewKind::elevation;
+            value.direction = {0, 1, 0}; value.up = {0, 0, 1};
+            const auto id = selection->currentData().toString().toStdString();
+            for (const auto& view : record->model.views()) if (view.id == id) value = view;
+            const auto vector_text = [](const std::array<double, 3>& values) {
+                return QStringLiteral("%1, %2, %3").arg(QString::number(values[0], 'g', 17),
+                    QString::number(values[1], 'g', 17), QString::number(values[2], 'g', 17));
+            };
+            name->setText(QString::fromStdString(value.name));
+            kind->setCurrentIndex(kind->findData(static_cast<int>(value.kind)));
+            origin->setText(vector_text(value.origin_m)); direction->setText(vector_text(value.direction));
+            up->setText(vector_text(value.up));
+            cut->setText(QString::number(value.presentation.cut_depth_m, 'g', 17));
+            far->setText(QString::number(value.presentation.far_depth_m, 'g', 17));
+        };
+        QObject::connect(selection, &QComboBox::currentIndexChanged, &dialog, populate);
+        const auto current = selection->findData(m_active_named_view);
+        if (current > 0) selection->setCurrentIndex(current);
+        populate();
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+            try {
+                if (!modalContextUnchanged(context)) { error->setText(lastError()); return; }
+                const auto scalar = [](const QString& text) {
+                    bool ok = false; const auto number = text.trimmed().toDouble(&ok);
+                    if (!ok || !std::isfinite(number)) throw std::invalid_argument("Enter finite numeric coordinates and depths.");
+                    return number;
+                };
+                const auto vector = [&](QLineEdit* field) {
+                    const auto parts = field->text().split(',');
+                    if (parts.size() != 3) throw std::invalid_argument("Enter three coordinates separated by commas.");
+                    return std::array<double, 3>{scalar(parts[0]), scalar(parts[1]), scalar(parts[2])};
+                };
+                auto views = record->model.views();
+                const auto selected = selection->currentData().toString().toStdString();
+                auto found = std::find_if(views.begin(), views.end(), [&](const auto& view) { return view.id == selected; });
+                CoordinatedView value = found == views.end() ? CoordinatedView{} : *found;
+                if (found == views.end()) value.id = new_id("view");
+                value.name = name->text().trimmed().toStdString();
+                if (value.name.empty()) throw std::invalid_argument("Enter a view name.");
+                value.kind = static_cast<CoordinatedViewKind>(kind->currentData().toInt());
+                value.origin_m = vector(origin); value.direction = vector(direction); value.up = vector(up);
+                value.presentation.cut_depth_m = scalar(cut->text()); value.presentation.far_depth_m = scalar(far->text());
+                if (found == views.end()) views.push_back(value); else *found = value;
+                const auto replacement = SheetViewModel::create(views, record->model.sheets(),
+                    record->model.to_json().at("schedule_ids").get<std::vector<std::string>>());
+                if (!applySheetModelMutation(QStringLiteral("Edit named view"), outputSheetId(),
+                        [replacement](const SheetViewModel&) { return replacement; })) {
+                    error->setText(lastError()); return;
+                }
+                m_active_named_view = QString::fromStdString(value.id);
+                m_architectural_view_kind = architectural_view_kind(value.kind);
+                refreshCanvases();
+                dialog.accept();
+            } catch (const std::exception& exception) { error->setText(QString::fromUtf8(exception.what())); }
+        });
+        dialog.exec();
+    }
+
+    bool setCalculationWorkflow(const QString& requested_workflow) {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        const auto workflow = requested_workflow.trimmed().toStdString();
+        if (workflow != "measurement" && workflow != "appraisal") {
+            setError(QStringLiteral("Choose Measurement or Appraisal."));
+            return false;
+        }
+        const auto property = propertyEntity();
+        if (!property.has_value()) {
+            setError(QStringLiteral("The project property is unavailable."));
+            return false;
         }
         try {
-            const auto model = decode_sheet_view_entity(sheet_entity->second);
-            if (model.sheets().empty() || model.sheets().front().schedules.empty())
-                throw std::invalid_argument("no schedule placement is defined");
-            const auto& sheet = model.sheets().front();
-            const auto& placement = sheet.schedules.front();
-            const auto number = [](double value) { return QString::number(value, 'g', 12); };
-            QDialog dialog(owner);
-            styleDialog(dialog);
-            dialog.setWindowTitle(QStringLiteral("Schedule placement settings"));
-            dialog.setModal(true);
-            auto* form = new QFormLayout(&dialog);
-            auto* schedule = new QLineEdit(QString::fromStdString(placement.schedule_id), &dialog);
-            auto* x = new QLineEdit(number(placement.bounds.x_mm), &dialog);
-            auto* y = new QLineEdit(number(placement.bounds.y_mm), &dialog);
-            auto* width = new QLineEdit(number(placement.bounds.width_mm), &dialog);
-            auto* height = new QLineEdit(number(placement.bounds.height_mm), &dialog);
-            schedule->setReadOnly(true);
-            schedule->setObjectName(QStringLiteral("schedulePlacementName"));
-            x->setObjectName(QStringLiteral("schedulePlacementX"));
-            y->setObjectName(QStringLiteral("schedulePlacementY"));
-            width->setObjectName(QStringLiteral("schedulePlacementWidth"));
-            height->setObjectName(QStringLiteral("schedulePlacementHeight"));
-            form->addRow(QStringLiteral("Schedule"), schedule);
-            form->addRow(QStringLiteral("X (mm)"), x);
-            form->addRow(QStringLiteral("Y (mm)"), y);
-            form->addRow(QStringLiteral("Width (mm)"), width);
-            form->addRow(QStringLiteral("Height (mm)"), height);
-            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-            form->addRow(buttons);
-            QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-            QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-            if (dialog.exec() != QDialog::Accepted || !modalContextUnchanged(context)) return;
-            (void)editSheetSchedulePlacement(QString::fromStdString(sheet.id),
-                                              QString::fromStdString(placement.id), x->text(), y->text(),
-                                              width->text(), height->text());
+            const auto current = calculation_workflow_name(property->properties);
+            if (current == workflow) {
+                clearError();
+                return true;
+            }
+            const auto snapshot = m_document->snapshot();
+            auto updated = *property;
+            if (workflow == "appraisal") {
+                updated.properties["measurement_calculation_profile"] =
+                    calculation_profile_json(read_calculation_profile(property->properties));
+                updated.properties["calculation_profile"] =
+                    calculation_profile_json(builtin_appraisal_profile());
+            } else {
+                if (property->properties.contains("measurement_calculation_profile")) {
+                    json stored_properties{{"calculation_profile",
+                                            property->properties.at("measurement_calculation_profile")}};
+                    updated.properties["calculation_profile"] =
+                        calculation_profile_json(read_calculation_profile(stored_properties));
+                } else {
+                    updated.properties["calculation_profile"] =
+                        calculation_profile_json(default_calculation_profile());
+                }
+            }
+            updated.properties["calculation_workflow"] = workflow;
+            std::vector<EntityChange> changes;
+            changes.push_back(EntityChange::upsert(std::move(updated)));
+            for (const auto& [id, source] : snapshot.entities()) {
+                (void)id;
+                if (!is_closed_boundary_entity(source.type)) continue;
+                auto boundary = source;
+                bool changed = false;
+                auto measurement = read_string(boundary.properties,
+                                               "measurement_classification");
+                const auto shared = read_string(boundary.properties, "classification");
+                if (!measurement.has_value() || measurement->empty()) {
+                    if (shared.has_value() && !shared->empty() &&
+                        !parse_appraisal_category(*shared).has_value()) {
+                        measurement = shared;
+                    } else {
+                        // Areas created while Appraisal is active have no
+                        // earlier measurement classification. The documented
+                        // neutral measurement rule keeps that workflow usable
+                        // without inferring any appraisal meaning.
+                        measurement = std::string{"measurement"};
+                    }
+                    boundary.properties["measurement_classification"] = *measurement;
+                    changed = true;
+                }
+                if (!read_string(boundary.properties, "appraisal_category").has_value() &&
+                    shared.has_value() &&
+                    parse_appraisal_category(*shared).has_value()) {
+                    // Interactive boundary authoring predates the split
+                    // workflow fields and commits the chosen appraisal token
+                    // as classification. Preserve it before Measurement
+                    // restores the independent measurement meaning.
+                    boundary.properties["appraisal_category"] = *shared;
+                    changed = true;
+                }
+                if (workflow != "appraisal" &&
+                    (!shared.has_value() || *shared != *measurement)) {
+                    boundary.properties["classification"] = *measurement;
+                    changed = true;
+                }
+                if (changed) changes.push_back(EntityChange::upsert(std::move(boundary)));
+            }
+            applyDocumentCommand(ApplyEntityChanges{
+                .expected_revision = snapshot.revision(),
+                .entity_changes = std::move(changes),
+                .message = workflow == "appraisal" ? "activate appraisal workflow"
+                                                    : "activate measurement workflow",
+            });
+            clearError();
+            refresh();
+            return true;
         } catch (const std::exception& error) {
-            setError(QStringLiteral("Schedule placement settings: %1")
+            setError(QStringLiteral("Calculation workflow: %1")
                          .arg(QString::fromUtf8(error.what())));
+            return false;
         }
     }
 
@@ -14798,7 +15188,8 @@ public:
                 : m_architectural_view_kind == BuildingViewKind::elevation
                 ? CoordinatedViewKind::elevation : CoordinatedViewKind::section;
             const auto found = std::find_if(model.views().begin(), model.views().end(),
-                [&](const auto& view) { return view.kind == expected_kind; });
+                [&](const auto& view) { return m_active_named_view.isEmpty() ? view.kind == expected_kind
+                    : view.id == m_active_named_view.toStdString(); });
             if (found == model.views().end())
                 throw std::invalid_argument("the selected architectural view is not defined");
             const auto number = [](double value) { return QString::number(value, 'g', 12); };
@@ -14862,10 +15253,21 @@ public:
             ? m_symbol_list->currentItem()->data(symbol_family_role).toString() : QString{};
         const auto query = m_symbol_search->text().trimmed().toLower().toStdString();
         const auto category = m_symbol_category->currentData().toString().toStdString();
-        const auto filtered = filter_symbol_catalog(default_symbol_catalog(), query, category);
+        auto filtered = filter_symbol_catalog(desktop_symbol_catalog(), query, category);
+        std::stable_sort(filtered.begin(), filtered.end(), [](const auto& left, const auto& right) {
+            if (left.svg_asset.has_value() != right.svg_asset.has_value())
+                return left.svg_asset.has_value();
+            const auto left_name = QString::fromStdString(
+                left.name.empty() ? left.family : left.name);
+            const auto right_name = QString::fromStdString(
+                right.name.empty() ? right.family : right.name);
+            const auto order = QString::compare(left_name, right_name, Qt::CaseInsensitive);
+            return order == 0 ? left.id < right.id : order < 0;
+        });
         const QSignalBlocker blocker(m_symbol_list);
         m_symbol_list->clear();
         std::set<std::string> rendered_families;
+        std::size_t detailed_svg_families{};
         for (const auto& first_variant : filtered) {
             if (!rendered_families.insert(first_variant.family).second) continue;
             const SymbolDefinition* definition = &first_variant;
@@ -14880,54 +15282,31 @@ public:
                        }); nominal != filtered.end()) {
                 definition = &*nominal;
             }
-            auto label = QString::fromStdString(definition->family);
-            label.replace(QLatin1Char('-'), QLatin1Char(' '));
-            if (!label.isEmpty()) label[0] = label[0].toUpper();
+            auto label = QString::fromStdString(
+                definition->name.empty() ? definition->family : definition->name);
+            if (definition->name.empty()) {
+                label.replace(QLatin1Char('-'), QLatin1Char(' '));
+                if (!label.isEmpty()) label[0] = label[0].toUpper();
+            }
             auto* entry = new QListWidgetItem(label, m_symbol_list);
-
-            QPixmap thumbnail(136, 108);
-            thumbnail.setDevicePixelRatio(2.0);
-            thumbnail.fill(QColor(248, 250, 253));
-            QPainter painter(&thumbnail);
-            painter.setRenderHint(QPainter::Antialiasing, true);
-            painter.setPen(QPen(QColor(42, 61, 82), 1.25,
-                                Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-            double left = std::numeric_limits<double>::infinity();
-            double right = -std::numeric_limits<double>::infinity();
-            double bottom = std::numeric_limits<double>::infinity();
-            double top = -std::numeric_limits<double>::infinity();
-            for (const auto& stroke : definition->preview) {
-                for (const auto point : {stroke.start, stroke.end}) {
-                    left = std::min(left, point.x);
-                    right = std::max(right, point.x);
-                    bottom = std::min(bottom, point.y);
-                    top = std::max(top, point.y);
-                }
-            }
-            if (!std::isfinite(left) || right <= left || top <= bottom) {
-                left = -definition->width_metres * 0.5;
-                right = definition->width_metres * 0.5;
-                bottom = -definition->depth_metres * 0.5;
-                top = definition->depth_metres * 0.5;
-            }
-            const auto factor = std::min(58.0 / (right - left), 44.0 / (top - bottom));
-            const auto centre_x = (left + right) * 0.5;
-            const auto centre_y = (bottom + top) * 0.5;
-            const auto point = [factor, centre_x, centre_y](Vec2 value) {
-                return QPointF(34.0 + (value.x - centre_x) * factor,
-                               27.0 - (value.y - centre_y) * factor);
-            };
-            for (const auto& stroke : definition->preview)
-                painter.drawLine(point(stroke.start), point(stroke.end));
-            painter.end();
-
-            entry->setIcon(QIcon(thumbnail));
+            if (definition->svg_asset.has_value()) ++detailed_svg_families;
+            entry->setIcon(symbol_library_thumbnail(*definition));
             entry->setData(Qt::UserRole, QString::fromStdString(definition->id));
             entry->setData(symbol_family_role, QString::fromStdString(definition->family));
             entry->setSizeHint(QSize(112, 82));
-            entry->setToolTip(QStringLiteral("%1 × %2 m\nDrag onto the plan, or double-click then click to place.")
-                                  .arg(QString::number(definition->width_metres, 'g', 4))
-                                  .arg(QString::number(definition->depth_metres, 'g', 4)));
+            const auto size_description =
+                definition->svg_asset.has_value() &&
+                        !definition->svg_asset->dimensions_are_nominal
+                    ? QStringLiteral("Default size: %1 × %2 m — adjust to suit")
+                          .arg(QString::number(definition->width_metres, 'g', 4))
+                          .arg(QString::number(definition->depth_metres, 'g', 4))
+                    : QStringLiteral("Nominal size: %1 × %2 m")
+                          .arg(QString::number(definition->width_metres, 'g', 4))
+                          .arg(QString::number(definition->depth_metres, 'g', 4));
+            entry->setToolTip(QStringLiteral("%1\n%2\n%3\nDrag onto the plan, or double-click then click to place.")
+                                  .arg(label)
+                                  .arg(size_description)
+                                  .arg(symbol_category_label(definition->category)));
             if (entry->data(symbol_family_role).toString() == previous_family)
                 m_symbol_list->setCurrentItem(entry);
         }
@@ -14935,8 +15314,9 @@ public:
             m_symbol_list->setCurrentRow(0);
         if (m_symbol_library_status) {
             m_symbol_library_status->setText(
-                QStringLiteral("%1 components • Drag onto the plan or double-click to place.")
-                    .arg(rendered_families.size()));
+                QStringLiteral("%1 components • %2 detailed SVG • Drag or double-click to place.")
+                    .arg(rendered_families.size())
+                    .arg(detailed_svg_families));
         }
         populateSymbolVariants(m_symbol_list->currentItem());
     }
@@ -14952,13 +15332,19 @@ public:
         const auto family = item->data(symbol_family_role).toString().toStdString();
         const auto selected_id = item->data(Qt::UserRole).toString();
         int selected_index = -1;
-        for (const auto& definition : default_symbol_catalog()) {
+        for (const auto& definition : desktop_symbol_catalog()) {
             if (definition.family != family) continue;
             auto label = QStringLiteral("%1 × %2 m")
                              .arg(QString::number(definition.width_metres, 'g', 4))
                              .arg(QString::number(definition.depth_metres, 'g', 4));
-            if (QString::fromStdString(definition.id).endsWith(QStringLiteral("-w2-d2")))
+            if (definition.svg_asset.has_value() &&
+                !definition.svg_asset->dimensions_are_nominal) {
+                label += QStringLiteral(" — Default size; adjust to suit");
+            } else if (definition.svg_asset.has_value()) {
+                label += QStringLiteral(" — Nominal");
+            } else if (QString::fromStdString(definition.id).endsWith(QStringLiteral("-w2-d2"))) {
                 label += QStringLiteral(" - Standard");
+            }
             m_symbol_size->addItem(label, QString::fromStdString(definition.id));
             if (QString::fromStdString(definition.id) == selected_id)
                 selected_index = m_symbol_size->count() - 1;
@@ -15794,11 +16180,14 @@ public:
             {QStringLiteral("Trace selected reference"), [this] { beginReferenceTrace(); }},
             {QStringLiteral("Open schedules"), [this] { showSchedules(); }},
             {QStringLiteral("Edit drawing sheet settings"), [this] { showSheetSettings(); }},
-            {QStringLiteral("Edit sheet viewport settings"), [this] { showViewportSettings(); }},
-            {QStringLiteral("Edit schedule placement settings"),
-             [this] { showSchedulePlacementSettings(); }},
+            {QStringLiteral("Edit sheet layout"), [this] { showSheetLayoutManager(); }},
             {QStringLiteral("Edit architectural view settings"),
              [this] { showArchitecturalViewSettings(); }},
+            {QStringLiteral("Create or edit named elevations and sections"), [this] { showNamedViews(); }},
+            {QStringLiteral("Join selected walls"), [this] { changeSelectedJoin(false, false); }},
+            {QStringLiteral("Unjoin selected walls"), [this] { changeSelectedJoin(false, true); }},
+            {QStringLiteral("Join selected roofs"), [this] { changeSelectedJoin(true, false); }},
+            {QStringLiteral("Unjoin selected roofs"), [this] { changeSelectedJoin(true, true); }},
             {QStringLiteral("Design phases and remodeling alternatives"),
              [this] { showRemodelingAlternatives(); }},
             {QStringLiteral("Room and boundary relationships"),
@@ -16974,6 +17363,52 @@ private:
         // presentation commands remain one click away in an overflow menu,
         // while their QAction identities and shortcuts stay stable.
         auto* more_menu = new QMenu(owner);
+        auto* architecture_menu = more_menu->addMenu(QStringLiteral("Architecture"));
+        architecture_menu->setObjectName(QStringLiteral("architecturalAuthoringMenu"));
+        const auto authoring_action = [&](const char* id, const QString& label, auto callback) {
+            auto* action = architecture_menu->addAction(label);
+            action->setObjectName(QString::fromLatin1(id));
+            QObject::connect(action, &QAction::triggered, owner, callback);
+        };
+        authoring_action("createWall", QStringLiteral("Wall — draw two points"),
+                         [this] { setTool(CanvasTool::wall); });
+        authoring_action("createDoor", QStringLiteral("Door in selected wall…"),
+                         [this] { createOpeningFromDialog(QStringLiteral("door")); });
+        authoring_action("createWindow", QStringLiteral("Window in selected wall…"),
+                         [this] { createOpeningFromDialog(QStringLiteral("window")); });
+        authoring_action("createOpening", QStringLiteral("Opening in selected wall…"), [this] {
+            const auto context = captureModalContext();
+            bool accepted = false;
+            const auto kind = QInputDialog::getItem(owner, QStringLiteral("Create opening"),
+                QStringLiteral("Opening kind"), {QStringLiteral("Door"), QStringLiteral("Window")},
+                0, false, &accepted);
+            if (accepted && modalContextUnchanged(context)) createOpeningFromDialog(kind.toLower());
+        });
+        authoring_action("createRoom", QStringLiteral("Room from selected boundary…"),
+                         [this] { createRoomVolumeFromDialog(); });
+        authoring_action("createSlab", QStringLiteral("Slab from selected boundary…"),
+                         [this] { createSlabFromDialog(QStringLiteral("slab")); });
+        authoring_action("createFloor", QStringLiteral("Floor from selected boundary…"),
+                         [this] { createSlabFromDialog(QStringLiteral("floor")); });
+        for (const auto* kind : {"roof", "stair", "column", "beam"}) {
+            const auto type = QString::fromLatin1(kind);
+            auto label = type; label[0] = label[0].toUpper();
+            auto* action = architecture_menu->addAction(label + QStringLiteral("…"));
+            action->setObjectName(QStringLiteral("create") + label);
+            QObject::connect(action, &QAction::triggered, owner,
+                             [this, type] { showBuildingObjectDialog(false, type); });
+        }
+        architecture_menu->addSeparator();
+        authoring_action("joinWalls", QStringLiteral("Join selected walls"),
+                         [this] { changeSelectedJoin(false, false); });
+        authoring_action("unjoinWalls", QStringLiteral("Unjoin selected walls"),
+                         [this] { changeSelectedJoin(false, true); });
+        authoring_action("joinRoofs", QStringLiteral("Join selected roofs"),
+                         [this] { changeSelectedJoin(true, false); });
+        authoring_action("unjoinRoofs", QStringLiteral("Unjoin selected roofs"),
+                         [this] { changeSelectedJoin(true, true); });
+        authoring_action("manageNamedViews", QStringLiteral("Named elevations and sections…"),
+                         [this] { showNamedViews(); });
         auto* dimension_action = more_menu->addAction(QStringLiteral("Add angle or area dimension…"));
         dimension_action->setObjectName(QStringLiteral("dimensionCreator"));
         dimension_action->setToolTip(QStringLiteral(
@@ -17045,8 +17480,8 @@ private:
         m_project_resources_action->setObjectName(QStringLiteral("projectResources"));
         m_schedule_action = new QAction(QStringLiteral("Schedules"), owner);
         m_sheet_action = new QAction(QStringLiteral("Sheet settings"), owner);
-        m_viewport_action = new QAction(QStringLiteral("Viewport settings"), owner);
-        m_schedule_placement_action = new QAction(QStringLiteral("Schedule placement"), owner);
+        m_viewport_action = new QAction(QStringLiteral("Sheet layout manager…"), owner);
+        m_viewport_action->setObjectName(QStringLiteral("sheetLayoutManager"));
         m_view_action = new QAction(QStringLiteral("Architectural view settings"), owner);
         m_remodel_action = new QAction(QStringLiteral("Design phases and alternatives…"), owner);
         m_remodel_action->setObjectName(QStringLiteral("designPhaseSettings"));
@@ -17079,16 +17514,16 @@ private:
         m_terrain_action = new QAction(QStringLiteral("Create terrain surface…"), owner);
         m_terrain_action->setObjectName(QStringLiteral("createTerrainSurface"));
         m_architectural_actions = {curved_wall_action, sloped_wall_action, m_view_action, m_remodel_action,
-            m_schedule_action, m_schedule_placement_action,
+            m_schedule_action, m_viewport_action,
             m_relationship_action, m_levels_action, m_reference_grid_action,
             m_assembly_action, m_terrain_action};
         m_about_action = new QAction(QStringLiteral("About"), owner);
         m_about_action->setObjectName(QStringLiteral("aboutAction"));
         auto* user_guide_action = new QAction(QStringLiteral("User guide…"), owner);
         user_guide_action->setObjectName(QStringLiteral("userGuide"));
-        const std::array<QAction*, 24> secondary_actions{
+        const std::array<QAction*, 23> secondary_actions{
             m_annotation_action, m_reference_action, m_project_resources_action, m_schedule_action, m_sheet_action,
-            m_viewport_action, m_schedule_placement_action, m_view_action, m_remodel_action,
+            m_viewport_action, m_view_action, m_remodel_action,
             m_relationship_action, m_levels_action, m_reference_grid_action, m_assembly_action, m_assistance_action,
             m_calculation_profile_action, measurement_keypad_action,
             m_workspace_profiles_action, m_revisions_action, m_transform_action, m_redefine_action,
@@ -17239,9 +17674,7 @@ private:
         QObject::connect(m_sheet_action, &QAction::triggered, owner,
                          [this] { showSheetSettings(); });
         QObject::connect(m_viewport_action, &QAction::triggered, owner,
-                         [this] { showViewportSettings(); });
-        QObject::connect(m_schedule_placement_action, &QAction::triggered, owner,
-                         [this] { showSchedulePlacementSettings(); });
+                         [this] { showSheetLayoutManager(); });
         QObject::connect(m_view_action, &QAction::triggered, owner,
                          [this] { showArchitecturalViewSettings(); });
         QObject::connect(m_remodel_action, &QAction::triggered, owner,
@@ -17283,6 +17716,7 @@ private:
                              case BuildingViewKind::elevation:
                              case BuildingViewKind::section:
                                  m_architectural_view_kind = static_cast<BuildingViewKind>(value);
+                                 m_active_named_view = m_architecturalViewCombo->itemData(index, Qt::UserRole + 1).toString();
                                  refreshCanvases();
                                  if (m_workspace == Workspace::architectural) m_architecturalCanvas->fitView();
                                  break;
@@ -17455,6 +17889,8 @@ private:
         m_object_button->setAccessibleName(QStringLiteral("Create architectural object"));
         m_object_button->setToolTip(QStringLiteral("Create a column, beam, stair or roof"));
         m_object_button->setObjectName(QStringLiteral("createBuildingObject"));
+        m_object_button->setMenu(architecture_menu);
+        m_object_button->setPopupMode(QToolButton::MenuButtonPopup);
         m_object_button->setAutoRaise(true);
         components_header_layout->addWidget(m_object_button);
         QObject::connect(m_object_button, &QToolButton::clicked, owner,
@@ -17518,15 +17954,13 @@ private:
             "Drag a component onto the plan, or double-click to place by cursor."));
         symbols_layout->addWidget(m_symbol_library_status);
 
-        const auto catalog = default_symbol_catalog();
+        const auto& catalog = desktop_symbol_catalog();
         std::set<std::string> symbol_categories;
         for (const auto& definition : catalog) symbol_categories.insert(definition.category);
         m_symbol_category->addItem(QStringLiteral("All categories"), QString{});
         for (const auto& category : symbol_categories) {
-            auto label = QString::fromStdString(category);
-            label.replace(QLatin1Char('_'), QLatin1Char(' '));
-            if (!label.isEmpty()) label[0] = label[0].toUpper();
-            m_symbol_category->addItem(label, QString::fromStdString(category));
+            m_symbol_category->addItem(symbol_category_label(category),
+                                       QString::fromStdString(category));
         }
         QObject::connect(m_symbol_category, &QComboBox::currentIndexChanged, owner,
                          [this] { populateSymbolLibrary(); });
@@ -18285,10 +18719,64 @@ private:
         calculation_layout->addRow(QStringLiteral("Factor"), m_factor_edit);
         inspector_layout->addWidget(calculation_group);
 
-        auto* profile_group = new QGroupBox(QStringLiteral("Calculation profile"), inspector_body);
+        m_appraisal_summary_group = new QGroupBox(QStringLiteral("Appraisal square footage"),
+                                                  inspector_body);
+        m_appraisal_summary_group->setObjectName(QStringLiteral("appraisalSummary"));
+        m_appraisal_summary_group->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+        auto* appraisal_layout = new QFormLayout(m_appraisal_summary_group);
+        appraisal_layout->setRowWrapPolicy(QFormLayout::WrapLongRows);
+        const auto add_appraisal_value = [&](const QString& label, const char* object_name) {
+            auto* value = new QLabel(m_appraisal_summary_group);
+            value->setObjectName(QString::fromLatin1(object_name));
+            configure_value_label(value);
+            appraisal_layout->addRow(label, value);
+            return value;
+        };
+        m_appraisal_gla_value = add_appraisal_value(
+            QStringLiteral("GLA (above-grade finished)"), "appraisalGlaTotal");
+        m_appraisal_above_unfinished_value = add_appraisal_value(
+            QStringLiteral("Above-grade unfinished"), "appraisalAboveGradeUnfinishedTotal");
+        m_appraisal_below_finished_value = add_appraisal_value(
+            QStringLiteral("Below-grade finished"), "appraisalBelowGradeFinishedTotal");
+        m_appraisal_below_unfinished_value = add_appraisal_value(
+            QStringLiteral("Below-grade unfinished"), "appraisalBelowGradeUnfinishedTotal");
+        m_appraisal_garage_value = add_appraisal_value(
+            QStringLiteral("Garage"), "appraisalGarageTotal");
+        m_appraisal_carport_value = add_appraisal_value(
+            QStringLiteral("Carport"), "appraisalCarportTotal");
+        m_appraisal_porch_value = add_appraisal_value(
+            QStringLiteral("Porch"), "appraisalPorchTotal");
+        m_appraisal_patio_value = add_appraisal_value(
+            QStringLiteral("Patio"), "appraisalPatioTotal");
+        m_appraisal_deck_value = add_appraisal_value(
+            QStringLiteral("Deck"), "appraisalDeckTotal");
+        m_appraisal_other_value = add_appraisal_value(
+            QStringLiteral("Other non-living"), "appraisalOtherNonLivingTotal");
+        m_appraisal_floor_value = add_appraisal_value(
+            QStringLiteral("Selected floor measured"), "appraisalFloorTotal");
+        m_appraisal_property_value = add_appraisal_value(
+            QStringLiteral("Property measured"), "appraisalPropertyTotal");
+        m_appraisal_contribution_value = add_appraisal_value(
+            QStringLiteral("Contributing boundaries"), "appraisalContribution");
+        m_appraisal_contribution_value->setWordWrap(true);
+        m_appraisal_summary_group->hide();
+        inspector_layout->addWidget(m_appraisal_summary_group);
+
+        auto* profile_group = new QGroupBox(QStringLiteral("Area workflow"), inspector_body);
         m_profile_group = profile_group;
         profile_group->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
         auto* profile_layout = new QVBoxLayout(profile_group);
+        auto* workflow_form = new QFormLayout;
+        m_calculation_workflow_combo = new QComboBox(profile_group);
+        m_calculation_workflow_combo->setObjectName(QStringLiteral("calculationWorkflow"));
+        m_calculation_workflow_combo->addItem(QStringLiteral("Measurement"),
+                                              QStringLiteral("measurement"));
+        m_calculation_workflow_combo->addItem(QStringLiteral("Appraisal"),
+                                              QStringLiteral("appraisal"));
+        m_calculation_workflow_combo->setToolTip(QStringLiteral(
+            "Appraisal calculates GLA and ancillary square footage automatically from explicit area classifications."));
+        workflow_form->addRow(QStringLiteral("Workflow"), m_calculation_workflow_combo);
+        profile_layout->addLayout(workflow_form);
         m_calculation_profile_context = new QLabel(profile_group);
         m_calculation_profile_context->setObjectName(QStringLiteral("calculationProfileContext"));
         m_calculation_profile_context->setWordWrap(true);
@@ -18379,6 +18867,13 @@ private:
                          });
         QObject::connect(m_edit_calculation_profile_button, &QPushButton::clicked, owner,
                          [this] { showCalculationProfileEditor(); });
+        QObject::connect(m_calculation_workflow_combo, &QComboBox::currentIndexChanged, owner,
+                         [this](int) {
+                             if (!m_refreshing) {
+                                 (void)setCalculationWorkflow(
+                                     m_calculation_workflow_combo->currentData().toString());
+                             }
+                         });
         QObject::connect(m_classification_combo, &QComboBox::currentTextChanged, owner,
                          [this](const QString& text) {
                              if (!m_refreshing) {
@@ -18515,10 +19010,25 @@ private:
                 if (m_selected_ids.size() == 1) {
                     const auto entity = selectedEntity();
                     if (entity && entity->type == "wall") {
+                        menu.addAction(owner->findChild<QAction*>(QStringLiteral("createDoor")));
+                        menu.addAction(owner->findChild<QAction*>(QStringLiteral("createWindow")));
                         auto* length = menu.addAction(QStringLiteral("Change length…"));
                         QObject::connect(length, &QAction::triggered, owner,
                                          [this] { showConstraintEditor(); });
                     }
+                }
+                const auto selected = selectedEntity();
+                if (selected && is_closed_boundary_entity(selected->type)) {
+                    for (const auto* id : {"createRoom", "createSlab", "createFloor"})
+                        menu.addAction(owner->findChild<QAction*>(QString::fromLatin1(id)));
+                }
+                if (selected && (selected->type == "wall" || selected->type == "wall_join")) {
+                    if (m_selected_ids.size() > 1) menu.addAction(owner->findChild<QAction*>(QStringLiteral("joinWalls")));
+                    menu.addAction(owner->findChild<QAction*>(QStringLiteral("unjoinWalls")));
+                }
+                if (selected && (selected->type == "roof" || selected->type == "roof_join")) {
+                    if (m_selected_ids.size() > 1) menu.addAction(owner->findChild<QAction*>(QStringLiteral("joinRoofs")));
+                    menu.addAction(owner->findChild<QAction*>(QStringLiteral("unjoinRoofs")));
                 }
                 auto* properties = menu.addAction(QStringLiteral("Properties"));
                 QObject::connect(properties, &QAction::triggered, owner,
@@ -18965,7 +19475,7 @@ private:
             if (entity.type != kAnnotationEntityType) continue;
             try {
                 const auto state = decode_annotation_entity(entity);
-                const auto catalog = default_symbol_catalog();
+                const auto& catalog = desktop_symbol_catalog();
                 for (const auto& label : state.labels) {
                     if (!label.visible) continue;
                     annotation_child_layers.emplace_back(label.id, label.placement.layer_id);
@@ -19017,6 +19527,22 @@ private:
                         QString::fromStdString(symbol.style.fill_pattern);
                     canvas_symbol.filled = symbol.style.fill_pattern != "none" &&
                                            canvas_symbol.fill_color.isValid();
+                    if (definition->svg_asset.has_value()) {
+                        const auto& asset = *definition->svg_asset;
+                        CanvasSvgSymbol svg_symbol;
+                        svg_symbol.catalog_id = QString::fromStdString(definition->id);
+                        svg_symbol.document = load_symbol_svg(asset);
+                        svg_symbol.view_box = QRectF(asset.view_box[0], asset.view_box[1],
+                                                    asset.view_box[2], asset.view_box[3]);
+                        svg_symbol.footprint_view_box =
+                            QRectF(asset.footprint_view_box[0], asset.footprint_view_box[1],
+                                   asset.footprint_view_box[2], asset.footprint_view_box[3]);
+                        svg_symbol.position = symbol.placement.position;
+                        svg_symbol.rotation_radians = symbol.placement.rotation_radians;
+                        svg_symbol.width_metres = definition->width_metres * symbol.placement.scale;
+                        svg_symbol.depth_metres = definition->depth_metres * symbol.placement.scale;
+                        canvas_symbol.svg_symbol = std::move(svg_symbol);
+                    }
                     all_geometry.push_back(std::move(canvas_symbol));
                 }
                 for (const auto& override : state.overrides) {
@@ -19125,7 +19651,8 @@ private:
                                       .arg(QString::fromUtf8(error.what())));
         }
         for (const auto& [child_id, host_id] : assembly_child_hosts) {
-            if (visible_ids.contains(host_id)) visible_ids.insert(child_id);
+            if (visible_ids.contains(host_id) && !presentation_hidden_ids.contains(host_id) &&
+                !presentation_hidden_ids.contains(child_id)) visible_ids.insert(child_id);
         }
         for (const auto& [id, layer_id] : annotation_child_layers) {
             if (layer_id.empty() || visible_ids.contains(layer_id)) visible_ids.insert(id);
@@ -19163,12 +19690,23 @@ private:
             } catch (const std::exception&) {
                 continue;
             }
-            const auto width = std::max(0.45, label.text.size() * 0.105);
-            constexpr double height = 0.30;
+            // Match the canvas font and padded label layout at its standard
+            // model scale. Character counts are not a text footprint (notably
+            // for wide glyphs, fallback fonts, and non-ASCII room names).
+            constexpr double layout_scale = 80.0;
+            auto font = m_measurementCanvas->font();
+            font.setPixelSize(static_cast<int>(std::lround(std::clamp(
+                label.text_height_metres * label.scale * layout_scale, 8.0, 96.0))));
+            if (label.bold) font.setBold(true);
+            if (label.italic) font.setItalic(true);
+            auto footprint = QFontMetricsF(font, m_measurementCanvas).boundingRect(label.text);
+            footprint.adjust(-5.0, -3.0, 5.0, 3.0);
+            const auto width = footprint.width() / layout_scale;
+            const auto height = footprint.height() / layout_scale;
             const auto room_width = room_bounds.maximum.x - room_bounds.minimum.x;
             const auto room_height = room_bounds.maximum.y - room_bounds.minimum.y;
             const auto center = plan_label_anchor(label_owner->segments);
-            const std::array<Vec2, 9> candidates{
+            std::vector<Vec2> candidates{
                 center,
                 Vec2{room_bounds.maximum.x - room_width * 0.18, center.y},
                 Vec2{room_bounds.minimum.x + room_width * 0.18, center.y},
@@ -19183,6 +19721,15 @@ private:
                 Vec2{room_bounds.minimum.x + room_width * 0.22,
                      room_bounds.minimum.y + room_height * 0.22},
             };
+            // A concave room's centroid and all nine preferred positions can
+            // be outside. Search the remaining interior before omitting a name.
+            for (int row = 1; row < 20; ++row) {
+                for (int column = 1; column < 20; ++column) {
+                    candidates.push_back({room_bounds.minimum.x + room_width * column / 20.0,
+                                          room_bounds.minimum.y + room_height * row / 20.0});
+                }
+            }
+            bool placed = false;
             for (const auto candidate : candidates) {
                 const Bounds2 label_bounds{{candidate.x - width * 0.5,
                                             candidate.y - height * 0.5},
@@ -19194,17 +19741,18 @@ private:
                     label_bounds.maximum.y > room_bounds.maximum.y - 0.08) {
                     continue;
                 }
-                const std::array<Vec2, 5> containment_points{
-                    candidate,
-                    Vec2{label_bounds.minimum.x, label_bounds.minimum.y},
-                    Vec2{label_bounds.minimum.x, label_bounds.maximum.y},
-                    Vec2{label_bounds.maximum.x, label_bounds.minimum.y},
-                    Vec2{label_bounds.maximum.x, label_bounds.maximum.y},
-                };
-                if (!std::all_of(containment_points.begin(), containment_points.end(),
-                        [&](Vec2 sample) {
-                            return plan_boundary_contains(label_owner->segments, sample);
-                        })) {
+                // Treat the footprint as a hole for the geometry kernel's
+                // strict analytical containment test. This checks every edge
+                // against lines and arcs, including notches between corners.
+                const Vec2 bottom_left = label_bounds.minimum;
+                const Vec2 top_right = label_bounds.maximum;
+                const Vec2 bottom_right{top_right.x, bottom_left.y};
+                const Vec2 top_left{bottom_left.x, top_right.y};
+                const Boundary rectangle{{bottom_left, bottom_right, 0.0},
+                                         {bottom_right, top_right, 0.0},
+                                         {top_right, top_left, 0.0},
+                                         {top_left, bottom_left, 0.0}};
+                if (validate_boundary_holes(label_owner->segments, {rectangle})) {
                     continue;
                 }
                 const auto blocked = std::any_of(component_bounds.begin(), component_bounds.end(),
@@ -19217,10 +19765,15 @@ private:
                     });
                 if (!blocked) {
                     label.position = candidate;
+                    placed = true;
                     break;
                 }
             }
+            if (!placed) label.text.clear();
         }
+        std::erase_if(all_labels, [](const auto& label) {
+            return label.avoid_components && label.text.isEmpty();
+        });
         // Measurement always retains its plan geometry. Build all three
         // architectural presentations from the same snapshot so persisted
         // sheet viewports can render independently of the active workspace.
@@ -19308,21 +19861,27 @@ private:
                                                        const ArchitecturalViewContext& view_context) {
             std::set<std::string, std::less<>> referenced(
                 view_context.object_ids.begin(), view_context.object_ids.end());
-            if (!referenced.empty()) {
+            const bool restricted = !view_context.object_ids.empty();
+            std::erase_if(referenced, [&](const auto& id) {
+                return presentation_hidden_ids.contains(id);
+            });
+            if (restricted) {
                 // Hosted openings are represented by their wall's clipped
                 // solid in every architectural projection. Referencing an
                 // opening therefore admits its host as a derived dependency.
                 for (const auto& [id, entity] : snapshot.entities()) {
                     if (entity.type != "opening" || !referenced.contains(id)) continue;
                     const auto host = entity.properties.find("wall_id");
-                    if (host != entity.properties.end() && host->is_string()) {
+                    if (host != entity.properties.end() && host->is_string() &&
+                        !presentation_hidden_ids.contains(host->get<std::string>())) {
                         referenced.insert(host->get<std::string>());
                     }
                 }
                 // A placed assembly is a transformed copy of its host. Keep
                 // that dependent preview when the view selects the host.
                 for (const auto& assembly : assembly_previews) {
-                    if (referenced.contains(assembly.host_entity_id)) {
+                    if (referenced.contains(assembly.host_entity_id) &&
+                        !presentation_hidden_ids.contains(assembly.child_id)) {
                         referenced.insert(assembly.child_id);
                     }
                 }
@@ -19341,7 +19900,8 @@ private:
                 std::vector<CanvasEntity> filtered;
                 filtered.reserve(all_geometry.size());
                 for (const auto& entity : all_geometry) {
-                    if (referenced.empty() || referenced.contains(entity.id.toStdString())) {
+                    if (!presentation_hidden_ids.contains(entity.id.toStdString()) &&
+                        (!restricted || referenced.contains(entity.id.toStdString()))) {
                         filtered.push_back(entity);
                         filtered.back().output_stroke_width_mm =
                             view_context.presentation.projection_line_mm;
@@ -19388,7 +19948,8 @@ private:
                 return key.str();
             }();
             for (const auto& [id, entity] : snapshot.entities()) {
-                if (!referenced.empty() && !referenced.contains(id)) {
+                if (presentation_hidden_ids.contains(id) ||
+                    (restricted && !referenced.contains(id))) {
                     continue;
                 }
                 try {
@@ -19514,8 +20075,10 @@ private:
                 }
             }
             for (const auto& assembly : assembly_previews) {
-                if (!referenced.empty() && !referenced.contains(assembly.host_entity_id) &&
-                    !referenced.contains(assembly.child_id)) {
+                if (presentation_hidden_ids.contains(assembly.host_entity_id) ||
+                    presentation_hidden_ids.contains(assembly.child_id) ||
+                    (restricted && !referenced.contains(assembly.host_entity_id) &&
+                     !referenced.contains(assembly.child_id))) {
                     continue;
                 }
                 try {
@@ -19655,6 +20218,28 @@ private:
         m_architectural_view_entities = std::move(visible_view_geometry);
         m_architecturalCanvas->setEntities(
             m_architectural_view_entities[architectural_view_index(m_architectural_view_kind)]);
+        {
+            const QSignalBlocker blocker(m_architecturalViewCombo);
+            while (m_architecturalViewCombo->count() > 3) m_architecturalViewCombo->removeItem(3);
+            int selected_index = m_architecturalViewCombo->findData(static_cast<int>(m_architectural_view_kind));
+            for (const auto& [model_id, entity] : snapshot.entities()) {
+                if (entity.type != kSheetViewEntityType) continue;
+                const auto model = decode_sheet_view_entity(entity);
+                for (const auto& view : model.views()) {
+                    m_architecturalViewCombo->addItem(QString::fromStdString(view.name),
+                        static_cast<int>(architectural_view_kind(view.kind)));
+                    const auto index = m_architecturalViewCombo->count() - 1;
+                    m_architecturalViewCombo->setItemData(index, QString::fromStdString(view.id), Qt::UserRole + 1);
+                    if (view.id == m_active_named_view.toStdString()) {
+                        selected_index = index;
+                        const auto projected = m_coordinated_view_entities.find(std::make_pair(model_id, view.id));
+                        if (projected != m_coordinated_view_entities.end()) m_architecturalCanvas->setEntities(projected->second);
+                    }
+                }
+            }
+            if (selected_index < 3) m_active_named_view.clear();
+            m_architecturalViewCombo->setCurrentIndex(selected_index);
+        }
         std::vector<CanvasLabel> labels;
         for (auto& label : all_labels) {
             if (visible_ids.contains(label.id.toStdString()) &&
@@ -20058,6 +20643,16 @@ private:
         const bool is_area = selected.has_value() && is_closed_boundary_entity(selected->type);
         m_calculation_group->setVisible(is_area);
         m_profile_group->setVisible(is_area);
+        m_appraisal_summary_group->hide();
+        for (auto* value : {m_appraisal_gla_value, m_appraisal_above_unfinished_value,
+                            m_appraisal_below_finished_value, m_appraisal_below_unfinished_value,
+                            m_appraisal_garage_value, m_appraisal_carport_value,
+                            m_appraisal_porch_value, m_appraisal_patio_value,
+                            m_appraisal_deck_value, m_appraisal_other_value,
+                            m_appraisal_floor_value, m_appraisal_property_value,
+                            m_appraisal_contribution_value}) {
+            value->setText(QStringLiteral("—"));
+        }
         const auto clear_values = [&] {
             m_calculation_base_value->setText(QStringLiteral("—"));
             m_calculation_net_value->setText(QStringLiteral("—"));
@@ -20088,6 +20683,7 @@ private:
             m_include_building_check->setEnabled(false);
             m_include_living_check->setEnabled(false);
             m_edit_calculation_profile_button->setEnabled(false);
+            m_calculation_workflow_combo->setEnabled(false);
         };
         const auto set_calculation_error = [&](const QString& message) {
             clear_values();
@@ -20119,8 +20715,10 @@ private:
         }
 
         CalculationProfile persisted_profile;
+        std::string calculation_workflow;
         try {
             persisted_profile = read_calculation_profile(property->properties);
+            calculation_workflow = calculation_workflow_name(property->properties);
         } catch (const std::exception& error) {
             clear_controls();
             set_calculation_error(QStringLiteral("profile is invalid: %1")
@@ -20128,10 +20726,21 @@ private:
             return;
         }
 
+        const bool appraisal_workflow = calculation_workflow == "appraisal";
+        {
+            QSignalBlocker blocker(m_calculation_workflow_combo);
+            m_calculation_workflow_combo->setCurrentIndex(
+                m_calculation_workflow_combo->findData(
+                    QString::fromStdString(calculation_workflow)));
+        }
+        m_calculation_workflow_combo->setEnabled(editable);
+        m_appraisal_summary_group->setVisible(appraisal_workflow);
+
         CalculationProfile display_profile = persisted_profile;
         display_profile.display_unit =
             m_metric_units ? AreaUnit::square_metre : AreaUnit::square_foot;
-        const auto classification = read_string(selected->properties, "classification");
+        const auto classification = area_classification_for_workflow(
+            selected->properties, calculation_workflow);
         const auto classification_name =
             classification.has_value() && !classification->empty()
                 ? QString::fromStdString(*classification)
@@ -20142,6 +20751,19 @@ private:
             if (found != persisted_profile.classifications.end()) {
                 profile_rule = found->second;
             }
+        }
+        {
+            QSignalBlocker blocker(m_classification_combo);
+            m_classification_combo->clear();
+            for (const auto& [name, rule] : persisted_profile.classifications) {
+                (void)rule;
+                m_classification_combo->addItem(QString::fromStdString(name));
+            }
+            if (!classification_name.startsWith(QLatin1Char('(')) &&
+                m_classification_combo->findText(classification_name) < 0) {
+                m_classification_combo->addItem(classification_name);
+            }
+            m_classification_combo->setCurrentText(classification_name);
         }
         StoredFactor factor;
         try {
@@ -20175,7 +20797,10 @@ private:
         m_edit_deductions_button->setEnabled(editable);
 
         m_calculation_profile_version->setText(
-            QStringLiteral("Profile version %1").arg(persisted_profile.version));
+            appraisal_workflow
+                ? QStringLiteral("Built-in appraisal profile · version %1")
+                      .arg(persisted_profile.version)
+                : QStringLiteral("Profile version %1").arg(persisted_profile.version));
         m_calculation_profile_version->setToolTip(QString::fromStdString(persisted_profile.id));
         if (profile_rule.has_value()) {
             m_calculation_profile_context->setText(
@@ -20202,9 +20827,14 @@ private:
                 profile_rule.has_value() && profile_rule->living_total);
         }
         m_factor_edit->setEnabled(editable);
-        m_include_building_check->setEnabled(editable);
-        m_include_living_check->setEnabled(editable);
-        m_edit_calculation_profile_button->setEnabled(editable);
+        m_include_building_check->setVisible(!appraisal_workflow);
+        m_include_living_check->setVisible(!appraisal_workflow);
+        m_edit_calculation_profile_button->setVisible(!appraisal_workflow);
+        m_include_building_check->setEnabled(editable && !appraisal_workflow);
+        m_include_living_check->setEnabled(editable && !appraisal_workflow);
+        m_edit_calculation_profile_button->setEnabled(editable && !appraisal_workflow);
+        if (m_calculation_profile_action)
+            m_calculation_profile_action->setEnabled(editable && !appraisal_workflow);
 
         try {
             const auto& entities = snapshot.entities();
@@ -20244,7 +20874,15 @@ private:
                 if (!phase_visible_ids.contains(id)) {
                     continue;
                 }
-                if (referenced_deductions.contains(id)) {
+                const auto entity_classification = area_classification_for_workflow(
+                    entity.properties, calculation_workflow);
+                if (referenced_deductions.contains(id) &&
+                    (!appraisal_workflow || !entity_classification.has_value() ||
+                     !persisted_profile.classifications.contains(*entity_classification))) {
+                    // Measurement deductions and appraisal voids only modify
+                    // their parent. An explicitly classified appraisal area
+                    // (for example, a garage inside the gross footprint) is
+                    // also a first-class category contribution.
                     continue;
                 }
                 const auto floor_id = read_string(entity.properties, "floor_id");
@@ -20270,10 +20908,12 @@ private:
                 if (boundary.empty()) {
                     throw std::invalid_argument("Boundary " + id + " has no valid segments");
                 }
-                const auto entity_classification = read_string(entity.properties, "classification");
                 if (!entity_classification.has_value() || entity_classification->empty()) {
-                    throw std::invalid_argument("Boundary " + id +
-                                                " has no classification rule; assign a classification");
+                    throw std::invalid_argument(
+                        "Boundary " + id +
+                        (appraisal_workflow
+                             ? " has no appraisal category; assign one before calculating totals"
+                             : " has no measurement classification; assign one before calculating totals"));
                 }
                 if (!persisted_profile.classifications.contains(*entity_classification)) {
                     throw std::invalid_argument("Classification '" + *entity_classification +
@@ -20320,7 +20960,14 @@ private:
                                                 stored_factor.rational,
                                                 scope_name == "site" ? AreaScope::site : AreaScope::building});
             }
-            const auto report = calculate_areas(areas, display_profile);
+            std::optional<AppraisalCalculationReport> appraisal_report;
+            CalculationReport report;
+            if (appraisal_workflow) {
+                appraisal_report = calculate_appraisal_areas(areas, display_profile);
+                report = appraisal_report->calculation;
+            } else {
+                report = calculate_areas(areas, display_profile);
+            }
             const auto selected_result = std::find_if(
                 report.areas.begin(), report.areas.end(), [&](const AreaCalculation& result) {
                     return result.area_id == selected->id;
@@ -20366,6 +21013,66 @@ private:
                     .arg(QString::number(factored.rounding_delta, 'f', 6)));
             m_calculation_building_total_value->setText(format_area(report.building.display));
             m_calculation_living_total_value->setText(format_area(report.living.display));
+            if (appraisal_report.has_value()) {
+                const auto show_bucket = [&](QLabel* label, AppraisalAreaCategory category) {
+                    label->setText(format_area(
+                        appraisal_report->property.by_category.at(category).total.display));
+                };
+                show_bucket(m_appraisal_gla_value,
+                            AppraisalAreaCategory::above_grade_finished);
+                show_bucket(m_appraisal_above_unfinished_value,
+                            AppraisalAreaCategory::above_grade_unfinished);
+                show_bucket(m_appraisal_below_finished_value,
+                            AppraisalAreaCategory::below_grade_finished);
+                show_bucket(m_appraisal_below_unfinished_value,
+                            AppraisalAreaCategory::below_grade_unfinished);
+                show_bucket(m_appraisal_garage_value, AppraisalAreaCategory::garage);
+                show_bucket(m_appraisal_carport_value, AppraisalAreaCategory::carport);
+                show_bucket(m_appraisal_porch_value, AppraisalAreaCategory::porch);
+                show_bucket(m_appraisal_patio_value, AppraisalAreaCategory::patio);
+                show_bucket(m_appraisal_deck_value, AppraisalAreaCategory::deck);
+                show_bucket(m_appraisal_other_value,
+                            AppraisalAreaCategory::other_non_living);
+
+                const auto floor_key = std::pair{selected_result->building_id,
+                                                 selected_result->floor_id};
+                const auto floor_totals = appraisal_report->by_floor.find(floor_key);
+                long double floor_square_metres = 0.0L;
+                if (floor_totals != appraisal_report->by_floor.end()) {
+                    for (const auto& [category, bucket] : floor_totals->second.by_category) {
+                        (void)category;
+                        floor_square_metres += bucket.total.square_metres;
+                    }
+                }
+                long double property_square_metres = 0.0L;
+                for (const auto& [category, bucket] : appraisal_report->property.by_category) {
+                    (void)category;
+                    property_square_metres += bucket.total.square_metres;
+                }
+                m_appraisal_floor_value->setText(format_area(display_area(
+                    static_cast<double>(floor_square_metres), display_profile)));
+                m_appraisal_property_value->setText(format_area(display_area(
+                    static_cast<double>(property_square_metres), display_profile)));
+
+                if (profile_rule.has_value() &&
+                    profile_rule->appraisal_category != AppraisalAreaCategory::none) {
+                    const auto& contribution = appraisal_report->property.by_category.at(
+                        profile_rule->appraisal_category);
+                    QStringList ids;
+                    for (const auto& id : contribution.area_ids) ids.push_back(id_from(id));
+                    const auto category_name = appraisal_category_name(
+                        profile_rule->appraisal_category);
+                    m_appraisal_contribution_value->setText(
+                        QStringLiteral("%1: %2")
+                            .arg(QString::fromLatin1(category_name.data(),
+                                                     static_cast<qsizetype>(category_name.size())),
+                                 ids.isEmpty() ? QStringLiteral("None")
+                                               : ids.join(QStringLiteral(", "))));
+                } else {
+                    m_appraisal_contribution_value->setText(
+                        QStringLiteral("Not assigned to an appraisal category"));
+                }
+            }
             m_calculation_status->setText(QStringLiteral("Calculated"));
             m_factor_edit->setToolTip(
                 QStringLiteral("Exact factor %1 = %2")
@@ -21080,14 +21787,17 @@ private:
                 if (const auto symbol = std::find_if(state.symbols.begin(), state.symbols.end(),
                         [&](const auto& candidate) { return candidate.id == id; });
                     symbol != state.symbols.end()) {
-                    const auto catalog = default_symbol_catalog();
+                    const auto& catalog = desktop_symbol_catalog();
                     const auto definition = std::find_if(catalog.begin(), catalog.end(),
                         [&](const auto& candidate) { return candidate.id == symbol->symbol_id; });
                     auto name = definition == catalog.end()
                         ? QString::fromStdString(symbol->symbol_id)
-                        : QString::fromStdString(definition->family);
-                    name.replace(QLatin1Char('-'), QLatin1Char(' '));
-                    if (!name.isEmpty()) name[0] = name[0].toUpper();
+                        : QString::fromStdString(definition->name.empty()
+                              ? definition->family : definition->name);
+                    if (definition == catalog.end() || definition->name.empty()) {
+                        name.replace(QLatin1Char('-'), QLatin1Char(' '));
+                        if (!name.isEmpty()) name[0] = name[0].toUpper();
+                    }
                     return QStringLiteral("Selected: %1").arg(name);
                 }
             } catch (const std::exception&) {
@@ -22236,7 +22946,53 @@ private:
         dialog.exec();
     }
 
-    void showBuildingObjectDialog(bool editing) {
+    void changeSelectedJoin(bool roofs, bool removing) {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return;
+        }
+        try {
+            const auto source = m_document->snapshot();
+            const std::string member_type = roofs ? "roof" : "wall";
+            const std::string join_type = member_type + "_join";
+            std::vector<std::string> members;
+            std::vector<EntityChange> changes;
+            for (const auto& selected : m_selected_ids) {
+                const auto found = source.entities().find(selected.toStdString());
+                if (found == source.entities().end() ||
+                    (found->second.type != member_type && !(removing && found->second.type == join_type)))
+                    throw std::invalid_argument("Select only walls or only roofs for this operation.");
+                members.push_back(found->first);
+            }
+            if (removing) {
+                for (const auto& [id, entity] : source.entities()) {
+                    if (entity.type != join_type) continue;
+                    const auto ids = roofs ? parse_roof_join(entity.properties, id).roof_ids
+                                           : parse_wall_join(entity.properties, id).wall_ids;
+                    if (std::find(members.begin(), members.end(), id) != members.end() ||
+                        std::any_of(ids.begin(), ids.end(), [&](const auto& member) {
+                            return std::find(members.begin(), members.end(), member) != members.end();
+                        })) changes.push_back(EntityChange::erase(id));
+                }
+                if (changes.empty()) throw std::invalid_argument("Select a joined object to unjoin.");
+            } else {
+                const auto id = new_id(join_type.c_str());
+                const auto properties = roofs ? roof_join_json(RoofJoin{id, members})
+                                              : wall_join_json(WallJoin{id, members});
+                changes.push_back(EntityChange::upsert(Entity{id, join_type, properties, false, json::object()}));
+            }
+            const ApplyEntityChanges command{source.revision(), changes, {},
+                removing ? "Unjoin selected objects" : "Join selected objects"};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            clearError();
+            refresh();
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Architectural join: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
+    void showBuildingObjectDialog(bool editing, const QString& requested_type = {}) {
         const auto context = captureModalContext();
         const auto original = editing ? selectedEntity() : std::optional<Entity>{};
         if (editing && (!original || !can_recognize_building_entity_type(original->type))) {
@@ -22248,6 +23004,10 @@ private:
             return;
         }
         BuildingObjectDialog dialog(original, m_metric_units, owner);
+        if (!editing && !requested_type.isEmpty()) {
+            auto* selector = dialog.findChild<QComboBox*>(QStringLiteral("buildingObjectType"));
+            if (selector) selector->setCurrentIndex(selector->findData(requested_type));
+        }
         if (dialog.exec() != QDialog::Accepted)
             return;
         if (!modalContextUnchanged(context)) return;
@@ -22600,6 +23360,7 @@ private:
     QString m_last_boundary_classification{QStringLiteral("measurement")};
     std::optional<Vec2> m_pending_wall_start;
     BuildingViewKind m_architectural_view_kind{BuildingViewKind::plan};
+    QString m_active_named_view;
 
     VisibilityTreeWidget* m_navigator{};
     QSplitter* m_workspace_splitter{};
@@ -22627,6 +23388,7 @@ private:
     std::optional<ModalContext> m_dimension_edit_context;
     QGroupBox* m_calculation_group{};
     QGroupBox* m_profile_group{};
+    QGroupBox* m_appraisal_summary_group{};
     QLabel* m_inspector_context{};
     QLabel* m_plan_error_banner{};
     QGroupBox* m_project_details_group{};
@@ -22682,8 +23444,22 @@ private:
     QLabel* m_calculation_rounding_value{};
     QLabel* m_calculation_building_total_value{};
     QLabel* m_calculation_living_total_value{};
+    QLabel* m_appraisal_gla_value{};
+    QLabel* m_appraisal_above_unfinished_value{};
+    QLabel* m_appraisal_below_finished_value{};
+    QLabel* m_appraisal_below_unfinished_value{};
+    QLabel* m_appraisal_garage_value{};
+    QLabel* m_appraisal_carport_value{};
+    QLabel* m_appraisal_porch_value{};
+    QLabel* m_appraisal_patio_value{};
+    QLabel* m_appraisal_deck_value{};
+    QLabel* m_appraisal_other_value{};
+    QLabel* m_appraisal_floor_value{};
+    QLabel* m_appraisal_property_value{};
+    QLabel* m_appraisal_contribution_value{};
     QLabel* m_calculation_profile_context{};
     QLabel* m_calculation_profile_version{};
+    QComboBox* m_calculation_workflow_combo{};
     QPushButton* m_edit_calculation_profile_button{};
     QLabel* m_read_only_label{};
     QComboBox* m_classification_combo{};
@@ -22761,7 +23537,6 @@ private:
     QAction* m_schedule_action{};
     QAction* m_sheet_action{};
     QAction* m_viewport_action{};
-    QAction* m_schedule_placement_action{};
     QAction* m_view_action{};
     QAction* m_remodel_action{};
     QAction* m_relationship_action{};

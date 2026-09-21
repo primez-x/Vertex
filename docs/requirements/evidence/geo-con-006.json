@@ -1,5 +1,7 @@
 {
   "acceptance": "Changing a level elevation previews and applies expected dependent changes across plans, sections, and 3D without cycles.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -66,10 +68,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Changing a level elevation previews and applies expected dependent changes across plans, sections, and 3D without cycles.",
   "qualification_boundary": "This evidence covers the validated vertical dependency graph, level edits, connected stair rise updates, and plan/elevation/section/native-3D projections in Debug and Release. Site/terrain coordination and production qualification remain open.",
+  "requirement": "Model levels and floor-to-floor relationships through an explicit vertical dependency graph.",
   "requirement_id": "GEO-CON-006",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "VerticalLevel",
     "floor_to_floor",
@@ -132,5 +143,6 @@
     "vertical_levels",
     "document_commands",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

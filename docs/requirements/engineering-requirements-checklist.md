@@ -66,7 +66,7 @@ Build/version tested: ____________________  Date: ____________________
 
 ### Ownership
 
-- [ ] **004 — CORE-OWN-001**: Deliver the original application source privately with reproducible Windows build instructions, fixtures, and build configuration.
+- [ ] **004 — CORE-OWN-001**: Publish the original application source under GPL-3.0-or-later with reproducible Windows build instructions, fixtures, and build configuration.
 
   **Expected result / acceptance:** The delivered source archive builds the shipped artifacts on a documented Windows environment from a clean checkout without a hosted build service.
 
@@ -198,7 +198,7 @@ Build/version tested: ____________________  Date: ____________________
 
   **Steps, issues, screenshots, or notes:** ____________________
 
-- [ ] **019 — COMP-LIC-002**: Original application code remains clearly separated from third-party code, with contribution provenance suitable for later private sale or optional open source release.
+- [ ] **019 — COMP-LIC-002**: GPL-3.0-or-later first-party application code remains clearly separated from third-party code, with contribution and license provenance suitable for public distribution.
 
   **Expected result / acceptance:** Repository provenance, contributor rights, notices, and third-party source locations are complete and reviewable without relying on a hosted service.
 

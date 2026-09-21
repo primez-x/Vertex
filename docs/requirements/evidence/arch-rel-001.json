@@ -1,5 +1,7 @@
 {
-  "acceptance": "Typed relationship graphs identify stable object references, validate relationship kinds and states, and preserve explicit links across views and output adapters.",
+  "acceptance": "Deleting or changing a referenced feature produces a visible issue or controlled update rather than silently retargeting an annotation or schedule row.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -50,10 +52,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Typed relationship graphs identify stable object references, validate relationship kinds and states, and preserve explicit links across views and output adapters.",
   "qualification_boundary": "This evidence covers the deterministic typed relationship graph. Full production cross-view certification and native Apex relationship mapping remain open.",
+  "requirement": "Plans, elevations, sections, 3D, calculations, schedules, and sheets use explicit stable references to the same semantic objects.",
   "requirement_id": "ARCH-REL-001",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "TypedRelationship",
     "RelationshipKind",
@@ -82,5 +93,6 @@
   "source_tree_sha256": "b89bdba6cef5fd26b8d83708b44086edb733aed72a63c060eb658c9ad75ad6cf",
   "tests": [
     "typed_relationships"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

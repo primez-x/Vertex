@@ -1,5 +1,7 @@
 {
-  "acceptance": "Residential and light-commercial architectural workflow contracts cover shared semantic objects, plans, elevations, sections, 3D, schedules, sheets, alternatives, and save/reopen output requirements.",
+  "acceptance": "End-to-end residential and light-commercial remodel fixtures produce editable model, comparison views, schedules, and sheets from one project.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -82,10 +84,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Residential and light-commercial architectural workflow contracts cover shared semantic objects, plans, elevations, sections, 3D, schedules, sheets, alternatives, and save/reopen output requirements.",
   "qualification_boundary": "This evidence covers the shared local architectural workflow foundation. Complete integrated residential/commercial fixtures, physical output, and the unified production gate remain open.",
+  "requirement": "Support complete residential and light-commercial remodel documentation from existing conditions through alternatives and coordinated output.",
   "requirement_id": "ARCH-OUTPUT-001",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "ArchitecturalOutputKind",
     "plan",
@@ -185,5 +196,6 @@
     "architectural_schedule",
     "sheet_view_model",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

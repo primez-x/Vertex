@@ -1,5 +1,7 @@
 {
-  "acceptance": "Integration adapters declare versioned capabilities, provenance, and licensing metadata and resolve deterministically or fail closed.",
+  "acceptance": "A disabled or failed adapter does not prevent project open, deterministic editing, calculation, save, print, or export; manifests report protocol and capability versions.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -50,10 +52,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Integration adapters declare versioned capabilities, provenance, and licensing metadata and resolve deterministically or fail closed.",
   "qualification_boundary": "This evidence covers deterministic local adapter metadata and capability resolution. Apex/native integrations, legal review, and production qualification remain open.",
+  "requirement": "Apex exchange, CAD exchange, devices, georeferencing, and appraisal integrations attach through replaceable versioned adapters.",
   "requirement_id": "CORE-DOC-010",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "IntegrationAdapterDefinition",
     "IntegrationAdapterRegistry",
@@ -89,5 +100,6 @@
   "source_tree_sha256": "b89bdba6cef5fd26b8d83708b44086edb733aed72a63c060eb658c9ad75ad6cf",
   "tests": [
     "integration_adapter"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

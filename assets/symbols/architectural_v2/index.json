@@ -1,0 +1,1927 @@
+{
+  "library": "Vertex Architectural SVG Library",
+  "version": "2.0",
+  "count": 320,
+  "symbols": [
+    {
+      "id": "basin-oval",
+      "name": "Basin Oval",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/basin-oval.svg"
+    },
+    {
+      "id": "basin-pedestal",
+      "name": "Basin Pedestal",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/basin-pedestal.svg"
+    },
+    {
+      "id": "basin-rectangular",
+      "name": "Basin Rectangular",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/basin-rectangular.svg"
+    },
+    {
+      "id": "basin-round",
+      "name": "Basin Round",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/basin-round.svg"
+    },
+    {
+      "id": "bidet",
+      "name": "Bidet",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/bidet.svg"
+    },
+    {
+      "id": "shower-quadrant",
+      "name": "Shower Quadrant",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/shower-quadrant.svg"
+    },
+    {
+      "id": "shower-rectangular",
+      "name": "Shower Rectangular",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/shower-rectangular.svg"
+    },
+    {
+      "id": "shower-square",
+      "name": "Shower Square",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/shower-square.svg"
+    },
+    {
+      "id": "shower-walk-in",
+      "name": "Shower Walk In",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/shower-walk-in.svg"
+    },
+    {
+      "id": "toilet-back-to-wall",
+      "name": "Toilet Back To Wall",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/toilet-back-to-wall.svg"
+    },
+    {
+      "id": "toilet-close-coupled",
+      "name": "Toilet Close Coupled",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/toilet-close-coupled.svg"
+    },
+    {
+      "id": "toilet-compact",
+      "name": "Toilet Compact",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/toilet-compact.svg"
+    },
+    {
+      "id": "toilet-open-seat",
+      "name": "Toilet Open Seat",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/toilet-open-seat.svg"
+    },
+    {
+      "id": "toilet-wall-hung",
+      "name": "Toilet Wall Hung",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/toilet-wall-hung.svg"
+    },
+    {
+      "id": "towel-rail",
+      "name": "Towel Rail",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/towel-rail.svg"
+    },
+    {
+      "id": "towel-warmer",
+      "name": "Towel Warmer",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/towel-warmer.svg"
+    },
+    {
+      "id": "tub-alcove",
+      "name": "Tub Alcove",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/tub-alcove.svg"
+    },
+    {
+      "id": "tub-compact",
+      "name": "Tub Compact",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/tub-compact.svg"
+    },
+    {
+      "id": "tub-corner",
+      "name": "Tub Corner",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/tub-corner.svg"
+    },
+    {
+      "id": "tub-freestanding-oval",
+      "name": "Tub Freestanding Oval",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/tub-freestanding-oval.svg"
+    },
+    {
+      "id": "tub-shower-combination",
+      "name": "Tub Shower Combination",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/tub-shower-combination.svg"
+    },
+    {
+      "id": "tub-whirlpool",
+      "name": "Tub Whirlpool",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/tub-whirlpool.svg"
+    },
+    {
+      "id": "urinal",
+      "name": "Urinal",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/urinal.svg"
+    },
+    {
+      "id": "vanity-600",
+      "name": "Vanity 600",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/vanity-600.svg"
+    },
+    {
+      "id": "vanity-900",
+      "name": "Vanity 900",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/vanity-900.svg"
+    },
+    {
+      "id": "vanity-double",
+      "name": "Vanity Double",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/vanity-double.svg"
+    },
+    {
+      "id": "base-cabinet-600",
+      "name": "Base Cabinet 600",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/base-cabinet-600.svg"
+    },
+    {
+      "id": "base-cabinet-900",
+      "name": "Base Cabinet 900",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/base-cabinet-900.svg"
+    },
+    {
+      "id": "cooktop-domino",
+      "name": "Cooktop Domino",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/cooktop-domino.svg"
+    },
+    {
+      "id": "cooktop-gas-five",
+      "name": "Cooktop Gas Five",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/cooktop-gas-five.svg"
+    },
+    {
+      "id": "cooktop-gas-four",
+      "name": "Cooktop Gas Four",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/cooktop-gas-four.svg"
+    },
+    {
+      "id": "cooktop-induction",
+      "name": "Cooktop Induction",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/cooktop-induction.svg"
+    },
+    {
+      "id": "counter-corner-left",
+      "name": "Counter Corner Left",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/counter-corner-left.svg"
+    },
+    {
+      "id": "counter-corner-right",
+      "name": "Counter Corner Right",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/counter-corner-right.svg"
+    },
+    {
+      "id": "dishwasher",
+      "name": "Dishwasher",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/dishwasher.svg"
+    },
+    {
+      "id": "fridge-french-door",
+      "name": "Fridge French Door",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/fridge-french-door.svg"
+    },
+    {
+      "id": "fridge-side-by-side",
+      "name": "Fridge Side By Side",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/fridge-side-by-side.svg"
+    },
+    {
+      "id": "fridge-single",
+      "name": "Fridge Single",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/fridge-single.svg"
+    },
+    {
+      "id": "kitchen-island-seating",
+      "name": "Kitchen Island Seating",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/kitchen-island-seating.svg"
+    },
+    {
+      "id": "kitchen-island-sink",
+      "name": "Kitchen Island Sink",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/kitchen-island-sink.svg"
+    },
+    {
+      "id": "kitchen-island",
+      "name": "Kitchen Island",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/kitchen-island.svg"
+    },
+    {
+      "id": "microwave",
+      "name": "Microwave",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/microwave.svg"
+    },
+    {
+      "id": "oven-built-in",
+      "name": "Oven Built In",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/oven-built-in.svg"
+    },
+    {
+      "id": "range-hood",
+      "name": "Range Hood",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/range-hood.svg"
+    },
+    {
+      "id": "range-standard",
+      "name": "Range Standard",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/range-standard.svg"
+    },
+    {
+      "id": "range-wide",
+      "name": "Range Wide",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/range-wide.svg"
+    },
+    {
+      "id": "sink-farmhouse",
+      "name": "Sink Farmhouse",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/sink-farmhouse.svg"
+    },
+    {
+      "id": "sink-stainless-double",
+      "name": "Sink Stainless Double",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/sink-stainless-double.svg"
+    },
+    {
+      "id": "sink-stainless-single",
+      "name": "Sink Stainless Single",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/sink-stainless-single.svg"
+    },
+    {
+      "id": "sink-with-drainer",
+      "name": "Sink With Drainer",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/sink-with-drainer.svg"
+    },
+    {
+      "id": "wine-fridge",
+      "name": "Wine Fridge",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/wine-fridge.svg"
+    },
+    {
+      "id": "air-handler",
+      "name": "Air Handler",
+      "category": "03_laundry_utility",
+      "file": "symbols/03_laundry_utility/air-handler.svg"
+    },
+    {
+      "id": "dryer-front-load",
+      "name": "Dryer Front Load",
+      "category": "03_laundry_utility",
+      "file": "symbols/03_laundry_utility/dryer-front-load.svg"
+    },
+    {
+      "id": "electrical-panel",
+      "name": "Electrical Panel",
+      "category": "03_laundry_utility",
+      "file": "symbols/03_laundry_utility/electrical-panel.svg"
+    },
+    {
+      "id": "freezer-chest",
+      "name": "Freezer Chest",
+      "category": "03_laundry_utility",
+      "file": "symbols/03_laundry_utility/freezer-chest.svg"
+    },
+    {
+      "id": "heat-pump-condenser",
+      "name": "Heat Pump Condenser",
+      "category": "03_laundry_utility",
+      "file": "symbols/03_laundry_utility/heat-pump-condenser.svg"
+    },
+    {
+      "id": "ironing-board",
+      "name": "Ironing Board",
+      "category": "03_laundry_utility",
+      "file": "symbols/03_laundry_utility/ironing-board.svg"
+    },
+    {
+      "id": "laundry-basket",
+      "name": "Laundry Basket",
+      "category": "03_laundry_utility",
+      "file": "symbols/03_laundry_utility/laundry-basket.svg"
+    },
+    {
+      "id": "laundry-sink",
+      "name": "Laundry Sink",
+      "category": "03_laundry_utility",
+      "file": "symbols/03_laundry_utility/laundry-sink.svg"
+    },
+    {
+      "id": "radiator",
+      "name": "Radiator",
+      "category": "03_laundry_utility",
+      "file": "symbols/03_laundry_utility/radiator.svg"
+    },
+    {
+      "id": "washer-front-load",
+      "name": "Washer Front Load",
+      "category": "03_laundry_utility",
+      "file": "symbols/03_laundry_utility/washer-front-load.svg"
+    },
+    {
+      "id": "washer-top-load",
+      "name": "Washer Top Load",
+      "category": "03_laundry_utility",
+      "file": "symbols/03_laundry_utility/washer-top-load.svg"
+    },
+    {
+      "id": "water-heater",
+      "name": "Water Heater",
+      "category": "03_laundry_utility",
+      "file": "symbols/03_laundry_utility/water-heater.svg"
+    },
+    {
+      "id": "armchair",
+      "name": "Armchair",
+      "category": "04_living",
+      "file": "symbols/04_living/armchair.svg"
+    },
+    {
+      "id": "coffee-table-nested",
+      "name": "Coffee Table Nested",
+      "category": "04_living",
+      "file": "symbols/04_living/coffee-table-nested.svg"
+    },
+    {
+      "id": "coffee-table-rectangular",
+      "name": "Coffee Table Rectangular",
+      "category": "04_living",
+      "file": "symbols/04_living/coffee-table-rectangular.svg"
+    },
+    {
+      "id": "coffee-table-round",
+      "name": "Coffee Table Round",
+      "category": "04_living",
+      "file": "symbols/04_living/coffee-table-round.svg"
+    },
+    {
+      "id": "fireplace",
+      "name": "Fireplace",
+      "category": "04_living",
+      "file": "symbols/04_living/fireplace.svg"
+    },
+    {
+      "id": "floor-lamp",
+      "name": "Floor Lamp",
+      "category": "04_living",
+      "file": "symbols/04_living/floor-lamp.svg"
+    },
+    {
+      "id": "media-console",
+      "name": "Media Console",
+      "category": "04_living",
+      "file": "symbols/04_living/media-console.svg"
+    },
+    {
+      "id": "ottoman-rectangular",
+      "name": "Ottoman Rectangular",
+      "category": "04_living",
+      "file": "symbols/04_living/ottoman-rectangular.svg"
+    },
+    {
+      "id": "ottoman-round",
+      "name": "Ottoman Round",
+      "category": "04_living",
+      "file": "symbols/04_living/ottoman-round.svg"
+    },
+    {
+      "id": "recliner",
+      "name": "Recliner",
+      "category": "04_living",
+      "file": "symbols/04_living/recliner.svg"
+    },
+    {
+      "id": "rug-rectangular",
+      "name": "Rug Rectangular",
+      "category": "04_living",
+      "file": "symbols/04_living/rug-rectangular.svg"
+    },
+    {
+      "id": "rug-round",
+      "name": "Rug Round",
+      "category": "04_living",
+      "file": "symbols/04_living/rug-round.svg"
+    },
+    {
+      "id": "sectional-left",
+      "name": "Sectional Left",
+      "category": "04_living",
+      "file": "symbols/04_living/sectional-left.svg"
+    },
+    {
+      "id": "sectional-right",
+      "name": "Sectional Right",
+      "category": "04_living",
+      "file": "symbols/04_living/sectional-right.svg"
+    },
+    {
+      "id": "side-table",
+      "name": "Side Table",
+      "category": "04_living",
+      "file": "symbols/04_living/side-table.svg"
+    },
+    {
+      "id": "sofa-four-seat",
+      "name": "Sofa Four Seat",
+      "category": "04_living",
+      "file": "symbols/04_living/sofa-four-seat.svg"
+    },
+    {
+      "id": "sofa-pillow",
+      "name": "Sofa Pillow",
+      "category": "04_living",
+      "file": "symbols/04_living/sofa-pillow.svg"
+    },
+    {
+      "id": "sofa-three-seat",
+      "name": "Sofa Three Seat",
+      "category": "04_living",
+      "file": "symbols/04_living/sofa-three-seat.svg"
+    },
+    {
+      "id": "sofa-two-seat",
+      "name": "Sofa Two Seat",
+      "category": "04_living",
+      "file": "symbols/04_living/sofa-two-seat.svg"
+    },
+    {
+      "id": "television",
+      "name": "Television",
+      "category": "04_living",
+      "file": "symbols/04_living/television.svg"
+    },
+    {
+      "id": "tub-chair",
+      "name": "Tub Chair",
+      "category": "04_living",
+      "file": "symbols/04_living/tub-chair.svg"
+    },
+    {
+      "id": "bed-bunk",
+      "name": "Bed Bunk",
+      "category": "05_bedroom",
+      "file": "symbols/05_bedroom/bed-bunk.svg"
+    },
+    {
+      "id": "bed-california-king",
+      "name": "Bed California King",
+      "category": "05_bedroom",
+      "file": "symbols/05_bedroom/bed-california-king.svg"
+    },
+    {
+      "id": "bed-daybed",
+      "name": "Bed Daybed",
+      "category": "05_bedroom",
+      "file": "symbols/05_bedroom/bed-daybed.svg"
+    },
+    {
+      "id": "bed-full",
+      "name": "Bed Full",
+      "category": "05_bedroom",
+      "file": "symbols/05_bedroom/bed-full.svg"
+    },
+    {
+      "id": "bed-king",
+      "name": "Bed King",
+      "category": "05_bedroom",
+      "file": "symbols/05_bedroom/bed-king.svg"
+    },
+    {
+      "id": "bed-queen",
+      "name": "Bed Queen",
+      "category": "05_bedroom",
+      "file": "symbols/05_bedroom/bed-queen.svg"
+    },
+    {
+      "id": "bed-twin-xl",
+      "name": "Bed Twin Xl",
+      "category": "05_bedroom",
+      "file": "symbols/05_bedroom/bed-twin-xl.svg"
+    },
+    {
+      "id": "bed-twin",
+      "name": "Bed Twin",
+      "category": "05_bedroom",
+      "file": "symbols/05_bedroom/bed-twin.svg"
+    },
+    {
+      "id": "bedroom-bench",
+      "name": "Bedroom Bench",
+      "category": "05_bedroom",
+      "file": "symbols/05_bedroom/bedroom-bench.svg"
+    },
+    {
+      "id": "crib",
+      "name": "Crib",
+      "category": "05_bedroom",
+      "file": "symbols/05_bedroom/crib.svg"
+    },
+    {
+      "id": "dresser-six-drawer",
+      "name": "Dresser Six Drawer",
+      "category": "05_bedroom",
+      "file": "symbols/05_bedroom/dresser-six-drawer.svg"
+    },
+    {
+      "id": "nightstand",
+      "name": "Nightstand",
+      "category": "05_bedroom",
+      "file": "symbols/05_bedroom/nightstand.svg"
+    },
+    {
+      "id": "bar-stool-round",
+      "name": "Bar Stool Round",
+      "category": "06_dining",
+      "file": "symbols/06_dining/bar-stool-round.svg"
+    },
+    {
+      "id": "bar-stool-square",
+      "name": "Bar Stool Square",
+      "category": "06_dining",
+      "file": "symbols/06_dining/bar-stool-square.svg"
+    },
+    {
+      "id": "dining-armchair",
+      "name": "Dining Armchair",
+      "category": "06_dining",
+      "file": "symbols/06_dining/dining-armchair.svg"
+    },
+    {
+      "id": "dining-chair-upholstered",
+      "name": "Dining Chair Upholstered",
+      "category": "06_dining",
+      "file": "symbols/06_dining/dining-chair-upholstered.svg"
+    },
+    {
+      "id": "dining-chair-wood",
+      "name": "Dining Chair Wood",
+      "category": "06_dining",
+      "file": "symbols/06_dining/dining-chair-wood.svg"
+    },
+    {
+      "id": "dining-set-four",
+      "name": "Dining Set Four",
+      "category": "06_dining",
+      "file": "symbols/06_dining/dining-set-four.svg"
+    },
+    {
+      "id": "dining-set-round",
+      "name": "Dining Set Round",
+      "category": "06_dining",
+      "file": "symbols/06_dining/dining-set-round.svg"
+    },
+    {
+      "id": "dining-set-six",
+      "name": "Dining Set Six",
+      "category": "06_dining",
+      "file": "symbols/06_dining/dining-set-six.svg"
+    },
+    {
+      "id": "dining-table-eight",
+      "name": "Dining Table Eight",
+      "category": "06_dining",
+      "file": "symbols/06_dining/dining-table-eight.svg"
+    },
+    {
+      "id": "dining-table-four",
+      "name": "Dining Table Four",
+      "category": "06_dining",
+      "file": "symbols/06_dining/dining-table-four.svg"
+    },
+    {
+      "id": "dining-table-oval",
+      "name": "Dining Table Oval",
+      "category": "06_dining",
+      "file": "symbols/06_dining/dining-table-oval.svg"
+    },
+    {
+      "id": "dining-table-round",
+      "name": "Dining Table Round",
+      "category": "06_dining",
+      "file": "symbols/06_dining/dining-table-round.svg"
+    },
+    {
+      "id": "dining-table-six",
+      "name": "Dining Table Six",
+      "category": "06_dining",
+      "file": "symbols/06_dining/dining-table-six.svg"
+    },
+    {
+      "id": "desk-corner",
+      "name": "Desk Corner",
+      "category": "07_office",
+      "file": "symbols/07_office/desk-corner.svg"
+    },
+    {
+      "id": "desk-drafting",
+      "name": "Desk Drafting",
+      "category": "07_office",
+      "file": "symbols/07_office/desk-drafting.svg"
+    },
+    {
+      "id": "desk-dual-monitor",
+      "name": "Desk Dual Monitor",
+      "category": "07_office",
+      "file": "symbols/07_office/desk-dual-monitor.svg"
+    },
+    {
+      "id": "desk-laptop",
+      "name": "Desk Laptop",
+      "category": "07_office",
+      "file": "symbols/07_office/desk-laptop.svg"
+    },
+    {
+      "id": "desk-plain",
+      "name": "Desk Plain",
+      "category": "07_office",
+      "file": "symbols/07_office/desk-plain.svg"
+    },
+    {
+      "id": "desk-reception",
+      "name": "Desk Reception",
+      "category": "07_office",
+      "file": "symbols/07_office/desk-reception.svg"
+    },
+    {
+      "id": "desk-workstation",
+      "name": "Desk Workstation",
+      "category": "07_office",
+      "file": "symbols/07_office/desk-workstation.svg"
+    },
+    {
+      "id": "keyboard",
+      "name": "Keyboard",
+      "category": "07_office",
+      "file": "symbols/07_office/keyboard.svg"
+    },
+    {
+      "id": "laptop",
+      "name": "Laptop",
+      "category": "07_office",
+      "file": "symbols/07_office/laptop.svg"
+    },
+    {
+      "id": "meeting-table",
+      "name": "Meeting Table",
+      "category": "07_office",
+      "file": "symbols/07_office/meeting-table.svg"
+    },
+    {
+      "id": "monitor",
+      "name": "Monitor",
+      "category": "07_office",
+      "file": "symbols/07_office/monitor.svg"
+    },
+    {
+      "id": "office-chair-armless",
+      "name": "Office Chair Armless",
+      "category": "07_office",
+      "file": "symbols/07_office/office-chair-armless.svg"
+    },
+    {
+      "id": "office-chair",
+      "name": "Office Chair",
+      "category": "07_office",
+      "file": "symbols/07_office/office-chair.svg"
+    },
+    {
+      "id": "office-pedestal",
+      "name": "Office Pedestal",
+      "category": "07_office",
+      "file": "symbols/07_office/office-pedestal.svg"
+    },
+    {
+      "id": "printer",
+      "name": "Printer",
+      "category": "07_office",
+      "file": "symbols/07_office/printer.svg"
+    },
+    {
+      "id": "server-rack",
+      "name": "Server Rack",
+      "category": "07_office",
+      "file": "symbols/07_office/server-rack.svg"
+    },
+    {
+      "id": "wastebasket",
+      "name": "Wastebasket",
+      "category": "07_office",
+      "file": "symbols/07_office/wastebasket.svg"
+    },
+    {
+      "id": "bookcase-small",
+      "name": "Bookcase Small",
+      "category": "08_storage",
+      "file": "symbols/08_storage/bookcase-small.svg"
+    },
+    {
+      "id": "bookcase-wide",
+      "name": "Bookcase Wide",
+      "category": "08_storage",
+      "file": "symbols/08_storage/bookcase-wide.svg"
+    },
+    {
+      "id": "coat-rack",
+      "name": "Coat Rack",
+      "category": "08_storage",
+      "file": "symbols/08_storage/coat-rack.svg"
+    },
+    {
+      "id": "filing-cabinet",
+      "name": "Filing Cabinet",
+      "category": "08_storage",
+      "file": "symbols/08_storage/filing-cabinet.svg"
+    },
+    {
+      "id": "locker-bank",
+      "name": "Locker Bank",
+      "category": "08_storage",
+      "file": "symbols/08_storage/locker-bank.svg"
+    },
+    {
+      "id": "shelf-open",
+      "name": "Shelf Open",
+      "category": "08_storage",
+      "file": "symbols/08_storage/shelf-open.svg"
+    },
+    {
+      "id": "shoe-cabinet",
+      "name": "Shoe Cabinet",
+      "category": "08_storage",
+      "file": "symbols/08_storage/shoe-cabinet.svg"
+    },
+    {
+      "id": "sideboard",
+      "name": "Sideboard",
+      "category": "08_storage",
+      "file": "symbols/08_storage/sideboard.svg"
+    },
+    {
+      "id": "storage-chest",
+      "name": "Storage Chest",
+      "category": "08_storage",
+      "file": "symbols/08_storage/storage-chest.svg"
+    },
+    {
+      "id": "wardrobe-double",
+      "name": "Wardrobe Double",
+      "category": "08_storage",
+      "file": "symbols/08_storage/wardrobe-double.svg"
+    },
+    {
+      "id": "wardrobe-single",
+      "name": "Wardrobe Single",
+      "category": "08_storage",
+      "file": "symbols/08_storage/wardrobe-single.svg"
+    },
+    {
+      "id": "wardrobe-triple",
+      "name": "Wardrobe Triple",
+      "category": "08_storage",
+      "file": "symbols/08_storage/wardrobe-triple.svg"
+    },
+    {
+      "id": "door-barn",
+      "name": "Door Barn",
+      "category": "09_doors",
+      "file": "symbols/09_doors/door-barn.svg"
+    },
+    {
+      "id": "door-bifold",
+      "name": "Door Bifold",
+      "category": "09_doors",
+      "file": "symbols/09_doors/door-bifold.svg"
+    },
+    {
+      "id": "door-double",
+      "name": "Door Double",
+      "category": "09_doors",
+      "file": "symbols/09_doors/door-double.svg"
+    },
+    {
+      "id": "door-garage",
+      "name": "Door Garage",
+      "category": "09_doors",
+      "file": "symbols/09_doors/door-garage.svg"
+    },
+    {
+      "id": "door-hinged-760-left",
+      "name": "Door Hinged 760 Left",
+      "category": "09_doors",
+      "file": "symbols/09_doors/door-hinged-760-left.svg"
+    },
+    {
+      "id": "door-hinged-760-right",
+      "name": "Door Hinged 760 Right",
+      "category": "09_doors",
+      "file": "symbols/09_doors/door-hinged-760-right.svg"
+    },
+    {
+      "id": "door-hinged-810-left",
+      "name": "Door Hinged 810 Left",
+      "category": "09_doors",
+      "file": "symbols/09_doors/door-hinged-810-left.svg"
+    },
+    {
+      "id": "door-hinged-810-right",
+      "name": "Door Hinged 810 Right",
+      "category": "09_doors",
+      "file": "symbols/09_doors/door-hinged-810-right.svg"
+    },
+    {
+      "id": "door-hinged-910-left",
+      "name": "Door Hinged 910 Left",
+      "category": "09_doors",
+      "file": "symbols/09_doors/door-hinged-910-left.svg"
+    },
+    {
+      "id": "door-hinged-910-right",
+      "name": "Door Hinged 910 Right",
+      "category": "09_doors",
+      "file": "symbols/09_doors/door-hinged-910-right.svg"
+    },
+    {
+      "id": "door-pocket",
+      "name": "Door Pocket",
+      "category": "09_doors",
+      "file": "symbols/09_doors/door-pocket.svg"
+    },
+    {
+      "id": "door-sliding-glass",
+      "name": "Door Sliding Glass",
+      "category": "09_doors",
+      "file": "symbols/09_doors/door-sliding-glass.svg"
+    },
+    {
+      "id": "skylight",
+      "name": "Skylight",
+      "category": "10_windows",
+      "file": "symbols/10_windows/skylight.svg"
+    },
+    {
+      "id": "window-bay",
+      "name": "Window Bay",
+      "category": "10_windows",
+      "file": "symbols/10_windows/window-bay.svg"
+    },
+    {
+      "id": "window-casement",
+      "name": "Window Casement",
+      "category": "10_windows",
+      "file": "symbols/10_windows/window-casement.svg"
+    },
+    {
+      "id": "window-double",
+      "name": "Window Double",
+      "category": "10_windows",
+      "file": "symbols/10_windows/window-double.svg"
+    },
+    {
+      "id": "window-fixed-1200",
+      "name": "Window Fixed 1200",
+      "category": "10_windows",
+      "file": "symbols/10_windows/window-fixed-1200.svg"
+    },
+    {
+      "id": "window-fixed-600",
+      "name": "Window Fixed 600",
+      "category": "10_windows",
+      "file": "symbols/10_windows/window-fixed-600.svg"
+    },
+    {
+      "id": "window-sliding",
+      "name": "Window Sliding",
+      "category": "10_windows",
+      "file": "symbols/10_windows/window-sliding.svg"
+    },
+    {
+      "id": "window-triple",
+      "name": "Window Triple",
+      "category": "10_windows",
+      "file": "symbols/10_windows/window-triple.svg"
+    },
+    {
+      "id": "elevator",
+      "name": "Elevator",
+      "category": "11_circulation",
+      "file": "symbols/11_circulation/elevator.svg"
+    },
+    {
+      "id": "ramp",
+      "name": "Ramp",
+      "category": "11_circulation",
+      "file": "symbols/11_circulation/ramp.svg"
+    },
+    {
+      "id": "stairs-l",
+      "name": "Stairs L",
+      "category": "11_circulation",
+      "file": "symbols/11_circulation/stairs-l.svg"
+    },
+    {
+      "id": "stairs-spiral",
+      "name": "Stairs Spiral",
+      "category": "11_circulation",
+      "file": "symbols/11_circulation/stairs-spiral.svg"
+    },
+    {
+      "id": "stairs-straight",
+      "name": "Stairs Straight",
+      "category": "11_circulation",
+      "file": "symbols/11_circulation/stairs-straight.svg"
+    },
+    {
+      "id": "stairs-u",
+      "name": "Stairs U",
+      "category": "11_circulation",
+      "file": "symbols/11_circulation/stairs-u.svg"
+    },
+    {
+      "id": "stairs-wide",
+      "name": "Stairs Wide",
+      "category": "11_circulation",
+      "file": "symbols/11_circulation/stairs-wide.svg"
+    },
+    {
+      "id": "stairs-with-landing",
+      "name": "Stairs With Landing",
+      "category": "11_circulation",
+      "file": "symbols/11_circulation/stairs-with-landing.svg"
+    },
+    {
+      "id": "hedge-section",
+      "name": "Hedge Section",
+      "category": "12_landscape",
+      "file": "symbols/12_landscape/hedge-section.svg"
+    },
+    {
+      "id": "landscape-rock",
+      "name": "Landscape Rock",
+      "category": "12_landscape",
+      "file": "symbols/12_landscape/landscape-rock.svg"
+    },
+    {
+      "id": "plant-potted",
+      "name": "Plant Potted",
+      "category": "12_landscape",
+      "file": "symbols/12_landscape/plant-potted.svg"
+    },
+    {
+      "id": "plant-succulent",
+      "name": "Plant Succulent",
+      "category": "12_landscape",
+      "file": "symbols/12_landscape/plant-succulent.svg"
+    },
+    {
+      "id": "planter-rectangular",
+      "name": "Planter Rectangular",
+      "category": "12_landscape",
+      "file": "symbols/12_landscape/planter-rectangular.svg"
+    },
+    {
+      "id": "shrub-round",
+      "name": "Shrub Round",
+      "category": "12_landscape",
+      "file": "symbols/12_landscape/shrub-round.svg"
+    },
+    {
+      "id": "stepping-stone",
+      "name": "Stepping Stone",
+      "category": "12_landscape",
+      "file": "symbols/12_landscape/stepping-stone.svg"
+    },
+    {
+      "id": "tree-conifer",
+      "name": "Tree Conifer",
+      "category": "12_landscape",
+      "file": "symbols/12_landscape/tree-conifer.svg"
+    },
+    {
+      "id": "tree-deciduous-large",
+      "name": "Tree Deciduous Large",
+      "category": "12_landscape",
+      "file": "symbols/12_landscape/tree-deciduous-large.svg"
+    },
+    {
+      "id": "tree-deciduous-medium",
+      "name": "Tree Deciduous Medium",
+      "category": "12_landscape",
+      "file": "symbols/12_landscape/tree-deciduous-medium.svg"
+    },
+    {
+      "id": "tree-deciduous-small",
+      "name": "Tree Deciduous Small",
+      "category": "12_landscape",
+      "file": "symbols/12_landscape/tree-deciduous-small.svg"
+    },
+    {
+      "id": "tree-palm",
+      "name": "Tree Palm",
+      "category": "12_landscape",
+      "file": "symbols/12_landscape/tree-palm.svg"
+    },
+    {
+      "id": "barbecue-grill",
+      "name": "Barbecue Grill",
+      "category": "13_outdoor",
+      "file": "symbols/13_outdoor/barbecue-grill.svg"
+    },
+    {
+      "id": "fence-section",
+      "name": "Fence Section",
+      "category": "13_outdoor",
+      "file": "symbols/13_outdoor/fence-section.svg"
+    },
+    {
+      "id": "fire-pit",
+      "name": "Fire Pit",
+      "category": "13_outdoor",
+      "file": "symbols/13_outdoor/fire-pit.svg"
+    },
+    {
+      "id": "garden-fountain",
+      "name": "Garden Fountain",
+      "category": "13_outdoor",
+      "file": "symbols/13_outdoor/garden-fountain.svg"
+    },
+    {
+      "id": "garden-gate",
+      "name": "Garden Gate",
+      "category": "13_outdoor",
+      "file": "symbols/13_outdoor/garden-gate.svg"
+    },
+    {
+      "id": "hot-tub",
+      "name": "Hot Tub",
+      "category": "13_outdoor",
+      "file": "symbols/13_outdoor/hot-tub.svg"
+    },
+    {
+      "id": "outdoor-bench",
+      "name": "Outdoor Bench",
+      "category": "13_outdoor",
+      "file": "symbols/13_outdoor/outdoor-bench.svg"
+    },
+    {
+      "id": "outdoor-lounger",
+      "name": "Outdoor Lounger",
+      "category": "13_outdoor",
+      "file": "symbols/13_outdoor/outdoor-lounger.svg"
+    },
+    {
+      "id": "patio-chair",
+      "name": "Patio Chair",
+      "category": "13_outdoor",
+      "file": "symbols/13_outdoor/patio-chair.svg"
+    },
+    {
+      "id": "patio-table",
+      "name": "Patio Table",
+      "category": "13_outdoor",
+      "file": "symbols/13_outdoor/patio-table.svg"
+    },
+    {
+      "id": "patio-umbrella",
+      "name": "Patio Umbrella",
+      "category": "13_outdoor",
+      "file": "symbols/13_outdoor/patio-umbrella.svg"
+    },
+    {
+      "id": "pergola",
+      "name": "Pergola",
+      "category": "13_outdoor",
+      "file": "symbols/13_outdoor/pergola.svg"
+    },
+    {
+      "id": "picnic-table",
+      "name": "Picnic Table",
+      "category": "13_outdoor",
+      "file": "symbols/13_outdoor/picnic-table.svg"
+    },
+    {
+      "id": "swimming-pool",
+      "name": "Swimming Pool",
+      "category": "13_outdoor",
+      "file": "symbols/13_outdoor/swimming-pool.svg"
+    },
+    {
+      "id": "bicycle",
+      "name": "Bicycle",
+      "category": "14_vehicles",
+      "file": "symbols/14_vehicles/bicycle.svg"
+    },
+    {
+      "id": "car-sedan",
+      "name": "Car Sedan",
+      "category": "14_vehicles",
+      "file": "symbols/14_vehicles/car-sedan.svg"
+    },
+    {
+      "id": "car-suv",
+      "name": "Car Suv",
+      "category": "14_vehicles",
+      "file": "symbols/14_vehicles/car-suv.svg"
+    },
+    {
+      "id": "motorcycle",
+      "name": "Motorcycle",
+      "category": "14_vehicles",
+      "file": "symbols/14_vehicles/motorcycle.svg"
+    },
+    {
+      "id": "pickup-truck",
+      "name": "Pickup Truck",
+      "category": "14_vehicles",
+      "file": "symbols/14_vehicles/pickup-truck.svg"
+    },
+    {
+      "id": "van",
+      "name": "Van",
+      "category": "14_vehicles",
+      "file": "symbols/14_vehicles/van.svg"
+    },
+    {
+      "id": "bollard",
+      "name": "Bollard",
+      "category": "15_structure_access",
+      "file": "symbols/15_structure_access/bollard.svg"
+    },
+    {
+      "id": "column-round",
+      "name": "Column Round",
+      "category": "15_structure_access",
+      "file": "symbols/15_structure_access/column-round.svg"
+    },
+    {
+      "id": "column-square",
+      "name": "Column Square",
+      "category": "15_structure_access",
+      "file": "symbols/15_structure_access/column-square.svg"
+    },
+    {
+      "id": "column-steel-i",
+      "name": "Column Steel I",
+      "category": "15_structure_access",
+      "file": "symbols/15_structure_access/column-steel-i.svg"
+    },
+    {
+      "id": "railing-section",
+      "name": "Railing Section",
+      "category": "15_structure_access",
+      "file": "symbols/15_structure_access/railing-section.svg"
+    },
+    {
+      "id": "wall-corner",
+      "name": "Wall Corner",
+      "category": "15_structure_access",
+      "file": "symbols/15_structure_access/wall-corner.svg"
+    },
+    {
+      "id": "wall-cross",
+      "name": "Wall Cross",
+      "category": "15_structure_access",
+      "file": "symbols/15_structure_access/wall-cross.svg"
+    },
+    {
+      "id": "wall-straight",
+      "name": "Wall Straight",
+      "category": "15_structure_access",
+      "file": "symbols/15_structure_access/wall-straight.svg"
+    },
+    {
+      "id": "wall-tee",
+      "name": "Wall Tee",
+      "category": "15_structure_access",
+      "file": "symbols/15_structure_access/wall-tee.svg"
+    },
+    {
+      "id": "wheelchair",
+      "name": "Wheelchair",
+      "category": "15_structure_access",
+      "file": "symbols/15_structure_access/wheelchair.svg"
+    },
+    {
+      "id": "arched-opening",
+      "name": "Arched Opening",
+      "category": "16_walls_openings",
+      "file": "symbols/16_walls_openings/arched-opening.svg"
+    },
+    {
+      "id": "column-round",
+      "name": "Column Round",
+      "category": "16_walls_openings",
+      "file": "symbols/16_walls_openings/column-round.svg"
+    },
+    {
+      "id": "column-square",
+      "name": "Column Square",
+      "category": "16_walls_openings",
+      "file": "symbols/16_walls_openings/column-square.svg"
+    },
+    {
+      "id": "exterior-wall",
+      "name": "Exterior Wall",
+      "category": "16_walls_openings",
+      "file": "symbols/16_walls_openings/exterior-wall.svg"
+    },
+    {
+      "id": "half-wall",
+      "name": "Half Wall",
+      "category": "16_walls_openings",
+      "file": "symbols/16_walls_openings/half-wall.svg"
+    },
+    {
+      "id": "interior-wall",
+      "name": "Interior Wall",
+      "category": "16_walls_openings",
+      "file": "symbols/16_walls_openings/interior-wall.svg"
+    },
+    {
+      "id": "opening",
+      "name": "Opening",
+      "category": "16_walls_openings",
+      "file": "symbols/16_walls_openings/opening.svg"
+    },
+    {
+      "id": "partition-wall",
+      "name": "Partition Wall",
+      "category": "16_walls_openings",
+      "file": "symbols/16_walls_openings/partition-wall.svg"
+    },
+    {
+      "id": "structural-post",
+      "name": "Structural Post",
+      "category": "16_walls_openings",
+      "file": "symbols/16_walls_openings/structural-post.svg"
+    },
+    {
+      "id": "baluster-railing",
+      "name": "Baluster Railing",
+      "category": "17_railings",
+      "file": "symbols/17_railings/baluster-railing.svg"
+    },
+    {
+      "id": "glass-railing",
+      "name": "Glass Railing",
+      "category": "17_railings",
+      "file": "symbols/17_railings/glass-railing.svg"
+    },
+    {
+      "id": "guardrail",
+      "name": "Guardrail",
+      "category": "17_railings",
+      "file": "symbols/17_railings/guardrail.svg"
+    },
+    {
+      "id": "newel-post",
+      "name": "Newel Post",
+      "category": "17_railings",
+      "file": "symbols/17_railings/newel-post.svg"
+    },
+    {
+      "id": "railing",
+      "name": "Railing",
+      "category": "17_railings",
+      "file": "symbols/17_railings/railing.svg"
+    },
+    {
+      "id": "chimney",
+      "name": "Chimney",
+      "category": "18_fireplace",
+      "file": "symbols/18_fireplace/chimney.svg"
+    },
+    {
+      "id": "fireplace-corner",
+      "name": "Fireplace Corner",
+      "category": "18_fireplace",
+      "file": "symbols/18_fireplace/fireplace-corner.svg"
+    },
+    {
+      "id": "fireplace-double-sided",
+      "name": "Fireplace Double Sided",
+      "category": "18_fireplace",
+      "file": "symbols/18_fireplace/fireplace-double-sided.svg"
+    },
+    {
+      "id": "fireplace-linear",
+      "name": "Fireplace Linear",
+      "category": "18_fireplace",
+      "file": "symbols/18_fireplace/fireplace-linear.svg"
+    },
+    {
+      "id": "fireplace-outdoor",
+      "name": "Fireplace Outdoor",
+      "category": "18_fireplace",
+      "file": "symbols/18_fireplace/fireplace-outdoor.svg"
+    },
+    {
+      "id": "fireplace-standard",
+      "name": "Fireplace Standard",
+      "category": "18_fireplace",
+      "file": "symbols/18_fireplace/fireplace-standard.svg"
+    },
+    {
+      "id": "hearth",
+      "name": "Hearth",
+      "category": "18_fireplace",
+      "file": "symbols/18_fireplace/hearth.svg"
+    },
+    {
+      "id": "wood-stove",
+      "name": "Wood Stove",
+      "category": "18_fireplace",
+      "file": "symbols/18_fireplace/wood-stove.svg"
+    },
+    {
+      "id": "ceiling-fan",
+      "name": "Ceiling Fan",
+      "category": "19_lighting_electrical",
+      "file": "symbols/19_lighting_electrical/ceiling-fan.svg"
+    },
+    {
+      "id": "ceiling-light",
+      "name": "Ceiling Light",
+      "category": "19_lighting_electrical",
+      "file": "symbols/19_lighting_electrical/ceiling-light.svg"
+    },
+    {
+      "id": "chandelier",
+      "name": "Chandelier",
+      "category": "19_lighting_electrical",
+      "file": "symbols/19_lighting_electrical/chandelier.svg"
+    },
+    {
+      "id": "doorbell",
+      "name": "Doorbell",
+      "category": "19_lighting_electrical",
+      "file": "symbols/19_lighting_electrical/doorbell.svg"
+    },
+    {
+      "id": "duplex-outlet",
+      "name": "Duplex Outlet",
+      "category": "19_lighting_electrical",
+      "file": "symbols/19_lighting_electrical/duplex-outlet.svg"
+    },
+    {
+      "id": "exterior-light",
+      "name": "Exterior Light",
+      "category": "19_lighting_electrical",
+      "file": "symbols/19_lighting_electrical/exterior-light.svg"
+    },
+    {
+      "id": "floor-outlet",
+      "name": "Floor Outlet",
+      "category": "19_lighting_electrical",
+      "file": "symbols/19_lighting_electrical/floor-outlet.svg"
+    },
+    {
+      "id": "gfci-outlet",
+      "name": "Gfci Outlet",
+      "category": "19_lighting_electrical",
+      "file": "symbols/19_lighting_electrical/gfci-outlet.svg"
+    },
+    {
+      "id": "landscape-light",
+      "name": "Landscape Light",
+      "category": "19_lighting_electrical",
+      "file": "symbols/19_lighting_electrical/landscape-light.svg"
+    },
+    {
+      "id": "light-switch",
+      "name": "Light Switch",
+      "category": "19_lighting_electrical",
+      "file": "symbols/19_lighting_electrical/light-switch.svg"
+    },
+    {
+      "id": "pendant-light",
+      "name": "Pendant Light",
+      "category": "19_lighting_electrical",
+      "file": "symbols/19_lighting_electrical/pendant-light.svg"
+    },
+    {
+      "id": "post-light",
+      "name": "Post Light",
+      "category": "19_lighting_electrical",
+      "file": "symbols/19_lighting_electrical/post-light.svg"
+    },
+    {
+      "id": "recessed-light",
+      "name": "Recessed Light",
+      "category": "19_lighting_electrical",
+      "file": "symbols/19_lighting_electrical/recessed-light.svg"
+    },
+    {
+      "id": "security-camera",
+      "name": "Security Camera",
+      "category": "19_lighting_electrical",
+      "file": "symbols/19_lighting_electrical/security-camera.svg"
+    },
+    {
+      "id": "smoke-detector",
+      "name": "Smoke Detector",
+      "category": "19_lighting_electrical",
+      "file": "symbols/19_lighting_electrical/smoke-detector.svg"
+    },
+    {
+      "id": "wall-sconce",
+      "name": "Wall Sconce",
+      "category": "19_lighting_electrical",
+      "file": "symbols/19_lighting_electrical/wall-sconce.svg"
+    },
+    {
+      "id": "ac-condenser",
+      "name": "Ac Condenser",
+      "category": "20_hvac_plumbing",
+      "file": "symbols/20_hvac_plumbing/ac-condenser.svg"
+    },
+    {
+      "id": "boiler",
+      "name": "Boiler",
+      "category": "20_hvac_plumbing",
+      "file": "symbols/20_hvac_plumbing/boiler.svg"
+    },
+    {
+      "id": "cleanout",
+      "name": "Cleanout",
+      "category": "20_hvac_plumbing",
+      "file": "symbols/20_hvac_plumbing/cleanout.svg"
+    },
+    {
+      "id": "floor-drain",
+      "name": "Floor Drain",
+      "category": "20_hvac_plumbing",
+      "file": "symbols/20_hvac_plumbing/floor-drain.svg"
+    },
+    {
+      "id": "gas-line",
+      "name": "Gas Line",
+      "category": "20_hvac_plumbing",
+      "file": "symbols/20_hvac_plumbing/gas-line.svg"
+    },
+    {
+      "id": "heat-pump",
+      "name": "Heat Pump",
+      "category": "20_hvac_plumbing",
+      "file": "symbols/20_hvac_plumbing/heat-pump.svg"
+    },
+    {
+      "id": "hose-bib",
+      "name": "Hose Bib",
+      "category": "20_hvac_plumbing",
+      "file": "symbols/20_hvac_plumbing/hose-bib.svg"
+    },
+    {
+      "id": "radiator",
+      "name": "Radiator",
+      "category": "20_hvac_plumbing",
+      "file": "symbols/20_hvac_plumbing/radiator.svg"
+    },
+    {
+      "id": "return-vent",
+      "name": "Return Vent",
+      "category": "20_hvac_plumbing",
+      "file": "symbols/20_hvac_plumbing/return-vent.svg"
+    },
+    {
+      "id": "sprinkler-head",
+      "name": "Sprinkler Head",
+      "category": "20_hvac_plumbing",
+      "file": "symbols/20_hvac_plumbing/sprinkler-head.svg"
+    },
+    {
+      "id": "sump-pump",
+      "name": "Sump Pump",
+      "category": "20_hvac_plumbing",
+      "file": "symbols/20_hvac_plumbing/sump-pump.svg"
+    },
+    {
+      "id": "supply-vent",
+      "name": "Supply Vent",
+      "category": "20_hvac_plumbing",
+      "file": "symbols/20_hvac_plumbing/supply-vent.svg"
+    },
+    {
+      "id": "thermostat",
+      "name": "Thermostat",
+      "category": "20_hvac_plumbing",
+      "file": "symbols/20_hvac_plumbing/thermostat.svg"
+    },
+    {
+      "id": "water-line",
+      "name": "Water Line",
+      "category": "20_hvac_plumbing",
+      "file": "symbols/20_hvac_plumbing/water-line.svg"
+    },
+    {
+      "id": "diving-board",
+      "name": "Diving Board",
+      "category": "21_swimming_pools",
+      "file": "symbols/21_swimming_pools/diving-board.svg"
+    },
+    {
+      "id": "pool-cover",
+      "name": "Pool Cover",
+      "category": "21_swimming_pools",
+      "file": "symbols/21_swimming_pools/pool-cover.svg"
+    },
+    {
+      "id": "pool-equipment-pad",
+      "name": "Pool Equipment Pad",
+      "category": "21_swimming_pools",
+      "file": "symbols/21_swimming_pools/pool-equipment-pad.svg"
+    },
+    {
+      "id": "pool-fence",
+      "name": "Pool Fence",
+      "category": "21_swimming_pools",
+      "file": "symbols/21_swimming_pools/pool-fence.svg"
+    },
+    {
+      "id": "pool-freeform",
+      "name": "Pool Freeform",
+      "category": "21_swimming_pools",
+      "file": "symbols/21_swimming_pools/pool-freeform.svg"
+    },
+    {
+      "id": "pool-infinity-edge",
+      "name": "Pool Infinity Edge",
+      "category": "21_swimming_pools",
+      "file": "symbols/21_swimming_pools/pool-infinity-edge.svg"
+    },
+    {
+      "id": "pool-l-shaped",
+      "name": "Pool L Shaped",
+      "category": "21_swimming_pools",
+      "file": "symbols/21_swimming_pools/pool-l-shaped.svg"
+    },
+    {
+      "id": "pool-ladder",
+      "name": "Pool Ladder",
+      "category": "21_swimming_pools",
+      "file": "symbols/21_swimming_pools/pool-ladder.svg"
+    },
+    {
+      "id": "pool-oval",
+      "name": "Pool Oval",
+      "category": "21_swimming_pools",
+      "file": "symbols/21_swimming_pools/pool-oval.svg"
+    },
+    {
+      "id": "pool-rectangular",
+      "name": "Pool Rectangular",
+      "category": "21_swimming_pools",
+      "file": "symbols/21_swimming_pools/pool-rectangular.svg"
+    },
+    {
+      "id": "pool-round",
+      "name": "Pool Round",
+      "category": "21_swimming_pools",
+      "file": "symbols/21_swimming_pools/pool-round.svg"
+    },
+    {
+      "id": "pool-steps",
+      "name": "Pool Steps",
+      "category": "21_swimming_pools",
+      "file": "symbols/21_swimming_pools/pool-steps.svg"
+    },
+    {
+      "id": "spa-round",
+      "name": "Spa Round",
+      "category": "21_swimming_pools",
+      "file": "symbols/21_swimming_pools/spa-round.svg"
+    },
+    {
+      "id": "spa-square",
+      "name": "Spa Square",
+      "category": "21_swimming_pools",
+      "file": "symbols/21_swimming_pools/spa-square.svg"
+    },
+    {
+      "id": "bollard-light",
+      "name": "Bollard Light",
+      "category": "22_site_elements",
+      "file": "symbols/22_site_elements/bollard-light.svg"
+    },
+    {
+      "id": "deck",
+      "name": "Deck",
+      "category": "22_site_elements",
+      "file": "symbols/22_site_elements/deck.svg"
+    },
+    {
+      "id": "driveway",
+      "name": "Driveway",
+      "category": "22_site_elements",
+      "file": "symbols/22_site_elements/driveway.svg"
+    },
+    {
+      "id": "fence-panel",
+      "name": "Fence Panel",
+      "category": "22_site_elements",
+      "file": "symbols/22_site_elements/fence-panel.svg"
+    },
+    {
+      "id": "fire-hydrant",
+      "name": "Fire Hydrant",
+      "category": "22_site_elements",
+      "file": "symbols/22_site_elements/fire-hydrant.svg"
+    },
+    {
+      "id": "gate-double",
+      "name": "Gate Double",
+      "category": "22_site_elements",
+      "file": "symbols/22_site_elements/gate-double.svg"
+    },
+    {
+      "id": "gate-single",
+      "name": "Gate Single",
+      "category": "22_site_elements",
+      "file": "symbols/22_site_elements/gate-single.svg"
+    },
+    {
+      "id": "gazebo",
+      "name": "Gazebo",
+      "category": "22_site_elements",
+      "file": "symbols/22_site_elements/gazebo.svg"
+    },
+    {
+      "id": "lamp-post",
+      "name": "Lamp Post",
+      "category": "22_site_elements",
+      "file": "symbols/22_site_elements/lamp-post.svg"
+    },
+    {
+      "id": "mailbox",
+      "name": "Mailbox",
+      "category": "22_site_elements",
+      "file": "symbols/22_site_elements/mailbox.svg"
+    },
+    {
+      "id": "patio",
+      "name": "Patio",
+      "category": "22_site_elements",
+      "file": "symbols/22_site_elements/patio.svg"
+    },
+    {
+      "id": "pergola",
+      "name": "Pergola",
+      "category": "22_site_elements",
+      "file": "symbols/22_site_elements/pergola.svg"
+    },
+    {
+      "id": "property-line",
+      "name": "Property Line",
+      "category": "22_site_elements",
+      "file": "symbols/22_site_elements/property-line.svg"
+    },
+    {
+      "id": "retaining-wall",
+      "name": "Retaining Wall",
+      "category": "22_site_elements",
+      "file": "symbols/22_site_elements/retaining-wall.svg"
+    },
+    {
+      "id": "stepping-stones",
+      "name": "Stepping Stones",
+      "category": "22_site_elements",
+      "file": "symbols/22_site_elements/stepping-stones.svg"
+    },
+    {
+      "id": "walkway",
+      "name": "Walkway",
+      "category": "22_site_elements",
+      "file": "symbols/22_site_elements/walkway.svg"
+    },
+    {
+      "id": "bench-outdoor",
+      "name": "Bench Outdoor",
+      "category": "23_misc_residential",
+      "file": "symbols/23_misc_residential/bench-outdoor.svg"
+    },
+    {
+      "id": "bird-bath",
+      "name": "Bird Bath",
+      "category": "23_misc_residential",
+      "file": "symbols/23_misc_residential/bird-bath.svg"
+    },
+    {
+      "id": "compost-bin",
+      "name": "Compost Bin",
+      "category": "23_misc_residential",
+      "file": "symbols/23_misc_residential/compost-bin.svg"
+    },
+    {
+      "id": "dog-house",
+      "name": "Dog House",
+      "category": "23_misc_residential",
+      "file": "symbols/23_misc_residential/dog-house.svg"
+    },
+    {
+      "id": "ev-charger",
+      "name": "Ev Charger",
+      "category": "23_misc_residential",
+      "file": "symbols/23_misc_residential/ev-charger.svg"
+    },
+    {
+      "id": "generator",
+      "name": "Generator",
+      "category": "23_misc_residential",
+      "file": "symbols/23_misc_residential/generator.svg"
+    },
+    {
+      "id": "playground",
+      "name": "Playground",
+      "category": "23_misc_residential",
+      "file": "symbols/23_misc_residential/playground.svg"
+    },
+    {
+      "id": "rain-barrel",
+      "name": "Rain Barrel",
+      "category": "23_misc_residential",
+      "file": "symbols/23_misc_residential/rain-barrel.svg"
+    },
+    {
+      "id": "recycling-bin",
+      "name": "Recycling Bin",
+      "category": "23_misc_residential",
+      "file": "symbols/23_misc_residential/recycling-bin.svg"
+    },
+    {
+      "id": "satellite-dish",
+      "name": "Satellite Dish",
+      "category": "23_misc_residential",
+      "file": "symbols/23_misc_residential/satellite-dish.svg"
+    },
+    {
+      "id": "shed",
+      "name": "Shed",
+      "category": "23_misc_residential",
+      "file": "symbols/23_misc_residential/shed.svg"
+    },
+    {
+      "id": "solar-panel",
+      "name": "Solar Panel",
+      "category": "23_misc_residential",
+      "file": "symbols/23_misc_residential/solar-panel.svg"
+    },
+    {
+      "id": "trampoline",
+      "name": "Trampoline",
+      "category": "23_misc_residential",
+      "file": "symbols/23_misc_residential/trampoline.svg"
+    },
+    {
+      "id": "trash-can",
+      "name": "Trash Can",
+      "category": "23_misc_residential",
+      "file": "symbols/23_misc_residential/trash-can.svg"
+    },
+    {
+      "id": "antenna",
+      "name": "Antenna",
+      "category": "24_roof_site",
+      "file": "symbols/24_roof_site/antenna.svg"
+    },
+    {
+      "id": "downspout",
+      "name": "Downspout",
+      "category": "24_roof_site",
+      "file": "symbols/24_roof_site/downspout.svg"
+    },
+    {
+      "id": "gutter",
+      "name": "Gutter",
+      "category": "24_roof_site",
+      "file": "symbols/24_roof_site/gutter.svg"
+    },
+    {
+      "id": "roof-drain",
+      "name": "Roof Drain",
+      "category": "24_roof_site",
+      "file": "symbols/24_roof_site/roof-drain.svg"
+    },
+    {
+      "id": "roof-vent",
+      "name": "Roof Vent",
+      "category": "24_roof_site",
+      "file": "symbols/24_roof_site/roof-vent.svg"
+    },
+    {
+      "id": "skylight",
+      "name": "Skylight",
+      "category": "24_roof_site",
+      "file": "symbols/24_roof_site/skylight.svg"
+    },
+    {
+      "id": "solar-array",
+      "name": "Solar Array",
+      "category": "24_roof_site",
+      "file": "symbols/24_roof_site/solar-array.svg"
+    },
+    {
+      "id": "weather-vane",
+      "name": "Weather Vane",
+      "category": "24_roof_site",
+      "file": "symbols/24_roof_site/weather-vane.svg"
+    },
+    {
+      "id": "detail-marker",
+      "name": "Detail Marker",
+      "category": "25_drafting_symbols",
+      "file": "symbols/25_drafting_symbols/detail-marker.svg"
+    },
+    {
+      "id": "elevation-marker",
+      "name": "Elevation Marker",
+      "category": "25_drafting_symbols",
+      "file": "symbols/25_drafting_symbols/elevation-marker.svg"
+    },
+    {
+      "id": "north-arrow",
+      "name": "North Arrow",
+      "category": "25_drafting_symbols",
+      "file": "symbols/25_drafting_symbols/north-arrow.svg"
+    },
+    {
+      "id": "property-pin",
+      "name": "Property Pin",
+      "category": "25_drafting_symbols",
+      "file": "symbols/25_drafting_symbols/property-pin.svg"
+    },
+    {
+      "id": "revision-cloud",
+      "name": "Revision Cloud",
+      "category": "25_drafting_symbols",
+      "file": "symbols/25_drafting_symbols/revision-cloud.svg"
+    },
+    {
+      "id": "scale-bar",
+      "name": "Scale Bar",
+      "category": "25_drafting_symbols",
+      "file": "symbols/25_drafting_symbols/scale-bar.svg"
+    },
+    {
+      "id": "section-marker",
+      "name": "Section Marker",
+      "category": "25_drafting_symbols",
+      "file": "symbols/25_drafting_symbols/section-marker.svg"
+    },
+    {
+      "id": "spot-elevation",
+      "name": "Spot Elevation",
+      "category": "25_drafting_symbols",
+      "file": "symbols/25_drafting_symbols/spot-elevation.svg"
+    }
+  ]
+}

@@ -1,5 +1,7 @@
 {
   "acceptance": "Changing a fingerprint input either regenerates output or produces a visible stale-output block; matching inputs reproduce the same output identity.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -58,10 +60,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Changing a fingerprint input either regenerates output or produces a visible stale-output block; matching inputs reproduce the same output identity.",
   "qualification_boundary": "This evidence covers deterministic fingerprint construction, dependency currentness, and desktop output binding on the development host. Physical output calibration and production authority qualification remain open.",
+  "requirement": "Every authoritative output carries an OutputFingerprint for document revision, profiles, assets, fonts, views, and processing components.",
   "requirement_id": "CORE-DOC-004",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "OutputFingerprintInputs",
     "make_output_fingerprint",
@@ -106,5 +117,6 @@
   "tests": [
     "output_fingerprint",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

@@ -1,5 +1,7 @@
 {
-  "acceptance": "Concurrent-open and external-change fixtures prevent silent overwrite and make the selected read-only or independent-copy path explicit.",
+  "acceptance": "Concurrent-open and external-change fixtures prevent silent overwrite and make the selected read-only/copy path explicit.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -66,10 +68,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Concurrent-open and external-change fixtures prevent silent overwrite and make the selected read-only or independent-copy path explicit.",
   "qualification_boundary": "This evidence covers local and cross-process ownership, Windows path identity, external-change save blocking, and the desktop read-only second-open behavior. Clean-machine lifetime and hostile-writer qualification remain open.",
+  "requirement": "Detect external changes and enforce exclusive editing ownership, with read-only or independent-copy behavior for a second opening.",
   "requirement_id": "REC-004",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "ProjectOwnershipSession",
     "external_change",
@@ -125,5 +136,6 @@
     "project_ownership",
     "project_ownership_process",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

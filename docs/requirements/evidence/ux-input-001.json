@@ -1,5 +1,7 @@
 {
-  "acceptance": "Pen/touch controls and the on-screen measurement keypad share the keyboard precision command path and retain pressure-independent undoable edits.",
+  "acceptance": "Real pen/touch fixtures enter and commit measurements through the keypad, preserve units/provenance, and remain undoable.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -58,10 +60,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Pen/touch controls and the on-screen measurement keypad share the keyboard precision command path and retain pressure-independent undoable edits.",
   "qualification_boundary": "This evidence covers synthetic pen/touch event routing and keypad semantics. Real devices, multi-touch ergonomics, and production field qualification remain open.",
+  "requirement": "Provide pen/touch-specific controls and an on-screen measurement keypad while preserving keyboard precision paths.",
   "requirement_id": "UX-INPUT-001",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "pen_controls",
     "touch_controls",
@@ -107,5 +118,6 @@
   "tests": [
     "workspace_accessibility",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

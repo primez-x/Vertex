@@ -1,5 +1,7 @@
 {
-  "acceptance": "Constraint solving preserves protected winding, topology, stable endpoint identity, and branch behavior while rejecting mirrored or unstable solutions.",
+  "acceptance": "Branch and mirrored-solution fixtures either retain the intended branch or ask for an explicit alternative selection.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -74,10 +76,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Constraint solving preserves protected winding, topology, stable endpoint identity, and branch behavior while rejecting mirrored or unstable solutions.",
   "qualification_boundary": "This evidence covers deterministic branch and topology guards; broader architectural constraint coverage remains open.",
+  "requirement": "Prevent unintended mirrored solutions, winding changes, topology changes, and unstable alternate branches during solve.",
   "requirement_id": "GEO-CON-004",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "winding",
     "topology",
@@ -140,5 +151,6 @@
     "constraint_integrity",
     "constraint_authoring",
     "constraint_dialog"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

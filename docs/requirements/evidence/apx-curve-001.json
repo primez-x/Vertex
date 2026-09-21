@@ -1,5 +1,7 @@
 {
-  "acceptance": "Chord, arc-length, height, angle, and tangent curve entries produce true analytical arcs whose sweep and perimeter survive edit and save/reopen.",
+  "acceptance": "Curve fixtures calculate correct area and perimeter, retain defining parameters, render smoothly, and remain editable after save/reopen.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -74,10 +76,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Chord, arc-length, height, angle, and tangent curve entries produce true analytical arcs whose sweep and perimeter survive edit and save/reopen.",
   "qualification_boundary": "This evidence covers analytical curve construction and local persistence. Native Apex curve fixtures, field input, and production qualification remain open.",
+  "requirement": "Expose curved wall and boundary construction through actual curve geometry, including chord, arc length, arc height, and angle definitions.",
   "requirement_id": "APX-CURVE-001",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "arc_from_chord_angle",
     "arc_from_chord_arc_length",
@@ -141,5 +152,6 @@
     "boundary_authoring_session",
     "calculations",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

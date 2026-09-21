@@ -1,7 +1,7 @@
 # Packaging inputs
 
 The two JSON files in this directory are the reviewed input lists for a
-private Windows handoff:
+reproducible Windows source and runtime package:
 
 - `source-kit-allowlist.json` names the tracked source, build metadata,
   documentation, fixtures, and license files that can be copied into a source

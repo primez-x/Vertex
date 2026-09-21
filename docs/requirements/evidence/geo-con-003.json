@@ -1,5 +1,7 @@
 {
-  "acceptance": "Constraint previews report underconstrained, redundant, and conflicting states with diagnostics and never silently relax locked measurements.",
+  "acceptance": "Conflict fixtures identify the offending relations, offer only explicit user-confirmed repairs, and leave the previous valid revision intact on rejection.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -74,10 +76,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Constraint previews report underconstrained, redundant, and conflicting states with diagnostics and never silently relax locked measurements.",
   "qualification_boundary": "This evidence covers local solver diagnostics and atomic rejection; full constraint parity and production qualification remain open.",
+  "requirement": "Detect redundant, contradictory, underconstrained, and near-singular constraint states with understandable diagnostics; never silently relax locked measurements.",
   "requirement_id": "GEO-CON-003",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "degrees_of_freedom",
     "redundant",
@@ -144,5 +155,6 @@
     "constraint_integrity",
     "constraint_authoring",
     "constraint_dialog"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

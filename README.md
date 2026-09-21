@@ -1,4 +1,4 @@
-# Vertex is under active development and has not yet published it's first production-grade release. Do not attempt to use yet. I will publish a release once ready. :)
+# Vertex is under active development and has not yet published its first production-grade release. Do not use it for production work yet. A release will be published when the production gate passes.
 
 Vertex is an independent, offline-first Windows application for property
 measurement and residential/light-commercial architectural work.
@@ -68,7 +68,7 @@ it records direct application imports separately from transitive third-party
 network libraries.
 The tracked checkout also has a [source provenance audit](docs/dependencies/source-provenance.md)
 that keeps first-party source separate from third-party provenance and excludes
-build, dependency-cache, and generated paths from private handoff review.
+build, dependency-cache, and generated paths from source-kit review.
 
 The [project format](docs/project-format.md), [calculation contract](docs/calculations.md),
 [workspace UI](docs/workspace-ui.md),
@@ -85,7 +85,8 @@ filter both plans and 3D without changing totals; Show all clears the filters.
 Floor association currently leaves world elevations unchanged.
 See [project organization](docs/project-organization.md) for the tested boundary.
 
-The source is private and backed up in the [Vertex GitHub repository](https://github.com/primez-x/Vertex).
-Third-party components retain their licenses; see `LICENSE` and the component
-notices. No public source publication, product release, or deployment is
-implied by this repository.
+Vertex is publicly developed in the [Vertex GitHub repository](https://github.com/primez-x/Vertex).
+First-party Vertex code and original project assets are free software under
+**GPL-3.0-or-later**. Third-party components retain their own licenses; see
+`LICENSE`, `third_party/`, and the component notices. Public source availability
+does not mean the current development checkpoint is a production release.

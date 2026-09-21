@@ -1,5 +1,7 @@
 {
-  "acceptance": "Preview, PDF, SVG, and printing use one shared vector scene, while raster imagery and shaded 3D are identified as raster content with bound output fingerprints.",
+  "acceptance": "Paired output fixtures compare scene geometry, scale, text, dimensions, and raster placement across preview and exported/printed results.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -66,10 +68,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Preview, PDF, SVG, and printing use one shared vector scene, while raster imagery and shaded 3D are identified as raster content with bound output fingerprints.",
   "qualification_boundary": "This evidence covers the shared local scene and output receipts. Physical printer calibration and production output comparison remain open.",
+  "requirement": "Preview, PDF, SVG, and printing consume one vector scene; raster imagery and shaded 3D are explicitly identified raster content.",
   "requirement_id": "IO-OUTPUT-001",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "SheetOutputScene",
     "vector",
@@ -126,5 +137,6 @@
     "sheet_output_scene",
     "output_fingerprint",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

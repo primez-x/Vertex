@@ -1,5 +1,7 @@
 {
   "acceptance": "Transform fixtures preserve analytical dimensions, typed links, and expected handedness, and can be undone exactly.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -58,10 +60,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Transform fixtures preserve analytical dimensions, typed links, and expected handedness, and can be undone exactly.",
   "qualification_boundary": "This evidence covers analytical rotation, reflection, pivot and offset semantics with typed desktop history. Reference/annotation breadth, linked propagation, and production qualification remain open.",
+  "requirement": "Support rotation and flipping of supported geometry, areas, references, annotations, and architectural objects with explicit pivot behavior.",
   "requirement_id": "APX-EDIT-002",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "rotate_boundary",
     "flip_boundary",
@@ -106,5 +117,6 @@
   "tests": [
     "geometry_operations",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

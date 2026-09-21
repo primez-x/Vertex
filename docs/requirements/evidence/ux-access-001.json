@@ -1,5 +1,7 @@
 {
-  "acceptance": "The accessibility profile validates keyboard navigation, predictable focus, accessible properties, high contrast, themes, and declared 100%, 150%, and 200% layouts.",
+  "acceptance": "Accessibility and DPI fixtures complete core workflows without clipped controls, lost focus, inaccessible properties, or unreadable contrast.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -58,10 +60,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "The accessibility profile validates keyboard navigation, predictable focus, accessible properties, high contrast, themes, and declared 100%, 150%, and 200% layouts.",
   "qualification_boundary": "This evidence covers the local accessibility contract and declared layouts. Physical screen-reader, keyboard-only, DPI, and assistive-technology qualification remain open.",
+  "requirement": "Support keyboard navigation, predictable focus, accessible properties and commands, high contrast, and layouts from 1366x768 through 4K at 100%, 150%, and 200% scaling.",
   "requirement_id": "UX-ACCESS-001",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "keyboard_navigation",
     "predictable_focus",
@@ -107,5 +118,6 @@
   "tests": [
     "workspace_accessibility",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

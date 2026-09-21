@@ -1,4 +1,4 @@
-"""Write hash-bound acceptance evidence for implemented architecture workflows."""
+"""Write hash-bound supporting checks, never inferred product acceptance."""
 
 from __future__ import annotations
 
@@ -11,6 +11,14 @@ from typing import Any
 
 
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
+
+# These gaps are against the original requirement, not the narrower local checks.
+OPEN_ACCEPTANCE_GAPS = {
+    "ARCH-VIEW-002": "Complete section annotation/detail overlays and render/print fixtures remain unverified.",
+    "IO-IFC-001": "Reference View 1.2 conformance and representative geometry/type/property/material/relationship fidelity remain unverified.",
+    "ARCH-3D-001": "A native 3D edit propagated through all linked views, schedules, calculations and save/reopen remains unverified.",
+    "APX-DOC-001": "The complete multipage metadata, ordering, independent-view and linked-model save/reopen fixture remains unverified.",
+}
 
 
 WORKFLOW_RULES: dict[str, dict[str, Any]] = {
@@ -1405,16 +1413,23 @@ WORKFLOW_RULES.update({
     },
     "APX-SYM-001": {
         "acceptance": (
-            "The local symbol catalog contains at least 468 scaled residential and light-commercial "
-            "entries with deterministic previews, filtering, resizing, rotation, and output metadata."
+            "The local symbol catalog contains 1,129 residential and light-commercial entries, "
+            "including all 320 supplied SVG symbols, with deterministic previews, filtering, "
+            "resizing, rotation, and output metadata."
         ),
         "sources": (
             "include/sketch/annotation_catalog.hpp",
             "src/core/annotation_catalog.cpp",
+            "assets/symbols/architectural_v2/index.json",
+            "assets/symbols/architectural_v2/catalog_data.inc",
+            "scripts/generate_architectural_svg_catalog.py",
             "src/cli/main.cpp",
             "include/sketch/annotation_entity_codec.hpp",
             "src/core/annotation_entity_codec.cpp",
+            "src/desktop/main_window.cpp",
+            "src/desktop/plan_canvas.cpp",
             "tests/annotation_catalog_tests.cpp",
+            "tests/symbol_svg_desktop_tests.cpp",
             "tests/test_cli.py",
             "tests/annotation_entity_codec_tests.cpp",
             "tests/dxf_project_exchange_tests.cpp",
@@ -1423,7 +1438,9 @@ WORKFLOW_RULES.update({
             "docs/annotation-catalog.md",
         ),
         "anchors": (
-            "468",
+            "1,129",
+            "320",
+            "svg",
             "scale",
             "plumbing",
             "furniture",
@@ -1440,6 +1457,7 @@ WORKFLOW_RULES.update({
             "dxf_project_exchange",
             "project_cli",
             "packaging_symbol_catalog_manifest",
+            "symbol_svg_desktop",
             "desktop_workflow",
         ),
         "qualification_boundary": (
@@ -1520,14 +1538,14 @@ WORKFLOW_RULES.update({
         "qualification_boundary": "This evidence covers deterministic local staging and hash verification; signed installer and clean-machine installation qualification remain open.",
     },
     "CORE-OWN-001": {
-        "acceptance": "The source kit records pinned dependencies, reproducible build inputs, an explicit allowlist, and local build instructions for private delivery.",
+        "acceptance": "The public GPL-3.0-or-later source kit records pinned dependencies, reproducible build inputs, an explicit allowlist, and local build instructions.",
         "sources": (
             "third_party/dependencies.json", "scripts/source_kit_manifest.py", "tests/test_source_kit_manifest.py",
             "docs/dependencies/source-kit.md",
         ),
         "anchors": ("source-kit", "manifest", "reproducible", "build", "dependency", "allowlist", "source"),
         "tests": ("packaging_source_kit_manifest", "packaging_update_source_kit_allowlist", "source_kit_allowlist_contract"),
-        "qualification_boundary": "This evidence covers the repository source/build kit and manifest contract; private handoff and clean-machine reproducibility remain open.",
+        "qualification_boundary": "This evidence covers the public repository source/build kit and manifest contract; clean-machine reproducibility remains open.",
     },
     "CORE-OWN-002": {
         "acceptance": "The local project format preserves inspectable geometry, metadata, assets, history, ownership, and migration behavior through save and reopen.",
@@ -1562,14 +1580,14 @@ WORKFLOW_RULES.update({
         "qualification_boundary": "This evidence covers declared component inventory, file-level source provenance preservation, SPDX generation, and documented replacement-build boundaries. Complete matching sources, live relink/replacement proof, notice review, legal clearance, and redistributability approval remain open.",
     },
     "COMP-LIC-002": {
-        "acceptance": "Original application paths and third-party paths have explicit ownership and provenance classifications suitable for private delivery or later licensing review.",
+        "acceptance": "First-party GPL-3.0-or-later paths and third-party paths have explicit ownership, provenance, and license classifications suitable for public distribution review.",
         "sources": (
             "third_party/dependencies.json", "third_party/source-provenance.json", "scripts/source_provenance_audit.py",
             "tests/test_source_provenance_audit.py", "docs/dependencies/source-provenance.md",
         ),
         "anchors": ("source-provenance", "ownership", "provenance", "third_party", "application", "audit"),
         "tests": ("packaging_source_provenance_audit", "source_kit_allowlist_contract"),
-        "qualification_boundary": "This evidence covers repository provenance declarations; independent legal review and future publication decisions remain open.",
+        "qualification_boundary": "This evidence covers repository provenance declarations and the selected first-party license; independent legal review and third-party redistribution clearance remain open.",
     },
     "COMP-LIC-003": {
         "acceptance": "The distribution inventory identifies GPL, AGPL, LGPL, commercial, and other license obligations and rejects unapproved dependency policy violations.",
@@ -2154,6 +2172,66 @@ def _workflow_test_records(root: pathlib.Path, configuration: str, test_names: t
     }
 
 
+def _requirements(root: pathlib.Path) -> dict[str, dict[str, Any]]:
+    path = root / "docs/requirements/apex-parity.json"
+    rows = json.loads(path.read_text(encoding="utf-8"))["requirements"]
+    requirements = {row["id"]: row for row in rows}
+    if len(requirements) != len(rows):
+        raise RuntimeError("duplicate requirement IDs in acceptance contract")
+    for requirement_id in WORKFLOW_RULES:
+        if not requirements.get(requirement_id, {}).get("acceptance"):
+            raise RuntimeError(f"{requirement_id}: original acceptance contract is missing")
+    return requirements
+
+
+def _classify(record: dict[str, Any], requirement: dict[str, Any],
+              rule: dict[str, Any]) -> dict[str, Any]:
+    """Keep technical checks separate from a review of full user acceptance.
+
+    Source anchors locate evidence; suite names and passing aggregate logs do
+    not prove that every clause of the original requirement was exercised.
+    """
+    return {
+        **record,
+        "schema_version": 2,
+        "result": "supporting_evidence",
+        "requirement": requirement["requirement"],
+        "acceptance": requirement["acceptance"],
+        "local_check_scope": rule["acceptance"],
+        "acceptance_status": "in_progress",
+        "acceptance_gap": OPEN_ACCEPTANCE_GAPS.get(
+            record["requirement_id"],
+            "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it."),
+        "evidence_dimensions": {
+            "core_implemented": "not_assessed",
+            "ui_usable": "not_assessed",
+            "end_to_end_verified": "not_assessed",
+            "externally_qualified": "not_assessed",
+        },
+        "source_anchor_role": "source_locator_only",
+        "qualification_boundary": rule["qualification_boundary"],
+    }
+
+
+def reclassify_existing(root: pathlib.Path, output_directory: pathlib.Path) -> dict[str, dict[str, Any]]:
+    """Correct historical claims without refreshing hashes or claiming new runs."""
+    requirements = _requirements(root)
+    result = {}
+    for requirement_id, rule in WORKFLOW_RULES.items():
+        path = output_directory / f"{requirement_id.lower()}.json"
+        if not path.is_file():
+            continue
+        record = json.loads(path.read_text(encoding="utf-8"))
+        if record.get("requirement_id") != requirement_id:
+            raise RuntimeError(f"{path}: requirement identity mismatch")
+        record = _classify(record, requirements[requirement_id], rule)
+        record["verification_freshness"] = "historical_not_revalidated"
+        result[requirement_id] = record
+    if not result:
+        raise RuntimeError("no existing workflow records to reclassify")
+    return result
+
+
 def build_evidence(root: pathlib.Path) -> dict[str, dict[str, Any]]:
     root = root.resolve()
     audit = _load_module("vertex_completion_audit_for_workflow", SCRIPT_DIR / "completion_audit.py")
@@ -2162,6 +2240,7 @@ def build_evidence(root: pathlib.Path) -> dict[str, dict[str, Any]]:
     source_fingerprint = requirement_audit.source_fingerprint(root)
     for configuration in ("windows-debug", "windows-release"):
         provenance.verify(root, configuration, source_fingerprint)
+    requirements = _requirements(root)
     result: dict[str, dict[str, Any]] = {}
 
     for requirement_id, rule in WORKFLOW_RULES.items():
@@ -2184,10 +2263,11 @@ def build_evidence(root: pathlib.Path) -> dict[str, dict[str, Any]]:
         for test_record in ctest:
             test_record["provenance"] = _path_record(
                 root, f"build/{test_record['configuration']}/{provenance.PROVENANCE_FILE}")
-        result[requirement_id] = {
+        result[requirement_id] = _classify({
             "schema_version": 1,
             "requirement_id": requirement_id,
-            "result": "pass",
+            "verification_freshness": "source_bound_local_checks",
+            "local_checks_result": "pass",
             "source_tree_sha256": source_fingerprint,
             "acceptance": rule["acceptance"],
             "source_files": source_records,
@@ -2195,7 +2275,7 @@ def build_evidence(root: pathlib.Path) -> dict[str, dict[str, Any]]:
             "tests": list(rule["tests"]),
             "ctest": ctest,
             "qualification_boundary": rule["qualification_boundary"],
-        }
+        }, requirements[requirement_id], rule)
     if requirement_audit.source_fingerprint(root) != source_fingerprint:
         raise RuntimeError("source changed while generating workflow evidence")
     for configuration in ("windows-debug", "windows-release"):
@@ -2208,13 +2288,16 @@ def main() -> int:
     parser.add_argument("--root", type=pathlib.Path,
                         default=pathlib.Path(__file__).resolve().parents[1])
     parser.add_argument("--output-directory", type=pathlib.Path, default=None)
+    parser.add_argument("--reclassify-existing", action="store_true",
+                        help="Correct historical claim scope without rerunning checks or refreshing source/test hashes")
     args = parser.parse_args()
     root = args.root.resolve()
     output_directory = (args.output_directory or root / "artifacts/acceptance/workflows").resolve()
     if not output_directory.is_relative_to(root):
         raise SystemExit("output directory must remain inside the repository root")
     output_directory.mkdir(parents=True, exist_ok=True)
-    evidence = build_evidence(root)
+    evidence = (reclassify_existing(root, output_directory) if args.reclassify_existing
+                else build_evidence(root))
     for requirement_id, record in evidence.items():
         output = output_directory / f"{requirement_id.lower()}.json"
         output.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n",

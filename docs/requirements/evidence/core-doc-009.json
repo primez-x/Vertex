@@ -1,5 +1,7 @@
 {
   "acceptance": "The CLI validates a good fixture, rejects malformed or incomplete data with actionable diagnostics, extracts assets, and produces a migration report.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -50,10 +52,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "The CLI validates a good fixture, rejects malformed or incomplete data with actionable diagnostics, extracts assets, and produces a migration report.",
   "qualification_boundary": "This evidence covers the local inspect, validate, extract, and migrate CLI fixture including malformed input and source preservation. It does not certify Apex/native migration fidelity or a production release.",
+  "requirement": "Provide a documented JSON-and-assets exchange representation plus local inspect, validate, extract, and migrate CLI operations.",
   "requirement_id": "CORE-DOC-009",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "inspect",
     "validate",
@@ -82,5 +93,6 @@
   "source_tree_sha256": "b89bdba6cef5fd26b8d83708b44086edb733aed72a63c060eb658c9ad75ad6cf",
   "tests": [
     "project_cli"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

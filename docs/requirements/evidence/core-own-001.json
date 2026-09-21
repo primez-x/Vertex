@@ -1,5 +1,7 @@
 {
-  "acceptance": "The source kit records pinned dependencies, reproducible build inputs, an explicit allowlist, and local build instructions for private delivery.",
+  "acceptance": "The delivered source archive builds the shipped artifacts on a documented Windows environment from a clean checkout without a hosted build service.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -66,10 +68,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "The source kit records pinned dependencies, reproducible build inputs, an explicit allowlist, and local build instructions for private delivery.",
   "qualification_boundary": "This evidence covers the repository source/build kit and manifest contract; private handoff and clean-machine reproducibility remain open.",
+  "requirement": "Deliver the original application source privately with reproducible Windows build instructions, fixtures, and build configuration.",
   "requirement_id": "CORE-OWN-001",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "source-kit",
     "manifest",
@@ -106,5 +117,6 @@
     "packaging_source_kit_manifest",
     "packaging_update_source_kit_allowlist",
     "source_kit_allowlist_contract"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

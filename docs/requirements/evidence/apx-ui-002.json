@@ -1,5 +1,7 @@
 {
-  "acceptance": "Visibility filters, overview navigation, themes, and saved workspace configurations persist locally and apply to the drawing views.",
+  "acceptance": "Workspace fixtures save and restore filters, theme, overview, and panel state without changing document geometry.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -66,10 +68,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Visibility filters, overview navigation, themes, and saved workspace configurations persist locally and apply to the drawing views.",
   "qualification_boundary": "This evidence covers local visibility and workspace presentation behavior; accessibility and DPI certification remain open.",
+  "requirement": "Provide visibility filters, overview map, light/dark themes, and saved workspace configurations.",
   "requirement_id": "APX-UI-002",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "visibility",
     "overview",
@@ -112,5 +123,6 @@
     "project_visibility",
     "visibility_workflow",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

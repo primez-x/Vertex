@@ -81,7 +81,8 @@ int differing_pixels(const QImage& left, const QImage& right, QRect region) {
     return result;
 }
 
-QRect bright_pixel_bounds(const QImage& image, QRect region) {
+QRect bright_pixel_bounds(const QImage& image, QRect region,
+                         const QImage* without_label = nullptr) {
     region = region.intersected(image.rect());
     int left = region.right() + 1;
     int top = region.bottom() + 1;
@@ -89,6 +90,7 @@ QRect bright_pixel_bounds(const QImage& image, QRect region) {
     int bottom = region.top() - 1;
     for (int y = region.top(); y <= region.bottom(); ++y) {
         for (int x = region.left(); x <= region.right(); ++x) {
+            if (without_label && image.pixel(x, y) == without_label->pixel(x, y)) continue;
             const auto color = image.pixelColor(x, y);
             if (color.red() > 180 && color.green() > 150 && color.blue() > 80 &&
                 color.red() > color.blue() + 45) {
@@ -243,6 +245,16 @@ void test_boundary_draft_rendering_and_history() {
             "boundary draft setter must retain an owned value copy");
 
     const auto screen_draft = render(canvas, false);
+    const auto render_without_draft_labels = [&] {
+        const auto original = *canvas.boundaryDraftPreview();
+        auto without_labels = original;
+        without_labels.labels.clear();
+        canvas.setBoundaryDraftPreview(without_labels);
+        const auto image = render(canvas, false);
+        canvas.setBoundaryDraftPreview(original);
+        return image;
+    };
+    const auto screen_without_labels = render_without_draft_labels();
     const auto arc_top = fit_screen_point(canvas, {0.0, 1.0});
     const auto arc_bottom = fit_screen_point(canvas, {0.0, -1.0});
     const auto arc_region_top = QRectF(arc_top.x() - 120.0, arc_top.y() - 18.0,
@@ -257,7 +269,8 @@ void test_boundary_draft_rendering_and_history() {
                                     120.0, 48.0).toAlignedRect();
     require(differing_pixels(screen_before, screen_draft, label_region) > 20,
             "onscreen draft image must contain the dimension label");
-    const auto normal_label_bounds = bright_pixel_bounds(screen_draft, label_region);
+    const auto normal_label_bounds = bright_pixel_bounds(screen_draft, label_region,
+                                                         &screen_without_labels);
     require(!normal_label_bounds.isEmpty(),
             "dimension label must contain readable bright text pixels");
 
@@ -278,6 +291,7 @@ void test_boundary_draft_rendering_and_history() {
     canvas.zoomBy(1.5);
     process_events();
     const auto zoomed_screen = render(canvas, false);
+    const auto zoomed_without_labels = render_without_draft_labels();
     const auto zoomed_grab = canvas.grab();
     require(!zoomed_grab.isNull(), "150 percent boundary draft capture must be available");
     save_capture(capture_directory, QStringLiteral("boundary-draft-150.png"), zoomed_grab.toImage());
@@ -286,7 +300,9 @@ void test_boundary_draft_rendering_and_history() {
             "fit-to-content output must stay unchanged after interactive zoom");
 
     // The label font is screen-space text, so zooming changes its position but
-    // not its pixel footprint.
+    // not its pixel footprint. Restrict the color oracle to pixels changed by
+    // the label: Windows subpixel antialiasing can give the nearby instruction
+    // text yellow fringes, which otherwise look like part of the zoomed label.
     const auto zoom_label_center = QPointF(canvas.rect().center().x(),
                                            canvas.rect().center().y() - 1.5 *
                                                (static_cast<double>(canvas.height()) /
@@ -294,7 +310,8 @@ void test_boundary_draft_rendering_and_history() {
     const auto zoom_label_region = QRectF(zoom_label_center.x() - 60.0,
                                           zoom_label_center.y() - 24.0, 120.0, 48.0)
                                              .toAlignedRect();
-    const auto zoom_label_bounds = bright_pixel_bounds(zoomed_screen, zoom_label_region);
+    const auto zoom_label_bounds = bright_pixel_bounds(zoomed_screen, zoom_label_region,
+                                                       &zoomed_without_labels);
     require(!zoom_label_bounds.isEmpty() &&
                 std::abs(normal_label_bounds.width() - zoom_label_bounds.width()) <= 2 &&
                 std::abs(normal_label_bounds.height() - zoom_label_bounds.height()) <= 2,
@@ -1375,6 +1392,7 @@ void test_direct_canvas_manipulation_contract() {
     canvas.setTool(CanvasTool::boundary);
     int points = 0;
     canvas.setPointClicked([&](Vec2) { ++points; });
+    canvas.setBoundaryDraftPreview(BoundaryDraftPreview{});
     mouse(QEvent::MouseButtonDblClick, center, Qt::LeftButton, Qt::LeftButton);
     require(points == 0 && double_clicked.isEmpty(),
             "authoring double-click must suppress the second point and properties");
@@ -1532,6 +1550,159 @@ void test_single_selection_transform_handles() {
             "rotation handle must commit an angular transform");
 }
 
+void test_boundary_tool_uses_unified_selection_until_a_draft_starts() {
+    PlanCanvas canvas;
+    canvas.resize(640, 480);
+    canvas.setOverviewMapEnabled(false);
+    canvas.setSnapEnabled(false);
+    canvas.setTool(CanvasTool::boundary);
+    canvas.setEntities({CanvasEntity{QStringLiteral("line"), QStringLiteral("wall"),
+        Boundary{Segment{{-1.0, 0.0}, {1.0, 0.0}, 0.0}}}});
+    int points = 0, moves = 0, finishes = 0;
+    QString selected, context, properties;
+    canvas.setPointClicked([&](Vec2) { ++points; });
+    canvas.setEntitySelectionClicked([&](QString id, bool) {
+        selected = id;
+        canvas.setSelectedId(id);
+    });
+    canvas.setEntitiesMoveRequested([&](QStringList ids, Vec2 delta) {
+        require(ids == QStringList{QStringLiteral("line")} && delta.x == 0.5,
+                "boundary-tool selection drag must retain identity and model delta");
+        ++moves;
+        return true;
+    });
+    canvas.setRightClicked([&](Vec2, QString id) { context = id; });
+    canvas.setEntityDoubleClicked([&](QString id) { properties = id; });
+    canvas.setFinishRequested([&] { ++finishes; });
+    const auto mouse = [&](QEvent::Type type, QPointF p, Qt::MouseButton button,
+                           Qt::MouseButtons buttons) {
+        QMouseEvent event(type, p, canvas.mapToGlobal(p.toPoint()), button, buttons,
+                          Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &event);
+    };
+    const auto click = [&](QPointF p, Qt::MouseButton button = Qt::LeftButton) {
+        mouse(QEvent::MouseButtonPress, p, button, button);
+        mouse(QEvent::MouseButtonRelease, p, button, Qt::NoButton);
+    };
+    click({320, 240});
+    require(selected == QStringLiteral("line") && points == 0,
+            "idle boundary tool must select existing geometry without placing a node");
+    // A thin line has a visible 44 px minimum frame; its interior away from
+    // the painted stroke remains a usable touch target.
+    const QPointF frame_interior{320, 259};
+    mouse(QEvent::MouseMove, frame_interior, Qt::NoButton, Qt::NoButton);
+    require(canvas.cursor().shape() == Qt::SizeAllCursor,
+            "idle boundary tool must advertise movement throughout the selection frame");
+    click(frame_interior, Qt::RightButton);
+    require(context == selected, "right-click inside the selection frame must target the selection");
+    mouse(QEvent::MouseButtonPress, frame_interior, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, frame_interior + QPointF(40, 0), Qt::NoButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, frame_interior + QPointF(40, 0), Qt::LeftButton, Qt::NoButton);
+    require(moves == 1 && points == 0, "idle boundary tool must move a selected object from its frame");
+    mouse(QEvent::MouseButtonDblClick, {320, 240}, Qt::LeftButton, Qt::LeftButton);
+    require(properties == selected, "idle boundary tool must open quick properties");
+    click({100, 100});
+    require(selected.isEmpty() && points == 0, "first outside click must only deselect in boundary tool");
+    click({100, 100});
+    require(points == 1, "next empty click must start drawing in boundary tool");
+
+    BoundaryDraftPreview draft;
+    draft.anchor = Vec2{0.0, 0.0};
+    draft.can_close_on_anchor = false;
+    canvas.setBoundaryDraftPreview(draft);
+    click({320, 240});
+    require(points == 2 && selected.isEmpty(), "active draft must accept points over existing geometry");
+    properties.clear();
+    mouse(QEvent::MouseButtonDblClick, {320, 240}, Qt::LeftButton, Qt::LeftButton);
+    require(properties.isEmpty(), "active draft must suppress quick properties");
+    draft.can_close_on_anchor = true;
+    canvas.setBoundaryDraftPreview(draft);
+    canvas.setTool(CanvasTool::select);
+    click({320, 240});
+    require(finishes == 1 && points == 2 && selected.isEmpty(),
+            "active draft anchor must close through the unified select surface even over geometry");
+    canvas.setBoundaryDraftPreview(std::nullopt);
+    for (const auto tool : {CanvasTool::wall, CanvasTool::sloped_wall}) {
+        canvas.setTool(tool);
+        click({320, 240});
+    }
+    require(points == 4 && selected.isEmpty() && finishes == 1,
+            "wall tools must still accept authoring points over existing geometry");
+}
+
+void test_dimension_ticks_respect_angular_geometry() {
+    PlanCanvas canvas;
+    canvas.resize(640, 480);
+    canvas.setGridEnabled(false);
+    canvas.setOverviewMapEnabled(false);
+    CanvasEntity dimension{QStringLiteral("dimension"), QStringLiteral("dimension_line"),
+        {{{0, 0}, {1, 0}, 0}, {{1, 0}, {0, 1}, std::numbers::pi / 2},
+         {{0, 1}, {0, 0}, 0}}};
+    for (const auto output : {false, true}) {
+        dimension.dimension_end_ticks = false;
+        canvas.setEntities({dimension});
+        canvas.fitView();
+        const auto without_ticks = render(canvas, output);
+        dimension.dimension_end_ticks = true;
+        canvas.setEntities({dimension});
+        require(images_equal(without_ticks, render(canvas, output)),
+                "angular dimensions must ignore stale endpoint ticks in screen and output");
+    }
+    dimension.segments = {{{0, 0}, {0, 1}, 0}, {{2, 0}, {2, 1}, 0},
+                          {{0, 1}, {2, 1}, 0}};
+    for (const auto output : {false, true}) {
+        dimension.dimension_end_ticks = false;
+        canvas.setEntities({dimension});
+        canvas.fitView();
+        const auto without_ticks = render(canvas, output);
+        dimension.dimension_end_ticks = true;
+        canvas.setEntities({dimension});
+        require(!images_equal(without_ticks, render(canvas, output)),
+                "linear dimensions must retain endpoint ticks in screen and output");
+    }
+}
+
+void test_dark_canvas_semantic_strokes_and_overrides() {
+    PlanCanvas canvas;
+    canvas.resize(640, 480);
+    canvas.setGridEnabled(false);
+    canvas.setOverviewMapEnabled(false);
+    CanvasEntity entity{QStringLiteral("geometry"), QStringLiteral("wall"),
+                         {{{-1, 0}, {1, 0}, 0}}};
+    const auto capture = [&](QColor surface, bool output = false) {
+        canvas.setEntities({entity});
+        QImage image(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+        QPainter painter(&image);
+        canvas.renderScene(painter, QRectF(image.rect()), output, surface);
+        return image;
+    };
+    const auto semantic_dark = capture(background);
+    entity.stroke_color = QColor(35, 77, 113);
+    require(images_equal(semantic_dark, capture(background)),
+            "light semantic wall stroke must not suppress dark theme contrast");
+    entity.stroke_color = Qt::black;
+    require(images_equal(semantic_dark, capture(background)),
+            "default black stroke must use semantic dark contrast");
+    entity.stroke_color = QColor(220, 35, 90);
+    require(!images_equal(semantic_dark, capture(background)),
+            "intentional custom stroke must survive dark mode");
+    const auto custom_dark = capture(background);
+    const auto custom_light = capture(Qt::white);
+    const auto custom_output = capture(Qt::white, true);
+    entity.dark_stroke_color = QColor(143, 198, 245);
+    require(images_equal(semantic_dark, capture(background)),
+            "explicit dark stroke must take precedence on dark interactive canvases");
+    require(images_equal(custom_light, capture(Qt::white)) &&
+                images_equal(custom_output, capture(Qt::white, true)),
+            "dark stroke must not change light canvases or printed output");
+    entity.selected = true;
+    const auto selected = capture(background);
+    entity.dark_stroke_color = {};
+    require(images_equal(selected, capture(background)) &&
+                !images_equal(custom_dark, selected),
+            "selection color must take precedence over both stroke overrides");
+}
+
 int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QApplication application(argc, argv);
@@ -1545,7 +1716,10 @@ int main(int argc, char** argv) {
         for (const auto character : QStringLiteral("2.00 m Draft boundary • place the next dimension")) {
             require(metrics.inFont(character), "capture font must contain each rendered character");
         }
+        test_dimension_ticks_respect_angular_geometry();
+        test_dark_canvas_semantic_strokes_and_overrides();
         test_selection_frame_for_styled_geometry();
+        test_boundary_tool_uses_unified_selection_until_a_draft_starts();
         test_direct_canvas_manipulation_contract();
         test_selected_boundary_is_the_move_hit_target();
         test_single_selection_transform_handles();

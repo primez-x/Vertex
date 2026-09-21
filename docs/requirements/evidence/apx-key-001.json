@@ -1,5 +1,7 @@
 {
-  "acceptance": "Keyboard-first distance and direction entry commits valid values, supports focus and cancel behavior, and leaves invalid entries recoverable.",
+  "acceptance": "Recorded keyboard fixtures create and edit geometry without pointer input and reproduce the documented endpoint and heading results.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -58,10 +60,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Keyboard-first distance and direction entry commits valid values, supports focus and cancel behavior, and leaves invalid entries recoverable.",
   "qualification_boundary": "This evidence covers local keyboard dialog semantics and deterministic commit/cancel behavior. Physical keypad/keyboard parity and production qualification remain open.",
+  "requirement": "Support keyboard distance-and-direction entry with predictable focus, commit, cancel, and repeat behavior.",
   "requirement_id": "APX-KEY-001",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "QLineEdit",
     "Escape",
@@ -103,5 +114,6 @@
   "tests": [
     "boundary_input_dialog",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

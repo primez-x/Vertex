@@ -482,16 +482,28 @@ if(SKETCH_BUILD_DESKTOP)
   target_link_libraries(sketch_visualization PUBLIC sketch_architecture sketch_building_entities sketch_document sketch_project_organization sketch_project_visibility sketch_architectural_workflow_contract Qt6::Widgets TKService TKV3d TKOpenGl TKMesh)
   add_library(sketch_plan_canvas src/desktop/plan_canvas.cpp)
   target_include_directories(sketch_plan_canvas PUBLIC include PRIVATE src/desktop)
-  target_link_libraries(sketch_plan_canvas PUBLIC Qt6::Widgets sketch_precision
+  target_link_libraries(sketch_plan_canvas PUBLIC Qt6::Widgets Qt6::Svg sketch_precision
     sketch_reference_grid)
   add_library(sketch_boundary_input src/desktop/boundary_input_dialog.cpp)
   target_include_directories(sketch_boundary_input PUBLIC include)
   target_link_libraries(sketch_boundary_input PUBLIC sketch_boundary_authoring Qt6::Widgets)
+  add_library(sketch_sheet_layout src/desktop/sheet_layout_dialog.cpp)
+  target_include_directories(sketch_sheet_layout PUBLIC include)
+  target_link_libraries(sketch_sheet_layout PUBLIC sketch_sheet_view_model Qt6::Widgets)
+  if(MSVC)
+    target_compile_options(sketch_sheet_layout PRIVATE /W4 /permissive- /utf-8)
+  endif()
   add_library(sketch_desktop src/desktop/main_window.cpp
     src/desktop/building_object_dialog.cpp src/desktop/hosted_opening_dialog.cpp src/desktop/constraint_dialog.cpp
     src/desktop/constraint_preview_canvas.cpp)
   target_include_directories(sketch_desktop PUBLIC include PRIVATE src/desktop)
-  target_link_libraries(sketch_desktop PUBLIC sketch_reference_import)
+  file(GLOB_RECURSE VERTEX_ARCHITECTURAL_SYMBOL_SVGS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/symbols/architectural_v2/symbols/*.svg")
+  qt_add_resources(sketch_desktop vertex_architectural_symbols
+    PREFIX "/symbols/architectural_v2"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets/symbols/architectural_v2"
+    FILES ${VERTEX_ARCHITECTURAL_SYMBOL_SVGS})
+  target_link_libraries(sketch_desktop PUBLIC sketch_reference_import sketch_sheet_layout)
   add_dependencies(sketch_desktop vertex-import-worker)
   target_link_libraries(sketch_desktop PUBLIC sketch_survey_contract sketch_storage sketch_project_ownership sketch_recovery_discovery sketch_project_organization sketch_project_visibility sketch_precision sketch_geometry_operations sketch_assistance_engine sketch_constraint_authoring sketch_room_relationship_geometry_commit sketch_calculations sketch_schedule_model sketch_document_schedule_adapter sketch_architectural_schedule sketch_visualization sketch_building_plan_projection sketch_plan_canvas sketch_boundary_input sketch_boundary_commit sketch_project_workspace_archive_restore sketch_project_workspace_preview_adapters sketch_workspace_save_coordinator sketch_workspace_save_queue sketch_workspace_regeneration_queue sketch_performance_telemetry sketch_workspace_autosave_scheduler sketch_offline_policy sketch_field_adapter_contract sketch_workspace_accessibility sketch_architectural_document_adapter sketch_sheet_output_scene sketch_output_fingerprint sketch_dxf_project_exchange sketch_ifc_project_exchange sketch_georeferencing_runtime sketch_project_resource_catalog Qt6::Widgets Qt6::PrintSupport Qt6::Pdf Qt6::Svg)
   qt_add_executable(vertex WIN32 src/desktop/main.cpp resources/windows/vertex.rc)
@@ -500,6 +512,11 @@ if(SKETCH_BUILD_DESKTOP)
   target_link_libraries(vertex PRIVATE sketch_desktop)
   if(BUILD_TESTING)
     add_executable(reference_import_tests tests/reference_import_tests.cpp)
+    add_executable(sheet_layout_dialog_tests tests/sheet_layout_dialog_tests.cpp)
+    target_link_libraries(sheet_layout_dialog_tests PRIVATE sketch_desktop)
+    qt_add_resources(sheet_layout_dialog_tests sheet_layout_test_fonts PREFIX "/fonts" BASE assets/fonts
+      FILES assets/fonts/Inter.ttf)
+    add_test(NAME sheet_layout_dialog COMMAND sheet_layout_dialog_tests)
     target_link_libraries(reference_import_tests PRIVATE sketch_reference_import)
     add_dependencies(reference_import_tests vertex-import-worker)
     add_test(NAME reference_import COMMAND reference_import_tests "$<TARGET_FILE:vertex-import-worker>")
@@ -535,6 +552,10 @@ if(SKETCH_BUILD_DESKTOP)
       FILES assets/fonts/Inter.ttf)
     add_executable(project_resource_desktop_tests tests/project_resource_desktop_tests.cpp)
     target_link_libraries(project_resource_desktop_tests PRIVATE sketch_desktop)
+    add_executable(appraisal_desktop_workflow_tests tests/appraisal_desktop_workflow_tests.cpp)
+    target_link_libraries(appraisal_desktop_workflow_tests PRIVATE sketch_desktop)
+    add_executable(symbol_svg_desktop_tests tests/symbol_svg_desktop_tests.cpp)
+    target_link_libraries(symbol_svg_desktop_tests PRIVATE sketch_desktop)
     add_executable(desktop_performance_tests tests/desktop_performance_tests.cpp)
     target_link_libraries(desktop_performance_tests PRIVATE sketch_desktop)
     add_executable(desktop_workspace_recovery_tests tests/desktop_workspace_recovery_tests.cpp)
@@ -579,6 +600,8 @@ if(SKETCH_BUILD_DESKTOP)
     if(MSVC)
       target_compile_options(desktop_smoke PRIVATE /utf-8)
       target_compile_options(project_resource_desktop_tests PRIVATE /W4 /permissive- /utf-8)
+      target_compile_options(appraisal_desktop_workflow_tests PRIVATE /W4 /permissive- /utf-8)
+      target_compile_options(symbol_svg_desktop_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(desktop_performance_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(desktop_workspace_recovery_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(building_object_dialog_tests PRIVATE /W4 /permissive- /utf-8)
@@ -595,6 +618,8 @@ if(SKETCH_BUILD_DESKTOP)
     endif()
     add_test(NAME desktop_workflow COMMAND desktop_smoke)
     add_test(NAME project_resource_desktop COMMAND project_resource_desktop_tests)
+    add_test(NAME appraisal_desktop_workflow COMMAND appraisal_desktop_workflow_tests)
+    add_test(NAME symbol_svg_desktop COMMAND symbol_svg_desktop_tests)
     add_test(NAME desktop_performance COMMAND desktop_performance_tests)
     add_test(NAME desktop_workspace_recovery COMMAND desktop_workspace_recovery_tests)
     add_test(NAME building_object_dialog COMMAND building_object_dialog_tests)
@@ -611,7 +636,7 @@ if(SKETCH_BUILD_DESKTOP)
     get_target_property(SKETCH_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
     get_filename_component(SKETCH_QT_BIN "${SKETCH_QMAKE_EXECUTABLE}" DIRECTORY)
     get_filename_component(SKETCH_QT_PREFIX "${SKETCH_QT_BIN}" DIRECTORY)
-    set_tests_properties(reference_import desktop_workflow desktop_performance native_geometry_preparation native_model_preparation performance_workload project_resource_desktop desktop_workspace_recovery building_object_dialog building_receipt_workflow modal_authoring constraint_dialog visibility_workflow boundary_canvas boundary_input_dialog boundary_workflow assistance_workflow dxf_desktop_workflow ifc_desktop_workflow PROPERTIES
+    set_tests_properties(sheet_layout_dialog reference_import desktop_workflow desktop_performance native_geometry_preparation native_model_preparation performance_workload project_resource_desktop appraisal_desktop_workflow symbol_svg_desktop desktop_workspace_recovery building_object_dialog building_receipt_workflow modal_authoring constraint_dialog visibility_workflow boundary_canvas boundary_input_dialog boundary_workflow assistance_workflow dxf_desktop_workflow ifc_desktop_workflow PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
       ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
   endif()
@@ -1231,7 +1256,11 @@ if(BUILD_TESTING)
     # The full desktop workflow includes native-solid and multi-page output
     # checks. Debug builds are intentionally slower on the reference host;
     # keep the test deterministic instead of letting a valid fixture race a
-    # fragile six-minute timeout.
-    set_tests_properties(desktop_workflow desktop_workspace_recovery PROPERTIES TIMEOUT 600)
+    # fragile short timeout.
+    set_tests_properties(desktop_workflow desktop_workspace_recovery PROPERTIES TIMEOUT 900)
+    # The boundary workflow opens a sequence of real MainWindow instances.
+    # Its measured Debug runtime on the Windows reference host is about 63
+    # seconds while the Release runtime is about 12 seconds.
+    set_tests_properties(boundary_workflow PROPERTIES TIMEOUT 120)
   endif()
 endif()

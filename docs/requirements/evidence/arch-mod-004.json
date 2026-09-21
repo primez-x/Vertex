@@ -1,5 +1,7 @@
 {
-  "acceptance": "Beam and column fixtures create validated semantic solids, project into plan, expose editable properties, and contribute source-backed schedule quantities through save/reopen.",
+  "acceptance": "Beam and column fixtures support creation, placement, property editing, section display, schedules, and save/reopen.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -82,10 +84,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Beam and column fixtures create validated semantic solids, project into plan, expose editable properties, and contribute source-backed schedule quantities through save/reopen.",
   "qualification_boundary": "This evidence covers local beam/column authoring, projection, schedules, and history. Complete commercial detailing, physical output, and production qualification remain open.",
+  "requirement": "Author beams and columns suitable for residential and light-commercial building documentation.",
   "requirement_id": "ARCH-MOD-004",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "RectangularColumn",
     "CircularColumn",
@@ -159,5 +170,6 @@
     "building_plan_projection",
     "architectural_schedule",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

@@ -1,5 +1,7 @@
 {
-  "acceptance": "The import-worker policy declares AppContainer isolation, network denial, Job Object limits, brokered inputs, controlled temporary storage, fixed search paths, and attestation requirements.",
+  "acceptance": "A worker security fixture verifies token/container policy, network denial, resource limits, path restrictions, and controlled parent termination.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -50,10 +52,19 @@
       ]
     }
   ],
-  "qualification_boundary": "This evidence covers deterministic worker policy, path, resource, and attestation contracts. Live AppContainer/network-denial execution on a clean Windows host remains open.",
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "The import-worker policy declares AppContainer isolation, network denial, Job Object limits, brokered inputs, controlled temporary storage, fixed search paths, and attestation requirements.",
+  "qualification_boundary": "This evidence covers deterministic worker policy, path, resource, and attestation contracts and the source of a job-free development-host runner. Its local captures are not embedded here; active network, parent-exit, installed-runtime, and clean-machine qualification remain open.",
+  "requirement": "Run untrusted import workers in Windows AppContainer without network capabilities, with Job Object limits, brokered inputs, controlled temporary storage, and fixed search paths.",
   "requirement_id": "SEC-WORKER-001",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "AppContainer",
     "network",
@@ -108,5 +119,6 @@
   "source_tree_sha256": "b89bdba6cef5fd26b8d83708b44086edb733aed72a63c060eb658c9ad75ad6cf",
   "tests": [
     "import_worker_policy"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

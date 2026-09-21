@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-265 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+274 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -35,6 +35,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - Survey and georeferencing — when used (7 tasks)
 - Optional assistance — when available (7 tasks)
 - Complete a real job (5 tasks)
+- Appraisal square-foot workflow (9 tasks)
 
 ## Start a project and arrange the workspace
 
@@ -597,22 +598,22 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 ## Symbols, furniture and component library
 
 - [ ] **U109 — Open the visible component library**
-  - Expected: You can browse symbols without searching through unrelated menus, and All categories reports at least 300 distinct named components.
+  - Expected: The left-panel Symbols tab opens without a modal. All categories reports more than 700 placeable components, including 320 detailed SVG components, and shows the detailed set first.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U110 — Search for a toilet, bed, sofa or table**
-  - Expected: Relevant named items and recognizable previews appear.
+  - Expected: Relevant human names and recognizable detailed previews appear. Searching `Sofa Three Seat` returns a sofa with visible arms, back and three distinct cushions rather than a rectangle or generic line motif.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U111 — Browse library categories**
-  - Expected: Plumbing, furniture, appliances, accessibility, lighting, electrical, mechanical, doors/windows, structure, circulation, site, office, medical, recreation, safety and commercial categories are easy to distinguish.
+  - Expected: Source categories use readable names without numeric filename prefixes. Bathroom, bedroom, living, kitchen, office, electrical, HVAC/plumbing, doors/windows, structure, circulation, site and commercial equipment are easy to distinguish.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U112 — Place a symbol by choosing it and clicking the drawing**
-  - Expected: It lands at the chosen location with a useful initial size.
+  - Expected: It lands at the chosen location with its declared nominal footprint when supplied, or a clearly editable default size. The selected caption uses its human name.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -667,12 +668,12 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U123 — Save and reopen a furnished plan**
-  - Expected: Symbol type, placement, size, rotation and visibility survive.
+  - Expected: Symbol type, detailed artwork, placement, size, rotation and visibility survive. Reopened SVG symbols do not degrade to compatibility rectangles.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U124 — Print or export a furnished plan**
-  - Expected: Symbols retain the correct appearance and scale.
+  - Expected: PDF, SVG and image exports retain the detailed component artwork and correct physical scale. Compare the three-seat sofa cushions and arms with the canvas preview.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -1420,6 +1421,54 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 
 - [ ] **U265 — Open, edit and save a larger real project**
   - Expected: The app remains responsive enough for practical work and clearly indicates any lengthy operation.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
+
+## Appraisal square-foot workflow
+
+- [ ] **U266 — Switch an area project from measurement to appraisal workflow**
+  - Expected: Select a measured boundary, open its properties and choose Appraisal. The category list changes to appraisal categories and a square-foot summary appears without changing the drawn geometry.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
+- [ ] **U267 — Calculate above-grade finished GLA automatically**
+  - Expected: Classify a 10 ft × 10 ft closed boundary as Above-grade finished. GLA, selected-floor and property totals each show 100.00 ft² without a separate calculate command.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
+- [ ] **U268 — Keep below-grade finished area out of GLA**
+  - Expected: Add and classify a basement boundary as Below-grade finished. Its square feet appear in that separate bucket and in applicable measured totals, while GLA remains unchanged.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
+- [ ] **U269 — Report garage, carport, porch, patio and deck separately**
+  - Expected: Each explicitly classified area appears only in its named bucket. None silently becomes GLA.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
+- [ ] **U270 — Review appraisal totals by floor, building and property**
+  - Expected: With areas on two floors and two buildings, the selected-floor total changes with selection, building grouping remains correct, and the property total equals the unrounded sum of all included areas.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
+- [ ] **U271 — Apply a deduction and factor in appraisal workflow**
+  - Expected: A valid deduction and explicit factor update the assigned appraisal bucket and totals automatically. If an internal deduction is explicitly classified as Garage, it reduces the enclosing GLA and appears once in the Garage bucket. The contribution list identifies both source areas; displayed rounding does not change the stored measurements.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
+- [ ] **U272 — Change an appraisal category and undo it**
+  - Expected: The area moves between the two category buckets, GLA changes only when Above-grade finished is involved, and Undo restores the previous category and totals.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
+- [ ] **U273 — Save and reopen an appraisal project**
+  - Expected: Appraisal workflow selection, category assignments, deductions, factors, GLA and all separate square-foot buckets return unchanged.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
+- [ ] **U274 — Return to measurement workflow**
+  - Expected: Switching back restores the project's prior measurement profile and its building/living calculations without reclassifying appraisal categories heuristically.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

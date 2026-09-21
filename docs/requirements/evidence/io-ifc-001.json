@@ -1,5 +1,7 @@
 {
-  "acceptance": "The declared IFC4 STEP subset exports supported walls, slabs, openings, relationships, units, and Vertex property preservation, and reconstructs reliable typed entities while reporting unsupported content.",
+  "acceptance": "Representative IFC fixtures export/import with a fidelity report for geometry, types, properties, materials, relationships, and unreconstructed content.",
+  "acceptance_gap": "Reference View 1.2 conformance and representative geometry/type/property/material/relationship fidelity remain unverified.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -66,10 +68,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "The declared IFC4 STEP subset exports supported walls, slabs, openings, relationships, units, and Vertex property preservation, and reconstructs reliable typed entities while reporting unsupported content.",
   "qualification_boundary": "This evidence covers the bounded local IFC4 exchange subset and diagnostics. External IFC consumers, full MVD fidelity, and production interoperability remain open.",
+  "requirement": "Support the declared IFC4 ADD2 TC1 Reference View 1.2 interchange target with editable reconstruction where reliable and identifiable reference preservation otherwise.",
   "requirement_id": "IO-IFC-001",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "IFC4",
     "IFCWALL",
@@ -126,5 +137,6 @@
     "interchange_profile",
     "ifc_project_exchange",
     "ifc_desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

@@ -1,5 +1,7 @@
 {
-  "acceptance": "Optional assisted label placement and bounded natural-language commands produce typed proposals that use the same permission, command, and undo path as manual edits.",
+  "acceptance": "Suggestions preview as normal typed commands, identify affected entities, require acceptance, and are fully undoable.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -66,10 +68,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Optional assisted label placement and bounded natural-language commands produce typed proposals that use the same permission, command, and undo path as manual edits.",
   "qualification_boundary": "This evidence covers the bounded local label/language grammar and command integration. Broader language coverage and production UX review remain open.",
+  "requirement": "Provide optional assisted label placement and natural-language commands through the same command and permission model as manual edits.",
   "requirement_id": "ASSIST-003",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "suggest_label_placements",
     "parse_natural_language",
@@ -130,5 +141,6 @@
     "assistance_contract",
     "assistance_engine",
     "assistance_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

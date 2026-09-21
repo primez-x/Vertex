@@ -1,5 +1,7 @@
 {
-  "acceptance": "Draw First creates a closed classified boundary from geometry, then saves, reopens, and prints the same analytical result.",
+  "acceptance": "A Draw First fixture creates, closes, edits, classifies, calculates, saves, reopens, and prints with expected geometry and command behavior.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -58,10 +60,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Draw First creates a closed classified boundary from geometry, then saves, reopens, and prints the same analytical result.",
   "qualification_boundary": "This evidence covers the local Draw First workflow and persisted output path. Physical Apex key behavior, native files, and production qualification remain open.",
+  "requirement": "Provide a modern Draw First workflow with the documented Apex behavior and equivalent efficient completion path.",
   "requirement_id": "APX-WF-001",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "Draw First",
     "draw_first",
@@ -102,5 +113,6 @@
   "tests": [
     "boundary_workflow",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

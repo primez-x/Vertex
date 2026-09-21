@@ -1,5 +1,7 @@
 {
-  "acceptance": "Commands are searchable, shortcut bindings are editable and persisted locally, primary toolbar commands are not duplicated in another menu, and Measurement and Architectural tabs remain available.",
+  "acceptance": "Every exposed command is searchable, can be bound where supported, reports conflicts, and remains available from keyboard and pointer paths.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -58,10 +60,19 @@
       ]
     }
   ],
-  "qualification_boundary": "This evidence covers local command discovery, shortcut persistence, nonduplicated toolbar commands, and workspace tabs. Physical keyboard coverage and the unified production gate remain open.",
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Commands are searchable, quick-access actions and shortcut bindings are editable and persisted locally, and Measurement and Architectural tabs remain available.",
+  "qualification_boundary": "This evidence covers local command discovery, shortcut persistence, quick access, and workspace tabs. Physical keyboard coverage and the unified production gate remain open.",
+  "requirement": "Provide a searchable command palette, shortcut editing, and view tabs without duplicating primary commands in a second toolbar menu.",
   "requirement_id": "APX-UI-003",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "showCommandPalette",
     "keyboardShortcutSettings",
@@ -96,5 +107,6 @@
   "tests": [
     "desktop_workflow",
     "workspace_navigation"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

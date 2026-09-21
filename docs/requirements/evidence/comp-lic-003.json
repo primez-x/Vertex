@@ -1,5 +1,7 @@
 {
-  "acceptance": "The distribution inventory identifies GPL, AGPL, LGPL, commercial, and other license obligations and rejects unapproved dependency policy violations.",
+  "acceptance": "Automated and manual dependency review finds no prohibited baseline dependency and verifies the selected dynamic-linking and relink path.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -50,10 +52,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "The distribution inventory identifies GPL, AGPL, LGPL, commercial, and other license obligations and rejects unapproved dependency policy violations.",
   "qualification_boundary": "This evidence covers the declared dependency policy and inventory checks; final counsel approval remains open.",
+  "requirement": "The baseline excludes GPL/AGPL application dependencies, noncommercial restrictions, and mandatory paid runtime SDKs; applicable LGPL components meet their obligations.",
   "requirement_id": "COMP-LIC-003",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "GPL",
     "LGPL",
@@ -87,5 +98,6 @@
   "source_tree_sha256": "b89bdba6cef5fd26b8d83708b44086edb733aed72a63c060eb658c9ad75ad6cf",
   "tests": [
     "packaging_distribution_inventory"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

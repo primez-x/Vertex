@@ -802,6 +802,54 @@ std::vector<SymbolDefinition> default_symbol_catalog() {
         result.push_back(std::move(s));
       }
     }
+    struct SvgRecord {
+        const char* id;
+        const char* name;
+        const char* category;
+        const char* legacy_family;
+        const char* path;
+        double width;
+        double depth;
+        std::array<double, 4> view_box;
+        std::array<double, 4> footprint_view_box;
+        bool nominal;
+    };
+    static constexpr SvgRecord svg_records[] = {
+#include "../../assets/symbols/architectural_v2/catalog_data.inc"
+    };
+    const auto legacy_count = result.size();
+    result.reserve(legacy_count + std::size(svg_records));
+    for (const auto& record : svg_records) {
+        SymbolDefinition symbol;
+        symbol.id = record.id;
+        // Namespaced families avoid collisions with legacy/category duplicates.
+        symbol.family = record.id;
+        symbol.category = record.category;
+        symbol.name = record.name;
+        symbol.width_metres = record.width;
+        symbol.depth_metres = record.depth;
+        symbol.svg_asset = SymbolSvgAsset{record.path, record.view_box,
+                                         record.footprint_view_box, record.nominal};
+        const auto end = result.begin() + static_cast<std::ptrdiff_t>(legacy_count);
+        const auto legacy = std::find_if(result.begin(), end, [&](const auto& entry) {
+            return entry.family == record.legacy_family && entry.id.ends_with("-w2-d2");
+        });
+        if (legacy != end) {
+            const auto rescale = [&](Vec2 point) {
+                return Vec2{(point.x - legacy->anchor.x) * record.width / legacy->width_metres,
+                            (point.y - legacy->anchor.y) * record.depth / legacy->depth_metres};
+            };
+            for (const auto& stroke : legacy->preview)
+                symbol.preview.push_back({rescale(stroke.start), rescale(stroke.end)});
+        } else {
+            // Explicit footprint-only fallback for consumers without SVG support;
+            // these strokes are not a tessellation of the supplied artwork.
+            const double x = record.width / 2, y = record.depth / 2;
+            symbol.preview = {{{-x, -y}, {x, -y}}, {{x, -y}, {x, y}},
+                              {{x, y}, {-x, y}}, {{-x, y}, {-x, -y}}};
+        }
+        result.push_back(std::move(symbol));
+    }
     return result;
 }
 
@@ -843,6 +891,14 @@ nlohmann::json encode_symbol_catalog_manifest(const std::vector<SymbolDefinition
             {"maximum_scale", definition->maximum_scale},
             {"preview", std::move(preview)},
         });
+        if (!definition->name.empty()) encoded_entries.back()["name"] = definition->name;
+        if (definition->svg_asset) {
+            const auto& asset = *definition->svg_asset;
+            encoded_entries.back()["svg_asset"] = {
+                {"relative_path", asset.relative_path}, {"view_box", asset.view_box},
+                {"footprint_view_box", asset.footprint_view_box},
+                {"dimensions_are_nominal", asset.dimensions_are_nominal}};
+        }
     }
 
     nlohmann::json encoded_families = nlohmann::json::array();
@@ -869,6 +925,7 @@ std::vector<SymbolDefinition> filter_symbol_catalog(
     for (const auto& symbol : catalog) {
         if (!folded_category.empty() && folded(symbol.category) != folded_category) continue;
         if (!folded_query.empty() && folded(symbol.id).find(folded_query) == std::string::npos &&
+            folded(symbol.name).find(folded_query) == std::string::npos &&
             folded(symbol.family).find(folded_query) == std::string::npos &&
             folded(symbol.category).find(folded_query) == std::string::npos) continue;
         result.push_back(symbol);
@@ -881,6 +938,19 @@ void validate_symbol_catalog(const std::vector<SymbolDefinition>& catalog) {
     for (const auto& s : catalog) {
         unique_id(ids,s.id); point(s.anchor);
         check(!s.family.empty() && !s.category.empty(), "Missing symbol metadata");
+        if (s.svg_asset) {
+            const auto& asset = *s.svg_asset;
+            check(!s.name.empty(), "SVG symbol requires a human name");
+            check(asset.relative_path.starts_with("symbols/") && asset.relative_path.ends_with(".svg") &&
+                      asset.relative_path.find("..") == std::string::npos &&
+                      asset.relative_path.find_first_not_of(
+                          "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-/.") == std::string::npos,
+                  "Invalid relative SVG asset path");
+            for (const auto& box : {asset.view_box, asset.footprint_view_box}) {
+                check(std::all_of(box.begin(), box.end(), [](double v) { return std::isfinite(v); }) &&
+                          box[2] > 0 && box[3] > 0, "Invalid SVG coordinate bounds");
+            }
+        }
         check(std::isfinite(s.width_metres) && s.width_metres > 0 && std::isfinite(s.depth_metres) && s.depth_metres > 0,
               "Invalid symbol dimensions");
         check(std::isfinite(s.minimum_scale) && s.minimum_scale > 0 && std::isfinite(s.maximum_scale) &&

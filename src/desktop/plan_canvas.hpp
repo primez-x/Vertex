@@ -5,10 +5,13 @@
 #include "sketch/reference_grid.hpp"
 
 #include <QColor>
+#include <QByteArray>
 #include <QEvent>
+#include <QHash>
 #include <QImage>
 #include <QMouseEvent>
 #include <QRectF>
+#include <QSharedPointer>
 #include <QString>
 #include <QStringList>
 #include <QWidget>
@@ -19,6 +22,7 @@
 #include <vector>
 
 class QPainter;
+class QSvgRenderer;
 
 namespace sketch::desktop {
 
@@ -27,6 +31,21 @@ enum class CanvasTool {
     boundary,
     wall,
     sloped_wall,
+};
+
+// Retained vector artwork for one placed catalog symbol. The fallback boundary
+// on CanvasEntity remains the authoritative hit-test, transform, minimap, and
+// interchange geometry; this payload supplies the detailed screen/print/export
+// presentation from the same physical footprint.
+struct CanvasSvgSymbol {
+    QString catalog_id;
+    QByteArray document;
+    QRectF view_box;
+    QRectF footprint_view_box;
+    Vec2 position{};
+    double rotation_radians{};
+    double width_metres{};
+    double depth_metres{};
 };
 
 struct CanvasEntity {
@@ -53,6 +72,7 @@ struct CanvasEntity {
     // Zero keeps the normal model-space or cosmetic canvas default.
     double output_stroke_width_mm{};
     bool dimension_end_ticks{false};
+    std::optional<CanvasSvgSymbol> svg_symbol;
 };
 
 // A retained document annotation. Unlike BoundaryDraftPreview, labels are
@@ -276,6 +296,8 @@ private:
     [[nodiscard]] Vec2 toModel(QPointF point, const QRectF& viewport) const;
     [[nodiscard]] Vec2 snapped(Vec2 point) const;
     [[nodiscard]] QString hitTest(QPointF point) const;
+    [[nodiscard]] bool selectionInteractionEnabled() const;
+    [[nodiscard]] QString contextTarget(QPointF point) const;
     [[nodiscard]] QStringList selectedIds() const;
     [[nodiscard]] Vec2 dragDelta(QPointF position) const;
     [[nodiscard]] QStringList rectangleHits(const QRectF& rectangle, bool crossing) const;
@@ -310,6 +332,7 @@ private:
     std::vector<CanvasLabel> m_labels;
     std::vector<CanvasReference> m_references;
     std::vector<CanvasReferenceGrid> m_reference_grids;
+    mutable QHash<QString, QSharedPointer<QSvgRenderer>> m_svg_renderers;
     QString m_selection_caption;
     std::vector<Vec2> m_boundary_preview;
     std::optional<std::pair<Vec2, Vec2>> m_wall_preview;

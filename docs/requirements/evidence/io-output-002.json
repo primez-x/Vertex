@@ -1,5 +1,7 @@
 {
-  "acceptance": "Letter, Legal, Tabloid, A4, A3, and architectural sheet definitions persist independent scales and map numeric page dimensions consistently into PDF, SVG, preview, and print requests.",
+  "acceptance": "Each sheet fixture reports numeric page dimensions and a physical/driver scaling check separately from PDF geometry.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -66,10 +68,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Letter, Legal, Tabloid, A4, A3, and architectural sheet definitions persist independent scales and map numeric page dimensions consistently into PDF, SVG, preview, and print requests.",
   "qualification_boundary": "This evidence covers numeric local page and scale semantics. Driver-specific scaling and physical printer calibration remain open.",
+  "requirement": "Support Letter, Legal, Tabloid, A4, A3, and architectural sheet sizes with independent scale and printer calibration verification.",
   "requirement_id": "IO-OUTPUT-002",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "Letter",
     "Legal",
@@ -117,5 +128,6 @@
     "sheet_view_model",
     "sheet_output_scene",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

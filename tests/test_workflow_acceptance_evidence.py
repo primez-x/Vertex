@@ -51,6 +51,12 @@ def write_fixture_receipts(root):
         (build / "workflow-test-provenance.json").write_text(json.dumps(record), encoding="utf-8")
 
 
+def write_requirement_contract(root):
+    destination = root / "docs/requirements/apex-parity.json"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(ROOT / "docs/requirements/apex-parity.json", destination)
+
+
 class WorkflowAcceptanceEvidenceTests(unittest.TestCase):
     def test_build_evidence_records_both_configurations_and_workflows(self):
         generator = load_generator()
@@ -96,6 +102,7 @@ class WorkflowAcceptanceEvidenceTests(unittest.TestCase):
                     "\n".join(log) + "\n", encoding="utf-8"
                 )
 
+            write_requirement_contract(root)
             write_fixture_receipts(root)
             evidence = generator.build_evidence(root)
             self.assertEqual(set(evidence), set(generator.WORKFLOW_RULES))
@@ -127,7 +134,15 @@ class WorkflowAcceptanceEvidenceTests(unittest.TestCase):
                 "SEC-WORKER-001", "SEC-WORKER-002", "SEC-PROJ-001",
             }.issubset(set(evidence)))
             for requirement_id, record in evidence.items():
-                self.assertEqual(record["result"], "pass")
+                self.assertEqual(record["result"], "supporting_evidence")
+                self.assertEqual(record["local_checks_result"], "pass")
+                self.assertEqual(record["acceptance_status"], "in_progress")
+                self.assertEqual(record["requirement"], next(
+                    row["requirement"] for row in json.loads(
+                        (root / "docs/requirements/apex-parity.json").read_text(encoding="utf-8")
+                    )["requirements"] if row["id"] == requirement_id))
+                self.assertTrue(all(value == "not_assessed"
+                                    for value in record["evidence_dimensions"].values()))
                 self.assertEqual(len(record["ctest"]), 2)
                 self.assertEqual(record["requirement_id"], requirement_id)
                 self.assertTrue(record["source_files"])
@@ -183,6 +198,7 @@ class WorkflowAcceptanceEvidenceTests(unittest.TestCase):
                 (temporary / "LastTest.log").write_text(
                     "Start testing: now\nEnd testing: now\n", encoding="utf-8"
                 )
+            write_requirement_contract(root)
             write_fixture_receipts(root)
             with self.assertRaisesRegex(RuntimeError, "invalid CTest inventory"):
                 generator.build_evidence(root)

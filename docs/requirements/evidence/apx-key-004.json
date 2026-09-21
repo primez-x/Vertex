@@ -1,5 +1,7 @@
 {
-  "acceptance": "Each point-jump, automatic-closure, and bay-window operation is observable in command history, produces the expected topology, and is undoable.",
+  "acceptance": "Each operation is observable in command history, produces the expected topology, and is undoable.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -58,10 +60,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Each point-jump, automatic-closure, and bay-window operation is observable in command history, produces the expected topology, and is undoable.",
   "qualification_boundary": "This evidence covers the deterministic geometry operations and Windows workflow history/undo behavior. Physical Apex key mapping, native Apex fixtures, and the unified production gate remain open.",
+  "requirement": "Support point jumping, automatic closure, and bay-window completion as explicit geometry operations.",
   "requirement_id": "APX-KEY-004",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "jump_to_boundary_vertex",
     "automatically_close_boundary",
@@ -117,5 +128,6 @@
   "tests": [
     "geometry_operations",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

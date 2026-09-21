@@ -1,6 +1,6 @@
 """Audit the tracked source boundary between application and third-party material.
 
-The repository deliberately keeps the application source private while retaining
+The repository publishes the application source under GPL-3.0-or-later while retaining
 third-party notices and provenance for later distribution or optional publication.
 This audit checks that every tracked source-kit path has exactly one declared
 ownership class.  It does not decide contributor copyright, legal title, or the

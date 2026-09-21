@@ -1,5 +1,7 @@
 {
   "acceptance": "A room can relate to, follow, or remain independent from a measurement boundary without silently conflating classifications or geometry.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -74,10 +76,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "A room can relate to, follow, or remain independent from a measurement boundary without silently conflating classifications or geometry.",
   "qualification_boundary": "This evidence covers deterministic relationship semantics, controlled retargeting, geometry propagation, and the Windows workflow on the development host. It does not certify imported Apex files, physical devices, printing, or the unified release gate.",
+  "requirement": "Model rooms and architectural boundaries separately from appraisal measurement boundaries, with explicit relationships where desired.",
   "requirement_id": "ARCH-MOD-009",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "RoomRelationshipSnapshot",
     "room_boundary",
@@ -160,5 +171,6 @@
     "room_relationship_geometry",
     "room_relationship_geometry_commit",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

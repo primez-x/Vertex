@@ -1,5 +1,7 @@
 {
-  "acceptance": "Optional local assistance extracts explicit-unit dimensions while retaining the original text, parsed units, and typed proposal provenance.",
+  "acceptance": "Extracted dimensions are visibly provisional, include source location/confidence, and require acceptance before becoming document commands.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -66,10 +68,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Optional local assistance extracts explicit-unit dimensions while retaining the original text, parsed units, and typed proposal provenance.",
   "qualification_boundary": "This evidence covers explicit-unit extraction from deterministic fixture text. Real plan OCR, ambiguous labels, and production accuracy qualification remain open.",
+  "requirement": "Provide optional offline dimension extraction from supported plans and references.",
   "requirement_id": "ASSIST-002",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "extract_dimensions",
     "dimension_extraction",
@@ -130,5 +141,6 @@
     "assistance_contract",
     "assistance_engine",
     "assistance_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

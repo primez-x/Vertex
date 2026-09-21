@@ -1,5 +1,7 @@
 {
-  "acceptance": "PDF and raster references are imported through the bounded local worker, preserve source assets and pages, and provide validated previews for tracing.",
+  "acceptance": "PDF and common raster fixtures import offline with asset identity, page selection, and explicit fidelity/error reporting.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -74,10 +76,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "PDF and raster references are imported through the bounded local worker, preserve source assets and pages, and provide validated previews for tracing.",
   "qualification_boundary": "This evidence covers bounded local PDF/raster import, page handling, source preservation, and worker validation. Full tracing parity, clean-machine codecs, and production qualification remain open.",
+  "requirement": "Import PDF and raster reference images as project assets for tracing and calibrated presentation.",
   "requirement_id": "APX-TRACE-001",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "PDF",
     "PNG",
@@ -148,5 +159,6 @@
     "reference_import",
     "reference_import_boundary",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

@@ -1,15 +1,45 @@
 # Implementation status
 
-## Current evidence snapshot (2026-09-14)
+## Evidence accounting correction (2026-09-20)
 
-The requirement ledger contains 130 mandatory requirements. **114 are locally
-verified (87.7%) and 16 remain in progress.** The unified production gate is
-still blocked by 17 items: the unresolved native Apex and external-integration
-fixtures, physical device checks, reference-hardware performance runs,
-clean-machine and network-denied qualification, accessibility captures,
-package handoff qualification, and the final dependency-license review.
+The ledger contains 130 mandatory requirements, but its historical `verified`
+labels do not measure product completion. No product-complete percentage is
+supported by the current evidence. Source anchors, standalone contracts and
+passing test suites are supporting checks; they do not demonstrate every clause
+of the original acceptance criterion or a usable end-user workflow.
 
-The latest private `Vertex` checkpoint is published to the private `origin/main`
+Track these dimensions separately for each original requirement:
+
+| Dimension | Evidence needed to claim it |
+| --- | --- |
+| Core implemented | Reviewed implementation and focused behavior/failure-path checks covering the claimed core scope. |
+| UI usable | An exercised user-facing path for the required actions, including validation and recovery. |
+| End-to-end verified | A current, source-bound fixture covering every original acceptance clause across the integrated workflow. |
+| Externally qualified | The required external applications, devices, clean machines or other qualification environments, with captured results. |
+
+The workflow evidence generator does not automatically award any of these
+dimensions. Its records preserve the original requirement and acceptance text,
+describe the narrower local check scope separately, and report
+`supporting_evidence` with acceptance still `in_progress`. Reclassified historical
+records retain their old source/test hashes and explicitly say they were not
+revalidated. Updating classification is not a new test run or release approval.
+
+At minimum, the following acceptance claims are reopened:
+
+| Requirement | Remaining original acceptance gap |
+| --- | --- |
+| ARCH-VIEW-002 | Complete annotations/detail overlays plus render/print fixtures for the selected section presentation. |
+| IO-IFC-001 | Declared Reference View target and representative geometry, types, properties, materials, relationships and unreconstructed-content fidelity. |
+| ARCH-3D-001 | A native 3D edit demonstrated in linked plan/elevation/section views, schedules, calculations and save/reopen. |
+| APX-DOC-001 | A complete multipage save/reopen fixture preserving metadata, page order, independent settings and linked model references. |
+
+The unified production gate remains blocked. External fixtures, physical device
+checks, reference-hardware performance runs, clean-machine/network-denied
+qualification, accessibility captures, package handoff qualification and license
+review remain separate from local implementation checks. The checkpoint details
+below are historical observations, not a current product acceptance tally.
+
+The latest public GPL-3.0-or-later `Vertex` checkpoint is published to `origin/main`
 repository. Its deterministic offline bundle contains 733 declared files and
 its source-kit manifest contains 647 allowlisted files. These counts describe the current local evidence and
 packaging checkpoint; they do not certify a production release.
@@ -136,8 +166,9 @@ versioned Document-history command. The editor remains deterministic and
 usable without a service; Apex standard-profile fixtures and production
 calculation certification remain open.
 
-The requirement contract passes, while `python scripts/requirement_audit.py
---release` still fails closed with 16 in-progress requirements. The offline
+The requirement contract passed at this checkpoint, while `python
+scripts/requirement_audit.py --release` remained blocked. Historical ledger
+status counts are not full acceptance counts. The offline
 bundle installer now has guarded Install, Repair, and Uninstall actions with
 transactional publish and installed-marker verification; clean-machine
 installer qualification is still open. The corrected
@@ -417,19 +448,21 @@ independent assembly profiles, Apex compatibility, and production acceptance
 evidence remain open.
 
 The current foundation also has a strict typed annotation Document entity and
-semantic annotation/style records with a 468-entry parametric symbol catalog:
-52 stable families across plumbing, furniture, storage, fixtures, appliances,
-accessibility, lighting, doors/windows, structural/site, and light-commercial
-equipment, each with nine physical width/depth variants and validated scale
-limits. Annotation state pins built-in catalog revision 1 and rejects
+semantic annotation/style records with a 1,129-entry catalog: 320 supplied,
+detailed SVG components in 25 categories plus 809 compatibility definitions
+across 393 legacy families. The SVG entries carry searchable human names,
+physical footprint metadata and editable scale limits; they appear first in the
+visible library and render from their original bundled documents in thumbnails,
+the plan canvas and shared print/export scenes. Annotation state pins built-in
+catalog revision 1 and rejects
 unsupported revisions until an explicit migration is available. Family-specific
 appliance, storage, plumbing, furniture, and commercial motifs now remain
 distinguishable instead of relying on count-only generic geometry.
 Representative symbol resize/placement now has a desktop regression
 fixture and a multi-family scale/rotation geometry matrix, and resized symbols
-are covered by vector DXF output. Polished artwork,
-physical-footprint bounds, family-specific motifs, and case-insensitive
-catalog search/filtering are now covered. Authoring also accepts a
+are covered by vector DXF output. SVG payload, detailed-pixel rendering,
+save/reopen identity, physical-footprint bounds, family-specific motifs, and
+case-insensitive catalog search/filtering are now covered. Authoring also accepts a
 case-insensitive family alias and stores the resolved `-w2-d2` nominal variant
 explicitly. The offline `vertex-cli symbols` command emits a deterministic
 catalog manifest with category/family counts, physical dimensions, scale
@@ -757,7 +790,7 @@ Job Object. The analytical fixture audit now passes in both configurations.
   by the subsequent v23 work. Desktop session wiring is now integrated
   as described above. Persisted unfinished work and typed receipt-preserving
   geometry edits remain required.
-- The private repository, Windows compiler scripts and pinned dependency
+- The public repository, Windows compiler scripts and pinned dependency
   bootstrap are established. Qt 6.8.3 is installed locally. OCCT 8.0.1,
   Eigen 5.0.1 and Boost 1.92.0 have compiled and installed from the pinned
   vcpkg registry. The distribution license audit remains open.
@@ -1146,6 +1179,5 @@ build converts those requirements into completed parity.
    including full architectural objects/constraints, Apex workflows/adapters,
    local assistance, recovery, output, packaging and certification.
 
-The private Vertex remote is configured and the source handoff is pushed. A
-public source publication, product release, and deployment have not been
-performed.
+The public Vertex remote is configured and the source history is pushed.
+Product release and deployment have not been performed.

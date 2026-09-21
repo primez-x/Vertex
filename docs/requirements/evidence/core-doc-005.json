@@ -1,5 +1,7 @@
 {
   "acceptance": "A compound edit either commits as one revision with one undo entry or leaves the previous revision unchanged; stale worker results cannot overwrite newer edits.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -66,10 +68,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "A compound edit either commits as one revision with one undo entry or leaves the previous revision unchanged; stale worker results cannot overwrite newer edits.",
   "qualification_boundary": "This evidence covers typed command envelopes, immutable preparation, atomic commits, revision fences, and undo/redo fixtures. Full production recovery and external worker qualification remain open.",
+  "requirement": "All edits use typed serialized commands over immutable snapshots; accepted compound operations commit atomically and are reversible.",
   "requirement_id": "CORE-DOC-005",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "command_to_json",
     "command_from_json",
@@ -126,5 +137,6 @@
     "project_workspace_preview_adapters",
     "document_commands",
     "workspace_document_history"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

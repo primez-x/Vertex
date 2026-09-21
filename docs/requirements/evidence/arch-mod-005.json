@@ -1,5 +1,7 @@
 {
-  "acceptance": "Flat, sloped, gable, and hip roof fixtures retain defining pitch, joins, openings, materials, semantic identity, and plan/elevation/section projections.",
+  "acceptance": "Roof fixtures produce correct plan, elevation, section, and editable 3D representations and retain defining parameters.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -74,10 +76,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Flat, sloped, gable, and hip roof fixtures retain defining pitch, joins, openings, materials, semantic identity, and plan/elevation/section projections.",
   "qualification_boundary": "This evidence covers supported local roof forms, cuts, joins, and projections. Unsupported roof variants, physical output, native Apex fidelity, and production acceptance remain open.",
+  "requirement": "Author flat, shed, gable, and hip roof forms with slopes, joins, openings where supported, and materials.",
   "requirement_id": "ARCH-MOD-005",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "SlopedRoofPanel",
     "GableRoof",
@@ -170,5 +181,6 @@
     "roof_join",
     "building_plan_projection",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

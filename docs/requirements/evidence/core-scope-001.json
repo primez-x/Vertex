@@ -1,5 +1,7 @@
 {
-  "acceptance": "The product scope declares Windows 11 x64, imperial and metric units, and residential and light-commercial markets.",
+  "acceptance": "Supported OS, unit profiles, and representative residential and light-commercial fixtures are listed and pass the final acceptance workflow.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -50,10 +52,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "The product scope declares Windows 11 x64, imperial and metric units, and residential and light-commercial markets.",
   "qualification_boundary": "This evidence covers the declared product scope and validation contract; market workflow qualification remains open.",
+  "requirement": "The production application targets Windows 11 x64, supports imperial and metric units, and serves residential and light-commercial projects.",
   "requirement_id": "CORE-SCOPE-001",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "Windows 11",
     "x64",
@@ -88,5 +99,6 @@
   "source_tree_sha256": "b89bdba6cef5fd26b8d83708b44086edb733aed72a63c060eb658c9ad75ad6cf",
   "tests": [
     "product_scope"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

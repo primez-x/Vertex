@@ -1,5 +1,7 @@
 {
-  "acceptance": "Stair, landing, and railing fixtures validate dimensions and level links, produce semantic solids and plan projections, and survive editable history and save/reopen.",
+  "acceptance": "Stair fixtures validate supported dimensions, display in all required views, and save/reopen with connected levels intact.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -82,10 +84,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Stair, landing, and railing fixtures validate dimensions and level links, produce semantic solids and plan projections, and survive editable history and save/reopen.",
   "qualification_boundary": "This evidence covers supported local stairs, landings, railings, level links, and history. Complete code-compliant assemblies, physical output, and production qualification remain open.",
+  "requirement": "Author stairs, landings, and railings with level connections and editable dimensions.",
   "requirement_id": "ARCH-MOD-006",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "StairFlight",
     "StairLanding",
@@ -174,5 +185,6 @@
     "building_plan_projection",
     "document_commands",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

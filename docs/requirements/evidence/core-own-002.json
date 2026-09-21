@@ -1,5 +1,7 @@
 {
-  "acceptance": "The local project format preserves inspectable geometry, metadata, assets, history, ownership, and migration behavior through save and reopen.",
+  "acceptance": "Format documentation and the CLI describe schema versions, required fields, asset references, migration behavior, and preservation rules; a fixture round-trips through the documented format.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -82,10 +84,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "The local project format preserves inspectable geometry, metadata, assets, history, ownership, and migration behavior through save and reopen.",
   "qualification_boundary": "This evidence covers the documented local project format and ownership safeguards; broad legacy migration fidelity remains open.",
+  "requirement": "Provide a documented, versioned .bldproj project format whose geometry, classifications, assets, metadata, history, and migrations are inspectable locally.",
   "requirement_id": "CORE-OWN-002",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "ProjectOwnershipSession",
     "DocumentSnapshot",
@@ -150,5 +161,6 @@
     "project_storage",
     "document_commands",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

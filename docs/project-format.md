@@ -161,6 +161,29 @@ The v1 known types are:
 
 All geometry properties use metres and radians. A wall and opening can be represented as:
 
+The root `property` entity may persist `calculation_workflow` as `"measurement"`
+or `"appraisal"`. Its `calculation_profile` contains `id`, positive `version`,
+`display_unit`, `decimal_places`, and a `classifications` object. Every
+classification rule stores boolean `building_total` and `living_total` values
+plus an `appraisal_category` token. Supported appraisal tokens are `none`,
+`above_grade_finished`, `above_grade_unfinished`, `below_grade_finished`,
+`below_grade_unfinished`, `garage`, `carport`, `porch`, `patio`, `deck`, and
+`other_non_living`. Appraisal workflow uses the versioned `vertex-appraisal`
+profile; a prior measurement profile is retained separately as
+`measurement_calculation_profile` so switching workflows is reversible. Missing
+workflow or appraisal-category fields migrate to measurement and `none`, which
+prevents an older project from silently acquiring GLA classifications.
+
+Closed area entities retain workflow-specific meanings independently.
+`measurement_classification` stores the user-selected measurement rule and
+`appraisal_category` stores the explicit appraisal category. `classification`
+remains the compatibility measurement value. Projects written by the initial
+appraisal preview, which placed an appraisal token in `classification`, are
+recognized and migrated on a workflow change. An area created for the first
+time while Appraisal is active receives the neutral `measurement` rule when the
+user later enters Measurement; Vertex never infers an appraisal category from
+its name, floor, or geometry.
+
 ```json
 {
   "id": "wall-1",

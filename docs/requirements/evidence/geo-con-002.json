@@ -1,5 +1,7 @@
 {
   "acceptance": "A 12-foot-to-14-foot edit previews both supported anchoring choices, shows dependent movement, and commits only after selection.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -58,10 +60,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "A 12-foot-to-14-foot edit previews both supported anchoring choices, shows dependent movement, and commits only after selection.",
   "qualification_boundary": "This evidence covers source-bound length previews, explicit endpoint anchoring, connected movement selection, invalidation, and atomic Apply. Boundary/curve editing and production qualification remain open.",
+  "requirement": "Preview dimension changes with an explicit anchored endpoint and an explicit choice about moving connected geometry.",
   "requirement_id": "GEO-CON-002",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "constraintAnchor",
     "Allow connected walls to move",
@@ -106,5 +117,6 @@
   "tests": [
     "constraint_authoring",
     "constraint_dialog"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

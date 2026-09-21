@@ -1,5 +1,7 @@
 {
-  "acceptance": "Reference transforms support scale, rotation, horizontal and vertical flips, intensity, visibility, and undo without changing source bytes.",
+  "acceptance": "Reference transforms are independently undoable, remain linked to the source asset, and preserve measured geometry.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -58,10 +60,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Reference transforms support scale, rotation, horizontal and vertical flips, intensity, visibility, and undo without changing source bytes.",
   "qualification_boundary": "This evidence covers local reference transform semantics; full trace editing parity and production visual qualification remain open.",
+  "requirement": "Trace over references and support resize, rotate, flip, intensity adjustment, and show/hide controls without changing source assets.",
   "requirement_id": "APX-TRACE-003",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "transform",
     "scale",
@@ -98,5 +109,6 @@
   "tests": [
     "reference_assets",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

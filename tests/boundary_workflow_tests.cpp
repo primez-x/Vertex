@@ -11,14 +11,18 @@
 #include <QApplication>
 #include <QAbstractButton>
 #include <QCoreApplication>
+#include <QComboBox>
 #include <QDialog>
 #include <QDir>
 #include <QEventLoop>
 #include <QFileInfo>
 #include <QFont>
 #include <QFontDatabase>
+#include <QFontMetricsF>
+#include <QPainterPath>
 #include <QKeyEvent>
 #include <QInputDialog>
+#include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QMouseEvent>
@@ -1422,6 +1426,109 @@ void test_concave_room_label_stays_inside_room() {
             "concave room label must not be placed in the missing corner of its bounds");
 }
 
+void test_long_room_label_footprint_avoids_narrow_notch() {
+    MainWindow window;
+    prepare_window(window);
+    const std::vector<Vec2> vertices{{0, 0}, {10, 0}, {10, 4}, {5.75, 4},
+                                     {5.75, 1.7}, {5.7, 1.7}, {5.7, 4}, {0, 4}};
+    Boundary boundary;
+    QPainterPath room;
+    room.moveTo(vertices.front().x, vertices.front().y);
+    for (std::size_t i = 0; i < vertices.size(); ++i) {
+        const auto end = vertices[(i + 1) % vertices.size()];
+        boundary.push_back({vertices[i], end, 0.0});
+        room.lineTo(end.x, end.y);
+    }
+    room.closeSubpath();
+    const auto id = window.createRoomBoundary(boundary, QString(20, QLatin1Char('W')));
+    require(!id.isEmpty(), "notched long-label room must be creatable");
+    const auto* target = canvas(window, QStringLiteral("measurementPlanCanvas"));
+    const auto label = std::find_if(target->labels().begin(), target->labels().end(),
+        [&](const auto& value) { return value.id == id; });
+    require(label != target->labels().end(), "long label must fit somewhere in the room");
+    auto font = target->font();
+    font.setPixelSize(16); // 0.20 m at the canvas's 80 px/m model layout scale.
+    auto footprint = QFontMetricsF(font, target).boundingRect(label->text);
+    footprint.moveCenter(QPointF());
+    footprint.adjust(-5, -3, 5, 3);
+    const QRectF model_rect(label->position.x + footprint.left() / 80.0,
+                            label->position.y + footprint.top() / 80.0,
+                            footprint.width() / 80.0, footprint.height() / 80.0);
+    require(room.contains(model_rect),
+            "entire font-aware long-label footprint must avoid the concave notch");
+}
+
+void test_room_label_avoids_components_and_omits_unplaceable_names() {
+    MainWindow window;
+    prepare_window(window);
+    const Boundary room{{{0, 0}, {8, 0}, 0}, {{8, 0}, {8, 6}, 0},
+                        {{8, 6}, {0, 6}, 0}, {{0, 6}, {0, 0}, 0}};
+    const auto id = window.createRoomBoundary(room, QStringLiteral("Office"));
+    require(!id.isEmpty(), "component-overlap room fixture must be creatable");
+    const auto symbol = window.createAnnotationSymbol(QStringLiteral("desk"), {4, 3});
+    require(!symbol.isEmpty(), "room-label component fixture must be creatable");
+    const auto* target = canvas(window, QStringLiteral("measurementPlanCanvas"));
+    const auto label = std::find_if(target->labels().begin(), target->labels().end(),
+        [&](const auto& value) { return value.id == id; });
+    const auto component = std::find_if(target->entities().begin(), target->entities().end(),
+        [&](const auto& value) { return value.id == symbol; });
+    require(label != target->labels().end() && component != target->entities().end(),
+            "room label and component must remain visible");
+    const auto bounds = sketch::boundary_bounds(component->segments);
+    auto font = target->font();
+    font.setPixelSize(16);
+    auto footprint = QFontMetricsF(font, target).boundingRect(label->text);
+    footprint.moveCenter(QPointF());
+    footprint.adjust(-5, -3, 5, 3);
+    const QRectF label_rect(label->position.x + footprint.left() / 80.0,
+                            label->position.y + footprint.top() / 80.0,
+                            footprint.width() / 80.0, footprint.height() / 80.0);
+    const QRectF component_rect(bounds.minimum.x - 0.1, bounds.minimum.y - 0.1,
+        bounds.maximum.x - bounds.minimum.x + 0.2, bounds.maximum.y - bounds.minimum.y + 0.2);
+    require(!label_rect.intersects(component_rect),
+            "font-aware room placement must retain component clearance");
+    const auto huge_id = window.createRoomBoundary(room, QString(500, QLatin1Char('W')));
+    require(!huge_id.isEmpty(), "unplaceable label must not reject its valid owning room");
+    require(std::none_of(target->labels().begin(), target->labels().end(),
+        [&](const auto& value) { return value.id == huge_id; }),
+        "an unplaceable derived name must not retain an invalid centroid fallback");
+}
+
+void test_appraisal_draw_category_survives_workflow_switches() {
+    MainWindow window;
+    prepare_window(window);
+    auto* workflow = window.findChild<QComboBox*>(QStringLiteral("calculationWorkflow"));
+    require(workflow != nullptr, "appraisal draw fixture needs a workflow selector");
+    const auto appraisal = workflow->findData(QStringLiteral("appraisal"));
+    const auto measurement = workflow->findData(QStringLiteral("measurement"));
+    require(appraisal >= 0 && measurement >= 0,
+            "area workflow selector must expose Measurement and Appraisal");
+    workflow->setCurrentIndex(appraisal);
+    require(window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first,
+                                        QStringLiteral("garage")),
+            "appraisal drawing must accept an explicit garage category");
+    auto* target = canvas(window, QStringLiteral("measurementPlanCanvas"));
+    send_click(*target, {0.0, 0.0});
+    send_click(*target, {2.0, 0.0});
+    send_click(*target, {2.0, 2.0});
+    send_click(*target, {0.0, 2.0});
+    send_key(*target, Qt::Key_Return);
+    const auto id = window.selectedEntityId();
+    require(!id.isEmpty(), "interactive appraisal drawing must commit a selected boundary");
+    workflow->setCurrentIndex(measurement);
+    auto switched = window.document().snapshot().entities().at(id.toStdString());
+    require(switched.properties.at("classification") == "measurement" &&
+                switched.properties.at("measurement_classification") == "measurement" &&
+                switched.properties.at("appraisal_category") == "garage",
+            "leaving Appraisal must preserve the interactively drawn category before restoring Measurement");
+    workflow->setCurrentIndex(appraisal);
+    auto* garage = window.findChild<QLabel*>(QStringLiteral("appraisalGarageTotal"));
+    auto* gla = window.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"));
+    require(garage && garage->text().contains(QStringLiteral("43.06")) &&
+                gla && gla->text().contains(QStringLiteral("0.00")),
+            "returning to Appraisal must restore the drawn garage category and automatic total");
+}
+
 void install_test_font() {
     const auto font_id = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"));
     require(font_id >= 0, "boundary workflow test must load the bundled Inter font");
@@ -1438,6 +1545,12 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
         install_test_font();
+        if (application.arguments().contains(QStringLiteral("--room-labels-only"))) {
+            test_concave_room_label_stays_inside_room();
+            test_long_room_label_footprint_avoids_narrow_notch();
+            test_room_label_avoids_components_and_omits_unplaceable_names();
+            return 0;
+        }
         test_unified_pointer_clicks_to_draw_and_drags_to_pan();
         test_draw_first_events_commit_receipts_labels_and_visibility();
         test_define_first_events_place_manual_dimensions_and_close();
@@ -1451,7 +1564,10 @@ int main(int argc, char** argv) {
         test_receipt_boundary_offset_copy();
         test_dimension_presentation_editing();
         test_semantic_angle_and_area_dimension_creation();
+        test_appraisal_draw_category_survives_workflow_switches();
         test_concave_room_label_stays_inside_room();
+        test_long_room_label_footprint_avoids_narrow_notch();
+        test_room_label_avoids_components_and_omits_unplaceable_names();
         std::cout << "Boundary workflow event tests passed\n";
         return 0;
     } catch (const std::exception& error) {

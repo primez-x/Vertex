@@ -4335,6 +4335,106 @@ void test_coordinated_view_output_identity() {
     }
 }
 
+void test_architectural_authoring_commands() {
+    sketch::desktop::MainWindow window;
+    auto* menu = window.findChild<QMenu*>(QStringLiteral("architecturalAuthoringMenu"));
+    require(menu != nullptr, "architectural authoring must have a discoverable menu");
+    for (const auto* name : {"createWall", "createDoor", "createWindow", "createOpening",
+                             "createRoom", "createSlab", "createFloor", "createRoof",
+                             "createStair", "createColumn", "createBeam", "joinWalls",
+                             "unjoinWalls", "joinRoofs", "unjoinRoofs"}) {
+        auto* action = window.findChild<QAction*>(QString::fromLatin1(name));
+        require(action && menu->actions().contains(action), "architectural command must be discoverable");
+    }
+    const auto first = window.createStraightWall({0, 0}, {4, 0}, QStringLiteral("living"));
+    const auto second = window.createStraightWall({4, 0}, {4, 3}, QStringLiteral("living"));
+    require(!first.isEmpty() && !second.isEmpty(), "wall fixture must be valid");
+    require(window.selectEntity(first) && window.selectEntity(second, true), "select wall pair");
+    const auto before = window.document().revision();
+    window.findChild<QAction*>(QStringLiteral("joinWalls"))->trigger();
+    auto snapshot = window.document().snapshot();
+    std::string join_id;
+    for (const auto& [id, entity] : snapshot.entities()) {
+        if (entity.type == "wall_join") {
+            join_id = id;
+            require(entity.properties.at("wall_ids").size() == 2, "join must retain both source walls");
+        }
+    }
+    require(!join_id.empty() && window.document().revision() == before + 1,
+            "join action must atomically create semantic wall join");
+    window.findChild<QAction*>(QStringLiteral("joinWalls"))->trigger();
+    require(window.document().revision() == before + 1, "duplicate join membership must be rejected atomically");
+    window.findChild<QAction*>(QStringLiteral("unjoinWalls"))->trigger();
+    snapshot = window.document().snapshot();
+    require(!snapshot.entities().contains(join_id) && snapshot.entities().contains(first.toStdString()) &&
+                snapshot.entities().contains(second.toStdString()), "unjoin must preserve source walls");
+    require(window.undoCommand() && window.document().snapshot().entities().contains(join_id),
+            "unjoin must undo as one operation");
+    require(window.redoCommand(), "unjoin must redo");
+    require(window.selectEntity(first), "select lone wall");
+    const auto invalid_revision = window.document().revision();
+    window.findChild<QAction*>(QStringLiteral("joinWalls"))->trigger();
+    require(window.document().revision() == invalid_revision && !window.lastError().isEmpty(),
+            "invalid join selection must leave document unchanged");
+    const auto roof_a = window.commitBuildingObject(sketch::encode_building_entity(sketch::SlopedRoofPanel{
+        "command-roof-a", {0, 0, 3}, 0, 4, 3, 0, 0, 0.2, 0.1}), window.document().revision());
+    const auto roof_b = window.commitBuildingObject(sketch::encode_building_entity(sketch::SlopedRoofPanel{
+        "command-roof-b", {3, 0, 3}, 0, 4, 3, 0, 0, 0.2, 0.1}), window.document().revision());
+    require(!roof_a.isEmpty() && !roof_b.isEmpty() && window.selectEntity(roof_a) && window.selectEntity(roof_b, true),
+            "select roof pair");
+    window.findChild<QAction*>(QStringLiteral("joinRoofs"))->trigger();
+    const auto joined_roofs = window.document().snapshot();
+    const auto roof_join = std::find_if(joined_roofs.entities().begin(), joined_roofs.entities().end(),
+        [](const auto& entry) { return entry.second.type == "roof_join"; });
+    require(roof_join != joined_roofs.entities().end() && roof_join->second.properties.at("roof_ids").size() == 2,
+            "roof join must retain both semantic sources");
+    window.findChild<QAction*>(QStringLiteral("unjoinRoofs"))->trigger();
+    require(!window.document().snapshot().entities().contains(roof_join->first), "roof unjoin removes the join");
+    for (const auto* type : {"Roof", "Stair", "Column", "Beam"}) {
+        QTimer::singleShot(0, &window, [&window, type] {
+            auto* dialog = dynamic_cast<sketch::desktop::BuildingObjectDialog*>(QApplication::activeModalWidget());
+            require(dialog && dialog->findChild<QComboBox*>("buildingObjectType")->currentText() == type,
+                    "direct architectural command must preselect its object type");
+            dialog->reject();
+        });
+        window.findChild<QAction*>(QStringLiteral("create") + QString::fromLatin1(type))->trigger();
+    }
+    auto* views = window.findChild<QAction*>(QStringLiteral("manageNamedViews"));
+    require(views, "named elevation and section views must have a discoverable manager");
+    const auto before_view = window.document().revision();
+    QTimer::singleShot(0, &window, [&window] {
+        auto* dialog = QApplication::activeModalWidget();
+        require(dialog, "named view editor opens");
+        auto* selector = dialog->findChild<QComboBox*>("namedViewSelection");
+        selector->setCurrentIndex(0);
+        dialog->findChild<QLineEdit*>("namedViewName")->setText("East elevation");
+        dialog->findChild<QComboBox*>("namedViewKind")->setCurrentIndex(0);
+        dialog->findChild<QLineEdit*>("namedViewDirection")->setText("0, 0, 0");
+        const auto revision = window.document().revision();
+        dialog->findChild<QPushButton*>("saveNamedView")->click();
+        require(window.document().revision() == revision && !dialog->findChild<QLabel*>("namedViewError")->text().isEmpty(),
+                "invalid view frame must remain editable without document mutation");
+        dialog->findChild<QLineEdit*>("namedViewDirection")->setText("1, 0, 0");
+        dialog->findChild<QPushButton*>("saveNamedView")->click();
+    });
+    views->trigger();
+    require(window.document().revision() == before_view + 1, "named view saves as one command");
+    const auto view_snapshot = window.document().snapshot();
+    bool found_view = false;
+    for (const auto& [id, entity] : view_snapshot.entities()) {
+        if (entity.type != sketch::kSheetViewEntityType) continue;
+        const auto model = sketch::decode_sheet_view_entity(entity);
+        for (const auto& view : model.views()) {
+            if (view.name == "East elevation") {
+                found_view = view.kind == sketch::CoordinatedViewKind::elevation && view.direction[0] == 1;
+            }
+        }
+    }
+    require(found_view, "named view persists its direction and kind");
+    require(window.findChild<QComboBox*>("architecturalView")->currentText() == "East elevation",
+            "saved named view becomes the selected architectural projection");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -4345,6 +4445,8 @@ int main(int argc, char** argv) {
     const auto families = QFontDatabase::applicationFontFamilies(font_id);
     require(!families.isEmpty(), "bundled Inter font must expose a family");
     application.setFont(QFont(families.front(), 10));
+    test_architectural_authoring_commands();
+    if (argc == 2 && std::string_view(argv[1]) == "--architectural-authoring-only") return 0;
     if (argc == 2 && std::string_view(argv[1]) == "--coordinated-view-output-only") {
         test_coordinated_view_output_identity();
         std::cout << "Coordinated view output tests passed\n";
@@ -5318,8 +5420,11 @@ int main(int argc, char** argv) {
     auto* architectural_widget = window.findChild<QWidget*>(QStringLiteral("architecturalPlanCanvas"));
     auto* architectural = dynamic_cast<sketch::desktop::PlanCanvas*>(architectural_widget);
     auto* architectural_view = window.findChild<QComboBox*>(QStringLiteral("architecturalView"));
-    require(architectural && architectural_view && architectural_view->count() == 3,
-            "architectural view selector and canvas should be available");
+    require(architectural && architectural_view && architectural_view->count() >= 3 &&
+                architectural_view->itemText(0) == QStringLiteral("Plan") &&
+                architectural_view->itemText(1) == QStringLiteral("Elevation") &&
+                architectural_view->itemText(2) == QStringLiteral("Section · 1.2 m"),
+            "architectural view selector must retain standard views alongside named views");
     architectural_view->setCurrentText(QStringLiteral("Elevation"));
     const auto elevation_column = std::find_if(architectural->entities().begin(),
                                                architectural->entities().end(),

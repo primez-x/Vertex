@@ -1,5 +1,7 @@
 {
-  "acceptance": "Boundary dimensions retain analytical references and allow explicit placement, visibility, rotation, scale, curve, and area presentation without storing measurement truth in text.",
+  "acceptance": "Dimension fixtures remain associated with semantic geometry through supported edits, print at the selected output scale, and can be undone.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -58,10 +60,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Boundary dimensions retain analytical references and allow explicit placement, visibility, rotation, scale, curve, and area presentation without storing measurement truth in text.",
   "qualification_boundary": "This evidence covers analytical boundary dimension semantics and desktop placement. Native Apex dimension layout and calibrated production print remain open.",
+  "requirement": "Provide editable dimensions with placement, visibility, styles, references, and independent output-scale behavior.",
   "requirement_id": "APX-ANNO-002",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "Dimension",
     "placement",
@@ -100,5 +111,6 @@
   "tests": [
     "boundary_dimensions",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

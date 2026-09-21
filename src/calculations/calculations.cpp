@@ -5,6 +5,7 @@
 #include <BRepCheck_Analyzer.hxx>
 #include <Standard_Failure.hxx>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iomanip>
 #include <locale>
@@ -14,6 +15,19 @@
 
 namespace sketch {
 namespace {
+constexpr std::array category_names{
+    std::pair{AppraisalAreaCategory::none, std::string_view{"none"}},
+    std::pair{AppraisalAreaCategory::above_grade_finished, std::string_view{"above_grade_finished"}},
+    std::pair{AppraisalAreaCategory::above_grade_unfinished, std::string_view{"above_grade_unfinished"}},
+    std::pair{AppraisalAreaCategory::below_grade_finished, std::string_view{"below_grade_finished"}},
+    std::pair{AppraisalAreaCategory::below_grade_unfinished, std::string_view{"below_grade_unfinished"}},
+    std::pair{AppraisalAreaCategory::garage, std::string_view{"garage"}},
+    std::pair{AppraisalAreaCategory::carport, std::string_view{"carport"}},
+    std::pair{AppraisalAreaCategory::porch, std::string_view{"porch"}},
+    std::pair{AppraisalAreaCategory::patio, std::string_view{"patio"}},
+    std::pair{AppraisalAreaCategory::deck, std::string_view{"deck"}},
+    std::pair{AppraisalAreaCategory::other_non_living, std::string_view{"other_non_living"}}};
+
 double tolerance(double area) { return std::max(1e-6, std::abs(area) * 1e-8); }
 void profile_valid(const CalculationProfile& p) {
     if (p.id.empty() || p.version == 0 || p.decimal_places > 6)
@@ -26,6 +40,8 @@ void profile_valid(const CalculationProfile& p) {
     default:
         throw std::invalid_argument("Unknown area display unit");
     }
+    for (const auto& [name, rule] : p.classifications)
+        (void)appraisal_category_name(rule.appraisal_category);
 }
 double analytical(const Boundary& b) {
     auto issues = validate_boundary(b);
@@ -121,6 +137,75 @@ AreaTotal total(long double value, const CalculationProfile& p) {
     return {metres, display_area(metres, p)};
 }
 } // namespace
+
+std::string_view appraisal_category_name(AppraisalAreaCategory category) {
+    for (const auto& [value, name] : category_names)
+        if (category == value)
+            return name;
+    throw std::invalid_argument("Unknown appraisal area category");
+}
+
+std::optional<AppraisalAreaCategory> parse_appraisal_category(std::string_view name) {
+    for (const auto& [value, token] : category_names)
+        if (name == token)
+            return value;
+    return std::nullopt;
+}
+
+CalculationProfile builtin_appraisal_profile() {
+    CalculationProfile profile{"vertex-appraisal", 1, AreaUnit::square_foot, 2, {}};
+    for (const auto& [category, name] : category_names) {
+        if (category != AppraisalAreaCategory::none)
+            profile.classifications.emplace(std::string(name), ClassificationRule{
+                true, category == AppraisalAreaCategory::above_grade_finished, category});
+    }
+    return profile;
+}
+
+AppraisalCalculationReport calculate_appraisal_areas(const std::vector<MeasurementArea>& areas,
+                                                     const CalculationProfile& profile) {
+    AppraisalCalculationReport report;
+    report.calculation = calculate_areas(areas, profile);
+    struct Accumulator {
+        std::map<AppraisalAreaCategory, long double> values;
+        std::map<AppraisalAreaCategory, std::vector<std::string>> ids;
+        void add(AppraisalAreaCategory category, const AreaCalculation& area) {
+            if (category == AppraisalAreaCategory::none)
+                return;
+            values[category] += area.factored_square_metres;
+            ids[category].push_back(area.area_id);
+        }
+        AppraisalTotals finish(const CalculationProfile& profile) const {
+            AppraisalTotals result;
+            for (const auto& [category, name] : category_names) {
+                if (category == AppraisalAreaCategory::none)
+                    continue;
+                const auto value = values.find(category);
+                const auto provenance = ids.find(category);
+                result.by_category.emplace(category, AppraisalAreaBucket{
+                    total(value == values.end() ? 0 : value->second, profile),
+                    provenance == ids.end() ? std::vector<std::string>{} : provenance->second});
+            }
+            return result;
+        }
+    } property;
+    std::map<std::string, Accumulator> buildings;
+    std::map<std::pair<std::string, std::string>, Accumulator> floors;
+    for (const auto& area : report.calculation.areas) {
+        if (area.scope != AreaScope::building)
+            continue;
+        const auto category = profile.classifications.at(area.classification).appraisal_category;
+        property.add(category, area);
+        buildings[area.building_id].add(category, area);
+        floors[{area.building_id, area.floor_id}].add(category, area);
+    }
+    report.property = property.finish(profile);
+    for (const auto& [id, accumulator] : buildings)
+        report.by_building.emplace(id, accumulator.finish(profile));
+    for (const auto& [id, accumulator] : floors)
+        report.by_floor.emplace(id, accumulator.finish(profile));
+    return report;
+}
 
 AreaCalculation calculate_area(const MeasurementArea& a, const CalculationProfile& p) {
     (void)analytical(a.boundary);

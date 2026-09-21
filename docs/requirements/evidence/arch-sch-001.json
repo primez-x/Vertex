@@ -1,5 +1,7 @@
 {
-  "acceptance": "Door/window, room, material, assembly, and building schedule fixtures expose marks, dimensions, counts, areas, deductions, net quantities, and source references.",
+  "acceptance": "Schedules generated from a representative project match the semantic model and update after accepted object edits.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -66,10 +68,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Door/window, room, material, assembly, and building schedule fixtures expose marks, dimensions, counts, areas, deductions, net quantities, and source references.",
   "qualification_boundary": "This evidence covers deterministic schedule projection and source-backed quantities. Complete market-specific schedules, native Apex fidelity, and production issue-set qualification remain open.",
+  "requirement": "Provide door/window, room, and material schedules with the required marks, properties, dimensions, counts, areas, deductions, and net quantities.",
   "requirement_id": "ARCH-SCH-001",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "ScheduleRowKind",
     "build_architectural_schedules",
@@ -136,5 +147,6 @@
     "document_schedule_adapter",
     "architectural_schedule",
     "schedule_model"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

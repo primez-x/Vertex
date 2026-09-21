@@ -1,5 +1,7 @@
 {
-  "acceptance": "The native 3D view consumes the same semantic document objects used by architectural and measurement workflows, supports selection/translation, and emits a deterministic native image path.",
+  "acceptance": "A 3D edit changes the shared object and is visible in linked plan/elevation/section views, schedules, calculations, and save/reopen.",
+  "acceptance_gap": "A native 3D edit propagated through all linked views, schedules, calculations and save/reopen remains unverified.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -50,10 +52,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "The native 3D view consumes the same semantic document objects used by architectural and measurement workflows, supports selection/translation, and emits a deterministic native image path.",
   "qualification_boundary": "This evidence covers shared semantic decoding and the desktop smoke path. Native OpenGL/window capture, GPU-driver behavior, and full production 3D qualification remain open.",
+  "requirement": "Provide editable 3D authoring over the same semantic objects used by measurement and 2D documentation.",
   "requirement_id": "ARCH-3D-001",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "NativeModelView",
     "setSnapshot",
@@ -93,5 +104,6 @@
   "source_tree_sha256": "b89bdba6cef5fd26b8d83708b44086edb733aed72a63c060eb658c9ad75ad6cf",
   "tests": [
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

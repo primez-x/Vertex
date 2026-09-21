@@ -1,5 +1,7 @@
 {
   "acceptance": "Nested, adjacent, overlapping, and disconnected area fixtures produce independently inspectable totals and deductions.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -66,10 +68,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Nested, adjacent, overlapping, and disconnected area fixtures produce independently inspectable totals and deductions.",
   "qualification_boundary": "This evidence covers analytical face detection, grouping, holes, overlap rejection, deductions, and the desktop calculation path. Same-floor production fixtures and complete Apex workflows remain open.",
+  "requirement": "Detect, aggregate, and subtract areas from analytical boundaries with explicit grouping and hole behavior.",
   "requirement_id": "APX-AREA-001",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "detect_closed_boundaries",
     "calculate_areas",
@@ -125,5 +136,6 @@
     "geometry_operations",
     "calculations",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

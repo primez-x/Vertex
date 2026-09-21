@@ -1,5 +1,7 @@
 {
-  "acceptance": "The declared DXF R2013 subset round-trips lines, arcs, polylines, text, dimensions, hatches, blocks, and inserts with units and explicit unsupported-feature diagnostics.",
+  "acceptance": "Subset fixtures round-trip supported entities and report unsupported entities without blocking native project use.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -74,10 +76,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "The declared DXF R2013 subset round-trips lines, arcs, polylines, text, dimensions, hatches, blocks, and inserts with units and explicit unsupported-feature diagnostics.",
   "qualification_boundary": "This evidence covers the bounded local DXF R2013 subset and desktop exchange path. External CAD consumer comparison and complete production fidelity remain open.",
+  "requirement": "Support a declared DXF R2013 subset covering lines, arcs, polylines, text, dimensions, hatches, and blocks.",
   "requirement_id": "IO-DXF-001",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "R2013",
     "LINE",
@@ -152,5 +163,6 @@
     "dxf_exchange",
     "dxf_project_exchange",
     "dxf_desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

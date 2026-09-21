@@ -4,17 +4,38 @@
 #include "sketch/quantity.hpp"
 
 #include <map>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace sketch {
 
 enum class AreaUnit { square_metre, square_foot, acre };
 enum class AreaScope { building, site };
+enum class AppraisalAreaCategory {
+    none,
+    above_grade_finished,
+    above_grade_unfinished,
+    below_grade_finished,
+    below_grade_unfinished,
+    garage,
+    carport,
+    porch,
+    patio,
+    deck,
+    other_non_living
+};
+
+// Stable persistence tokens; unknown strings return nullopt, invalid enums throw.
+[[nodiscard]] std::string_view appraisal_category_name(AppraisalAreaCategory category);
+[[nodiscard]] std::optional<AppraisalAreaCategory> parse_appraisal_category(std::string_view name);
 
 struct ClassificationRule {
     bool building_total{};
     bool living_total{};
+    AppraisalAreaCategory appraisal_category{AppraisalAreaCategory::none};
 };
 
 // This is an application calculation policy, not a claim of compliance with a
@@ -90,6 +111,33 @@ struct CalculationReport {
     AreaTotal building;
     AreaTotal living;
 };
+
+struct AppraisalAreaBucket {
+    AreaTotal total;
+    std::vector<std::string> area_ids;
+};
+
+struct AppraisalTotals {
+    // Calculated reports contain every named category, excluding none.
+    std::map<AppraisalAreaCategory, AppraisalAreaBucket> by_category;
+    [[nodiscard]] const AppraisalAreaBucket& gla() const {
+        return by_category.at(AppraisalAreaCategory::above_grade_finished);
+    }
+};
+
+struct AppraisalCalculationReport {
+    CalculationReport calculation;
+    AppraisalTotals property;
+    std::map<std::string, AppraisalTotals> by_building;
+    std::map<std::pair<std::string, std::string>, AppraisalTotals> by_floor;
+};
+
+// Application policy, not a measurement-standard compliance assertion.
+[[nodiscard]] CalculationProfile builtin_appraisal_profile();
+// Reuses calculate_areas validation and unrounded factored values. Only building
+// scope and explicitly mapped categories contribute; GLA is above-grade finished.
+[[nodiscard]] AppraisalCalculationReport calculate_appraisal_areas(
+    const std::vector<MeasurementArea>& areas, const CalculationProfile& profile);
 
 // All topology and dimensions are analytical. Deductions must be contained in
 // the area; touching the boundary is allowed and overlaps subtract only once.

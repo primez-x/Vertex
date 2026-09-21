@@ -1,5 +1,7 @@
 {
-  "acceptance": "A project retains stable document revisions, named revisions, sheets, alternatives, schedules, and export metadata across the desktop workflow.",
+  "acceptance": "Plans, calculations, projections, schedules, exports, and printing consume the same document revision and stable entity IDs.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -74,10 +76,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "A project retains stable document revisions, named revisions, sheets, alternatives, schedules, and export metadata across the desktop workflow.",
   "qualification_boundary": "This evidence covers shared-document revision and presentation resources in Debug and Release. Native Apex project compatibility, physical output, and production qualification remain open.",
+  "requirement": "One semantic document model is authoritative for property/site, buildings, storeys, levels, layers, objects, boundaries, annotations, schedules, sheets, phases, and alternatives.",
   "requirement_id": "CORE-DOC-001",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "Document",
     "revision",
@@ -121,5 +132,6 @@
     "architectural_workflow_contract",
     "architectural_schedule",
     "project_resource_desktop"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

@@ -1,5 +1,7 @@
 {
-  "acceptance": "The Windows workspace exposes a compact canvas-centered shell with navigator, tool rail, contextual inspector, measurement readout, and architectural 3D pane.",
+  "acceptance": "Representative workflows expose relevant controls in context, keep the canvas dominant, and preserve panel layout in saved workspaces.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -58,10 +60,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "The Windows workspace exposes a compact canvas-centered shell with navigator, tool rail, contextual inspector, measurement readout, and architectural 3D pane.",
   "qualification_boundary": "This evidence covers the local desktop shell and its deterministic widget contract. Visual acceptance across all Windows themes, DPI modes, and production hardware remains open.",
+  "requirement": "Use a canvas-centered workspace with compact tool rail, expandable navigator, contextual inspector, and cursor-adjacent measurement panel.",
   "requirement_id": "UX-WORK-001",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "workspaceSplitter",
     "workspaceTabs",
@@ -92,5 +103,6 @@
   "tests": [
     "desktop_workflow",
     "workspace_navigation"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

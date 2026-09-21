@@ -1,5 +1,7 @@
 {
-  "acceptance": "Each interchange profile declares its capabilities, required resources, loaded module allowlist, and licensing review before use.",
+  "acceptance": "The exact Qt module set builds offline, is license-audited, and produces the same vector scene used by preview and supported output formats.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -50,10 +52,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Each interchange profile declares its capabilities, required resources, loaded module allowlist, and licensing review before use.",
   "qualification_boundary": "This evidence covers local profile attestation and module/license policy checks. Independent license approval and clean-machine module verification remain open.",
+  "requirement": "Use reviewed Qt PDF and Print Support modules for vector output and printing, with an explicit module allowlist.",
   "requirement_id": "COMP-IO-002",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "pdf",
     "PrintSupport",
@@ -86,5 +97,6 @@
   "source_tree_sha256": "b89bdba6cef5fd26b8d83708b44086edb733aed72a63c060eb658c9ad75ad6cf",
   "tests": [
     "interchange_profile"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

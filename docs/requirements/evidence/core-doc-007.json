@@ -1,5 +1,7 @@
 {
-  "acceptance": "Architectural documents persist native solid semantics for slabs, floors, ceilings, and foundations and expose consistent projections and schedules.",
+  "acceptance": "Rebuilding or deleting derived caches leaves semantic geometry intact and all consumers regenerate from the document snapshot.",
+  "acceptance_gap": "Full original acceptance requires clause-level review and workflow evidence; local check success alone does not close it.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -82,10 +84,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Architectural documents persist native solid semantics for slabs, floors, ceilings, and foundations and expose consistent projections and schedules.",
   "qualification_boundary": "This evidence covers persisted architectural solids, horizontal element kinds, native projections, and schedule rows. External CAD/native compatibility and production qualification remain open.",
+  "requirement": "BRep geometry, meshes, projections, render pixels, and calculation caches are derived data and cannot become independent document authorities.",
   "requirement_id": "CORE-DOC-007",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "document_solid",
     "slab",
@@ -165,5 +176,6 @@
     "architectural_schedule",
     "document_commands",
     "desktop_workflow"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }

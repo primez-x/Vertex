@@ -14,6 +14,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QSvgRenderer>
 #include <QPainterPathStroker>
 #include <QPaintEvent>
 #include <QTabletEvent>
@@ -1112,7 +1113,8 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
     }
     m_left_start = position;
     m_left_dragging = false;
-    const auto handle = selectionHandleAt(position, QRectF(rect()));
+    const auto handle = selectionInteractionEnabled()
+        ? selectionHandleAt(position, QRectF(rect())) : SelectionHandle::none;
     if (handle != SelectionHandle::none) {
         m_move_ids = selectedIds();
         m_transform_frame_start = selectionFrame(QRectF(rect()));
@@ -1127,7 +1129,7 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
     m_pressed_entity = hitTest(position);
     const auto retained_selection = selectedIds();
     const auto frame = selectionFrame(QRectF(rect()));
-    if (m_tool == CanvasTool::select && !retained_selection.isEmpty() && frame &&
+    if (selectionInteractionEnabled() && !retained_selection.isEmpty() && frame &&
         frame->contains(position)) {
         m_left_gesture = LeftGesture::object_move;
         m_move_ids = retained_selection;
@@ -1213,7 +1215,7 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button) {
     if (button == Qt::RightButton) {
         const bool clicked = !m_right_dragging &&
             (position - m_right_start).manhattanLength() < QApplication::startDragDistance();
-        const auto target = clicked ? hitTest(position) : QString{};
+        const auto target = clicked ? contextTarget(position) : QString{};
         resetGesture();
         if (clicked && m_right_clicked) m_right_clicked(inputPoint(position), target);
         return;
@@ -1242,12 +1244,12 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button) {
                 m_entity_selection_clicked(hitTest(position), true);
             }
         } else if (gesture == LeftGesture::canvas_pan && !dragging) {
-            if (m_tool == CanvasTool::select && !pressed_entity.isEmpty()) {
+            if (selectionInteractionEnabled() && !pressed_entity.isEmpty()) {
                 if (m_entity_selection_clicked)
                     m_entity_selection_clicked(pressed_entity, false);
                 else if (m_entity_clicked)
                     m_entity_clicked(pressed_entity);
-            } else if (m_tool == CanvasTool::select && !selectedIds().isEmpty()) {
+            } else if (selectionInteractionEnabled() && !selectedIds().isEmpty()) {
                 // An empty click outside the retained selection is an explicit
                 // deselect. Do not also interpret it as the first drawing node;
                 // the next empty click begins authoring once selection is clear.
@@ -1318,12 +1320,12 @@ void PlanCanvas::setRightClicked(std::function<void(Vec2, QString)> callback) {
 
 void PlanCanvas::mouseDoubleClickEvent(QMouseEvent* event) {
     // Qt dispatches press/release/double-click/release. The first click already
-    // authored or selected. In Select mode an unmodified left double-click
-    // opens contextual properties for the stable hit target. Every other mode
+    // authored or selected. An idle pointer's unmodified left double-click
+    // opens contextual properties for the stable hit target. Active authoring
     // consumes the second press so a double-click cannot add a duplicate point
     // or replay Ctrl-selection.
     if (event->button() == Qt::LeftButton && event->modifiers() == Qt::NoModifier &&
-        m_tool == CanvasTool::select && m_entity_double_clicked) {
+        selectionInteractionEnabled() && m_entity_double_clicked) {
         const auto target = hitTest(event->position());
         if (!target.isEmpty()) m_entity_double_clicked(target);
     }
@@ -1681,7 +1683,7 @@ Vec2 PlanCanvas::snapped(Vec2 point) const {
 }
 
 std::optional<Vec2> PlanCanvas::closingAnchor(QPointF point) const {
-    if (m_tool != CanvasTool::boundary || !m_boundary_draft_preview ||
+    if ((m_tool != CanvasTool::boundary && m_tool != CanvasTool::select) || !m_boundary_draft_preview ||
         !m_boundary_draft_preview->can_close_on_anchor ||
         !m_boundary_draft_preview->anchor) return std::nullopt;
     const auto anchor = *m_boundary_draft_preview->anchor;
@@ -1858,6 +1860,22 @@ QStringList PlanCanvas::selectedIds() const {
     return result;
 }
 
+bool PlanCanvas::selectionInteractionEnabled() const {
+    return (m_tool == CanvasTool::select || m_tool == CanvasTool::boundary) &&
+           !m_boundary_draft_preview;
+}
+
+QString PlanCanvas::contextTarget(QPointF point) const {
+    // The same visible frame owns movement and contextual selection actions.
+    // A retained selection takes precedence over unrelated geometry under it.
+    if (selectionInteractionEnabled()) {
+        const auto ids = selectedIds();
+        const auto frame = selectionFrame(QRectF(rect()));
+        if (!ids.isEmpty() && frame && frame->contains(point)) return ids.back();
+    }
+    return hitTest(point);
+}
+
 Vec2 PlanCanvas::dragDelta(QPointF position) const {
     const auto start = toModel(m_left_start, rect());
     const auto end = toModel(position, rect());
@@ -1872,7 +1890,7 @@ void PlanCanvas::updatePointerCursor(QPointF point) {
         setCursor(Qt::ClosedHandCursor);
     } else if (m_space_pan_armed && m_gesture_button == Qt::NoButton) {
         setCursor(Qt::OpenHandCursor);
-    } else if (m_tool == CanvasTool::select && m_gesture_button == Qt::NoButton) {
+    } else if (selectionInteractionEnabled() && m_gesture_button == Qt::NoButton) {
         const auto handle = selectionHandleAt(point, QRectF(rect()));
         if (handle != SelectionHandle::none) {
             setCursor(handle == SelectionHandle::resize ? Qt::SizeFDiagCursor
@@ -1886,7 +1904,7 @@ void PlanCanvas::updatePointerCursor(QPointF point) {
         }
         const auto target = hitTest(point);
         setCursor(target.isEmpty() ? Qt::CrossCursor : Qt::ArrowCursor);
-    } else if (m_tool != CanvasTool::select && m_gesture_button == Qt::NoButton) {
+    } else if (m_gesture_button == Qt::NoButton) {
         setCursor(Qt::CrossCursor);
     }
 }
@@ -2104,11 +2122,44 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
     const auto default_color = output
         ? (background.lightnessF() > 0.5 ? QColor(25, 25, 25) : QColor(235, 235, 235))
         : color_for(entity, light_surface);
+    // Legacy/default presentation records may supply only the light stroke.
+    // Keep recognizably custom colors, but never let a semantic light default
+    // (or the annotation default black) defeat dark-canvas contrast.
+    const auto custom_stroke = entity.stroke_color.isValid() &&
+        entity.stroke_color != color_for(entity, true) &&
+        entity.stroke_color != QColor(Qt::black);
     const auto color = !output && entity.selected
         ? default_color
-        : !output && !light_surface && entity.dark_stroke_color.isValid()
-            ? entity.dark_stroke_color
+        : !output && !light_surface
+            ? (entity.dark_stroke_color.isValid() ? entity.dark_stroke_color
+                : custom_stroke ? entity.stroke_color : default_color)
             : entity.stroke_color.isValid() ? entity.stroke_color : default_color;
+
+    if (entity.svg_symbol.has_value()) {
+        const auto& symbol = *entity.svg_symbol;
+        auto renderer = m_svg_renderers.value(symbol.catalog_id);
+        if (!renderer || !renderer->isValid()) {
+            renderer = QSharedPointer<QSvgRenderer>::create(symbol.document);
+            if (renderer->isValid()) m_svg_renderers.insert(symbol.catalog_id, renderer);
+        }
+        const auto footprint = symbol.footprint_view_box;
+        if (renderer && renderer->isValid() && footprint.width() > 0.0 &&
+            footprint.height() > 0.0 && symbol.width_metres > 0.0 &&
+            symbol.depth_metres > 0.0) {
+            painter.save();
+            painter.translate(symbol.position.x, symbol.position.y);
+            painter.rotate(symbol.rotation_radians * 180.0 / pi);
+            // SVG coordinates grow downward. Mirror the local Y axis so the
+            // outer Cartesian canvas transform restores the authored artwork
+            // orientation while rotation remains model-space counterclockwise.
+            painter.scale(symbol.width_metres / footprint.width(),
+                          -symbol.depth_metres / footprint.height());
+            painter.translate(-footprint.center());
+            renderer->render(&painter, symbol.view_box);
+            painter.restore();
+            return;
+        }
+    }
     QPen pen(color, 0.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
     const auto paper_width = output && std::isfinite(entity.output_stroke_width_mm) &&
                              entity.output_stroke_width_mm > 0.0
@@ -2190,7 +2241,13 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
     if (!entity.segments.empty()) {
         painter.drawPath(path);
     }
-    if (entity.dimension_end_ticks && entity.segments.size() >= 3) {
+    // Angular dimension overlays share the dimension_line type, but carry
+    // an arc between their radial witnesses. A stale tick flag must not add
+    // linear-dimension ticks to either witness of an angular dimension.
+    const auto linear_dimension = entity.type == QStringLiteral("dimension_line") &&
+        std::all_of(entity.segments.begin(), entity.segments.end(),
+                    [](const Segment& segment) { return segment.sweep_radians == 0.0; });
+    if (entity.dimension_end_ticks && linear_dimension && entity.segments.size() >= 3) {
         const auto& dimension = entity.segments.back();
         const auto dx = dimension.end.x - dimension.start.x;
         const auto dy = dimension.end.y - dimension.start.y;

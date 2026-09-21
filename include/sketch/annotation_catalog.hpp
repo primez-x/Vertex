@@ -2,6 +2,8 @@
 
 #include "sketch/geometry.hpp"
 #include <nlohmann/json.hpp>
+#include <array>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -61,6 +63,14 @@ struct PresentationOverride {
 };
 
 struct SymbolStroke { Vec2 start; Vec2 end; };
+struct SymbolSvgAsset {
+    // Relative to the application's asset root. No runtime archive dependency.
+    std::string relative_path;
+    std::array<double, 4> view_box; // x, y, width, height in SVG coordinates
+    // Maps physical width/depth to SVG coordinates, excluding artwork padding.
+    std::array<double, 4> footprint_view_box;
+    bool dimensions_are_nominal{}; // false: editable default, not source dimensions
+};
 struct SymbolDefinition {
     std::string id;
     std::string family;
@@ -71,6 +81,8 @@ struct SymbolDefinition {
     double minimum_scale{0.01};
     double maximum_scale{100.0};
     std::vector<SymbolStroke> preview;
+    std::string name; // Human-readable searchable name; legacy entries may be empty.
+    std::optional<SymbolSvgAsset> svg_asset;
 };
 
 struct SymbolInstance {
@@ -96,7 +108,7 @@ struct AnnotationState {
 [[nodiscard]] nlohmann::json encode_symbol_catalog_manifest(
     const std::vector<SymbolDefinition>&);
 // Empty query/category match all; query matching is case-insensitive and covers
-// stable ID, family, and category without mutating the catalog records.
+// stable ID, human name, family, and category without mutating catalog records.
 [[nodiscard]] std::vector<SymbolDefinition> filter_symbol_catalog(
     const std::vector<SymbolDefinition>&, std::string_view query,
     std::string_view category = {});

@@ -1,5 +1,7 @@
 {
-  "acceptance": "Section and coordinated view definitions retain cut depth, line treatment, material hatching, detail level, annotations, callouts, and overlay metadata through validation and persistence.",
+  "acceptance": "Section fixtures render and print the selected cut and presentation settings and preserve them in the project.",
+  "acceptance_gap": "Complete section annotation/detail overlays and render/print fixtures remain unverified.",
+  "acceptance_status": "in_progress",
   "ctest": [
     {
       "configuration": "windows-debug",
@@ -66,10 +68,19 @@
       ]
     }
   ],
+  "evidence_dimensions": {
+    "core_implemented": "not_assessed",
+    "end_to_end_verified": "not_assessed",
+    "externally_qualified": "not_assessed",
+    "ui_usable": "not_assessed"
+  },
+  "local_check_scope": "Section and coordinated view definitions retain cut depth, line treatment, material hatching, detail level, annotations, callouts, and overlay metadata through validation and persistence.",
   "qualification_boundary": "This evidence covers deterministic section/view metadata and persistence. Full detail-overlay authoring, production annotation standards, and print qualification remain open.",
+  "requirement": "Sections support cut depth, line treatment, material hatching, annotations, and detail overlays.",
   "requirement_id": "ARCH-VIEW-002",
-  "result": "pass",
-  "schema_version": 1,
+  "result": "supporting_evidence",
+  "schema_version": 2,
+  "source_anchor_role": "source_locator_only",
   "source_anchors": [
     "cut_depth_m",
     "cut_line_mm",
@@ -141,5 +152,6 @@
     "building_view_projection",
     "sheet_view_model",
     "sheet_view_entity_codec"
-  ]
+  ],
+  "verification_freshness": "historical_not_revalidated"
 }
