@@ -13,7 +13,11 @@ active workspace tab. Desktop sheet title-block/number and viewport
 bounds/scale editing now commit through the typed Document history; schedule
 placement rendering, including revision-bound door/window, room and material
 rows, now uses the same schedule projection as the Schedules dialog. Desktop
-schedule placement bounds can be edited through typed Document history. Sheet
+sheet layout can add or remove shared-view viewports and registered-schedule
+placements as well as edit their bounds and scales. The detached layout dialog
+stages all changes until OK, commits them as one undoable Document command, and
+discards them on Cancel. Placement IDs remain stable through save/reopen, and a
+viewport referenced by a surviving callout is protected from removal. Sheet
 revisions and cross-sheet callouts can be added, edited, and removed through
 the same revision-checked history path. Vector sheet output renders callout
 markers with target sheet/viewport references and a revision block beside the
@@ -100,7 +104,9 @@ the stored snapshot. Import validates the complete graph before returning a
 snapshot. Tests cover coordinated edits, scale independence, input isolation,
 deterministic round trips and malformed geometry, identities and references,
 including revision and callout replacement, addition, removal, and target
-validation.
+validation. Placement lifecycle tests also cover duplicate identities, invalid
+references and page bounds, callout-protected deletion, empty layouts, dialog
+staging, atomic undo/redo, and save/reopen.
 The entity codec tests cover typed Document admission and ProjectStore
 save/reopen, including schema, version, unknown-field and dangling-view
 rejection.

@@ -1552,7 +1552,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Source review correction (2026-09-20): Output currently renders only the selected sheet and remains permanently draft-stamped; complete multipage output is missing. Draft PDF, SVG, PNG, and print preview share the validated sheet renderer; PNG uses a deterministic 1600 x 1200 raster target at 144 DPI and writes the same adjacent output fingerprint contract. Physical printer calibration, complete page-layout qualification, Apex output comparison, and the production gate remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Output still renders only the selected sheet and remains visibly draft-stamped; complete ordered multipage PDF/print issue output is missing. Draft PDF, SVG, PNG, and print preview share the validated persisted-sheet renderer. PDF and print use the sheet physical page, SVG writes exact millimetre dimensions, and PNG now derives its pixel width and height from the selected sheet millimetres at 144 DPI under a 100-megapixel limit, preserving portrait/landscape aspect instead of letterboxing into a fixed canvas. Every file output writes the adjacent fingerprint contract. Physical printer calibration, complete page-set qualification, Apex output comparison, and the production gate remain open."
     },
     {
       "id": "APX-UI-001",
@@ -2295,13 +2295,16 @@
         "include/sketch/sheet_view_entity_codec.hpp",
         "src/core/sheet_view_entity_codec.cpp",
         "tests/sheet_view_entity_codec_tests.cpp",
+        "include/sketch/desktop/sheet_layout_dialog.hpp",
+        "src/desktop/sheet_layout_dialog.cpp",
+        "tests/sheet_layout_dialog_tests.cpp",
         "src/desktop/main_window.cpp",
         "tests/desktop_smoke.cpp",
         "docs/sheets-views.md",
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Source review correction (2026-09-20): Sheet editors target the first sheet/item and output lacks a complete multi-sheet issue workflow. Coordinated sheets with title blocks, revisions, callouts, schedule references, page sizes, and independent viewport scales are implemented as immutable semantic records and persist through the typed Document entity. New desktop projects seed validated plan/elevation/section views and a default sheet containing one viewport for each view plus door and building-object schedule placements; draft PDF/SVG/print consume persisted page, viewport, title-block, scale, schedule placement, and view-specific derived geometry data even when another workspace is active, while sheet number/title-block, viewport bounds/scale, and schedule placement bounds edits commit through Document history. Printer receipts and production output qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Coordinated sheets with title blocks, revisions, callouts, schedule references, page sizes, and independent viewport scales are immutable semantic records persisted through the typed Document entity. The selected-sheet layout manager can add and remove registered shared-view viewports and registered-schedule placements, edit placement bounds and scale, preserve stable identities, reject removal of callout targets, stage without mutating the document, and commit the complete layout as one undoable command that survives save/reopen. New projects seed plan/elevation/section views and a default composed sheet. Draft PDF/SVG/PNG/print consume the selected persisted page, placement, scale, title-block, schedule, and derived geometry data. Explicit page ordering, complete multi-sheet issue PDF/print, printer calibration, Apex output comparison, and production qualification remain open."
     },
     {
       "id": "ARCH-EDIT-001",
@@ -2657,7 +2660,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Source review correction (2026-09-20): Named revisions exist, but graphical side-by-side or overlay comparison with drawing navigation is missing. The Document NameRevision command is now surfaced in a local desktop editor with ordered listing, read-only entity/asset comparison, and guarded restore-as-new-project copies that preserve the open document. Geometric/calculation/presentation diff detail and production fixtures remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Named revisions are persisted through the normal NameRevision command and survive save/reopen. The desktop editor now compares any two independently selected named revisions or the current head in either direction, reporting added, removed, and changed entities/assets plus semantic, geometric, calculation, and presentation classifications and bounded property-path detail. Restore reconstructs the selected immutable history prefix as a separate clean project without changing the open document. Graphical side-by-side or overlay comparison synchronized with drawing navigation and production qualification remain open."
     },
     {
       "id": "REC-003",

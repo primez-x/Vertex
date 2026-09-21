@@ -3,11 +3,13 @@
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFormLayout>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
+#include <QUuid>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -25,6 +27,11 @@ struct SheetLayoutDialog::Impl {
     QComboBox* sheets{};
     QComboBox* placements{};
     QComboBox* views{};
+    QComboBox* new_view{};
+    QComboBox* new_schedule{};
+    QPushButton* add_viewport{};
+    QPushButton* add_schedule{};
+    QPushButton* remove_selected{};
     std::array<QLineEdit*, 4> bounds{};
     QLineEdit* scale{};
     QLabel* target{};
@@ -57,8 +64,13 @@ struct SheetLayoutDialog::Impl {
         scale->setEnabled(active && isViewport());
         scale->clear();
         views->setCurrentIndex(-1);
-        buttons->button(QDialogButtonBox::Ok)->setEnabled(active);
+        buttons->button(QDialogButtonBox::Ok)->setEnabled(current != nullptr);
         buttons->button(QDialogButtonBox::Apply)->setEnabled(active);
+        new_view->setEnabled(current && new_view->count() > 0);
+        new_schedule->setEnabled(current && new_schedule->count() > 0);
+        add_viewport->setEnabled(new_view->isEnabled());
+        add_schedule->setEnabled(new_schedule->isEnabled());
+        remove_selected->setEnabled(active);
         if (!current) {
             target->setText(QStringLiteral("Choose a sheet to edit its layout."));
             return;
@@ -167,6 +179,54 @@ struct SheetLayoutDialog::Impl {
         loadPlacement();
         return true;
     }
+    std::string newId(bool viewport) const {
+        // Never reuse a removed identity or derive identity from mutable labels.
+        std::string id;
+        bool exists;
+        do {
+            id = (viewport ? "viewport-" : "schedule-placement-") +
+                 QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+            exists = false;
+            for (const auto& page : model.sheets()) {
+                exists = exists || std::any_of(page.viewports.begin(), page.viewports.end(),
+                    [&](const auto& item) { return item.id == id; });
+                exists = exists || std::any_of(page.schedules.begin(), page.schedules.end(),
+                    [&](const auto& item) { return item.id == id; });
+            }
+        } while (exists);
+        return id;
+    }
+    void add(bool viewport) {
+        if (placement_index >= 0 && !apply()) return;
+        try {
+            const auto* current = sheet();
+            if (!current) throw std::invalid_argument("Choose a sheet first.");
+            const auto id = newId(viewport);
+            const SheetRect rect{0, 0, std::min(100.0, current->width_mm),
+                std::min(viewport ? 100.0 : 50.0, current->height_mm)};
+            if (viewport) model = model.with_added_viewport(current->id,
+                {id, new_view->currentData().toString().toStdString(), rect, 100});
+            else model = model.with_added_schedule_placement(current->id,
+                {id, new_schedule->currentData().toString().toStdString(), rect});
+            loadSheet();
+            (void)changePlacement(placements->findData(text(id)));
+        } catch (const std::exception& exception) {
+            error->setText(QString::fromUtf8(exception.what()));
+        }
+    }
+    void remove() {
+        try {
+            const auto* current = sheet();
+            if (!current || placement_index < 0) throw std::invalid_argument("Choose a placement first.");
+            // Removing the selected placement discards its pending field edits.
+            // Failure leaves both staged data and the editable fields intact.
+            if (isViewport()) model = model.with_removed_viewport(current->id, placementId());
+            else model = model.with_removed_schedule_placement(current->id, placementId());
+            loadSheet();
+        } catch (const std::exception& exception) {
+            error->setText(QString::fromUtf8(exception.what()));
+        }
+    }
 };
 
 SheetLayoutDialog::SheetLayoutDialog(const SheetViewModel& model, const QString& selected_sheet_id,
@@ -174,11 +234,12 @@ SheetLayoutDialog::SheetLayoutDialog(const SheetViewModel& model, const QString&
     : QDialog(parent), impl_(std::make_unique<Impl>(model)) {
     setWindowTitle(QStringLiteral("Sheet layout manager"));
     setObjectName(QStringLiteral("sheetLayoutDialog"));
-    resize(640, 490);
+    resize(640, 620);
     auto& p = *impl_;
     auto* layout = new QVBoxLayout(this);
-    auto* help = new QLabel(QStringLiteral("Choose the exact sheet and placement. Valid edits are staged when you switch targets. "
-        "OK saves all staged edits; Cancel discards them. Coordinates and sizes are paper millimetres, measured from the top-left."), this);
+    auto* help = new QLabel(QStringLiteral("Add shared views or registered schedules to the selected sheet, or choose a placement to edit. "
+        "Valid edits are staged when you switch targets. Remove selected also discards its pending field edits. "
+        "OK saves all staged changes; Cancel discards them. Coordinates and sizes are paper millimetres, measured from the top-left."), this);
     help->setWordWrap(true); layout->addWidget(help);
     auto* form = new QFormLayout;
     p.sheets = new QComboBox(this); p.sheets->setObjectName("sheetLayoutSheet");
@@ -190,7 +251,26 @@ SheetLayoutDialog::SheetLayoutDialog(const SheetViewModel& model, const QString&
     p.placements = new QComboBox(this); p.placements->setObjectName("sheetLayoutPlacement");
     p.placements->setPlaceholderText(QStringLiteral("Choose a viewport or schedule placement"));
     form->addRow(QStringLiteral("&Placement"), p.placements);
+    p.new_view = new QComboBox(this); p.new_view->setObjectName("sheetLayoutNewView");
+    for (const auto& view : model.views())
+        p.new_view->addItem(QStringLiteral("%1 [%2]").arg(text(view.name), text(view.id)), text(view.id));
+    p.add_viewport = new QPushButton(QStringLiteral("Add viewport"), this);
+    p.add_viewport->setObjectName("sheetLayoutAddViewport"); p.add_viewport->setAutoDefault(false);
+    auto* viewport_row = new QHBoxLayout;
+    viewport_row->addWidget(p.new_view); viewport_row->addWidget(p.add_viewport);
+    form->addRow(QStringLiteral("Shared view"), viewport_row);
+    p.new_schedule = new QComboBox(this); p.new_schedule->setObjectName("sheetLayoutNewSchedule");
+    for (const auto& id : model.schedule_ids()) p.new_schedule->addItem(text(id), text(id));
+    p.add_schedule = new QPushButton(QStringLiteral("Add schedule"), this);
+    p.add_schedule->setObjectName("sheetLayoutAddSchedule"); p.add_schedule->setAutoDefault(false);
+    auto* schedule_row = new QHBoxLayout;
+    schedule_row->addWidget(p.new_schedule); schedule_row->addWidget(p.add_schedule);
+    form->addRow(QStringLiteral("Registered schedule"), schedule_row);
+    p.remove_selected = new QPushButton(QStringLiteral("Remove selected"), this);
+    p.remove_selected->setObjectName("sheetLayoutRemoveSelected"); p.remove_selected->setAutoDefault(false);
+    form->addRow(p.remove_selected);
     p.target = new QLabel(this); p.target->setObjectName("sheetLayoutTarget"); p.target->setWordWrap(true);
+    p.target->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
     form->addRow(p.target);
     p.views = new QComboBox(this); p.views->setObjectName("sheetLayoutView");
     for (const auto& view : model.views())
@@ -214,6 +294,9 @@ SheetLayoutDialog::SheetLayoutDialog(const SheetViewModel& model, const QString&
     connect(p.buttons, &QDialogButtonBox::accepted, this, &SheetLayoutDialog::accept);
     connect(p.buttons, &QDialogButtonBox::rejected, this, &SheetLayoutDialog::reject);
     connect(p.buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, this, [this] { (void)applyCurrentEdit(); });
+    connect(p.add_viewport, &QPushButton::clicked, this, [this] { impl_->add(true); });
+    connect(p.add_schedule, &QPushButton::clicked, this, [this] { impl_->add(false); });
+    connect(p.remove_selected, &QPushButton::clicked, this, [this] { impl_->remove(); });
     connect(p.sheets, &QComboBox::currentIndexChanged, this, [this](int index) {
         if (!impl_->changeSheet(index)) { QSignalBlocker block(impl_->sheets); impl_->sheets->setCurrentIndex(impl_->sheet_index); }
     });
@@ -248,7 +331,7 @@ const SheetViewModel& SheetLayoutDialog::workingModel() const { return impl_->mo
 const std::optional<SheetViewModel>& SheetLayoutDialog::acceptedModel() const { return impl_->accepted; }
 bool SheetLayoutDialog::applyCurrentEdit() { return impl_->apply(); }
 void SheetLayoutDialog::accept() {
-    if (!applyCurrentEdit()) return;
+    if (!impl_->sheet() || (impl_->placement_index >= 0 && !applyCurrentEdit())) return;
     impl_->accepted = impl_->model;
     QDialog::accept();
 }

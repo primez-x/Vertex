@@ -1544,26 +1544,45 @@ void test_named_revisions() {
         auto* name = dialog->findChild<QLineEdit*>(QStringLiteral("revisionName"));
         auto* name_current = dialog->findChild<QPushButton*>(QStringLiteral("nameCurrentRevision"));
         auto* compare = dialog->findChild<QPushButton*>(QStringLiteral("compareRevisions"));
+        auto* compare_from = dialog->findChild<QComboBox*>(QStringLiteral("revisionCompareFrom"));
+        auto* compare_to = dialog->findChild<QComboBox*>(QStringLiteral("revisionCompareTo"));
         auto* comparison = dialog->findChild<QPlainTextEdit*>(QStringLiteral("revisionComparison"));
         auto* status = dialog->findChild<QLabel*>(QStringLiteral("revisionStatus"));
-        require(list && name && name_current && compare && comparison && status,
+        require(list && name && name_current && compare && compare_from && compare_to &&
+                    comparison && status,
                 "named revision editor must expose history, naming, compare, and status controls");
         name->setText(QStringLiteral("Existing conditions"));
         name_current->click();
         require(list->count() == 1 && window.document().snapshot().named_revisions().contains(
-                    "Existing conditions"),
-                "naming the current revision must create one persisted history marker");
+                    "Existing conditions") &&
+                    compare_from->currentData(Qt::UserRole + 1).toBool() &&
+                    compare_from->currentText().startsWith(QStringLiteral("Current head")),
+                "naming the current revision must create a marker without changing a current-head selection");
         const auto named_revision = window.document().snapshot().named_revisions().at(
             "Existing conditions");
         const auto wall = window.createStraightWall({0.0, 0.0}, {4.0, 0.0});
         require(!wall.isEmpty() && window.document().revision() > named_revision,
                 "later edits must remain available after naming a revision");
+        name->setText(QStringLiteral("Design revision"));
+        name_current->click();
+        const auto design_revision = window.document().snapshot().named_revisions().at(
+            "Design revision");
+        require(list->count() == 2 && design_revision > named_revision &&
+                    compare_from->currentData(Qt::UserRole + 1).toBool() &&
+                    compare_from->currentText().startsWith(QStringLiteral("Current head")),
+                "a second named revision must remain independently selectable without retargeting current head");
+        compare_from->setCurrentIndex(compare_from->findData(
+            QVariant::fromValue<qulonglong>(named_revision)));
+        compare_to->setCurrentIndex(compare_to->findData(
+            QVariant::fromValue<qulonglong>(design_revision)));
         compare->click();
-        require(comparison->toPlainText().contains(QStringLiteral("Entities added: 1")) &&
+        require(comparison->toPlainText().contains(QStringLiteral("From: Existing conditions")) &&
+                    comparison->toPlainText().contains(QStringLiteral("To: Design revision")) &&
+                    comparison->toPlainText().contains(QStringLiteral("Entities added: 1")) &&
                     comparison->toPlainText().contains(QStringLiteral("Geometric changes: 1")) &&
                     comparison->toPlainText().contains(QStringLiteral("Details:")) &&
                     status->text().contains(QStringLiteral("without changing"), Qt::CaseInsensitive),
-                "comparison must report categorized later changes without mutating the document");
+                "two named revisions must report categorized changes without mutating the document");
         dialog->reject();
     });
     action->trigger();
@@ -4514,6 +4533,11 @@ int main(int argc, char** argv) {
     const auto families = QFontDatabase::applicationFontFamilies(font_id);
     require(!families.isEmpty(), "bundled Inter font must expose a family");
     application.setFont(QFont(families.front(), 10));
+    if (argc == 2 && std::string_view(argv[1]) == "--named-revisions-only") {
+        test_named_revisions();
+        std::cout << "Named revision comparison tests passed\n";
+        return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--section-overlays-only") {
         test_section_overlay_workflow();
         std::cout << "Section overlay workflow tests passed\n";
@@ -5636,6 +5660,28 @@ int main(int argc, char** argv) {
                 std::abs(view_box[2].toDouble() / view_box[3].toDouble() - 215.5 / 330.2) < 0.00001,
             "SVG viewBox aspect must match its persisted paper dimensions");
     physical_svg.close();
+    require(window.exportDraftImage(image_path_qstring),
+            "custom portrait sheet should export a PNG");
+    QImage portrait_image(image_path_qstring);
+    require(!portrait_image.isNull() &&
+                portrait_image.size() == QSize(qRound(215.5 * 144.0 / 25.4),
+                                               qRound(330.2 * 144.0 / 25.4)) &&
+                std::abs(portrait_image.dotsPerMeterX() - qRound(144.0 / 0.0254)) <= 1 &&
+                std::abs(portrait_image.dotsPerMeterY() - qRound(144.0 / 0.0254)) <= 1,
+            "PNG pixels and metadata must preserve the persisted portrait sheet at 144 DPI");
+    QFile preserved_png(image_path_qstring);
+    require(preserved_png.open(QIODevice::ReadOnly), "portrait PNG should be readable before cap rejection");
+    const auto preserved_png_bytes = preserved_png.readAll();
+    preserved_png.close();
+    const auto oversized_sheet = window.createDrawingSheet(QStringLiteral("A-203"),
+        QStringLiteral("2000"), QStringLiteral("2000"), QStringLiteral("Raster cap fixture"));
+    require(!oversized_sheet.isEmpty() && !window.exportDraftImage(image_path_qstring) &&
+                window.lastError().contains(QStringLiteral("100 megapixel"), Qt::CaseInsensitive),
+            "PNG export must reject a selected sheet above the raster allocation limit");
+    require(preserved_png.open(QIODevice::ReadOnly) && preserved_png.readAll() == preserved_png_bytes,
+            "rejected oversized PNG export must preserve the existing destination bytes");
+    preserved_png.close();
+    require(window.removeDrawingSheet(oversized_sheet), "oversized PNG fixture sheet should be removable");
     require(window.removeDrawingSheet(portrait_sheet), "custom portrait test sheet should be removable");
     require(window.selectOutputSheet(QStringLiteral("sheet-1")) &&
                 window.outputSheetId() == QStringLiteral("sheet-1"),
@@ -5798,8 +5844,20 @@ int main(int argc, char** argv) {
     require(window.exportDraftImage(image_path_qstring), "draft PNG export should succeed locally");
     require(std::filesystem::file_size(image_path) > 0, "draft PNG should be nonempty");
     QImage draft_image(image_path_qstring);
-    require(!draft_image.isNull() && draft_image.size() == QSize(1600, 1200),
-            "draft PNG should be a deterministic raster of the shared sheet scene");
+    const auto raster_sheet_model = sketch::decode_sheet_view_entity(
+        window.document().snapshot().entities().at("sheet-view-1"));
+    const auto raster_sheet = std::find_if(raster_sheet_model.sheets().begin(),
+        raster_sheet_model.sheets().end(), [&](const auto& sheet) {
+            return sheet.id == window.outputSheetId().toStdString();
+        });
+    require(raster_sheet != raster_sheet_model.sheets().end(),
+            "draft PNG must resolve the selected persisted drawing sheet");
+    const QSize expected_raster_size(qRound(raster_sheet->width_mm * 144.0 / 25.4),
+                                     qRound(raster_sheet->height_mm * 144.0 / 25.4));
+    require(!draft_image.isNull() && draft_image.size() == expected_raster_size &&
+                std::abs(draft_image.dotsPerMeterX() - qRound(144.0 / 0.0254)) <= 1 &&
+                std::abs(draft_image.dotsPerMeterY() - qRound(144.0 / 0.0254)) <= 1,
+            "draft PNG must preserve the selected sheet aspect and physical size at 144 DPI");
     const auto image_fingerprint_path = std::filesystem::path(image_path.wstring() + L".fingerprint.json");
     QFile image_fingerprint(QString::fromStdWString(image_fingerprint_path.wstring()));
     require(image_fingerprint.open(QIODevice::ReadOnly | QIODevice::Text),

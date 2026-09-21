@@ -117,6 +117,7 @@ public:
     [[nodiscard]] nlohmann::json to_json() const;
     [[nodiscard]] const std::vector<CoordinatedView>& views() const noexcept { return views_; }
     [[nodiscard]] const std::vector<DrawingSheet>& sheets() const noexcept { return sheets_; }
+    [[nodiscard]] const std::vector<std::string>& schedule_ids() const noexcept { return schedule_ids_; }
     // Updates the shared view definition; viewport references and scales survive.
     [[nodiscard]] SheetViewModel with_view(CoordinatedView replacement) const;
     // Updates one sheet definition while revalidating every viewport, callout,
@@ -128,14 +129,23 @@ public:
     // Removes one drawing sheet. The graph must retain at least one sheet and
     // no surviving callout may target the removed sheet.
     [[nodiscard]] SheetViewModel with_removed_sheet(const std::string& sheet_id) const;
-    // Updates one viewport within a sheet while preserving its linked view and
-    // revalidating all page and callout references.
+    // Updates one viewport within a sheet while preserving its stable ID and
+    // revalidating its shared view link, page bounds and callout references.
     [[nodiscard]] SheetViewModel with_viewport(const std::string& sheet_id,
                                                SheetViewport replacement) const;
+    [[nodiscard]] SheetViewModel with_added_viewport(const std::string& sheet_id,
+                                                     SheetViewport addition) const;
+    // Refuses removal while any callout targets this viewport on this sheet.
+    [[nodiscard]] SheetViewModel with_removed_viewport(const std::string& sheet_id,
+                                                       const std::string& viewport_id) const;
     // Updates one schedule placement within a sheet while preserving its
-    // registry identity and revalidating the page bounds and schedule link.
+    // stable ID and revalidating the page bounds and schedule registry link.
     [[nodiscard]] SheetViewModel with_schedule_placement(
         const std::string& sheet_id, SheetSchedulePlacement replacement) const;
+    [[nodiscard]] SheetViewModel with_added_schedule_placement(
+        const std::string& sheet_id, SheetSchedulePlacement addition) const;
+    [[nodiscard]] SheetViewModel with_removed_schedule_placement(
+        const std::string& sheet_id, const std::string& placement_id) const;
     // Updates one revision within a sheet while preserving its stable ID.
     [[nodiscard]] SheetViewModel with_revision(const std::string& sheet_id,
                                                SheetRevision replacement) const;

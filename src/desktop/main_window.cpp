@@ -4496,9 +4496,22 @@ public:
         auto* comparison = new QPlainTextEdit(&dialog);
         comparison->setObjectName(QStringLiteral("revisionComparison"));
         comparison->setReadOnly(true);
-        comparison->setPlaceholderText(QStringLiteral("Select a named revision and choose Compare."));
+        comparison->setPlaceholderText(QStringLiteral("Choose two project states and compare them."));
         body->addWidget(comparison, 2);
         layout->addLayout(body, 1);
+
+        auto* comparison_row = new QHBoxLayout;
+        auto* compare_from = new QComboBox(&dialog);
+        compare_from->setObjectName(QStringLiteral("revisionCompareFrom"));
+        compare_from->setAccessibleName(QStringLiteral("Compare from project state"));
+        auto* compare_to = new QComboBox(&dialog);
+        compare_to->setObjectName(QStringLiteral("revisionCompareTo"));
+        compare_to->setAccessibleName(QStringLiteral("Compare to project state"));
+        comparison_row->addWidget(new QLabel(QStringLiteral("From"), &dialog));
+        comparison_row->addWidget(compare_from, 1);
+        comparison_row->addWidget(new QLabel(QStringLiteral("To"), &dialog));
+        comparison_row->addWidget(compare_to, 1);
+        layout->addLayout(comparison_row);
 
         auto* name = new QLineEdit(&dialog);
         name->setObjectName(QStringLiteral("revisionName"));
@@ -4513,7 +4526,7 @@ public:
         auto* actions = new QHBoxLayout;
         auto* name_current = new QPushButton(QStringLiteral("Name current revision"), &dialog);
         name_current->setObjectName(QStringLiteral("nameCurrentRevision"));
-        auto* compare = new QPushButton(QStringLiteral("Compare to current"), &dialog);
+        auto* compare = new QPushButton(QStringLiteral("Compare states"), &dialog);
         compare->setObjectName(QStringLiteral("compareRevisions"));
         auto* restore = new QPushButton(QStringLiteral("Restore as new project…"), &dialog);
         restore->setObjectName(QStringLiteral("restoreRevision"));
@@ -4526,7 +4539,17 @@ public:
         layout->addLayout(actions);
 
         const auto populate = [&] {
+            const auto previous_from_valid = compare_from->currentIndex() >= 0;
+            const auto previous_from_head = compare_from->currentData(Qt::UserRole + 1).toBool();
+            const auto previous_from_revision = compare_from->currentData().toULongLong();
+            const auto previous_to_valid = compare_to->currentIndex() >= 0;
+            const auto previous_to_head = compare_to->currentData(Qt::UserRole + 1).toBool();
+            const auto previous_to_revision = compare_to->currentData().toULongLong();
             revisions->clear();
+            const QSignalBlocker from_blocker(compare_from);
+            const QSignalBlocker to_blocker(compare_to);
+            compare_from->clear();
+            compare_to->clear();
             try {
                 const auto snapshot = authoringSnapshot();
                 std::vector<std::pair<std::string, Revision>> entries;
@@ -4543,7 +4566,40 @@ public:
                     item->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(revision));
                     item->setData(Qt::UserRole + 1, QString::fromStdString(revision_name));
                     item->setToolTip(QStringLiteral("Document revision %1").arg(revision));
+                    const auto label = QStringLiteral("%1  •  revision %2")
+                                           .arg(QString::fromStdString(revision_name))
+                                           .arg(revision);
+                    compare_from->addItem(label, QVariant::fromValue<qulonglong>(revision));
+                    compare_to->addItem(label, QVariant::fromValue<qulonglong>(revision));
+                    compare_from->setItemData(compare_from->count() - 1, false, Qt::UserRole + 1);
+                    compare_to->setItemData(compare_to->count() - 1, false, Qt::UserRole + 1);
                 }
+                const auto current_label = QStringLiteral("Current head  •  revision %1")
+                                               .arg(snapshot.revision());
+                compare_from->addItem(current_label,
+                                      QVariant::fromValue<qulonglong>(snapshot.revision()));
+                compare_to->addItem(current_label,
+                                    QVariant::fromValue<qulonglong>(snapshot.revision()));
+                compare_from->setItemData(compare_from->count() - 1, true, Qt::UserRole + 1);
+                compare_to->setItemData(compare_to->count() - 1, true, Qt::UserRole + 1);
+                const auto restore_selection = [](QComboBox* combo, bool valid, bool head,
+                                                   qulonglong revision, int fallback) {
+                    int found = -1;
+                    if (valid) {
+                        for (int index = 0; index < combo->count(); ++index) {
+                            if (combo->itemData(index, Qt::UserRole + 1).toBool() == head &&
+                                (head || combo->itemData(index).toULongLong() == revision)) {
+                                found = index;
+                                break;
+                            }
+                        }
+                    }
+                    combo->setCurrentIndex(found >= 0 ? found : fallback);
+                };
+                restore_selection(compare_from, previous_from_valid, previous_from_head,
+                                  previous_from_revision, 0);
+                restore_selection(compare_to, previous_to_valid, previous_to_head,
+                                  previous_to_revision, compare_to->count() - 1);
                 if (revisions->count() > 0) revisions->setCurrentRow(0);
                 else status->setText(QStringLiteral("No named revisions yet."));
             } catch (const std::exception& error) {
@@ -4571,18 +4627,21 @@ public:
             }
         });
         QObject::connect(compare, &QPushButton::clicked, &dialog, [&] {
-            const auto* item = revisions->currentItem();
-            if (!item) {
-                status->setText(QStringLiteral("Choose a named revision first."));
+            if (compare_from->currentIndex() < 0 || compare_to->currentIndex() < 0) {
+                status->setText(QStringLiteral("Choose both project states first."));
                 return;
             }
             try {
                 const auto source = authoringSnapshot();
-                const auto revision = item->data(Qt::UserRole).toULongLong();
-                const auto name_text = item->data(Qt::UserRole + 1).toString();
-                auto historical = Document::fork_at_revision(source, revision);
-                const auto older = historical.snapshot();
-                const auto diff = compareRevisions(older, source);
+                const auto from_revision = static_cast<Revision>(
+                    compare_from->currentData().toULongLong());
+                const auto to_revision = static_cast<Revision>(
+                    compare_to->currentData().toULongLong());
+                auto from_document = Document::fork_at_revision(source, from_revision);
+                auto to_document = Document::fork_at_revision(source, to_revision);
+                const auto from_snapshot = from_document.snapshot();
+                const auto to_snapshot = to_document.snapshot();
+                const auto diff = compareRevisions(from_snapshot, to_snapshot);
                 QString detail_text;
                 if (diff.details.empty()) {
                     detail_text = QStringLiteral("No semantic records changed.");
@@ -4597,15 +4656,13 @@ public:
                     }
                 }
                 comparison->setPlainText(
-                    QStringLiteral("%1\n\nNamed revision: %2\nCurrent revision: %3\n\n"
-                                   "Entities added: %4\nEntities removed: %5\nEntities changed: %6\n"
-                                   "Assets added: %7\nAssets removed: %8\nAssets changed: %9\n\n"
-                                   "Semantic changes: %10\nGeometric changes: %11\n"
-                                   "Calculation changes: %12\nPresentation changes: %13\n\n"
-                                   "%14\nThe original revision remains immutable.\n")
-                        .arg(name_text)
-                        .arg(revision)
-                        .arg(source.revision())
+                    QStringLiteral("From: %1\nTo: %2\n\n"
+                                   "Entities added: %3\nEntities removed: %4\nEntities changed: %5\n"
+                                   "Assets added: %6\nAssets removed: %7\nAssets changed: %8\n\n"
+                                   "Semantic changes: %9\nGeometric changes: %10\n"
+                                   "Calculation changes: %11\nPresentation changes: %12\n\n"
+                                   "%13\nBoth source revisions remain immutable.\n")
+                        .arg(compare_from->currentText(), compare_to->currentText())
                         .arg(diff.added_entities)
                         .arg(diff.removed_entities)
                         .arg(diff.changed_entities)
@@ -13970,11 +14027,26 @@ public:
             return false;
         }
         try {
-            constexpr int width = 1600;
-            constexpr int height = 1200;
+            constexpr double output_dpi = 144.0;
+            constexpr qint64 max_raster_pixels = 100'000'000;
+            const auto page_mm = selectedSheetPageMm(m_document->snapshot());
+            const auto width_value = page_mm.width() * output_dpi / 25.4;
+            const auto height_value = page_mm.height() * output_dpi / 25.4;
+            if (!std::isfinite(width_value) || !std::isfinite(height_value) ||
+                width_value < 1.0 || height_value < 1.0 ||
+                width_value > std::numeric_limits<int>::max() ||
+                height_value > std::numeric_limits<int>::max()) {
+                throw std::invalid_argument("sheet dimensions exceed PNG device limits");
+            }
+            const auto width = qRound(width_value);
+            const auto height = qRound(height_value);
+            if (static_cast<qint64>(width) * static_cast<qint64>(height) > max_raster_pixels) {
+                throw std::invalid_argument("sheet dimensions exceed the 100 megapixel PNG limit");
+            }
             QImage image(width, height, QImage::Format_ARGB32_Premultiplied);
-            image.setDotsPerMeterX(144 * 3937 / 100);
-            image.setDotsPerMeterY(144 * 3937 / 100);
+            const auto dots_per_metre = qRound(output_dpi / 0.0254);
+            image.setDotsPerMeterX(dots_per_metre);
+            image.setDotsPerMeterY(dots_per_metre);
             image.fill(Qt::white);
             QPainter painter(&image);
             if (!painter.isActive()) {

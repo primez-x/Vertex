@@ -171,6 +171,51 @@ void sheet_lifecycle() {
     const auto single = sketch::SheetViewModel::create({plan}, {only});
     rejects([&] { (void)single.with_removed_sheet("only"); });
 }
+void placement_lifecycle() {
+    const auto original = fixture();
+    const auto saved = original.to_json();
+    sketch::SheetViewport viewport{"added", "plan", {0, 0, 100, 100}, 50};
+    const auto added = original.with_added_viewport("a", viewport);
+    require(added.sheets()[0].viewports.size() == 3, "viewport addition missing");
+    require(added.with_removed_viewport("a", "added").to_json() == saved, "viewport removal roundtrip");
+    rejects([&] { (void)added.with_added_viewport("a", viewport); });
+    rejects([&] { (void)original.with_added_viewport("missing", viewport); });
+    rejects([&] { (void)original.with_removed_viewport("missing", "added"); });
+    rejects([&] { (void)original.with_removed_viewport("a", "missing"); });
+    rejects([&] { (void)original.with_removed_viewport("b", "section-main"); });
+    auto same_sheet = original.sheets()[1];
+    same_sheet.callouts = {{"self", "Self", "b", "elevation-main", 0, 0}};
+    const auto self_linked = original.with_sheet(same_sheet);
+    rejects([&] { (void)self_linked.with_removed_viewport("b", "elevation-main"); });
+    const auto same_id = original.with_added_viewport("a", {"section-main", "plan", {0, 0, 100, 100}, 100});
+    require(same_id.with_removed_viewport("a", "section-main").to_json() == saved,
+            "callout protection must qualify viewport identity by sheet");
+    const auto unlinked = original.with_removed_callout("a", "section-marker");
+    require(unlinked.with_removed_viewport("b", "section-main").sheets()[1].viewports.size() == 1,
+            "unreferenced viewport removal failed");
+    viewport.view_id = "missing";
+    rejects([&] { (void)original.with_added_viewport("a", viewport); });
+    viewport.view_id = "plan"; viewport.bounds.width_mm = 1000;
+    rejects([&] { (void)original.with_added_viewport("a", viewport); });
+    viewport.bounds.width_mm = 100; viewport.scale_denominator = 0;
+    rejects([&] { (void)original.with_added_viewport("a", viewport); });
+    sketch::SheetSchedulePlacement schedule{"added", "rooms", {0, 0, 100, 50}};
+    const auto scheduled = original.with_added_schedule_placement("b", schedule);
+    require(scheduled.sheets()[1].schedules.size() == 1, "schedule addition missing");
+    require(scheduled.with_removed_schedule_placement("b", "added").to_json() == saved,
+            "schedule removal roundtrip");
+    rejects([&] { (void)scheduled.with_added_schedule_placement("b", schedule); });
+    rejects([&] { (void)original.with_added_schedule_placement("missing", schedule); });
+    rejects([&] { (void)original.with_removed_schedule_placement("missing", "added"); });
+    rejects([&] { (void)original.with_removed_schedule_placement("b", "missing"); });
+    schedule.schedule_id = "missing";
+    rejects([&] { (void)original.with_added_schedule_placement("b", schedule); });
+    schedule.schedule_id = "rooms"; schedule.bounds.x_mm = -1;
+    rejects([&] { (void)original.with_added_schedule_placement("b", schedule); });
+    schedule.bounds.x_mm = 0; schedule.bounds.height_mm = std::numeric_limits<double>::infinity();
+    rejects([&] { (void)original.with_added_schedule_placement("b", schedule); });
+    require(original.to_json() == saved, "placement lifecycle mutated source");
+}
 void serialization() {
     const auto saved = fixture().to_json();
     require(sketch::SheetViewModel::from_json(saved).to_json().dump() == saved.dump(), "canonical roundtrip");
@@ -283,7 +328,7 @@ void section_overlays() {
 int main() {
     sketch::testing::noninteractive_errors();
     try {
-        coordination_and_isolation(); sheet_lifecycle(); serialization(); invalid_values(); section_overlays();
+        coordination_and_isolation(); sheet_lifecycle(); placement_lifecycle(); serialization(); invalid_values(); section_overlays();
         std::cout << "sheet/view model tests passed\n";
         return 0;
     } catch (const std::exception& error) {

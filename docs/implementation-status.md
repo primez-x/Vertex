@@ -972,9 +972,10 @@ Job Object. The analytical fixture audit now passes in both configurations.
   driver-evidence receipt with printer identity, DPI and page rectangles;
   persisted sheet layout, physical printer calibration, and production output
   qualification remain open. The desktop output selector now applies Letter, Legal, Tabloid, A4, or
-  A3 to draft PDF and print preview. Draft PNG and SVG use a deterministic
-  output target independent of paper selection. Draft PNG is a deterministic
-  1600 × 1200 raster export at 144 DPI and is covered by the integrated desktop
+  A3 as a fallback for documents without persisted sheets. Draft PDF, SVG, PNG,
+  and print consume the selected persisted sheet dimensions. PNG derives its
+  deterministic pixel dimensions from the physical page at 144 DPI, preserving
+  portrait/landscape aspect under a 100-megapixel bound, and is covered by the integrated desktop
   output smoke workflow; physical printer calibration and production output
   qualification remain open.
 - New desktop projects now seed a validated `sheet_view_model` entity with a
@@ -987,7 +988,10 @@ Job Object. The analytical fixture audit now passes in both configurations.
   sheet number/title-block plus viewport bounds/scale edits use Document
   history; persisted schedule placements now render revision-bound schedule
   rows in draft output, and placement bounds can be edited through typed
-  Document history. New projects also seed a compact building-object schedule
+  Document history. The sheet layout manager now adds and removes shared-view
+  viewports and registered-schedule placements, protects callout targets, stages
+  changes until OK, and commits the complete layout as one undoable command that
+  survives save/reopen. New projects also seed a compact building-object schedule
   placement beside the default door schedule, so canonical architectural
   quantities are present in the first draft sheet. Printer receipts now capture
   driver evidence; physical calibration and qualification remain open.

@@ -300,6 +300,55 @@ SheetViewModel SheetViewModel::with_schedule_placement(
     return create(views_, std::move(changed), schedule_ids_);
 }
 
+SheetViewModel SheetViewModel::with_added_viewport(const std::string& sheet_id,
+                                                  SheetViewport addition) const {
+    auto changed = sheets_;
+    const auto sheet = std::find_if(changed.begin(), changed.end(),
+        [&](const auto& candidate) { return candidate.id == sheet_id; });
+    require(sheet != changed.end(), "cannot add viewport to unknown drawing sheet");
+    sheet->viewports.push_back(std::move(addition));
+    return create(views_, std::move(changed), schedule_ids_);
+}
+
+SheetViewModel SheetViewModel::with_removed_viewport(const std::string& sheet_id,
+                                                    const std::string& viewport_id) const {
+    auto changed = sheets_;
+    const auto sheet = std::find_if(changed.begin(), changed.end(),
+        [&](const auto& candidate) { return candidate.id == sheet_id; });
+    require(sheet != changed.end(), "cannot remove viewport from unknown drawing sheet");
+    const auto viewport = std::find_if(sheet->viewports.begin(), sheet->viewports.end(),
+        [&](const auto& candidate) { return candidate.id == viewport_id; });
+    require(viewport != sheet->viewports.end(), "cannot remove unknown sheet viewport");
+    for (const auto& owner : sheets_) for (const auto& callout : owner.callouts)
+        require(callout.target_sheet_id != sheet_id || callout.target_viewport_id != viewport_id,
+                "cannot remove viewport targeted by a callout; remove or retarget the callout first");
+    sheet->viewports.erase(viewport);
+    return create(views_, std::move(changed), schedule_ids_);
+}
+
+SheetViewModel SheetViewModel::with_added_schedule_placement(
+    const std::string& sheet_id, SheetSchedulePlacement addition) const {
+    auto changed = sheets_;
+    const auto sheet = std::find_if(changed.begin(), changed.end(),
+        [&](const auto& candidate) { return candidate.id == sheet_id; });
+    require(sheet != changed.end(), "cannot add schedule placement to unknown drawing sheet");
+    sheet->schedules.push_back(std::move(addition));
+    return create(views_, std::move(changed), schedule_ids_);
+}
+
+SheetViewModel SheetViewModel::with_removed_schedule_placement(
+    const std::string& sheet_id, const std::string& placement_id) const {
+    auto changed = sheets_;
+    const auto sheet = std::find_if(changed.begin(), changed.end(),
+        [&](const auto& candidate) { return candidate.id == sheet_id; });
+    require(sheet != changed.end(), "cannot remove schedule placement from unknown drawing sheet");
+    const auto placement = std::find_if(sheet->schedules.begin(), sheet->schedules.end(),
+        [&](const auto& candidate) { return candidate.id == placement_id; });
+    require(placement != sheet->schedules.end(), "cannot remove unknown sheet schedule placement");
+    sheet->schedules.erase(placement);
+    return create(views_, std::move(changed), schedule_ids_);
+}
+
 SheetViewModel SheetViewModel::with_revision(const std::string& sheet_id,
                                              SheetRevision replacement) const {
     auto changed = sheets_;

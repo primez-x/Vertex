@@ -345,13 +345,15 @@ dark, or high-contrast palettes; these presentation controls do not alter
 document geometry or measurement units.
 
 Draft PDF and SVG export use the same fit-to-content vector scene as the
-interactive preview and print callback. Draft PNG export rasterizes that same
-scene at a deterministic 1600 × 1200 canvas with an independent 144 DPI output
-profile. All three outputs carry the visible draft stamp. Each output writes an
+interactive preview and print callback. Draft PNG export rasterizes the selected
+persisted sheet at 144 DPI, deriving pixel width and height from its millimetre
+dimensions so arbitrary portrait and landscape pages keep their physical aspect.
+A 100-megapixel bound rejects unreasonable raster dimensions before allocation.
+All three outputs carry the visible draft stamp. Each output writes an
 adjacent fingerprint manifest, and the same scene/currentness gate is evaluated
 before rendering. The workspace strip exposes Letter, Legal,
-Tabloid, A4, and A3 paper choices for PDF and print preview; SVG and PNG retain
-their deterministic 1600 × 1200 output target. Changing output presentation never
+Tabloid, A4, and A3 fallback choices for documents without persisted sheets;
+PDF, SVG, PNG, and print otherwise use the selected sheet dimensions. Changing output presentation never
 changes document geometry or revision.
 
 Open loads into a temporary `LoadResult` and swaps the document only after a
@@ -386,8 +388,10 @@ The **Named revisions** command is available from **More** and the command
 palette. It records a user-provided name at the current Document revision
 through the normal undoable `NameRevision` command, so names are portable in
 `.bldproj` files and survive save/reopen. The editor lists named revisions in
-document order and compares any selected revision with the current head by
-counting added, removed, and changed entities and assets. The report also
+document order and provides independent **From** and **To** selectors containing
+every named revision plus the current head. This allows historical-to-historical
+and historical-to-current comparison in either direction by counting added,
+removed, and changed entities and assets. The report also
 classifies changed records as semantic, geometric, calculation, or
 presentation changes and lists the first changed property paths for review.
 Comparison is read-only and does not alter the current selection or history.
@@ -549,8 +553,8 @@ behavior and the scaled capture runner.
 
 PDF export and print preview use the canvas's shared QPainter geometry renderer
 with an independent fit-to-content paper transform and a white background.
-Draft PNG export uses the same scene and a fixed 1600 × 1200 raster target at
-144 DPI. They stamp `DRAFT — internal checkpoint` while sheets, profiles, and
+Draft PNG export uses the same selected sheet scene and physical page dimensions
+at 144 DPI. They stamp `DRAFT — internal checkpoint` while sheets, profiles, and
 complete output qualification remain open. PDF, SVG, PNG, and native 3D image
 exports write an adjacent output-fingerprint manifest covering the document
 head, page/filter view descriptor, linked processing roles, and running Windows
@@ -565,6 +569,14 @@ coordinated plan/elevation/section viewports with independent scales; removing
 a page uses the typed graph validator and is undoable. The selected page in
 that dialog is the page rendered by draft PDF, SVG, PNG, and print, and its identity
 is bound into the adjacent output fingerprint.
+
+The Sheet layout manager composes the selected page. It can add any registered
+shared view as an independently scaled viewport, add any registered schedule as
+a schedule placement, edit the selected placement, and remove it. Placement IDs
+remain stable across staging, undo/redo, and save/reopen. A viewport targeted by
+a surviving callout cannot be removed until that callout is removed or retargeted.
+All changes stay detached inside the dialog until **OK** commits the complete
+layout as one Document command; **Cancel** discards the staged layout.
 
 Schedule placements are capacity-aware in every shared output path. When a
 placement cannot show all revision-bound rows, the renderer reserves a final
