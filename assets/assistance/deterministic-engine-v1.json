@@ -10,6 +10,12 @@
       "network": false
     },
     {
+      "id": "pixel-cell-contour-trace-v2",
+      "input": "bounded thresholded grayscale pixel buffer",
+      "output": "unverified concavity-preserving outer contours with linked enclosed voids",
+      "network": false
+    },
+    {
       "id": "explicit-unit-dimension-extraction",
       "input": "local text with explicit units",
       "output": "unverified dimension proposal retaining source text",
@@ -29,5 +35,5 @@
     }
   ],
   "provenance": "Vertex source",
-  "license": "Private Vertex source; no third-party model weights"
+  "license": "GPL-3.0-or-later; no third-party model weights"
 }

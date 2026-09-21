@@ -2535,7 +2535,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Source review correction (2026-09-20): Tracing currently reduces dark regions to rectangles or convex hulls, losing concavities and holes. Offline tracing now has a deterministic local raster engine, source bounds, explicit calibration and identified-boundary desktop dispatch. The desktop also exposes connected-component edge tracing that emits one provisional convex contour per useful component with retained bounds and pixel provenance; arbitrary-plan accuracy and production qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Topology correction (2026-09-21): Offline tracing has a deterministic local raster engine, source bounds, explicit calibration and identified-boundary desktop dispatch. Edge tracing follows pixel-cell contours instead of convex hulls, retains concave recesses, emits enclosed white regions as explicitly linked void deductions, and commits the outer and void boundaries in one undoable revision after explicit acceptance. Deterministic fixtures cover concavity, holes, malformed topology, and desktop save-history behavior. Arbitrary-plan visual accuracy and production qualification remain open; workflow evidence must be regenerated against the changed sources before certification."
     },
     {
       "id": "ASSIST-002",
@@ -2640,7 +2640,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "The deterministic engine declares portable resource paths and private-source provenance, and its fixture is allowlisted; package hash/license audit and clean-machine qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "The deterministic engine declares portable resource paths and GPL-3.0-or-later provenance, and its fixture is allowlisted. First-party executable, CLI, worker, help, runtime-configuration, and assistance entries in the distribution inventory use the same GPL-3.0-or-later project license. Package hash/license audit and clean-machine qualification remain open; workflow evidence must be regenerated against the changed sources before certification."
     },
     {
       "id": "REC-001",

@@ -20,7 +20,7 @@
       "package": {
         "name": "Application Qt plugin configuration",
         "version": "1",
-        "license": "Proprietary"
+        "license": "GPL-3.0-or-later"
       },
       "source": {
         "kind": "workspace",
@@ -63,7 +63,7 @@
       "package": {
         "name": "Vertex",
         "version": "workspace",
-        "license": "Proprietary"
+        "license": "GPL-3.0-or-later"
       },
       "source": {
         "kind": "workspace",
@@ -81,7 +81,7 @@
       "package": {
         "name": "Vertex isolated reference import worker",
         "version": "workspace",
-        "license": "Proprietary"
+        "license": "GPL-3.0-or-later"
       },
       "source": {
         "kind": "workspace",
@@ -106,7 +106,7 @@
       "package": {
         "name": "Vertex CLI",
         "version": "workspace",
-        "license": "Proprietary"
+        "license": "GPL-3.0-or-later"
       },
       "source": {
         "kind": "workspace",
@@ -124,7 +124,7 @@
       "package": {
         "name": "Vertex offline user guide",
         "version": "workspace",
-        "license": "Proprietary"
+        "license": "GPL-3.0-or-later"
       },
       "source": {
         "kind": "workspace",
@@ -626,7 +626,7 @@
       "package": {
         "name": "Vertex deterministic assistance engine",
         "version": "1",
-        "license": "Proprietary"
+        "license": "GPL-3.0-or-later"
       },
       "source": {
         "kind": "workspace",

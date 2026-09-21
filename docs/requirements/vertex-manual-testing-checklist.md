@@ -1370,12 +1370,14 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 ## Optional assistance — when available
 
 - [ ] **U254 — Request suggested tracing from a reference**
-  - Expected: Suggestions are visually distinct from accepted geometry.
+  - Steps: Import and calibrate a high-contrast plan reference containing an L-shaped outline and an enclosed void. Open Assistance, choose Edge tracing, and request suggestions.
+  - Expected: The unverified preview follows the L-shaped recess instead of filling its bounding rectangle. The enclosed void is visible as a separate interior contour. No editable drawing geometry exists before acceptance.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U255 — Accept a suggested trace**
-  - Expected: Only the selected proposal becomes editable drawing geometry.
+  - Steps: Accept the topology-preserving suggestion from U254, inspect the resulting area calculation, then use Undo and Redo.
+  - Expected: The outer contour and its interior void become editable boundaries in one history step. The outer boundary lists the void as a deduction, its net area excludes the void, one Undo removes both, and one Redo restores both. Other unaccepted suggestions remain previews.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

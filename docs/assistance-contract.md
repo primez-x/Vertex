@@ -11,10 +11,14 @@ currently provides five proposal producers:
   analytical rectangle using the reference calibration. The source pixel
   bounds, calibration and confidence are retained in the proposal.
 - **Edge tracing** segments the thresholded raster into deterministic connected
-  components and proposes one convex analytical contour per useful component.
-  Each proposal records its component bounds, pixel count, calibration, and the
-  `connected-components-v1` trace mode. Small isolated raster specks are
-  ignored; the contour remains provisional until reviewed.
+  components and follows their actual pixel-cell contours. Concave recesses are
+  retained. Enclosed white regions become explicit void contours linked to the
+  outer boundary as area deductions. A component that touches only at diagonal
+  pixels may produce separate outer contours rather than an invalid self-touching
+  polygon. Each proposal records its component bounds, pixel count, calibration,
+  and the `pixel-contours-v2` trace mode. Small isolated raster specks are ignored;
+  large contours are simplified only when the result remains a valid boundary,
+  and every contour remains provisional until reviewed.
 - **Dimension extraction** recognizes explicit-unit text (`ft`, `in`, `m`,
   `cm`, and `mm`). Unqualified numbers are ignored. The original matched text,
   UTF-8 byte offset, parsed exact quantity and confidence remain visible.
@@ -43,7 +47,9 @@ proposal at a time. Acceptance calls
 document command path:
 
 - labels are added to the typed annotation entity;
-- trace and rectangle proposals become identified measurement boundaries;
+- trace and rectangle proposals become identified measurement boundaries; a
+  topology-preserving edge trace creates its outer boundary and linked void
+  boundaries in one undoable document revision;
 - a dimension proposal requires a selected target boundary, upgrades a legacy
   boundary when needed, and creates a typed segment dimension atomically;
 - workspace-language commands change presentation state without changing
@@ -81,16 +87,17 @@ silently change an area classification.
 
 The deterministic implementation is recorded in
 `assets/assistance/deterministic-engine-v1.json` and is included in the
-portable allowlist with the private-source notice. The source and package
-manifests retain the same provenance and license boundary as the rest of the
-application; no third-party model license is introduced by this engine.
+portable allowlist under GPL-3.0-or-later. The source and package manifests
+retain the same provenance and license boundary as the rest of the application;
+no third-party model license is introduced by this engine.
 
 `tests/assistance_contract_tests.cpp` covers the proposal envelope and strict
 acceptance rules. `tests/assistance_engine_tests.cpp` covers deterministic
-envelope and edge tracing, explicit-unit parsing, label placement, the language
-grammar and malformed inputs. `tests/assistance_workflow_tests.cpp` covers the
+envelope and topology-preserving edge tracing, explicit-unit parsing, label
+placement, the language grammar and malformed inputs.
+`tests/assistance_workflow_tests.cpp` covers the
 Windows desktop integration, explicit acceptance, identified-boundary creation,
-connected-component tracing, the calibration provenance gate, legacy-boundary
+concave and holed contour tracing, the calibration provenance gate, legacy-boundary
 upgrade, undo and the disabled path.
 `tests/reference_import_tests.cpp` covers real embedded-text PDF extraction,
 distinct line positions, deterministic bounds, and malformed worker replies.

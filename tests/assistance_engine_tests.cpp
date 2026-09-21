@@ -45,6 +45,17 @@ sketch::AssistanceRaster fixture() {
     return raster;
 }
 
+double polygon_area(const nlohmann::json& points) {
+    double twice_area = 0.0;
+    for (std::size_t index = 0; index < points.size(); ++index) {
+        const auto& first = points.at(index);
+        const auto& second = points.at((index + 1) % points.size());
+        twice_area += first.at(0).get<double>() * second.at(1).get<double>() -
+                      second.at(0).get<double>() * first.at(1).get<double>();
+    }
+    return std::abs(twice_area) * 0.5;
+}
+
 }  // namespace
 
 int main() {
@@ -108,11 +119,64 @@ int main() {
         for (const auto& edge : first_edges) {
             require(edge.kind == sketch::AssistanceKind::edge_tracing,
                     "edge tracing kind was lost");
-            require(edge.preview.arguments.at("trace_mode") == "connected-components-v1",
+            require(edge.preview.arguments.at("trace_mode") == "pixel-contours-v2",
                     "edge tracing mode was not recorded");
             require(edge.preview.arguments.at("points").size() >= 4,
                     "edge tracing contour is incomplete");
+            require(edge.preview.arguments.at("holes").size() == 1 &&
+                        edge.preview.arguments.at("hole_ids").size() == 1 &&
+                        edge.preview.affected_entity_ids.size() == 2,
+                    "outlined components must preserve their enclosed void");
             sketch::validate_assistance_proposal(edge);
+        }
+
+        auto concave = raster;
+        concave.width = 32;
+        concave.height = 32;
+        concave.luminance.assign(concave.width * concave.height, 255);
+        for (std::size_t y = 3; y <= 22; ++y) {
+            for (std::size_t x = 3; x <= 8; ++x)
+                concave.luminance[y * concave.width + x] = 0;
+        }
+        for (std::size_t y = 17; y <= 22; ++y) {
+            for (std::size_t x = 3; x <= 24; ++x)
+                concave.luminance[y * concave.width + x] = 0;
+        }
+        const auto concave_edges = sketch::suggest_edge_tracing(concave);
+        require(concave_edges.size() == 1,
+                "one connected concave region must produce one proposal");
+        const auto& concave_arguments = concave_edges.front().preview.arguments;
+        require(concave_arguments.at("points").size() == 6 &&
+                    concave_arguments.at("holes").empty(),
+                "an L-shaped region must retain its six-corner concavity");
+        const auto bounds = concave_arguments.at("source_pixel_bounds");
+        const auto bounds_area = static_cast<double>(bounds.at(2).get<std::size_t>() -
+                                                      bounds.at(0).get<std::size_t>() + 1) *
+                                 static_cast<double>(bounds.at(3).get<std::size_t>() -
+                                                      bounds.at(1).get<std::size_t>() + 1) *
+                                 0.0001;
+        require(polygon_area(concave_arguments.at("points")) < bounds_area * 0.7,
+                "edge tracing must not inflate a concave region to its envelope");
+
+        auto diagonal_touch = raster;
+        diagonal_touch.width = 20;
+        diagonal_touch.height = 20;
+        diagonal_touch.luminance.assign(diagonal_touch.width * diagonal_touch.height, 255);
+        for (std::size_t y = 2; y <= 5; ++y)
+            for (std::size_t x = 2; x <= 5; ++x)
+                diagonal_touch.luminance[y * diagonal_touch.width + x] = 0;
+        for (std::size_t y = 6; y <= 9; ++y)
+            for (std::size_t x = 6; x <= 9; ++x)
+                diagonal_touch.luminance[y * diagonal_touch.width + x] = 0;
+        const auto diagonal_edges = sketch::suggest_edge_tracing(diagonal_touch);
+        require(diagonal_edges.size() == 2 &&
+                    diagonal_edges.front().preview.arguments.at("component_index") == 0 &&
+                    diagonal_edges.back().preview.arguments.at("component_index") == 0,
+                "diagonally touching pixels must remain one component with two valid contours");
+        for (const auto& edge : diagonal_edges) {
+            require(edge.preview.arguments.at("points").size() == 4 &&
+                        edge.preview.arguments.at("holes").empty(),
+                    "a diagonal touch must not create a self-touching boundary");
         }
 
         const auto dimensions = sketch::extract_dimensions(raster);

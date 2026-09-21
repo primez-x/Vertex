@@ -9069,27 +9069,71 @@ public:
         }
         const auto context = requireDrawingContext();
         if (!context) return false;
-        IdentifiedBoundary identified{id, "measurement_boundary", {}};
-        identified.segments.reserve(boundary.size());
-        for (std::size_t index = 0; index < boundary.size(); ++index) {
-            const auto segment_id = id + "-segment-" + std::to_string(index);
-            const auto start_id = id + "-vertex-" + std::to_string(index);
-            const auto end_id = id + "-vertex-" +
-                                std::to_string((index + 1) % boundary.size());
-            identified.segments.push_back({segment_id, start_id, end_id, boundary[index]});
+        const auto holes_value = args.value("holes", json::array());
+        const auto hole_ids_value = args.value("hole_ids", json::array());
+        if (!holes_value.is_array() || !hole_ids_value.is_array() ||
+            holes_value.size() != hole_ids_value.size() || holes_value.size() > 15) {
+            throw std::invalid_argument("Assisted boundary holes are invalid or exceed the supported limit.");
         }
-        auto entity = encode_identified_boundary_entity(identified);
-        entity.properties["property_id"] = context->property_id;
-        entity.properties["building_id"] = context->building_id;
-        entity.properties["floor_id"] = context->floor_id;
-        entity.properties["layer_id"] = context->layer_id;
-        entity.properties["classification"] = args.value("classification", "measurement");
-        entity.properties["factor"] = 1.0;
-        entity.properties["factor_expression"] = "1";
-        entity.properties["factor_numerator"] = 1;
-        entity.properties["factor_denominator"] = 1;
+        std::vector<Boundary> holes;
+        std::vector<std::string> hole_ids;
+        holes.reserve(holes_value.size());
+        hole_ids.reserve(hole_ids_value.size());
+        std::set<std::string> all_ids{id};
+        for (std::size_t index = 0; index < holes_value.size(); ++index) {
+            holes.push_back(assistanceBoundary(holes_value.at(index)));
+            if (!hole_ids_value.at(index).is_string())
+                throw std::invalid_argument("Assisted boundary hole ID is invalid.");
+            auto hole_id = hole_ids_value.at(index).get<std::string>();
+            if (hole_id.empty() || !all_ids.insert(hole_id).second ||
+                source.entities().contains(hole_id)) {
+                throw std::invalid_argument("Assisted boundary hole ID is empty, duplicated, or already exists.");
+            }
+            hole_ids.push_back(std::move(hole_id));
+        }
+        if (const auto topology_error = validate_boundary_holes(boundary, holes))
+            throw std::invalid_argument("Assisted boundary topology is invalid: " + *topology_error);
+        std::set<std::string> affected(proposal.preview.affected_entity_ids.begin(),
+                                       proposal.preview.affected_entity_ids.end());
+        if (affected != all_ids)
+            throw std::invalid_argument("Assisted boundary affected entities do not match its geometry.");
+
+        const auto make_entity = [&](const std::string& entity_id, const Boundary& geometry,
+                                     std::string classification) {
+            IdentifiedBoundary identified{entity_id, "measurement_boundary", {}};
+            identified.segments.reserve(geometry.size());
+            for (std::size_t index = 0; index < geometry.size(); ++index) {
+                const auto segment_id = entity_id + "-segment-" + std::to_string(index);
+                const auto start_id = entity_id + "-vertex-" + std::to_string(index);
+                const auto end_id = entity_id + "-vertex-" +
+                                    std::to_string((index + 1) % geometry.size());
+                identified.segments.push_back(
+                    {segment_id, start_id, end_id, geometry[index]});
+            }
+            auto entity = encode_identified_boundary_entity(identified);
+            entity.properties["property_id"] = context->property_id;
+            entity.properties["building_id"] = context->building_id;
+            entity.properties["floor_id"] = context->floor_id;
+            entity.properties["layer_id"] = context->layer_id;
+            entity.properties["classification"] = std::move(classification);
+            entity.properties["factor"] = 1.0;
+            entity.properties["factor_expression"] = "1";
+            entity.properties["factor_numerator"] = 1;
+            entity.properties["factor_denominator"] = 1;
+            return entity;
+        };
+        auto entity = make_entity(id, boundary, args.value("classification", "measurement"));
+        if (!hole_ids.empty()) entity.properties["deduction_ids"] = hole_ids;
+        std::vector<EntityChange> changes;
+        changes.reserve(1 + holes.size());
+        changes.push_back(EntityChange::upsert(std::move(entity)));
+        for (std::size_t index = 0; index < holes.size(); ++index) {
+            auto hole = make_entity(hole_ids[index], holes[index], "void");
+            hole.properties["assistance_parent_id"] = id;
+            changes.push_back(EntityChange::upsert(std::move(hole)));
+        }
         const ApplyEntityChanges command{
-            source.revision(), {EntityChange::upsert(std::move(entity))}, {},
+            source.revision(), std::move(changes), {},
             "Accept assisted boundary"};
         (void)Document::preview_command(source, command);
         applyDocumentCommand(command);

@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <limits>
-#include <numbers>
+#include <map>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -26,6 +26,11 @@ using Json = nlohmann::json;
 
 constexpr std::size_t maximum_raster_dimension = 8192;
 constexpr std::size_t maximum_edge_trace_pixels = 16 * 1024 * 1024;
+constexpr std::size_t maximum_contour_edges = 4 * 1024 * 1024;
+constexpr std::size_t maximum_raw_contour_points = 16 * 1024;
+constexpr std::size_t maximum_contour_points = 256;
+constexpr std::size_t maximum_contour_holes = 15;
+constexpr std::size_t maximum_contour_total_points = 1024;
 constexpr std::size_t maximum_dimension_proposals = 64;
 constexpr double minimum_metres_per_pixel = 1e-7;
 constexpr double maximum_metres_per_pixel = 1e3;
@@ -82,53 +87,287 @@ std::uint64_t fnv1a(std::string_view value) {
 }
 
 struct TraceComponent {
-    struct Support {
-        double score{};
-        std::size_t index{};
-        bool present{};
-    };
     std::size_t pixel_count{};
     std::size_t min_x{};
     std::size_t min_y{};
     std::size_t max_x{};
     std::size_t max_y{};
-    std::array<Support, 16> support{};
+    std::vector<std::uint32_t> pixels;
 };
 
-double cross_product(Vec2 origin, Vec2 first, Vec2 second) {
-    return (first.x - origin.x) * (second.y - origin.y) -
-           (first.y - origin.y) * (second.x - origin.x);
+struct GridPoint {
+    std::size_t x{};
+    std::size_t y{};
+    bool operator==(const GridPoint&) const = default;
+};
+
+struct GridEdge {
+    GridPoint start;
+    GridPoint end;
+    unsigned direction{}; // East, south, west, north in source-image coordinates.
+    bool used{};
+};
+
+struct PixelContour {
+    std::vector<Vec2> points;
+    double signed_area{};
+    double minimum_x{};
+    double minimum_y{};
+    double maximum_x{};
+    double maximum_y{};
+};
+
+double polygon_signed_area(const std::vector<Vec2>& points) {
+    double twice_area = 0.0;
+    for (std::size_t index = 0; index < points.size(); ++index) {
+        const auto& first = points[index];
+        const auto& second = points[(index + 1) % points.size()];
+        twice_area += first.x * second.y - second.x * first.y;
+    }
+    return twice_area * 0.5;
 }
 
-std::vector<Vec2> convex_hull(std::vector<Vec2> points) {
-    std::sort(points.begin(), points.end(), [](Vec2 first, Vec2 second) {
-        if (first.x != second.x) return first.x < second.x;
-        return first.y < second.y;
-    });
-    points.erase(std::unique(points.begin(), points.end(), [](Vec2 first, Vec2 second) {
-        return first.x == second.x && first.y == second.y;
-    }), points.end());
-    if (points.size() <= 2) return {};
+std::vector<Vec2> remove_collinear_vertices(std::vector<Vec2> points) {
+    bool changed = true;
+    while (changed && points.size() > 3) {
+        changed = false;
+        std::vector<Vec2> reduced;
+        reduced.reserve(points.size());
+        for (std::size_t index = 0; index < points.size(); ++index) {
+            const auto& previous = points[(index + points.size() - 1) % points.size()];
+            const auto& current = points[index];
+            const auto& next = points[(index + 1) % points.size()];
+            const auto cross = (current.x - previous.x) * (next.y - current.y) -
+                               (current.y - previous.y) * (next.x - current.x);
+            if (cross == 0.0) {
+                changed = true;
+                continue;
+            }
+            reduced.push_back(current);
+        }
+        if (reduced.size() < 3) return {};
+        points = std::move(reduced);
+    }
+    return points;
+}
 
-    std::vector<Vec2> hull;
-    hull.reserve(points.size() * 2);
-    for (const auto point : points) {
-        while (hull.size() >= 2 &&
-               cross_product(hull[hull.size() - 2], hull.back(), point) <= 0.0) {
-            hull.pop_back();
+double distance_to_segment(Vec2 point, Vec2 first, Vec2 second) {
+    const auto dx = second.x - first.x;
+    const auto dy = second.y - first.y;
+    const auto length_squared = dx * dx + dy * dy;
+    if (length_squared == 0.0) return std::hypot(point.x - first.x, point.y - first.y);
+    const auto position = std::clamp(((point.x - first.x) * dx + (point.y - first.y) * dy) /
+                                         length_squared,
+                                     0.0, 1.0);
+    return std::hypot(point.x - (first.x + position * dx),
+                      point.y - (first.y + position * dy));
+}
+
+void simplify_open_chain(const std::vector<Vec2>& points, std::size_t first, std::size_t last,
+                         double tolerance, std::vector<std::uint8_t>& keep) {
+    std::vector<std::pair<std::size_t, std::size_t>> pending{{first, last}};
+    while (!pending.empty()) {
+        const auto [range_first, range_last] = pending.back();
+        pending.pop_back();
+        if (range_last <= range_first + 1) continue;
+        double maximum_distance = -1.0;
+        std::size_t maximum_index = range_first;
+        for (std::size_t index = range_first + 1; index < range_last; ++index) {
+            const auto distance = distance_to_segment(
+                points[index], points[range_first], points[range_last]);
+            if (distance > maximum_distance) {
+                maximum_distance = distance;
+                maximum_index = index;
+            }
         }
-        hull.push_back(point);
+        if (maximum_distance <= tolerance) continue;
+        keep[maximum_index] = 1;
+        pending.emplace_back(maximum_index, range_last);
+        pending.emplace_back(range_first, maximum_index);
     }
-    const auto lower_size = hull.size();
-    for (auto iterator = points.rbegin(); iterator != points.rend(); ++iterator) {
-        while (hull.size() > lower_size &&
-               cross_product(hull[hull.size() - 2], hull.back(), *iterator) <= 0.0) {
-            hull.pop_back();
+}
+
+std::vector<Vec2> simplify_closed_contour(const std::vector<Vec2>& input, double tolerance) {
+    if (input.size() <= 3) return input;
+    const auto anchor = std::min_element(input.begin(), input.end(), [](Vec2 first, Vec2 second) {
+        return std::tie(first.y, first.x) < std::tie(second.y, second.x);
+    });
+    const auto anchor_index = static_cast<std::size_t>(std::distance(input.begin(), anchor));
+    std::vector<Vec2> rotated;
+    rotated.reserve(input.size() + 1);
+    for (std::size_t index = 0; index < input.size(); ++index)
+        rotated.push_back(input[(anchor_index + index) % input.size()]);
+    const auto opposite = static_cast<std::size_t>(std::distance(
+        rotated.begin(), std::max_element(rotated.begin() + 1, rotated.end(),
+            [&](Vec2 first, Vec2 second) {
+                return std::hypot(first.x - rotated.front().x, first.y - rotated.front().y) <
+                       std::hypot(second.x - rotated.front().x, second.y - rotated.front().y);
+            })));
+    rotated.push_back(rotated.front());
+    std::vector<std::uint8_t> keep(rotated.size(), 0);
+    keep.front() = keep[opposite] = keep.back() = 1;
+    simplify_open_chain(rotated, 0, opposite, tolerance, keep);
+    simplify_open_chain(rotated, opposite, rotated.size() - 1, tolerance, keep);
+    std::vector<Vec2> result;
+    result.reserve(rotated.size());
+    for (std::size_t index = 0; index + 1 < rotated.size(); ++index)
+        if (keep[index] != 0) result.push_back(rotated[index]);
+    return remove_collinear_vertices(std::move(result));
+}
+
+bool valid_pixel_contour(const std::vector<Vec2>& points) {
+    if (points.size() < 3) return false;
+    Boundary boundary;
+    boundary.reserve(points.size());
+    for (std::size_t index = 0; index < points.size(); ++index)
+        boundary.push_back({points[index], points[(index + 1) % points.size()], 0.0});
+    return validate_boundary(boundary).empty();
+}
+
+std::vector<Vec2> bounded_contour(std::vector<Vec2> points) {
+    points = remove_collinear_vertices(std::move(points));
+    if (points.size() <= maximum_contour_points)
+        return valid_pixel_contour(points) ? points : std::vector<Vec2>{};
+    // An extremely noisy raster can alternate at every pixel. Fail closed
+    // instead of spending unbounded quadratic work inventing a coarse outline.
+    if (points.size() > maximum_raw_contour_points) return {};
+    const auto [minimum_x, maximum_x] = std::minmax_element(points.begin(), points.end(),
+        [](Vec2 first, Vec2 second) { return first.x < second.x; });
+    const auto [minimum_y, maximum_y] = std::minmax_element(points.begin(), points.end(),
+        [](Vec2 first, Vec2 second) { return first.y < second.y; });
+    const auto diagonal = std::hypot(maximum_x->x - minimum_x->x,
+                                     maximum_y->y - minimum_y->y);
+    double low = 0.0;
+    double high = diagonal;
+    std::vector<Vec2> candidate;
+    for (unsigned iteration = 0; iteration < 40; ++iteration) {
+        const auto tolerance = (low + high) * 0.5;
+        auto simplified = simplify_closed_contour(points, tolerance);
+        if (simplified.size() <= maximum_contour_points) {
+            high = tolerance;
+            if (simplified.size() >= 3 && valid_pixel_contour(simplified))
+                candidate = std::move(simplified);
+        } else {
+            low = tolerance;
         }
-        hull.push_back(*iterator);
     }
-    if (!hull.empty()) hull.pop_back();
-    return hull.size() >= 3 ? hull : std::vector<Vec2>{};
+    return candidate;
+}
+
+bool point_in_polygon(Vec2 point, const std::vector<Vec2>& polygon) {
+    bool inside = false;
+    for (std::size_t first = 0, second = polygon.size() - 1; first < polygon.size();
+         second = first++) {
+        const auto& a = polygon[first];
+        const auto& b = polygon[second];
+        if ((a.y > point.y) != (b.y > point.y) &&
+            point.x < (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x) {
+            inside = !inside;
+        }
+    }
+    return inside;
+}
+
+std::vector<PixelContour> component_contours(const AssistanceRaster& raster,
+                                             const TraceComponent& component,
+                                             int threshold) {
+    const auto dark = [&](std::ptrdiff_t x, std::ptrdiff_t y) {
+        return x >= 0 && y >= 0 && x < static_cast<std::ptrdiff_t>(raster.width) &&
+               y < static_cast<std::ptrdiff_t>(raster.height) &&
+               static_cast<int>(raster.luminance[static_cast<std::size_t>(y) * raster.width +
+                                                  static_cast<std::size_t>(x)]) <= threshold;
+    };
+    std::vector<GridEdge> edges;
+    edges.reserve(std::min<std::size_t>(component.pixel_count * 2, 64 * 1024));
+    const auto append = [&](GridPoint start, GridPoint end, unsigned direction) {
+        if (edges.size() < maximum_contour_edges)
+            edges.push_back({start, end, direction, false});
+    };
+    for (const auto raw_index : component.pixels) {
+        const auto index = static_cast<std::size_t>(raw_index);
+        const auto x = index % raster.width;
+        const auto y = index / raster.width;
+        if (!dark(static_cast<std::ptrdiff_t>(x), static_cast<std::ptrdiff_t>(y) - 1))
+            append({x, y}, {x + 1, y}, 0);
+        if (!dark(static_cast<std::ptrdiff_t>(x) + 1, static_cast<std::ptrdiff_t>(y)))
+            append({x + 1, y}, {x + 1, y + 1}, 1);
+        if (!dark(static_cast<std::ptrdiff_t>(x), static_cast<std::ptrdiff_t>(y) + 1))
+            append({x + 1, y + 1}, {x, y + 1}, 2);
+        if (!dark(static_cast<std::ptrdiff_t>(x) - 1, static_cast<std::ptrdiff_t>(y)))
+            append({x, y + 1}, {x, y}, 3);
+        if (edges.size() == maximum_contour_edges) return {};
+    }
+    std::sort(edges.begin(), edges.end(), [](const GridEdge& first, const GridEdge& second) {
+        return std::tie(first.start.y, first.start.x, first.direction,
+                        first.end.y, first.end.x) <
+               std::tie(second.start.y, second.start.x, second.direction,
+                        second.end.y, second.end.x);
+    });
+    const auto point_key = [&](GridPoint point) {
+        return point.y * (raster.width + 1) + point.x;
+    };
+    std::map<std::size_t, std::vector<std::size_t>> outgoing;
+    for (std::size_t index = 0; index < edges.size(); ++index)
+        outgoing[point_key(edges[index].start)].push_back(index);
+
+    std::vector<PixelContour> result;
+    for (std::size_t seed = 0; seed < edges.size(); ++seed) {
+        if (edges[seed].used) continue;
+        const auto start = edges[seed].start;
+        auto edge_index = seed;
+        std::vector<Vec2> points;
+        points.reserve(64);
+        points.push_back({static_cast<double>(start.x), static_cast<double>(start.y)});
+        bool closed = false;
+        for (std::size_t guard = 0; guard <= edges.size(); ++guard) {
+            auto& edge = edges[edge_index];
+            if (edge.used) break;
+            edge.used = true;
+            if (edge.end == start) {
+                closed = true;
+                break;
+            }
+            points.push_back({static_cast<double>(edge.end.x),
+                              static_cast<double>(edge.end.y)});
+            const auto found = outgoing.find(point_key(edge.end));
+            if (found == outgoing.end()) break;
+            std::optional<std::size_t> next;
+            unsigned best_priority = 5;
+            for (const auto candidate : found->second) {
+                if (edges[candidate].used) continue;
+                const auto turn = (edges[candidate].direction + 4 - edge.direction) % 4;
+                const auto priority = turn == 1 ? 0u : turn == 0 ? 1u : turn == 3 ? 2u : 3u;
+                if (priority < best_priority) {
+                    next = candidate;
+                    best_priority = priority;
+                }
+            }
+            if (!next) break;
+            edge_index = *next;
+        }
+        if (!closed) continue;
+        points = bounded_contour(std::move(points));
+        if (points.size() < 3) continue;
+        PixelContour contour;
+        contour.signed_area = polygon_signed_area(points);
+        if (contour.signed_area == 0.0) continue;
+        contour.points = std::move(points);
+        contour.minimum_x = contour.maximum_x = contour.points.front().x;
+        contour.minimum_y = contour.maximum_y = contour.points.front().y;
+        for (const auto point : contour.points) {
+            contour.minimum_x = std::min(contour.minimum_x, point.x);
+            contour.minimum_y = std::min(contour.minimum_y, point.y);
+            contour.maximum_x = std::max(contour.maximum_x, point.x);
+            contour.maximum_y = std::max(contour.maximum_y, point.y);
+        }
+        result.push_back(std::move(contour));
+    }
+    std::sort(result.begin(), result.end(), [](const PixelContour& first,
+                                               const PixelContour& second) {
+        return std::tie(first.minimum_y, first.minimum_x, first.maximum_y, first.maximum_x) <
+               std::tie(second.minimum_y, second.minimum_x, second.maximum_y, second.maximum_x);
+    });
+    return result;
 }
 
 std::vector<TraceComponent> trace_components(const AssistanceRaster& raster, int threshold) {
@@ -138,15 +377,6 @@ std::vector<TraceComponent> trace_components(const AssistanceRaster& raster, int
     std::vector<TraceComponent> result;
     const std::array<std::pair<int, int>, 8> neighbors{{
         {-1, -1}, {0, -1}, {1, -1}, {-1, 0}, {1, 0}, {-1, 1}, {0, 1}, {1, 1}}};
-    const std::array<double, 16> direction_angles = [] {
-        std::array<double, 16> values{};
-        for (std::size_t index = 0; index < values.size(); ++index) {
-            values[index] = 2.0 * std::numbers::pi * static_cast<double>(index) /
-                            static_cast<double>(values.size());
-        }
-        return values;
-    }();
-
     const auto dark = [&](std::size_t index) {
         return static_cast<int>(raster.luminance[index]) <= threshold;
     };
@@ -165,28 +395,11 @@ std::vector<TraceComponent> trace_components(const AssistanceRaster& raster, int
                 const auto current_x = index % raster.width;
                 const auto current_y = index / raster.width;
                 ++component.pixel_count;
+                component.pixels.push_back(static_cast<std::uint32_t>(index));
                 component.min_x = std::min(component.min_x, current_x);
                 component.min_y = std::min(component.min_y, current_y);
                 component.max_x = std::max(component.max_x, current_x);
                 component.max_y = std::max(component.max_y, current_y);
-                for (std::size_t direction = 0; direction < direction_angles.size(); ++direction) {
-                    const auto angle = direction_angles[direction];
-                    const auto cosine = std::cos(angle);
-                    const auto sine = std::sin(angle);
-                    const auto score = static_cast<double>(current_x) * cosine +
-                                       static_cast<double>(current_y) * sine;
-                    auto& support = component.support[direction];
-                    if (!support.present || score > support.score) {
-                        support = {score, index, true};
-                    } else if (score == support.score) {
-                        // Keep a stable endpoint when a support direction runs
-                        // along a straight raster edge. The stored Y value is
-                        // the pixel index, so no floating-point tie is involved.
-                        if (index > support.index) {
-                            support = {score, index, true};
-                        }
-                    }
-                }
                 for (const auto [delta_x, delta_y] : neighbors) {
                     const auto next_x = static_cast<std::ptrdiff_t>(current_x) + delta_x;
                     const auto next_y = static_cast<std::ptrdiff_t>(current_y) + delta_y;
@@ -221,9 +434,9 @@ std::string stable_id(std::string_view prefix, std::string_view material) {
 std::vector<AssistanceResource> resources() {
     return {
         {"assistance-engine-v1", "assets/assistance/deterministic-engine-v1.json",
-         "Vertex deterministic offline assistance engine v1", "private-source-notice", true},
+         "Vertex deterministic offline assistance engine v1", "GPL-3.0-or-later", true},
         {"Vertex-LICENSE", "LICENSE",
-         "Vertex source ownership notice", "private-source-notice", true},
+         "Vertex source license", "GPL-3.0-or-later", true},
     };
 }
 
@@ -472,15 +685,13 @@ std::vector<AssistanceProposal> suggest_edge_tracing(const AssistanceRaster& ras
     result.reserve(std::min<std::size_t>(components.size(), 64));
     const auto cosine = std::cos(options.rotation_radians);
     const auto sine = std::sin(options.rotation_radians);
-    const auto transform = [&](Vec2 point, const TraceComponent& component) {
+    const auto transform = [&](Vec2 point) {
         const auto scale = options.metres_per_pixel * options.image_scale;
-        const auto local_x = (point.x - static_cast<double>(component.min_x)) * scale;
-        const auto local_y = (point.y - static_cast<double>(component.min_y)) * scale;
-        const auto base_x = static_cast<double>(component.min_x) * scale;
-        const auto base_y = static_cast<double>(component.min_y) * scale;
+        const auto source_x = point.x * scale;
+        const auto source_y = point.y * scale;
         return Vec2{
-            options.origin_metres.x + cosine * (base_x + local_x) - sine * (base_y + local_y),
-            options.origin_metres.y + sine * (base_x + local_x) + cosine * (base_y + local_y)};
+            options.origin_metres.x + cosine * source_x - sine * source_y,
+            options.origin_metres.y + sine * source_x + cosine * source_y};
     };
 
     for (std::size_t component_index = 0; component_index < components.size() &&
@@ -495,35 +706,34 @@ std::vector<AssistanceProposal> suggest_edge_tracing(const AssistanceRaster& ras
         const auto box_width = component.max_x - component.min_x + 1;
         const auto box_height = component.max_y - component.min_y + 1;
         if (box_width * box_height < 12) continue;
-
-        std::vector<Vec2> support_points;
-        support_points.reserve(component.support.size());
-        for (const auto& support : component.support) {
-            if (!support.present) continue;
-            const auto pixel_x = support.index % raster.width;
-            const auto pixel_y = support.index / raster.width;
-            support_points.push_back({static_cast<double>(pixel_x),
-                                      static_cast<double>(pixel_y)});
+        const auto contours = component_contours(raster, component, threshold);
+        std::vector<std::size_t> outer_indices;
+        std::vector<std::size_t> hole_indices;
+        for (std::size_t index = 0; index < contours.size(); ++index) {
+            if (contours[index].signed_area > 0.0) outer_indices.push_back(index);
+            else hole_indices.push_back(index);
         }
-        const auto hull = convex_hull(std::move(support_points));
-        if (hull.size() < 3 || std::abs(cross_product(hull[0], hull[1], hull[2])) <= 0.0) {
-            continue;
+        std::vector<std::vector<std::size_t>> assigned_holes(outer_indices.size());
+        for (const auto hole_index : hole_indices) {
+            std::optional<std::size_t> owner;
+            double owner_area = std::numeric_limits<double>::infinity();
+            for (std::size_t outer_position = 0; outer_position < outer_indices.size();
+                 ++outer_position) {
+                const auto& outer = contours[outer_indices[outer_position]];
+                if (point_in_polygon(contours[hole_index].points.front(), outer.points) &&
+                    std::abs(outer.signed_area) < owner_area) {
+                    owner = outer_position;
+                    owner_area = std::abs(outer.signed_area);
+                }
+            }
+            if (owner) assigned_holes[*owner].push_back(hole_index);
         }
 
-        Json points = Json::array();
-        for (const auto point : hull) points.push_back(point_json(transform(point, component)));
         const auto scale = options.metres_per_pixel * options.image_scale;
-        const auto width_metres = static_cast<double>(component.max_x - component.min_x) * scale;
-        const auto height_metres = static_cast<double>(component.max_y - component.min_y) * scale;
+        const auto width_metres = static_cast<double>(box_width) * scale;
+        const auto height_metres = static_cast<double>(box_height) * scale;
         finite_positive(width_metres, "assistance edge trace width is not representable");
         finite_positive(height_metres, "assistance edge trace height is not representable");
-        std::string material = raster.reference_id + ":" + std::to_string(component_index) + ":";
-        material += std::to_string(component.min_x) + ":" + std::to_string(component.min_y) + ":" +
-                    std::to_string(component.max_x) + ":" + std::to_string(component.max_y) + ":" +
-                    std::to_string(options.metres_per_pixel) + ":" +
-                    std::to_string(options.image_scale) + ":" +
-                    std::to_string(options.rotation_radians);
-        const auto id = stable_id("assist-edge-trace", material);
         const auto normalized_x = static_cast<double>(component.min_x) /
                                   static_cast<double>(raster.width);
         const auto normalized_y = static_cast<double>(component.min_y) /
@@ -534,22 +744,60 @@ std::vector<AssistanceProposal> suggest_edge_tracing(const AssistanceRaster& ras
                                        static_cast<double>(raster.height);
         const auto confidence = std::clamp(0.60 + static_cast<double>(range) / 255.0 * 0.30,
                                            0.60, 0.94);
-        result.push_back(proposal(
-            id, AssistanceKind::edge_tracing,
-            source_for(raster.reference_id, {}, normalized_x, normalized_y,
-                       normalized_width, normalized_height, confidence),
-            {"add_boundary", {id},
-             {{"boundary_id", id}, {"points", std::move(points)}, {"closed", true},
-              {"classification", "measurement"}, {"source", "deterministic-raster-contour-v1"},
-              {"trace_mode", "connected-components-v1"},
-              {"component_index", component_index},
-              {"component_pixels", component.pixel_count},
-              {"source_pixel_bounds", Json::array({component.min_x, component.min_y,
-                                                     component.max_x, component.max_y})},
-              {"metres_per_pixel", options.metres_per_pixel},
-              {"image_scale", options.image_scale},
-              {"rotation_radians", options.rotation_radians},
-              {"origin_metres", point_json(options.origin_metres)}}}));
+        for (std::size_t outer_position = 0;
+             outer_position < outer_indices.size() && result.size() < 64; ++outer_position) {
+            const auto& outer = contours[outer_indices[outer_position]];
+            const auto& owned_holes = assigned_holes[outer_position];
+            if (owned_holes.size() > maximum_contour_holes) continue;
+            auto total_points = outer.points.size();
+            for (const auto hole_index : owned_holes)
+                total_points += contours[hole_index].points.size();
+            if (total_points > maximum_contour_total_points) continue;
+            std::string material = raster.reference_id + ":" +
+                                   std::to_string(component_index) + ":" +
+                                   std::to_string(outer_position) + ":";
+            for (const auto point : outer.points)
+                material += std::to_string(point.x) + "," + std::to_string(point.y) + ";";
+            material += std::to_string(options.metres_per_pixel) + ":" +
+                        std::to_string(options.image_scale) + ":" +
+                        std::to_string(options.rotation_radians);
+            const auto id = stable_id("assist-edge-trace", material);
+            Json points = Json::array();
+            for (const auto point : outer.points)
+                points.push_back(point_json(transform(point)));
+            Json holes = Json::array();
+            Json hole_ids = Json::array();
+            std::vector<std::string> affected{id};
+            for (std::size_t hole_position = 0; hole_position < owned_holes.size();
+                 ++hole_position) {
+                Json hole = Json::array();
+                for (const auto point : contours[owned_holes[hole_position]].points)
+                    hole.push_back(point_json(transform(point)));
+                const auto hole_id = id + "-void-" + std::to_string(hole_position + 1);
+                holes.push_back(std::move(hole));
+                hole_ids.push_back(hole_id);
+                affected.push_back(hole_id);
+            }
+            result.push_back(proposal(
+                id, AssistanceKind::edge_tracing,
+                source_for(raster.reference_id, {}, normalized_x, normalized_y,
+                           normalized_width, normalized_height, confidence),
+                {"add_boundary", std::move(affected),
+                 {{"boundary_id", id}, {"points", std::move(points)},
+                  {"holes", std::move(holes)}, {"hole_ids", std::move(hole_ids)},
+                  {"closed", true}, {"classification", "measurement"},
+                  {"source", "deterministic-raster-contour-v2"},
+                  {"trace_mode", "pixel-contours-v2"},
+                  {"component_index", component_index},
+                  {"contour_index", outer_position},
+                  {"component_pixels", component.pixel_count},
+                  {"source_pixel_bounds", Json::array({component.min_x, component.min_y,
+                                                         component.max_x, component.max_y})},
+                  {"metres_per_pixel", options.metres_per_pixel},
+                  {"image_scale", options.image_scale},
+                  {"rotation_radians", options.rotation_radians},
+                  {"origin_metres", point_json(options.origin_metres)}}}));
+        }
     }
     return result;
 }

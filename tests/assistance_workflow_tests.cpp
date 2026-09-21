@@ -226,8 +226,9 @@ int main(int argc, char** argv) {
                                                                    AssistanceKind::edge_tracing);
         require(edge_trace.size() == 1 &&
                     edge_trace.front().preview.arguments.at("trace_mode") ==
-                        "connected-components-v1",
-                "desktop must expose connected-component edge tracing");
+                        "pixel-contours-v2" &&
+                    edge_trace.front().preview.arguments.at("holes").size() == 1,
+                "desktop must expose topology-preserving edge tracing");
         const auto revision_before_trace = window.document().revision();
         require(window.acceptAssistanceProposal(trace.front()),
                 "accepted trace must use the desktop command path");
@@ -245,15 +246,27 @@ int main(int argc, char** argv) {
                     !window.document().snapshot().entities().contains(trace_id),
                 "accepted trace must be undoable");
         const auto edge_id = edge_trace.front().id;
+        const auto hole_id = edge_trace.front().preview.arguments.at("hole_ids").at(0)
+                                 .get<std::string>();
+        auto malformed_edge = edge_trace.front();
+        malformed_edge.preview.arguments["hole_ids"] = nlohmann::json::array();
+        const auto malformed_revision = window.document().revision();
+        require(!window.acceptAssistanceProposal(malformed_edge) &&
+                    window.document().revision() == malformed_revision,
+                "mismatched assisted contour topology must fail before document mutation");
         const auto revision_before_edge_trace = window.document().revision();
         require(window.acceptAssistanceProposal(edge_trace.front()),
                 "accepted edge trace must use the desktop command path");
         require(window.document().revision() == revision_before_edge_trace + 1 &&
-                    window.document().snapshot().entities().contains(edge_id),
-                "accepted edge trace must create one identified boundary revision");
+                    window.document().snapshot().entities().contains(edge_id) &&
+                    window.document().snapshot().entities().contains(hole_id) &&
+                    window.document().snapshot().entities().at(edge_id).properties.at(
+                        "deduction_ids") == nlohmann::json::array({hole_id}),
+                "accepted edge trace must atomically retain and link enclosed voids");
         require(window.undoCommand() &&
-                    !window.document().snapshot().entities().contains(edge_id),
-                "accepted edge trace must be undoable");
+                    !window.document().snapshot().entities().contains(edge_id) &&
+                    !window.document().snapshot().entities().contains(hole_id),
+                "accepted topology-preserving edge trace must be undoable as one revision");
 
         const auto natural = window.parseAssistanceCommand("label Entry at 1.25, 2.5");
         require(natural.size() == 1, "desktop must expose the local language grammar");

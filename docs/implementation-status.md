@@ -304,9 +304,11 @@ a validated local PNG preview, so PDF tracing can start from an offline project
 asset. Multiple retained underlays, PDF page selection, known-distance
 calibration UI, and the explicit **Trace selected reference** boundary workflow
 are integrated through the typed Document history. The assistance dialog also
-exposes connected-component edge tracing: thresholded pixels are segmented
-deterministically and each useful component yields a provisional convex contour
-with retained source bounds and pixel provenance. Editable PDF geometry, native
+exposes topology-preserving edge tracing: thresholded pixels are segmented
+deterministically, concave pixel-cell contours retain their recesses, and
+enclosed white regions become linked void deductions. Accepting one proposal
+creates the outer and void boundaries in one undoable revision with retained
+source bounds and pixel provenance. Editable PDF geometry, native
 Apex compatibility, arbitrary-plan contour accuracy, clean-machine packaging,
 and end-to-end production evidence are still open. The Windows import worker now
 decodes TIFF through the system WIC codec in addition to the packaged Qt
