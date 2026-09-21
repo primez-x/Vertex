@@ -17,6 +17,7 @@
 #include <QWidget>
 
 #include <functional>
+#include <cstdint>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -48,6 +49,15 @@ struct CanvasSvgSymbol {
     double depth_metres{};
 };
 
+// Stable, screen-only edit point supplied by the document projection. Handles
+// never participate in print/export geometry; the owning document remains the
+// source of truth and receives exactly one commit after a completed drag.
+struct CanvasVertexHandle {
+    QString id;
+    Vec2 position{};
+    std::uint64_t source_revision{};
+};
+
 struct CanvasEntity {
     QString id;
     QString type;
@@ -73,6 +83,7 @@ struct CanvasEntity {
     double output_stroke_width_mm{};
     bool dimension_end_ticks{false};
     std::optional<CanvasSvgSymbol> svg_symbol;
+    std::vector<CanvasVertexHandle> vertex_handles;
 };
 
 // A retained document annotation. Unlike BoundaryDraftPreview, labels are
@@ -241,6 +252,10 @@ public:
     // Commits a single-selection transform after the interactive preview.
     // Scale is relative and uniform; rotation is a relative radian delta.
     void setEntityTransformRequested(std::function<bool(QString, double, double)> callback);
+    // Commits one selected boundary vertex at an absolute model-space point.
+    // The canvas previews locally and restores document geometry if rejected.
+    void setBoundaryVertexMoveRequested(
+        std::function<bool(QString, QString, Vec2, std::uint64_t)> callback);
     void setSymbolDropped(std::function<void(QString, double, Vec2)> callback);
     void setCursorMoved(std::function<void(Vec2)> callback);
     // Emitted only on a stationary right-button release. The target is the
@@ -287,6 +302,15 @@ private:
                                                      const QRectF& viewport) const;
     [[nodiscard]] QPointF rotationHandlePoint(const QRectF& frame,
                                               const QRectF& viewport) const;
+    struct VertexHandleHit {
+        QString entity_id;
+        QString vertex_id;
+        Vec2 source_position{};
+        std::uint64_t source_revision{};
+    };
+    [[nodiscard]] std::optional<VertexHandleHit> vertexHandleAt(
+        QPointF point, const QRectF& viewport) const;
+    void drawVertexHandles(QPainter& painter, const QRectF& viewport) const;
     void drawSelectionFrame(QPainter& painter, const QRectF& viewport) const;
     void drawSelectionCaption(QPainter& painter, const QRectF& viewport,
                               QColor background) const;
@@ -348,7 +372,8 @@ private:
     std::optional<QPointF> m_last_mouse_position;
     bool m_panning{false};
     enum class LeftGesture {
-        none, canvas_pan, object_move, selection_resize, selection_rotate, marquee, space_pan
+        none, canvas_pan, object_move, selection_resize, selection_rotate,
+        vertex_move, marquee, space_pan
     };
     LeftGesture m_left_gesture{LeftGesture::none};
     QPointF m_left_start;
@@ -363,6 +388,8 @@ private:
     QPointF m_transform_start;
     double m_transform_scale_preview{1.0};
     double m_transform_rotation_preview{};
+    std::optional<VertexHandleHit> m_vertex_move_handle;
+    std::optional<Vec2> m_vertex_move_preview;
     bool m_space_pan_armed{false};
     Qt::MouseButton m_gesture_button{Qt::NoButton};
     QPointF m_right_start;
@@ -385,6 +412,8 @@ private:
     std::function<void(QStringList, bool)> m_entities_selected;
     std::function<bool(QStringList, Vec2)> m_entities_move_requested;
     std::function<bool(QString, double, double)> m_entity_transform_requested;
+    std::function<bool(QString, QString, Vec2, std::uint64_t)>
+        m_boundary_vertex_move_requested;
     std::function<void(QString, double, Vec2)> m_symbol_dropped;
     std::function<void(Vec2)> m_cursor_moved;
     std::function<void(Vec2, QString)> m_right_clicked;

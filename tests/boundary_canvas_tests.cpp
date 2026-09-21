@@ -1550,6 +1550,87 @@ void test_single_selection_transform_handles() {
             "rotation handle must commit an angular transform");
 }
 
+void test_boundary_vertex_handles_preview_and_commit_once() {
+    PlanCanvas canvas;
+    canvas.resize(640, 480);
+    canvas.setGridEnabled(false);
+    canvas.setSnapEnabled(false);
+    canvas.setOverviewMapEnabled(false);
+    canvas.setTool(CanvasTool::select);
+    CanvasEntity boundary{QStringLiteral("boundary"), QStringLiteral("measurement_boundary"),
+        Boundary{Segment{{-1, -1}, {1, -1}, 0}, Segment{{1, -1}, {1, 1}, 0},
+                 Segment{{1, 1}, {-1, 1}, 0}, Segment{{-1, 1}, {-1, -1}, 0}},
+        0.08, true};
+    boundary.vertex_handles = {
+        {QStringLiteral("v0"), {-1, -1}, 41},
+        {QStringLiteral("v1"), {1, -1}, 41},
+        {QStringLiteral("v2"), {1, 1}, 41},
+        {QStringLiteral("v3"), {-1, 1}, 41}};
+    canvas.setEntities({boundary});
+
+    int commits = 0;
+    QString owner;
+    QString vertex;
+    Vec2 target{};
+    std::uint64_t revision = 0;
+    canvas.setBoundaryVertexMoveRequested(
+        [&](QString next_owner, QString next_vertex, Vec2 next_target,
+            std::uint64_t next_revision) {
+            ++commits;
+            owner = std::move(next_owner);
+            vertex = std::move(next_vertex);
+            target = next_target;
+            revision = next_revision;
+            return true;
+        });
+    const auto mouse = [&](QEvent::Type type, QPointF point, Qt::MouseButton button,
+                           Qt::MouseButtons buttons) {
+        QMouseEvent event(type, point, canvas.mapToGlobal(point.toPoint()), button,
+                          buttons, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &event);
+    };
+    const QPointF handle{400, 160}; // model (1,1) at the default transform.
+    mouse(QEvent::MouseMove, handle, Qt::NoButton, Qt::NoButton);
+    require(canvas.cursor().shape() == Qt::SizeAllCursor,
+            "vertex handle must expose a generous direct-manipulation target");
+    mouse(QEvent::MouseButtonPress, handle, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, handle + QPointF(40, 16), Qt::NoButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, handle + QPointF(40, 16),
+          Qt::LeftButton, Qt::NoButton);
+    require(commits == 1 && owner == QStringLiteral("boundary") &&
+                vertex == QStringLiteral("v2") && revision == 41 &&
+                std::abs(target.x - 1.5) < 1e-9 && std::abs(target.y - 0.8) < 1e-9,
+            "vertex drag must commit one absolute model point with its source revision");
+
+    mouse(QEvent::MouseButtonPress, handle, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, handle + QPointF(-40, 24),
+          Qt::LeftButton, Qt::NoButton);
+    require(commits == 2 && std::abs(target.x - 0.5) < 1e-9 &&
+                std::abs(target.y - 0.7) < 1e-9,
+            "vertex drag must use the release point even without an intermediate move event");
+
+    mouse(QEvent::MouseButtonPress, handle, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, handle + QPointF(-40, 0), Qt::NoButton, Qt::LeftButton);
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &escape);
+    mouse(QEvent::MouseButtonRelease, handle + QPointF(-40, 0),
+          Qt::LeftButton, Qt::NoButton);
+    require(commits == 2, "Escape must cancel a vertex drag without a document request");
+
+    const auto with_handles = render(canvas, false);
+    boundary.vertex_handles.clear();
+    canvas.setEntities({boundary});
+    require(!images_equal(with_handles, render(canvas, false)),
+            "selected vertex handles must be visible on the interactive canvas");
+    boundary.vertex_handles = {{QStringLiteral("v0"), {-1, -1}, 41}};
+    canvas.setEntities({boundary});
+    const auto output_with = render(canvas, true);
+    boundary.vertex_handles.clear();
+    canvas.setEntities({boundary});
+    require(images_equal(output_with, render(canvas, true)),
+            "vertex handles must never appear in print or export output");
+}
+
 void test_boundary_tool_uses_unified_selection_until_a_draft_starts() {
     PlanCanvas canvas;
     canvas.resize(640, 480);
@@ -1779,6 +1860,7 @@ int main(int argc, char** argv) {
         test_direct_canvas_manipulation_contract();
         test_selected_boundary_is_the_move_hit_target();
         test_single_selection_transform_handles();
+        test_boundary_vertex_handles_preview_and_commit_once();
         test_mouse_gesture_contract();
         test_boundary_draft_rendering_and_history();
         test_request_to_paint_telemetry();

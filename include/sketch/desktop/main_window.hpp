@@ -369,7 +369,17 @@ public:
     // preserving the original edge identity for the first piece and creating
     // fresh identities for the inserted vertex and second piece.
     [[nodiscard]] bool insertSelectedBoundaryVertex(const QString& segment_id,
-                                                    const QString& fraction);
+                                                     const QString& fraction);
+    // Direct stable-ID coordinate editing used by canvas vertex handles.
+    [[nodiscard]] bool moveSelectedBoundaryVertex(
+        const QString& vertex_id, Vec2 position,
+        std::optional<Revision> expected_revision = std::nullopt);
+    // Changes one analytical edge length while explicitly retaining its start
+    // or end point. Connected mode translates the complementary boundary chain.
+    [[nodiscard]] bool editSelectedBoundaryEdgeLength(
+        const QString& segment_id, const QString& expression,
+        BoundaryFixedEndpoint fixed_endpoint, bool move_connected,
+        std::optional<Revision> expected_revision = std::nullopt);
     // Moves the precision pointer to a selected boundary vertex without
     // changing document history. When a boundary draft is active, the same
     // pointer is handed to its authoring session for the next anchor/edge.

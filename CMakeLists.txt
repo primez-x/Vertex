@@ -190,6 +190,7 @@ target_link_libraries(sketch_architectural_document_adapter PUBLIC sketch_archit
 
 add_library(sketch_document src/core/document.cpp src/core/document_digest.cpp src/core/constraint_entity.cpp
   src/core/constraint_integrity.cpp src/core/boundary_entity.cpp src/core/boundary_integrity.cpp
+  src/core/boundary_geometry_edit.cpp
   src/core/boundary_dimension.cpp src/core/sheet_view_entity_codec.cpp
   src/core/annotation_entity_codec.cpp src/core/georeferencing_entity_codec.cpp
   src/core/vertical_level_document_adapter.cpp)

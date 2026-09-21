@@ -1498,7 +1498,7 @@ nlohmann::json command_to_json(const Command& command) {
                                   {"expected_revision", typed.expected_revision},
                                   {"translation", {{"boundary_id", typed.translation.boundary_id},
                                       {"offset", command_vec2_to_json(typed.translation.offset)}}}};
-        } else {
+        } else if constexpr (std::is_same_v<T, TransformBoundary>) {
             if (!is_valid_identifier(typed.transformation.boundary_id))
                 document_error(DocumentErrorCode::invalid_entity, "serialized boundary ID is invalid");
             (void)command_transform_from_json(command_transform_to_json(typed.transformation.transform));
@@ -1506,6 +1506,14 @@ nlohmann::json command_to_json(const Command& command) {
                                   {"expected_revision", typed.expected_revision},
                                   {"transformation", {{"boundary_id", typed.transformation.boundary_id},
                                       {"transform", command_transform_to_json(typed.transformation.transform)}}}};
+        } else {
+            try {
+                return nlohmann::json{{"version", 1}, {"kind", "edit_boundary_geometry"},
+                                      {"expected_revision", typed.expected_revision},
+                                      {"edit", encode_boundary_geometry_edit(typed.edit)}};
+            } catch (const std::exception& error) {
+                document_error(DocumentErrorCode::invalid_entity, error.what());
+            }
         }
     }, command);
 }
@@ -1602,6 +1610,20 @@ Command command_from_json(const nlohmann::json& value) {
             if (!is_valid_identifier(result.transformation.boundary_id))
                 document_error(DocumentErrorCode::invalid_entity, "serialized boundary ID is invalid");
             result.transformation.transform = command_transform_from_json(transformation.at("transform"));
+            return result;
+        }
+        if (kind == "edit_boundary_geometry") {
+            command_exact_fields(value, {"version", "kind", "expected_revision", "edit"},
+                                 DocumentErrorCode::invalid_entity,
+                                 "serialized boundary geometry edit command");
+            EditBoundaryGeometry result;
+            result.expected_revision = command_revision(
+                value.at("expected_revision"), "command expected_revision");
+            try {
+                result.edit = decode_boundary_geometry_edit(value.at("edit"));
+            } catch (const std::exception& error) {
+                document_error(DocumentErrorCode::invalid_entity, error.what());
+            }
             return result;
         }
         document_error(DocumentErrorCode::invalid_entity, "unknown serialized command kind");
@@ -1828,6 +1850,21 @@ Revision Document::apply(const Command& command) {
                 validate_constraint_change(current.entities, next.entities);
                 if (same_state(next, current)) return head_revision_;
                 record_boundary_identity_transition(next_identity_history, current.entities, next.entities);
+            } else if constexpr (std::is_same_v<CommandType, EditBoundaryGeometry>) {
+                next.action = "Edit boundary geometry";
+                next.boundary_geometry_edit = typed_command.edit;
+                try {
+                    next.entities = edited_boundary_entities(current.entities, typed_command.edit);
+                    validate_boundary_identity_transition(
+                        boundary_identity_history_, current.entities, next.entities);
+                } catch (const std::exception& error) {
+                    document_error(DocumentErrorCode::invalid_entity, error.what());
+                }
+                next_unsupported_constraints = validate_state(next.entities, next.assets);
+                validate_constraint_change(current.entities, next.entities);
+                if (same_state(next, current)) return head_revision_;
+                record_boundary_identity_transition(
+                    next_identity_history, current.entities, next.entities);
             } else {
                 validate_revision_name(typed_command.name);
                 if (named_revisions_.contains(typed_command.name)) {
@@ -1974,7 +2011,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
 
         if (index == 0) {
             if (record.parent_revision.has_value() || record.source_revision.has_value() || record.boundary_translation.has_value() ||
-                record.boundary_transform.has_value() ||
+                record.boundary_transform.has_value() || record.boundary_geometry_edit.has_value() ||
                 record.name.has_value() || record.action != "create" ||
                 !record.undo_stack.empty() || !record.redo_stack.empty()) {
                 document_error(DocumentErrorCode::invalid_history,
@@ -1985,7 +2022,11 @@ Document Document::restore(DocumentSnapshot snapshot) {
         }
 
         const auto& previous = snapshot.history_[index - 1];
-        if (record.boundary_translation && record.boundary_transform)
+        const auto boundary_proof_count =
+            static_cast<unsigned>(record.boundary_translation.has_value()) +
+            static_cast<unsigned>(record.boundary_transform.has_value()) +
+            static_cast<unsigned>(record.boundary_geometry_edit.has_value());
+        if (boundary_proof_count > 1)
             document_error(DocumentErrorCode::invalid_history, "Boundary derivation proofs are mutually exclusive");
         if (record.boundary_transform && (record.name || record.source_revision))
             document_error(DocumentErrorCode::invalid_history,
@@ -1993,6 +2034,9 @@ Document Document::restore(DocumentSnapshot snapshot) {
         if (record.boundary_translation && (record.name || record.source_revision))
             document_error(DocumentErrorCode::invalid_history,
                            "Boundary translation proof is not valid on history navigation or named revisions");
+        if (record.boundary_geometry_edit && (record.name || record.source_revision))
+            document_error(DocumentErrorCode::invalid_history,
+                           "Boundary geometry edit proof is not valid on history navigation or named revisions");
         // Unknown locks retain the read-only latch, but must not suppress
         // stable-endpoint checks for known relations in the same history.
         validate_constraint_change(previous.entities, record.entities);
@@ -2098,6 +2142,25 @@ Document Document::restore(DocumentSnapshot snapshot) {
                 if (same_state(expected, previous))
                     document_error(DocumentErrorCode::invalid_history,
                                    "Unchanged boundary transform cannot create a history record");
+            } else if (record.boundary_geometry_edit) {
+                if (record.action != "Edit boundary geometry")
+                    document_error(DocumentErrorCode::invalid_history,
+                                   "Boundary geometry edit action does not match proof");
+                auto expected = previous;
+                try {
+                    expected.entities = edited_boundary_entities(
+                        previous.entities, *record.boundary_geometry_edit);
+                    validate_boundary_identity_transition(
+                        identity_history, previous.entities, record.entities);
+                } catch (const std::exception& error) {
+                    document_error(DocumentErrorCode::invalid_history, error.what());
+                }
+                if (!same_state(expected, record))
+                    document_error(DocumentErrorCode::invalid_history,
+                                   "Boundary geometry state differs from deterministic reconstruction");
+                if (same_state(expected, previous))
+                    document_error(DocumentErrorCode::invalid_history,
+                                   "Unchanged boundary geometry edit cannot create a history record");
             } else validate_boundary_change(identity_history, previous.entities, record.entities,
                                             record.action == "Propagate room relationships");
             record_boundary_identity_transition(identity_history, previous.entities, record.entities);

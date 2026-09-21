@@ -55,9 +55,116 @@ void test_rotated_boundary_transform_sequence() {
     require(decode_identified_boundary_entity(encode_identified_boundary_entity(candidate)) == candidate,
             "transformed rectangle must remain admissible as an identified boundary");
 }
+
+void test_direct_boundary_edits() {
+    using namespace sketch;
+    const auto source = square();
+    auto expected = source;
+    expected.segments[0].segment.end = {5, 1};
+    expected.segments[1].segment.start = {5, 1};
+    require(move_boundary_vertex(source, "v1", {5, 1}) == expected,
+            "moving one vertex must update both incident edges and preserve all other data");
+    expected = source;
+    expected.segments[0].segment.start = {-1, 0};
+    expected.segments[3].segment.end = {-1, 0};
+    require(move_boundary_vertex(source, "v0", {-1, 0}) == expected,
+            "moving the first vertex must update the closing edge");
+    for (const auto fixed : {BoundaryFixedEndpoint::start, BoundaryFixedEndpoint::end}) {
+        for (const auto connected : {false, true}) {
+            expected = source;
+            const auto fixed_id = fixed == BoundaryFixedEndpoint::start ? "v0" : "v1";
+            const auto moving_id = fixed == BoundaryFixedEndpoint::start ? "v1" : "v0";
+            const double delta = fixed == BoundaryFixedEndpoint::start ? 2 : -2;
+            for (auto& edge : expected.segments) {
+                if (edge.start_vertex_id == moving_id || (connected && edge.start_vertex_id != fixed_id))
+                    edge.segment.start.x += delta;
+                if (edge.end_vertex_id == moving_id || (connected && edge.end_vertex_id != fixed_id))
+                    edge.segment.end.x += delta;
+            }
+            require(set_boundary_segment_length(source, "e0", 6, fixed, connected) == expected,
+                    "length edits must honor fixed endpoint and connected translation mode");
+        }
+    }
+    auto curved = source;
+    curved.segments[0].segment.sweep_radians = std::numbers::pi / 2;
+    expected = curved;
+    expected.segments[0].segment.end = {5, 0};
+    expected.segments[1].segment.start = {5, 0};
+    require(move_boundary_vertex(curved, "v1", {5, 0}) == expected,
+            "vertex edit must retain the analytical arc sweep");
+    const double arc_target = 5 * std::numbers::pi / (2 * std::sqrt(2.0));
+    const auto resized = set_boundary_segment_length(curved, "e0", arc_target,
+                                                     BoundaryFixedEndpoint::start, false);
+    require(near(resized.segments[0].segment.end.x, 5) &&
+                near(segment_length(resized.segments[0].segment), arc_target) &&
+                resized.segments[0].segment.sweep_radians == std::numbers::pi / 2,
+            "curved target length must be arc length with unchanged sweep");
+    const auto connected_curve = set_boundary_segment_length(curved, "e0", arc_target,
+                                                              BoundaryFixedEndpoint::end, true);
+    require(near(connected_curve.segments[0].segment.start.x, -1) &&
+                connected_curve.segments[0].segment.end.x == 4 &&
+                near(segment_length(connected_curve.segments[0].segment), arc_target) &&
+                connected_curve.segments[0].segment.sweep_radians == std::numbers::pi / 2 &&
+                near(connected_curve.segments[2].segment.start.x, 3) &&
+                near(connected_curve.segments[2].segment.end.x, -1),
+            "connected curved edits must anchor the end and translate the opposite chain");
+    expected = source;
+    expected.segments[0].segment.end = {4, 1};
+    expected.segments[1].segment.start = {4, 1};
+    require(set_boundary_segment_length(source, "e1", 2, BoundaryFixedEndpoint::end, false) == expected,
+            "vertical segment shortening must move toward the fixed endpoint");
+    const auto diagonal = move_boundary_vertex(source, "v1", {3, -1});
+    const auto shortened = set_boundary_segment_length(diagonal, "e0", std::sqrt(10.0) / 2,
+                                                       BoundaryFixedEndpoint::start, false);
+    require(near(shortened.segments[0].segment.end.x, 1.5) &&
+                near(shortened.segments[0].segment.end.y, -0.5),
+            "diagonal resizing must retain chord direction");
+    require(set_boundary_segment_length(curved, "e0", segment_length(curved.segments[0].segment),
+                                        BoundaryFixedEndpoint::end, true) == curved,
+            "unchanged target length must preserve exact geometry");
+    require(source == square(), "direct edits must never mutate their source");
+}
+
+void test_direct_boundary_edit_rejections() {
+    using namespace sketch;
+    const auto source = square();
+    rejects([&] { (void)move_boundary_vertex(source, "missing", {1, 1}); });
+    for (const auto value : {std::numeric_limits<double>::quiet_NaN(),
+                             std::numeric_limits<double>::infinity()}) {
+        rejects([&] { (void)move_boundary_vertex(source, "v0", {value, 0}); });
+        rejects([&] { (void)move_boundary_vertex(source, "v0", {0, value}); });
+    }
+    rejects([&] { (void)move_boundary_vertex(source, "v1", {0, 0}); });
+    rejects([&] { (void)move_boundary_vertex(source, "v1", {-1, 2}); });
+    rejects([&] { (void)set_boundary_segment_length(source, "missing", 5, BoundaryFixedEndpoint::start, false); });
+    for (const auto value : {0.0, -1.0, std::numeric_limits<double>::quiet_NaN(),
+                             std::numeric_limits<double>::infinity()}) {
+        rejects([&] { (void)set_boundary_segment_length(source, "e0", value, BoundaryFixedEndpoint::start, false); });
+    }
+    rejects([&] { (void)set_boundary_segment_length(source, "e0", 5, static_cast<BoundaryFixedEndpoint>(99), false); });
+    auto degenerate = source;
+    degenerate.segments[0].segment.end = {0, 0};
+    degenerate.segments[1].segment.start = {0, 0};
+    const auto unchanged = degenerate;
+    rejects([&] { (void)set_boundary_segment_length(degenerate, "e0", 5, BoundaryFixedEndpoint::start, false); });
+    require(degenerate == unchanged && source == square(), "rejections must leave input unchanged");
+    // A concave boundary whose extended bottom edge crosses its right-hand notch.
+    const IdentifiedBoundary concave{"c", "boundary", {
+        {"a", "a0", "a1", {{0, 0}, {2, 0}, 0}},
+        {"b", "a1", "a2", {{2, 0}, {2, 2}, 0}},
+        {"c", "a2", "a3", {{2, 2}, {4, -1}, 0}},
+        {"d", "a3", "a4", {{4, -1}, {4, 4}, 0}},
+        {"e", "a4", "a5", {{4, 4}, {0, 4}, 0}},
+        {"f", "a5", "a0", {{0, 4}, {0, 0}, 0}}}};
+    require(validate_boundary(boundary_geometry(concave)).empty());
+    rejects([&] { (void)set_boundary_segment_length(concave, "a", 3.5, BoundaryFixedEndpoint::start, false); });
+    rejects([&] { (void)set_boundary_segment_length(concave, "a", 4, BoundaryFixedEndpoint::end, true); });
+}
 }
 int main() {
     try {
+        test_direct_boundary_edits();
+        test_direct_boundary_edit_rejections();
         test_rotated_boundary_transform_sequence();
         using namespace sketch;
         const auto source = square();

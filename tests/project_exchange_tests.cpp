@@ -3,6 +3,7 @@
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/boundary_translation.hpp"
 #include "sketch/boundary_transform.hpp"
+#include "sketch/boundary_edit.hpp"
 #include "support/noninteractive_errors.hpp"
 #include <fstream>
 #include <iostream>
@@ -65,6 +66,27 @@ void test_translation_export(const std::filesystem::path& root) {
   check(!transformed_rows[5].contains("boundary_transform") &&
         transformed_rows[5].contains("boundary_translation") &&
         !transformed_rows[6].contains("boundary_transform"), "export must keep proof roles separate");
+
+  sketch::BoundaryGeometryEdit edit;
+  edit.boundary_id = "boundary";
+  edit.kind = sketch::BoundaryGeometryEditKind::move_vertex;
+  edit.target_id = "vertex-1";
+  const auto current = sketch::decode_identified_boundary_entity(
+      document.snapshot().entities().at("boundary"));
+  edit.target_position = current.segments[1].segment.start;
+  edit.target_position.x += 0.25;
+  document.apply(sketch::EditBoundaryGeometry{document.revision(), edit});
+  document.undo(document.revision());
+  sketch::extract_project(document.snapshot(), root / "geometry-edit");
+  std::ifstream edit_input(root / "geometry-edit" / "project.json");
+  const auto edit_json = nlohmann::json::parse(edit_input);
+  check(edit_json.at("exchange_version") == 4,
+        "boundary edit export must advertise version 4");
+  const auto& edit_rows = edit_json.at("revisions");
+  check(edit_rows[7].at("boundary_geometry_edit") ==
+            sketch::encode_boundary_geometry_edit(edit) &&
+        !edit_rows[8].contains("boundary_geometry_edit"),
+        "exchange must preserve an undone boundary edit proof on only its command revision");
 }
 } // namespace
 int main() {

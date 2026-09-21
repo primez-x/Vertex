@@ -1,5 +1,6 @@
 #pragma once
 
+#include "sketch/boundary_edit.hpp"
 #include "sketch/boundary_entity.hpp"
 #include <string_view>
 
@@ -24,6 +25,17 @@ enum class BoundaryFlipAxis { horizontal, vertical };
     const LegacyBoundaryIdentityOptions& new_ids, Vec2 translation);
 
 [[nodiscard]] Vec2 jump_to_boundary_vertex(const IdentifiedBoundary&, std::string_view vertex_id);
+// Returns a validated copy; updates both incident endpoints and retains all IDs and sweeps.
+[[nodiscard]] IdentifiedBoundary move_boundary_vertex(const IdentifiedBoundary&,
+    std::string_view vertex_id, Vec2 position);
+// Target is analytical segment length (arc length for a curve), retaining its sweep
+// and chord direction. Without move_connected, only the unfixed vertex moves.
+// With move_connected, every vertex except the fixed endpoint translates equally;
+// the chain between those translated vertices retains its geometry. The two edges
+// incident to the fixed endpoint change shape. Invalid results throw without mutation.
+[[nodiscard]] IdentifiedBoundary set_boundary_segment_length(const IdentifiedBoundary&,
+    std::string_view segment_id, double target_length, BoundaryFixedEndpoint fixed_endpoint,
+    bool move_connected);
 // Helpers operate on geometry only. Closure never snaps or repairs existing points.
 [[nodiscard]] Boundary automatically_close_boundary(const Boundary& open_chain);
 // Completes start -> shoulder1 -> shoulder2 -> end with three straight segments.

@@ -101,9 +101,10 @@ public:
     // written as v1; identified boundaries, dimensions or boundary drafts
     // anywhere in retained history require v2. Qualified persisted
     // boundary_authoring envelopes require v3. Translation command proofs
-    // require v5; general transform proofs require v6. Either may include
+    // require v5; general transform proofs require v6; boundary geometry edit
+    // proofs require v7. Any may include
     // the optional recovery ledger. Absent proofs preserve historical formats.
-    static constexpr std::uint32_t format_version = 6;
+    static constexpr std::uint32_t format_version = 7;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

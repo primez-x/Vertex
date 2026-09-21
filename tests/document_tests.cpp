@@ -1101,6 +1101,9 @@ void test_typed_command_codec_round_trips_and_rejects_tampering() {
             .translation = {"boundary-1", {1.25, -2.5}}}},
         sketch::Command{sketch::TransformBoundary{.expected_revision = 10,
             .transformation = {"boundary-1", {{2.0, 3.0}, 0.75, true, false, {-1.0, 4.0}}}}},
+        sketch::Command{sketch::EditBoundaryGeometry{.expected_revision = 11,
+            .edit = {"boundary-1", sketch::BoundaryGeometryEditKind::resize_segment,
+                     "segment-1", {}, 4.25, sketch::BoundaryFixedEndpoint::end, true}}},
     };
     for (const auto& command : commands) {
         const auto encoded = sketch::command_to_json(command);

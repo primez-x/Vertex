@@ -351,27 +351,32 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - [ ] **U061 — Change a wall or boundary edge length**
   - Expected: The final measured length matches your entry.
   - Result: Not tested
-  - Notes / steps to reproduce: ____________________
+  - Steps: Select a closed boundary. Double-click it or right-click and choose **Edit boundary geometry**. Choose an edge, enter a visibly different length such as `14 ft`, and apply. Measure the edited edge and confirm it reads 14 ft. Repeat on a curved edge and confirm the displayed arc length, rather than its straight chord, matches the entry.
+  - Notes / issues / screenshots: ____________________
 
 - [ ] **U062 — Choose which endpoint stays fixed when changing length**
   - Expected: The chosen endpoint remains stationary.
   - Result: Not tested
-  - Notes / steps to reproduce: ____________________
+  - Steps: Record or dimension both endpoints of one boundary edge. Resize it once with **Keep start fixed**, undo, then resize it with **Keep end fixed**. Confirm the chosen endpoint stays in the same grid position each time and undo/redo restores the exact prior/resulting shape.
+  - Notes / issues / screenshots: ____________________
 
 - [ ] **U063 — Choose whether connected geometry moves with an edit**
   - Expected: The preview and final result match your choice.
   - Result: Not tested
-  - Notes / steps to reproduce: ____________________
+  - Steps: Resize one edge with **Move connected boundary chain** off and observe that only the opposite vertex moves. Undo, repeat with the option on, and confirm the complementary boundary chain translates together while the chosen endpoint stays fixed. Coincident geometry in a different object should remain unchanged unless it has an explicit supported relationship.
+  - Notes / issues / screenshots: ____________________
 
 - [ ] **U064 — Insert a vertex into an edge**
   - Expected: A new editable corner appears without corrupting the area.
   - Result: Not tested
-  - Notes / steps to reproduce: ____________________
+  - Steps: Select an editable boundary created without retained construction receipts, choose **Insert vertex**, select an edge, enter `0.5`, and apply. Confirm one new handle appears halfway along the edge, the boundary remains closed, and undo removes exactly that vertex. A receipt-backed boundary must reject this operation with a clear message until topology-proof migration is supported.
+  - Notes / issues / screenshots: ____________________
 
 - [ ] **U065 — Move a vertex**
   - Expected: Adjacent edges update and the area remains valid or a clear error explains the problem.
   - Result: Not tested
-  - Notes / steps to reproduce: ____________________
+  - Steps: Select a closed boundary, drag one visible corner handle, and release. Confirm both adjacent edges meet at the new point, attached length/angle dimensions still resolve, and one Undo restores the exact original geometry. Press Escape during a second drag and confirm no change is committed. Attempt to cross another edge and confirm Vertex rejects the invalid shape without changing the document.
+  - Notes / issues / screenshots: ____________________
 
 - [ ] **U066 — Copy and paste a room or object**
   - Expected: A separate editable copy appears with the expected geometry and properties.

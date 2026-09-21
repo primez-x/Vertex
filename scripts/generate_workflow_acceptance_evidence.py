@@ -528,6 +528,21 @@ WORKFLOW_RULES.update({
             "tests/constraint_authoring_tests.cpp",
             "tests/constraint_dialog_tests.cpp",
             "docs/constraint-authoring.md",
+            "include/sketch/boundary_edit.hpp",
+            "include/sketch/geometry_operations.hpp",
+            "src/core/boundary_geometry_edit.cpp",
+            "src/core/boundary_integrity.cpp",
+            "src/core/document.cpp",
+            "src/core/project_store.cpp",
+            "src/desktop/plan_canvas.cpp",
+            "src/desktop/main_window.cpp",
+            "tests/geometry_operations_tests.cpp",
+            "tests/boundary_canvas_tests.cpp",
+            "tests/project_store_tests.cpp",
+            "tests/desktop_smoke.cpp",
+            "docs/geometry-operations.md",
+            "docs/desktop-workflow.md",
+            "docs/project-format.md",
         ),
         "anchors": (
             "constraintAnchor",
@@ -536,12 +551,19 @@ WORKFLOW_RULES.update({
             "Apply",
             "source_snapshot_digest",
             "invalidate",
+            "move_boundary_vertex",
+            "set_boundary_segment_length",
+            "BoundaryFixedEndpoint",
+            "move_connected",
+            "boundary_geometry_derivation",
         ),
-        "tests": ("constraint_authoring", "constraint_dialog"),
+        "tests": ("constraint_authoring", "constraint_dialog", "geometry_operations",
+                  "boundary_canvas", "project_storage", "desktop_workflow"),
         "qualification_boundary": (
-            "This evidence covers source-bound length previews, explicit endpoint anchoring, connected "
-            "movement selection, invalidation, and atomic Apply. Boundary/curve editing and production "
-            "qualification remain open."
+            "This evidence covers source-bound wall previews plus direct boundary vertex movement, "
+            "analytical straight/curve length changes, explicit endpoint anchoring, connected-chain "
+            "selection, stable identity, receipt derivation, invalidation, atomic Apply, undo/redo, and "
+            "save/reopen. Cross-object boundary constraints and production qualification remain open."
         ),
     },
     "GEO-CON-006": {

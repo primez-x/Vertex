@@ -3,6 +3,7 @@
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/boundary_transform.hpp"
+#include "sketch/geometry_operations.hpp"
 #include <cmath>
 #include <set>
 
@@ -97,6 +98,76 @@ bool valid_explicit_relationship_transform(const Entity& previous, const Entity&
     } catch (const std::exception&) {
         return false;
     }
+}
+
+IdentifiedBoundary apply_geometry_edit(const IdentifiedBoundary& source,
+                                       const BoundaryGeometryEdit& edit) {
+    validate_boundary_geometry_edit(edit);
+    if (source.id != edit.boundary_id)
+        throw std::invalid_argument("Boundary geometry edit owner does not match");
+    if (edit.kind == BoundaryGeometryEditKind::move_vertex)
+        return move_boundary_vertex(source, edit.target_id, edit.target_position);
+    return set_boundary_segment_length(source, edit.target_id, edit.target_length_metres,
+                                       edit.fixed_endpoint, edit.move_connected);
+}
+
+IdentifiedBoundary apply_geometry_transform(const IdentifiedBoundary& source,
+                                             const BoundaryTransformation& transformation) {
+    validate_boundary_transform(transformation);
+    if (source.id != transformation.boundary_id)
+        throw std::invalid_argument("Boundary transform owner does not match");
+    auto result = source;
+    for (auto& edge : result.segments) {
+        edge.segment = transform_segment(edge.segment, transformation.transform);
+    }
+    (void)encode_identified_boundary_entity(result);
+    return result;
+}
+
+nlohmann::json geometry_edit_operation(const BoundaryGeometryEdit& edit) {
+    return {{"kind", "geometry_edit"}, {"value", encode_boundary_geometry_edit(edit)}};
+}
+
+nlohmann::json geometry_transform_operation(const BoundaryTransformation& transformation) {
+    return {{"kind", "transform"}, {"value", encode_boundary_transform(transformation)}};
+}
+
+IdentifiedBoundary replay_geometry_derivation(const Entity& entity) {
+    const auto found = entity.extensions.find("boundary_geometry_derivation");
+    if (found == entity.extensions.end() || !found->is_object() ||
+        found->value("version", 0) != 1 || found->size() != 3 ||
+        !found->contains("source_boundary_authoring") ||
+        !found->contains("operations") || !found->at("operations").is_array() ||
+        found->at("operations").empty()) {
+        throw std::invalid_argument("Boundary geometry derivation is invalid");
+    }
+    const auto decoded = decode_boundary_receipt_envelope(
+        found->at("source_boundary_authoring"));
+    if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+    const auto replay = replay_boundary_construction(*decoded.record);
+    IdentifiedBoundary result{replay.boundary_id, entity.type, {}};
+    for (const auto& edge : replay.edges) {
+        result.segments.push_back({edge.segment_id, edge.start_vertex_id,
+                                   edge.end_vertex_id, edge.segment});
+    }
+    for (const auto& operation : found->at("operations")) {
+        if (!operation.is_object() || operation.size() != 2 ||
+            !operation.contains("kind") || !operation.at("kind").is_string() ||
+            !operation.contains("value")) {
+            throw std::invalid_argument("Boundary geometry derivation operation is invalid");
+        }
+        const auto kind = operation.at("kind").get<std::string>();
+        if (kind == "geometry_edit") {
+            result = apply_geometry_edit(
+                result, decode_boundary_geometry_edit(operation.at("value")));
+        } else if (kind == "transform") {
+            result = apply_geometry_transform(
+                result, decode_boundary_transform(operation.at("value")));
+        } else {
+            throw std::invalid_argument("Boundary geometry derivation operation kind is unsupported");
+        }
+    }
+    return result;
 }
 } // namespace
 
@@ -218,26 +289,42 @@ std::map<std::string, Entity, std::less<>> translated_boundary_entities(
     if (found == source.end()) throw std::invalid_argument("Translation boundary does not exist");
     const auto& original = found->second;
     auto boundary = decode_identified_boundary_entity(original);
-    if (!original.properties.contains("boundary_authoring"))
-        throw std::invalid_argument("Explicit boundary translation requires construction receipts");
-    const auto decoded = decode_boundary_receipt_envelope(original.properties.at("boundary_authoring"));
-    if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+    const bool derived = original.extensions.contains("boundary_geometry_derivation");
+    if (!original.properties.contains("boundary_authoring") && !derived)
+        throw std::invalid_argument(
+            "Explicit boundary translation requires construction or geometry-derivation evidence");
     if (const auto unsupported = validate_boundary_integrity(source))
         throw std::invalid_argument(*unsupported);
     if (translation.offset.x == 0.0 && translation.offset.y == 0.0) return source;
-    // Keep historical v1/v2 translation proofs byte-replayable. Framed records
-    // retain local inputs and compose a world-space offset instead.
-    const auto translated = decoded.record->schema_version == boundary_receipt_schema_version_v3
-        ? transformed_boundary_construction(*decoded.record, PlanarTransform{{},0,false,false,translation.offset})
-        : translated_boundary_construction(*decoded.record, translation.offset);
-    const auto replay = replay_boundary_construction(translated);
-    boundary.segments.clear();
-    for (const auto& edge : replay.edges)
-        boundary.segments.push_back({edge.segment_id, edge.start_vertex_id, edge.end_vertex_id, edge.segment});
     auto metadata = original;
-    metadata.properties.erase("boundary_authoring");
-    auto encoded = encode_identified_boundary_entity(boundary, &metadata);
-    encoded.properties["boundary_authoring"] = encode_boundary_receipt_envelope(translated);
+    Entity encoded;
+    if (derived) {
+        const BoundaryTransformation transformation{
+            translation.boundary_id,
+            PlanarTransform{{}, 0.0, false, false, translation.offset}};
+        boundary = apply_geometry_transform(boundary, transformation);
+        metadata.extensions.at("boundary_geometry_derivation").at("operations")
+            .push_back(geometry_transform_operation(transformation));
+        encoded = encode_identified_boundary_entity(boundary, &metadata);
+    } else {
+        const auto decoded = decode_boundary_receipt_envelope(
+            original.properties.at("boundary_authoring"));
+        if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+        // Keep historical v1/v2 translation proofs byte-replayable. Framed
+        // records retain local inputs and compose a world-space offset instead.
+        const auto translated = decoded.record->schema_version == boundary_receipt_schema_version_v3
+            ? transformed_boundary_construction(
+                *decoded.record, PlanarTransform{{},0,false,false,translation.offset})
+            : translated_boundary_construction(*decoded.record, translation.offset);
+        const auto replay = replay_boundary_construction(translated);
+        boundary.segments.clear();
+        for (const auto& edge : replay.edges)
+            boundary.segments.push_back(
+                {edge.segment_id, edge.start_vertex_id, edge.end_vertex_id, edge.segment});
+        metadata.properties.erase("boundary_authoring");
+        encoded = encode_identified_boundary_entity(boundary, &metadata);
+        encoded.properties["boundary_authoring"] = encode_boundary_receipt_envelope(translated);
+    }
     auto result = source;
     result.at(translation.boundary_id) = std::move(encoded);
     for (auto& [id, entity] : result) {
@@ -262,24 +349,36 @@ std::map<std::string, Entity, std::less<>> transformed_boundary_entities(
     if (found == source.end()) throw std::invalid_argument("Transform boundary does not exist");
     const auto& original = found->second;
     auto boundary = decode_identified_boundary_entity(original);
-    if (!original.properties.contains("boundary_authoring"))
-        throw std::invalid_argument("Explicit boundary transform requires construction receipts");
-    const auto decoded = decode_boundary_receipt_envelope(original.properties.at("boundary_authoring"));
-    if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+    const bool derived = original.extensions.contains("boundary_geometry_derivation");
+    if (!original.properties.contains("boundary_authoring") && !derived)
+        throw std::invalid_argument(
+            "Explicit boundary transform requires construction or geometry-derivation evidence");
     if (const auto unsupported = validate_boundary_integrity(source))
         throw std::invalid_argument(*unsupported);
     const auto& transform = transformation.transform;
     if (transform.rotation_radians == 0 && !transform.flip_horizontal && !transform.flip_vertical &&
         transform.offset.x == 0 && transform.offset.y == 0) return source;
-    const auto transformed = transformed_boundary_construction(*decoded.record, transform);
-    const auto replay = replay_boundary_construction(transformed);
-    boundary.segments.clear();
-    for (const auto& edge : replay.edges)
-        boundary.segments.push_back({edge.segment_id, edge.start_vertex_id, edge.end_vertex_id, edge.segment});
     auto metadata = original;
-    metadata.properties.erase("boundary_authoring");
-    auto encoded = encode_identified_boundary_entity(boundary, &metadata);
-    encoded.properties["boundary_authoring"] = encode_boundary_receipt_envelope(transformed);
+    Entity encoded;
+    if (derived) {
+        boundary = apply_geometry_transform(boundary, transformation);
+        metadata.extensions.at("boundary_geometry_derivation").at("operations")
+            .push_back(geometry_transform_operation(transformation));
+        encoded = encode_identified_boundary_entity(boundary, &metadata);
+    } else {
+        const auto decoded = decode_boundary_receipt_envelope(
+            original.properties.at("boundary_authoring"));
+        if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+        const auto transformed = transformed_boundary_construction(*decoded.record, transform);
+        const auto replay = replay_boundary_construction(transformed);
+        boundary.segments.clear();
+        for (const auto& edge : replay.edges)
+            boundary.segments.push_back(
+                {edge.segment_id, edge.start_vertex_id, edge.end_vertex_id, edge.segment});
+        metadata.properties.erase("boundary_authoring");
+        encoded = encode_identified_boundary_entity(boundary, &metadata);
+        encoded.properties["boundary_authoring"] = encode_boundary_receipt_envelope(transformed);
+    }
     auto result = source;
     result.at(transformation.boundary_id) = std::move(encoded);
     for (auto& [id, entity] : result) {
@@ -292,6 +391,56 @@ std::map<std::string, Entity, std::less<>> transformed_boundary_entities(
         moved.text_position = transform_point(moved.text_position, transform);
         entity = encode_boundary_dimension_entity(moved, &entity);
     }
+    return result;
+}
+
+std::map<std::string, Entity, std::less<>> edited_boundary_entities(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const BoundaryGeometryEdit& edit) {
+    validate_boundary_geometry_edit(edit);
+    const auto found = source.find(edit.boundary_id);
+    if (found == source.end()) throw std::invalid_argument("Edited boundary does not exist");
+    const auto& original = found->second;
+    const auto version = inspect_boundary_entity_version(original);
+    if (version.format != BoundaryEntityFormat::identified_v1)
+        throw std::invalid_argument("Boundary geometry editing requires a supported identified boundary");
+    if (const auto unsupported = validate_boundary_integrity(source))
+        throw std::invalid_argument(*unsupported);
+    const auto edited = apply_geometry_edit(decode_identified_boundary_entity(original), edit);
+    if (edited == decode_identified_boundary_entity(original)) return source;
+
+    auto metadata = original;
+    const bool had_derivation = metadata.extensions.contains("boundary_geometry_derivation");
+    if (metadata.properties.contains("boundary_authoring")) {
+        if (had_derivation)
+            throw std::invalid_argument("Boundary has conflicting geometry provenance");
+        metadata.extensions["boundary_geometry_derivation"] = {
+            {"version", 1},
+            {"source_boundary_authoring", metadata.properties.at("boundary_authoring")},
+            {"operations", nlohmann::json::array()}};
+        metadata.properties.erase("boundary_authoring");
+    }
+    if (auto derivation = metadata.extensions.find("boundary_geometry_derivation");
+        derivation != metadata.extensions.end()) {
+        // Strictly replay before appending so malformed or stale evidence can
+        // never be extended into an apparently valid history.
+        if (had_derivation &&
+            replay_geometry_derivation(original) != decode_identified_boundary_entity(original))
+            throw std::invalid_argument("Boundary geometry derivation does not reproduce its source");
+        derivation->at("operations").push_back(geometry_edit_operation(edit));
+    }
+    auto encoded = encode_identified_boundary_entity(edited, &metadata);
+    if (encoded.properties.contains("boundary")) {
+        auto geometry = nlohmann::json::array();
+        for (const auto& edge : edited.segments) {
+            geometry.push_back({{"start", {edge.segment.start.x, edge.segment.start.y}},
+                                {"end", {edge.segment.end.x, edge.segment.end.y}},
+                                {"sweep_radians", edge.segment.sweep_radians}});
+        }
+        encoded.properties["boundary"] = std::move(geometry);
+    }
+    auto result = source;
+    result.at(edit.boundary_id) = std::move(encoded);
     return result;
 }
 
@@ -327,6 +476,15 @@ std::optional<std::string> validate_boundary_integrity(
                                 ": canonical geometry or topology differs from construction input replay");
                     }
                 }
+            }
+            if (entity.extensions.contains("boundary_geometry_derivation")) {
+                if (entity.properties.contains("boundary_authoring"))
+                    throw std::invalid_argument("Boundary " + id +
+                        ": construction and geometry derivation evidence conflict");
+                const auto replayed = replay_geometry_derivation(entity);
+                if (replayed != boundary)
+                    throw std::invalid_argument("Boundary " + id +
+                        ": canonical geometry differs from geometry edit replay");
             }
         } else if (version.format == BoundaryEntityFormat::unsupported_version) {
             future_boundaries.insert(id);
@@ -383,6 +541,20 @@ void validate_boundary_transition(const std::map<std::string, Entity, std::less<
               valid_explicit_relationship_transform(entity, found->second)))
             throw std::invalid_argument("Boundary " + id +
                 ": construction-bound geometry, topology and inputs require an explicit derivation edit");
+        const bool previous_derivation = identified_v1(entity) &&
+            entity.extensions.contains("boundary_geometry_derivation");
+        const bool next_derivation = identified_v1(found->second) &&
+            found->second.extensions.contains("boundary_geometry_derivation");
+        if (previous_derivation != next_derivation)
+            throw std::invalid_argument("Boundary " + id +
+                ": surviving entities cannot acquire or lose geometry derivation evidence through a raw edit");
+        if (previous_derivation &&
+            (decode_identified_boundary_entity(entity) !=
+                 decode_identified_boundary_entity(found->second) ||
+             entity.extensions.at("boundary_geometry_derivation").dump() !=
+                 found->second.extensions.at("boundary_geometry_derivation").dump()))
+            throw std::invalid_argument("Boundary " + id +
+                ": derived geometry and its proof require an explicit typed command");
         if (entity.type == "dimension") {
             if (found->second.type != "dimension")
                 throw std::invalid_argument("Dimension " + id + ": ordinary edit cannot strip dimension semantics");

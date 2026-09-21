@@ -53,6 +53,25 @@ arcs. Tiny, unrepresentable or invalid resulting geometry is rejected. The new
 vertex is a geometric subdivision; this helper adds no solver constraint and
 does not calculate constraint degrees of freedom.
 
+Direct vertex movement updates both incident endpoint occurrences of the stable
+vertex ID and retains every boundary, segment, and vertex identity. Direct
+segment resizing accepts an analytical target length and an explicit fixed
+endpoint. For an arc, the retained sweep makes analytical length proportional
+to chord length, so resizing changes the chord and radius without converting
+the arc to a line. With connected movement disabled, only the opposite vertex
+moves and its two incident edges reshape. With connected movement enabled, the
+complementary boundary chain translates as a unit while the two edges meeting
+the fixed endpoint reshape. These primitives do not infer connections to other
+objects from coincident coordinates.
+
+The desktop exposes selected boundary vertices as screen-sized handles. A drag
+previews locally and commits one revision on release through the typed
+`EditBoundaryGeometry` command. Escape cancels without a revision. The boundary
+geometry editor accepts a displayed-unit length, start/end anchor, and connected
+chain choice. Stale revisions, invalid topology, degenerate edges, and
+self-intersections reject atomically. Handles are interaction overlays and are
+excluded from print/export rendering.
+
 Cloning requires a distinct boundary ID, a complete explicit segment/vertex ID
 map, and a translation in metres. No segment or vertex ID can reuse its source
 namespace's identities. Project-wide identity allocation remains the caller's
@@ -101,6 +120,11 @@ semantic dependency migration remain open. Callers must not replace a document
 entity with a geometry result while silently dropping its owned semantics;
 existing document commands and integrity checks remain authoritative.
 
+Coordinate-only edits preserve dimension target IDs, including the secondary
+segment and shared vertex used by angle dimensions. Topology-changing insertion
+still requires explicit reference migration for receipt-backed geometry and
+angle targets; that broader insertion path remains open.
+
 APX-EDIT-004 reopen/redefine/delete/cancel/restore lifecycle support is outside
 these helpers and remains open. Other areas, architectural objects, annotations,
 and references are also outside the supported transform types. A future command
@@ -112,6 +136,8 @@ still required.
 
 `geometry_operations_tests.cpp` checks pivot rotation, handedness and arc sweep,
 line/arc subdivision area and perimeter, clone identity/translation, exact
-closure, bay validation, command mapping/conflicts, and invalid inputs. The
-desktop fixture supplies the current end-user history and undo evidence. Native
+closure, bay validation, stable-ID vertex movement, anchored line/arc resizing,
+connected-chain behavior, command mapping/conflicts, and invalid inputs. Canvas,
+document, storage, and desktop fixtures cover preview/commit separation,
+cancellation, receipt derivation, dimensions, undo/redo, and save/reopen. Native
 Apex output comparison and production qualification remain open.

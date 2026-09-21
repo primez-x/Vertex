@@ -89,6 +89,16 @@ void require_error_contains(Function&& function, StorageErrorCode code, std::str
     fail(message);
 }
 
+template <typename Function>
+void require_document_error(Function&& function, std::string_view message) {
+    try {
+        function();
+    } catch (const sketch::DocumentError&) {
+        return;
+    }
+    fail(message);
+}
+
 struct TempDirectory {
     std::filesystem::path path = std::filesystem::temp_directory_path() /
                                  ("vertex-tests-" + sketch::make_stable_id());
@@ -240,7 +250,10 @@ void rewrite_logical_digest(const std::filesystem::path& path) {
     sqlite3_stmt* statement = nullptr;
     require(sqlite3_prepare_v2(
                 database,
-                format >= 6
+                format >= 7
+                    ? "SELECT revision,parent_revision,source_revision,action,name,undo_stack_json,"
+                      "redo_stack_json,boundary_translation_json,boundary_transform_json,boundary_edit_json FROM revisions ORDER BY revision"
+                    : format >= 6
                     ? "SELECT revision,parent_revision,source_revision,action,name,undo_stack_json,"
                       "redo_stack_json,boundary_translation_json,boundary_transform_json FROM revisions ORDER BY revision"
                     : format == 5
@@ -270,6 +283,9 @@ void rewrite_logical_digest(const std::filesystem::path& path) {
         if (format >= 6 && sqlite3_column_type(statement, 8) != SQLITE_NULL)
             manifest["history"].back()["boundary_transform"] =
                 nlohmann::json::parse(sqlite_text(statement, 8));
+        if (format >= 7 && sqlite3_column_type(statement, 9) != SQLITE_NULL)
+            manifest["history"].back()["boundary_geometry_edit"] =
+                nlohmann::json::parse(sqlite_text(statement, 9));
     }
     sqlite3_finalize(statement);
 
@@ -851,6 +867,98 @@ void test_transform_proof_storage_and_forgery_rejection() {
     execute_sql(overloaded, "UPDATE revisions SET boundary_transform_json=CAST(zeroblob(67108865) AS TEXT) WHERE revision=1");
     require_error([&] { (void)ProjectStore::load(overloaded); }, StorageErrorCode::resource_limit,
                   "transform proof bytes must count toward preallocation budget");
+}
+
+void test_boundary_geometry_edit_proof_storage_and_forgery_rejection() {
+    TempDirectory temp;
+    const auto file = temp.path / "boundary-edit-v7.psketch";
+    auto document = Document::create({translation_fixture()});
+    sketch::BoundaryGeometryEdit edit;
+    edit.boundary_id = "translated-boundary";
+    edit.kind = sketch::BoundaryGeometryEditKind::move_vertex;
+    edit.target_id = "vertex-1";
+    edit.target_position = {3.0, 0.25};
+    document.apply(sketch::EditBoundaryGeometry{document.revision(), edit});
+    const auto first_edited = document.snapshot().entities();
+
+    auto stripped = first_edited.at("translated-boundary");
+    stripped.extensions.erase("boundary_geometry_derivation");
+    require_document_error([&] {
+        (void)document.apply(ApplyEntityChanges{document.revision(),
+            {EntityChange::upsert(stripped)}, {}, "strip geometry derivation"});
+    }, "raw edits must not strip geometry derivation evidence");
+    auto replaced = first_edited.at("translated-boundary");
+    replaced.extensions.at("boundary_geometry_derivation").at("operations")[0]
+        .at("value").at("position")[0] = 9.0;
+    require_document_error([&] {
+        (void)document.apply(ApplyEntityChanges{document.revision(),
+            {EntityChange::upsert(replaced)}, {}, "replace geometry derivation"});
+    }, "raw edits must not replace geometry derivation evidence");
+
+    sketch::PlanarTransform transform;
+    transform.pivot = {0.5, 0.5};
+    transform.rotation_radians = 0.2;
+    transform.offset = {2.0, -1.0};
+    document.apply(sketch::TransformBoundary{document.revision(),
+        {"translated-boundary", transform}});
+    const auto transformed = document.snapshot().entities();
+    const auto transformed_boundary = sketch::decode_identified_boundary_entity(
+        transformed.at("translated-boundary"));
+    auto second_edit = edit;
+    second_edit.target_id = "vertex-2";
+    second_edit.target_position = transformed_boundary.segments[2].segment.start;
+    second_edit.target_position.x += 0.2;
+    second_edit.target_position.y += 0.1;
+    document.apply(sketch::EditBoundaryGeometry{document.revision(), second_edit});
+    const auto final_entities = document.snapshot().entities();
+    document.undo(document.revision());
+    require(ProjectStore::required_format_version(document.snapshot()) == 7,
+            "edit followed by transform with a retained redo must still require v7");
+
+    (void)ProjectStore::save(file, document.snapshot());
+    auto loaded = ProjectStore::load(file);
+    const auto reopened = loaded.document.snapshot();
+    require(reopened.entities() == transformed && loaded.document.can_redo() &&
+                reopened.history().at(1).boundary_geometry_edit == edit,
+            "v7 reopen must preserve mixed edit/transform history and its retained redo");
+    const auto& entity = reopened.entities().at("translated-boundary");
+    require(!entity.properties.contains("boundary_authoring") &&
+                entity.extensions.at("boundary_geometry_derivation")
+                    .at("source_boundary_authoring").is_object() &&
+                entity.extensions.at("boundary_geometry_derivation")
+                    .at("operations").size() == 2,
+            "v7 direct editing and transforms must retain ordered derivation evidence");
+    loaded.document.redo(loaded.document.revision());
+    require(loaded.document.snapshot().entities() == final_entities,
+            "v7 redo must reproduce a geometry edit made after a transform");
+
+    const auto missing = temp.path / "missing-boundary-edit-proof.psketch";
+    std::filesystem::copy_file(file, missing);
+    execute_sql(missing, "UPDATE revisions SET boundary_edit_json=NULL WHERE revision=1");
+    rewrite_logical_digest(missing);
+    require_error([&] { (void)ProjectStore::load(missing); },
+                  StorageErrorCode::integrity_failure,
+                  "a recomputed digest must not authorize missing boundary edit proof");
+
+    const auto forged = temp.path / "forged-boundary-edit-proof.psketch";
+    std::filesystem::copy_file(file, forged);
+    execute_sql(forged,
+        "UPDATE revisions SET boundary_edit_json='"
+        "{\"version\":1,\"kind\":\"move_vertex\",\"boundary_id\":\"translated-boundary\","
+        "\"vertex_id\":\"vertex-1\",\"position\":[4.0,0.25]}' WHERE revision=1");
+    rewrite_logical_digest(forged);
+    require_error([&] { (void)ProjectStore::load(forged); },
+                  StorageErrorCode::integrity_failure,
+                  "a recomputed digest must not authorize forged boundary edit intent");
+
+    const auto downgraded = temp.path / "downgraded-boundary-edit.psketch";
+    std::filesystem::copy_file(file, downgraded);
+    execute_sql(downgraded, "ALTER TABLE revisions DROP COLUMN boundary_edit_json; "
+        "PRAGMA user_version=6; UPDATE metadata SET value='6' WHERE key='format_version'");
+    rewrite_logical_digest(downgraded);
+    require_error([&] { (void)ProjectStore::load(downgraded); },
+                  StorageErrorCode::unsupported_format,
+                  "downgraded boundary edit history must fail its minimum format guard");
 }
 
 void test_boundary_authoring_receipt_after_v2_entity_requires_v3() {
@@ -1545,6 +1653,7 @@ int main() {
         test_impossible_history_is_rejected_after_digest_recomputation();
         test_translation_proof_storage_and_forgery_rejection();
         test_transform_proof_storage_and_forgery_rejection();
+        test_boundary_geometry_edit_proof_storage_and_forgery_rejection();
         test_boundary_authoring_receipt_after_v2_entity_requires_v3();
         test_unqualified_authoring_property_collisions_remain_v1_and_opaque();
         test_unknown_boundary_model_collision_requires_v2();

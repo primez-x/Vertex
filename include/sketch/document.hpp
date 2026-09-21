@@ -1,4 +1,5 @@
 #pragma once
+#include "sketch/boundary_edit.hpp"
 #include "sketch/boundary_identity_history.hpp"
 #include "sketch/geometry.hpp"
 
@@ -109,7 +110,13 @@ struct TransformBoundary {
     BoundaryTransformation transformation;
 };
 
-using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary, TransformBoundary>;
+struct EditBoundaryGeometry {
+    Revision expected_revision = 0;
+    BoundaryGeometryEdit edit;
+};
+
+using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,
+                             TransformBoundary, EditBoundaryGeometry>;
 
 // Commands cross worker, workspace, and persistence boundaries as a strict,
 // versioned JSON envelope.  The codec preserves typed command identity and
@@ -154,6 +161,7 @@ struct RevisionRecord {
     std::vector<Revision> redo_stack;
     std::optional<BoundaryTranslation> boundary_translation;
     std::optional<BoundaryTransformation> boundary_transform;
+    std::optional<BoundaryGeometryEdit> boundary_geometry_edit;
 };
 
 class DocumentSnapshot {

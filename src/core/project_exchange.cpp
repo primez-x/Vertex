@@ -1,6 +1,7 @@
 #include "sketch/project_exchange.hpp"
 #include "sketch/boundary_translation.hpp"
 #include "sketch/boundary_transform.hpp"
+#include "sketch/boundary_edit.hpp"
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -580,8 +581,13 @@ void extract_project(const DocumentSnapshot &snapshot,
         row["boundary_translation"] = encode_boundary_translation(*revision.boundary_translation);
       }
       if (revision.boundary_transform) {
-        result["exchange_version"] = 3;
+        if (result["exchange_version"].get<int>() < 3) result["exchange_version"] = 3;
         row["boundary_transform"] = encode_boundary_transform(*revision.boundary_transform);
+      }
+      if (revision.boundary_geometry_edit) {
+        result["exchange_version"] = 4;
+        row["boundary_geometry_edit"] =
+            encode_boundary_geometry_edit(*revision.boundary_geometry_edit);
       }
       for (const auto &[id, entity] : revision.entities) {
         (void)id;

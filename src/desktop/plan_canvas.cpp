@@ -619,7 +619,23 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     }
     drawReferenceGrids(painter);
     for (const auto& entity : m_entities) {
-        if (!output && m_move_preview_delta && m_move_ids.contains(entity.id)) {
+        if (!output && m_vertex_move_handle && m_vertex_move_preview &&
+            m_vertex_move_handle->entity_id == entity.id) {
+            auto preview = entity;
+            const auto source = m_vertex_move_handle->source_position;
+            const auto target = *m_vertex_move_preview;
+            const auto same = [](Vec2 left, Vec2 right) {
+                return left.x == right.x && left.y == right.y;
+            };
+            for (auto& segment : preview.segments) {
+                if (same(segment.start, source)) segment.start = target;
+                if (same(segment.end, source)) segment.end = target;
+            }
+            for (auto& handle : preview.vertex_handles) {
+                if (handle.id == m_vertex_move_handle->vertex_id) handle.position = target;
+            }
+            drawEntity(painter, preview, output, background, paper_pixels_per_mm);
+        } else if (!output && m_move_preview_delta && m_move_ids.contains(entity.id)) {
             painter.save();
             painter.translate(m_move_preview_delta->x, m_move_preview_delta->y);
             drawEntity(painter, entity, output, background, paper_pixels_per_mm);
@@ -693,6 +709,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
 
     if (!output) {
         drawSelectionFrame(painter, viewport);
+        drawVertexHandles(painter, viewport);
         drawSelectionCaption(painter, viewport, background);
         drawCursorReadout(painter, viewport, background);
     }
@@ -1113,6 +1130,15 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
     }
     m_left_start = position;
     m_left_dragging = false;
+    if (selectionInteractionEnabled()) {
+        if (const auto vertex = vertexHandleAt(position, QRectF(rect()))) {
+            m_left_gesture = LeftGesture::vertex_move;
+            m_vertex_move_handle = *vertex;
+            m_vertex_move_preview = vertex->source_position;
+            setCursor(Qt::SizeAllCursor);
+            return;
+        }
+    }
     const auto handle = selectionInteractionEnabled()
         ? selectionHandleAt(position, QRectF(rect())) : SelectionHandle::none;
     if (handle != SelectionHandle::none) {
@@ -1194,6 +1220,16 @@ void PlanCanvas::pointerMove(QPointF position) {
             }
             update();
         }
+    } else if (m_left_gesture == LeftGesture::vertex_move) {
+        if (!m_left_dragging &&
+            (position - m_left_start).manhattanLength() >= QApplication::startDragDistance()) {
+            m_left_dragging = true;
+        }
+        if (m_left_dragging && m_vertex_move_handle) {
+            m_vertex_move_preview = inputPoint(position);
+            setCursor(Qt::SizeAllCursor);
+            update();
+        }
     }
     if (m_panning) {
         beginPerformanceMeasurement(PerformanceMetric::navigation);
@@ -1233,6 +1269,12 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button) {
         const auto delta = dragDelta(position);
         const auto transform_scale = m_transform_scale_preview;
         const auto transform_rotation = m_transform_rotation_preview;
+        const auto vertex_handle = m_vertex_move_handle;
+        // A tablet/touch/mouse release can cross the drag threshold without an
+        // intermediate move event. Commit the actual snapped release point,
+        // while a stationary press remains a no-op.
+        const auto vertex_target = gesture == LeftGesture::vertex_move && dragging
+            ? std::optional<Vec2>(inputPoint(position)) : m_vertex_move_preview;
         const auto closing = closingAnchor(position);
         resetGesture();
         if (gesture == LeftGesture::marquee && selection_start) {
@@ -1283,6 +1325,13 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button) {
                    move_ids.size() == 1 && m_entity_transform_requested) {
             (void)m_entity_transform_requested(move_ids.front(), transform_scale,
                                                transform_rotation);
+        } else if (gesture == LeftGesture::vertex_move && dragging &&
+                   vertex_handle && vertex_target && m_boundary_vertex_move_requested &&
+                   (vertex_target->x != vertex_handle->source_position.x ||
+                    vertex_target->y != vertex_handle->source_position.y)) {
+            (void)m_boundary_vertex_move_requested(
+                vertex_handle->entity_id, vertex_handle->vertex_id, *vertex_target,
+                vertex_handle->source_revision);
         }
         updateCursor(position);
     }
@@ -1304,6 +1353,8 @@ void PlanCanvas::resetGesture() {
     m_transform_frame_start.reset();
     m_transform_scale_preview = 1.0;
     m_transform_rotation_preview = 0.0;
+    m_vertex_move_handle.reset();
+    m_vertex_move_preview.reset();
     if (m_space_pan_armed) {
         setCursor(Qt::OpenHandCursor);
     } else if (m_last_mouse_position) {
@@ -1448,6 +1499,46 @@ PlanCanvas::SelectionHandle PlanCanvas::selectionHandleAt(
          hit(frame->bottomLeft()) || hit(frame->bottomRight())))
         return SelectionHandle::resize;
     return SelectionHandle::none;
+}
+
+std::optional<PlanCanvas::VertexHandleHit> PlanCanvas::vertexHandleAt(
+    QPointF point, const QRectF& viewport) const {
+    if (selectedIds().size() != 1) return std::nullopt;
+    constexpr qreal hit_radius = 13.0;
+    for (const auto& entity : m_entities) {
+        if (!entity.selected || entity.vertex_handles.empty()) continue;
+        for (const auto& handle : entity.vertex_handles) {
+            const auto screen = toScreen(handle.position, viewport);
+            if (QLineF(point, screen).length() <= hit_radius) {
+                return VertexHandleHit{entity.id, handle.id, handle.position,
+                                       handle.source_revision};
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+void PlanCanvas::drawVertexHandles(QPainter& painter, const QRectF& viewport) const {
+    if (!selectionInteractionEnabled() || selectedIds().size() != 1) return;
+    painter.save();
+    painter.setClipRect(viewport, Qt::IntersectClip);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(QPen(QColor(37, 99, 235), 1.5));
+    painter.setBrush(QColor(255, 255, 255, 245));
+    for (const auto& entity : m_entities) {
+        if (!entity.selected) continue;
+        for (const auto& handle : entity.vertex_handles) {
+            auto position = handle.position;
+            if (m_vertex_move_handle && m_vertex_move_preview &&
+                m_vertex_move_handle->entity_id == entity.id &&
+                m_vertex_move_handle->vertex_id == handle.id) {
+                position = *m_vertex_move_preview;
+            }
+            const auto screen = toScreen(position, viewport);
+            painter.drawEllipse(screen, 5.5, 5.5);
+        }
+    }
+    painter.restore();
 }
 
 void PlanCanvas::drawSelectionFrame(QPainter& painter, const QRectF& viewport) const {
@@ -1886,11 +1977,17 @@ Vec2 PlanCanvas::dragDelta(QPointF position) const {
 }
 
 void PlanCanvas::updatePointerCursor(QPointF point) {
-    if (m_panning || (m_left_gesture == LeftGesture::object_move && m_left_dragging)) {
+    if (m_panning ||
+        ((m_left_gesture == LeftGesture::object_move ||
+          m_left_gesture == LeftGesture::vertex_move) && m_left_dragging)) {
         setCursor(Qt::ClosedHandCursor);
     } else if (m_space_pan_armed && m_gesture_button == Qt::NoButton) {
         setCursor(Qt::OpenHandCursor);
     } else if (selectionInteractionEnabled() && m_gesture_button == Qt::NoButton) {
+        if (vertexHandleAt(point, QRectF(rect()))) {
+            setCursor(Qt::SizeAllCursor);
+            return;
+        }
         const auto handle = selectionHandleAt(point, QRectF(rect()));
         if (handle != SelectionHandle::none) {
             setCursor(handle == SelectionHandle::resize ? Qt::SizeFDiagCursor
@@ -1912,6 +2009,11 @@ void PlanCanvas::updatePointerCursor(QPointF point) {
 void PlanCanvas::setEntityTransformRequested(
     std::function<bool(QString, double, double)> callback) {
     m_entity_transform_requested = std::move(callback);
+}
+
+void PlanCanvas::setBoundaryVertexMoveRequested(
+    std::function<bool(QString, QString, Vec2, std::uint64_t)> callback) {
+    m_boundary_vertex_move_requested = std::move(callback);
 }
 
 void PlanCanvas::updateCursor(QPointF point) {

@@ -825,10 +825,25 @@
         "src/desktop/constraint_dialog.cpp",
         "tests/constraint_authoring_tests.cpp",
         "tests/constraint_dialog_tests.cpp",
+        "include/sketch/boundary_edit.hpp",
+        "include/sketch/geometry_operations.hpp",
+        "src/core/boundary_geometry_edit.cpp",
+        "src/core/boundary_integrity.cpp",
+        "src/core/document.cpp",
+        "src/core/project_store.cpp",
+        "src/desktop/plan_canvas.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/geometry_operations_tests.cpp",
+        "tests/boundary_canvas_tests.cpp",
+        "tests/project_store_tests.cpp",
+        "tests/desktop_smoke.cpp",
+        "docs/geometry-operations.md",
+        "docs/desktop-workflow.md",
+        "docs/project-format.md",
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Source review correction (2026-09-20): The promised anchored preview/propagation workflow is not complete across measurement boundaries and curved geometry. Both workspaces preview straight-wall length changes with start/end anchor and explicit connected-movement choice. Candidate and source digests bind Apply; keyboard, invalidation and comparison captures are covered. Boundary/curve editing and full production qualification remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Both workspaces preview straight-wall length changes with start/end anchoring and an explicit connected-movement choice. Selected measurement boundaries now expose stable vertex handles plus analytical straight/curve edge-length editing with explicit start/end anchor and connected-chain choice. Typed revision-fenced edits preserve segment and vertex identities, attached dimensions, exact undo/redo, original construction provenance, and v7 save/reopen history. Cross-object boundary constraint propagation and full production qualification remain open. Current acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "GEO-CON-003",

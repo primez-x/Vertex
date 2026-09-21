@@ -1,4 +1,4 @@
-# Vertex project formats v1 through v6
+# Vertex project formats v1 through v7
 
 Vertex projects are standalone SQLite files containing one immutable logical
 document snapshot and the complete command history known when that snapshot was captured.
@@ -19,9 +19,10 @@ boundary for identified geometry. Any identified boundary, boundary draft or
 dimension in retained history requires v2, including an undone or deleted
 identified boundary. Both SQLite `user_version` and `metadata.format_version`
 must agree, and the logical digest includes that version. The reader accepts
-v1 legacy history, v2 identity history, v3 construction-receipt history and v5
-translation history and v6 transform history, plus v4/v5/v6 archives through
-recovery-aware APIs. Under-versioned semantic data and versions above 6 reject. Legacy-only history
+v1 legacy history, v2 identity history, v3 construction-receipt history, v5
+translation history, v6 transform history, and v7 boundary-coordinate edit
+history, plus v4 through v7 archives through recovery-aware APIs.
+Under-versioned semantic data and versions above 7 reject. Legacy-only history
 is still written as v1. Unknown boundary entity
 versions in v2 remain preserved read-only. See `boundary-entity-format.md`.
 Version 2 also recognizes `dimension` entities. Segment-length dimensions refer
@@ -100,6 +101,7 @@ reject the transforms field and retain their original encodings; new drawing
 sessions still emit v2. The SQLite receipt storage minimum remains format 3;
 explicit in-place translation history independently requires format 5.
 Explicit in-place rotation/reflection history requires format 6.
+Direct stable-ID vertex moves and segment-length changes require format 7.
 
 Point construction copies the finite endpoint directly into a straight segment
 after checking its exact start and minimum chord length. It performs no angle
@@ -142,12 +144,13 @@ unsupported versions, invalid identifiers, non-finite coordinates, malformed
 asset hex, and asset digest mismatches before a command can be applied.
 
 The supported `kind` values are `apply_entity_changes`, `name_revision`,
-`translate_boundary`, and `transform_boundary`. An apply envelope contains
+`translate_boundary`, `transform_boundary`, and `edit_boundary_geometry`. An apply envelope contains
 typed `entity_changes` and `asset_changes`; an upsert carries the complete
 entity or asset payload and an erase carries its stable ID. Assets use a
 lowercase `bytes_hex` representation and retain their SHA-256. Translation
 and transform envelopes carry explicit finite `offset`, `pivot`, rotation, and
-reflection fields. `ProjectWorkspace::prepare` round-trips each command
+reflection fields. Boundary geometry envelopes carry the strict edit intent
+described above. `ProjectWorkspace::prepare` round-trips each command
 through this codec on an isolated immutable fork before staging one document
 revision, so one accepted compound operation has one undoable history entry.
 
@@ -484,7 +487,8 @@ the v5 translation column and adds nullable `TEXT`
 `flip_vertical`, and `offset`. Points are finite two-number arrays in metres,
 the angle is finite radians, and both flip fields are Booleans. Unknown versions,
 duplicate or extra keys, and malformed values reject. SQL NULL is absence;
-JSON null is invalid. A revision cannot contain both proof types.
+JSON null is invalid. A revision cannot contain more than one boundary
+derivation proof.
 
 Transform proofs participate in the same digests, resource budgets, complete
 state reconstruction, and navigation restrictions as translation proofs.
@@ -496,6 +500,27 @@ transform proofs keep their earlier minimum format and digest representation.
 JSON/assets extraction uses exchange version 3 when a transform proof occurs
 and emits `boundary_transform` on its command revision. Translation-only and
 proof-free histories retain exchange versions 2 and 1, respectively.
+
+Version 7 adds nullable `revisions.boundary_edit_json`. A present value is a
+strict version-1 `move_vertex` or `resize_segment` intent. Vertex moves store the
+boundary ID, stable vertex ID, and absolute finite position. Segment resize
+intents store the boundary ID, stable segment ID, positive analytical length in
+metres, fixed endpoint (`start` or `end`), and the explicit connected-chain
+choice. The edit retains all existing boundary, segment, and vertex IDs.
+
+The first direct edit of a receipt-backed boundary moves the exact original
+`boundary_authoring` envelope into
+`extensions.boundary_geometry_derivation.source_boundary_authoring` and appends
+the edit intent to its ordered `operations` array. Subsequent coordinate edits,
+translations, rotations, and reflections append in command order. Load and
+document restoration replay the original construction and every operation, then
+require an exact match with canonical geometry and command history.
+The original construction evidence is therefore preserved without pretending
+that it produced the manually edited coordinates. A missing, forged, reordered,
+or incompatible edit proof rejects the project. A v7 archive is distinguished
+by its recovery table exactly like v5 and v6. JSON/assets extraction uses
+exchange version 4 and writes `boundary_geometry_edit` on each corresponding
+command revision, including retained undone and abandoned history.
 
 ## Save and replacement protocol
 

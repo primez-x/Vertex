@@ -514,14 +514,40 @@ Per-edge metadata stays with its continuing edge identity: the first piece of
 a split retains it, the new second piece starts without it, and unaffected
 edges keep their metadata. Unhandled directional receipts on a split edge
 reject the edit atomically rather than being discarded or duplicated.
-Legacy anonymous and receipt-bound boundaries fail
-closed until their identity and derivation policies are explicit. Receipt-bound
-derivation edits, linked-relationship propagation, and full architectural
-transform qualification remain open. The **Create room boundary
+Legacy anonymous and receipt-bound boundaries fail closed for topology-changing
+vertex insertion until their identity and derivation policies are explicit.
+Linked-relationship propagation and full architectural transform qualification
+remain open. The **Create room boundary
 from selected geometry** command can also assemble the selected wall's
 connected analytical component into one room boundary. It preserves the
 source walls, rejects open/branched/disconnected topology, and commits the
 room through normal document history.
+
+## Direct boundary editing
+
+Selecting a supported closed boundary displays blue vertex handles sized in
+screen pixels, so they remain usable at different zoom levels and do not appear
+in print or export output. Dragging a handle previews both incident edges on the
+canvas and commits one revision on release. Escape cancels the preview. The
+press captures the document revision, boundary ID, and vertex ID; a stale
+release cannot modify a newer document state.
+
+Double-clicking the boundary, choosing **Edit boundary geometry** from its
+context menu, or using the inspector action opens the edge-length editor. It
+shows every edge with its current analytical length, accepts a new length in the
+active units, lets the user keep either endpoint fixed, and includes an explicit
+**Move connected boundary chain** choice. With that choice off, the unfixed
+vertex moves. With it on, the remaining boundary chain translates together.
+This option does not infer connections to another object from overlapping
+coordinates.
+
+Both paths use the typed revision-checked document command. They preserve stable
+boundary, segment, and vertex IDs, so existing length and angle dimensions keep
+their targets. For receipt-backed geometry, Vertex archives the exact original
+construction envelope and appends replayable coordinate-edit intents instead of
+rewriting historical measurement input. Invalid, degenerate,
+self-intersecting, unsupported, or stale edits leave the document unchanged.
+Undo/redo and format-v7 save/reopen reconstruct the exact edited state.
 
 **Redefine boundary…** starts the same Draw First editor against the selected
 identified boundary. Finish with the same number of edges to replace its

@@ -23,6 +23,7 @@
 #include "sketch/boundary_commit.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_receipt.hpp"
+#include "sketch/boundary_transform.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/dxf_project_exchange.hpp"
 #include "sketch/ifc_project_exchange.hpp"
@@ -2940,10 +2941,13 @@ public:
         const Vec2 offset{parse_offset(offset_x), parse_offset(offset_y)};
         if (!std::isfinite(offset.x) || !std::isfinite(offset.y))
             throw std::invalid_argument("Boundary offsets must be finite.");
-        if (!clone && original.properties.contains("boundary_authoring")) {
+        const PlanarTransform requested_transform{
+            pivot, radians, flip_horizontal, flip_vertical, offset};
+        if (!clone && (original.properties.contains("boundary_authoring") ||
+                       original.extensions.contains("boundary_geometry_derivation"))) {
             if (radians != 0.0 || flip_horizontal || flip_vertical)
                 return {TransformBoundary{source.revision(),
-                    {original.id, PlanarTransform{pivot,radians,flip_horizontal,flip_vertical,offset}}}, original.id};
+                    {original.id, requested_transform}}, original.id};
             return {TranslateBoundary{source.revision(), {original.id, offset}}, original.id};
         }
         if (std::abs(radians) > 0.0)
@@ -2970,9 +2974,14 @@ public:
                     dimension.id = new_id("dimension");
                     dimension.boundary_id = identities.at(original.id);
                     dimension.segment_id = identities.at(dimension.segment_id);
+                    if (!dimension.secondary_segment_id.empty())
+                        dimension.secondary_segment_id = identities.at(
+                            dimension.secondary_segment_id);
+                    if (!dimension.vertex_id.empty())
+                        dimension.vertex_id = identities.at(dimension.vertex_id);
                 }
                 dimension.text_position = transform_point(dimension.text_position,
-                    PlanarTransform{pivot,radians,flip_horizontal,flip_vertical,offset});
+                    requested_transform);
                 auto dimension_metadata = entity;
                 dimension_metadata.id = dimension.id;
                 auto dimension_ids = identities;
@@ -2985,6 +2994,7 @@ public:
         const auto revision = source.revision();
         if (clone) {
             std::optional<BoundaryConstructionRecord> construction;
+            std::optional<json> source_derivation;
             if (original.properties.contains("boundary_authoring")) {
                 const auto decoded = decode_boundary_receipt_envelope(original.properties.at("boundary_authoring"));
                 if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
@@ -2992,6 +3002,15 @@ public:
                 // Only this qualified envelope is handled below. Other owned
                 // semantics still pass through the ordinary retirement guard.
                 original.properties.erase("boundary_authoring");
+            }
+            if (original.extensions.contains("boundary_geometry_derivation")) {
+                if (construction)
+                    throw std::invalid_argument("Boundary has conflicting geometry provenance");
+                source_derivation = original.extensions.at("boundary_geometry_derivation");
+                // This qualified extension is remapped below. Keeping the old
+                // owner and child IDs in metadata would make the clone proof
+                // refer back to the source boundary.
+                original.extensions.erase("boundary_geometry_derivation");
             }
             LegacyBoundaryIdentityOptions ids;
             ids.segment_ids.reserve(transformed.segments.size());
@@ -3014,20 +3033,82 @@ public:
                 identities.emplace(transformed.segments[index].start_vertex_id, ids.vertex_ids[index]);
             }
             std::optional<json> envelope;
+            std::optional<json> derivation;
             if (construction) {
                 const auto translated = transformed_boundary_construction(*construction,
-                    PlanarTransform{pivot,radians,flip_horizontal,flip_vertical,offset}, identities);
+                    requested_transform, identities);
                 const auto replay = replay_boundary_construction(translated);
                 cloned.segments.clear();
                 for (const auto& edge : replay.edges)
                     cloned.segments.push_back({edge.segment_id, edge.start_vertex_id, edge.end_vertex_id, edge.segment});
                 envelope = encode_boundary_receipt_envelope(translated);
             }
+            if (source_derivation) {
+                const auto& value = *source_derivation;
+                if (!value.is_object() || value.size() != 3 || value.value("version", 0) != 1 ||
+                    !value.contains("source_boundary_authoring") ||
+                    !value.contains("operations") || !value.at("operations").is_array() ||
+                    value.at("operations").empty()) {
+                    throw std::invalid_argument("Boundary geometry derivation is invalid");
+                }
+                const auto decoded = decode_boundary_receipt_envelope(
+                    value.at("source_boundary_authoring"));
+                if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+                const auto remapped_construction = transformed_boundary_construction(
+                    *decoded.record, {}, identities);
+                auto operations = json::array();
+                for (const auto& operation : value.at("operations")) {
+                    if (!operation.is_object() || operation.size() != 2 ||
+                        !operation.contains("kind") || !operation.at("kind").is_string() ||
+                        !operation.contains("value")) {
+                        throw std::invalid_argument(
+                            "Boundary geometry derivation operation is invalid");
+                    }
+                    const auto kind = operation.at("kind").get<std::string>();
+                    if (kind == "geometry_edit") {
+                        auto edit = decode_boundary_geometry_edit(operation.at("value"));
+                        if (edit.boundary_id != original.id)
+                            throw std::invalid_argument(
+                                "Boundary geometry derivation owner does not match");
+                        const auto target = identities.find(edit.target_id);
+                        if (target == identities.end())
+                            throw std::invalid_argument(
+                                "Boundary geometry derivation target does not exist");
+                        edit.boundary_id = clone_id;
+                        edit.target_id = target->second;
+                        operations.push_back({{"kind", "geometry_edit"},
+                            {"value", encode_boundary_geometry_edit(edit)}});
+                    } else if (kind == "transform") {
+                        auto transform = decode_boundary_transform(operation.at("value"));
+                        if (transform.boundary_id != original.id)
+                            throw std::invalid_argument(
+                                "Boundary geometry derivation owner does not match");
+                        transform.boundary_id = clone_id;
+                        operations.push_back({{"kind", "transform"},
+                            {"value", encode_boundary_transform(transform)}});
+                    } else {
+                        throw std::invalid_argument(
+                            "Boundary geometry derivation operation kind is unsupported");
+                    }
+                }
+                if (radians != 0.0 || flip_horizontal || flip_vertical ||
+                    offset.x != 0.0 || offset.y != 0.0) {
+                    operations.push_back({{"kind", "transform"},
+                        {"value", encode_boundary_transform(
+                            BoundaryTransformation{clone_id, requested_transform})}});
+                }
+                derivation = json{{"version", 1},
+                    {"source_boundary_authoring",
+                     encode_boundary_receipt_envelope(remapped_construction)},
+                    {"operations", std::move(operations)}};
+            }
             auto metadata = original;
             metadata.id = clone_id;
             remap_entity_references(metadata, identities);
             auto encoded = encode_identified_boundary_entity(cloned, &metadata);
             if (envelope) encoded.properties["boundary_authoring"] = *envelope;
+            if (derivation)
+                encoded.extensions["boundary_geometry_derivation"] = std::move(*derivation);
             std::vector<EntityChange> changes{EntityChange::upsert(std::move(encoded))};
             append_dimensions(changes, identities);
             return {ApplyEntityChanges{
@@ -12255,6 +12336,70 @@ public:
         }
     }
 
+    bool applySelectedBoundaryGeometryEdit(
+        BoundaryGeometryEdit edit, std::optional<Revision> expected_revision = std::nullopt) {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        try {
+            const auto source = authoringSnapshot();
+            const auto selected = m_selected_id.toStdString();
+            if (selected.empty() || edit.boundary_id != selected)
+                throw std::invalid_argument("The selected boundary changed before the edit was committed.");
+            const auto found = source.entities().find(selected);
+            if (found == source.entities().end() ||
+                !is_closed_boundary_entity(found->second.type)) {
+                throw std::invalid_argument("Select an identified closed boundary first.");
+            }
+            const auto revision = expected_revision.value_or(source.revision());
+            const EditBoundaryGeometry command{revision, std::move(edit)};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Boundary geometry: %1")
+                         .arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    bool moveSelectedBoundaryVertex(
+        const QString& vertex_id, Vec2 position,
+        std::optional<Revision> expected_revision = std::nullopt) {
+        return applySelectedBoundaryGeometryEdit(
+            BoundaryGeometryEdit{m_selected_id.toStdString(),
+                                 BoundaryGeometryEditKind::move_vertex,
+                                 vertex_id.trimmed().toStdString(), position},
+            expected_revision);
+    }
+
+    bool editSelectedBoundaryEdgeLength(
+        const QString& segment_id, const QString& expression,
+        BoundaryFixedEndpoint fixed_endpoint, bool move_connected,
+        std::optional<Revision> expected_revision = std::nullopt) {
+        try {
+            const auto quantity = parse_quantity(
+                expression.toStdString(), m_metric_units ? Unit::metre : Unit::foot);
+            if (!(quantity.metres > 1e-7))
+                throw std::invalid_argument("Edge length must be greater than zero.");
+            BoundaryGeometryEdit edit;
+            edit.boundary_id = m_selected_id.toStdString();
+            edit.kind = BoundaryGeometryEditKind::resize_segment;
+            edit.target_id = segment_id.trimmed().toStdString();
+            edit.target_length_metres = quantity.metres;
+            edit.fixed_endpoint = fixed_endpoint;
+            edit.move_connected = move_connected;
+            return applySelectedBoundaryGeometryEdit(std::move(edit), expected_revision);
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Boundary edge length: %1")
+                         .arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     bool jumpSelectedBoundaryVertex(const QString& vertex_id) {
         try {
             const auto selected = selectedEntity();
@@ -19441,6 +19586,14 @@ private:
         m_constraint_button->setObjectName(QStringLiteral("editWallConstraints"));
         inspector_layout->addWidget(m_constraint_button);
         QObject::connect(m_constraint_button, &QPushButton::clicked, owner, [this] { showConstraintEditor(); });
+        m_boundary_geometry_button = new QPushButton(
+            QStringLiteral("Edit boundary geometry…"), inspector_body);
+        m_boundary_geometry_button->setObjectName(QStringLiteral("editBoundaryGeometry"));
+        m_boundary_geometry_button->setToolTip(QStringLiteral(
+            "Change an edge length and anchor, or use the canvas vertex handles"));
+        inspector_layout->addWidget(m_boundary_geometry_button);
+        QObject::connect(m_boundary_geometry_button, &QPushButton::clicked, owner,
+                         [this] { showBoundaryGeometryEditor(); });
         auto* form = new QFormLayout;
         m_geometry_form = form;
         form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
@@ -19847,6 +20000,13 @@ private:
             [this](QString id, double scale, double rotation) {
                 return transformSelectionFromCanvas(id, scale, rotation);
             });
+        canvas->setBoundaryVertexMoveRequested(
+            [this](QString id, QString vertex_id, Vec2 position,
+                   std::uint64_t source_revision) {
+                if (id != m_selected_id && !selectEntity(id, false)) return false;
+                return moveSelectedBoundaryVertex(
+                    vertex_id, position, static_cast<Revision>(source_revision));
+            });
         canvas->setCursorMoved([this, canvas](Vec2 point) {
             // Snap toggles update both canvases; only the active workspace
             // owns the shared authoring pointer and cursor status.
@@ -19917,7 +20077,12 @@ private:
                     }
                 }
                 const auto selected = selectedEntity();
-                if (selected && is_closed_boundary_entity(selected->type)) {
+                if (selected && is_closed_boundary_entity(selected->type) &&
+                    inspect_boundary_entity_version(*selected).format ==
+                        BoundaryEntityFormat::identified_v1) {
+                    auto* geometry = menu.addAction(QStringLiteral("Edit boundary geometry…"));
+                    QObject::connect(geometry, &QAction::triggered, owner,
+                                     [this] { showBoundaryGeometryEditor(); });
                     for (const auto* id : {"createRoom", "createSlab", "createFloor"})
                         menu.addAction(owner->findChild<QAction*>(QString::fromLatin1(id)));
                 }
@@ -20348,6 +20513,17 @@ private:
                     ? 0.7 : 1.0;
                 canvas_entity.filled = presentation.filled;
                 canvas_entity.output_stroke_width_mm = 0.34;
+                if (canvas_entity.selected && m_document->is_editable() &&
+                    inspect_boundary_entity_version(entity).format ==
+                        BoundaryEntityFormat::identified_v1) {
+                    const auto identified = decode_identified_boundary_entity(entity);
+                    canvas_entity.vertex_handles.reserve(identified.segments.size());
+                    for (const auto& edge : identified.segments) {
+                        canvas_entity.vertex_handles.push_back(
+                            {id_from(edge.start_vertex_id), edge.segment.start,
+                             snapshot.revision()});
+                    }
+                }
 
                 const auto label_text = plan_area_label(geometry_entity);
                 if (!label_text.isEmpty()) {
@@ -22245,6 +22421,11 @@ private:
         const bool reference_asset = entity.has_value() && entity->type == "reference_asset";
         const bool project_entity = entity.has_value() && entity->type == "property";
         const bool area_entity = entity.has_value() && is_closed_boundary_entity(entity->type);
+        const bool directly_editable_boundary = area_entity &&
+            inspect_boundary_entity_version(*entity).format ==
+                BoundaryEntityFormat::identified_v1;
+        m_boundary_geometry_button->setVisible(directly_editable_boundary);
+        m_boundary_geometry_button->setEnabled(directly_editable_boundary && editable);
         const bool building_object = entity && can_recognize_building_entity_type(entity->type);
         const bool material_object = wall || opening || slab || building_object ||
             (entity && (entity->type == "room" || entity->type == "room_boundary"));
@@ -23691,6 +23872,99 @@ public:
         }
     }
 
+    void showBoundaryGeometryEditor() {
+        const auto selected = selectedEntity();
+        if (!selected || !is_closed_boundary_entity(selected->type) ||
+            !m_document->is_editable()) {
+            setError(QStringLiteral("Select an editable measurement or room boundary first."));
+            return;
+        }
+        const auto context = captureModalContext();
+        try {
+            const auto boundary = decode_identified_boundary_entity(*selected);
+            QDialog dialog(owner);
+            styleDialog(dialog);
+            dialog.setObjectName(QStringLiteral("boundaryGeometryDialog"));
+            dialog.setWindowTitle(QStringLiteral("Edit boundary geometry"));
+            dialog.setModal(true);
+            dialog.resize(460, 280);
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* help = new QLabel(QStringLiteral(
+                "Choose an edge, enter its analytical length, and choose the point that stays fixed. "
+                "You can also drag the blue vertex handles directly on the canvas."), &dialog);
+            help->setWordWrap(true);
+            layout->addWidget(help);
+            auto* form = new QFormLayout;
+            auto* edge = new QComboBox(&dialog);
+            edge->setObjectName(QStringLiteral("boundaryEdge"));
+            for (std::size_t index = 0; index < boundary.segments.size(); ++index) {
+                const auto& value = boundary.segments[index];
+                edge->addItem(QStringLiteral("Edge %1  ·  %2")
+                                  .arg(index + 1)
+                                  .arg(format_length(segment_length(value.segment), m_metric_units)),
+                              id_from(value.segment_id));
+            }
+            form->addRow(QStringLiteral("Edge"), edge);
+            auto* length = new QLineEdit(&dialog);
+            length->setObjectName(QStringLiteral("boundaryEdgeLength"));
+            form->addRow(QStringLiteral("New length"), length);
+            auto* fixed = new QComboBox(&dialog);
+            fixed->setObjectName(QStringLiteral("boundaryFixedEndpoint"));
+            fixed->addItem(QStringLiteral("Keep start point fixed"), QStringLiteral("start"));
+            fixed->addItem(QStringLiteral("Keep end point fixed"), QStringLiteral("end"));
+            form->addRow(QStringLiteral("Anchor"), fixed);
+            auto* connected = new QCheckBox(
+                QStringLiteral("Move the connected boundary chain"), &dialog);
+            connected->setObjectName(QStringLiteral("boundaryMoveConnected"));
+            connected->setToolTip(QStringLiteral(
+                "Moves every other boundary vertex together; only the two edges at the fixed point reshape."));
+            form->addRow(connected);
+            layout->addLayout(form);
+            auto* status = new QLabel(&dialog);
+            status->setObjectName(QStringLiteral("boundaryGeometryStatus"));
+            status->setWordWrap(true);
+            layout->addWidget(status);
+            auto* buttons = new QDialogButtonBox(
+                QDialogButtonBox::Apply | QDialogButtonBox::Cancel, &dialog);
+            buttons->setObjectName(QStringLiteral("boundaryGeometryButtons"));
+            layout->addWidget(buttons);
+            const auto refresh_length = [&] {
+                const auto index = edge->currentIndex();
+                if (index < 0 || static_cast<std::size_t>(index) >= boundary.segments.size()) return;
+                length->setText(format_length(
+                    segment_length(boundary.segments[static_cast<std::size_t>(index)].segment),
+                    m_metric_units));
+                length->selectAll();
+            };
+            QObject::connect(edge, &QComboBox::currentIndexChanged, &dialog,
+                             [refresh_length](int) { refresh_length(); });
+            QObject::connect(buttons->button(QDialogButtonBox::Cancel), &QPushButton::clicked,
+                             &dialog, &QDialog::reject);
+            QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked,
+                             &dialog, [&] {
+                if (!modalContextUnchanged(context)) {
+                    status->setText(lastError());
+                    return;
+                }
+                const auto endpoint = fixed->currentData().toString() == QStringLiteral("end")
+                    ? BoundaryFixedEndpoint::end : BoundaryFixedEndpoint::start;
+                if (editSelectedBoundaryEdgeLength(
+                        edge->currentData().toString(), length->text(), endpoint,
+                        connected->isChecked(), context.revision)) {
+                    dialog.accept();
+                } else {
+                    status->setText(lastError());
+                }
+            });
+            refresh_length();
+            dialog.exec();
+            refreshInspector();
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Boundary geometry: %1")
+                         .arg(QString::fromUtf8(error.what())));
+        }
+    }
+
     void showWallLayerEditor() {
         const auto selected = selectedEntity();
         const bool wall = selected && selected->type == "wall";
@@ -24587,6 +24861,7 @@ private:
     QPushButton* m_apply_reference_button{};
     QPushButton* m_calibrate_reference_button{};
     QPushButton* m_constraint_button{};
+    QPushButton* m_boundary_geometry_button{};
     QToolButton* m_grid_button{};
     QToolButton* m_snap_button{};
     QToolButton* m_fit_button{};
@@ -24990,6 +25265,20 @@ bool MainWindow::deleteSelection() {
 bool MainWindow::insertSelectedBoundaryVertex(const QString& segment_id,
                                               const QString& fraction) {
     return m_impl->insertSelectedBoundaryVertex(segment_id, fraction);
+}
+
+bool MainWindow::moveSelectedBoundaryVertex(
+    const QString& vertex_id, Vec2 position,
+    std::optional<Revision> expected_revision) {
+    return m_impl->moveSelectedBoundaryVertex(vertex_id, position, expected_revision);
+}
+
+bool MainWindow::editSelectedBoundaryEdgeLength(
+    const QString& segment_id, const QString& expression,
+    BoundaryFixedEndpoint fixed_endpoint, bool move_connected,
+    std::optional<Revision> expected_revision) {
+    return m_impl->editSelectedBoundaryEdgeLength(
+        segment_id, expression, fixed_endpoint, move_connected, expected_revision);
 }
 
 bool MainWindow::jumpSelectedBoundaryVertex(const QString& vertex_id) {

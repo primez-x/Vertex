@@ -11,6 +11,7 @@
 #include "sketch/project_store.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_dimension.hpp"
+#include "sketch/boundary_construction.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/building_entity.hpp"
@@ -1389,6 +1390,193 @@ void test_boundary_vertex_insertion_workflow() {
                 QStringLiteral("0.5")) && window.document().snapshot().entities()==receipt_snapshot.entities() &&
         window.document().revision()==receipt_snapshot.revision(),
         "insertion must reject an unhandled edge receipt without discarding it or changing the document");
+}
+
+void test_direct_boundary_geometry_edit_workflow() {
+    using namespace sketch;
+    BoundaryAuthoringOptions options;
+    BoundaryAuthoringSession session(BoundaryAuthoringMode::draw_first, options);
+    (void)session.anchor({0, 0});
+    (void)session.add_line_rise_run(parse_quantity("0 m", Unit::metre),
+                                    parse_quantity("4 m", Unit::metre));
+    (void)session.add_line_rise_run(parse_quantity("3 m", Unit::metre),
+                                    parse_quantity("0 m", Unit::metre));
+    (void)session.add_line_rise_run(parse_quantity("0 m", Unit::metre),
+                                    parse_quantity("-4 m", Unit::metre));
+    (void)session.add_line_rise_run(parse_quantity("-3 m", Unit::metre),
+                                    parse_quantity("0 m", Unit::metre));
+    session.classify_current_chain("living");
+    const auto accepted = session.close_chain();
+    auto boundary_entity = encode_identified_boundary_entity(accepted.boundary);
+    boundary_entity.properties["classification"] = "living";
+    boundary_entity.properties["boundary_authoring"] =
+        boundary_construction_envelope(accepted, options);
+    const auto original_receipt = boundary_entity.properties.at("boundary_authoring");
+    const auto& first = accepted.boundary.segments[0];
+    const auto& second = accepted.boundary.segments[1];
+    auto length_dimension = encode_boundary_dimension_entity(BoundaryDimension{
+        "direct-length", accepted.boundary.id, first.segment_id, {2, -0.5}});
+    BoundaryDimension angle;
+    angle.id = "direct-angle";
+    angle.boundary_id = accepted.boundary.id;
+    angle.segment_id = first.segment_id;
+    angle.secondary_segment_id = second.segment_id;
+    angle.vertex_id = first.end_vertex_id;
+    angle.text_position = {4.4, 0.4};
+    angle.kind = BoundaryDimensionKind::angle;
+    auto angle_dimension = encode_boundary_dimension_entity(angle);
+
+    desktop::MainWindow window;
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(boundary_entity), EntityChange::upsert(length_dimension),
+         EntityChange::upsert(angle_dimension)}, {}, "direct boundary fixture"});
+    const auto id = QString::fromStdString(accepted.boundary.id);
+    require(window.selectEntity(id), "direct-edit boundary fixture must be selectable");
+    const auto before = window.document().revision();
+    require(window.moveSelectedBoundaryVertex(
+                QString::fromStdString(first.end_vertex_id), {5, 0.5}, before) &&
+                window.document().revision() == before + 1,
+            "canvas vertex edit must commit one revision through the typed command");
+    auto moved_entity = window.document().snapshot().entities().at(accepted.boundary.id);
+    auto moved = decode_identified_boundary_entity(moved_entity);
+    require(moved.segments[0].segment.end.x == 5 && moved.segments[0].segment.end.y == 0.5 &&
+                moved.segments[1].segment.start.x == 5 && moved.segments[1].segment.start.y == 0.5 &&
+                moved.segments[0].segment_id == first.segment_id &&
+                moved.segments[0].end_vertex_id == first.end_vertex_id,
+            "vertex edit must update both incident edges while retaining stable identities");
+    require(!moved_entity.properties.contains("boundary_authoring") &&
+                moved_entity.extensions.at("boundary_geometry_derivation")
+                    .at("source_boundary_authoring") == original_receipt &&
+                moved_entity.extensions.at("boundary_geometry_derivation")
+                    .at("operations").size() == 1,
+            "manual editing must archive exact construction evidence and append replayable intent");
+    const auto moved_snapshot = window.document().snapshot();
+    require(decode_boundary_dimension_entity(moved_snapshot.entities().at("direct-length"))
+                    .dimension->resolve(moved_entity).segment_length() > 5.0 &&
+                std::isfinite(decode_boundary_dimension_entity(
+                    moved_snapshot.entities().at("direct-angle")).dimension->resolve(moved_entity).angle()),
+            "length and angle dimensions must remain resolvable through coordinate edits");
+
+    const auto after_move = window.document().revision();
+    require(window.editSelectedBoundaryEdgeLength(
+                QString::fromStdString(first.segment_id), QStringLiteral("6 m"),
+                BoundaryFixedEndpoint::start, false, after_move),
+            "selected boundary edge must accept an explicit target length and fixed endpoint");
+    const auto resized_entity = window.document().snapshot().entities().at(accepted.boundary.id);
+    const auto resized = decode_identified_boundary_entity(resized_entity);
+    require(std::abs(segment_length(resized.segments[0].segment) - 6.0) < 1e-9 &&
+                resized_entity.extensions.at("boundary_geometry_derivation")
+                    .at("operations").size() == 2,
+            "edge length edit must be analytical and extend its replayable derivation");
+    require(window.undoCommand() &&
+                decode_identified_boundary_entity(window.document().snapshot().entities().at(
+                    accepted.boundary.id)) == moved &&
+                window.redoCommand() &&
+                decode_identified_boundary_entity(window.document().snapshot().entities().at(
+                    accepted.boundary.id)) == resized,
+            "direct boundary edits must undo and redo exactly");
+
+    const auto stable = window.document().snapshot();
+    require(!window.moveSelectedBoundaryVertex(
+                QString::fromStdString(first.start_vertex_id), {-1, 0}, after_move) &&
+                window.document().snapshot().revision() == stable.revision() &&
+                window.document().snapshot().entities() == stable.entities(),
+            "stale handle release must reject without mutating the document");
+    require(!window.moveSelectedBoundaryVertex(
+                QString::fromStdString(first.end_vertex_id), {0, 0}) &&
+                window.document().snapshot().entities() == stable.entities(),
+            "degenerate vertex edits must reject atomically");
+
+    require(window.transformSelectedBoundary(QStringLiteral("10"), false, false,
+                QStringLiteral("1 m"), QStringLiteral("0 m"), false),
+            "a directly edited receipt-backed boundary must remain transformable");
+    const auto transformed_entity = window.document().snapshot().entities().at(
+        accepted.boundary.id);
+    const auto transformed = decode_identified_boundary_entity(transformed_entity);
+    require(transformed != resized &&
+                transformed_entity.extensions.at("boundary_geometry_derivation")
+                    .at("operations").size() == 3,
+            "the typed transform must append to the ordered boundary derivation");
+    const auto transformed_vertex = transformed.segments[1].segment.start;
+    require(window.moveSelectedBoundaryVertex(
+                QString::fromStdString(first.end_vertex_id),
+                {transformed_vertex.x + 0.1, transformed_vertex.y + 0.1},
+                window.document().revision()),
+            "a boundary must remain directly editable after a typed transform");
+    const auto final_boundary = decode_identified_boundary_entity(
+        window.document().snapshot().entities().at(accepted.boundary.id));
+    require(window.undoCommand() &&
+                decode_identified_boundary_entity(window.document().snapshot().entities().at(
+                    accepted.boundary.id)) == transformed &&
+                window.redoCommand() &&
+                decode_identified_boundary_entity(window.document().snapshot().entities().at(
+                    accepted.boundary.id)) == final_boundary,
+            "edit-transform-edit history must undo and redo exactly");
+
+    const auto source_before_clone = window.document().snapshot().entities().at(
+        accepted.boundary.id);
+    const auto derived_clone_ok = window.transformSelectedBoundary(
+        QStringLiteral("0"), false, false,
+        QStringLiteral("2 m"), QStringLiteral("1 m"), true);
+    if (!derived_clone_ok)
+        std::cerr << "derived boundary clone error: "
+                  << window.lastError().toStdString() << '\n';
+    require(derived_clone_ok,
+            "a directly edited boundary must support a transformed copy");
+    const auto clone_id = window.selectedEntityId().toStdString();
+    const auto clone_snapshot = window.document().snapshot();
+    require(clone_id != accepted.boundary.id &&
+                clone_snapshot.entities().at(accepted.boundary.id) == source_before_clone,
+            "derived-boundary cloning must preserve the source exactly");
+    const auto& clone_entity = clone_snapshot.entities().at(clone_id);
+    const auto cloned_boundary = decode_identified_boundary_entity(clone_entity);
+    require(cloned_boundary.segments.size() == final_boundary.segments.size(),
+            "derived-boundary clone must preserve topology");
+    for (std::size_t index = 0; index < cloned_boundary.segments.size(); ++index) {
+        const auto& source_edge = final_boundary.segments[index];
+        const auto& cloned_edge = cloned_boundary.segments[index];
+        require(cloned_edge.segment_id != source_edge.segment_id &&
+                    cloned_edge.start_vertex_id != source_edge.start_vertex_id &&
+                    std::abs(cloned_edge.segment.start.x - source_edge.segment.start.x - 2.0) < 1e-9 &&
+                    std::abs(cloned_edge.segment.start.y - source_edge.segment.start.y - 1.0) < 1e-9 &&
+                    std::abs(cloned_edge.segment.end.x - source_edge.segment.end.x - 2.0) < 1e-9 &&
+                    std::abs(cloned_edge.segment.end.y - source_edge.segment.end.y - 1.0) < 1e-9,
+                "derived-boundary clone must use fresh IDs and the requested transform");
+    }
+    const auto& clone_derivation =
+        clone_entity.extensions.at("boundary_geometry_derivation");
+    require(clone_derivation.at("operations").size() == 5,
+            "derived-boundary clone must retain remapped edit history and append its transform");
+    for (const auto& operation : clone_derivation.at("operations")) {
+        require(operation.at("value").at("boundary_id") == clone_id,
+                "every cloned derivation operation must target the cloned boundary");
+    }
+    require(window.undoCommand() &&
+                !window.document().snapshot().entities().contains(clone_id) &&
+                window.redoCommand() &&
+                window.document().snapshot().entities().at(clone_id) == clone_entity,
+            "derived-boundary cloning must undo and redo exactly");
+
+    QTemporaryDir directory;
+    const auto path = directory.filePath(QStringLiteral("boundary-edit.bldproj"));
+    require(directory.isValid() && window.saveProjectAs(path),
+            "typed boundary edit history must save");
+    desktop::MainWindow reopened;
+    require(reopened.openProject(path), "typed boundary edit project must reopen");
+    const auto reopened_snapshot = reopened.document().snapshot();
+    require(decode_identified_boundary_entity(reopened_snapshot.entities().at(
+                accepted.boundary.id)) == final_boundary,
+            "typed boundary edit geometry must survive save and reopen");
+    require(reopened_snapshot.entities().at(clone_id) == clone_entity,
+            "a derived-boundary clone and its remapped proof must survive save and reopen");
+    const auto persisted_edits = std::count_if(
+        reopened_snapshot.history().begin(), reopened_snapshot.history().end(),
+        [](const RevisionRecord& record) { return record.boundary_geometry_edit.has_value(); });
+    const auto persisted_transforms = std::count_if(
+        reopened_snapshot.history().begin(), reopened_snapshot.history().end(),
+        [](const RevisionRecord& record) { return record.boundary_transform.has_value(); });
+    require(persisted_edits == 3 && persisted_transforms == 1,
+            "typed edit and transform proofs must survive save and reopen");
 }
 
 void test_boundary_redefinition_workflow() {
@@ -4759,6 +4947,7 @@ int main(int argc, char** argv) {
     test_material_clipboard_transfer();
     test_delete_selection_workflow();
     test_boundary_vertex_insertion_workflow();
+    test_direct_boundary_geometry_edit_workflow();
     test_boundary_redefinition_workflow();
     test_automatic_room_boundary_detection_workflow();
     test_explicit_boundary_geometry_operations();

@@ -10,6 +10,12 @@ namespace sketch {
 [[nodiscard]] std::map<std::string, Entity, std::less<>> translated_boundary_entities(
     const std::map<std::string, Entity, std::less<>>& source,
     const BoundaryTranslation& translation);
+// Deterministically applies a stable-ID coordinate edit. Receipt-backed input
+// is retained as immutable derivation evidence and the edit list is replayed
+// during integrity validation and project-history restoration.
+[[nodiscard]] std::map<std::string, Entity, std::less<>> edited_boundary_entities(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const BoundaryGeometryEdit& edit);
 // Validate every supported boundary, qualified construction receipt and
 // dimension, including stable child references, even when another entity has an unknown version. Unknown
 // versions return a document-wide read-only reason.
