@@ -32,9 +32,16 @@ The Drawing sheets dialog also manages the page collection. A new page is
 created through the typed model with a validated size, copied project
 title-block context, and one independently scaled viewport for each
 coordinated view. Removing a page is undoable and fails when it would leave a
-dangling cross-sheet callout or remove the final page. The dialog selects the
-page used by draft PDF, SVG, and print output; that presentation selection is
-included in the output scene fingerprint without dirtying the document.
+dangling cross-sheet callout or remove the final page. Move up/down commands
+persist an explicit page order through normal undo/redo and save/reopen. The
+dialog also selects the page used by single-sheet PDF, SVG, PNG, and print
+output; that presentation selection does not dirty the document. Drawing-set
+PDF and print commands enumerate every page in the persisted order and bind the
+complete ordered set to a distinct output fingerprint. Drawing-set preview is
+rendered from the staged multipage PDF instead of Qt's single-layout preview
+widget, so portrait, landscape, and custom pages retain their own geometry.
+Physical printing preflights every page and aborts the printer job if a later
+page layout or render fails.
 The selected sheet's persisted width and height in millimetres determine the
 PDF physical page with zero margins, SVG physical dimensions and
 viewBox aspect, and the custom paper requested by print preview. Changing the
@@ -93,12 +100,15 @@ lexical order. The desktop editor exposes the persisted revision and callout
 collections with typed graph validation; callout target sheet and viewport
 references are never inferred from display labels.
 
-Version 3 JSON uses `sketch.sheet_view_model`, persists section overlays, and
+Version 4 JSON uses `sketch.sheet_view_model`, persists section overlays and an
+explicit `sheet_order` that is an exact permutation of the sheet identities, and
 rejects unknown/missing fields,
 invalid enum names, nonfinite numeric values, malformed frames and dangling
-references. Version 1 and 2 documents remain readable and normalize missing
-`object_ids` or overlay collections to empty lists before strict validation. Collections serialize in
-ID order (schedule registry lexically),
+references. Version 1 through 3 documents remain readable, normalize missing
+`object_ids` or overlay collections to empty lists, and derive page order from
+the canonical sheet-ID sequence before strict validation. Definition collections
+serialize in ID order (schedule registry lexically), while `sheet_order` retains
+the user-visible page sequence,
 independent of insertion order. JSON output and caller inputs are detached from
 the stored snapshot. Import validates the complete graph before returning a
 snapshot. Tests cover coordinated edits, scale independence, input isolation,

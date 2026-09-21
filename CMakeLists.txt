@@ -622,6 +622,7 @@ if(SKETCH_BUILD_DESKTOP)
       target_compile_options(ifc_desktop_workflow_tests PRIVATE /W4 /permissive- /utf-8)
     endif()
     add_test(NAME desktop_workflow COMMAND desktop_smoke)
+    add_test(NAME drawing_set_output COMMAND desktop_smoke --drawing-set-output-only)
     add_test(NAME project_resource_desktop COMMAND project_resource_desktop_tests)
     add_test(NAME appraisal_desktop_workflow COMMAND appraisal_desktop_workflow_tests)
     add_test(NAME symbol_svg_desktop COMMAND symbol_svg_desktop_tests)
@@ -643,7 +644,7 @@ if(SKETCH_BUILD_DESKTOP)
     get_target_property(SKETCH_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
     get_filename_component(SKETCH_QT_BIN "${SKETCH_QMAKE_EXECUTABLE}" DIRECTORY)
     get_filename_component(SKETCH_QT_PREFIX "${SKETCH_QT_BIN}" DIRECTORY)
-    set_tests_properties(sheet_layout_dialog reference_import desktop_workflow desktop_performance native_geometry_preparation native_model_preparation performance_workload project_resource_desktop appraisal_desktop_workflow symbol_svg_desktop desktop_workspace_recovery building_object_dialog building_receipt_workflow modal_authoring constraint_dialog visibility_workflow boundary_canvas boundary_input_dialog boundary_workflow assistance_workflow dxf_desktop_workflow ifc_desktop_workflow PROPERTIES
+    set_tests_properties(sheet_layout_dialog reference_import desktop_workflow drawing_set_output desktop_performance native_geometry_preparation native_model_preparation performance_workload project_resource_desktop appraisal_desktop_workflow symbol_svg_desktop desktop_workspace_recovery building_object_dialog building_receipt_workflow modal_authoring constraint_dialog visibility_workflow boundary_canvas boundary_input_dialog boundary_workflow assistance_workflow dxf_desktop_workflow ifc_desktop_workflow PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
       ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
   endif()

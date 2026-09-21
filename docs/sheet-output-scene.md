@@ -1,7 +1,8 @@
 # Persisted sheet output scene adapter
 
-`sheet_output_scene.hpp` supplies the version-1 `sketch.sheet-output-scene`
-envelope independently of Qt and the desktop renderer. Creation resolves an
+`sheet_output_scene.hpp` supplies distinct version-1
+`sketch.sheet-output-scene` and `sketch.sheet-set-output-scene` envelopes
+independently of Qt and the desktop renderer. Selected-sheet creation resolves an
 explicit `sheet_view_model` entity ID and sheet ID in one immutable Document
 snapshot. It decodes through the existing entity codec, validating positive
 finite page dimensions and viewport scales, page bounds, orthonormal view
@@ -35,8 +36,15 @@ with an error. Equivalent reordered definition arrays normalize before compariso
 Fingerprint integrity is not authentication. Callers must require both `valid`
 and `current` before treating this as evidence for current output.
 
-This is a semantic output plan and validator, not a geometry scene renderer,
-PDF/SVG/print implementation, output-file receipt or printer calibration check.
+The set envelope carries `sheet_ids` instead of `sheet_id`. Those identities
+must exactly match the model's complete persisted page order. Its fingerprint
+therefore changes when a page is added, removed, reordered, or edited and is
+independent of the locally selected single-sheet page. The desktop uses this
+contract for ordered multipage PDF export and drawing-set print preview; the
+selected-sheet schema and behavior remain unchanged.
+
+This is a semantic output plan and validator, not a geometry scene renderer or
+printer calibration check.
 It does not resolve schedule contents or prove output fidelity. It does not
 persist a derived scene back into Document or change ProjectStore's format.
 The standalone multipage-project model is not persisted in Document, so it is

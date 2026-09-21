@@ -216,11 +216,79 @@ void placement_lifecycle() {
     rejects([&] { (void)original.with_added_schedule_placement("b", schedule); });
     require(original.to_json() == saved, "placement lifecycle mutated source");
 }
+void presentation_order() {
+    const auto original = fixture();
+    const std::vector<std::string> reverse{"b", "a"};
+    require(original.sheet_order() == std::vector<std::string>{"a", "b"}, "default order");
+    const auto reordered = original.with_sheet_order(reverse);
+    require(reordered.sheet_order() == reverse && reordered.sheets() == original.sheets(),
+            "presentation order must leave sheet definitions canonical and unchanged");
+    require(original.sheet_order() == std::vector<std::string>{"a", "b"}, "reorder mutated source");
+    require(sketch::SheetViewModel::create(original.views(), original.sheets(),
+        original.schedule_ids(), reverse).to_json() == reordered.to_json(), "explicit creation order");
+    for (const auto& invalid : std::vector<std::vector<std::string>>{
+             {}, {"a"}, {"a", "a"}, {"a", "missing"}, {"a", "b", "extra"}}) {
+        rejects([&] { (void)original.with_sheet_order(invalid); });
+        rejects([&] { (void)sketch::SheetViewModel::create(original.views(), original.sheets(),
+            original.schedule_ids(), invalid); });
+        auto json = reordered.to_json(); json["sheet_order"] = invalid;
+        rejects([&] { (void)sketch::SheetViewModel::from_json(json); });
+    }
+    auto json = reordered.to_json(); json.erase("sheet_order");
+    rejects([&] { (void)sketch::SheetViewModel::from_json(json); });
+    for (const auto& invalid : {nlohmann::json(nullptr), nlohmann::json("b,a"),
+                               nlohmann::json::array({"b", 7})}) {
+        json = reordered.to_json(); json["sheet_order"] = invalid;
+        rejects([&] { (void)sketch::SheetViewModel::from_json(json); });
+    }
+    require(sketch::SheetViewModel::from_json(reordered.to_json()).to_json() == reordered.to_json(),
+            "nonlexical presentation order roundtrip");
+    for (int version : {1, 2, 3}) {
+        json = reordered.to_json(); json["version"] = version; json.erase("sheet_order");
+        std::reverse(json["sheets"].begin(), json["sheets"].end());
+        if (version < 3) for (auto& view : json["views"]) view.erase("overlays");
+        if (version == 1) for (auto& view : json["views"]) view.erase("object_ids");
+        require(sketch::SheetViewModel::from_json(json).sheet_order() == original.sheet_order(),
+                "legacy versions migrate to canonical IDs regardless of serialized order");
+    }
+    const auto preserves = [&](const sketch::SheetViewModel& changed) {
+        require(changed.sheet_order() == reverse, "mutator lost presentation order");
+    };
+    const auto& first = reordered.sheets().front();
+    preserves(reordered.with_view(reordered.views().front()));
+    preserves(reordered.with_sheet(first));
+    preserves(reordered.with_viewport("a", first.viewports.front()));
+    preserves(reordered.with_schedule_placement("a", first.schedules.front()));
+    preserves(reordered.with_revision("a", first.revisions.front()));
+    preserves(reordered.with_callout("a", first.callouts.front()));
+    preserves(reordered.with_added_viewport("a", {"new", "plan", {0, 0, 10, 10}, 50}));
+    preserves(reordered.with_removed_viewport("a", first.viewports.front().id));
+    preserves(reordered.with_added_schedule_placement("a", {"new", "rooms", {0, 0, 10, 10}}));
+    preserves(reordered.with_removed_schedule_placement("a", first.schedules.front().id));
+    preserves(reordered.with_added_revision("a", {"new", "2026-09-20", "Issue"}));
+    preserves(reordered.with_removed_revision("a", first.revisions.front().id));
+    auto callout = first.callouts.front(); callout.id = "new";
+    preserves(reordered.with_added_callout("a", callout));
+    preserves(reordered.with_removed_callout("a", first.callouts.front().id));
+    sketch::DrawingSheet addition; addition.id = "0"; addition.number = "A000";
+    const auto appended = reordered.with_added_sheet(addition);
+    require(appended.sheet_order() == std::vector<std::string>{"b", "a", "0"} &&
+            appended.sheets().front().id == "0", "new sheet appends independently of canonical storage");
+    require(appended.with_removed_sheet("a").sheet_order() == std::vector<std::string>{"b", "0"},
+            "removal must retain relative presentation order");
+    require(appended.with_removed_sheet("0").to_json() == reordered.to_json(), "add/remove order roundtrip");
+    const auto empty = sketch::SheetViewModel::create({}, {});
+    require(empty.sheet_order().empty() && empty.with_sheet_order({}).sheet_order().empty(), "empty graph order");
+}
 void serialization() {
     const auto saved = fixture().to_json();
+    require(saved.at("version") == 4, "sheet order requires schema version 4");
+    require(saved.at("sheet_order") == nlohmann::json({"a", "b"}),
+            "default presentation order must use canonical sheet IDs");
     require(sketch::SheetViewModel::from_json(saved).to_json().dump() == saved.dump(), "canonical roundtrip");
     auto legacy = saved;
     legacy["version"] = 1;
+    legacy.erase("sheet_order");
     for (auto& view : legacy["views"]) view.erase("object_ids");
     auto legacy_views = fixture().views();
     for (auto& view : legacy_views) view.object_ids.clear();
@@ -249,7 +317,7 @@ void serialization() {
     }
     auto invalid = saved; invalid["views"][0]["direction"].push_back(0);
     rejects([&] { (void)sketch::SheetViewModel::from_json(invalid); });
-    for (const auto& version : {nlohmann::json(4), nlohmann::json(2.0), nlohmann::json("2")}) {
+    for (const auto& version : {nlohmann::json(5), nlohmann::json(2.0), nlohmann::json("2")}) {
         invalid = saved; invalid["version"] = version;
         rejects([&] { (void)sketch::SheetViewModel::from_json(invalid); });
     }
@@ -308,6 +376,7 @@ void section_overlays() {
     require(!sketch::section_overlay_visible(line, sketch::ViewDetail::medium) &&
         sketch::section_overlay_visible(line, sketch::ViewDetail::fine), "detail controls inclusion");
     auto legacy = model.to_json(); legacy["version"] = 2;
+    legacy.erase("sheet_order");
     for (auto& v : legacy["views"]) v.erase("overlays");
     require(sketch::SheetViewModel::from_json(legacy).views().back().overlays.empty(), "v2 upgrade");
     const auto invalid = [&](auto edit) {
@@ -328,7 +397,7 @@ void section_overlays() {
 int main() {
     sketch::testing::noninteractive_errors();
     try {
-        coordination_and_isolation(); sheet_lifecycle(); placement_lifecycle(); serialization(); invalid_values(); section_overlays();
+        coordination_and_isolation(); sheet_lifecycle(); placement_lifecycle(); serialization(); presentation_order(); invalid_values(); section_overlays();
         std::cout << "sheet/view model tests passed\n";
         return 0;
     } catch (const std::exception& error) {

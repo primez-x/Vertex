@@ -1508,7 +1508,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Source review correction (2026-09-20): The complete multipage metadata, ordering, independent-view, linked-model save/reopen workflow is not implemented and verified. Multipage subject/shared data, areas, stable links, page order, and view semantics are implemented as a standalone contract. The desktop sheet_view_model now supports undoable page add/remove, reference-safe lifecycle validation, selected-page PDF/SVG/print output, and save/reopen through Document. The property entity now projects subject name/address/reference and bounded string attributes through the Project details inspector, and closed boundaries expose bounded area_attributes through the Area attributes inspector; both have undoable save/reopen coverage. The complete multipage acceptance fixture and production qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Multipage subject/shared data, areas, stable links, page order, and view semantics are implemented as a standalone contract. The desktop sheet_view_model supports undoable page add/remove/reorder, reference-safe lifecycle validation, selected-page PDF/SVG/PNG/print output, ordered drawing-set PDF/print output, and save/reopen through Document. A distinct complete-set output scene binds exact page membership and order independently of the locally selected page. The property entity projects subject name/address/reference and bounded string attributes through the Project details inspector, and closed boundaries expose bounded area_attributes through the Area attributes inspector; both have undoable save/reopen coverage. Physical printer behavior and production qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-DOC-002",
@@ -1548,11 +1548,14 @@
         "include/sketch/sheet_view_model.hpp",
         "src/core/sheet_view_model.cpp",
         "tests/sheet_view_model_tests.cpp",
+        "include/sketch/sheet_output_scene.hpp",
+        "src/core/sheet_output_scene.cpp",
+        "tests/sheet_output_scene_tests.cpp",
         "docs/sheets-views.md",
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Output still renders only the selected sheet and remains visibly draft-stamped; complete ordered multipage PDF/print issue output is missing. Draft PDF, SVG, PNG, and print preview share the validated persisted-sheet renderer. PDF and print use the sheet physical page, SVG writes exact millimetre dimensions, and PNG now derives its pixel width and height from the selected sheet millimetres at 144 DPI under a 100-megapixel limit, preserving portrait/landscape aspect instead of letterboxing into a fixed canvas. Every file output writes the adjacent fingerprint contract. Physical printer calibration, complete page-set qualification, Apex output comparison, and the production gate remain open."
+      "implementation_note": "Selected-sheet PDF, SVG, PNG, and print preview share the validated persisted-sheet renderer. Ordered drawing-set PDF and print preview render every persisted page in explicit order, including mixed physical sizes, and bind the complete set to a fingerprint independent of local sheet selection. PDF and print use sheet physical dimensions, SVG writes exact millimetre dimensions, and PNG derives its pixel width and height from the selected sheet millimetres at 144 DPI under a 100-megapixel limit. Outputs remain visibly draft-stamped. Physical printer calibration, Apex output comparison, and the production gate remain open."
     },
     {
       "id": "APX-UI-001",
@@ -2304,7 +2307,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Coordinated sheets with title blocks, revisions, callouts, schedule references, page sizes, and independent viewport scales are immutable semantic records persisted through the typed Document entity. The selected-sheet layout manager can add and remove registered shared-view viewports and registered-schedule placements, edit placement bounds and scale, preserve stable identities, reject removal of callout targets, stage without mutating the document, and commit the complete layout as one undoable command that survives save/reopen. New projects seed plan/elevation/section views and a default composed sheet. Draft PDF/SVG/PNG/print consume the selected persisted page, placement, scale, title-block, schedule, and derived geometry data. Explicit page ordering, complete multi-sheet issue PDF/print, printer calibration, Apex output comparison, and production qualification remain open."
+      "implementation_note": "Coordinated sheets with title blocks, revisions, callouts, schedule references, page sizes, independent viewport scales, and explicit page order are immutable semantic records persisted through the typed Document entity. The layout manager can add and remove registered shared-view viewports and registered-schedule placements, edit placement bounds and scale, preserve stable identities, reject removal of callout targets, stage without mutating the document, and commit the complete layout as one undoable command that survives save/reopen. Drawing-sheet settings expose undoable move-up/down ordering. New projects seed plan/elevation/section views and a default composed sheet. Selected-sheet PDF/SVG/PNG/print and ordered drawing-set PDF/print consume persisted placements, scales, title blocks, schedules, derived geometry, and page dimensions. Printer calibration, Apex output comparison, and production qualification remain open."
     },
     {
       "id": "ARCH-EDIT-001",

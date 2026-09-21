@@ -187,9 +187,14 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DrawingSheet, id, number, width_mm, height_mm
     revisions, viewports, callouts, schedules)
 
 SheetViewModel SheetViewModel::create(std::vector<CoordinatedView> views,
-    std::vector<DrawingSheet> sheets, std::vector<std::string> schedule_ids) {
+    std::vector<DrawingSheet> sheets, std::vector<std::string> schedule_ids,
+    std::optional<std::vector<std::string>> sheet_order) {
     const auto view_ids = canonical(views);
-    (void)canonical(sheets);
+    const auto sheet_ids = canonical(sheets);
+    if (!sheet_order) sheet_order = std::vector<std::string>(sheet_ids.begin(), sheet_ids.end());
+    require(sheet_order->size() == sheet_ids.size() &&
+        std::set<std::string>(sheet_order->begin(), sheet_order->end()) == sheet_ids,
+        "sheet order must contain each drawing sheet ID exactly once");
     std::set<std::string> schedules;
     for (const auto& id : schedule_ids) {
         identifier(id);
@@ -232,7 +237,12 @@ SheetViewModel SheetViewModel::create(std::vector<CoordinatedView> views,
     SheetViewModel result;
     result.views_ = std::move(views); result.sheets_ = std::move(sheets);
     result.schedule_ids_ = std::move(schedule_ids);
+    result.sheet_order_ = std::move(*sheet_order);
     return result;
+}
+
+SheetViewModel SheetViewModel::with_sheet_order(std::vector<std::string> order) const {
+    return create(views_, sheets_, schedule_ids_, std::move(order));
 }
 
 SheetViewModel SheetViewModel::with_view(CoordinatedView replacement) const {
@@ -241,7 +251,7 @@ SheetViewModel SheetViewModel::with_view(CoordinatedView replacement) const {
         [&](const auto& view) { return view.id == replacement.id; });
     require(found != changed.end(), "cannot replace unknown coordinated view");
     *found = std::move(replacement);
-    return create(std::move(changed), sheets_, schedule_ids_);
+    return create(std::move(changed), sheets_, schedule_ids_, sheet_order_);
 }
 
 SheetViewModel SheetViewModel::with_sheet(DrawingSheet replacement) const {
@@ -250,16 +260,18 @@ SheetViewModel SheetViewModel::with_sheet(DrawingSheet replacement) const {
         [&](const auto& sheet) { return sheet.id == replacement.id; });
     require(found != changed.end(), "cannot replace unknown drawing sheet");
     *found = std::move(replacement);
-    return create(views_, std::move(changed), schedule_ids_);
+    return create(views_, std::move(changed), schedule_ids_, sheet_order_);
 }
 
 SheetViewModel SheetViewModel::with_added_sheet(DrawingSheet addition) const {
     auto changed = sheets_;
+    auto order = sheet_order_;
+    order.push_back(addition.id);
     changed.push_back(std::move(addition));
     // create() performs the complete detached graph validation, including
     // identity/number uniqueness and references from the new page to views,
     // schedules, and other sheets.
-    return create(views_, std::move(changed), schedule_ids_);
+    return create(views_, std::move(changed), schedule_ids_, std::move(order));
 }
 
 SheetViewModel SheetViewModel::with_removed_sheet(const std::string& sheet_id) const {
@@ -269,9 +281,11 @@ SheetViewModel SheetViewModel::with_removed_sheet(const std::string& sheet_id) c
         [&](const auto& sheet) { return sheet.id == sheet_id; });
     require(found != changed.end(), "cannot remove unknown drawing sheet");
     changed.erase(found);
+    auto order = sheet_order_;
+    std::erase(order, sheet_id);
     // create() rejects any surviving callout that still targets the removed
     // sheet. Callouts owned by the removed page disappear with that page.
-    return create(views_, std::move(changed), schedule_ids_);
+    return create(views_, std::move(changed), schedule_ids_, std::move(order));
 }
 
 SheetViewModel SheetViewModel::with_viewport(const std::string& sheet_id,
@@ -284,7 +298,7 @@ SheetViewModel SheetViewModel::with_viewport(const std::string& sheet_id,
         [&](const auto& candidate) { return candidate.id == replacement.id; });
     require(viewport != sheet->viewports.end(), "cannot replace unknown sheet viewport");
     *viewport = std::move(replacement);
-    return create(views_, std::move(changed), schedule_ids_);
+    return create(views_, std::move(changed), schedule_ids_, sheet_order_);
 }
 
 SheetViewModel SheetViewModel::with_schedule_placement(
@@ -297,7 +311,7 @@ SheetViewModel SheetViewModel::with_schedule_placement(
         [&](const auto& candidate) { return candidate.id == replacement.id; });
     require(placement != sheet->schedules.end(), "cannot replace unknown schedule placement");
     *placement = std::move(replacement);
-    return create(views_, std::move(changed), schedule_ids_);
+    return create(views_, std::move(changed), schedule_ids_, sheet_order_);
 }
 
 SheetViewModel SheetViewModel::with_added_viewport(const std::string& sheet_id,
@@ -307,7 +321,7 @@ SheetViewModel SheetViewModel::with_added_viewport(const std::string& sheet_id,
         [&](const auto& candidate) { return candidate.id == sheet_id; });
     require(sheet != changed.end(), "cannot add viewport to unknown drawing sheet");
     sheet->viewports.push_back(std::move(addition));
-    return create(views_, std::move(changed), schedule_ids_);
+    return create(views_, std::move(changed), schedule_ids_, sheet_order_);
 }
 
 SheetViewModel SheetViewModel::with_removed_viewport(const std::string& sheet_id,
@@ -323,7 +337,7 @@ SheetViewModel SheetViewModel::with_removed_viewport(const std::string& sheet_id
         require(callout.target_sheet_id != sheet_id || callout.target_viewport_id != viewport_id,
                 "cannot remove viewport targeted by a callout; remove or retarget the callout first");
     sheet->viewports.erase(viewport);
-    return create(views_, std::move(changed), schedule_ids_);
+    return create(views_, std::move(changed), schedule_ids_, sheet_order_);
 }
 
 SheetViewModel SheetViewModel::with_added_schedule_placement(
@@ -333,7 +347,7 @@ SheetViewModel SheetViewModel::with_added_schedule_placement(
         [&](const auto& candidate) { return candidate.id == sheet_id; });
     require(sheet != changed.end(), "cannot add schedule placement to unknown drawing sheet");
     sheet->schedules.push_back(std::move(addition));
-    return create(views_, std::move(changed), schedule_ids_);
+    return create(views_, std::move(changed), schedule_ids_, sheet_order_);
 }
 
 SheetViewModel SheetViewModel::with_removed_schedule_placement(
@@ -346,7 +360,7 @@ SheetViewModel SheetViewModel::with_removed_schedule_placement(
         [&](const auto& candidate) { return candidate.id == placement_id; });
     require(placement != sheet->schedules.end(), "cannot remove unknown sheet schedule placement");
     sheet->schedules.erase(placement);
-    return create(views_, std::move(changed), schedule_ids_);
+    return create(views_, std::move(changed), schedule_ids_, sheet_order_);
 }
 
 SheetViewModel SheetViewModel::with_revision(const std::string& sheet_id,
@@ -359,7 +373,7 @@ SheetViewModel SheetViewModel::with_revision(const std::string& sheet_id,
         [&](const auto& candidate) { return candidate.id == replacement.id; });
     require(revision != sheet->revisions.end(), "cannot replace unknown sheet revision");
     *revision = std::move(replacement);
-    return create(views_, std::move(changed), schedule_ids_);
+    return create(views_, std::move(changed), schedule_ids_, sheet_order_);
 }
 
 SheetViewModel SheetViewModel::with_added_revision(const std::string& sheet_id,
@@ -369,7 +383,7 @@ SheetViewModel SheetViewModel::with_added_revision(const std::string& sheet_id,
         [&](const auto& candidate) { return candidate.id == sheet_id; });
     require(sheet != changed.end(), "cannot add revision to unknown drawing sheet");
     sheet->revisions.push_back(std::move(addition));
-    return create(views_, std::move(changed), schedule_ids_);
+    return create(views_, std::move(changed), schedule_ids_, sheet_order_);
 }
 
 SheetViewModel SheetViewModel::with_removed_revision(const std::string& sheet_id,
@@ -382,7 +396,7 @@ SheetViewModel SheetViewModel::with_removed_revision(const std::string& sheet_id
         [&](const auto& candidate) { return candidate.id == revision_id; });
     require(revision != sheet->revisions.end(), "cannot remove unknown sheet revision");
     sheet->revisions.erase(revision);
-    return create(views_, std::move(changed), schedule_ids_);
+    return create(views_, std::move(changed), schedule_ids_, sheet_order_);
 }
 
 SheetViewModel SheetViewModel::with_callout(const std::string& sheet_id,
@@ -395,7 +409,7 @@ SheetViewModel SheetViewModel::with_callout(const std::string& sheet_id,
         [&](const auto& candidate) { return candidate.id == replacement.id; });
     require(callout != sheet->callouts.end(), "cannot replace unknown sheet callout");
     *callout = std::move(replacement);
-    return create(views_, std::move(changed), schedule_ids_);
+    return create(views_, std::move(changed), schedule_ids_, sheet_order_);
 }
 
 SheetViewModel SheetViewModel::with_added_callout(const std::string& sheet_id,
@@ -405,7 +419,7 @@ SheetViewModel SheetViewModel::with_added_callout(const std::string& sheet_id,
         [&](const auto& candidate) { return candidate.id == sheet_id; });
     require(sheet != changed.end(), "cannot add callout to unknown drawing sheet");
     sheet->callouts.push_back(std::move(addition));
-    return create(views_, std::move(changed), schedule_ids_);
+    return create(views_, std::move(changed), schedule_ids_, sheet_order_);
 }
 
 SheetViewModel SheetViewModel::with_removed_callout(const std::string& sheet_id,
@@ -418,18 +432,19 @@ SheetViewModel SheetViewModel::with_removed_callout(const std::string& sheet_id,
         [&](const auto& candidate) { return candidate.id == callout_id; });
     require(callout != sheet->callouts.end(), "cannot remove unknown sheet callout");
     sheet->callouts.erase(callout);
-    return create(views_, std::move(changed), schedule_ids_);
+    return create(views_, std::move(changed), schedule_ids_, sheet_order_);
 }
 
 nlohmann::json SheetViewModel::to_json() const {
-    return {{"schema", "sketch.sheet_view_model"}, {"version", 3}, {"views", views_},
-        {"sheets", sheets_}, {"schedule_ids", schedule_ids_}};
+    return {{"schema", "sketch.sheet_view_model"}, {"version", 4}, {"views", views_},
+        {"sheets", sheets_}, {"schedule_ids", schedule_ids_}, {"sheet_order", sheet_order_}};
 }
 SheetViewModel SheetViewModel::from_json(const nlohmann::json& value) {
     try {
         require(value.at("schema") == "sketch.sheet_view_model" &&
             value.at("version").is_number_integer() &&
-            (value.at("version") == 1 || value.at("version") == 2 || value.at("version") == 3),
+            (value.at("version") == 1 || value.at("version") == 2 ||
+             value.at("version") == 3 || value.at("version") == 4),
             "unsupported sheet/view schema");
         auto normalized = value;
         if (value.at("version") == 1) {
@@ -448,9 +463,18 @@ SheetViewModel SheetViewModel::from_json(const nlohmann::json& value) {
             for (auto& view : normalized.at("views"))
                 if (!view.contains("overlays")) view["overlays"] = nlohmann::json::array();
         }
+        if (value.at("version") != 4) {
+            normalized["version"] = 4;
+            std::vector<std::string> order;
+            for (const auto& sheet : normalized.at("sheets"))
+                order.push_back(sheet.at("id").get<std::string>());
+            std::sort(order.begin(), order.end());
+            normalized["sheet_order"] = std::move(order);
+        }
         auto result = create(normalized.at("views").get<std::vector<CoordinatedView>>(),
             normalized.at("sheets").get<std::vector<DrawingSheet>>(),
-            normalized.at("schedule_ids").get<std::vector<std::string>>());
+            normalized.at("schedule_ids").get<std::vector<std::string>>(),
+            normalized.at("sheet_order").get<std::vector<std::string>>());
         shape(normalized, result.to_json());
         return result;
     } catch (const nlohmann::json::exception& error) {

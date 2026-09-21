@@ -37,15 +37,18 @@ invalid references, duplicate IDs/links, numeric validation, and malformed JSON.
 
 The richer `MultipageProject` contract remains the interchange model. The
 application-level `sheet_view_model` entity now supplies the corresponding
-desktop page lifecycle: pages can be added or removed through Document history,
-cross-sheet references are validated, and a selected page drives the shared
-PDF/SVG/print renderer and its output fingerprint. The property entity now
+desktop page lifecycle: pages can be added, removed, and explicitly reordered
+through Document history, the order survives save/reopen, cross-sheet references
+are validated, and selected-page and complete ordered drawing-set output have
+separate fingerprints. The drawing set exports as one multipage PDF and can be
+sent through a multipage print preview, including mixed physical sheet sizes.
+The property entity now
 stores a `subject` object with `name`, `address`, `reference`, and bounded
 string `attributes`; the Project details inspector edits that record through
 the same undoable command path and save/reopen preserves it. Closed-boundary
 area attributes are stored under each boundary's `area_attributes` object and
 the Area attributes inspector edits them with the same bounded string-object
-validation and history semantics. A complete multipage acceptance fixture,
-rendering fidelity, and production qualification remain open. The standalone
+validation and history semantics. Physical printer behavior, rendering fidelity,
+and production qualification remain open. The standalone
 JSON roundtrip is therefore not by itself evidence of the full APX-DOC-001
 requirement.

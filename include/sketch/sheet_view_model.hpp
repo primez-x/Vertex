@@ -2,6 +2,7 @@
 
 #include <nlohmann/json.hpp>
 #include <array>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -112,11 +113,15 @@ struct DrawingSheet {
 class SheetViewModel final {
 public:
     [[nodiscard]] static SheetViewModel create(std::vector<CoordinatedView> views,
-        std::vector<DrawingSheet> sheets, std::vector<std::string> schedule_ids = {});
+        std::vector<DrawingSheet> sheets, std::vector<std::string> schedule_ids = {},
+        std::optional<std::vector<std::string>> sheet_order = std::nullopt);
     [[nodiscard]] static SheetViewModel from_json(const nlohmann::json& value);
     [[nodiscard]] nlohmann::json to_json() const;
     [[nodiscard]] const std::vector<CoordinatedView>& views() const noexcept { return views_; }
     [[nodiscard]] const std::vector<DrawingSheet>& sheets() const noexcept { return sheets_; }
+    // Presentation order is an exact permutation of the canonical sheet IDs.
+    [[nodiscard]] const std::vector<std::string>& sheet_order() const noexcept { return sheet_order_; }
+    [[nodiscard]] SheetViewModel with_sheet_order(std::vector<std::string> order) const;
     [[nodiscard]] const std::vector<std::string>& schedule_ids() const noexcept { return schedule_ids_; }
     // Updates the shared view definition; viewport references and scales survive.
     [[nodiscard]] SheetViewModel with_view(CoordinatedView replacement) const;
@@ -168,6 +173,7 @@ private:
     SheetViewModel() = default;
     std::vector<CoordinatedView> views_;
     std::vector<DrawingSheet> sheets_;
+    std::vector<std::string> sheet_order_;
     std::vector<std::string> schedule_ids_;
 };
 

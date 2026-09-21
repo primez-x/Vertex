@@ -109,7 +109,9 @@
 #include <QBuffer>
 #include <QRegularExpression>
 #include <QPainter>
+#include <QPdfDocument>
 #include <QPdfWriter>
+#include <QPrintDialog>
 #include <QPrintPreviewDialog>
 #include <QPrinter>
 #include <QPlainTextEdit>
@@ -159,6 +161,7 @@
 #include <functional>
 #include <iomanip>
 #include <limits>
+#include <memory>
 #include <locale>
 #include <map>
 #include <numbers>
@@ -5343,13 +5346,55 @@ public:
             if (m_output_sheet_id == QString::fromStdString(wanted) ||
                 !std::any_of(updated_model.sheets().begin(), updated_model.sheets().end(),
                              [&](const auto& sheet) { return QString::fromStdString(sheet.id) == m_output_sheet_id; })) {
-                m_output_sheet_id = QString::fromStdString(updated_model.sheets().front().id);
+                m_output_sheet_id = QString::fromStdString(updated_model.sheet_order().front());
             }
             clearError();
             refresh();
             return true;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Sheet remove: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    [[nodiscard]] bool moveDrawingSheet(const QString& sheet_id, int offset) {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        try {
+            if (offset != -1 && offset != 1)
+                throw std::invalid_argument("Sheet moves must be one page at a time");
+            const auto wanted = sheet_id.trimmed().toStdString();
+            if (wanted.empty()) throw std::invalid_argument("Choose a sheet to move");
+            const auto source = authoringSnapshot();
+            const auto record = decode_sheet_model(source);
+            if (!record) throw std::invalid_argument("No typed drawing sheet is available");
+            auto order = record->model.sheet_order();
+            const auto found = std::find(order.begin(), order.end(), wanted);
+            if (found == order.end()) throw std::invalid_argument("Drawing sheet identity was not found");
+            const auto index = static_cast<std::ptrdiff_t>(std::distance(order.begin(), found));
+            const auto destination = index + offset;
+            if (destination < 0 || destination >= static_cast<std::ptrdiff_t>(order.size())) {
+                setError(QStringLiteral("The drawing sheet is already at the end of the set."));
+                return false;
+            }
+            std::iter_swap(order.begin() + index, order.begin() + destination);
+            const auto updated_model = record->model.with_sheet_order(std::move(order));
+            auto updated_entity = source.entities().at(record->entity_id);
+            updated_entity.properties = make_sheet_view_entity(
+                updated_entity.id, updated_model).properties;
+            const ApplyEntityChanges command{
+                source.revision(), {EntityChange::upsert(std::move(updated_entity))}, {},
+                "Reorder drawing sheets"};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            m_output_sheet_id = QString::fromStdString(wanted);
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Sheet reorder: %1").arg(QString::fromUtf8(error.what())));
             return false;
         }
     }
@@ -5382,7 +5427,7 @@ public:
                             })) {
                 return m_output_sheet_id;
             }
-            return QString::fromStdString(record->model.sheets().front().id);
+            return QString::fromStdString(record->model.sheet_order().front());
         } catch (const std::exception&) {
             return {};
         }
@@ -13131,17 +13176,21 @@ public:
         return static_cast<QPageSize::PageSizeId>(m_pageSizeCombo->currentData().toInt());
     }
 
-    [[nodiscard]] QSizeF selectedSheetPageMm(const DocumentSnapshot& snapshot) const {
+    [[nodiscard]] QSizeF sheetPageMm(const DocumentSnapshot& snapshot,
+                                     const std::string& sheet_id) const {
         const auto record = decode_sheet_model(snapshot);
         if (!record) return QPageSize(selectedPageSize()).size(QPageSize::Millimeter);
         const auto& sheets = record->model.sheets();
         if (sheets.empty()) throw std::invalid_argument("no drawing sheets are defined");
-        const auto selected_id = outputSheetId().toStdString();
         const auto found = std::find_if(sheets.begin(), sheets.end(),
-            [&](const auto& sheet) { return sheet.id == selected_id; });
+            [&](const auto& sheet) { return sheet.id == sheet_id; });
         if (found == sheets.end())
-            throw std::invalid_argument("selected drawing sheet is no longer available");
+            throw std::invalid_argument("drawing sheet is no longer available");
         return QSizeF(found->width_mm, found->height_mm);
+    }
+
+    [[nodiscard]] QSizeF selectedSheetPageMm(const DocumentSnapshot& snapshot) const {
+        return sheetPageMm(snapshot, outputSheetId().toStdString());
     }
 
     [[nodiscard]] QPageSize selectedSheetPageSize(const DocumentSnapshot& snapshot) const {
@@ -13154,15 +13203,15 @@ public:
                                                         : m_measurementCanvas;
     }
 
-    bool renderSheetOutput(QPainter& painter, const QRectF& target, QColor background) {
+    bool renderSheetOutput(const DocumentSnapshot& snapshot, const std::string& sheet_id,
+                           QPainter& painter, const QRectF& target, QColor background) {
         if (target.width() <= 0.0 || target.height() <= 0.0) return false;
-        const auto snapshot = m_document->snapshot();
         // Resolve and fingerprint the persisted sheet graph before drawing so
         // preview, PDF, SVG, and print all share one validated output scene.
         // This also blocks authoritative-looking output when a required sheet
         // or dependency is malformed.
         try {
-            (void)outputFingerprintForSnapshot(snapshot);
+            (void)outputFingerprintForSnapshot(snapshot, sheet_id);
         } catch (const std::exception& error) {
             setError(QStringLiteral("Sheet output blocked: %1").arg(QString::fromUtf8(error.what())));
             return false;
@@ -13182,10 +13231,9 @@ public:
         try {
             const auto model = decode_sheet_view_entity(*sheet_entity);
             if (model.sheets().empty()) throw std::invalid_argument("no drawing sheets are defined");
-            const auto selected_sheet_id = outputSheetId().toStdString();
             const auto selected_sheet = std::find_if(
                 model.sheets().begin(), model.sheets().end(),
-                [&](const auto& candidate) { return candidate.id == selected_sheet_id; });
+                [&](const auto& candidate) { return candidate.id == sheet_id; });
             if (selected_sheet == model.sheets().end())
                 throw std::invalid_argument("selected drawing sheet is no longer available");
             const auto& sheet = *selected_sheet;
@@ -13721,7 +13769,7 @@ public:
     }
 
     [[nodiscard]] OutputFingerprint outputFingerprintForSnapshot(
-        const DocumentSnapshot& snapshot) const {
+        const DocumentSnapshot& snapshot, const std::string& requested_sheet_id) const {
         const auto sheet = std::find_if(snapshot.entities().begin(), snapshot.entities().end(),
             [](const auto& entry) { return entry.second.type == kSheetViewEntityType; });
         if (sheet == snapshot.entities().end()) {
@@ -13733,10 +13781,10 @@ public:
             throw std::invalid_argument("the persisted sheet graph contains no drawing sheets");
         }
         const auto inputs = outputFingerprintInputs(snapshot, false);
-        const auto selected_sheet_id = outputSheetId().toStdString();
+        const auto selected_sheet_id = requested_sheet_id.empty()
+            ? model.sheet_order().front() : requested_sheet_id;
         const auto scene = make_sheet_output_scene(snapshot, sheet->first,
-                                                   selected_sheet_id.empty() ? model.sheets().front().id
-                                                                             : selected_sheet_id,
+                                                   selected_sheet_id,
                                                    inputs);
         const auto current = check_sheet_output_scene_current(scene, snapshot, inputs);
         if (!current.valid) {
@@ -13759,6 +13807,31 @@ public:
         return *fingerprint;
     }
 
+    [[nodiscard]] OutputFingerprint outputFingerprintForSnapshot(
+        const DocumentSnapshot& snapshot) const {
+        return outputFingerprintForSnapshot(snapshot, outputSheetId().toStdString());
+    }
+
+    [[nodiscard]] OutputFingerprint drawingSetFingerprintForSnapshot(
+        const DocumentSnapshot& snapshot) const {
+        const auto sheet = std::find_if(snapshot.entities().begin(), snapshot.entities().end(),
+            [](const auto& entry) { return entry.second.type == kSheetViewEntityType; });
+        if (sheet == snapshot.entities().end())
+            throw std::invalid_argument("the persisted sheet graph is unavailable");
+        const auto inputs = outputFingerprintInputs(snapshot, false);
+        const auto scene = make_sheet_set_output_scene(snapshot, sheet->first, inputs);
+        const auto current = check_sheet_set_output_scene_current(scene, snapshot, inputs);
+        if (!current.valid)
+            throw std::invalid_argument("drawing set output scene is invalid: " + current.error);
+        if (!current.current)
+            throw std::invalid_argument("drawing set output scene is stale");
+        std::string error;
+        const auto fingerprint = deserialize_output_fingerprint(scene.at("fingerprint"), &error);
+        if (!fingerprint)
+            throw std::invalid_argument("drawing set output scene fingerprint is invalid: " + error);
+        return *fingerprint;
+    }
+
     bool prepareOutputFingerprint(QSaveFile& sidecar, const QString& output_path,
                                   const DocumentSnapshot& snapshot, const QString& output_kind,
                                   std::string output_digest) {
@@ -13774,6 +13847,27 @@ public:
             sidecar.error() != QFileDevice::NoError) {
             setError(QStringLiteral("%1 export fingerprint could not be written beside the output.")
                          .arg(output_kind));
+            return false;
+        }
+        return true;
+    }
+
+    bool prepareDrawingSetFingerprint(QSaveFile& sidecar, const QString& output_path,
+                                      const DocumentSnapshot& snapshot,
+                                      std::string output_digest,
+                                      const std::vector<std::string>& sheet_order) {
+        const auto fingerprint = drawingSetFingerprintForSnapshot(snapshot);
+        const auto payload = json{{"schema", "vertex.output-fingerprint.v1"},
+                                  {"output_kind", "pdf-set"},
+                                  {"output_file", QFileInfo(output_path).fileName().toStdString()},
+                                  {"output_sha256", std::move(output_digest)},
+                                  {"sheet_order", sheet_order},
+                                  {"fingerprint", serialize_output_fingerprint(fingerprint)}}.dump(2);
+        if (!sidecar.open(QIODevice::WriteOnly) ||
+            sidecar.write(QByteArray::fromStdString(payload)) !=
+                static_cast<qint64>(payload.size()) || !sidecar.flush() ||
+            sidecar.error() != QFileDevice::NoError) {
+            setError(QStringLiteral("Drawing-set export fingerprint could not be written beside the output."));
             return false;
         }
         return true;
@@ -13933,6 +14027,204 @@ public:
             return true;
         } catch (const std::exception& error) {
             setError(QStringLiteral("PDF export failed: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    bool writeDrawingSetPrintReceipt(const QPrinter& printer,
+                                     const DocumentSnapshot& snapshot,
+                                     const std::vector<std::string>& sheet_order,
+                                     const json& pages) {
+        try {
+            const auto fingerprint = drawingSetFingerprintForSnapshot(snapshot);
+            const auto receipt_path = m_file_path.empty()
+                ? (std::filesystem::temp_directory_path() /
+                   "vertex-print-preview-receipt.json")
+                : std::filesystem::path(m_file_path.wstring() + L".print-receipt.json");
+            const auto payload = json{
+                {"schema", "vertex.print-set-receipt.v1"},
+                {"document_revision", snapshot.revision()},
+                {"sheet_order", sheet_order},
+                {"pages", pages},
+                {"printer_name", printer.printerName().toStdString()},
+                {"output_format", static_cast<int>(printer.outputFormat())},
+                {"resolution_dpi", printer.resolution()},
+                {"output_fingerprint", serialize_output_fingerprint(fingerprint)},
+                {"verification", "preview-driver-evidence-only"},
+            }.dump(2);
+            QSaveFile file(QString::fromStdWString(receipt_path.wstring()));
+            if (!file.open(QIODevice::WriteOnly | QIODevice::Text) ||
+                file.write(QByteArray::fromStdString(payload)) !=
+                    static_cast<qint64>(payload.size()) || !file.commit()) {
+                setError(QStringLiteral("Drawing-set print receipt could not be written locally."));
+                return false;
+            }
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Drawing-set print receipt failed: %1")
+                         .arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    bool exportDrawingSetPdf(const QString& path) {
+        refreshOutput();
+        if (!m_plan_geometry_error.isEmpty()) {
+            setError(QStringLiteral("Drawing-set PDF export blocked: %1").arg(m_plan_geometry_error));
+            return false;
+        }
+        if (path.trimmed().isEmpty()) {
+            setError(QStringLiteral("Choose a drawing-set PDF destination."));
+            return false;
+        }
+        try {
+            const auto snapshot = m_document->snapshot();
+            const auto record = decode_sheet_model(snapshot);
+            if (!record || record->model.sheet_order().empty())
+                throw std::invalid_argument("no drawing sheets are defined");
+            const auto order = record->model.sheet_order();
+            std::vector<QSizeF> page_sizes;
+            page_sizes.reserve(order.size());
+            for (const auto& sheet_id : order) {
+                const auto size = sheetPageMm(snapshot, sheet_id);
+                if (!(std::isfinite(size.width()) && std::isfinite(size.height()) &&
+                      size.width() > 0.0 && size.height() > 0.0))
+                    throw std::invalid_argument("a drawing sheet has invalid physical dimensions");
+                page_sizes.push_back(size);
+            }
+            // Validate the complete graph and exact ordered membership before
+            // a staging device is created.
+            (void)drawingSetFingerprintForSnapshot(snapshot);
+
+            const QFileInfo output_info(path);
+            QTemporaryFile staged(output_info.dir().filePath(
+                QStringLiteral(".%1.vertex-pdf-set-XXXXXX").arg(output_info.fileName())));
+            staged.setAutoRemove(true);
+            if (!staged.open()) {
+                setError(QStringLiteral("Drawing-set PDF export could not create its local staging file."));
+                return false;
+            }
+            {
+                QPdfWriter writer(&staged);
+                const auto page_layout = [&](std::size_t index) {
+                    return QPageLayout(
+                        QPageSize(page_sizes[index], QPageSize::Millimeter,
+                                  QStringLiteral("Drawing sheet"), QPageSize::ExactMatch),
+                        QPageLayout::Portrait, QMarginsF(), QPageLayout::Millimeter);
+                };
+                if (!writer.setPageLayout(page_layout(0))) {
+                    setError(QStringLiteral("Drawing-set PDF export could not configure the first sheet."));
+                    return false;
+                }
+                writer.setResolution(144);
+                QPainter painter(&writer);
+                if (!painter.isActive()) {
+                    setError(QStringLiteral("Drawing-set PDF export could not start the renderer."));
+                    return false;
+                }
+                for (std::size_t index = 0; index < order.size(); ++index) {
+                    if (index > 0) {
+                        painter.resetTransform();
+                        if (!writer.setPageLayout(page_layout(index)) || !writer.newPage()) {
+                            painter.end();
+                            setError(QStringLiteral("Drawing-set PDF export could not create page %1.")
+                                         .arg(static_cast<qulonglong>(index + 1)));
+                            return false;
+                        }
+                    }
+                    const QRectF page(0.0, 0.0, writer.width(), writer.height());
+                    if (!renderSheetOutput(snapshot, order[index], painter, page, Qt::white)) {
+                        painter.end();
+                        return false;
+                    }
+                    painter.resetTransform();
+                    painter.setPen(QColor(150, 50, 50));
+                    painter.drawText(QRectF(30.0, 30.0, writer.width() - 60.0, 80.0),
+                                     Qt::TextWordWrap | Qt::AlignRight | Qt::AlignTop,
+                                     draftOutputStamp());
+                }
+                if (!painter.end()) {
+                    setError(QStringLiteral("Drawing-set PDF export could not finish rendering."));
+                    return false;
+                }
+            }
+            if (!staged.flush() || staged.error() != QFileDevice::NoError ||
+                staged.size() <= 0 || !staged.seek(0)) {
+                setError(QStringLiteral("Drawing-set PDF export could not stage the complete file."));
+                return false;
+            }
+            const auto pdf_bytes = staged.readAll();
+            if (staged.error() != QFileDevice::NoError || pdf_bytes.isEmpty()) {
+                setError(QStringLiteral("Drawing-set PDF export could not read its staged file."));
+                return false;
+            }
+            staged.close();
+            const auto pdf_digest = QCryptographicHash::hash(
+                pdf_bytes, QCryptographicHash::Sha256).toHex().toStdString();
+            const auto sidecar_path = path + QStringLiteral(".fingerprint.json");
+            const auto retain_existing = [&](const QString& existing_path)
+                -> std::optional<QByteArray> {
+                if (!QFileInfo::exists(existing_path)) return std::nullopt;
+                QFile existing(existing_path);
+                if (!existing.open(QIODevice::ReadOnly))
+                    throw std::runtime_error("an existing drawing-set output cannot be retained for rollback");
+                const auto bytes = existing.readAll();
+                if (existing.error() != QFileDevice::NoError)
+                    throw std::runtime_error("an existing drawing-set output cannot be read for rollback");
+                return bytes;
+            };
+            const auto previous_pdf = retain_existing(path);
+            const auto previous_sidecar = retain_existing(sidecar_path);
+            const auto restore_existing = [](const QString& restore_path,
+                                             const std::optional<QByteArray>& previous) {
+                if (!previous) return !QFileInfo::exists(restore_path) || QFile::remove(restore_path);
+                QSaveFile restore(restore_path);
+                restore.setDirectWriteFallback(false);
+                return restore.open(QIODevice::WriteOnly) &&
+                    restore.write(*previous) == previous->size() && restore.flush() &&
+                    restore.error() == QFileDevice::NoError && restore.commit();
+            };
+            QSaveFile destination(path);
+            destination.setDirectWriteFallback(false);
+            if (!destination.open(QIODevice::WriteOnly) ||
+                destination.write(pdf_bytes) != pdf_bytes.size() || !destination.flush() ||
+                destination.error() != QFileDevice::NoError) {
+                setError(QStringLiteral("Drawing-set PDF export could not stage the destination."));
+                return false;
+            }
+            QSaveFile sidecar(sidecar_path);
+            if (!prepareDrawingSetFingerprint(sidecar, path, snapshot, pdf_digest, order))
+                return false;
+            if (!destination.commit()) {
+                setError(QStringLiteral("Drawing-set PDF export could not save the destination: %1")
+                             .arg(destination.errorString()));
+                return false;
+            }
+            const auto injected_commit_failure = qApp->property(
+                "vertex.testFailDrawingSetSidecarCommit").toBool();
+            if (injected_commit_failure) sidecar.cancelWriting();
+            if (injected_commit_failure || !sidecar.commit()) {
+                const auto sidecar_error = injected_commit_failure
+                    ? QStringLiteral("injected commit failure") : sidecar.errorString();
+                sidecar.cancelWriting();
+                const auto restored_pdf = restore_existing(path, previous_pdf);
+                const auto restored_sidecar = restore_existing(sidecar_path, previous_sidecar);
+                setError(QStringLiteral(
+                    "Drawing-set PDF fingerprint could not be committed beside the output: %1. "
+                    "Previous output restoration: PDF %2, fingerprint %3.")
+                             .arg(sidecar_error,
+                                  restored_pdf ? QStringLiteral("restored") : QStringLiteral("FAILED"),
+                                  restored_sidecar ? QStringLiteral("restored") : QStringLiteral("FAILED")));
+                return false;
+            }
+            clearError();
+            owner->statusBar()->showMessage(
+                QStringLiteral("Drawing set exported locally as %1 ordered pages.")
+                    .arg(static_cast<qulonglong>(order.size())), 5000);
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Drawing-set PDF export failed: %1")
+                         .arg(QString::fromUtf8(error.what())));
             return false;
         }
     }
@@ -14569,6 +14861,182 @@ public:
         return true;
     }
 
+    bool printDrawingSet(QPrinter& printer) {
+        refreshOutput();
+        if (!m_plan_geometry_error.isEmpty()) {
+            setError(QStringLiteral("Drawing-set printing blocked: %1").arg(m_plan_geometry_error));
+            return false;
+        }
+        try {
+            const auto snapshot = m_document->snapshot();
+            const auto record = decode_sheet_model(snapshot);
+            if (!record || record->model.sheet_order().empty())
+                throw std::invalid_argument("no drawing sheets are defined");
+            const auto order = record->model.sheet_order();
+            (void)drawingSetFingerprintForSnapshot(snapshot);
+
+            // Preflight the complete set into disposable images before opening
+            // the printer painter. A bad later page must never finalize an
+            // otherwise plausible partial drawing set.
+            for (const auto& sheet_id : order) {
+                QImage probe(QSize(512, 512), QImage::Format_ARGB32_Premultiplied);
+                probe.fill(Qt::white);
+                QPainter probe_painter(&probe);
+                if (!probe_painter.isActive() ||
+                    !renderSheetOutput(snapshot, sheet_id, probe_painter,
+                                       QRectF(probe.rect()), Qt::white)) {
+                    probe_painter.end();
+                    throw std::runtime_error("a drawing-set page failed render preflight");
+                }
+                if (!probe_painter.end())
+                    throw std::runtime_error("a drawing-set page could not finish render preflight");
+            }
+
+            const auto layout_for = [&](const std::string& sheet_id) {
+                return QPageLayout(
+                    QPageSize(sheetPageMm(snapshot, sheet_id), QPageSize::Millimeter,
+                              QStringLiteral("Drawing sheet"), QPageSize::ExactMatch),
+                    QPageLayout::Portrait, QMarginsF(), QPageLayout::Millimeter);
+            };
+            // Ask the selected driver to accept every requested physical layout
+            // before the painter starts and any page can reach the spooler.
+            for (const auto& sheet_id : order) {
+                if (!printer.setPageLayout(layout_for(sheet_id)))
+                    throw std::runtime_error(
+                        "the printer rejected one or more drawing-set page layouts");
+            }
+            if (!printer.setPageLayout(layout_for(order.front())))
+                throw std::runtime_error("the printer rejected the first page layout");
+            printer.setFullPage(true);
+            QPainter painter(&printer);
+            if (!painter.isActive())
+                throw std::runtime_error("the printer renderer could not start");
+            const auto abort_job = [&](const QString& reason) {
+                (void)printer.abort();
+                painter.end();
+                setError(reason);
+                return false;
+            };
+            json pages = json::array();
+            for (std::size_t index = 0; index < order.size(); ++index) {
+                if (index > 0) {
+                    painter.resetTransform();
+                    if (!printer.setPageLayout(layout_for(order[index])) || !printer.newPage()) {
+                        return abort_job(QStringLiteral(
+                            "Drawing-set printing aborted because the printer rejected page %1.")
+                                .arg(static_cast<qulonglong>(index + 1)));
+                    }
+                }
+                const auto page = printer.pageRect(QPrinter::DevicePixel);
+                if (!renderSheetOutput(snapshot, order[index], painter, QRectF(page), Qt::white)) {
+                    return abort_job(QStringLiteral(
+                        "Drawing-set printing aborted because page %1 could not render.")
+                            .arg(static_cast<qulonglong>(index + 1)));
+                }
+                painter.resetTransform();
+                painter.setPen(QColor(150, 50, 50));
+                painter.drawText(QRectF(page.left() + 24.0, page.top() + 24.0,
+                                        page.width() - 48.0, 80.0),
+                                 Qt::TextWordWrap | Qt::AlignRight | Qt::AlignTop,
+                                 draftOutputStamp());
+                const auto requested = sheetPageMm(snapshot, order[index]);
+                const auto actual_page = printer.pageRect(QPrinter::Millimeter);
+                const auto actual_paper = printer.paperRect(QPrinter::Millimeter);
+                pages.push_back({
+                    {"sheet_id", order[index]},
+                    {"requested_sheet_mm", {requested.width(), requested.height()}},
+                    {"rendered_page_px", {page.x(), page.y(), page.width(), page.height()}},
+                    {"driver_page_mm", {actual_page.x(), actual_page.y(),
+                                        actual_page.width(), actual_page.height()}},
+                    {"driver_paper_mm", {actual_paper.x(), actual_paper.y(),
+                                         actual_paper.width(), actual_paper.height()}},
+                });
+            }
+            if (!painter.end())
+                return abort_job(QStringLiteral("Drawing-set printing could not finish the printer job."));
+            if (!writeDrawingSetPrintReceipt(printer, snapshot, order, pages)) return false;
+            clearError();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Drawing-set printing blocked: %1")
+                         .arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    bool showDrawingSetPrintPreview() {
+        auto staging = std::make_shared<QTemporaryDir>();
+        if (!staging->isValid()) {
+            setError(QStringLiteral("Drawing-set preview could not create local staging."));
+            return false;
+        }
+        const auto pdf_path = staging->filePath(QStringLiteral("drawing-set-preview.pdf"));
+        if (!exportDrawingSetPdf(pdf_path)) return false;
+
+        auto* preview = new QDialog(owner);
+        styleDialog(*preview);
+        preview->setObjectName(QStringLiteral("drawingSetPrintPreview"));
+        preview->setWindowTitle(QStringLiteral("Drawing set print preview"));
+        preview->setAttribute(Qt::WA_DeleteOnClose);
+        preview->resize(980, 760);
+        auto* root = new QVBoxLayout(preview);
+        auto* summary = new QLabel(
+            QStringLiteral("Complete ordered drawing set • mixed page sizes are shown at their own aspect ratios"),
+            preview);
+        root->addWidget(summary);
+        auto* scroll = new QScrollArea(preview);
+        scroll->setWidgetResizable(true);
+        auto* pages_widget = new QWidget(scroll);
+        auto* pages_layout = new QVBoxLayout(pages_widget);
+        auto* document = new QPdfDocument(preview);
+        if (document->load(pdf_path) != QPdfDocument::Error::None || document->pageCount() < 1) {
+            preview->deleteLater();
+            setError(QStringLiteral("Drawing-set preview could not load the staged PDF."));
+            return false;
+        }
+        for (int page_index = 0; page_index < document->pageCount(); ++page_index) {
+            const auto points = document->pagePointSize(page_index);
+            const auto scale = std::min(860.0 / points.width(), 1080.0 / points.height());
+            const QSize pixels(std::max(1, static_cast<int>(std::lround(points.width() * scale))),
+                               std::max(1, static_cast<int>(std::lround(points.height() * scale))));
+            auto* caption = new QLabel(QStringLiteral("Page %1 of %2 • %3 × %4 mm")
+                                           .arg(page_index + 1)
+                                           .arg(document->pageCount())
+                                           .arg(QString::number(points.width() * 25.4 / 72.0, 'f', 1))
+                                           .arg(QString::number(points.height() * 25.4 / 72.0, 'f', 1)),
+                                       pages_widget);
+            caption->setStyleSheet(QStringLiteral("font-weight:600; margin-top:10px;"));
+            pages_layout->addWidget(caption);
+            auto* page = new QLabel(pages_widget);
+            page->setObjectName(QStringLiteral("drawingSetPreviewPage%1").arg(page_index + 1));
+            page->setProperty("physicalWidthMm", points.width() * 25.4 / 72.0);
+            page->setProperty("physicalHeightMm", points.height() * 25.4 / 72.0);
+            page->setAlignment(Qt::AlignCenter);
+            page->setStyleSheet(QStringLiteral("background:#ffffff; border:1px solid #aeb8c4;"));
+            page->setPixmap(QPixmap::fromImage(document->render(page_index, pixels)));
+            pages_layout->addWidget(page, 0, Qt::AlignHCenter);
+        }
+        pages_layout->addStretch(1);
+        scroll->setWidget(pages_widget);
+        root->addWidget(scroll, 1);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, preview);
+        auto* print = buttons->addButton(QStringLiteral("Print…"), QDialogButtonBox::ActionRole);
+        print->setObjectName(QStringLiteral("printDrawingSetFromPreview"));
+        root->addWidget(buttons);
+        QObject::connect(buttons, &QDialogButtonBox::rejected, preview, &QDialog::reject);
+        QObject::connect(print, &QPushButton::clicked, preview, [this, preview, staging] {
+            Q_UNUSED(staging);
+            QPrinter printer(QPrinter::HighResolution);
+            QPrintDialog dialog(&printer, preview);
+            dialog.setWindowTitle(QStringLiteral("Print drawing set"));
+            if (dialog.exec() == QDialog::Accepted) (void)printDrawingSet(printer);
+        });
+        QObject::connect(preview, &QObject::destroyed, owner,
+                         [staging] { Q_UNUSED(staging); });
+        preview->open();
+        return true;
+    }
+
     void showSchedules() {
         const auto projection = scheduleSnapshot();
         QDialog dialog(owner);
@@ -14705,10 +15173,16 @@ public:
         selector->setToolTip(QStringLiteral("Select the sheet used by draft PDF, SVG, and print output"));
         auto* add = new QPushButton(QStringLiteral("Add sheet…"), &dialog);
         add->setObjectName(QStringLiteral("addSheet"));
+        auto* move_up = new QPushButton(QStringLiteral("Move up"), &dialog);
+        move_up->setObjectName(QStringLiteral("moveSheetUp"));
+        auto* move_down = new QPushButton(QStringLiteral("Move down"), &dialog);
+        move_down->setObjectName(QStringLiteral("moveSheetDown"));
         auto* remove = new QPushButton(QStringLiteral("Remove"), &dialog);
         remove->setObjectName(QStringLiteral("removeSheet"));
         sheet_row->addWidget(sheet_label);
         sheet_row->addWidget(selector, 1);
+        sheet_row->addWidget(move_up);
+        sheet_row->addWidget(move_down);
         sheet_row->addWidget(add);
         sheet_row->addWidget(remove);
         root->addLayout(sheet_row);
@@ -14847,8 +15321,13 @@ public:
                 }
                 auto wanted = outputSheetId();
                 int wanted_index = -1;
-                for (int index = 0; index < static_cast<int>(record->model.sheets().size()); ++index) {
-                    const auto& sheet = record->model.sheets()[static_cast<std::size_t>(index)];
+                const auto& order = record->model.sheet_order();
+                for (int index = 0; index < static_cast<int>(order.size()); ++index) {
+                    const auto found = std::find_if(
+                        record->model.sheets().begin(), record->model.sheets().end(),
+                        [&](const auto& sheet) { return sheet.id == order[static_cast<std::size_t>(index)]; });
+                    if (found == record->model.sheets().end()) continue;
+                    const auto& sheet = *found;
                     selector->addItem(QStringLiteral("%1  ·  %2")
                                           .arg(QString::fromStdString(sheet.number),
                                                QString::fromStdString(sheet.title_block.title)),
@@ -14857,6 +15336,8 @@ public:
                 }
                 if (wanted_index < 0 && selector->count() > 0) wanted_index = 0;
                 if (wanted_index >= 0) selector->setCurrentIndex(wanted_index);
+                move_up->setEnabled(wanted_index > 0);
+                move_down->setEnabled(wanted_index >= 0 && wanted_index + 1 < selector->count());
                 fill_fields();
             } catch (const std::exception& error) {
                 status->setText(QStringLiteral("Sheet list is unavailable: %1")
@@ -14867,9 +15348,27 @@ public:
                          [&](int index) {
                              if (index < 0) return;
                              if (selectOutputSheet(selector->itemData(index).toString())) {
+                                 move_up->setEnabled(index > 0);
+                                 move_down->setEnabled(index + 1 < selector->count());
                                  fill_fields();
                              }
                          });
+        const auto move_selected = [&](int offset) {
+            const auto id = selected_id();
+            if (id.isEmpty() || !modalContextUnchanged(context)) {
+                context = captureModalContext();
+                fill_selector();
+                return;
+            }
+            if (moveDrawingSheet(id, offset)) {
+                context = captureModalContext();
+                fill_selector();
+            }
+        };
+        QObject::connect(move_up, &QPushButton::clicked, &dialog,
+                         [&] { move_selected(-1); });
+        QObject::connect(move_down, &QPushButton::clicked, &dialog,
+                         [&] { move_selected(1); });
         QObject::connect(apply, &QPushButton::clicked, &dialog, [&] {
             if (selected_id().isEmpty()) return;
             if (!modalContextUnchanged(context)) {
@@ -15250,8 +15749,10 @@ public:
                     value.overlays.push_back(std::move(overlay));
                 }
                 if (found == views.end()) views.push_back(value); else *found = value;
-                const auto replacement = SheetViewModel::create(views, record->model.sheets(),
-                    record->model.to_json().at("schedule_ids").get<std::vector<std::string>>());
+                const auto replacement = SheetViewModel::create(
+                    views, record->model.sheets(),
+                    record->model.to_json().at("schedule_ids").get<std::vector<std::string>>(),
+                    record->model.sheet_order());
                 if (!applySheetModelMutation(QStringLiteral("Edit named view"), outputSheetId(),
                         [replacement](const SheetViewModel&) { return replacement; })) {
                     error->setText(lastError()); return;
@@ -15360,6 +15861,11 @@ public:
                          .arg(QString::fromUtf8(error.what())));
             return false;
         }
+    }
+
+    bool renderSheetOutput(QPainter& painter, const QRectF& target, QColor background) {
+        const auto snapshot = m_document->snapshot();
+        return renderSheetOutput(snapshot, outputSheetId().toStdString(), painter, target, background);
     }
 
     void showArchitecturalViewSettings() {
@@ -16425,7 +16931,8 @@ public:
             {QStringLiteral("Light theme"), [this] { applyTheme(WorkspaceTheme::light); }},
             {QStringLiteral("Dark theme"), [this] { applyTheme(WorkspaceTheme::dark); }},
             {QStringLiteral("High contrast theme"), [this] { applyTheme(WorkspaceTheme::high_contrast); }},
-            {QStringLiteral("Export draft PDF"), [this] { exportFromDialog(); }},
+            {QStringLiteral("Export selected sheet PDF"), [this] { exportFromDialog(); }},
+            {QStringLiteral("Export drawing set PDF"), [this] { exportDrawingSetFromDialog(); }},
             {QStringLiteral("Export draft SVG"), [this] {
                 const auto selected = QFileDialog::getSaveFileName(
                     owner, QStringLiteral("Export draft SVG"), {}, QStringLiteral("SVG document (*.svg)"));
@@ -16457,7 +16964,8 @@ public:
                     owner, QStringLiteral("Export IFC"), {}, QStringLiteral("IFC model (*.ifc)"));
                 if (!selected.isEmpty()) exportIfc(selected);
             }},
-            {QStringLiteral("Print preview (draft)"), [this] { showPrintPreview(); }},
+            {QStringLiteral("Print selected sheet (draft)"), [this] { showPrintPreview(); }},
+            {QStringLiteral("Print drawing set (draft)"), [this] { showDrawingSetPrintPreview(); }},
             {QStringLiteral("About"), [this] { showAbout(); }},
         };
 
@@ -17631,6 +18139,18 @@ private:
         export_image_action->setObjectName(QStringLiteral("exportDraftImage"));
         QObject::connect(export_image_action, &QAction::triggered, owner,
                          [this] { exportImageFromDialog(); });
+        auto* export_set_action = more_menu->addAction(QStringLiteral("Export drawing set PDF…"));
+        export_set_action->setObjectName(QStringLiteral("exportDrawingSetPdf"));
+        QObject::connect(export_set_action, &QAction::triggered, owner,
+                         [this] { exportDrawingSetFromDialog(); });
+        auto* print_sheet_action = more_menu->addAction(QStringLiteral("Print selected sheet (draft)…"));
+        print_sheet_action->setObjectName(QStringLiteral("printSelectedSheet"));
+        QObject::connect(print_sheet_action, &QAction::triggered, owner,
+                         [this] { showPrintPreview(); });
+        auto* print_set_action = more_menu->addAction(QStringLiteral("Print drawing set (draft)…"));
+        print_set_action->setObjectName(QStringLiteral("printDrawingSet"));
+        QObject::connect(print_set_action, &QAction::triggered, owner,
+                         [this] { showDrawingSetPrintPreview(); });
         m_copy_action = new QAction(QStringLiteral("Copy selection"), owner);
         m_copy_action->setObjectName(QStringLiteral("copySelection"));
         m_copy_action->setShortcut(QKeySequence::Copy);
@@ -23459,9 +23979,17 @@ private:
 
     void exportFromDialog() {
         const auto selected = QFileDialog::getSaveFileName(
-            owner, QStringLiteral("Export draft PDF"), {}, QStringLiteral("PDF document (*.pdf)"));
+            owner, QStringLiteral("Export selected sheet PDF"), {}, QStringLiteral("PDF document (*.pdf)"));
         if (!selected.isEmpty()) {
             exportDraftPdf(selected);
+        }
+    }
+
+    void exportDrawingSetFromDialog() {
+        const auto selected = QFileDialog::getSaveFileName(
+            owner, QStringLiteral("Export drawing set PDF"), {}, QStringLiteral("PDF document (*.pdf)"));
+        if (!selected.isEmpty()) {
+            exportDrawingSetPdf(selected);
         }
     }
 
@@ -23854,6 +24382,10 @@ QString MainWindow::createDrawingSheet(const QString& number, const QString& wid
 
 bool MainWindow::removeDrawingSheet(const QString& sheet_id) {
     return m_impl->removeDrawingSheet(sheet_id);
+}
+
+bool MainWindow::moveDrawingSheet(const QString& sheet_id, int offset) {
+    return m_impl->moveDrawingSheet(sheet_id, offset);
 }
 
 bool MainWindow::selectOutputSheet(const QString& sheet_id) {
@@ -24376,6 +24908,10 @@ bool MainWindow::exportDraftPdf(const QString& path) {
     return m_impl->exportDraftPdf(path);
 }
 
+bool MainWindow::exportDrawingSetPdf(const QString& path) {
+    return m_impl->exportDrawingSetPdf(path);
+}
+
 bool MainWindow::exportDraftSvg(const QString& path) {
     return m_impl->exportDraftSvg(path);
 }
@@ -24422,6 +24958,10 @@ bool MainWindow::importIfc(const QString& path) {
 
 bool MainWindow::showPrintPreview() {
     return m_impl->showPrintPreview();
+}
+
+bool MainWindow::showDrawingSetPrintPreview() {
+    return m_impl->showDrawingSetPrintPreview();
 }
 
 void MainWindow::showCommandPalette() {

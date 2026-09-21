@@ -551,7 +551,7 @@ navigation selects rows and Space toggles their visibility. Hidden drawing
 destinations remain explicit. See `project-visibility.md` for project-switch
 behavior and the scaled capture runner.
 
-PDF export and print preview use the canvas's shared QPainter geometry renderer
+Selected-sheet and drawing-set PDF/print output use the canvas's shared QPainter geometry renderer
 with an independent fit-to-content paper transform and a white background.
 Draft PNG export uses the same selected sheet scene and physical page dimensions
 at 144 DPI. They stamp `DRAFT — internal checkpoint` while sheets, profiles, and
@@ -566,9 +566,16 @@ the document.
 
 The Drawing sheets command manages the persisted page set. Adding a page seeds
 coordinated plan/elevation/section viewports with independent scales; removing
-a page uses the typed graph validator and is undoable. The selected page in
-that dialog is the page rendered by draft PDF, SVG, PNG, and print, and its identity
-is bound into the adjacent output fingerprint.
+a page uses the typed graph validator and is undoable. Move up/down persists an
+explicit page order through undo/redo and save/reopen. The selected page in that
+dialog is the page rendered by selected-sheet PDF, SVG, PNG, and print. Drawing-set
+PDF and print render every page in the persisted order. Separate selected-page
+and complete-set fingerprints prevent local selection from changing a set identity.
+The drawing-set preview renders the staged PDF pages in a scrollable dialog so
+mixed sheet sizes keep independent aspect ratios. Physical printing preflights
+the complete set and aborts a failed job instead of finalizing earlier pages.
+If adjacent fingerprint publication fails after PDF replacement, Vertex restores
+the previous PDF/fingerprint pair and reports any restoration failure explicitly.
 
 The Sheet layout manager composes the selected page. It can add any registered
 shared view as an independently scaled viewport, add any registered schedule as

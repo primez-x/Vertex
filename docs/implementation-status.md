@@ -394,12 +394,16 @@ available for inspection.
 
 Drawing-sheet lifecycle is now integrated at the desktop boundary: the sheet
 settings workflow can add a validated page with coordinated viewports, remove a
-page only when graph references remain valid, and select the page used by draft
-PDF/SVG/print output. Page creation/removal is ordinary undoable Document
-history, and output fingerprints bind the selected sheet. Revisions and
+page only when graph references remain valid, explicitly reorder pages, and
+select the page used by single-sheet output. Page creation/removal/reordering is
+ordinary undoable Document history. Ordered multipage PDF export and drawing-set
+print preview consume every persisted page, while a distinct set fingerprint
+binds exact membership and order. The PDF-backed preview preserves mixed page
+geometry, physical printing preflights every page and aborts failed jobs, and a
+failed fingerprint commit restores the previous PDF/fingerprint pair. Revisions and
 cross-sheet callouts now have typed add/edit/remove operations, and vector
 sheet output renders their issue rows and target markers. Subject/area metadata
-from the standalone multipage contract, richer layout editing, printer
+from the standalone multipage contract, printer
 calibration, and production output qualification remain open.
 
 The Windows handoff inputs now include explicit source-kit and portable-package
@@ -969,11 +973,14 @@ Job Object. The analytical fixture audit now passes in both configurations.
   SVG, PNG, and native 3D image exports now write adjacent fingerprint manifests that bind
   the document head, view filters/page size, linked processing roles, and
   running Windows executable digest. Print preview now writes a local
-  driver-evidence receipt with printer identity, DPI and page rectangles;
-  persisted sheet layout, physical printer calibration, and production output
+  driver-evidence receipt with printer identity, DPI and page rectangles.
+  Ordered drawing-set PDF and print-preview paths now consume the persisted
+  page sequence and bind it to a distinct complete-set fingerprint; physical
+  printer calibration and production output
   qualification remain open. The desktop output selector now applies Letter, Legal, Tabloid, A4, or
   A3 as a fallback for documents without persisted sheets. Draft PDF, SVG, PNG,
-  and print consume the selected persisted sheet dimensions. PNG derives its
+  and selected-sheet print consume the selected persisted sheet dimensions.
+  PNG derives its
   deterministic pixel dimensions from the physical page at 144 DPI, preserving
   portrait/landscape aspect under a 100-megapixel bound, and is covered by the integrated desktop
   output smoke workflow; physical printer calibration and production output

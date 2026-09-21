@@ -34,7 +34,8 @@ sketch::SheetViewModel fixture() {
     sheet.id = "sheet-a";
     sheet.number = "A101";
     sheet.viewports.push_back({"viewport-a", "plan", {10, 10, 180, 120}, 50});
-    return sketch::SheetViewModel::create({plan}, {sheet});
+    auto second = sheet; second.id = "sheet-b"; second.number = "A102";
+    return sketch::SheetViewModel::create({plan}, {sheet, second});
 }
 }  // namespace
 
@@ -50,21 +51,20 @@ int main() {
         auto document = sketch::Document::create({entity});
         auto edited_view = model.views().front();
         edited_view.overlays.front().text = "Edited section note";
-        const auto edited_model = model.with_view(edited_view);
+        const auto edited_model = model.with_view(edited_view).with_sheet_order({"sheet-b", "sheet-a"});
         document.apply(sketch::ApplyEntityChanges{.expected_revision = document.revision(),
             .entity_changes = {sketch::EntityChange::upsert(sketch::make_sheet_view_entity("sheet-view", edited_model))}});
         document.undo(document.revision());
         require(sketch::decode_sheet_view_entity(document.snapshot().entities().at("sheet-view")).to_json() == model.to_json(), "overlay undo");
         document.redo(document.revision());
         require(sketch::decode_sheet_view_entity(document.snapshot().entities().at("sheet-view")).to_json() == edited_model.to_json(), "overlay redo");
-        document.undo(document.revision());
         const auto path = std::filesystem::temp_directory_path() /
             "vertex-sheet-view-entity.bldproj";
         std::filesystem::remove(path);
         (void)sketch::ProjectStore::save(path, document.snapshot());
         const auto reopened = sketch::ProjectStore::load(path).document.snapshot();
         require(sketch::decode_sheet_view_entity(reopened.entities().at("sheet-view")).to_json() ==
-                    model.to_json(),
+                    edited_model.to_json(),
                 "sheet/view entity did not survive save/reopen");
         std::filesystem::remove(path);
 

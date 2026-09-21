@@ -116,6 +116,9 @@ public:
     // Removes a drawing sheet through typed graph validation. The last sheet
     // and sheets targeted by surviving callouts cannot be removed.
     [[nodiscard]] bool removeDrawingSheet(const QString& sheet_id);
+    // Moves one persisted drawing sheet by one page position. Reordering is a
+    // normal undoable document command and is retained by save/reopen.
+    [[nodiscard]] bool moveDrawingSheet(const QString& sheet_id, int offset);
     // Selects which persisted sheet is used by draft PDF/SVG/print output.
     // Selection is local presentation state and does not dirty the document.
     [[nodiscard]] bool selectOutputSheet(const QString& sheet_id);
@@ -541,6 +544,8 @@ public:
     // available. Returns true when the selected copy was opened.
     [[nodiscard]] bool offerStartupRecovery();
     [[nodiscard]] bool exportDraftPdf(const QString& path);
+    // Exports every persisted drawing sheet as one ordered multipage PDF.
+    [[nodiscard]] bool exportDrawingSetPdf(const QString& path);
     [[nodiscard]] bool exportDraftSvg(const QString& path);
     [[nodiscard]] bool exportDraftImage(const QString& path);
     [[nodiscard]] bool exportNativeViewImage(const QString& path);
@@ -569,6 +574,7 @@ public:
     [[nodiscard]] bool exportIfc(const QString& path);
     [[nodiscard]] bool importIfc(const QString& path);
     [[nodiscard]] bool showPrintPreview();
+    [[nodiscard]] bool showDrawingSetPrintPreview();
 
     void showCommandPalette();
     void showDistoImport();

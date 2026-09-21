@@ -4288,6 +4288,159 @@ void test_pdf_export_atomicity() {
             "blocked PDF destination must preserve the existing directory");
 }
 
+void test_drawing_set_pdf_and_ordering() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "drawing-set fixture needs a temporary directory");
+    sketch::desktop::MainWindow window;
+    const auto landscape = window.createDrawingSheet(
+        QStringLiteral("A-201"), QStringLiteral("420"), QStringLiteral("297"),
+        QStringLiteral("Landscape details"));
+    const auto portrait = window.createDrawingSheet(
+        QStringLiteral("A-202"), QStringLiteral("215.5"), QStringLiteral("330.2"),
+        QStringLiteral("Portrait details"));
+    require(!landscape.isEmpty() && !portrait.isEmpty(),
+            "drawing-set fixture must create two additional sheets");
+    const auto sheet_order = [&](const sketch::desktop::MainWindow& source) {
+        const auto model = sketch::decode_sheet_view_entity(
+            source.document().snapshot().entities().at("sheet-view-1"));
+        return model.sheet_order();
+    };
+    require(sheet_order(window) == std::vector<std::string>{
+                "sheet-1", landscape.toStdString(), portrait.toStdString()},
+            "new drawing sheets must append to the persisted page order");
+    require(window.moveDrawingSheet(portrait, -1) && window.moveDrawingSheet(portrait, -1) &&
+                sheet_order(window) == std::vector<std::string>{
+                    portrait.toStdString(), "sheet-1", landscape.toStdString()},
+            "sheet order must support stable one-step moves");
+    const auto reordered = sheet_order(window);
+    require(window.undoCommand() && sheet_order(window) != reordered &&
+                window.redoCommand() && sheet_order(window) == reordered,
+            "sheet ordering must participate in normal undo and redo");
+    require(!window.moveDrawingSheet(portrait, -1) && sheet_order(window) == reordered,
+            "moving the first sheet above the set must be a no-op without history");
+
+    const auto project = directory.filePath(QStringLiteral("ordered-set.bldproj"));
+    require(window.saveProjectAs(project), "ordered drawing set must save");
+    require(window.createNewProject(),
+            "drawing-set fixture must release the saved project before independent reopen");
+    sketch::desktop::MainWindow reopened;
+    require(reopened.openProject(project) && sheet_order(reopened) == reordered,
+            "drawing-sheet order must survive save and reopen");
+
+    const auto set_pdf = directory.filePath(QStringLiteral("drawing-set.pdf"));
+    require(reopened.exportDrawingSetPdf(set_pdf), "ordered drawing set must export as one PDF");
+    {
+        QPdfDocument set_document;
+        require(set_document.load(set_pdf) == QPdfDocument::Error::None &&
+                    set_document.pageCount() == 3,
+                "drawing-set PDF must contain every ordered sheet exactly once");
+        const auto require_page_mm = [&](int index, double width, double height) {
+            const auto points = set_document.pagePointSize(index);
+            require(std::abs(points.width() * 25.4 / 72.0 - width) < 0.4 &&
+                        std::abs(points.height() * 25.4 / 72.0 - height) < 0.4,
+                    "drawing-set PDF page dimensions or order are incorrect");
+        };
+        require_page_mm(0, 215.5, 330.2);
+        require_page_mm(1, 420.0, 297.0);
+        require_page_mm(2, 420.0, 297.0);
+    }
+
+    const auto sidecar = set_pdf + QStringLiteral(".fingerprint.json");
+    const auto read_manifest = [&](const QString& path) {
+        QFile file(path);
+        require(file.open(QIODevice::ReadOnly | QIODevice::Text),
+                "drawing-set fingerprint must be readable");
+        return nlohmann::json::parse(file.readAll().toStdString());
+    };
+    const auto first_manifest = read_manifest(sidecar);
+    require(first_manifest.at("output_kind") == "pdf-set" &&
+                first_manifest.at("sheet_order") == reordered &&
+                first_manifest.at("fingerprint").at("digest_sha256").is_string(),
+            "drawing-set fingerprint must bind kind, complete order, and digest");
+    const auto read_bytes = [](const QString& path) {
+        QFile file(path);
+        require(file.open(QIODevice::ReadOnly), "drawing-set rollback fixture must read output");
+        return file.readAll();
+    };
+    const auto committed_pdf = read_bytes(set_pdf);
+    const auto committed_sidecar = read_bytes(sidecar);
+    qApp->setProperty("vertex.testFailDrawingSetSidecarCommit", true);
+    require(!reopened.exportDrawingSetPdf(set_pdf),
+            "injected drawing-set sidecar commit failure must fail publication");
+    qApp->setProperty("vertex.testFailDrawingSetSidecarCommit", {});
+    require(read_bytes(set_pdf) == committed_pdf && read_bytes(sidecar) == committed_sidecar,
+            "sidecar commit failure must restore the previous PDF and fingerprint pair");
+    require(reopened.selectOutputSheet(landscape),
+            "drawing-set fixture must select another page without editing the document");
+    if (!reopened.exportDrawingSetPdf(set_pdf)) {
+        throw std::runtime_error(
+            "drawing-set export must remain available after changing selected sheet: " +
+            reopened.lastError().toStdString());
+    }
+    const auto second_manifest = read_manifest(sidecar);
+    const auto first_set_digest =
+        first_manifest.at("fingerprint").at("digest_sha256").get<std::string>();
+    const auto second_set_digest =
+        second_manifest.at("fingerprint").at("digest_sha256").get<std::string>();
+    if (second_set_digest != first_set_digest) {
+        throw std::runtime_error(
+            "drawing-set fingerprint must not depend on the selected single-sheet page: " +
+            first_set_digest + " != " + second_set_digest);
+    }
+    const auto valid_set_pdf = read_bytes(set_pdf);
+    const auto valid_set_sidecar = read_bytes(sidecar);
+    auto unrenderable_set = reopened.document().snapshot().entities().at("sheet-view-1");
+    auto& encoded_sheets = unrenderable_set.properties["model"]["sheets"];
+    const auto tiny = std::find_if(encoded_sheets.begin(), encoded_sheets.end(),
+        [&](const auto& sheet) { return sheet.at("id") == landscape.toStdString(); });
+    require(tiny != encoded_sheets.end(), "drawing-set fixture must resolve its final sheet");
+    (*tiny)["width_mm"] = 0.001;
+    (*tiny)["height_mm"] = 0.001;
+    for (const auto* placements : {"viewports", "schedules", "callouts"})
+        (*tiny)[placements] = nlohmann::json::array();
+    reopened.document().apply(sketch::ApplyEntityChanges{
+        reopened.document().revision(), {sketch::EntityChange::upsert(unrenderable_set)}, {},
+        "make later drawing-set page unrenderable"});
+    require(!reopened.exportDrawingSetPdf(set_pdf) &&
+                read_bytes(set_pdf) == valid_set_pdf &&
+                read_bytes(sidecar) == valid_set_sidecar,
+            "a valid first page and unrenderable later page must preserve the published set pair");
+    require(reopened.undoCommand(), "drawing-set fixture must restore the renderable sheet");
+    require(reopened.showDrawingSetPrintPreview(),
+            "drawing-set fixture must open the PDF-backed mixed-size preview");
+    QApplication::processEvents();
+    auto* preview = reopened.findChild<QDialog*>(QStringLiteral("drawingSetPrintPreview"));
+    require(preview != nullptr, "drawing-set preview must be discoverable");
+    const std::array<QSizeF, 3> preview_sizes{
+        QSizeF(215.5, 330.2), QSizeF(420.0, 297.0), QSizeF(420.0, 297.0)};
+    for (int index = 0; index < 3; ++index) {
+        const auto* page = preview->findChild<QLabel*>(
+            QStringLiteral("drawingSetPreviewPage%1").arg(index + 1));
+        require(page != nullptr && !page->pixmap().isNull(),
+                "drawing-set preview must render every staged PDF page");
+        require(std::abs(page->property("physicalWidthMm").toDouble() -
+                             preview_sizes[static_cast<std::size_t>(index)].width()) < 0.4 &&
+                    std::abs(page->property("physicalHeightMm").toDouble() -
+                             preview_sizes[static_cast<std::size_t>(index)].height()) < 0.4,
+                "drawing-set preview must retain each page's own physical geometry");
+    }
+    preview->close();
+    QApplication::processEvents();
+
+    const auto selected_pdf = directory.filePath(QStringLiteral("selected-sheet.pdf"));
+    require(reopened.exportDraftPdf(selected_pdf),
+            "selected-sheet PDF must remain available beside drawing-set output");
+    QPdfDocument selected_document;
+    require(selected_document.load(selected_pdf) == QPdfDocument::Error::None &&
+                selected_document.pageCount() == 1,
+            "selected-sheet PDF must remain a one-page export");
+    const auto selected_points = selected_document.pagePointSize(0);
+    require(std::abs(selected_points.width() * 25.4 / 72.0 - 420.0) < 0.4 &&
+                std::abs(selected_points.height() * 25.4 / 72.0 - 297.0) < 0.4,
+            "selected-sheet PDF must retain its selected physical dimensions");
+    selected_document.close();
+}
+
 void test_coordinated_view_output_identity() {
     QTemporaryDir directory;
     require(directory.isValid(), "view output fixture directory");
@@ -4536,6 +4689,11 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string_view(argv[1]) == "--named-revisions-only") {
         test_named_revisions();
         std::cout << "Named revision comparison tests passed\n";
+        return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--drawing-set-output-only") {
+        test_drawing_set_pdf_and_ordering();
+        std::cout << "Drawing-set ordering and PDF tests passed\n";
         return 0;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--section-overlays-only") {
