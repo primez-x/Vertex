@@ -124,6 +124,20 @@ the application's declared-facts policy; it is not ANSI, BOMA, or lender certifi
 The visible floor and building totals follow the selected area's floor and building;
 the property total remains the unrounded aggregate across all buildings.
 
+`build_appraisal_document_report` projects those same declarations and authoritative
+boundary geometries for sheets and export without depending on the currently
+selected object. The report is tied to a document revision and property, retains
+the source boundary IDs behind every category total, and includes property,
+building and floor totals from the same `calculate_appraisal_areas` result used by
+the inspector. Architectural room boundaries and site/survey boundaries are not
+appraisal measurement areas. Design-phase visibility is semantic and therefore
+participates in qualification; transient workspace visibility never changes the
+totals. If any participating boundary is incomplete, incompatible, hidden by the
+active design phase, or has an invalid deduction relationship, the printable
+report states **Unqualified - automatic totals withheld** and emits no area
+values. A qualified report can be placed on a sheet as **Appraisal area summary**
+and uses the active display unit only when formatting its calculated values.
+
 The desktop inspector now provides a local deduction editor. It lists valid
 closed boundaries on the active floor, stages additions and removals without
 mutating the document, and applies a revision-fenced `deduction_ids` array only

@@ -1114,8 +1114,14 @@ Job Object. The analytical fixture audit now passes in both configurations.
   now append deterministic read-only material-summary rows grouped by catalog
   identity or normalized explicit name, with source provenance, aggregate counts,
   net-volume totals when complete, and visible diagnostics when a source
-  quantity is unavailable. Full sheet/save/print/export qualification remains
-  open.
+  quantity is unavailable. A separate revision-bound appraisal projection now
+  recalculates declared residential and light-commercial areas directly from
+  measurement geometry, deductions and typed facts. Its read-only sheet
+  schedule carries source provenance, category/property/building/floor totals,
+  appears in the Sheet layout manager, and renders through selected-sheet and
+  drawing-set print/PDF paths. Incomplete or incompatible declarations render a
+  qualification row and withhold all area values. Full production output and
+  external appraisal-standard qualification remain open.
 - The product scope and interaction qualification contracts now enumerate the
   Windows 11 x64 target, both markets, both workspaces, both unit systems,
   themes, DPI layouts, keyboard/focus/property access, pen/touch controls, and

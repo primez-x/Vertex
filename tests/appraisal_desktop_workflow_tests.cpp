@@ -1,24 +1,29 @@
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/sheet_view_entity_codec.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <QApplication>
 #include <QComboBox>
 #include <QGroupBox>
+#include <QImage>
 #include <QLabel>
 #include <QListWidget>
 #include <QTemporaryDir>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QPushButton>
+#include <QPdfDocument>
 #include <QTimer>
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -186,6 +191,32 @@ void declared_appraisal_qualifies_without_manual_categories() {
     require(window.editSelectedAppraisalFacts(declarations()), "valid declarations must commit atomically");
     require(qualification->text().startsWith("Qualified") && derived->text().contains("above_grade_finished") && gla->text().contains("100.00"),
             "facts must qualify and derive GLA without manual category assignment");
+    const auto appraisal_schedule = window.scheduleSnapshot();
+    const auto schedule_gla = std::find_if(
+        appraisal_schedule.snapshot.rows.begin(), appraisal_schedule.snapshot.rows.end(),
+        [](const auto& row) {
+            return row.kind == sketch::ScheduleRowKind::appraisal &&
+                   row.object_id.ends_with(":category:above_grade_finished");
+        });
+    require(schedule_gla != appraisal_schedule.snapshot.rows.end() &&
+                std::holds_alternative<sketch::ScheduleQuantity>(
+                    schedule_gla->cells.at("area").value) &&
+                std::abs(std::get<sketch::ScheduleQuantity>(
+                    schedule_gla->cells.at("area").value).value - 9.290304) < 1e-8 &&
+                schedule_gla->cells.at("area").sources.front().object_id == area.toStdString(),
+            "the printable appraisal schedule must use automatic geometry totals with source provenance");
+    require(window.setContainerVisible(QStringLiteral("floor-1"), false),
+            "appraisal fixture must support hiding the floor presentation");
+    const auto filtered_schedule = window.scheduleSnapshot();
+    require(std::any_of(filtered_schedule.snapshot.rows.begin(),
+                        filtered_schedule.snapshot.rows.end(), [](const auto& row) {
+                return row.kind == sketch::ScheduleRowKind::appraisal &&
+                       row.object_id.ends_with(":category:above_grade_finished") &&
+                       row.cells.contains("area");
+            }),
+            "presentation visibility must not change printable appraisal totals");
+    require(window.setContainerVisible(QStringLiteral("floor-1"), true),
+            "appraisal fixture must restore the floor presentation");
     const auto stored = window.document().snapshot();
     require(stored.entities().at("property-1").properties.at("appraisal_policy").at("version") == 1 &&
             stored.entities().at(area.toStdString()).properties.at("appraisal_facts").at("finish") == "finished",
@@ -202,6 +233,23 @@ void declared_appraisal_qualifies_without_manual_categories() {
     require(window.editSelectedAppraisalFacts(declarations().replace("\"finish\":\"finished\",", "")) &&
             qualification->text().contains("Unqualified") && qualification->text().contains("Declare finish") &&
             !gla->text().contains("100.00"), "missing declarations must withhold automatic totals instead of inferring facts");
+    const auto unqualified_schedule = window.scheduleSnapshot();
+    require(std::any_of(unqualified_schedule.snapshot.rows.begin(),
+                        unqualified_schedule.snapshot.rows.end(), [](const auto& row) {
+                if (row.kind != sketch::ScheduleRowKind::appraisal ||
+                    !row.object_id.ends_with(":status")) return false;
+                const auto status = row.cells.find("status");
+                return status != row.cells.end() &&
+                       std::holds_alternative<std::string>(status->second.value) &&
+                       std::get<std::string>(status->second.value).find("totals withheld") !=
+                           std::string::npos;
+            }) &&
+                std::none_of(unqualified_schedule.snapshot.rows.begin(),
+                             unqualified_schedule.snapshot.rows.end(), [](const auto& row) {
+                    return row.kind == sketch::ScheduleRowKind::appraisal &&
+                           row.cells.contains("area");
+                }),
+            "unqualified sheet output must state that totals are withheld and print no area values");
     require(window.editSelectedAppraisalFacts(declarations("residential_declared", "dwelling", "below")) &&
             derived->text().contains("below_grade_finished") && gla->text().contains("0.00"),
             "declared floor grade must override neither name nor elevation, and exclude below grade from GLA");
@@ -376,6 +424,110 @@ void appraisal_declarations_reject_read_only_documents() {
             "appraisal declarations must reject a read-only document without mutation");
 }
 
+void malformed_appraisal_projection_prints_withheld_status() {
+    sketch::desktop::MainWindow window;
+    require(!window.createBoundary(square(0, 0, 3.048)).isEmpty(),
+            "malformed print fixture needs an appraisal boundary");
+    auto* workflow = window.findChild<QComboBox*>(QStringLiteral("calculationWorkflow"));
+    workflow->setCurrentIndex(workflow->findData(QStringLiteral("appraisal")));
+    require(window.editSelectedAppraisalFacts(declarations()),
+            "malformed print fixture must begin qualified");
+    auto snapshot = window.document().snapshot();
+    auto property = snapshot.entities().at("property-1");
+    property.properties["appraisal_policy"] = "malformed";
+    window.document().apply(sketch::ApplyEntityChanges{
+        snapshot.revision(), {sketch::EntityChange::upsert(std::move(property))}, {},
+        "inject malformed appraisal policy"});
+    const auto schedule = window.scheduleSnapshot();
+    require(std::any_of(schedule.snapshot.rows.begin(), schedule.snapshot.rows.end(),
+                        [](const auto& row) {
+                const auto status = row.cells.find("status");
+                return row.kind == sketch::ScheduleRowKind::appraisal &&
+                       status != row.cells.end() &&
+                       std::holds_alternative<std::string>(status->second.value) &&
+                       std::get<std::string>(status->second.value).find("totals withheld") !=
+                           std::string::npos;
+            }) &&
+                std::none_of(schedule.snapshot.rows.begin(), schedule.snapshot.rows.end(),
+                             [](const auto& row) {
+                    return row.kind == sketch::ScheduleRowKind::appraisal &&
+                           row.cells.contains("area");
+                }),
+            "malformed appraisal data must print an unqualified status and no area values");
+}
+
+void appraisal_summary_prints_from_the_automatic_report() {
+    sketch::desktop::MainWindow window;
+    require(!window.createBoundary(square(0, 0, 3.048)).isEmpty(),
+            "print fixture needs an appraisal boundary");
+    auto* workflow = window.findChild<QComboBox*>(QStringLiteral("calculationWorkflow"));
+    workflow->setCurrentIndex(workflow->findData(QStringLiteral("appraisal")));
+    require(window.editSelectedAppraisalFacts(declarations()),
+            "print fixture declarations must qualify");
+    const auto schedule = window.scheduleSnapshot();
+    const auto gla_row = std::find_if(
+        schedule.snapshot.rows.begin(), schedule.snapshot.rows.end(), [](const auto& row) {
+            return row.kind == sketch::ScheduleRowKind::appraisal &&
+                   row.object_id.ends_with(":category:above_grade_finished");
+        });
+    require(gla_row != schedule.snapshot.rows.end() &&
+                std::holds_alternative<sketch::ScheduleQuantity>(gla_row->cells.at("area").value) &&
+                std::abs(std::get<sketch::ScheduleQuantity>(gla_row->cells.at("area").value).value -
+                         9.290304) < 1e-8,
+            "print fixture must project its automatic 100 square foot GLA row before export");
+
+    auto snapshot = window.document().snapshot();
+    const auto sheet_entity = std::find_if(
+        snapshot.entities().begin(), snapshot.entities().end(), [](const auto& item) {
+            return item.second.type == sketch::kSheetViewEntityType;
+        });
+    require(sheet_entity != snapshot.entities().end(), "print fixture needs a sheet model");
+    auto model = sketch::decode_sheet_view_entity(sheet_entity->second);
+    require(std::find(model.schedule_ids().begin(), model.schedule_ids().end(),
+                      "appraisal-areas") != model.schedule_ids().end(),
+            "appraisal schedule must be registered in a new project");
+    sketch::DrawingSheet report_sheet;
+    report_sheet.id = "sheet-appraisal";
+    report_sheet.number = "A-900";
+    report_sheet.width_mm = 420;
+    report_sheet.height_mm = 297;
+    report_sheet.title_block = {"Appraisal fixture", "Appraisal area summary", "", ""};
+    report_sheet.schedules.push_back(
+        {"appraisal-summary-placement", "appraisal-areas", {10, 10, 400, 250}});
+    const auto original_sheet_id = model.sheets().front().id;
+    model = model.with_added_sheet(std::move(report_sheet))
+                 .with_removed_sheet(original_sheet_id);
+    window.document().apply(sketch::ApplyEntityChanges{
+        snapshot.revision(),
+        {sketch::EntityChange::upsert(
+            sketch::make_sheet_view_entity(sheet_entity->first, model))}, {},
+        "add appraisal report sheet"});
+
+    QTemporaryDir directory;
+    require(directory.isValid(), "print fixture needs a temporary directory");
+    const auto path = directory.filePath(QStringLiteral("appraisal-set.pdf"));
+    if (!window.exportDrawingSetPdf(path)) {
+        throw std::runtime_error(
+            "qualified appraisal summary must export in the drawing set: " +
+            window.lastError().toStdString());
+    }
+    QPdfDocument pdf;
+    require(pdf.load(path) == QPdfDocument::Error::None && pdf.pageCount() == 1,
+            "appraisal drawing set must contain the added report sheet");
+    const auto page = pdf.render(0, QSize(840, 594));
+    require(!page.isNull(), "appraisal drawing set page must render back from the exported PDF");
+    int schedule_header_pixels = 0;
+    for (int y = 20; y < 52; ++y) {
+        for (int x = 20; x < 820; ++x) {
+            const auto color = page.pixelColor(x, y);
+            if (color.red() < 245 || color.green() < 245 || color.blue() < 245)
+                ++schedule_header_pixels;
+        }
+    }
+    require(schedule_header_pixels > 15000,
+            "exported appraisal sheet must visibly render the automatic schedule header and rows");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -389,6 +541,8 @@ int main(int argc, char** argv) {
         declared_appraisal_excludes_site_boundaries();
         declared_appraisal_reports_selected_building_floor_and_property();
         appraisal_declarations_reject_read_only_documents();
+        malformed_appraisal_projection_prints_withheld_status();
+        appraisal_summary_prints_from_the_automatic_report();
         std::cout << "appraisal_desktop_workflow_tests passed\n";
         return 0;
     } catch (const std::exception& error) {

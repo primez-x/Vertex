@@ -2167,6 +2167,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/appraisal_document.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/architectural_document_adapter.hpp"
     },
     {
@@ -2224,6 +2228,10 @@
     {
       "category": "source",
       "path": "include/sketch/boundary_dimension.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/boundary_edit.hpp"
     },
     {
       "category": "source",
@@ -2871,6 +2879,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/appraisal_document.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/architectural_document_adapter.cpp"
     },
     {
@@ -2920,6 +2932,10 @@
     {
       "category": "source",
       "path": "src/core/boundary_entity.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/boundary_geometry_edit.cpp"
     },
     {
       "category": "source",
@@ -3308,6 +3324,10 @@
     {
       "category": "source",
       "path": "tests/appraisal_dispatcher_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/appraisal_document_tests.cpp"
     },
     {
       "category": "source",

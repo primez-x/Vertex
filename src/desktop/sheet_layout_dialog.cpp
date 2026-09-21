@@ -19,6 +19,13 @@ namespace sketch::desktop {
 namespace {
 QString text(const std::string& value) { return QString::fromStdString(value); }
 QString number(double value) { return QString::number(value, 'g', 17); }
+QString schedule_name(const std::string& id) {
+    if (id == "appraisal-areas") return QStringLiteral("Appraisal area summary");
+    auto value = text(id);
+    value.replace(QLatin1Char('-'), QLatin1Char(' '));
+    if (!value.isEmpty()) value[0] = value[0].toUpper();
+    return value;
+}
 }
 
 struct SheetLayoutDialog::Impl {
@@ -109,8 +116,9 @@ struct SheetLayoutDialog::Impl {
                 placements->setItemData(placements->count() - 1, true, Qt::UserRole + 1);
             }
             for (const auto& schedule : current->schedules) {
-                placements->addItem(QStringLiteral("Schedule placement %1 — %2").arg(text(schedule.id), text(schedule.schedule_id)),
-                                    text(schedule.id));
+                placements->addItem(QStringLiteral("Schedule placement %1 — %2")
+                    .arg(text(schedule.id), schedule_name(schedule.schedule_id)),
+                    text(schedule.id));
                 placements->setItemData(placements->count() - 1, false, Qt::UserRole + 1);
             }
         }
@@ -260,7 +268,8 @@ SheetLayoutDialog::SheetLayoutDialog(const SheetViewModel& model, const QString&
     viewport_row->addWidget(p.new_view); viewport_row->addWidget(p.add_viewport);
     form->addRow(QStringLiteral("Shared view"), viewport_row);
     p.new_schedule = new QComboBox(this); p.new_schedule->setObjectName("sheetLayoutNewSchedule");
-    for (const auto& id : model.schedule_ids()) p.new_schedule->addItem(text(id), text(id));
+    for (const auto& id : model.schedule_ids())
+        p.new_schedule->addItem(schedule_name(id), text(id));
     p.add_schedule = new QPushButton(QStringLiteral("Add schedule"), this);
     p.add_schedule->setObjectName("sheetLayoutAddSchedule"); p.add_schedule->setAutoDefault(false);
     auto* schedule_row = new QHBoxLayout;

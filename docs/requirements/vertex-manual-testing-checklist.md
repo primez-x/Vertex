@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-277 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+278 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -35,7 +35,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - Survey and georeferencing — when used (7 tasks)
 - Optional assistance — when available (7 tasks)
 - Complete a real job (5 tasks)
-- Appraisal square-foot workflow (12 tasks)
+- Appraisal square-foot workflow (13 tasks)
 
 ## Start a project and arrange the workspace
 
@@ -1495,6 +1495,11 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 
 - [ ] **U277 — Keep site and survey outlines outside building appraisal totals**
   - Expected: Add a site or survey boundary to a project with a qualified building. The building remains Qualified and its floor, building and property totals remain unchanged without entering appraisal facts for the site outline. Selecting the site explains that it is excluded. Attempting to use the site boundary as a building deduction is blocked.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
+- [ ] **U278 — Print the automatic appraisal area summary**
+  - Expected: Create and qualify a 10 ft × 10 ft above-grade finished dwelling boundary. Open **Sheet layout...**, add **Appraisal area summary**, and export the drawing set to PDF. The sheet shows Qualified under the declared Vertex policy, Above-grade finished (GLA) at 100.00 ft², and matching property/building/floor totals. Remove a required appraisal fact and export again; the sheet says **Unqualified - automatic totals withheld** and contains no appraisal area values.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

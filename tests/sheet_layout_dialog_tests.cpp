@@ -30,7 +30,7 @@ sketch::SheetViewModel fixture() {
                    {"schedule-b", "rooms", {120, 120, 100, 50}}};
     auto b = a; b.id = "sheet-b"; b.number = "A102";
     return sketch::SheetViewModel::create({{"plan", "Floor plan"}, {"section", "Section"}},
-                                          {a, b}, {"rooms", "doors"});
+                                          {a, b}, {"rooms", "doors", "appraisal-areas"});
 }
 void field(sketch::desktop::SheetLayoutDialog& dialog, const char* name, const char* text) {
     auto* edit = dialog.findChild<QLineEdit*>(name);
@@ -66,7 +66,10 @@ void testPlacementLifecycle() {
     const auto viewports = dialog.workingModel().sheets()[1].viewports;
     require(viewports.size() == 2 && viewports[0].id != viewports[1].id, "viewport identities collide");
     auto* schedules = dialog.findChild<QComboBox*>("sheetLayoutNewSchedule");
-    require(schedules && schedules->findData("rooms") >= 0 && schedules->findData("doors") >= 0,
+    const auto appraisal_index = schedules ? schedules->findData("appraisal-areas") : -1;
+    require(schedules && schedules->findData("rooms") >= 0 && schedules->findData("doors") >= 0 &&
+                appraisal_index >= 0 &&
+                schedules->itemText(appraisal_index) == QStringLiteral("Appraisal area summary"),
             "schedule registry chooser missing unplaced schedule");
     schedules->setCurrentIndex(schedules->findData("doors"));
     click(dialog, "sheetLayoutAddSchedule");
@@ -122,7 +125,11 @@ sketch::SheetViewModel windowSheetModel(const sketch::desktop::MainWindow& windo
 
 void testMainWindowCommitsSelectedSheetPlacement() {
     sketch::desktop::MainWindow window;
-    const auto first_sheet = windowSheetModel(window).sheets().front();
+    const auto initial_model = windowSheetModel(window);
+    require(std::find(initial_model.schedule_ids().begin(), initial_model.schedule_ids().end(),
+                      "appraisal-areas") != initial_model.schedule_ids().end(),
+            "new projects must register the appraisal area summary for sheet placement");
+    const auto first_sheet = initial_model.sheets().front();
     const auto second_id = window.createDrawingSheet(
         QStringLiteral("A-102"), QStringLiteral("420"), QStringLiteral("297"),
         QStringLiteral("Second sheet"));

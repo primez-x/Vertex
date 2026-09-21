@@ -36,6 +36,7 @@
 #include "sketch/output_fingerprint.hpp"
 #include "sketch/sheet_output_scene.hpp"
 #include "sketch/calculations.hpp"
+#include "sketch/appraisal_document.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/project_resource_catalog.hpp"
 #include "sketch/project_ownership.hpp"
@@ -161,6 +162,7 @@
 #include <filesystem>
 #include <functional>
 #include <iomanip>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <locale>
@@ -494,7 +496,16 @@ SheetViewModel default_sheet_view_model() {
                                {215.0, 220.0, 195.0, 45.0}});
     return SheetViewModel::create({std::move(section_view), std::move(plan_view),
                                    std::move(elevation_view)}, {std::move(sheet)},
-                                  {"doors", "windows", "rooms", "materials", "building-objects"});
+                                  {"doors", "windows", "rooms", "materials", "building-objects",
+                                   "appraisal-areas"});
+}
+
+SheetViewModel with_appraisal_schedule_registered(const SheetViewModel& source) {
+    auto schedules = source.schedule_ids();
+    if (std::find(schedules.begin(), schedules.end(), "appraisal-areas") == schedules.end())
+        schedules.push_back("appraisal-areas");
+    return SheetViewModel::create(source.views(), source.sheets(), std::move(schedules),
+                                  source.sheet_order());
 }
 
 json point_json(Vec2 point) {
@@ -952,6 +963,14 @@ QString format_dimension_area(double square_metres, bool metric) {
     constexpr double square_metres_per_square_foot = 0.09290304;
     return QStringLiteral("%1 ft²")
         .arg(square_metres / square_metres_per_square_foot, 0, 'f', 1);
+}
+
+QString format_appraisal_area(double square_metres, bool metric) {
+    if (!std::isfinite(square_metres)) return QStringLiteral("—");
+    if (metric) return QStringLiteral("%1 m²").arg(square_metres, 0, 'f', 2);
+    constexpr double square_metres_per_square_foot = 0.09290304;
+    return QStringLiteral("%1 ft²")
+        .arg(square_metres / square_metres_per_square_foot, 0, 'f', 2);
 }
 
 std::optional<Vec2> dimension_tangent_at_vertex(const IdentifiedSegment& identified,
@@ -1710,8 +1729,150 @@ QString schedule_kind_text(ScheduleRowKind kind) {
     case ScheduleRowKind::material_summary: return QStringLiteral("Material summary");
     case ScheduleRowKind::assembly: return QStringLiteral("Assembly");
     case ScheduleRowKind::building: return QStringLiteral("Building object");
+    case ScheduleRowKind::appraisal: return QStringLiteral("Appraisal area");
     }
     return QStringLiteral("Unknown");
+}
+
+std::string appraisal_category_label(AppraisalAreaCategory category) {
+    switch (category) {
+    case AppraisalAreaCategory::none: return "Unassigned";
+    case AppraisalAreaCategory::above_grade_finished: return "Above-grade finished (GLA)";
+    case AppraisalAreaCategory::above_grade_unfinished: return "Above-grade unfinished";
+    case AppraisalAreaCategory::below_grade_finished: return "Below-grade finished";
+    case AppraisalAreaCategory::below_grade_unfinished: return "Below-grade unfinished";
+    case AppraisalAreaCategory::garage: return "Garage";
+    case AppraisalAreaCategory::carport: return "Carport";
+    case AppraisalAreaCategory::porch: return "Porch";
+    case AppraisalAreaCategory::patio: return "Patio";
+    case AppraisalAreaCategory::deck: return "Deck";
+    case AppraisalAreaCategory::other_non_living: return "Other non-living";
+    case AppraisalAreaCategory::above_grade_nonstandard_finished:
+        return "Above-grade nonstandard finished";
+    case AppraisalAreaCategory::below_grade_nonstandard_finished:
+        return "Below-grade nonstandard finished";
+    case AppraisalAreaCategory::noncontinuous_finished: return "Noncontinuous finished";
+    case AppraisalAreaCategory::commercial_occupiable: return "Commercial occupiable";
+    case AppraisalAreaCategory::commercial_common: return "Commercial common";
+    case AppraisalAreaCategory::commercial_service: return "Commercial service";
+    }
+    throw std::invalid_argument("Unknown appraisal category");
+}
+
+double appraisal_total_square_metres(const AppraisalTotals& totals) {
+    long double result = 0.0L;
+    for (const auto& [category, bucket] : totals.by_category) {
+        (void)category;
+        result += bucket.total.square_metres;
+    }
+    return static_cast<double>(result);
+}
+
+ScheduleRow appraisal_text_row(const AppraisalDocumentReport& report, std::string suffix,
+                               std::string mark, std::string label, std::string value) {
+    ScheduleRow row;
+    row.object_id = "appraisal:" + report.property_id + ':' + std::move(suffix);
+    row.mark = std::move(mark);
+    row.kind = ScheduleRowKind::appraisal;
+    row.cells.emplace("label", ScheduleCell{std::move(label), false,
+        {{report.property_id, "appraisal_policy"}},
+        "Description derived from the declared property appraisal workflow"});
+    row.cells.emplace("status", ScheduleCell{std::move(value), false,
+        {{report.property_id, "appraisal_policy"}},
+        "Qualification status for the revision-bound appraisal projection"});
+    return row;
+}
+
+ScheduleRow appraisal_area_row(const AppraisalDocumentReport& report, std::string suffix,
+                               std::string mark, std::string label, double square_metres,
+                               const std::vector<std::string>& area_ids) {
+    std::vector<ScheduleSourceRef> sources;
+    sources.reserve(area_ids.size());
+    for (const auto& id : area_ids) sources.push_back({id, "geometry/appraisal_facts"});
+    ScheduleRow row;
+    row.object_id = "appraisal:" + report.property_id + ':' + std::move(suffix);
+    row.mark = std::move(mark);
+    row.kind = ScheduleRowKind::appraisal;
+    row.cells.emplace("area", ScheduleCell{
+        ScheduleQuantity{square_metres, ScheduleUnit::square_metre}, false, sources,
+        "Automatic area from authoritative boundary geometry, deductions and declared facts"});
+    row.cells.emplace("label", ScheduleCell{std::move(label), false, std::move(sources),
+        "Appraisal scope/category label"});
+    return row;
+}
+
+std::string appraisal_entity_name(const DocumentSnapshot& document, const std::string& id) {
+    const auto entity = document.entities().find(id);
+    if (entity != document.entities().end()) {
+        const auto name = entity->second.properties.find("name");
+        if (name != entity->second.properties.end() && name->is_string() &&
+            !name->get_ref<const std::string&>().empty())
+            return name->get<std::string>();
+    }
+    return id;
+}
+
+std::vector<ScheduleRow> appraisal_schedule_rows(const AppraisalDocumentReport& report,
+                                                 const DocumentSnapshot& document) {
+    std::vector<ScheduleRow> rows;
+    if (!report.configured) return rows;
+    if (!report.qualified || !report.calculation) {
+        std::string status = "Unqualified - automatic totals withheld";
+        if (!report.issues.empty()) status += ": " + report.issues.front();
+        rows.push_back(appraisal_text_row(report, "status", "STATUS", "Qualification",
+                                          std::move(status)));
+        return rows;
+    }
+    rows.push_back(appraisal_text_row(
+        report, "status", "STATUS", "Qualification",
+        "Qualified under declared Vertex policy v1; no ANSI/BOMA certification"));
+    for (const auto& [category, bucket] : report.calculation->property.by_category) {
+        if (bucket.total.square_metres <= 0.0) continue;
+        const auto token = appraisal_category_name(category);
+        rows.push_back(appraisal_area_row(
+            report, "category:" + std::string(token), "CATEGORY",
+            appraisal_category_label(category), bucket.total.square_metres, bucket.area_ids));
+    }
+    std::vector<std::string> property_sources;
+    for (const auto& [category, bucket] : report.calculation->property.by_category) {
+        (void)category;
+        property_sources.insert(property_sources.end(), bucket.area_ids.begin(), bucket.area_ids.end());
+    }
+    std::sort(property_sources.begin(), property_sources.end());
+    property_sources.erase(std::unique(property_sources.begin(), property_sources.end()),
+                           property_sources.end());
+    rows.push_back(appraisal_area_row(
+        report, "property-total", "PROPERTY",
+        appraisal_entity_name(document, report.property_id) + " total",
+        appraisal_total_square_metres(report.calculation->property), property_sources));
+    for (const auto& [building_id, totals] : report.calculation->by_building) {
+        std::vector<std::string> sources;
+        for (const auto& [category, bucket] : totals.by_category) {
+            (void)category;
+            sources.insert(sources.end(), bucket.area_ids.begin(), bucket.area_ids.end());
+        }
+        std::sort(sources.begin(), sources.end());
+        sources.erase(std::unique(sources.begin(), sources.end()), sources.end());
+        rows.push_back(appraisal_area_row(
+            report, "building:" + building_id, "BUILDING",
+            appraisal_entity_name(document, building_id) + " total",
+            appraisal_total_square_metres(totals), sources));
+    }
+    for (const auto& [scope, totals] : report.calculation->by_floor) {
+        std::vector<std::string> sources;
+        for (const auto& [category, bucket] : totals.by_category) {
+            (void)category;
+            sources.insert(sources.end(), bucket.area_ids.begin(), bucket.area_ids.end());
+        }
+        std::sort(sources.begin(), sources.end());
+        sources.erase(std::unique(sources.begin(), sources.end()), sources.end());
+        rows.push_back(appraisal_area_row(
+            report, "floor:" + scope.first + ':' + scope.second, "FLOOR",
+            appraisal_entity_name(document, scope.first) + " / " +
+                appraisal_entity_name(document, scope.second) + " total",
+            appraisal_total_square_metres(totals), sources));
+    }
+    return rows;
 }
 
 std::optional<ScheduleValue> parse_schedule_value(const ScheduleValue& current,
@@ -2540,12 +2701,53 @@ public:
     [[nodiscard]] DocumentScheduleProjection scheduleSnapshot() const {
         const auto source = m_document->snapshot();
         DocumentScheduleProjection projection;
+        std::optional<std::set<std::string, std::less<>>> semantic_visibility;
+        std::optional<std::string> semantic_visibility_error;
         try {
-            const auto visible = visible_project_entities_with_phase(source, m_view_filter);
-            projection = build_architectural_schedules(source, visible);
+            semantic_visibility = visible_project_entities_with_phase(source, ProjectViewFilter{});
+            const auto presentation_visibility = visible_project_entities_with_phase(
+                source, m_view_filter);
+            projection = build_architectural_schedules(source, presentation_visibility);
         } catch (const std::exception& error) {
             projection = build_architectural_schedules(source);
+            semantic_visibility_error = error.what();
             projection.diagnostics.push_back(std::string("Design phase: ") + error.what());
+        }
+        for (const auto& [id, entity] : source.entities()) {
+            if (entity.type != "property") continue;
+            try {
+                auto report = build_appraisal_document_report(
+                    source, id, m_metric_units ? AreaUnit::square_metre : AreaUnit::square_foot,
+                    semantic_visibility ? &*semantic_visibility : nullptr);
+                if (report.configured && semantic_visibility_error) {
+                    report.qualified = false;
+                    report.calculation.reset();
+                    report.issues.push_back(
+                        "Design phase visibility is unavailable: " + *semantic_visibility_error);
+                }
+                auto rows = appraisal_schedule_rows(report, source);
+                projection.snapshot.rows.insert(projection.snapshot.rows.end(),
+                                                std::make_move_iterator(rows.begin()),
+                                                std::make_move_iterator(rows.end()));
+                for (const auto& issue : report.issues)
+                    projection.diagnostics.push_back("Appraisal " + id + ": " + issue);
+            } catch (const std::exception& error) {
+                const auto workflow = entity.properties.find("calculation_workflow");
+                if (workflow != entity.properties.end() && workflow->is_string() &&
+                    workflow->get_ref<const std::string&>() == "appraisal") {
+                    AppraisalDocumentReport failed;
+                    failed.revision = source.revision();
+                    failed.property_id = id;
+                    failed.configured = true;
+                    failed.issues.push_back(
+                        "Appraisal report could not be produced: " + std::string(error.what()));
+                    auto rows = appraisal_schedule_rows(failed, source);
+                    projection.snapshot.rows.insert(projection.snapshot.rows.end(),
+                                                    std::make_move_iterator(rows.begin()),
+                                                    std::make_move_iterator(rows.end()));
+                }
+                projection.diagnostics.push_back("Appraisal " + id + ": " + error.what());
+            }
         }
         return projection;
     }
@@ -13969,8 +14171,11 @@ public:
                 else if (schedule_name.contains(QStringLiteral("building")) ||
                          schedule_name.contains(QStringLiteral("object"))) kind = ScheduleRowKind::building;
                 else if (schedule_name.contains(QStringLiteral("material"))) kind = ScheduleRowKind::material;
+                else if (schedule_name.contains(QStringLiteral("appraisal"))) kind = ScheduleRowKind::appraisal;
                 QString heading = schedule_name.isEmpty() ? QStringLiteral("SCHEDULE")
                                                             : schedule_name.toUpper() + QStringLiteral(" SCHEDULE");
+                if (kind == ScheduleRowKind::appraisal)
+                    heading = QStringLiteral("APPRAISAL AREA SUMMARY");
                 std::vector<const ScheduleRow*> rows;
                 if (kind) {
                     for (const auto& row : schedule_projection.snapshot.rows) {
@@ -14020,18 +14225,34 @@ public:
                     painter.setPen(QPen(QColor(196, 203, 211), std::max(1.0, paper_scale * 0.35)));
                     painter.drawLine(row_rect.bottomLeft(), row_rect.bottomRight());
                     painter.setPen(QColor(50, 57, 65));
-                    QString text = index < static_cast<int>(rows.size())
-                        ? QStringLiteral("%1  %2")
-                              .arg(QString::fromStdString(rows[static_cast<std::size_t>(index)]->mark),
-                                   QString::fromStdString(rows[static_cast<std::size_t>(index)]->object_id))
-                        : QString();
+                    QString text;
                     if (index < static_cast<int>(rows.size())) {
-                        const auto& cells = rows[static_cast<std::size_t>(index)]->cells;
-                        int appended = 0;
-                        for (const auto& [column, cell] : cells) {
-                            if (appended++ == 2) break;
-                            text += QStringLiteral("  %1: %2")
-                                        .arg(QString::fromStdString(column), schedule_value_text(cell.value));
+                        const auto& row = *rows[static_cast<std::size_t>(index)];
+                        const auto& cells = row.cells;
+                        if (row.kind == ScheduleRowKind::appraisal) {
+                            const auto label = cells.find("label");
+                            const auto area = cells.find("area");
+                            const auto status = cells.find("status");
+                            if (label != cells.end()) text = schedule_value_text(label->second.value);
+                            if (area != cells.end() &&
+                                std::holds_alternative<ScheduleQuantity>(area->second.value)) {
+                                const auto quantity = std::get<ScheduleQuantity>(area->second.value);
+                                text += QStringLiteral("  %1")
+                                            .arg(format_appraisal_area(quantity.value, m_metric_units));
+                            } else if (status != cells.end()) {
+                                text += QStringLiteral("  %1").arg(schedule_value_text(status->second.value));
+                            }
+                        } else {
+                            text = QStringLiteral("%1  %2")
+                                       .arg(QString::fromStdString(row.mark),
+                                            QString::fromStdString(row.object_id));
+                            int appended = 0;
+                            for (const auto& [column, cell] : cells) {
+                                if (appended++ == 2) break;
+                                text += QStringLiteral("  %1: %2")
+                                            .arg(QString::fromStdString(column),
+                                                 schedule_value_text(cell.value));
+                            }
                         }
                     }
                     if (text.isEmpty() && index == 0) text = QStringLiteral("No rows");
@@ -16216,7 +16437,8 @@ public:
             const auto record = decode_sheet_model(source);
             if (!record || record->model.sheets().empty())
                 throw std::invalid_argument("No typed drawing sheet is available.");
-            SheetLayoutDialog dialog(record->model, outputSheetId(), owner);
+            SheetLayoutDialog dialog(with_appraisal_schedule_registered(record->model),
+                                     outputSheetId(), owner);
             styleDialog(dialog);
             if (dialog.exec() != QDialog::Accepted || !modalContextUnchanged(context) ||
                 !dialog.acceptedModel()) return;
@@ -22322,6 +22544,7 @@ private:
             std::set<std::string, std::less<>> building_referenced_deductions;
             for (const auto& [id, entity] : entities) {
                 if (!is_closed_boundary_entity(entity.type)) continue;
+                if (declared && entity.type == "room_boundary") continue;
                 if (!phase_visible_ids.contains(id)) continue;
                 const auto parent_scope = area_scope_name(entity.properties);
                 if (declared && parent_scope == "site") {
@@ -22401,6 +22624,7 @@ private:
                 if (!is_closed_boundary_entity(entity.type)) {
                     continue;
                 }
+                if (declared && entity.type == "room_boundary") continue;
                 if (!phase_visible_ids.contains(id)) {
                     continue;
                 }

@@ -627,6 +627,17 @@ when the body has no row capacity, the same notice is appended to the schedule
 heading. Rows are never silently discarded, and an adequately sized placement
 does not emit a false overflow warning.
 
+The registered **Appraisal area summary** schedule is read-only and recalculates
+from stored appraisal declarations, deductions and measurement-boundary geometry
+for the current document revision. Add it from **Sheet layout...** like any other
+schedule, then use selected-sheet or drawing-set print/PDF output. A qualified
+summary shows the declared policy status, nonzero category buckets, property
+total, and building/floor totals in the active unit. If qualification fails, the
+sheet says that automatic totals are withheld and prints no area values. Hiding
+objects with workspace presentation filters cannot alter this report; an active
+design phase can, because it changes the semantic project state used for the
+calculation.
+
 The executable supports:
 
 ```text
@@ -718,3 +729,5 @@ Exclusion roles must be linked through the deduction editor and do not contribut
 standalone area. Independent site/survey outlines remain outside the building
 appraisal and need no appraisal facts; Vertex rejects using one as a building
 deduction. Vertex qualification does not certify ANSI or BOMA compliance.
+The same revision-bound result is available to **Sheet layout...** as the
+**Appraisal area summary** schedule for print and drawing-set PDF output.
