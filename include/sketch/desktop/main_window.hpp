@@ -439,6 +439,13 @@ public:
     // JSON object remains inspectable in the native project format and the
     // update uses the normal undoable Document history.
     [[nodiscard]] bool editSelectedAreaAttributes(const QString& attributes_json);
+    // Atomically declares property policy, selected floor grade and boundary facts.
+    // JSON keys: appraisal_policy {policy_kind, version, property_kind, measurement_basis},
+    // grade, appraisal_facts {finish, access, ceiling_eligibility, area_use, boundary_role}.
+    // Missing facts remain undeclared; unknown tokens and versions are rejected.
+    [[nodiscard]] bool editSelectedAppraisalFacts(
+        const QString& declarations_json, std::optional<Revision> expected_revision = std::nullopt);
+    void showAppraisalFacts();
     [[nodiscard]] bool setSelectedCalculationRule(bool include_in_building,
                                                    bool include_in_living);
     // Applies an analytic transform to a selected identified boundary or wall.

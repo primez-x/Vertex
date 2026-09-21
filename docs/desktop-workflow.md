@@ -660,3 +660,21 @@ visual smoke path remains deterministic; the tab shows an explicit reason
 instead of a fake projection. The native export method therefore reports an
 unavailable viewer on those platforms. Broader production 3D coverage remains
 outside this checkpoint.
+
+## Declared appraisal facts
+
+In Measurement workspace, select a closed boundary, choose the Appraisal workflow,
+then **Edit appraisal facts...**. Declare the residential or light-commercial
+policy, property kind and measurement basis, floor grade, and boundary finish,
+access, ceiling eligibility, use and role. The dialog identifies the shared
+property/floor scope. Saving is one revision-checked undoable command; reopening
+the project recomputes qualification from the stored declarations.
+
+The inspector reports qualification reasons, derived category, physical and adjusted
+area, selected-floor/selected-building/property totals, and separate commercial occupiable/common/service
+buckets. Missing declarations and nonunity factors withhold automatic totals.
+Existing manual category projects retain manual arithmetic labeled Unqualified.
+Exclusion roles must be linked through the deduction editor and do not contribute
+standalone area. Independent site/survey outlines remain outside the building
+appraisal and need no appraisal facts; Vertex rejects using one as a building
+deduction. Vertex qualification does not certify ANSI or BOMA compliance.

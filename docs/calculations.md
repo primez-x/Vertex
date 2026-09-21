@@ -43,19 +43,21 @@ Classification strings and floor names are never interpreted heuristically.
 Invalid enum values are rejected during profile validation.
 
 `builtin_appraisal_profile()` returns application policy `vertex-appraisal`, version 1,
-with square-foot display and two decimal places. It maps these exact
-classification IDs to their corresponding categories: `above_grade_finished`,
-`above_grade_unfinished`, `below_grade_finished`, `below_grade_unfinished`,
-`garage`, `carport`, `porch`, `patio`, `deck`, and `other_non_living`.
-All ten contribute to the legacy building total; only above-grade finished
-contributes to the legacy living total. This policy makes no measurement-standard
-or appraisal compliance claim.
+with square-foot display and two decimal places. Its compatibility categories
+remain `above_grade_finished`, `above_grade_unfinished`,
+`below_grade_finished`, `below_grade_unfinished`, `garage`, `carport`, `porch`,
+`patio`, `deck`, and `other_non_living`. The declared-facts workflow adds
+`above_grade_nonstandard_finished`, `below_grade_nonstandard_finished`,
+`noncontinuous_finished`, `commercial_occupiable`, `commercial_common`, and
+`commercial_service`. All sixteen contribute to the general measured building
+total; only above-grade finished contributes to the legacy living-total alias.
+This policy makes no measurement-standard or appraisal compliance claim.
 
 `calculate_appraisal_areas(areas, profile)` returns `AppraisalCalculationReport`.
 Its `calculation` member is the complete existing `CalculationReport`, including
 site results and the original geometry/deduction trace. Its `property`,
 `by_building[building_id]`, and `by_floor[{building_id, floor_id}]` members contain
-`AppraisalTotals`. Each has a `by_category` map of all ten named categories to
+`AppraisalTotals`. Each has a `by_category` map of all named categories to
 `AppraisalAreaBucket { total, area_ids }`. `gla()` references only the
 `above_grade_finished` bucket; finished and unfinished basements always remain
 separate from GLA. Source area IDs are sorted and appear in their explicit bucket
@@ -82,8 +84,7 @@ changes, provenance, site exclusion, legacy rules, persistence tokens, invalid
 categories, empty reports, and rounding after aggregation.
 
 The Windows area inspector exposes Measurement and Appraisal as explicit
-workflows. Appraisal selects the built-in profile, restricts the classification
-list to its ten categories, and refreshes GLA, above/below-grade unfinished and
+workflows. Appraisal selects the built-in profile and refreshes above-grade finished area, above/below-grade unfinished and
 finished buckets, garage, carport, porch, patio, deck, other non-living,
 selected-floor and property square-foot totals after each accepted document
 change. The contribution row names the source area IDs for the selected area's
@@ -92,7 +93,36 @@ separately on each closed area, so switching workflows restores the saved
 profile and the correct per-area meanings in one undoable command. Workflow,
 category and profile data persist in the project and participate in ordinary
 undo/save/reopen behavior; the UI never infers an appraisal category from a
-floor name or boundary label.
+floor name or boundary label. Category-only projects retain their manual arithmetic,
+visibly labeled **Unqualified**. The legacy `gla()` API and `appraisalGlaTotal`
+widget name are compatibility identifiers, not standard-compliance claims.
+
+**Edit appraisal facts...** declares an application policy independently of manual
+categories. Property `appraisal_policy` accepts only `version: 1`, `policy_kind`
+(`residential_declared` or `light_commercial_declared`), `property_kind`, and
+`measurement_basis`. Floor `appraisal_facts.grade` declares above/below/unknown;
+any partly below level must be declared below. Boundary `appraisal_facts` stores
+`finish`, `access`, `ceiling_eligibility`, `area_use`, and `boundary_role` tokens.
+Missing declarations remain unqualified; malformed types, unknown fields/tokens,
+and unsupported versions are rejected. No facts are inferred from names,
+elevations, or manual categories. The revision-fenced desktop API commits all
+three scopes atomically with undo/redo and ordinary project persistence.
+
+Automatic totals require all participating building boundaries to qualify under
+the declared Vertex policy. Independent site and survey boundaries are excluded
+without requiring building facts; using one as a building deduction is rejected.
+Otherwise the inspector withholds automatic totals and lists reasons. It displays
+the selected derived category and net physical versus
+factor-adjusted area separately; nonunity factors cannot qualify. Declared
+open-to-below, stair-footprint and other-void boundaries have no standalone
+contribution and must be explicitly linked as parent deductions. Measured
+deductions such as garages or commercial service areas retain their independent
+bucket once, while reducing their parent's area. Commercial occupiable, common
+and service buckets are separate. Nonstandard and noncontinuous finished areas
+remain separate from above-grade finished area. Qualification is only against
+the application's declared-facts policy; it is not ANSI, BOMA, or lender certification.
+The visible floor and building totals follow the selected area's floor and building;
+the property total remains the unrounded aggregate across all buildings.
 
 The desktop inspector now provides a local deduction editor. It lists valid
 closed boundaries on the active floor, stages additions and removals without

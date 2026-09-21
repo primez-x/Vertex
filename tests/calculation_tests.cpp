@@ -132,8 +132,202 @@ void appraisal_tests() {
     profile.classifications["living"].appraisal_category = static_cast<Category>(999);
     rejected([&] { (void)calculate_appraisal_areas({legacy}, profile); });
     const auto empty = calculate_appraisal_areas({}, builtin_appraisal_profile());
-    check(empty.property.by_category.size() == 10 && empty.property.gla().total.display.text == "0.00",
+    check(empty.property.by_category.size() == 16 && empty.property.gla().total.display.text == "0.00",
           "Empty reports expose all zero-valued categories");
+}
+void declared_policy_tests() {
+    using namespace sketch;
+    using C = AppraisalAreaCategory;
+    const AppraisalFacts standard{PropertyKind::detached_single_family, MeasurementBasis::exterior,
+        GradeStatus::above, FinishStatus::finished, AccessStatus::direct_interior,
+        CeilingEligibility::standard, AreaUse::dwelling, BoundaryRole::measured_area};
+    for (auto value : {AppraisalPolicyKind::residential_declared, AppraisalPolicyKind::light_commercial_declared}) {
+        check(parse_appraisal_policy_kind(appraisal_policy_kind_name(value)) == value, "Fact persistence tokens round trip");
+    }
+    check(!parse_appraisal_policy_kind("invalid"), "Unknown fact token rejected");
+    rejected([] { (void)appraisal_policy_kind_name(static_cast<AppraisalPolicyKind>(999)); });
+    for (auto value : {PropertyKind::detached_single_family, PropertyKind::attached_single_family, PropertyKind::manufactured_home, PropertyKind::apartment_unit, PropertyKind::multifamily, PropertyKind::light_commercial}) {
+        check(parse_property_kind(property_kind_name(value)) == value, "Fact persistence tokens round trip");
+    }
+    check(!parse_property_kind("invalid"), "Unknown fact token rejected");
+    rejected([] { (void)property_kind_name(static_cast<PropertyKind>(999)); });
+    for (auto value : {MeasurementBasis::exterior, MeasurementBasis::interior_perimeter, MeasurementBasis::plans, MeasurementBasis::unknown}) {
+        check(parse_measurement_basis(measurement_basis_name(value)) == value, "Fact persistence tokens round trip");
+    }
+    check(!parse_measurement_basis("invalid"), "Unknown fact token rejected");
+    rejected([] { (void)measurement_basis_name(static_cast<MeasurementBasis>(999)); });
+    for (auto value : {GradeStatus::above, GradeStatus::below, GradeStatus::unknown}) {
+        check(parse_grade_status(grade_status_name(value)) == value, "Fact persistence tokens round trip");
+    }
+    check(!parse_grade_status("invalid"), "Unknown fact token rejected");
+    rejected([] { (void)grade_status_name(static_cast<GradeStatus>(999)); });
+    for (auto value : {FinishStatus::finished, FinishStatus::unfinished, FinishStatus::unknown}) {
+        check(parse_finish_status(finish_status_name(value)) == value, "Fact persistence tokens round trip");
+    }
+    check(!parse_finish_status("invalid"), "Unknown fact token rejected");
+    rejected([] { (void)finish_status_name(static_cast<FinishStatus>(999)); });
+    for (auto value : {AccessStatus::direct_interior, AccessStatus::noncontinuous, AccessStatus::unknown}) {
+        check(parse_access_status(access_status_name(value)) == value, "Fact persistence tokens round trip");
+    }
+    check(!parse_access_status("invalid"), "Unknown fact token rejected");
+    rejected([] { (void)access_status_name(static_cast<AccessStatus>(999)); });
+    for (auto value : {CeilingEligibility::standard, CeilingEligibility::nonstandard, CeilingEligibility::unknown}) {
+        check(parse_ceiling_eligibility(ceiling_eligibility_name(value)) == value, "Fact persistence tokens round trip");
+    }
+    check(!parse_ceiling_eligibility("invalid"), "Unknown fact token rejected");
+    rejected([] { (void)ceiling_eligibility_name(static_cast<CeilingEligibility>(999)); });
+    for (auto value : {AreaUse::dwelling, AreaUse::garage, AreaUse::carport, AreaUse::porch, AreaUse::patio, AreaUse::deck, AreaUse::commercial_occupiable, AreaUse::commercial_common, AreaUse::commercial_service, AreaUse::other_non_living}) {
+        check(parse_area_use(area_use_name(value)) == value, "Fact persistence tokens round trip");
+    }
+    check(!parse_area_use("invalid"), "Unknown fact token rejected");
+    rejected([] { (void)area_use_name(static_cast<AreaUse>(999)); });
+    for (auto value : {BoundaryRole::measured_area, BoundaryRole::open_to_below, BoundaryRole::stair_footprint, BoundaryRole::other_void}) {
+        check(parse_boundary_role(boundary_role_name(value)) == value, "Fact persistence tokens round trip");
+    }
+    check(!parse_boundary_role("invalid"), "Unknown fact token rejected");
+    rejected([] { (void)boundary_role_name(static_cast<BoundaryRole>(999)); });
+    { auto invalid = standard; invalid.property_kind = static_cast<PropertyKind>(999);
+      rejected([&] { (void)derive_appraisal_category(invalid); }); }
+    { auto invalid = standard; invalid.measurement_basis = static_cast<MeasurementBasis>(999);
+      rejected([&] { (void)derive_appraisal_category(invalid); }); }
+    { auto invalid = standard; invalid.grade = static_cast<GradeStatus>(999);
+      rejected([&] { (void)derive_appraisal_category(invalid); }); }
+    { auto invalid = standard; invalid.finish = static_cast<FinishStatus>(999);
+      rejected([&] { (void)derive_appraisal_category(invalid); }); }
+    { auto invalid = standard; invalid.access = static_cast<AccessStatus>(999);
+      rejected([&] { (void)derive_appraisal_category(invalid); }); }
+    { auto invalid = standard; invalid.ceiling = static_cast<CeilingEligibility>(999);
+      rejected([&] { (void)derive_appraisal_category(invalid); }); }
+    { auto invalid = standard; invalid.use = static_cast<AreaUse>(999);
+      rejected([&] { (void)derive_appraisal_category(invalid); }); }
+    { auto invalid = standard; invalid.role = static_cast<BoundaryRole>(999);
+      rejected([&] { (void)derive_appraisal_category(invalid); }); }
+    rejected([&] { (void)derive_appraisal_category(standard, {static_cast<AppraisalPolicyKind>(999), 1}); });
+    auto expect = [](const AppraisalFacts& facts, C category, AppraisalPolicy policy = {}) {
+        const auto result = derive_appraisal_category(facts, policy);
+        check(result.qualified && result.issues.empty() && result.derived_category == category,
+              "Declared facts derive the expected category");
+    };
+    expect(standard, C::above_grade_finished);
+    for (auto kind : {PropertyKind::attached_single_family, PropertyKind::manufactured_home}) {
+        auto facts = standard; facts.property_kind = kind;
+        expect(facts, C::above_grade_finished);
+    }
+    for (auto grade : {GradeStatus::above, GradeStatus::below}) {
+        auto facts = standard; facts.grade = grade;
+        expect(facts, grade == GradeStatus::above ? C::above_grade_finished : C::below_grade_finished);
+        facts.ceiling = CeilingEligibility::nonstandard;
+        expect(facts, grade == GradeStatus::above ? C::above_grade_nonstandard_finished : C::below_grade_nonstandard_finished);
+        facts.finish = FinishStatus::unfinished;
+        facts.access = AccessStatus::unknown; facts.ceiling = CeilingEligibility::unknown;
+        expect(facts, grade == GradeStatus::above ? C::above_grade_unfinished : C::below_grade_unfinished);
+    }
+    auto facts = standard; facts.access = AccessStatus::noncontinuous;
+    expect(facts, C::noncontinuous_finished);
+    facts.ceiling = CeilingEligibility::nonstandard;
+    expect(facts, C::noncontinuous_finished); // Noncontinuous takes precedence above grade.
+    facts.grade = GradeStatus::below;
+    check(!derive_appraisal_category(facts).qualified,
+          "Below-grade noncontinuous finished space has no supported category");
+    for (const auto& [use, category] : std::vector<std::pair<AreaUse, C>>{
+             {AreaUse::garage, C::garage}, {AreaUse::carport, C::carport},
+             {AreaUse::porch, C::porch}, {AreaUse::patio, C::patio}, {AreaUse::deck, C::deck},
+             {AreaUse::other_non_living, C::other_non_living}}) {
+        facts = standard; facts.use = use; facts.grade = GradeStatus::unknown;
+        facts.finish = FinishStatus::unknown; facts.ceiling = CeilingEligibility::unknown;
+        facts.access = AccessStatus::unknown;
+        expect(facts, category);
+    }
+    facts = standard; facts.property_kind = PropertyKind::apartment_unit;
+    check(!derive_appraisal_category(facts).qualified, "Apartment exterior basis is incompatible");
+    facts.measurement_basis = MeasurementBasis::interior_perimeter;
+    expect(facts, C::above_grade_finished);
+    for (auto kind : {PropertyKind::multifamily, PropertyKind::light_commercial}) {
+        facts = standard; facts.property_kind = kind;
+        check(!derive_appraisal_category(facts).qualified, "Residential policy rejects unsupported property kinds");
+    }
+    facts = standard; facts.measurement_basis = MeasurementBasis::interior_perimeter;
+    check(!derive_appraisal_category(facts).qualified, "Whole house needs exterior or plans basis");
+    facts.measurement_basis = MeasurementBasis::plans;
+    expect(facts, C::above_grade_finished);
+    facts = standard; facts.measurement_basis = MeasurementBasis::unknown;
+    facts.grade = GradeStatus::unknown; facts.finish = FinishStatus::unknown;
+    const auto unknown = derive_appraisal_category(facts);
+    check(!unknown.qualified && !unknown.derived_category && unknown.issues.size() == 3 &&
+          unknown.issues[0].code == "measurement_basis_unknown" &&
+          unknown.issues[1].code == "grade_unknown" && unknown.issues[2].code == "finish_unknown",
+          "Unknown required facts produce deterministic structured issues");
+    for (bool access : {false, true}) {
+        facts = standard;
+        if (access) facts.access = AccessStatus::unknown;
+        else facts.ceiling = CeilingEligibility::unknown;
+        check(!derive_appraisal_category(facts).qualified, "Finished dwelling requires access and ceiling facts");
+    }
+    for (auto factor : {ExactRational{1, 2}, ExactRational{0, 1}, ExactRational{2, 1}}) {
+        const auto result = derive_appraisal_category(standard, {}, factor);
+        check(!result.qualified && !result.derived_category && result.issues[0].code == "factor_not_unity",
+              "Factored arithmetic is not a qualified physical area");
+    }
+    check(derive_appraisal_category(standard, {}, {2, 2}).qualified, "Exact rational unity is accepted");
+    rejected([&] { (void)derive_appraisal_category(standard, {}, {1, 0}); });
+    rejected([&] { (void)derive_appraisal_category(standard, {}, {-1, 1}); });
+    for (auto role : {BoundaryRole::open_to_below, BoundaryRole::stair_footprint, BoundaryRole::other_void}) {
+        facts = standard; facts.role = role; facts.grade = GradeStatus::unknown;
+        facts.finish = FinishStatus::unknown; facts.access = AccessStatus::unknown;
+        facts.ceiling = CeilingEligibility::unknown;
+        const auto result = derive_appraisal_category(facts);
+        check(result.qualified && !result.derived_category,
+              "Exclusion roles cannot create standalone category contributions");
+    }
+    AppraisalPolicy commercial{AppraisalPolicyKind::light_commercial_declared, 1};
+    facts = {}; facts.property_kind = PropertyKind::light_commercial;
+    facts.measurement_basis = MeasurementBasis::exterior;
+    facts.role = BoundaryRole::open_to_below;
+    const auto commercial_exclusion = derive_appraisal_category(facts, commercial);
+    check(commercial_exclusion.qualified && !commercial_exclusion.derived_category,
+          "Commercial exclusion roles do not require a fictitious contributing area use");
+    facts.role = BoundaryRole::measured_area;
+    for (auto use : {AreaUse::commercial_occupiable, AreaUse::commercial_common, AreaUse::commercial_service}) {
+        facts.use = use;
+        expect(facts, use == AreaUse::commercial_occupiable ? C::commercial_occupiable :
+                      use == AreaUse::commercial_common ? C::commercial_common : C::commercial_service, commercial);
+        check(!derive_appraisal_category(facts).qualified, "Commercial use cannot enter residential policy");
+    }
+    facts.use = AreaUse::dwelling;
+    check(!derive_appraisal_category(facts, commercial).qualified, "Commercial policy rejects dwelling use");
+    rejected([&] { (void)derive_appraisal_category(standard, {AppraisalPolicyKind::residential_declared, 2}); });
+    auto area = room("qualified", rectangle(0, 0, 10, 10));
+    area.deductions = {{"void", rectangle(1, 1, 2, 5)}};
+    area.factor = {1, 2};
+    auto measured = qualify_appraisal_area(area, standard);
+    check(!measured.qualified && measured.policy_id == "vertex-residential-declared-v1" && measured.policy_version == 1,
+          "Measurement retains declared policy provenance");
+    near(measured.physical_square_metres.value(), 90, 1e-7, "Physical measurement stays separate from adjustment");
+    near(measured.adjusted_square_metres.value(), 45, 1e-7, "Custom adjustment remains inspectable");
+    area.factor = {1, 1}; area.scope = AreaScope::site;
+    check(!qualify_appraisal_area(area, standard).qualified, "Site scope cannot qualify as building area");
+    std::vector<MeasurementArea> commercial_areas;
+    for (const auto& [category, name] : std::vector<std::pair<C, std::string>>{
+             {C::above_grade_nonstandard_finished, "above_grade_nonstandard_finished"},
+             {C::below_grade_nonstandard_finished, "below_grade_nonstandard_finished"},
+             {C::noncontinuous_finished, "noncontinuous_finished"},
+             {C::commercial_occupiable, "commercial_occupiable"},
+             {C::commercial_common, "commercial_common"},
+             {C::commercial_service, "commercial_service"}}) {
+        check(parse_appraisal_category(name) == category && appraisal_category_name(category) == name,
+              "New categories have stable persistence names");
+        auto item = room(name, rectangle(0, 0, 10, 10));
+        item.classification = name; item.floor_id = name;
+        commercial_areas.push_back(item);
+    }
+    const auto totals = calculate_appraisal_areas(commercial_areas, builtin_appraisal_profile()).property;
+    near(totals.commercial_gross_square_metres(), 300, 1e-7,
+         "Commercial gross sums occupiable common service once, excluding residential categories");
+    near(totals.by_category.at(C::commercial_occupiable).total.square_metres, 100, 1e-7,
+         "Commercial occupiable excludes common and service areas");
+    near(totals.nonstandard_finished_square_metres(), 200, 1e-7,
+         "Nonstandard subtotal excludes noncontinuous and regular finished area");
+    near(totals.gla().total.square_metres, 0, 1e-7, "New categories never enter legacy GLA");
 }
 } // namespace
 
@@ -141,6 +335,7 @@ int main() {
     try {
         using namespace sketch;
         appraisal_tests();
+        declared_policy_tests();
         CalculationProfile profile{"custom-metric",
                                    1,
                                    AreaUnit::square_metre,

@@ -1415,6 +1415,55 @@ QIcon symbol_library_thumbnail(const SymbolDefinition& definition) {
     return icon;
 }
 
+struct DeclaredAppraisal {
+    AppraisalPolicy policy;
+    AppraisalFacts facts;
+    QStringList missing;
+};
+
+void appraisal_keys(const json& value, std::initializer_list<std::string_view> keys) {
+    if (!value.is_object()) throw std::invalid_argument("Appraisal declarations must be objects");
+    for (const auto& [key, ignored] : value.items()) {
+        (void)ignored;
+        if (std::find(keys.begin(), keys.end(), key) == keys.end())
+            throw std::invalid_argument("Unknown appraisal declaration: " + key);
+    }
+}
+
+DeclaredAppraisal read_appraisal_declarations(const json& property, const json& floor,
+                                             const json& boundary) {
+    DeclaredAppraisal result;
+    const auto token = [&](const json& object, const char* key, auto parser, auto& target) {
+        if (!object.contains(key)) {
+            result.missing.push_back(QStringLiteral("Declare %1.").arg(QString::fromLatin1(key)));
+            return;
+        }
+        if (!object.at(key).is_string()) throw std::invalid_argument(std::string(key) + " must be a string");
+        const auto parsed = parser(object.at(key).get<std::string>());
+        if (!parsed) throw std::invalid_argument(std::string("Unknown appraisal ") + key);
+        target = *parsed;
+    };
+    const auto policy = property.value("appraisal_policy", json::object());
+    appraisal_keys(policy, {"policy_kind", "version", "property_kind", "measurement_basis"});
+    if (!policy.contains("version")) result.missing.push_back(QStringLiteral("Declare policy version."));
+    else if (!policy.at("version").is_number_integer() || policy.at("version") != 1)
+        throw std::invalid_argument("Unsupported appraisal policy version");
+    token(policy, "policy_kind", parse_appraisal_policy_kind, result.policy.kind);
+    token(policy, "property_kind", parse_property_kind, result.facts.property_kind);
+    token(policy, "measurement_basis", parse_measurement_basis, result.facts.measurement_basis);
+    const auto level = floor.value("appraisal_facts", json::object());
+    appraisal_keys(level, {"grade"});
+    token(level, "grade", parse_grade_status, result.facts.grade);
+    const auto area = boundary.value("appraisal_facts", json::object());
+    appraisal_keys(area, {"finish", "access", "ceiling_eligibility", "area_use", "boundary_role"});
+    token(area, "finish", parse_finish_status, result.facts.finish);
+    token(area, "access", parse_access_status, result.facts.access);
+    token(area, "ceiling_eligibility", parse_ceiling_eligibility, result.facts.ceiling);
+    token(area, "area_use", parse_area_use, result.facts.use);
+    token(area, "boundary_role", parse_boundary_role, result.facts.role);
+    return result;
+}
+
 std::string calculation_workflow_name(const json& properties) {
     if (!properties.contains("calculation_workflow")) return "measurement";
     const auto& value = properties.at("calculation_workflow");
@@ -1449,6 +1498,22 @@ std::optional<std::string> area_classification_for_workflow(
         return measurement;
     }
     return read_string(properties, "classification");
+}
+
+std::string area_scope_name(const json& properties) {
+    if (properties.contains("calculation_scope") &&
+        !properties.at("calculation_scope").is_string()) {
+        throw std::invalid_argument("Calculation scope must be a string");
+    }
+    if (const auto explicit_scope = read_string(properties, "calculation_scope")) {
+        if (*explicit_scope != "site" && *explicit_scope != "building")
+            throw std::invalid_argument("Calculation scope must be site or building");
+        return *explicit_scope;
+    }
+    const auto measurement_classification = area_classification_for_workflow(
+        properties, "measurement");
+    return measurement_classification && *measurement_classification == "survey"
+        ? "site" : "building";
 }
 
 std::string area_unit_name(AreaUnit unit) {
@@ -12847,6 +12912,125 @@ public:
         }
     }
 
+    bool editSelectedAppraisalFacts(const QString& declarations_json,
+                                   std::optional<Revision> expected_revision) {
+        if (!m_document->is_editable()) { setError(QStringLiteral("This document is read-only.")); return false; }
+        try {
+            const auto selected = selectedEntity();
+            const auto property = propertyEntity();
+            if (!selected || !is_closed_boundary_entity(selected->type) || !property)
+                throw std::invalid_argument("Select a closed boundary to declare appraisal facts");
+            const auto snapshot = m_document->snapshot();
+            auto boundary = *selected;
+            auto updated_property = *property;
+            const auto floor_id = read_string(boundary.properties, "floor_id");
+            if (!floor_id || !snapshot.entities().contains(*floor_id) ||
+                snapshot.entities().at(*floor_id).type != "floor")
+                throw std::invalid_argument("Selected boundary needs a valid floor");
+            auto floor = snapshot.entities().at(*floor_id);
+            const auto declarations = json::parse(declarations_json.toStdString());
+            appraisal_keys(declarations, {"appraisal_policy", "grade", "appraisal_facts"});
+            updated_property.properties["appraisal_policy"] = declarations.at("appraisal_policy");
+            floor.properties["appraisal_facts"] = json{{"grade", declarations.at("grade")}};
+            boundary.properties["appraisal_facts"] = declarations.at("appraisal_facts");
+            (void)read_appraisal_declarations(updated_property.properties, floor.properties, boundary.properties);
+            applyDocumentCommand(ApplyEntityChanges{
+                .expected_revision = expected_revision.value_or(snapshot.revision()),
+                .entity_changes = {EntityChange::upsert(std::move(updated_property)),
+                                   EntityChange::upsert(std::move(floor)),
+                                   EntityChange::upsert(std::move(boundary))},
+                .message = "declare appraisal facts",
+            });
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Appraisal facts: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    void showAppraisalFacts() {
+        const auto selected = selectedEntity();
+        const auto property = propertyEntity();
+        if (!selected || !is_closed_boundary_entity(selected->type) || !property) return;
+        const auto snapshot = m_document->snapshot();
+        const auto selected_id = selected->id;
+        const auto floor_id = read_string(selected->properties, "floor_id");
+        if (!floor_id || !snapshot.entities().contains(*floor_id)) return;
+        QDialog dialog(owner);
+        dialog.setObjectName(QStringLiteral("appraisalFactsDialog"));
+        dialog.setWindowTitle(QStringLiteral("Edit appraisal facts"));
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* note = new QLabel(QStringLiteral("Property and grade declarations affect all areas on that property/floor.\n"
+            "Declare observed facts; names and elevations are not evidence.\n"
+            "Vertex policy qualification does not certify ANSI or BOMA compliance."), &dialog);
+        note->setWordWrap(true);
+        layout->addWidget(note);
+        auto* form = new QFormLayout;
+        layout->addLayout(form);
+        const auto policy = property->properties.value("appraisal_policy", json::object());
+        const auto facts = selected->properties.value("appraisal_facts", json::object());
+        const auto level = snapshot.entities().at(*floor_id).properties.value("appraisal_facts", json::object());
+        const auto combo = [&](const QString& label, const char* key, const json& source,
+                               std::initializer_list<const char*> values) {
+            auto* box = new QComboBox(&dialog);
+            box->setObjectName(QString::fromLatin1(key));
+            box->addItem(QStringLiteral("Undeclared"), QString{});
+            for (const auto* value : values) {
+                const auto token = QString::fromLatin1(value);
+                auto text = token;
+                text.replace(QLatin1Char('_'), QLatin1Char(' '));
+                text[0] = text[0].toUpper();
+                if (token == QStringLiteral("residential_declared")) text = QStringLiteral("Residential declared-facts policy");
+                if (token == QStringLiteral("light_commercial_declared")) text = QStringLiteral("Light commercial declared-facts policy");
+                if (token == QStringLiteral("detached_single_family")) text = QStringLiteral("Detached single-family");
+                if (token == QStringLiteral("attached_single_family")) text = QStringLiteral("Attached single-family");
+                if (token == QStringLiteral("commercial_occupiable")) text = QStringLiteral("Occupiable");
+                if (token == QStringLiteral("commercial_common")) text = QStringLiteral("Common");
+                if (token == QStringLiteral("commercial_service")) text = QStringLiteral("Service");
+                box->addItem(text, token);
+            }
+            if (source.is_object() && source.contains(key) && source.at(key).is_string())
+                box->setCurrentIndex(std::max(0, box->findData(QString::fromStdString(source.at(key).get<std::string>()))));
+            form->addRow(label, box);
+            return box;
+        };
+        auto* kind = combo(QStringLiteral("Policy"), "policy_kind", policy, {"residential_declared", "light_commercial_declared"});
+        auto* property_kind = combo(QStringLiteral("Property kind"), "property_kind", policy,
+            {"detached_single_family", "attached_single_family", "manufactured_home", "apartment_unit", "multifamily", "light_commercial"});
+        auto* basis = combo(QStringLiteral("Measurement basis"), "measurement_basis", policy, {"exterior", "interior_perimeter", "plans", "unknown"});
+        auto* grade = combo(QStringLiteral("Floor grade (partly below = below)"), "grade", level, {"above", "below", "unknown"});
+        auto* finish = combo(QStringLiteral("Finish"), "finish", facts, {"finished", "unfinished", "unknown"});
+        auto* access = combo(QStringLiteral("Access"), "access", facts, {"direct_interior", "noncontinuous", "unknown"});
+        auto* ceiling = combo(QStringLiteral("Ceiling eligibility"), "ceiling_eligibility", facts, {"standard", "nonstandard", "unknown"});
+        auto* use = combo(QStringLiteral("Area use"), "area_use", facts,
+            {"dwelling", "garage", "carport", "porch", "patio", "deck", "commercial_occupiable", "commercial_common", "commercial_service", "other_non_living"});
+        auto* role = combo(QStringLiteral("Boundary role"), "boundary_role", facts, {"measured_area", "open_to_below", "stair_footprint", "other_void"});
+        auto* error = new QLabel(&dialog);
+        error->setWordWrap(true);
+        layout->addWidget(error);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
+        layout->addWidget(buttons);
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+            if (m_selected_id.toStdString() != selected_id) { error->setText(QStringLiteral("Selection changed; reopen this dialog.")); return; }
+            json declaration{{"appraisal_policy", json{{"version", 1}}}, {"grade", "unknown"}, {"appraisal_facts", json::object()}};
+            const auto save = [](json& target, const char* key, QComboBox* box) {
+                if (!box->currentData().toString().isEmpty()) target[key] = box->currentData().toString().toStdString();
+            };
+            save(declaration["appraisal_policy"], "policy_kind", kind);
+            save(declaration["appraisal_policy"], "property_kind", property_kind);
+            save(declaration["appraisal_policy"], "measurement_basis", basis);
+            if (!grade->currentData().toString().isEmpty()) declaration["grade"] = grade->currentData().toString().toStdString();
+            for (auto* box : {finish, access, ceiling, use, role})
+                save(declaration["appraisal_facts"], box->objectName().toStdString().c_str(), box);
+            if (editSelectedAppraisalFacts(QString::fromStdString(declaration.dump()), snapshot.revision())) dialog.accept();
+            else error->setText(m_last_error);
+        });
+        dialog.exec();
+    }
+
     bool setSelectedCalculationRule(bool include_in_building, bool include_in_living) {
         const auto entity = selectedEntity();
         if (!entity.has_value() || !is_closed_boundary_entity(entity->type)) {
@@ -19440,7 +19624,7 @@ private:
             return value;
         };
         m_appraisal_gla_value = add_appraisal_value(
-            QStringLiteral("GLA (above-grade finished)"), "appraisalGlaTotal");
+            QStringLiteral("Above-grade finished area"), "appraisalGlaTotal");
         m_appraisal_above_unfinished_value = add_appraisal_value(
             QStringLiteral("Above-grade unfinished"), "appraisalAboveGradeUnfinishedTotal");
         m_appraisal_below_finished_value = add_appraisal_value(
@@ -19466,6 +19650,14 @@ private:
         m_appraisal_contribution_value = add_appraisal_value(
             QStringLiteral("Contributing boundaries"), "appraisalContribution");
         m_appraisal_contribution_value->setWordWrap(true);
+        m_appraisal_qualification_value = add_appraisal_value(QStringLiteral("Qualification"), "appraisalQualification");
+        m_appraisal_derived_value = add_appraisal_value(QStringLiteral("Derived category / physical area"), "appraisalDerivedCategory");
+        m_appraisal_commercial_value = add_appraisal_value(QStringLiteral("Commercial occupiable / common / service"), "appraisalCommercialTotals");
+        m_appraisal_nonstandard_value = add_appraisal_value(QStringLiteral("Nonstandard / noncontinuous finished"), "appraisalNonstandardTotals");
+        auto* edit_appraisal = new QPushButton(QStringLiteral("Edit appraisal facts..."), m_appraisal_summary_group);
+        edit_appraisal->setObjectName(QStringLiteral("editAppraisalFacts"));
+        appraisal_layout->addRow(edit_appraisal);
+        QObject::connect(edit_appraisal, &QPushButton::clicked, owner, [this] { showAppraisalFacts(); });
         m_appraisal_summary_group->hide();
         inspector_layout->addWidget(m_appraisal_summary_group);
 
@@ -19481,7 +19673,7 @@ private:
         m_calculation_workflow_combo->addItem(QStringLiteral("Appraisal"),
                                               QStringLiteral("appraisal"));
         m_calculation_workflow_combo->setToolTip(QStringLiteral(
-            "Appraisal calculates GLA and ancillary square footage automatically from explicit area classifications."));
+            "Appraisal derives qualified categories from declared property, floor and area facts. Manual categories remain unqualified."));
         workflow_form->addRow(QStringLiteral("Workflow"), m_calculation_workflow_combo);
         profile_layout->addLayout(workflow_form);
         m_calculation_profile_context = new QLabel(profile_group);
@@ -21370,6 +21562,11 @@ private:
     }
 
     void refreshCalculationInspector(const std::optional<EntityValue>& selected) {
+        m_appraisal_qualification_value->setText(QStringLiteral("Unqualified — declare appraisal policy and facts."));
+        m_appraisal_derived_value->setText(QStringLiteral("—"));
+        m_appraisal_commercial_value->setText(QStringLiteral("—"));
+        m_appraisal_nonstandard_value->setText(QStringLiteral("—"));
+        m_appraisal_summary_group->setTitle(QStringLiteral("Manual appraisal totals — Unqualified"));
         const bool is_area = selected.has_value() && is_closed_boundary_entity(selected->type);
         m_calculation_group->setVisible(is_area);
         m_profile_group->setVisible(is_area);
@@ -21416,6 +21613,8 @@ private:
             m_calculation_workflow_combo->setEnabled(false);
         };
         const auto set_calculation_error = [&](const QString& message) {
+            m_appraisal_summary_group->setTitle(QStringLiteral("Appraisal — Unqualified"));
+            m_appraisal_qualification_value->setText(QStringLiteral("Unqualified: %1").arg(message));
             clear_values();
             set_status_style(true);
             m_calculation_status->setText(QStringLiteral("Totals blocked: %1").arg(message));
@@ -21579,10 +21778,19 @@ private:
                 throw std::invalid_argument(
                     "selected boundary is hidden by the active design phase");
             }
+            const bool declared = appraisal_workflow && property->properties.contains("appraisal_policy");
             std::set<std::string, std::less<>> referenced_deductions;
+            std::set<std::string, std::less<>> building_referenced_deductions;
             for (const auto& [id, entity] : entities) {
                 if (!is_closed_boundary_entity(entity.type)) continue;
                 if (!phase_visible_ids.contains(id)) continue;
+                const auto parent_scope = area_scope_name(entity.properties);
+                if (declared && parent_scope == "site") {
+                    // Site relationships are independent from building
+                    // qualification. They are validated only when the site is
+                    // selected for its own measurement details.
+                    continue;
+                }
                 for (const auto& deduction_id : read_deduction_ids(entity.properties)) {
                     if (deduction_id == id) {
                         throw std::invalid_argument("Boundary " + id + " cannot deduct itself");
@@ -21593,9 +21801,62 @@ private:
                                                     " hidden by the active design phase");
                     }
                     referenced_deductions.insert(deduction_id);
+                    if (parent_scope == "building")
+                        building_referenced_deductions.insert(deduction_id);
                 }
             }
+            const auto collect_deductions = [&](const std::string& parent_id,
+                                                 const EntityValue& parent,
+                                                 const std::string& floor_id,
+                                                 std::string_view parent_scope) {
+                std::vector<AreaDeduction> deductions;
+                for (const auto& deduction_id : read_deduction_ids(parent.properties)) {
+                    const auto deduction = entities.find(deduction_id);
+                    if (deduction == entities.end() ||
+                        !is_closed_boundary_entity(deduction->second.type)) {
+                        throw std::invalid_argument("Boundary " + parent_id +
+                                                    " references an unavailable deduction " + deduction_id);
+                    }
+                    if (!phase_visible_ids.contains(deduction_id)) {
+                        throw std::invalid_argument("Boundary " + parent_id +
+                                                    " references deduction " + deduction_id +
+                                                    " hidden by the active design phase");
+                    }
+                    const auto deduction_floor = read_string(deduction->second.properties, "floor_id");
+                    if (!deduction_floor.has_value() || *deduction_floor != floor_id) {
+                        throw std::invalid_argument("Deduction " + deduction_id +
+                                                    " must be on the same floor as boundary " + parent_id);
+                    }
+                    const auto deduction_boundary = read_boundary(deduction->second.properties);
+                    const auto deduction_diagnostics = validate_boundary(deduction_boundary);
+                    if (!deduction_diagnostics.empty()) {
+                        throw std::invalid_argument("Deduction " + deduction_id + " is invalid: " +
+                                                    deduction_diagnostics.front().message);
+                    }
+                    if (declared && parent_scope == "building" &&
+                        area_scope_name(deduction->second.properties) == "site") {
+                        throw std::invalid_argument("Site boundary " + deduction_id +
+                                                    " cannot be used as a building-area deduction");
+                    }
+                    if (!read_deduction_ids(deduction->second.properties).empty()) {
+                        throw std::invalid_argument("Deduction " + deduction_id +
+                                                    " cannot contain another deduction");
+                    }
+                    deductions.push_back({deduction_id, deduction_boundary});
+                }
+                return deductions;
+            };
             std::vector<MeasurementArea> areas;
+            bool all_qualified = declared;
+            QStringList qualification_reasons;
+            std::map<std::string, AppraisalQualification> qualifications;
+            std::optional<MeasurementArea> selected_exclusion;
+            std::optional<MeasurementArea> selected_site_area;
+            if (declared) {
+                display_profile = builtin_appraisal_profile();
+                display_profile.display_unit = m_metric_units ? AreaUnit::square_metre : AreaUnit::square_foot;
+                display_profile.classifications["unqualified"] = {false, false, AppraisalAreaCategory::none};
+            }
             areas.reserve(entities.size());
             for (const auto& [id, entity] : entities) {
                 if (!is_closed_boundary_entity(entity.type)) {
@@ -21604,9 +21865,9 @@ private:
                 if (!phase_visible_ids.contains(id)) {
                     continue;
                 }
-                const auto entity_classification = area_classification_for_workflow(
+                auto entity_classification = area_classification_for_workflow(
                     entity.properties, calculation_workflow);
-                if (referenced_deductions.contains(id) &&
+                if (!declared && referenced_deductions.contains(id) &&
                     (!appraisal_workflow || !entity_classification.has_value() ||
                      !persisted_profile.classifications.contains(*entity_classification))) {
                     // Measurement deductions and appraisal voids only modify
@@ -21638,6 +21899,33 @@ private:
                 if (boundary.empty()) {
                     throw std::invalid_argument("Boundary " + id + " has no valid segments");
                 }
+                const auto stored_factor = read_stored_factor(entity.properties);
+                const auto scope_name = area_scope_name(entity.properties);
+                if (declared && scope_name == "site") {
+                    if (building_referenced_deductions.contains(id)) {
+                        throw std::invalid_argument("Site boundary " + id +
+                                                    " cannot be used as a building-area deduction");
+                    }
+                    if (id == selected->id) {
+                        auto deductions = collect_deductions(id, entity, *floor_id, scope_name);
+                        selected_site_area = MeasurementArea{id,
+                                                             *building_id,
+                                                             *floor_id,
+                                                             "unqualified",
+                                                             boundary,
+                                                             std::move(deductions),
+                                                             stored_factor.rational,
+                                                             AreaScope::site};
+                    }
+                    // Survey and other site outlines are independent of the
+                    // building appraisal and require no building-area facts.
+                    continue;
+                }
+                std::optional<DeclaredAppraisal> declarations;
+                if (declared) {
+                    declarations = read_appraisal_declarations(property->properties, floor->second.properties, entity.properties);
+                    entity_classification = "unqualified";
+                }
                 if (!entity_classification.has_value() || entity_classification->empty()) {
                     throw std::invalid_argument(
                         "Boundary " + id +
@@ -21645,42 +21933,11 @@ private:
                              ? " has no appraisal category; assign one before calculating totals"
                              : " has no measurement classification; assign one before calculating totals"));
                 }
-                if (!persisted_profile.classifications.contains(*entity_classification)) {
+                if (!display_profile.classifications.contains(*entity_classification)) {
                     throw std::invalid_argument("Classification '" + *entity_classification +
                                                 "' has no calculation profile rule; assign it before calculating totals");
                 }
-                const auto stored_factor = read_stored_factor(entity.properties);
-                if (entity.properties.contains("calculation_scope") && !entity.properties.at("calculation_scope").is_string())
-                    throw std::invalid_argument("Boundary " + id + " has an invalid calculation scope");
-                const auto scope_name = read_string(entity.properties, "calculation_scope")
-                    .value_or(*entity_classification == "survey" ? "site" : "building");
-                if (scope_name != "site" && scope_name != "building")
-                    throw std::invalid_argument("Boundary " + id + " has an unknown calculation scope");
-                std::vector<AreaDeduction> deductions;
-                for (const auto& deduction_id : read_deduction_ids(entity.properties)) {
-                    const auto deduction = entities.find(deduction_id);
-                    if (deduction == entities.end() ||
-                        !is_closed_boundary_entity(deduction->second.type)) {
-                        throw std::invalid_argument("Boundary " + id +
-                                                    " references an unavailable deduction " + deduction_id);
-                    }
-                    const auto deduction_floor = read_string(deduction->second.properties, "floor_id");
-                    if (!deduction_floor.has_value() || *deduction_floor != *floor_id) {
-                        throw std::invalid_argument("Deduction " + deduction_id +
-                                                    " must be on the same floor as boundary " + id);
-                    }
-                    const auto deduction_boundary = read_boundary(deduction->second.properties);
-                    const auto deduction_diagnostics = validate_boundary(deduction_boundary);
-                    if (!deduction_diagnostics.empty()) {
-                        throw std::invalid_argument("Deduction " + deduction_id + " is invalid: " +
-                                                    deduction_diagnostics.front().message);
-                    }
-                    if (!read_deduction_ids(deduction->second.properties).empty()) {
-                        throw std::invalid_argument("Deduction " + deduction_id +
-                                                    " cannot contain another deduction");
-                    }
-                    deductions.push_back({deduction_id, deduction_boundary});
-                }
+                auto deductions = collect_deductions(id, entity, *floor_id, scope_name);
                 areas.push_back(MeasurementArea{id,
                                                 *building_id,
                                                 *floor_id,
@@ -21689,6 +21946,50 @@ private:
                                                 std::move(deductions),
                                                 stored_factor.rational,
                                                 scope_name == "site" ? AreaScope::site : AreaScope::building});
+                if (declarations) {
+                    auto qualification = qualify_appraisal_area(areas.back(), declarations->facts, declarations->policy);
+                    for (const auto& missing : declarations->missing)
+                        qualification.issues.push_back({"undeclared", missing.toStdString()});
+                    qualification.qualified = qualification.qualified && declarations->missing.isEmpty();
+                    if (!qualification.qualified) {
+                        all_qualified = false;
+                        qualification.derived_category.reset();
+                        for (const auto& issue : qualification.issues)
+                            qualification_reasons.push_back(id_from(id) + QStringLiteral(": ") + QString::fromStdString(issue.message));
+                    }
+                    if (qualification.derived_category)
+                        areas.back().classification = std::string(appraisal_category_name(*qualification.derived_category));
+                    qualifications[id] = qualification;
+                    if (declarations->facts.role != BoundaryRole::measured_area) {
+                        if (id == selected->id) selected_exclusion = areas.back();
+                        // Exclusion geometry participates only through explicit parent deductions.
+                        if (!building_referenced_deductions.contains(id)) {
+                            all_qualified = false;
+                            qualification_reasons.push_back(id_from(id) + QStringLiteral(": Exclusion must be linked as a deduction."));
+                        }
+                        areas.pop_back();
+                    }
+                }
+            }
+            if (declared) {
+                m_appraisal_summary_group->setTitle(all_qualified
+                    ? QStringLiteral("Automatic appraisal — Qualified (Vertex policy)")
+                    : QStringLiteral("Automatic appraisal — Unqualified"));
+                m_appraisal_qualification_value->setText(all_qualified
+                    ? QStringLiteral("Qualified under declared Vertex policy v1; no ANSI/BOMA certification.")
+                    : QStringLiteral("Unqualified\n") + qualification_reasons.join(QLatin1Char('\n')));
+                if (const auto found = qualifications.find(selected->id); found != qualifications.end()) {
+                    const auto& q = found->second;
+                    m_appraisal_derived_value->setText(QStringLiteral("%1\nPhysical: %2\nAdjusted: %3")
+                        .arg(q.derived_category ? QString::fromUtf8(appraisal_category_name(*q.derived_category).data())
+                                               : (q.qualified ? QStringLiteral("Excluded — no standalone contribution") : QStringLiteral("Unqualified")),
+                             format_display_area(display_area(q.physical_square_metres.value_or(0), display_profile)),
+                             format_display_area(display_area(q.adjusted_square_metres.value_or(0), display_profile))));
+                }
+                if (!all_qualified) {
+                    m_calculation_status->setText(QStringLiteral("Unqualified — automatic totals withheld"));
+                    return;
+                }
             }
             std::optional<AppraisalCalculationReport> appraisal_report;
             CalculationReport report;
@@ -21698,11 +21999,17 @@ private:
             } else {
                 report = calculate_areas(areas, display_profile);
             }
+            if (selected_exclusion) report.areas.push_back(calculate_area(*selected_exclusion, display_profile));
+            if (selected_site_area) report.areas.push_back(calculate_area(*selected_site_area, display_profile));
             const auto selected_result = std::find_if(
                 report.areas.begin(), report.areas.end(), [&](const AreaCalculation& result) {
                     return result.area_id == selected->id;
                 });
             if (selected_result == report.areas.end()) {
+                if (declared && qualifications.contains(selected->id)) {
+                    m_calculation_status->setText(QStringLiteral("Excluded — no standalone contribution"));
+                    return;
+                }
                 throw std::invalid_argument("selected boundary is not present in the calculation report");
             }
             const auto base = display_area(selected_result->base_square_metres, display_profile);
@@ -21744,6 +22051,30 @@ private:
             m_calculation_building_total_value->setText(format_area(report.building.display));
             m_calculation_living_total_value->setText(format_area(report.living.display));
             if (appraisal_report.has_value()) {
+                if (declared) {
+                    profile_rule = display_profile.classifications.at(selected_result->classification);
+                    long double building_square_metres = 0.0L;
+                    if (const auto building_totals = appraisal_report->by_building.find(selected_result->building_id);
+                        building_totals != appraisal_report->by_building.end()) {
+                        for (const auto& [category, bucket] : building_totals->second.by_category) {
+                            (void)category;
+                            building_square_metres += bucket.total.square_metres;
+                        }
+                    }
+                    m_calculation_building_total_value->setText(format_area(display_area(
+                        static_cast<double>(building_square_metres), display_profile)));
+                    const auto category_text = [&](AppraisalAreaCategory category) {
+                        return format_area(appraisal_report->property.by_category.at(category).total.display);
+                    };
+                    m_appraisal_commercial_value->setText(QStringLiteral("%1 / %2 / %3")
+                        .arg(category_text(AppraisalAreaCategory::commercial_occupiable),
+                             category_text(AppraisalAreaCategory::commercial_common),
+                             category_text(AppraisalAreaCategory::commercial_service)));
+                    m_appraisal_nonstandard_value->setText(QStringLiteral("Above: %1; below: %2; noncontinuous: %3")
+                        .arg(category_text(AppraisalAreaCategory::above_grade_nonstandard_finished),
+                             category_text(AppraisalAreaCategory::below_grade_nonstandard_finished),
+                             category_text(AppraisalAreaCategory::noncontinuous_finished)));
+                }
                 const auto show_bucket = [&](QLabel* label, AppraisalAreaCategory category) {
                     label->setText(format_area(
                         appraisal_report->property.by_category.at(category).total.display));
@@ -21803,7 +22134,15 @@ private:
                         QStringLiteral("Not assigned to an appraisal category"));
                 }
             }
-            m_calculation_status->setText(QStringLiteral("Calculated"));
+            if (selected_site_area) {
+                m_appraisal_summary_group->setTitle(QStringLiteral("Automatic appraisal — Site boundary excluded"));
+                m_appraisal_qualification_value->setText(
+                    QStringLiteral("Site/survey boundary is outside building appraisal totals."));
+                m_appraisal_derived_value->setText(QStringLiteral("Site area — no building contribution"));
+                m_calculation_status->setText(QStringLiteral("Calculated site area; excluded from building appraisal"));
+            } else {
+                m_calculation_status->setText(QStringLiteral("Calculated"));
+            }
             m_factor_edit->setToolTip(
                 QStringLiteral("Exact factor %1 = %2")
                     .arg(factor.expression.isEmpty() ? QStringLiteral("exact") : factor.expression)
@@ -24195,6 +24534,10 @@ private:
     QLabel* m_appraisal_floor_value{};
     QLabel* m_appraisal_property_value{};
     QLabel* m_appraisal_contribution_value{};
+    QLabel* m_appraisal_qualification_value{};
+    QLabel* m_appraisal_derived_value{};
+    QLabel* m_appraisal_commercial_value{};
+    QLabel* m_appraisal_nonstandard_value{};
     QLabel* m_calculation_profile_context{};
     QLabel* m_calculation_profile_version{};
     QComboBox* m_calculation_workflow_combo{};
@@ -24907,6 +25250,13 @@ bool MainWindow::saveProjectAs(const QString& path) {
 bool MainWindow::exportDraftPdf(const QString& path) {
     return m_impl->exportDraftPdf(path);
 }
+
+bool MainWindow::editSelectedAppraisalFacts(const QString& declarations_json,
+                                          std::optional<Revision> expected_revision) {
+    return m_impl->editSelectedAppraisalFacts(declarations_json, expected_revision);
+}
+
+void MainWindow::showAppraisalFacts() { m_impl->showAppraisalFacts(); }
 
 bool MainWindow::exportDrawingSetPdf(const QString& path) {
     return m_impl->exportDrawingSetPdf(path);

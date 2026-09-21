@@ -1,5 +1,22 @@
 # Implementation status
 
+## Declared appraisal workflow (2026-09-21)
+
+Residential and light-commercial appraisal policies now derive categories from
+explicit versioned property declarations, floor grade and boundary facts. The
+desktop editor commits these scopes atomically with stale-edit protection,
+undo/redo and save/reopen support. The inspector separates qualification reasons,
+physical and adjusted areas, nonstandard/noncontinuous finished categories and
+commercial occupiable/common/service totals. Missing facts withhold automatic
+totals; legacy manual arithmetic remains visibly Unqualified. Exclusion roles
+must be linked deductions and have no standalone contribution.
+
+Focused desktop tests cover the declaration API and dialog, compatibility,
+invalid tokens/versions, stale edits, read-only rejection, grade changes, factors,
+exclusions, independent site outlines, multi-building totals, commercial buckets
+and persistence. This is application-policy qualification,
+not ANSI/BOMA certification, external appraisal integration, or production parity.
+
 ## Evidence accounting correction (2026-09-20)
 
 The ledger contains 130 mandatory requirements, but its historical `verified`

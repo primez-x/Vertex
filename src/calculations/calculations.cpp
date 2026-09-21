@@ -26,7 +26,13 @@ constexpr std::array category_names{
     std::pair{AppraisalAreaCategory::porch, std::string_view{"porch"}},
     std::pair{AppraisalAreaCategory::patio, std::string_view{"patio"}},
     std::pair{AppraisalAreaCategory::deck, std::string_view{"deck"}},
-    std::pair{AppraisalAreaCategory::other_non_living, std::string_view{"other_non_living"}}};
+    std::pair{AppraisalAreaCategory::other_non_living, std::string_view{"other_non_living"}},
+    std::pair{AppraisalAreaCategory::above_grade_nonstandard_finished, std::string_view{"above_grade_nonstandard_finished"}},
+    std::pair{AppraisalAreaCategory::below_grade_nonstandard_finished, std::string_view{"below_grade_nonstandard_finished"}},
+    std::pair{AppraisalAreaCategory::noncontinuous_finished, std::string_view{"noncontinuous_finished"}},
+    std::pair{AppraisalAreaCategory::commercial_occupiable, std::string_view{"commercial_occupiable"}},
+    std::pair{AppraisalAreaCategory::commercial_common, std::string_view{"commercial_common"}},
+    std::pair{AppraisalAreaCategory::commercial_service, std::string_view{"commercial_service"}}};
 
 double tolerance(double area) { return std::max(1e-6, std::abs(area) * 1e-8); }
 void profile_valid(const CalculationProfile& p) {
@@ -150,6 +156,284 @@ std::optional<AppraisalAreaCategory> parse_appraisal_category(std::string_view n
         if (name == token)
             return value;
     return std::nullopt;
+}
+
+std::string_view appraisal_policy_kind_name(AppraisalPolicyKind value) {
+    switch (value) {
+    case AppraisalPolicyKind::residential_declared: return "residential_declared";
+    case AppraisalPolicyKind::light_commercial_declared: return "light_commercial_declared";
+    }
+    throw std::invalid_argument("Unknown appraisal_policy_kind");
+}
+std::optional<AppraisalPolicyKind> parse_appraisal_policy_kind(std::string_view token) {
+    if (token == "residential_declared") return AppraisalPolicyKind::residential_declared;
+    if (token == "light_commercial_declared") return AppraisalPolicyKind::light_commercial_declared;
+    return std::nullopt;
+}
+
+std::string_view property_kind_name(PropertyKind value) {
+    switch (value) {
+    case PropertyKind::detached_single_family: return "detached_single_family";
+    case PropertyKind::attached_single_family: return "attached_single_family";
+    case PropertyKind::manufactured_home: return "manufactured_home";
+    case PropertyKind::apartment_unit: return "apartment_unit";
+    case PropertyKind::multifamily: return "multifamily";
+    case PropertyKind::light_commercial: return "light_commercial";
+    }
+    throw std::invalid_argument("Unknown property_kind");
+}
+std::optional<PropertyKind> parse_property_kind(std::string_view token) {
+    if (token == "detached_single_family") return PropertyKind::detached_single_family;
+    if (token == "attached_single_family") return PropertyKind::attached_single_family;
+    if (token == "manufactured_home") return PropertyKind::manufactured_home;
+    if (token == "apartment_unit") return PropertyKind::apartment_unit;
+    if (token == "multifamily") return PropertyKind::multifamily;
+    if (token == "light_commercial") return PropertyKind::light_commercial;
+    return std::nullopt;
+}
+
+std::string_view measurement_basis_name(MeasurementBasis value) {
+    switch (value) {
+    case MeasurementBasis::exterior: return "exterior";
+    case MeasurementBasis::interior_perimeter: return "interior_perimeter";
+    case MeasurementBasis::plans: return "plans";
+    case MeasurementBasis::unknown: return "unknown";
+    }
+    throw std::invalid_argument("Unknown measurement_basis");
+}
+std::optional<MeasurementBasis> parse_measurement_basis(std::string_view token) {
+    if (token == "exterior") return MeasurementBasis::exterior;
+    if (token == "interior_perimeter") return MeasurementBasis::interior_perimeter;
+    if (token == "plans") return MeasurementBasis::plans;
+    if (token == "unknown") return MeasurementBasis::unknown;
+    return std::nullopt;
+}
+
+std::string_view grade_status_name(GradeStatus value) {
+    switch (value) {
+    case GradeStatus::above: return "above";
+    case GradeStatus::below: return "below";
+    case GradeStatus::unknown: return "unknown";
+    }
+    throw std::invalid_argument("Unknown grade_status");
+}
+std::optional<GradeStatus> parse_grade_status(std::string_view token) {
+    if (token == "above") return GradeStatus::above;
+    if (token == "below") return GradeStatus::below;
+    if (token == "unknown") return GradeStatus::unknown;
+    return std::nullopt;
+}
+
+std::string_view finish_status_name(FinishStatus value) {
+    switch (value) {
+    case FinishStatus::finished: return "finished";
+    case FinishStatus::unfinished: return "unfinished";
+    case FinishStatus::unknown: return "unknown";
+    }
+    throw std::invalid_argument("Unknown finish_status");
+}
+std::optional<FinishStatus> parse_finish_status(std::string_view token) {
+    if (token == "finished") return FinishStatus::finished;
+    if (token == "unfinished") return FinishStatus::unfinished;
+    if (token == "unknown") return FinishStatus::unknown;
+    return std::nullopt;
+}
+
+std::string_view access_status_name(AccessStatus value) {
+    switch (value) {
+    case AccessStatus::direct_interior: return "direct_interior";
+    case AccessStatus::noncontinuous: return "noncontinuous";
+    case AccessStatus::unknown: return "unknown";
+    }
+    throw std::invalid_argument("Unknown access_status");
+}
+std::optional<AccessStatus> parse_access_status(std::string_view token) {
+    if (token == "direct_interior") return AccessStatus::direct_interior;
+    if (token == "noncontinuous") return AccessStatus::noncontinuous;
+    if (token == "unknown") return AccessStatus::unknown;
+    return std::nullopt;
+}
+
+std::string_view ceiling_eligibility_name(CeilingEligibility value) {
+    switch (value) {
+    case CeilingEligibility::standard: return "standard";
+    case CeilingEligibility::nonstandard: return "nonstandard";
+    case CeilingEligibility::unknown: return "unknown";
+    }
+    throw std::invalid_argument("Unknown ceiling_eligibility");
+}
+std::optional<CeilingEligibility> parse_ceiling_eligibility(std::string_view token) {
+    if (token == "standard") return CeilingEligibility::standard;
+    if (token == "nonstandard") return CeilingEligibility::nonstandard;
+    if (token == "unknown") return CeilingEligibility::unknown;
+    return std::nullopt;
+}
+
+std::string_view area_use_name(AreaUse value) {
+    switch (value) {
+    case AreaUse::dwelling: return "dwelling";
+    case AreaUse::garage: return "garage";
+    case AreaUse::carport: return "carport";
+    case AreaUse::porch: return "porch";
+    case AreaUse::patio: return "patio";
+    case AreaUse::deck: return "deck";
+    case AreaUse::commercial_occupiable: return "commercial_occupiable";
+    case AreaUse::commercial_common: return "commercial_common";
+    case AreaUse::commercial_service: return "commercial_service";
+    case AreaUse::other_non_living: return "other_non_living";
+    }
+    throw std::invalid_argument("Unknown area_use");
+}
+std::optional<AreaUse> parse_area_use(std::string_view token) {
+    if (token == "dwelling") return AreaUse::dwelling;
+    if (token == "garage") return AreaUse::garage;
+    if (token == "carport") return AreaUse::carport;
+    if (token == "porch") return AreaUse::porch;
+    if (token == "patio") return AreaUse::patio;
+    if (token == "deck") return AreaUse::deck;
+    if (token == "commercial_occupiable") return AreaUse::commercial_occupiable;
+    if (token == "commercial_common") return AreaUse::commercial_common;
+    if (token == "commercial_service") return AreaUse::commercial_service;
+    if (token == "other_non_living") return AreaUse::other_non_living;
+    return std::nullopt;
+}
+
+std::string_view boundary_role_name(BoundaryRole value) {
+    switch (value) {
+    case BoundaryRole::measured_area: return "measured_area";
+    case BoundaryRole::open_to_below: return "open_to_below";
+    case BoundaryRole::stair_footprint: return "stair_footprint";
+    case BoundaryRole::other_void: return "other_void";
+    }
+    throw std::invalid_argument("Unknown boundary_role");
+}
+std::optional<BoundaryRole> parse_boundary_role(std::string_view token) {
+    if (token == "measured_area") return BoundaryRole::measured_area;
+    if (token == "open_to_below") return BoundaryRole::open_to_below;
+    if (token == "stair_footprint") return BoundaryRole::stair_footprint;
+    if (token == "other_void") return BoundaryRole::other_void;
+    return std::nullopt;
+}
+
+std::string_view appraisal_policy_id(AppraisalPolicy policy) {
+    (void)appraisal_policy_kind_name(policy.kind);
+    if (policy.version != 1)
+        throw std::invalid_argument("Unsupported appraisal policy version");
+    return policy.kind == AppraisalPolicyKind::residential_declared ?
+        "vertex-residential-declared-v1" : "vertex-light-commercial-declared-v1";
+}
+
+AppraisalQualification derive_appraisal_category(const AppraisalFacts& f, AppraisalPolicy policy,
+                                                 ExactRational factor) {
+    AppraisalQualification result;
+    result.policy_id = appraisal_policy_id(policy);
+    result.policy_version = policy.version;
+    // Validate every enum, even when a fact is irrelevant to the selected use.
+    (void)property_kind_name(f.property_kind);
+    (void)measurement_basis_name(f.measurement_basis);
+    (void)grade_status_name(f.grade);
+    (void)finish_status_name(f.finish);
+    (void)access_status_name(f.access);
+    (void)ceiling_eligibility_name(f.ceiling);
+    (void)area_use_name(f.use);
+    (void)boundary_role_name(f.role);
+    if (factor.denominator <= 0 || factor.numerator < 0)
+        throw std::invalid_argument("Area factor must be nonnegative with a positive denominator");
+    auto issue = [&](std::string code, std::string message) {
+        result.issues.push_back({std::move(code), std::move(message)});
+    };
+    if (factor.numerator != factor.denominator)
+        issue("factor_not_unity", "Qualified physical area requires a factor exactly equal to one.");
+    const bool residential = policy.kind == AppraisalPolicyKind::residential_declared;
+    if ((residential && (f.property_kind == PropertyKind::multifamily ||
+                         f.property_kind == PropertyKind::light_commercial)) ||
+        (!residential && f.property_kind != PropertyKind::light_commercial))
+        issue("property_kind_incompatible", "Property kind is unsupported by the selected policy.");
+    if (f.measurement_basis == MeasurementBasis::unknown)
+        issue("measurement_basis_unknown", "Declare the measurement basis.");
+    else if (residential && f.property_kind == PropertyKind::apartment_unit &&
+             f.measurement_basis != MeasurementBasis::interior_perimeter)
+        issue("measurement_basis_incompatible", "Apartment units require interior perimeter measurements.");
+    else if (residential && f.property_kind != PropertyKind::apartment_unit &&
+             f.measurement_basis == MeasurementBasis::interior_perimeter)
+        issue("measurement_basis_incompatible", "Whole-house residential measurements require exterior or plans basis.");
+    const bool commercial_use = f.use == AreaUse::commercial_occupiable ||
+        f.use == AreaUse::commercial_common || f.use == AreaUse::commercial_service;
+    if (f.role == BoundaryRole::measured_area && residential == commercial_use)
+        issue("area_use_incompatible", "Area use is incompatible with the selected policy.");
+
+    std::optional<AppraisalAreaCategory> category;
+    if (f.role == BoundaryRole::measured_area && residential && f.use == AreaUse::dwelling) {
+        if (f.grade == GradeStatus::unknown)
+            issue("grade_unknown", "Declare above grade or below grade; any partly below level is below grade.");
+        if (f.finish == FinishStatus::unknown)
+            issue("finish_unknown", "Declare finished or unfinished area.");
+        if (f.finish == FinishStatus::finished) {
+            if (f.access == AccessStatus::unknown)
+                issue("access_unknown", "Finished dwelling area requires an access declaration.");
+            if (f.ceiling == CeilingEligibility::unknown)
+                issue("ceiling_unknown", "Finished dwelling area requires a ceiling eligibility declaration.");
+            if (f.access == AccessStatus::noncontinuous && f.grade == GradeStatus::below)
+                issue("noncontinuous_below_grade", "Noncontinuous finished area is supported only above grade.");
+            if (f.access == AccessStatus::noncontinuous)
+                category = AppraisalAreaCategory::noncontinuous_finished;
+            else if (f.ceiling == CeilingEligibility::nonstandard)
+                category = f.grade == GradeStatus::above ? AppraisalAreaCategory::above_grade_nonstandard_finished :
+                                                          AppraisalAreaCategory::below_grade_nonstandard_finished;
+            else
+                category = f.grade == GradeStatus::above ? AppraisalAreaCategory::above_grade_finished :
+                                                          AppraisalAreaCategory::below_grade_finished;
+        } else if (f.finish == FinishStatus::unfinished) {
+            category = f.grade == GradeStatus::above ? AppraisalAreaCategory::above_grade_unfinished :
+                                                      AppraisalAreaCategory::below_grade_unfinished;
+        }
+    } else if (f.role == BoundaryRole::measured_area) {
+        switch (f.use) {
+        case AreaUse::garage: category = AppraisalAreaCategory::garage; break;
+        case AreaUse::carport: category = AppraisalAreaCategory::carport; break;
+        case AreaUse::porch: category = AppraisalAreaCategory::porch; break;
+        case AreaUse::patio: category = AppraisalAreaCategory::patio; break;
+        case AreaUse::deck: category = AppraisalAreaCategory::deck; break;
+        case AreaUse::other_non_living: category = AppraisalAreaCategory::other_non_living; break;
+        case AreaUse::commercial_occupiable: category = AppraisalAreaCategory::commercial_occupiable; break;
+        case AreaUse::commercial_common: category = AppraisalAreaCategory::commercial_common; break;
+        case AreaUse::commercial_service: category = AppraisalAreaCategory::commercial_service; break;
+        case AreaUse::dwelling: break;
+        }
+    }
+    result.qualified = result.issues.empty();
+    if (result.qualified)
+        result.derived_category = category;
+    return result;
+}
+
+AppraisalQualification qualify_appraisal_area(const MeasurementArea& area, const AppraisalFacts& facts,
+                                              AppraisalPolicy policy) {
+    auto result = derive_appraisal_category(facts, policy, area.factor);
+    auto measured = area;
+    measured.classification = "physical";
+    const CalculationProfile physical{"vertex-physical", 1, AreaUnit::square_metre, 2,
+                                       {{"physical", {false, false}}}};
+    const auto calculation = calculate_area(measured, physical);
+    result.physical_square_metres = calculation.net_square_metres;
+    result.adjusted_square_metres = calculation.factored_square_metres;
+    if (area.scope != AreaScope::building) {
+        result.issues.push_back({"scope_incompatible", "Declared appraisal policies require building scope."});
+        result.qualified = false;
+        result.derived_category.reset();
+    }
+    return result;
+}
+
+double AppraisalTotals::commercial_gross_square_metres() const {
+    return by_category.at(AppraisalAreaCategory::commercial_occupiable).total.square_metres +
+           by_category.at(AppraisalAreaCategory::commercial_common).total.square_metres +
+           by_category.at(AppraisalAreaCategory::commercial_service).total.square_metres;
+}
+
+double AppraisalTotals::nonstandard_finished_square_metres() const {
+    return by_category.at(AppraisalAreaCategory::above_grade_nonstandard_finished).total.square_metres +
+           by_category.at(AppraisalAreaCategory::below_grade_nonstandard_finished).total.square_metres;
 }
 
 CalculationProfile builtin_appraisal_profile() {

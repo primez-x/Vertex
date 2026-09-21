@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-274 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+277 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -35,7 +35,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - Survey and georeferencing — when used (7 tasks)
 - Optional assistance — when available (7 tasks)
 - Complete a real job (5 tasks)
-- Appraisal square-foot workflow (9 tasks)
+- Appraisal square-foot workflow (12 tasks)
 
 ## Start a project and arrange the workspace
 
@@ -1432,43 +1432,58 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
-- [ ] **U267 — Calculate above-grade finished GLA automatically**
-  - Expected: Classify a 10 ft × 10 ft closed boundary as Above-grade finished. GLA, selected-floor and property totals each show 100.00 ft² without a separate calculate command.
+- [ ] **U267 — Derive above-grade finished area automatically**
+  - Expected: For a 10 ft × 10 ft boundary, open **Edit appraisal facts**, choose the residential policy, compatible property and measurement basis, Above grade, Finished, Direct interior access, Standard ceiling and Dwelling use. Vertex shows **Qualified**, derives Above-grade finished area, and reports 100.00 ft² without a separate calculate command or manual category choice.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
-- [ ] **U268 — Keep below-grade finished area out of GLA**
-  - Expected: Add and classify a basement boundary as Below-grade finished. Its square feet appear in that separate bucket and in applicable measured totals, while GLA remains unchanged.
+- [ ] **U268 — Derive below-grade finished area from the floor declaration**
+  - Expected: Change the selected floor to Below grade while keeping the area finished and otherwise eligible. Vertex derives Below-grade finished, moves its square feet to that separate bucket, and removes them from Above-grade finished area. The floor name and elevation do not override the declaration.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
-- [ ] **U269 — Report garage, carport, porch, patio and deck separately**
-  - Expected: Each explicitly classified area appears only in its named bucket. None silently becomes GLA.
+- [ ] **U269 — Derive garage, carport, porch, patio and deck from area use**
+  - Expected: Set each boundary's Area use in **Edit appraisal facts**. Each area appears only in its derived named bucket; none silently becomes finished dwelling area.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U270 — Review appraisal totals by floor, building and property**
-  - Expected: With areas on two floors and two buildings, the selected-floor total changes with selection, building grouping remains correct, and the property total equals the unrounded sum of all included areas.
+  - Expected: Create a 100 ft² area in Building 1 and a 200 ft² area in Building 2. Selecting the first shows 100 ft² for its floor and building while the property remains 300 ft²; selecting the second shows 200 ft² for its floor and building while the property remains 300 ft².
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
-- [ ] **U271 — Apply a deduction and factor in appraisal workflow**
-  - Expected: A valid deduction and explicit factor update the assigned appraisal bucket and totals automatically. If an internal deduction is explicitly classified as Garage, it reduces the enclosing GLA and appears once in the Garage bucket. The contribution list identifies both source areas; displayed rounding does not change the stored measurements.
+- [ ] **U271 — Apply a typed deduction without double counting**
+  - Expected: Declare an internal boundary as Open to below, Stair footprint or Other void and link it as a deduction to its enclosing area. It reduces the enclosing physical area once and has no standalone contribution. An unlinked exclusion keeps the appraisal result visibly Unqualified instead of returning a plausible total.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
-- [ ] **U272 — Change an appraisal category and undo it**
-  - Expected: The area moves between the two category buckets, GLA changes only when Above-grade finished is involved, and Undo restores the previous category and totals.
+- [ ] **U272 — Change appraisal facts and undo them**
+  - Expected: Change an area's declared use or its floor's grade. Vertex immediately derives the new category and recalculates totals. Undo and Redo restore the prior declarations, derived category, qualification state and totals together.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
-- [ ] **U273 — Save and reopen an appraisal project**
-  - Expected: Appraisal workflow selection, category assignments, deductions, factors, GLA and all separate square-foot buckets return unchanged.
+- [ ] **U273 — Save and reopen a declared appraisal project**
+  - Expected: Appraisal workflow, policy, property kind, measurement basis, floor grade, area facts, deduction roles and derived square-foot buckets return unchanged. Vertex recalculates them from the saved facts rather than trusting a cached category.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U274 — Return to measurement workflow**
   - Expected: Switching back restores the project's prior measurement profile and its building/living calculations without reclassifying appraisal categories heuristically.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
+- [ ] **U275 — Withhold automatic totals when facts are incomplete or incompatible**
+  - Expected: Leave a required fact undeclared, choose an incompatible policy/property/basis combination, or apply a factor other than 1. Vertex shows Unqualified with specific reasons. Physical and adjusted area remain inspectable, but the adjusted value is not presented as qualified appraisal square footage.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
+- [ ] **U276 — Calculate light-commercial area by use**
+  - Expected: Select the light-commercial declared policy and assign separate boundaries as Occupiable, Common and Service. Vertex derives each bucket and reports their sum as the property measured total without mixing residential finished-area buckets into the result.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
+- [ ] **U277 — Keep site and survey outlines outside building appraisal totals**
+  - Expected: Add a site or survey boundary to a project with a qualified building. The building remains Qualified and its floor, building and property totals remain unchanged without entering appraisal facts for the site outline. Selecting the site explains that it is excluded. Attempting to use the site boundary as a building deduction is blocked.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
