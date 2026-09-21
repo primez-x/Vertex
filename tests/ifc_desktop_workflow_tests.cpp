@@ -58,6 +58,13 @@ int main(int argc, char** argv) {
         require(source.selectEntity(boundary_id) &&
                 !source.createSlabFromSelectedBoundary("0.15 m", "0 m").isEmpty(),
                 "source slab must be created");
+        auto required_sloped_wall = source.document().snapshot().entities().at(wall_id.toStdString());
+        required_sloped_wall.id = "required-sloped-wall";
+        required_sloped_wall.required = true;
+        required_sloped_wall.properties["slope_rise_m"] = 1.0;
+        required_sloped_wall.extensions["source_note"] = "retain unsupported wall semantics";
+        source.document().apply(ApplyEntityChanges{source.document().revision(),
+            {EntityChange::upsert(required_sloped_wall)}, {}, "Add required IFC reference fixture"});
         const auto path = temporary.filePath(QStringLiteral("mapped.ifc"));
         require(source.exportIfc(path), "native project must export IFC");
         require(QFileInfo::exists(path) && QFileInfo(path).size() > 0,
@@ -86,15 +93,22 @@ int main(int argc, char** argv) {
         bool imported_boundary = false;
         bool retained_source = false;
         std::map<std::string, std::string> imported;
+        std::string required_reference_id;
         const auto raw = readFile(path);
         const auto mapped = import_project_ifc(raw.toStdString());
         for (const auto& [id, entity] : snapshot.entities()) {
             if (entity.properties.contains("ifc_type")) {
-                imported.emplace(entity.type, id);
+                if (entity.type != "ifc_reference") imported.emplace(entity.type, id);
                 require(!entity.required, "imported objects must remain editable");
                 require(std::none_of(mapped.entities.begin(), mapped.entities.end(),
                     [&](const auto& candidate) { return candidate.id == id; }),
                     "imported objects must receive fresh document identities");
+                if (entity.type == "ifc_reference" &&
+                    entity.extensions.contains("ifc_vertex_properties") &&
+                    entity.extensions.at("ifc_vertex_properties").contains("native_entity") &&
+                    entity.extensions.at("ifc_vertex_properties").at("native_entity")
+                        .value("id", std::string{}) == "required-sloped-wall")
+                    required_reference_id = id;
             }
             if (entity.type == "boundary" && entity.properties.contains("ifc_type"))
                 imported_boundary = true;
@@ -113,11 +127,19 @@ int main(int argc, char** argv) {
         require(imported_boundary, "IFC import must create a mapped boundary");
         require(retained_source, "IFC import must retain source provenance");
         require(imported.size() == 4 && imported.contains("wall") && imported.contains("opening") &&
-                imported.contains("slab"), "IFC import must insert all four supported semantic objects");
+                imported.contains("slab") && !required_reference_id.empty(),
+                "IFC import must insert semantic objects and the required reference-only object");
+        const auto& imported_reference = snapshot.entities().at(required_reference_id);
+        require(!imported_reference.properties.contains("floor_id") &&
+                !imported_reference.properties.contains("layer_id") &&
+                imported_reference.extensions.at("ifc_vertex_properties").at("native_entity")
+                    .at("properties").at("slope_rise_m") == 1.0,
+                "reference-only IFC objects must remain inert and retain unsupported native semantics");
         require(snapshot.entities().at(imported.at("opening")).properties.at("wall_id") == imported.at("wall"),
                 "imported opening must reference its remapped wall");
         const auto report = nlohmann::json::parse(readFile(path + ".fidelity.json").toStdString());
-        require(report.at("inserted_entity_count") == 4 && report.at("rejected_entity_count") == 0,
+        require(report.at("inserted_entity_count") == mapped.entities.size() &&
+                report.at("rejected_entity_count") == 0,
                 "fidelity report must count objects actually inserted");
         require(report.at("diagnostics").size() == mapped.diagnostics.size(),
                 "fidelity report must preserve mapper diagnostics");
@@ -128,7 +150,7 @@ int main(int argc, char** argv) {
         for (const auto& [id, entity] : snapshot.entities()) {
             (void)id;
             if (entity.type != "ifc_source") continue;
-            require(entity.properties.at("inserted_entity_count") == 4 &&
+            require(entity.properties.at("inserted_entity_count") == mapped.entities.size() &&
                     entity.properties.at("rejected_entity_count") == 0 &&
                     entity.properties.at("diagnostics") == report.at("diagnostics"),
                     "persisted source receipt must report actual insertions and fidelity diagnostics");
@@ -140,7 +162,7 @@ int main(int argc, char** argv) {
         require(destination.redoCommand(), "IFC import must be redoable");
         require(destination.importIfc(path), "repeated IFC import must allocate independent identities");
         const auto repeated = destination.document().snapshot();
-        require(repeated.entities().size() == snapshot.entities().size() + 5,
+        require(repeated.entities().size() == snapshot.entities().size() + mapped.entities.size() + 1,
                 "repeated import must add rather than overwrite semantic objects");
         for (const auto& [id, entity] : repeated.entities()) {
             if (entity.type == "opening" && id != imported.at("opening"))
@@ -165,6 +187,9 @@ int main(int argc, char** argv) {
             require(saved.entities().at(id) == destination.document().snapshot().entities().at(id),
                     "saved semantic edits and host references must survive reopening");
         }
+        require(saved.entities().at(required_reference_id) ==
+                    destination.document().snapshot().entities().at(required_reference_id),
+                "required reference-only semantics must survive reopening");
         require(saved.assets() == destination.document().snapshot().assets(),
                 "retained IFC source must survive reopening");
         const auto second_path = temporary.filePath("roundtrip.ifc");
@@ -174,6 +199,13 @@ int main(int argc, char** argv) {
             require(std::count_if(second.entities.begin(), second.entities.end(),
                 [&](const auto& entity) { return entity.type == type; }) == 1,
                 "re-export must retain each supported semantic object");
+        require(std::any_of(second.entities.begin(), second.entities.end(), [](const auto& entity) {
+                    return entity.type == "ifc_reference" &&
+                        entity.extensions.contains("ifc_vertex_properties") &&
+                        entity.extensions.at("ifc_vertex_properties").contains("native_entity") &&
+                        entity.extensions.at("ifc_vertex_properties").at("native_entity")
+                            .value("id", std::string{}) == "required-sloped-wall";
+                }), "re-export must retain the named reference-only native payload");
         const auto invalid_path = temporary.filePath("invalid.ifc");
         {
             QFile invalid(invalid_path);

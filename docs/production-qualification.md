@@ -137,11 +137,13 @@ Light-commercial OPS-QA-003 additionally requires `multiple_levels`, `assemblies
 `symbol_library`, `symbol_resize`, `symbol_output`, `semantic`, `calculation`,
 `output`, and `fidelity`.
 
-The `symbol_library` observation must enumerate the shipped deterministic
-catalog, record its catalog revision, and prove at least 300 distinct usable
-families and at least 600 validated entries
-across plumbing, furniture, fixtures, appliances, accessibility, lighting,
-doors/windows, structural/site, and commercial equipment. `symbol_resize` must place representative toilets,
+The `symbol_library` observation must enumerate the visible placement library
+and underlying compatibility catalog separately, record the catalog revision,
+and prove at least 300 distinct production SVG components across plumbing,
+furniture, fixtures, appliances, accessibility, lighting, doors/windows,
+structural/site, and commercial equipment. Rescaled, skewed, relabeled, or
+hidden compatibility variants do not count toward the visible artwork total.
+`symbol_resize` must place representative toilets,
 beds, furniture, and commercial symbols at multiple scales and rotations while
 retaining their declared physical footprint and anchor through save/reopen.
 `symbol_output` must compare those same instances in print preview, PDF/SVG, and

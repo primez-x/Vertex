@@ -28,8 +28,8 @@ At minimum, the following acceptance claims are reopened:
 
 | Requirement | Remaining original acceptance gap |
 | --- | --- |
-| ARCH-VIEW-002 | Complete annotations/detail overlays plus render/print fixtures for the selected section presentation. |
-| IO-IFC-001 | Declared Reference View target and representative geometry, types, properties, materials, relationships and unreconstructed-content fidelity. |
+| ARCH-VIEW-002 | Associative overlay dimensions plus production visual and physical-print qualification for section presentation. |
+| IO-IFC-001 | Reference View conformance, full standardized semantic reconstruction, and representative external-application interoperability. |
 | ARCH-3D-001 | A native 3D edit demonstrated in linked plan/elevation/section views, schedules, calculations and save/reopen. |
 | APX-DOC-001 | A complete multipage save/reopen fixture preserving metadata, page order, independent settings and linked model references. |
 
@@ -448,11 +448,12 @@ independent assembly profiles, Apex compatibility, and production acceptance
 evidence remain open.
 
 The current foundation also has a strict typed annotation Document entity and
-semantic annotation/style records with a 1,129-entry catalog: 320 supplied,
-detailed SVG components in 25 categories plus 809 compatibility definitions
-across 393 legacy families. The SVG entries carry searchable human names,
-physical footprint metadata and editable scale limits; they appear first in the
-visible library and render from their original bundled documents in thumbnails,
+semantic annotation/style records with a 320-component visible SVG library in
+25 categories. The underlying 1,129-entry compatibility catalog retains 809
+procedural definitions across 393 legacy families solely for existing-project
+reopen and migration. The SVG entries carry searchable human names,
+physical footprint metadata and editable scale limits; they are the only entries
+shown in the visible placement library and render from their original bundled documents in thumbnails,
 the plan canvas and shared print/export scenes. Annotation state pins built-in
 catalog revision 1 and rejects
 unsupported revisions until an explicit migration is available. Family-specific
@@ -1003,8 +1004,12 @@ Job Object. The analytical fixture audit now passes in both configurations.
   half-space, and invalidates projection caches when view frames or limits
   change; section projections now carry the persisted hatch enablement, pattern,
   and scale into the retained canvas and draft output renderer, with fills only
-  applied to ordered closed paths. Complete section annotation/detail overlays,
-  sheet layout, and production print qualification remain open.
+  applied to ordered closed paths. Persisted text, detail-line, and dimension
+  overlays now participate in detail-level visibility, history, save/reopen,
+  interactive rendering, and draft output. Dimension end ticks retain a fixed
+  2.5 mm printed length across device DPI and viewport scale. Associative
+  object/edge dimension references and production visual/print qualification
+  remain open.
 - Release import inspection resolves 37 selected application/component
   binaries on this machine. The Qt dry-run exposed default plugin expansion;
   an explicit current-component allowlist and pinned archive-member hash
@@ -1034,11 +1039,15 @@ Job Object. The analytical fixture audit now passes in both configurations.
   retention, Apex native compatibility, external CAD fidelity, and production
   interchange qualification remain open.
 - A bounded IFC4 STEP project mapper now exports deterministic owner/unit
-  records, analytical linear boundaries, wall axes, hosted opening products and
-  wall void relationships, slab footprints, and optional swept solids from
-  immutable snapshots; product elevations are carried by local placements.
+  records, project/site/building/storey hierarchy, spatial containment,
+  analytical linear boundaries, typed walls, hosted opening products and wall
+  void relationships, slab footprints, and optional swept solids from immutable
+  snapshots; product elevations are carried by local placements.
   A standard IFC property-set container (`Pset_VertexExchange_v1`) retains
-  bounded native properties. Import recovers typed straight walls when their
+  bounded native properties. Wall types and homogeneous or layered material
+  associations export through standard IFC entities; occurrence-relative layer
+  placement remains explicit in the fidelity report rather than being implied.
+  Import recovers typed straight walls when their
   dimensions are available, closed extruded slabs, and rectangular hosted
   openings through unambiguous void relationships. Wall/slab elevations and
   opening sill relative to the host survive translation-only placements.
@@ -1047,10 +1056,14 @@ Job Object. The analytical fixture audit now passes in both configurations.
   `extensions.ifc_vertex_properties` retains native metadata whose assembly,
   material, and other semantics are only partially reconstructed. Non-metre
   units, compound representations, and unsupported products, properties,
-  materials, rotations, and relationships produce explicit source-retention
-  diagnostics. IFC worker isolation, desktop transaction/source-asset wiring,
-  Reference View conformance, and external interoperability fixtures remain
-  open.
+  rotations, and relationships produce explicit source-retention diagnostics.
+  Required native semantics that cannot be represented become inert
+  `ifc_reference` records with their bounded native payload. Desktop IFC parsing
+  runs in the AppContainer worker; the adapter commits mapped semantic objects,
+  reference-only records, and exact source bytes in one undoable operation and
+  preserves them through save/reopen and re-export. Reference View conformance,
+  complete standardized semantic reconstruction, external interoperability
+  fixtures, and installed-runtime qualification remain open.
 - Multipage project semantics, reusable assemblies, and optional offline
   assistance are implemented as standalone typed models plus a deterministic
   local engine. The engine produces unverified tracing, explicit-unit

@@ -71,6 +71,32 @@ void validate_view(const CoordinatedView& view) {
     positive(p.cut_line_mm); positive(p.projection_line_mm); positive(p.hatch_scale);
     identifier(p.hatch_pattern);
     for (const auto& object_id : view.object_ids) identifier(object_id);
+    require(view.overlays.size() <= 1000, "section overlay count exceeds 1000");
+    require(view.overlays.empty() || view.kind == CoordinatedViewKind::section,
+        "overlays belong only to section views");
+    for (const auto& overlay : view.overlays) {
+        require(overlay.id.size() <= 128 && overlay.text.size() <= 4096,
+            "section overlay identity or text exceeds limit");
+        switch (overlay.kind) {
+        case SectionOverlayKind::text: identifier(overlay.text); break;
+        case SectionOverlayKind::detail_line: case SectionOverlayKind::dimension:
+            require(std::hypot(overlay.end_m[0] - overlay.start_m[0],
+                overlay.end_m[1] - overlay.start_m[1]) > 1e-9, "section overlay endpoints coincide"); break;
+        default: throw std::invalid_argument("unknown section overlay kind");
+        }
+        switch (overlay.minimum_detail) {
+        case ViewDetail::coarse: case ViewDetail::medium: case ViewDetail::fine: break;
+        default: throw std::invalid_argument("unknown section overlay detail");
+        }
+        for (const auto& point : {overlay.start_m, overlay.end_m}) for (double v : point)
+            require(std::isfinite(v) && std::abs(v) <= 1e6, "section overlay coordinate outside finite bounds");
+        require(std::isfinite(overlay.text_height_mm) && overlay.text_height_mm >= 0.5 &&
+            overlay.text_height_mm <= 20, "section overlay text height outside 0.5 to 20 mm");
+        require(std::isfinite(overlay.line_width_mm) && overlay.line_width_mm >= 0.05 &&
+            overlay.line_width_mm <= 5, "section overlay line width outside 0.05 to 5 mm");
+        require(overlay.object_id.empty() || std::find(view.object_ids.begin(), view.object_ids.end(),
+            overlay.object_id) != view.object_ids.end(), "section overlay references object outside owning view");
+    }
 }
 // Reject unknown keys and wrong container lengths, including excess frame values.
 // Numeric scalar types are checked by JSON decoding and semantic validation.
@@ -133,8 +159,24 @@ void from_json(const nlohmann::json& value, ViewDetail& detail) {
 }
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ViewPresentation, cut_depth_m, far_depth_m, cut_line_mm,
     projection_line_mm, hatch_enabled, hatch_pattern, hatch_scale, detail)
+void to_json(nlohmann::json& value, const SectionOverlayKind& kind) {
+    switch (kind) {
+    case SectionOverlayKind::text: value = "text"; return;
+    case SectionOverlayKind::detail_line: value = "detail_line"; return;
+    case SectionOverlayKind::dimension: value = "dimension"; return;
+    }
+    throw std::invalid_argument("unknown section overlay kind");
+}
+void from_json(const nlohmann::json& value, SectionOverlayKind& kind) {
+    if (value == "text") kind = SectionOverlayKind::text;
+    else if (value == "detail_line") kind = SectionOverlayKind::detail_line;
+    else if (value == "dimension") kind = SectionOverlayKind::dimension;
+    else throw std::invalid_argument("unknown section overlay kind");
+}
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SectionOverlay, id, kind, start_m, end_m, text,
+    text_height_mm, line_width_mm, minimum_detail, object_id)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CoordinatedView, id, name, kind, origin_m, direction, up,
-    presentation, object_ids)
+    presentation, object_ids, overlays)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SheetRect, x_mm, y_mm, width_mm, height_mm)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SheetViewport, id, view_id, bounds, scale_denominator)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SheetTitleBlock, project, title, author, issue_date)
@@ -156,6 +198,7 @@ SheetViewModel SheetViewModel::create(std::vector<CoordinatedView> views,
     std::sort(schedule_ids.begin(), schedule_ids.end());
     for (auto& view : views) {
         object_references(view.object_ids);
+        (void)canonical(view.overlays);
         validate_view(view);
     }
     std::set<std::string> numbers;
@@ -330,14 +373,14 @@ SheetViewModel SheetViewModel::with_removed_callout(const std::string& sheet_id,
 }
 
 nlohmann::json SheetViewModel::to_json() const {
-    return {{"schema", "sketch.sheet_view_model"}, {"version", 2}, {"views", views_},
+    return {{"schema", "sketch.sheet_view_model"}, {"version", 3}, {"views", views_},
         {"sheets", sheets_}, {"schedule_ids", schedule_ids_}};
 }
 SheetViewModel SheetViewModel::from_json(const nlohmann::json& value) {
     try {
         require(value.at("schema") == "sketch.sheet_view_model" &&
             value.at("version").is_number_integer() &&
-            (value.at("version") == 1 || value.at("version") == 2),
+            (value.at("version") == 1 || value.at("version") == 2 || value.at("version") == 3),
             "unsupported sheet/view schema");
         auto normalized = value;
         if (value.at("version") == 1) {
@@ -351,6 +394,11 @@ SheetViewModel SheetViewModel::from_json(const nlohmann::json& value) {
                 }
             }
         }
+        if (value.at("version") == 1 || value.at("version") == 2) {
+            normalized["version"] = 3;
+            for (auto& view : normalized.at("views"))
+                if (!view.contains("overlays")) view["overlays"] = nlohmann::json::array();
+        }
         auto result = create(normalized.at("views").get<std::vector<CoordinatedView>>(),
             normalized.at("sheets").get<std::vector<DrawingSheet>>(),
             normalized.at("schedule_ids").get<std::vector<std::string>>());
@@ -359,6 +407,10 @@ SheetViewModel SheetViewModel::from_json(const nlohmann::json& value) {
     } catch (const nlohmann::json::exception& error) {
         throw std::invalid_argument(std::string("invalid sheet/view JSON: ") + error.what());
     }
+}
+
+bool section_overlay_visible(const SectionOverlay& overlay, ViewDetail detail) {
+    return static_cast<int>(detail) >= static_cast<int>(overlay.minimum_detail);
 }
 
 } // namespace sketch

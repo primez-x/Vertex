@@ -176,16 +176,21 @@ interoperability evidence remain production-gate work.
 ## Native project mapping for IFC
 
 `sketch/ifc_project_exchange.hpp` adds a bounded IFC4 STEP mapper on top of the
-native document model. Export emits an IFC4 envelope with deterministic owner,
-unit, placement, polyline, wall-axis, hosted `IFCOPENINGELEMENT`, slab-footprint,
-and optional swept-solid records. Linear analytical boundaries remain
+native document model. Export emits an IFC4 envelope with deterministic project,
+site, building, storey, containment, owner, unit, placement, polyline, typed
+wall, hosted `IFCOPENINGELEMENT`, slab-footprint, and optional swept-solid
+records. Linear analytical boundaries remain
 polylines; a closed slab or straight hosted opening with explicit depth becomes
 an `IFCEXTRUDEDAREASOLID`. Straight hosted openings also receive an
 `IFCRELVOIDSELEMENT` relationship to their exported wall when both products
 are representable; wall elevation plus opening sill are retained in a local
-placement. Curves, slab holes, wall thickness/profile data, opening assembly
-parts, unsupported architectural entities, and other spatial
-relationships are diagnosed instead of silently flattened.
+placement. Wall occurrences receive an `IFCWALLTYPE`; homogeneous materials
+use `IFCMATERIAL`, and layered constructions use an ordered
+`IFCMATERIALLAYERSET`. The exporter explicitly reports
+`wall_layer_placement_not_exported` because the layer set does not yet include
+an occurrence-relative usage axis. Curves, slab holes, opening assembly parts,
+unsupported architectural entities, and other spatial relationships are
+diagnosed instead of silently flattened.
 
 Import accepts the same IFC4 STEP subset and walks product representation
 references to reconstruct typed straight walls, closed slabs, and rectangular
@@ -200,7 +205,14 @@ property payload is retained in `extensions.ifc_vertex_properties`. Translation-
 placements preserve elevations and hosted openings recover host-relative sill,
 offset, and width when the void relationship is unique. Rotated placements,
 non-metre units, compound representations, opening assemblies, materials, and
-other `IFCREL*` relationships remain explicit fidelity diagnostics, and
-`source_retention_required` tells the caller to retain the original bytes. The
-mapper is in-memory and does not claim IFC worker isolation, Reference View
-conformance, or external-application certification.
+other `IFCREL*` relationships remain explicit fidelity diagnostics. Required
+native semantics that cannot be represented faithfully are emitted as an
+`IFCBUILDINGELEMENTPROXY` and reconstruct as an inert `ifc_reference` carrying
+the complete bounded native payload. The desktop accepts that reference-only
+record without assigning it to a drawing layer, retains the exact source bytes,
+and preserves both through save/reopen and re-export. Desktop parsing runs in
+the AppContainer import worker and publishes all mapped objects plus the source
+receipt as one undoable document command. `source_retention_required` tells the
+caller when those original bytes remain necessary. Reference View conformance,
+external-application certification, and complete standardized semantic mapping
+remain open production gates.

@@ -1630,6 +1630,61 @@ void test_boundary_tool_uses_unified_selection_until_a_draft_starts() {
             "wall tools must still accept authoring points over existing geometry");
 }
 
+void test_dimension_ticks_are_paper_space() {
+    PlanCanvas canvas;
+    canvas.resize(640, 480);
+    canvas.setGridEnabled(false);
+    canvas.setOverviewMapEnabled(false);
+    CanvasEntity dimension{QStringLiteral("section-dimension"),
+        QStringLiteral("section_overlay"),
+        {{{-1.0, 0.0}, {1.0, 0.0}, 0.0}}};
+    dimension.dimension_end_ticks = true;
+    dimension.output_stroke_width_mm = 0.25;
+    canvas.setEntities({dimension});
+
+    const auto output = [&](double scale, int dpi,
+                            std::optional<double> paper_pixels_per_mm = std::nullopt) {
+        QImage image(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+        image.setDotsPerMeterX(qRound(dpi / 0.0254));
+        image.setDotsPerMeterY(qRound(dpi / 0.0254));
+        image.fill(Qt::white);
+        QPainter painter(&image);
+        canvas.renderSceneAt(painter, QRectF(image.rect()), scale, {0.0, 0.0},
+                             Qt::white, paper_pixels_per_mm);
+        return image;
+    };
+    const auto tick_span = [](const QImage& image, int endpoint_x) {
+        int top = image.height(), bottom = -1;
+        for (int x = endpoint_x - 3; x <= endpoint_x + 3; ++x) {
+            for (int y = 0; y < image.height(); ++y) {
+                if (image.pixelColor(x, y).lightness() < 160) {
+                    top = std::min(top, y);
+                    bottom = std::max(bottom, y);
+                }
+            }
+        }
+        return bottom >= top ? bottom - top + 1 : 0;
+    };
+    const auto span = [&](const QImage& image, double scale) {
+        return tick_span(image, qRound(image.width() / 2.0 - scale));
+    };
+
+    const auto dpi_96 = span(output(100.0, 96), 100.0);
+    const auto dpi_192 = span(output(100.0, 192), 100.0);
+    require(dpi_96 >= 8 && std::abs(dpi_192 - 2 * dpi_96) <= 3,
+            "dimension ticks must preserve their 2.5 mm physical size across output DPI");
+    const auto fitted_50 = span(output(50.0, 96, 4.0), 50.0);
+    const auto fitted_200 = span(output(200.0, 96, 4.0), 200.0);
+    require(fitted_50 >= 9 && std::abs(fitted_50 - fitted_200) <= 1,
+            "dimension tick pixels must be independent of model-to-output scale");
+    const auto fitted_double = span(output(100.0, 96, 8.0), 100.0);
+    require(std::abs(fitted_double - 2 * fitted_50) <= 3,
+            "fitted sheet paper scale must control dimension tick pixels");
+    require(span(output(100.0, 192, 4.0), 100.0) ==
+                span(output(100.0, 96, 4.0), 100.0),
+            "explicit fitted sheet scale must override output-device DPI for ticks");
+}
+
 void test_dimension_ticks_respect_angular_geometry() {
     PlanCanvas canvas;
     canvas.resize(640, 480);
@@ -1716,6 +1771,7 @@ int main(int argc, char** argv) {
         for (const auto character : QStringLiteral("2.00 m Draft boundary • place the next dimension")) {
             require(metrics.inFont(character), "capture font must contain each rendered character");
         }
+        test_dimension_ticks_are_paper_space();
         test_dimension_ticks_respect_angular_geometry();
         test_dark_canvas_semantic_strokes_and_overrides();
         test_selection_frame_for_styled_geometry();

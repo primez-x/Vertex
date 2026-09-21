@@ -12,10 +12,12 @@ later instance edits do not alter the library. Empty content is allowed. Styles
 support font family, physical text height/stroke width, RGB colors, bold/italic,
 and none/solid/hatch fills. Font availability and hatch rendering are not checked.
 
-The current deterministic catalog contains **1,129 entries**: 320 supplied SVG
-symbols across 25 source categories, plus **809 legacy parametric footprint entries
-across 393 distinct named families**. The original 52 families retain nine
-width/depth presets (80%, 100%, 120% of each nominal dimension); the expanded
+The visible desktop placement library contains the **320 supplied SVG symbols**
+across 25 source categories. The underlying compatibility catalog also retains
+**809 legacy parametric footprint entries across 393 named families** so existing
+projects can reopen without losing stored symbol IDs. Those procedural
+compatibility definitions are not offered for new placement. The original 52
+families retain nine width/depth presets (80%, 100%, 120% of each nominal dimension); the expanded
 families ship at their standard physical footprint and remain continuously
 size-adjustable after placement. IDs encode family and dimension indices. The
 families cover plumbing, furniture, storage, fixtures, appliances, accessibility,
@@ -35,11 +37,11 @@ does not parse files or depend on a working directory at runtime.
 SVG IDs and families use `svg-v2-<source-category>-<source-id>`, for example
 `svg-v2-01_bathroom-basin-oval`. Category qualification distinguishes duplicate
 source IDs (radiator, skylight, pergola, column-round, column-square). All legacy
-IDs, dimensions, previews and order remain intact; the SVG entries append in
-category/ID order. This additive change retains catalog revision 1 and existing
-saved-project compatibility. Names are searchable case-insensitively along with
-IDs, families and categories. Consumers may present SVG entries first without
-changing the underlying catalog or saved IDs.
+IDs, dimensions, previews and order remain intact in the compatibility catalog;
+the SVG entries append in category/ID order. This retains catalog revision 1 and
+existing saved-project compatibility. New-placement browsing exposes only the
+supplied SVG set. Names are searchable case-insensitively along with IDs, families
+and categories.
 
 `SymbolDefinition::svg_asset` supplies an asset-root-relative path, native
 `view_box`, `footprint_view_box`, and `dimensions_are_nominal`. In 208 assets the
@@ -50,7 +52,8 @@ one-metre longest side and follows the viewBox aspect ratio. The flag is false
 for those defaults; it must not be presented as a measured or certified size.
 
 The Windows desktop embeds every SVG in its Qt resource bundle and presents the
-SVG entries first, with source names and cleaned category labels. Library
+320 SVG entries as the complete new-placement library, with source names and
+cleaned category labels. Library
 thumbnails and placed components use the original SVG document. The canvas maps
 the declared footprint bounds—not the padded viewBox—to the physical
 width/depth centred on the placement anchor, retains the artwork padding, and
@@ -70,10 +73,11 @@ and counter layouts) so the catalog cannot satisfy its count with duplicate
 generic rectangles alone. The test matrix also checks representative toilets,
 beds, furniture, and commercial entries at multiple scales and rotations using
 the exact placement transform.
-The production release criterion expands this catalog across plumbing, furniture,
-fixtures, appliances, accessibility, lighting, doors/windows, structural/site,
-and light-commercial equipment, while retaining at least 300 distinct named
-families and at least 600 validated entries.
+The production release criterion keeps at least 300 distinct production-quality
+SVG components visible across plumbing, furniture, fixtures, appliances,
+accessibility, lighting, doors/windows, structural/site, and light-commercial
+equipment. Rescaled, skewed, relabeled, and hidden compatibility definitions do
+not inflate that visible artwork count.
 The production qualification contract requires this coverage in both the
 residential and light-commercial runs through mandatory `symbol_library`,
 `symbol_resize`, and `symbol_output` observations. Those observations still
@@ -103,8 +107,9 @@ so release reviewers and downstream tooling can inspect the shipped library
 without opening a project or contacting a service.
 The complete unfiltered manifest can be checked independently with
 `python scripts/validate_symbol_catalog.py <manifest.json>`; that validator
-enforces the 300-family and 600-entry thresholds, every required category, representative
-toilet/bed/sofa/commercial families, deterministic counts/order, and preview
+enforces the compatibility catalog's 300-family and 600-entry structural
+thresholds, every required category, representative toilet/bed/sofa/commercial
+families, deterministic counts/order, and preview
 strokes contained within each declared physical footprint.
 
 Version-1 JSON roundtrips instance content, style, placement, visibility, and

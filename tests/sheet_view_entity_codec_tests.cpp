@@ -27,6 +27,9 @@ void rejects_document(F&& operation) {
 
 sketch::SheetViewModel fixture() {
     sketch::CoordinatedView plan{"plan", "Ground floor"};
+    plan.kind = sketch::CoordinatedViewKind::section;
+    sketch::SectionOverlay note; note.id = "note"; note.text = "Section note";
+    plan.overlays.push_back(note);
     sketch::DrawingSheet sheet;
     sheet.id = "sheet-a";
     sheet.number = "A101";
@@ -45,6 +48,16 @@ int main() {
                 "sheet/view entity decode changed the semantic graph");
 
         auto document = sketch::Document::create({entity});
+        auto edited_view = model.views().front();
+        edited_view.overlays.front().text = "Edited section note";
+        const auto edited_model = model.with_view(edited_view);
+        document.apply(sketch::ApplyEntityChanges{.expected_revision = document.revision(),
+            .entity_changes = {sketch::EntityChange::upsert(sketch::make_sheet_view_entity("sheet-view", edited_model))}});
+        document.undo(document.revision());
+        require(sketch::decode_sheet_view_entity(document.snapshot().entities().at("sheet-view")).to_json() == model.to_json(), "overlay undo");
+        document.redo(document.revision());
+        require(sketch::decode_sheet_view_entity(document.snapshot().entities().at("sheet-view")).to_json() == edited_model.to_json(), "overlay redo");
+        document.undo(document.revision());
         const auto path = std::filesystem::temp_directory_path() /
             "vertex-sheet-view-entity.bldproj";
         std::filesystem::remove(path);
@@ -57,6 +70,7 @@ int main() {
 
         auto referenced_views = model.views();
         referenced_views[0].object_ids = {"wall-target"};
+        referenced_views[0].overlays[0].object_id = "wall-target";
         const auto referenced_model = sketch::SheetViewModel::create(
             std::move(referenced_views), model.sheets());
         auto referenced_entity = sketch::make_sheet_view_entity("sheet-view", referenced_model);

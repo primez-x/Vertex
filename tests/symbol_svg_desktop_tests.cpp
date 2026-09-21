@@ -6,10 +6,16 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QDir>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QFile>
 #include <QImage>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMimeData>
 #include <QPainter>
 #include <QStandardPaths>
 #include <QSvgRenderer>
@@ -127,6 +133,36 @@ void requireAllBundledSvgsRenderable() {
     }
     require(count == 320, "desktop bundle must contain every supplied SVG symbol");
 }
+
+void requireSvgDropAccepted(const QString& symbol_id) {
+    sketch::desktop::PlanCanvas canvas;
+    canvas.resize(400, 300);
+    canvas.setSnapEnabled(false);
+    QString dropped_id;
+    double dropped_scale = 0.0;
+    sketch::Vec2 dropped_position{};
+    canvas.setSymbolDropped([&](QString id, double scale, sketch::Vec2 position) {
+        dropped_id = std::move(id);
+        dropped_scale = scale;
+        dropped_position = position;
+    });
+    QMimeData mime;
+    mime.setData("application/x-vertex-symbol",
+                 QJsonDocument(QJsonObject{{QStringLiteral("id"), symbol_id},
+                                           {QStringLiteral("scale"), 1.25}})
+                     .toJson(QJsonDocument::Compact));
+    QDragEnterEvent enter(QPoint(200, 150), Qt::CopyAction, &mime,
+                          Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &enter);
+    require(enter.isAccepted(), "canvas rejected the SVG library drag payload");
+    QDropEvent drop(QPointF(200.0, 150.0), Qt::CopyAction, &mime,
+                    Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &drop);
+    require(drop.isAccepted() && dropped_id == symbol_id &&
+                std::abs(dropped_scale - 1.25) < 1e-12 &&
+                std::isfinite(dropped_position.x) && std::isfinite(dropped_position.y),
+            "canvas did not commit the intended SVG library drop");
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -143,8 +179,27 @@ int main(int argc, char** argv) {
         auto* search = window.findChild<QLineEdit*>(QStringLiteral("annotationSymbolSearch"));
         auto* library = window.findChild<QListWidget*>(QStringLiteral("symbolLibraryItems"));
         auto* sizes = window.findChild<QComboBox*>(QStringLiteral("annotationSymbolSize"));
-        require(categories && search && library && sizes,
+        auto* status = window.findChild<QLabel*>(QStringLiteral("annotationEditorStatus"));
+        require(categories && search && library && sizes && status,
                 "visible component library controls are missing");
+        categories->setCurrentIndex(0);
+        search->clear();
+        QApplication::processEvents();
+        require(library->count() == 320,
+                "visible library must contain the complete supplied SVG set only");
+        for (int index = 0; index < library->count(); ++index) {
+            require(library->item(index)->data(Qt::UserRole).toString().startsWith(
+                        QStringLiteral("svg-v2-")),
+                    "legacy procedural compatibility symbol leaked into the visible library");
+        }
+        require(status->text().contains(QStringLiteral("320 components")) &&
+                    !status->text().contains(QStringLiteral("detailed SVG")),
+                "library status must report the supplied component count without redundant tiers");
+        require(library->dragEnabled() &&
+                    library->dragDropMode() == QAbstractItemView::DragOnly &&
+                    library->movement() == QListView::Free,
+                "visible SVG library is not configured to initiate external drags");
+        requireSvgDropAccepted(symbol_id);
         const auto category = categories->findData(QStringLiteral("04_living"));
         require(category >= 0, "SVG living-room category is missing");
         categories->setCurrentIndex(category);

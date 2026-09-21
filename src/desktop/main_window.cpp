@@ -1340,6 +1340,17 @@ const std::vector<SymbolDefinition>& desktop_symbol_catalog() {
     return catalog;
 }
 
+const std::vector<SymbolDefinition>& desktop_placeable_symbol_catalog() {
+    static const auto catalog = [] {
+        auto placeable = desktop_symbol_catalog();
+        std::erase_if(placeable, [](const auto& definition) {
+            return !definition.svg_asset.has_value();
+        });
+        return placeable;
+    }();
+    return catalog;
+}
+
 QIcon symbol_library_thumbnail(const SymbolDefinition& definition) {
     static QHash<QString, QIcon> cache;
     const auto cache_key = QString::fromStdString(definition.id);
@@ -1989,7 +2000,28 @@ struct ArchitecturalViewContext {
     BuildingViewDepth depth;
     ViewPresentation presentation;
     std::vector<std::string> object_ids;
+    std::string view_id;
+    std::vector<SectionOverlay> overlays;
 };
+
+std::vector<CanvasLabel> section_overlay_labels(const CoordinatedView& view, bool metric_units) {
+    std::vector<CanvasLabel> result;
+    for (const auto& overlay : view.overlays) {
+        if (!section_overlay_visible(overlay, view.presentation.detail) ||
+            overlay.kind == SectionOverlayKind::detail_line) continue;
+        const bool dimension = overlay.kind == SectionOverlayKind::dimension;
+        const auto text = dimension
+            ? format_length(std::hypot(overlay.end_m[0] - overlay.start_m[0],
+                overlay.end_m[1] - overlay.start_m[1]), metric_units)
+            : QString::fromStdString(overlay.text);
+        CanvasLabel label{QString::fromStdString(view.id + "/overlay/" + overlay.id),
+            {dimension ? (overlay.start_m[0] + overlay.end_m[0]) / 2 : overlay.start_m[0],
+             dimension ? (overlay.start_m[1] + overlay.end_m[1]) / 2 : overlay.start_m[1]}, text};
+        label.paper_height_mm = overlay.text_height_mm;
+        result.push_back(std::move(label));
+    }
+    return result;
+}
 
 BuildingViewKind architectural_view_kind(CoordinatedViewKind kind) {
     switch (kind) {
@@ -2007,7 +2039,7 @@ ArchitecturalViewContext architectural_view_context(const CoordinatedView& view)
         {view.up[0], view.up[1], view.up[2]}};
     ArchitecturalViewContext result{base,
         BuildingViewDepth{base.origin, base.direction, view.presentation.far_depth_m},
-        view.presentation, view.object_ids};
+        view.presentation, view.object_ids, view.id, view.overlays};
     if (view.kind == CoordinatedViewKind::section) {
         result.frame.origin.x += base.direction.x * view.presentation.cut_depth_m;
         result.frame.origin.y += base.direction.y * view.presentation.cut_depth_m;
@@ -13150,6 +13182,7 @@ public:
                 std::vector<CanvasLabel> labels;
                 for (const auto& label : m_measurementCanvas->labels())
                     if (includes(label.id)) labels.push_back(label);
+                for (auto& label : section_overlay_labels(*view, m_metric_units)) labels.push_back(std::move(label));
                 temporary_canvas->setLabels(std::move(labels));
                 std::vector<CanvasReference> references;
                 for (const auto& reference : m_measurementCanvas->references())
@@ -14341,7 +14374,8 @@ public:
             std::size_t rejected_entity_count = 0;
             for (const auto& candidate : mapped.entities) {
                 if (candidate.type != "boundary" && candidate.type != "wall" &&
-                    candidate.type != "slab" && candidate.type != "opening") {
+                    candidate.type != "slab" && candidate.type != "opening" &&
+                    candidate.type != "ifc_reference") {
                     ++rejected_entity_count;
                     diagnostics.push_back({candidate.id, candidate.type, "desktop_entity_type_unsupported"});
                     continue;
@@ -14355,8 +14389,12 @@ public:
                 auto imported = candidate;
                 imported.id = identity->second;
                 remap_entity_references(imported, identities);
-                imported.properties["floor_id"] = floor_id;
-                imported.properties["layer_id"] = layer_id;
+                // Reference-only records retain unsupported IFC/native semantics for
+                // loss-aware round trips. They are not drawable floor/layer content.
+                if (imported.type != "ifc_reference") {
+                    imported.properties["floor_id"] = floor_id;
+                    imported.properties["layer_id"] = layer_id;
+                }
                 imported_ids.push_back(imported.id);
                 changes.push_back(EntityChange::upsert(std::move(imported)));
             }
@@ -15029,6 +15067,41 @@ public:
         form->addRow(QStringLiteral("Up direction X, Y, Z"), up);
         form->addRow(QStringLiteral("Section cut depth (m)"), cut);
         form->addRow(QStringLiteral("Far depth (m)"), far);
+        auto* overlays = new QTableWidget(0, 8, &dialog);
+        overlays->setObjectName(QStringLiteral("sectionOverlays"));
+        overlays->setHorizontalHeaderLabels({QStringLiteral("ID"), QStringLiteral("Kind"),
+            QStringLiteral("X m"), QStringLiteral("Y m"), QStringLiteral("End X m"),
+            QStringLiteral("End Y m"), QStringLiteral("Text"), QStringLiteral("Minimum detail")});
+        overlays->setToolTip(QStringLiteral("Section-plane metres. Kind: text, detail_line, dimension. "
+            "Detail: coarse, medium, fine. Dimensions measure explicit endpoints; they are not associative. "
+            "Coarse sections omit hatching; higher levels include overlays at or below that detail."));
+        form->addRow(QStringLiteral("Section annotations"), overlays);
+        auto* add_overlay = new QPushButton(QStringLiteral("Add annotation"), &dialog);
+        add_overlay->setObjectName(QStringLiteral("addSectionOverlay"));
+        auto* remove_overlay = new QPushButton(QStringLiteral("Remove selected annotation"), &dialog);
+        remove_overlay->setObjectName(QStringLiteral("removeSectionOverlay"));
+        form->addRow(add_overlay, remove_overlay);
+        const auto append_overlay = [&](const SectionOverlay& overlay) {
+            const auto row = overlays->rowCount(); overlays->insertRow(row);
+            const QStringList cells{QString::fromStdString(overlay.id),
+                overlay.kind == SectionOverlayKind::text ? QStringLiteral("text") :
+                    overlay.kind == SectionOverlayKind::dimension ? QStringLiteral("dimension") : QStringLiteral("detail_line"),
+                QString::number(overlay.start_m[0], 'g', 17), QString::number(overlay.start_m[1], 'g', 17),
+                QString::number(overlay.end_m[0], 'g', 17), QString::number(overlay.end_m[1], 'g', 17),
+                QString::fromStdString(overlay.text),
+                overlay.minimum_detail == ViewDetail::coarse ? QStringLiteral("coarse") :
+                    overlay.minimum_detail == ViewDetail::fine ? QStringLiteral("fine") : QStringLiteral("medium")};
+            for (int column = 0; column < cells.size(); ++column)
+                overlays->setItem(row, column, new QTableWidgetItem(cells[column]));
+            overlays->item(row, 0)->setFlags(overlays->item(row, 0)->flags() & ~Qt::ItemIsEditable);
+        };
+        QObject::connect(add_overlay, &QPushButton::clicked, &dialog, [&] {
+            SectionOverlay overlay; overlay.id = new_id("overlay"); overlay.text = "Note";
+            append_overlay(overlay);
+        });
+        QObject::connect(remove_overlay, &QPushButton::clicked, &dialog, [&] {
+            if (overlays->currentRow() >= 0) overlays->removeRow(overlays->currentRow());
+        });
         auto* hint = new QLabel(QStringLiteral("Direction and up must be perpendicular unit vectors. "
             "Saved views are available in the view selector and drawing-sheet layout."), &dialog);
         hint->setWordWrap(true); form->addRow(hint);
@@ -15053,6 +15126,8 @@ public:
             up->setText(vector_text(value.up));
             cut->setText(QString::number(value.presentation.cut_depth_m, 'g', 17));
             far->setText(QString::number(value.presentation.far_depth_m, 'g', 17));
+            overlays->setRowCount(0);
+            for (const auto& overlay : value.overlays) append_overlay(overlay);
         };
         QObject::connect(selection, &QComboBox::currentIndexChanged, &dialog, populate);
         const auto current = selection->findData(m_active_named_view);
@@ -15082,6 +15157,26 @@ public:
                 value.kind = static_cast<CoordinatedViewKind>(kind->currentData().toInt());
                 value.origin_m = vector(origin); value.direction = vector(direction); value.up = vector(up);
                 value.presentation.cut_depth_m = scalar(cut->text()); value.presentation.far_depth_m = scalar(far->text());
+                const auto previous_overlays = value.overlays;
+                value.overlays.clear();
+                for (int row = 0; row < overlays->rowCount(); ++row) {
+                    const auto cell = [&](int column) { return overlays->item(row, column)->text().trimmed(); };
+                    SectionOverlay overlay;
+                    overlay.id = cell(0).toStdString();
+                    for (const auto& previous : previous_overlays) if (previous.id == overlay.id) overlay = previous;
+                    if (cell(1) == "text") overlay.kind = SectionOverlayKind::text;
+                    else if (cell(1) == "detail_line") overlay.kind = SectionOverlayKind::detail_line;
+                    else if (cell(1) == "dimension") overlay.kind = SectionOverlayKind::dimension;
+                    else throw std::invalid_argument("Annotation kind must be text, detail_line, or dimension.");
+                    overlay.start_m = {scalar(cell(2)), scalar(cell(3))};
+                    overlay.end_m = {scalar(cell(4)), scalar(cell(5))};
+                    overlay.text = cell(6).toStdString();
+                    if (cell(7) == "coarse") overlay.minimum_detail = ViewDetail::coarse;
+                    else if (cell(7) == "medium") overlay.minimum_detail = ViewDetail::medium;
+                    else if (cell(7) == "fine") overlay.minimum_detail = ViewDetail::fine;
+                    else throw std::invalid_argument("Minimum detail must be coarse, medium, or fine.");
+                    value.overlays.push_back(std::move(overlay));
+                }
                 if (found == views.end()) views.push_back(value); else *found = value;
                 const auto replacement = SheetViewModel::create(views, record->model.sheets(),
                     record->model.to_json().at("schedule_ids").get<std::vector<std::string>>());
@@ -15276,7 +15371,7 @@ public:
             ? m_symbol_list->currentItem()->data(symbol_family_role).toString() : QString{};
         const auto query = m_symbol_search->text().trimmed().toLower().toStdString();
         const auto category = m_symbol_category->currentData().toString().toStdString();
-        auto filtered = filter_symbol_catalog(desktop_symbol_catalog(), query, category);
+        auto filtered = filter_symbol_catalog(desktop_placeable_symbol_catalog(), query, category);
         std::stable_sort(filtered.begin(), filtered.end(), [](const auto& left, const auto& right) {
             if (left.svg_asset.has_value() != right.svg_asset.has_value())
                 return left.svg_asset.has_value();
@@ -15290,7 +15385,6 @@ public:
         const QSignalBlocker blocker(m_symbol_list);
         m_symbol_list->clear();
         std::set<std::string> rendered_families;
-        std::size_t detailed_svg_families{};
         for (const auto& first_variant : filtered) {
             if (!rendered_families.insert(first_variant.family).second) continue;
             const SymbolDefinition* definition = &first_variant;
@@ -15312,7 +15406,6 @@ public:
                 if (!label.isEmpty()) label[0] = label[0].toUpper();
             }
             auto* entry = new QListWidgetItem(label, m_symbol_list);
-            if (definition->svg_asset.has_value()) ++detailed_svg_families;
             entry->setIcon(symbol_library_thumbnail(*definition));
             entry->setData(Qt::UserRole, QString::fromStdString(definition->id));
             entry->setData(symbol_family_role, QString::fromStdString(definition->family));
@@ -15337,9 +15430,8 @@ public:
             m_symbol_list->setCurrentRow(0);
         if (m_symbol_library_status) {
             m_symbol_library_status->setText(
-                QStringLiteral("%1 components • %2 detailed SVG • Drag or double-click to place.")
-                    .arg(rendered_families.size())
-                    .arg(detailed_svg_families));
+                QStringLiteral("%1 components • Drag or double-click to place.")
+                    .arg(rendered_families.size()));
         }
         populateSymbolVariants(m_symbol_list->currentItem());
     }
@@ -15355,7 +15447,7 @@ public:
         const auto family = item->data(symbol_family_role).toString().toStdString();
         const auto selected_id = item->data(Qt::UserRole).toString();
         int selected_index = -1;
-        for (const auto& definition : desktop_symbol_catalog()) {
+        for (const auto& definition : desktop_placeable_symbol_catalog()) {
             if (definition.family != family) continue;
             auto label = QStringLiteral("%1 × %2 m")
                              .arg(QString::number(definition.width_metres, 'g', 4))
@@ -17977,7 +18069,7 @@ private:
             "Drag a component onto the plan, or double-click to place by cursor."));
         symbols_layout->addWidget(m_symbol_library_status);
 
-        const auto& catalog = desktop_symbol_catalog();
+        const auto& catalog = desktop_placeable_symbol_catalog();
         std::set<std::string> symbol_categories;
         for (const auto& definition : catalog) symbol_categories.insert(definition.category);
         m_symbol_category->addItem(QStringLiteral("All categories"), QString{});
@@ -19951,6 +20043,7 @@ private:
                 // the retained canvas entity so interactive, print, and image
                 // output all consume the same projected path and pattern.
                 if (kind == BuildingViewKind::section &&
+                    view_context.presentation.detail != ViewDetail::coarse &&
                     view_context.presentation.hatch_enabled) {
                     entity.filled = true;
                     entity.hatch_pattern = QString::fromStdString(
@@ -20130,6 +20223,17 @@ private:
                     }
                 }
             }
+            for (const auto& overlay : view_context.overlays) {
+                if (!section_overlay_visible(overlay, view_context.presentation.detail) ||
+                    overlay.kind == SectionOverlayKind::text) continue;
+                CanvasEntity line{QString::fromStdString(view_context.view_id + "/overlay/" + overlay.id),
+                    QStringLiteral("section_overlay"), Boundary{Segment{
+                        {overlay.start_m[0], overlay.start_m[1]},
+                        {overlay.end_m[0], overlay.end_m[1]}, 0.0}}, 0.0};
+                line.output_stroke_width_mm = overlay.line_width_mm;
+                line.dimension_end_ticks = overlay.kind == SectionOverlayKind::dimension;
+                result.push_back(std::move(line));
+            }
             return result;
         };
         view_geometry[architectural_view_index(BuildingViewKind::plan)] =
@@ -20215,7 +20319,7 @@ private:
         for (std::size_t index = 0; index < view_geometry.size(); ++index) {
             visible_view_geometry[index].reserve(view_geometry[index].size());
             for (auto& entity : view_geometry[index]) {
-                if (visible_ids.contains(entity.id.toStdString()) &&
+                if ((entity.type == QStringLiteral("section_overlay") || visible_ids.contains(entity.id.toStdString())) &&
                     !presentation_hidden_ids.contains(entity.id.toStdString())) {
                     visible_view_geometry[index].push_back(std::move(entity));
                 }
@@ -20229,6 +20333,7 @@ private:
         for (auto& [view_id, entities] : m_coordinated_view_entities) {
             (void)view_id;
             std::erase_if(entities, [&](const auto& entity) {
+                if (entity.type == QStringLiteral("section_overlay")) return false;
                 return !visible_ids.contains(entity.id.toStdString()) ||
                        presentation_hidden_ids.contains(entity.id.toStdString());
             });
@@ -20325,6 +20430,16 @@ private:
         m_measurementCanvas->setLabels(labels);
         if (m_architectural_view_kind != BuildingViewKind::plan) {
             std::erase_if(labels, [](const auto& label) { return label.plan_only; });
+        }
+        if (m_architectural_view_kind == BuildingViewKind::section) {
+            if (const auto record = decode_sheet_model(snapshot)) {
+                for (const auto& view : record->model.views()) {
+                    if (view.kind != CoordinatedViewKind::section ||
+                        (!m_active_named_view.isEmpty() && view.id != m_active_named_view.toStdString())) continue;
+                    for (auto& label : section_overlay_labels(view, m_metric_units)) labels.push_back(std::move(label));
+                    break;
+                }
+            }
         }
         m_architecturalCanvas->setLabels(std::move(labels));
         m_measurementCanvas->setReferences(reference_underlays);

@@ -43,9 +43,11 @@ struct IfcProjectImportResult {
 };
 
 // Maps the immutable native snapshot into a bounded IFC4 STEP subset. Linear
-// boundaries and wall axes remain analytical polylines; closed footprints with
-// an explicit thickness become swept solids. Unsupported native semantics are
-// reported and never silently flattened.
+// boundaries remain analytical polylines; straight constant-height walls and
+// closed footprints with an explicit thickness become swept solids in a default
+// project/site/building/storey hierarchy. Native wall layer stacks use IFC types
+// and material relationships. Unsupported required objects retain native payload
+// references with diagnostics; this subset does not claim MVD conformance.
 [[nodiscard]] IfcProjectExportResult export_project_ifc(
     const DocumentSnapshot& document,
     const IfcExchangeLimits& limits = {});

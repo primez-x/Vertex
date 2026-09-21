@@ -79,10 +79,12 @@ inline void fields(const nlohmann::json& value, std::initializer_list<const char
     if (!value.is_object() || value.size() != keys.size()) reject();
     for (const auto* key : keys) if (!value.contains(key)) reject();
 }
-inline std::string text(const nlohmann::json& value, bool empty = true) {
+inline std::string text(const nlohmann::json& value, bool empty = true,
+                        std::size_t limit = 4096) {
     if (!value.is_string()) reject();
     const auto& result = value.get_ref<const std::string&>();
-    if ((!empty && result.empty()) || result.size() > 4096 || result.find('\0') != std::string::npos) reject();
+    if ((!empty && result.empty()) || result.size() > limit ||
+        result.find('\0') != std::string::npos) reject();
     return result;
 }
 inline double number(const nlohmann::json& object, const char* key, bool positive = false) {
@@ -160,6 +162,19 @@ inline void validate_slab(const Entity& entity, GeometryBudget& budget) {
     budget.charge_cross(topology_segments);
     if (validate_boundary_holes(outer, holes).has_value()) reject();
 }
+inline void validate_ifc_reference(const Entity& entity) {
+    fields(entity.properties, {"ifc_name", "ifc_type"});
+    (void)text(entity.properties.at("ifc_name"));
+    (void)text(entity.properties.at("ifc_type"), false);
+    fields(entity.extensions, {"ifc_source", "ifc_vertex_properties"});
+    const auto& source = entity.extensions.at("ifc_source");
+    fields(source, {"record_id", "record_type", "arguments"});
+    if (!source.at("record_id").is_number_integer() ||
+        source.at("record_id").get<std::int64_t>() <= 0) reject();
+    (void)text(source.at("record_type"), false);
+    (void)text(source.at("arguments"), true, 1024 * 1024);
+    if (!entity.extensions.at("ifc_vertex_properties").is_object()) reject();
+}
 inline void validate(const ProjectImportCandidate& result) {
     (void)project_import_kind_name(result.kind);
     if (result.entities.size() > project_import_entity_limit ||
@@ -178,7 +193,8 @@ inline void validate(const ProjectImportCandidate& result) {
             !entity.properties.is_object() || !entity.extensions.is_object()) reject();
         const bool shared = entity.type == "boundary";
         const bool dxf = entity.type == "annotation_state";
-        const bool ifc = entity.type == "wall" || entity.type == "slab" || entity.type == "opening";
+        const bool ifc = entity.type == "wall" || entity.type == "slab" ||
+            entity.type == "opening" || entity.type == "ifc_reference";
         if (!shared && !(result.kind == ProjectImportKind::dxf ? dxf : ifc)) reject();
         if (entity.properties.contains("parent_id") || entity.properties.contains("layer_id")) reject();
         if (entity.type == "boundary") {
@@ -202,6 +218,8 @@ inline void validate(const ProjectImportCandidate& result) {
                 if (kind != "opening" && kind != "door" && kind != "window") reject();
             }
             openings.emplace_back(std::move(wall_id), std::move(hosted));
+        } else if (entity.type == "ifc_reference") {
+            validate_ifc_reference(entity);
         }
     }
     for (auto& [wall_id, hosted] : openings) {

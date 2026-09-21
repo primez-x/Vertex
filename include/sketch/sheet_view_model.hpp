@@ -9,6 +9,23 @@ namespace sketch {
 
 enum class CoordinatedViewKind { plan, elevation, section };
 enum class ViewDetail { coarse, medium, fine };
+enum class SectionOverlayKind { text, detail_line, dimension };
+// Detached view-plane coordinates in metres, never analytical model geometry.
+// Dimension values are measured between these explicit endpoints, not associative.
+struct SectionOverlay {
+    std::string id;
+    SectionOverlayKind kind{SectionOverlayKind::text};
+    std::array<double, 2> start_m{0, 0};
+    std::array<double, 2> end_m{1, 0};
+    std::string text;
+    double text_height_mm{2.5};
+    double line_width_mm{0.18};
+    ViewDetail minimum_detail{ViewDetail::medium};
+    // Optional source reference must occur in the owning view's object_ids.
+    std::string object_id;
+    bool operator==(const SectionOverlay&) const = default;
+};
+[[nodiscard]] bool section_overlay_visible(const SectionOverlay& overlay, ViewDetail detail);
 struct ViewPresentation {
     double cut_depth_m{1.2};
     double far_depth_m{100.0};
@@ -32,6 +49,7 @@ struct CoordinatedView {
     // The list is persisted in canonical ID order and validated against the
     // owning Document when the sheet/view entity is admitted.
     std::vector<std::string> object_ids;
+    std::vector<SectionOverlay> overlays;
     bool operator==(const CoordinatedView&) const = default;
 };
 struct SheetRect {

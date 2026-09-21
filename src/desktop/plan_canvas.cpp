@@ -2244,10 +2244,12 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
     // Angular dimension overlays share the dimension_line type, but carry
     // an arc between their radial witnesses. A stale tick flag must not add
     // linear-dimension ticks to either witness of an angular dimension.
-    const auto linear_dimension = entity.type == QStringLiteral("dimension_line") &&
+    const auto linear_dimension =
+        (entity.type == QStringLiteral("dimension_line") ||
+         entity.type == QStringLiteral("section_overlay")) &&
         std::all_of(entity.segments.begin(), entity.segments.end(),
                     [](const Segment& segment) { return segment.sweep_radians == 0.0; });
-    if (entity.dimension_end_ticks && linear_dimension && entity.segments.size() >= 3) {
+    if (entity.dimension_end_ticks && linear_dimension && !entity.segments.empty()) {
         const auto& dimension = entity.segments.back();
         const auto dx = dimension.end.x - dimension.start.x;
         const auto dy = dimension.end.y - dimension.start.y;
@@ -2256,7 +2258,17 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
                                            std::abs(painter.transform().m22()));
         if (length > 1e-9 && device_scale > 1e-9 && std::isfinite(length) &&
             std::isfinite(device_scale)) {
-            const auto half_tick = 4.5 / device_scale;
+            double half_tick_pixels = 4.5;
+            if (output) {
+                const auto pixels_per_mm =
+                    paper_pixels_per_mm && std::isfinite(*paper_pixels_per_mm) &&
+                            *paper_pixels_per_mm > 0.0
+                        ? *paper_pixels_per_mm
+                        : painter.device()->logicalDpiX() / 25.4;
+                // Dimension endpoint marks are a 2.5 mm paper-space feature.
+                half_tick_pixels = 1.25 * pixels_per_mm;
+            }
+            const auto half_tick = half_tick_pixels / device_scale;
             const Vec2 normal{-dy / length * half_tick, dx / length * half_tick};
             painter.drawLine(QLineF(dimension.start.x - normal.x,
                                     dimension.start.y - normal.y,

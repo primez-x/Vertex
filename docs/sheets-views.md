@@ -58,8 +58,15 @@ use the same frame contract; adapters choose the appropriate orientation. The
 desktop Architectural view settings command edits these presentation fields
 through typed Document history. The desktop renderer conservatively culls
 solids whose BRep bounding range lies wholly beyond far depth. Objects crossing
-the limit are clipped with an OCCT half-space before projection; output
-overlays and production qualification remain open.
+the limit are clipped with an OCCT half-space before projection. Section views
+also own persisted text, detail-line, and explicit-endpoint dimension overlays.
+Every overlay has a stable ID, paper-space text/line sizing, and a minimum
+coarse/medium/fine detail level; the same retained canvas scene feeds the
+interactive view and draft output. Coarse presentation suppresses hatching,
+and dimension end ticks print at a fixed 2.5 mm total length independent of
+device DPI or viewport model scale. Overlay dimensions are intentionally
+non-associative until object/edge references are added. Production visual and
+physical-print qualification remain open.
 
 Sheets have explicit positive page dimensions in millimetres, unique sheet
 numbers, title-block metadata, revisions, callouts and schedule placements.
@@ -82,10 +89,11 @@ lexical order. The desktop editor exposes the persisted revision and callout
 collections with typed graph validation; callout target sheet and viewport
 references are never inferred from display labels.
 
-Version 2 JSON uses `sketch.sheet_view_model`, rejects unknown/missing fields,
+Version 3 JSON uses `sketch.sheet_view_model`, persists section overlays, and
+rejects unknown/missing fields,
 invalid enum names, nonfinite numeric values, malformed frames and dangling
-references. Version 1 documents remain readable and normalize missing
-`object_ids` to empty lists before strict validation. Collections serialize in
+references. Version 1 and 2 documents remain readable and normalize missing
+`object_ids` or overlay collections to empty lists before strict validation. Collections serialize in
 ID order (schedule registry lexically),
 independent of insertion order. JSON output and caller inputs are detached from
 the stored snapshot. Import validates the complete graph before returning a

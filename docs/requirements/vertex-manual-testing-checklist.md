@@ -598,7 +598,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 ## Symbols, furniture and component library
 
 - [ ] **U109 — Open the visible component library**
-  - Expected: The left-panel Symbols tab opens without a modal. All categories reports more than 700 placeable components, including 320 detailed SVG components, and shows the detailed set first.
+  - Expected: The left-panel Symbols tab opens without a modal. All categories reports 320 placeable components from the supplied architectural SVG library. Old procedural compatibility definitions do not clutter the placement list.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

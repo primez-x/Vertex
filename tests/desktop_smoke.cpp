@@ -4435,6 +4435,75 @@ void test_architectural_authoring_commands() {
             "saved named view becomes the selected architectural projection");
 }
 
+void test_section_overlay_workflow() {
+    sketch::desktop::MainWindow window;
+    auto* action = window.findChild<QAction*>("manageNamedViews");
+    require(action, "section overlay editor action");
+    const auto before = window.document().revision();
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = QApplication::activeModalWidget();
+        auto* selection = dialog->findChild<QComboBox*>("namedViewSelection");
+        selection->setCurrentIndex(selection->findData(QStringLiteral("view-section")));
+        auto* table = dialog->findChild<QTableWidget*>("sectionOverlays");
+        auto* add = dialog->findChild<QPushButton*>("addSectionOverlay");
+        add->click(); table->item(0, 6)->setText("Section overlay proof");
+        add->click(); table->item(1, 1)->setText("dimension"); table->item(1, 4)->setText("2");
+        add->click(); table->item(2, 1)->setText("detail_line"); table->item(2, 7)->setText("fine");
+        dialog->findChild<QPushButton*>("saveNamedView")->click();
+    });
+    action->trigger();
+    require(window.document().revision() == before + 1, "overlay authoring is one history command");
+    auto* canvas = dynamic_cast<sketch::desktop::PlanCanvas*>(window.findChild<QWidget*>("architecturalPlanCanvas"));
+    const auto count_lines = [&] { return std::count_if(canvas->entities().begin(), canvas->entities().end(),
+        [](const auto& entity) { return entity.type == "section_overlay"; }); };
+    require(count_lines() == 1, "medium includes dimension but excludes fine detail line");
+    require(std::any_of(canvas->labels().begin(), canvas->labels().end(),
+        [](const auto& label) { return label.text == "Section overlay proof"; }), "section note retained on canvas");
+    require(std::any_of(canvas->labels().begin(), canvas->labels().end(),
+        [](const auto& label) { return label.text.contains('\''); }),
+        "section dimensions follow the active Imperial display units");
+    require(window.undoCommand() && count_lines() == 0 && window.redoCommand() && count_lines() == 1,
+        "overlay undo and redo refresh canvas");
+    const auto detail = [&](const QString& level) {
+        require(window.editArchitecturalViewPresentation("view-section", "1.2", "100", "0.5", "0.18",
+            true, "solid", "1", level, ""), "section detail edit");
+    };
+    detail("fine"); require(count_lines() == 2, "fine includes detail overlay");
+    detail("coarse"); require(count_lines() == 0, "coarse excludes medium and fine overlays");
+    detail("fine");
+    QTemporaryDir directory;
+    const auto svg = directory.filePath("section.svg");
+    require(window.exportDraftSvg(svg) && window.exportDraftPdf(directory.filePath("section.pdf")),
+        "section overlays export through shared scene");
+    QFile output(svg); require(output.open(QIODevice::ReadOnly) && output.readAll().contains("Section overlay proof"),
+        "SVG contains section annotation text");
+    const auto path = directory.filePath("section.bldproj");
+    require(window.saveProjectAs(path) && window.openProject(path), "section overlay save reopen");
+    const auto model = sketch::decode_sheet_view_entity(window.document().snapshot().entities().at("sheet-view-1"));
+    const auto view = std::find_if(model.views().begin(), model.views().end(), [](const auto& v) { return v.id == "view-section"; });
+    require(view != model.views().end() && view->overlays.size() == 3, "overlays survive desktop save reopen");
+    const auto stable_id = view->overlays.front().id;
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = QApplication::activeModalWidget();
+        auto* selection = dialog->findChild<QComboBox*>("namedViewSelection");
+        selection->setCurrentIndex(selection->findData(QStringLiteral("view-section")));
+        auto* table = dialog->findChild<QTableWidget*>("sectionOverlays");
+        table->item(0, 1)->setText("invalid");
+        const auto revision = window.document().revision();
+        dialog->findChild<QPushButton*>("saveNamedView")->click();
+        require(window.document().revision() == revision, "invalid overlay kind cannot mutate document");
+        table->item(0, 1)->setText("text"); table->item(0, 6)->setText("Edited annotation");
+        table->setCurrentCell(2, 0);
+        dialog->findChild<QPushButton*>("removeSectionOverlay")->click();
+        dialog->findChild<QPushButton*>("saveNamedView")->click();
+    });
+    action->trigger();
+    const auto edited = sketch::decode_sheet_view_entity(window.document().snapshot().entities().at("sheet-view-1"));
+    const auto section = std::find_if(edited.views().begin(), edited.views().end(), [](const auto& v) { return v.id == "view-section"; });
+    require(section->overlays.size() == 2 && section->overlays.front().id == stable_id &&
+        section->overlays.front().text == "Edited annotation", "edit and remove preserve remaining overlay identity");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -4445,7 +4514,13 @@ int main(int argc, char** argv) {
     const auto families = QFontDatabase::applicationFontFamilies(font_id);
     require(!families.isEmpty(), "bundled Inter font must expose a family");
     application.setFont(QFont(families.front(), 10));
+    if (argc == 2 && std::string_view(argv[1]) == "--section-overlays-only") {
+        test_section_overlay_workflow();
+        std::cout << "Section overlay workflow tests passed\n";
+        return 0;
+    }
     test_architectural_authoring_commands();
+    test_section_overlay_workflow();
     if (argc == 2 && std::string_view(argv[1]) == "--architectural-authoring-only") return 0;
     if (argc == 2 && std::string_view(argv[1]) == "--coordinated-view-output-only") {
         test_coordinated_view_output_identity();

@@ -1,6 +1,7 @@
 #include "sketch/ifc_project_exchange.hpp"
 
 #include "sketch/boundary_entity.hpp"
+#include "sketch/wall_semantics.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -396,7 +397,8 @@ public:
         std::string result;
         result.reserve(records_.size() * 80 + 256);
         result += "ISO-10303-21;\nHEADER;\n";
-        result += "FILE_DESCRIPTION(('ViewDefinition [CoordinationView_V2.0]'),'2;1');\n";
+        // A bounded IFC4 subset, not a claim of externally qualified MVD conformance.
+        result += "FILE_DESCRIPTION(('Vertex IFC4 exchange subset'),'2;1');\n";
         result += "FILE_NAME('vertex-project.ifc','1970-01-01T00:00:00',('Vertex'),('Vertex'),'Vertex','Vertex','');\n";
         result += "FILE_SCHEMA(('IFC4'));\nENDSEC;\nDATA;\n";
         for (const auto& record : records_) {
@@ -434,6 +436,7 @@ std::string guid_for(std::string_view source, std::size_t ordinal) {
         c = alphabet[hash & 63U];
         hash = (hash >> 6U) ^ (hash * 0x9e3779b97f4a7c15ULL);
     }
+    result.front() = alphabet[static_cast<unsigned char>(result.front()) & 3U];
     return result;
 }
 
@@ -460,13 +463,16 @@ struct ExportContext {
     int z_direction{};
     int axis_placement{};
     int placement{};
+    int representation_context{};
+    int storey{};
+    std::vector<int> contained_products;
     std::size_t ordinal{};
     std::map<std::string, int, std::less<>> product_ids;
     std::vector<std::pair<std::string, std::string>> opening_host_links;
 
     explicit ExportContext(const IfcExchangeLimits& limits) : limits(limits), builder(limits) {
-        const auto person = builder.add("IFCPERSON", "$,$,'Vertex',$,$,$,$");
-        const auto organization = builder.add("IFCORGANIZATION", "$,'Private',$,$");
+        const auto person = builder.add("IFCPERSON", "$,$,'Vertex',$,$,$,$,$");
+        const auto organization = builder.add("IFCORGANIZATION", "$,'Private',$,$,$");
         const auto person_org = builder.add("IFCPERSONANDORGANIZATION",
                                             ref(person) + "," + ref(organization) + ",$");
         const auto application = builder.add("IFCAPPLICATION",
@@ -474,13 +480,120 @@ struct ExportContext {
         owner_history = builder.add("IFCOWNERHISTORY", ref(person_org) + "," + ref(application) +
             ",$,.ADDED.,$,$,$,0");
         const auto unit = builder.add("IFCSIUNIT", "* ,.LENGTHUNIT.,$,.METRE.");
-        builder.add("IFCUNITASSIGNMENT", "(" + ref(unit) + ")");
+        const auto units = builder.add("IFCUNITASSIGNMENT", "(" + ref(unit) + ")");
         origin = builder.add("IFCCARTESIANPOINT", "(0.,0.,0.)");
         z_direction = builder.add("IFCDIRECTION", "(0.,0.,1.)");
         axis_placement = builder.add("IFCAXIS2PLACEMENT3D", ref(origin) + ",$,$");
         placement = builder.add("IFCLOCALPLACEMENT", "$," + ref(axis_placement));
+        representation_context = builder.add("IFCGEOMETRICREPRESENTATIONCONTEXT",
+            "$,'Model',3,0.0000001," + ref(axis_placement) + ",$");
+        const auto project = builder.add("IFCPROJECT", root("project", "Vertex project") +
+            ",$,$,$,(" + ref(representation_context) + ")," + ref(units));
+        const auto site = builder.add("IFCSITE", root("site", "Default site") +
+            ",$," + ref(placement) + ",$,$,.ELEMENT.,$,$,$,$,$");
+        const auto building = builder.add("IFCBUILDING", root("building", "Default building") +
+            ",$," + ref(placement) + ",$,$,.ELEMENT.,$,$,$");
+        storey = builder.add("IFCBUILDINGSTOREY", root("storey", "Default storey") +
+            ",$," + ref(placement) + ",$,$,.ELEMENT.,0.");
+        aggregate(project, site, "project-site");
+        aggregate(site, building, "site-building");
+        aggregate(building, storey, "building-storey");
+    }
+
+    std::string root(std::string_view id, std::string_view name) {
+        return step_string(guid_for(id, ++ordinal), limits) + "," + ref(owner_history) +
+            "," + step_string(name, limits) + ",$";
+    }
+
+    void aggregate(int parent, int child, std::string_view id) {
+        builder.add("IFCRELAGGREGATES", root(id, "") + "," + ref(parent) + ",(" + ref(child) + ")");
     }
 };
+
+void retain_properties(const Entity& entity, int product_id, ExportContext& context,
+                       std::vector<IfcProjectDiagnostic>& diagnostics) {
+    const auto payload = entity.properties.dump(-1, ' ', true);
+    if (payload.size() > context.limits.max_string_bytes / 2) {
+        add_diagnostic(diagnostics, entity.id, entity.type, "vertex_properties_not_exported");
+        return;
+    }
+    const auto property = context.builder.add("IFCPROPERTYSINGLEVALUE",
+        "'Properties',$,IFCTEXT(" + step_string(payload, context.limits) + "),$");
+    const auto pset = context.builder.add("IFCPROPERTYSET",
+        context.root("properties:" + entity.id, "Pset_VertexExchange_v1") + ",(" + ref(property) + ")");
+    context.builder.add("IFCRELDEFINESBYPROPERTIES",
+        context.root("property-link:" + entity.id, "") + ",(" + ref(product_id) + ")," + ref(pset));
+}
+
+void export_native_reference(const Entity& entity, ExportContext& context,
+                             std::vector<IfcProjectDiagnostic>& diagnostics) {
+    const auto product = context.builder.add("IFCBUILDINGELEMENTPROXY",
+        context.root("reference:" + entity.id, entity.id) + "," + step_string(entity.type, context.limits) +
+        "," + ref(context.placement) + ",$,$,.NOTDEFINED.");
+    context.contained_products.push_back(product);
+    auto retained = entity;
+    // An imported reference already carries the original bounded native payload.
+    // Reuse it verbatim so repeated export/import cycles neither grow a recursive
+    // carrier envelope nor cross the retention limit for unchanged content.
+    const auto prior = entity.extensions.find("ifc_vertex_properties");
+    if (entity.type == "ifc_reference" && prior != entity.extensions.end() && prior->is_object()) {
+        retained.properties = *prior;
+    } else {
+        retained.properties = Json{{"native_entity", {{"id", entity.id}, {"type", entity.type},
+            {"required", entity.required}, {"properties", entity.properties}, {"extensions", entity.extensions}}}};
+    }
+    retain_properties(retained, product, context, diagnostics);
+    add_diagnostic(diagnostics, entity.id, entity.type, "native_reference_only");
+}
+
+void export_wall_construction(const Entity& entity, int product, ExportContext& context,
+                              std::vector<IfcProjectDiagnostic>& diagnostics) {
+    // The native model has occurrence layer stacks, not a shared wall-type catalog.
+    // Give each construction its own type rather than invent shared type identity.
+    const auto type = context.builder.add("IFCWALLTYPE",
+        context.root("wall-type:" + entity.id, entity.id + " construction") +
+        ",$,$,$,$,$,.NOTDEFINED.");
+    context.builder.add("IFCRELDEFINESBYTYPE",
+        context.root("wall-type-link:" + entity.id, "") + ",(" + ref(product) + ")," + ref(type));
+    const auto layers = entity.properties.contains("layers")
+        ? parse_wall_layers(entity.properties.at("layers"), entity.properties.at("thickness_m").get<double>())
+        : std::vector<WallLayer>{};
+    if (layers.empty()) {
+        if (entity.properties.contains("material_assignment")) {
+            const auto& assignment = entity.properties.at("material_assignment");
+            const auto material = context.builder.add("IFCMATERIAL",
+                step_string(assignment.at("material_id").get<std::string>(), context.limits) + "," +
+                step_string("Native catalog: " + assignment.at("catalog_id").get<std::string>(), context.limits) + ",$");
+            context.builder.add("IFCRELASSOCIATESMATERIAL",
+                context.root("wall-material:" + entity.id, "") + ",(" + ref(product) + "," + ref(type) + ")," + ref(material));
+        }
+        return;
+    }
+    if (entity.properties.contains("material_assignment"))
+        add_diagnostic(diagnostics, entity.id, entity.type, "wall_overall_material_retained_with_layers");
+    std::string layer_list;
+    for (const auto& layer : layers) {
+        std::string material = "$";
+        if (layer.material) {
+            const auto id = context.builder.add("IFCMATERIAL",
+                step_string(layer.material->material_id, context.limits) + "," +
+                step_string("Native catalog: " + layer.material->catalog_id, context.limits) + ",$");
+            material = ref(id);
+        }
+        const auto id = context.builder.add("IFCMATERIALLAYER", material + "," +
+            real_text(layer.thickness) + ",$," + step_string(layer.id, context.limits) + ",$,$,$");
+        if (!layer_list.empty()) layer_list += ',';
+        layer_list += ref(id);
+    }
+    const auto set = context.builder.add("IFCMATERIALLAYERSET", "(" + layer_list + ")," +
+        step_string(entity.id + " layers", context.limits) + ",$");
+    // Direct layer-set assignment describes construction without claiming a
+    // local material usage axis for the world-coordinate body representation.
+    context.builder.add("IFCRELASSOCIATESMATERIAL",
+        context.root("wall-material:" + entity.id, "") + ",(" + ref(product) + "," + ref(type) + ")," + ref(set));
+    add_diagnostic(diagnostics, entity.id, entity.type,
+                   "wall_layer_placement_not_exported");
+}
 
 void export_product(const DocumentSnapshot& document, const Entity& entity,
                     ExportContext& context, std::vector<IfcProjectDiagnostic>& diagnostics) {
@@ -499,15 +612,32 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
             return;
         }
         boundary = {*baseline};
-        product_type = "IFCWALLSTANDARDCASE";
+        product_type = "IFCWALL";
         local_elevation = entity.properties.value("elevation_m", 0.0);
         if (entity.properties.is_object()) {
             const auto thickness = entity.properties.value("thickness_m", 0.0);
             const auto height = entity.properties.value("height_m", 0.0);
-            if (!(thickness > kTolerance) || !(height > kTolerance))
+            const auto length = std::hypot(baseline->end.x - baseline->start.x,
+                                           baseline->end.y - baseline->start.y);
+            if (!std::isfinite(thickness) || !std::isfinite(height) ||
+                !(thickness > kTolerance) || !(height > kTolerance) || !(length > kTolerance)) {
                 add_diagnostic(diagnostics, entity.id, type, "wall_profile_metadata_missing");
-            else
-                add_diagnostic(diagnostics, entity.id, type, "wall_thickness_height_axis_only");
+                return;
+            }
+            if (std::abs(baseline->sweep_radians) > kTolerance ||
+                std::abs(entity.properties.value("slope_rise_m", 0.0)) > kTolerance) {
+                add_diagnostic(diagnostics, entity.id, type, "wall_body_not_representable");
+                return;
+            }
+            const Vec2 normal{-(baseline->end.y - baseline->start.y) / length * thickness / 2,
+                               (baseline->end.x - baseline->start.x) / length * thickness / 2};
+            const Vec2 a{baseline->start.x - normal.x, baseline->start.y - normal.y};
+            const Vec2 b{baseline->end.x - normal.x, baseline->end.y - normal.y};
+            const Vec2 c{baseline->end.x + normal.x, baseline->end.y + normal.y};
+            const Vec2 d{baseline->start.x + normal.x, baseline->start.y + normal.y};
+            boundary = {{a,b,0}, {b,c,0}, {c,d,0}, {d,a,0}};
+            depth = height;
+            use_solid = true;
         }
     } else if (type == "slab") {
         if (!entity.properties.is_object() || !entity.properties.contains("boundary")) {
@@ -597,6 +727,15 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
                 break;
             }
         }
+        // A void feature must not outlive an unsupported host body: IFC openings
+        // require a host relationship, so retain both as native references.
+        if (!std::isfinite(wall_height) || wall_height <= kTolerance ||
+            std::abs(host->second.properties.value("slope_rise_m", 0.0)) > kTolerance ||
+            !host->second.properties.contains("height_m") ||
+            !host->second.properties.contains("thickness_m")) {
+            add_diagnostic(diagnostics, entity.id, type, "opening_host_body_not_representable");
+            return;
+        }
         const auto length = std::hypot(baseline->end.x - baseline->start.x,
                                        baseline->end.y - baseline->start.y);
         if (!std::isfinite(offset) || !std::isfinite(width) || !std::isfinite(sill) ||
@@ -654,14 +793,13 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
         return;
     }
     closed = linear_closed;
-    if (product_type == "IFCWALLSTANDARDCASE" && closed)
-        add_diagnostic(diagnostics, entity.id, type, "wall_axis_closed");
     const auto polyline_points = [&] {
         std::vector<int> ids;
         ids.reserve(points.size());
         for (const auto point : points) {
             const auto id = context.builder.add("IFCCARTESIANPOINT",
-                "(" + real_text(point.x) + "," + real_text(point.y) + ",0.)");
+                "(" + real_text(point.x) + "," + real_text(point.y) +
+                (use_solid && closed ? ")" : ",0.)"));
             ids.push_back(id);
         }
         std::string args = "(";
@@ -681,11 +819,10 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
             ref(profile) + "," + ref(context.axis_placement) + "," + ref(context.z_direction) +
             "," + real_text(depth));
         shape = context.builder.add("IFCSHAPEREPRESENTATION",
-            "$,'Body','SweptSolid',(" + ref(solid) + ")");
+            ref(context.representation_context) + ",'Body','SweptSolid',(" + ref(solid) + ")");
     } else {
-        const auto identifier = product_type == "IFCWALLSTANDARDCASE" ? "Axis" : "Footprint";
         shape = context.builder.add("IFCSHAPEREPRESENTATION",
-            "$,'" + std::string(identifier) + "','Curve2D',(" + ref(polyline_points) + ")");
+            ref(context.representation_context) + ",'Footprint','Curve3D',(" + ref(polyline_points) + ")");
     }
     const auto product_shape = context.builder.add("IFCPRODUCTDEFINITIONSHAPE",
         "$,$,(" + ref(shape) + ")");
@@ -707,10 +844,10 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
         placement = ref(local);
     }
     int product_id{};
-    if (product_type == "IFCWALLSTANDARDCASE") {
+    if (product_type == "IFCWALL") {
         product_id = context.builder.add(product_type,
             global_id + "," + ref(context.owner_history) + "," + name + "," +
-            description + ",$," + placement + "," + ref(product_shape) + ",$");
+            description + ",$," + placement + "," + ref(product_shape) + ",$,.NOTDEFINED.");
     } else if (product_type == "IFCSLAB") {
         product_id = context.builder.add(product_type,
             global_id + "," + ref(context.owner_history) + "," + name + "," +
@@ -722,25 +859,13 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
     } else {
         product_id = context.builder.add(product_type,
             global_id + "," + ref(context.owner_history) + "," + name + "," +
-            description + ",$," + placement + "," + ref(product_shape) + ",$");
+            description + ",$," + placement + "," + ref(product_shape) + ",$,.NOTDEFINED.");
     }
     if (product_id > 0) context.product_ids[entity.id] = product_id;
+    if (type != "opening") context.contained_products.push_back(product_id);
+    if (type == "wall") export_wall_construction(entity, product_id, context, diagnostics);
     if (type == "wall" || type == "slab" || type == "opening") {
-        // Standard IFC property containers retain the native payload without
-        // presenting it as standardized IFC material/assembly semantics.
-        const auto payload = entity.properties.dump(-1, ' ', true);
-        if (payload.size() > context.limits.max_string_bytes / 2) {
-            add_diagnostic(diagnostics, entity.id, type, "vertex_properties_not_exported");
-        } else {
-            const auto property = context.builder.add("IFCPROPERTYSINGLEVALUE",
-                "'Properties',$,IFCTEXT(" + step_string(payload, context.limits) + "),$");
-            const auto pset = context.builder.add("IFCPROPERTYSET",
-                step_string(guid_for("properties:" + entity.id, ++context.ordinal), context.limits) + "," +
-                ref(context.owner_history) + ",'Pset_VertexExchange_v1',$,(" + ref(property) + ")");
-            context.builder.add("IFCRELDEFINESBYPROPERTIES",
-                step_string(guid_for("property-link:" + entity.id, ++context.ordinal), context.limits) + "," +
-                ref(context.owner_history) + ",$,$,(" + ref(product_id) + ")," + ref(pset));
-        }
+        retain_properties(entity, product_id, context, diagnostics);
     }
 }
 
@@ -1018,6 +1143,35 @@ std::optional<double> positive_property(const Json& metadata, const char* key) {
     return value;
 }
 
+std::optional<Segment> reconstructed_wall_axis(const GeometryResult& geometry, const Json& metadata) {
+    if (!geometry.boundary) return std::nullopt;
+    // Keep compatibility with the older axis-only exchange subset.
+    if (geometry.boundary->size() == 1 && !geometry.depth)
+        return geometry.boundary->front();
+    const auto thickness = positive_property(metadata, "thickness_m");
+    const auto height = positive_property(metadata, "height_m");
+    if (!thickness || !height || !geometry.depth || geometry.boundary->size() != 4 ||
+        std::abs(*geometry.depth - *height) > kTolerance || !metadata.contains("baseline")) return std::nullopt;
+    auto axis = read_segment(metadata.at("baseline"));
+    if (!axis || std::abs(axis->sweep_radians) > kTolerance ||
+        same_point(axis->start, axis->end)) return std::nullopt;
+    // Native payload coordinates are product-local. Apply only the placement
+    // translation accepted by the geometry decoder, then check all corners.
+    axis->start.x += geometry.translation.x; axis->end.x += geometry.translation.x;
+    axis->start.y += geometry.translation.y; axis->end.y += geometry.translation.y;
+    const auto length = std::hypot(axis->end.x - axis->start.x, axis->end.y - axis->start.y);
+    const Vec2 n{-(axis->end.y - axis->start.y) / length * *thickness / 2,
+                 (axis->end.x - axis->start.x) / length * *thickness / 2};
+    const Vec2 corners[] = {{axis->start.x - n.x, axis->start.y - n.y},
+                           {axis->end.x - n.x, axis->end.y - n.y},
+                           {axis->end.x + n.x, axis->end.y + n.y},
+                           {axis->start.x + n.x, axis->start.y + n.y}};
+    for (std::size_t i = 0; i < 4; ++i)
+        if (!same_point((*geometry.boundary)[i].start, corners[i]) ||
+            !same_point((*geometry.boundary)[i].end, corners[(i + 1) % 4])) return std::nullopt;
+    return axis;
+}
+
 bool metre_units(const ParsedStep& parsed, std::size_t& count, const IfcExchangeLimits& limits) {
     bool found = false;
     for (const auto& record : parsed.records) {
@@ -1040,8 +1194,23 @@ IfcProjectExportResult export_project_ifc(const DocumentSnapshot& document,
     IfcProjectExportResult result;
     ExportContext context(limits);
     for (const auto& [id, entity] : document.entities()) {
-        (void)id;
         export_product(document, entity, context, result.diagnostics);
+        if (!context.product_ids.contains(id) &&
+            (entity.required || (!result.diagnostics.empty() && result.diagnostics.back().source_id == id) ||
+             entity.type == "wall" || entity.type == "slab" ||
+             entity.type == "opening" || entity.type == "roof" || entity.type == "room" ||
+             entity.type == "ifc_reference" ||
+             entity.type == "building" || entity.type == "floor" || entity.type == "property"))
+            export_native_reference(entity, context, result.diagnostics);
+    }
+    if (!context.contained_products.empty()) {
+        std::string products;
+        for (const auto id : context.contained_products) {
+            if (!products.empty()) products += ',';
+            products += ref(id);
+        }
+        context.builder.add("IFCRELCONTAINEDINSPATIALSTRUCTURE",
+            context.root("containment", "") + ",(" + products + ")," + ref(context.storey));
     }
     for (const auto& [opening_id, host_id] : context.opening_host_links) {
         const auto opening = context.product_ids.find(opening_id);
@@ -1082,6 +1251,14 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
             if (!geometry.boundary) {
                 add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
                               "product_geometry_missing");
+                if (const auto metadata = metadata_by_id.find(record.id); metadata != metadata_by_id.end()) {
+                    result.entities.push_back(Entity{"ifc-" + std::to_string(record.id), "ifc_reference",
+                        Json{{"ifc_name", product_string(record, 2, argument_count, limits)},
+                             {"ifc_type", record.type}}, false,
+                        Json{{"ifc_source", {{"record_id", record.id}, {"record_type", record.type},
+                                             {"arguments", record.args}}},
+                             {"ifc_vertex_properties", metadata->second}}});
+                }
                 continue;
             }
             const auto name = product_string(record, 2, argument_count, limits);
@@ -1107,15 +1284,32 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
             std::string entity_type = "boundary";
             const auto metadata_entry = metadata_by_id.find(record.id);
             const auto metadata = metadata_entry == metadata_by_id.end() ? Json::object() : metadata_entry->second;
-            if (supported_units && !geometry.rotated && geometry.reliable && classification == "ifc_wall_axis" && geometry.boundary->size() == 1 &&
-                !same_point(geometry.boundary->front().start, geometry.boundary->front().end)) {
+            if (supported_units && !geometry.rotated && geometry.reliable && classification == "ifc_wall_axis") {
                 const auto thickness = positive_property(metadata, "thickness_m");
                 const auto height = positive_property(metadata, "height_m");
-                if (thickness && height) {
+                const auto axis = reconstructed_wall_axis(geometry, metadata);
+                if (thickness && height && axis && !same_point(axis->start, axis->end)) {
                     entity_type = "wall";
-                    properties["baseline"] = properties["boundary"][0];
+                    properties["baseline"] = boundary_json(Boundary{*axis})[0];
                     properties["thickness_m"] = *thickness;
                     properties["height_m"] = *height;
+                    if (metadata.contains("layers")) {
+                        try {
+                            auto layers = parse_wall_layers(metadata.at("layers"), *thickness);
+                            bool retained_materials = false;
+                            for (auto& layer : layers) {
+                                retained_materials = retained_materials || layer.material.has_value();
+                                layer.material.reset();
+                            }
+                            properties["layers"] = wall_layers_json(layers);
+                            if (retained_materials)
+                                add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
+                                               "wall_material_references_retained");
+                        } catch (const std::exception&) {
+                            add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
+                                           "wall_layers_not_reconstructed");
+                        }
+                    }
                 } else {
                     add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
                                    "wall_dimensions_not_reconstructed");

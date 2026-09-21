@@ -38,6 +38,11 @@ unsupported entity types, non-finite values, incomplete diagnostics, and native
 document-graph validation failures before creating an ordinary atomic document
 command. Worker-supplied data cannot assert isolation; the committed source
 receipt records isolation only after the broker attests every sandbox control.
+The IFC adapter admits the bounded `ifc_reference` type as inert retained
+metadata for required source semantics that cannot be reconstructed faithfully;
+it is not assigned to a drawing floor or layer. The same transaction retains
+the exact IFC source asset, so reference-only content survives save/reopen and
+later re-export instead of disappearing.
 Malformed input, worker failure, timeout, or invalid output leaves the document
 revision, entities, assets, and undo history unchanged.
 

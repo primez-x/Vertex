@@ -1399,7 +1399,7 @@
       "source_urls": [],
       "evidence_status": "documented",
       "implementation_status": "in_progress",
-      "acceptance": "The catalog contains at least 300 distinct named symbol families and at least 600 deterministic entries across every required category; size variants do not count as separate families. Each entry has dimensional metadata, a validated preview, an anchor, and scale limits; each placed instance supports arbitrary rotation and visibility; persisted annotation state pins the catalog revision and any changed definitions require an explicit migration; representative residential and light-commercial symbols can be resized, placed, saved/reopened, printed, and exported without geometry or visual loss.",
+      "acceptance": "The visible placement library contains at least 300 distinct production-quality SVG components across every required category; scaled, skewed, relabeled, or compatibility variants do not count toward that total. Each component has dimensional metadata or an explicitly editable default size, a validated preview, an anchor, and scale limits; each placed instance supports movement, resizing, arbitrary rotation, visibility, and stable layer assignment; persisted annotation state pins the catalog revision and changed artwork requires an explicit migration; representative residential and light-commercial symbols can be dragged or clicked into a drawing, edited, saved/reopened, printed, and exported without geometry or visual loss. Legacy definitions may remain hidden solely for existing-project compatibility.",
       "package": 6,
       "blocker": null,
       "implementation_sources": [
@@ -1412,13 +1412,17 @@
         "tests/test_cli.py",
         "tests/annotation_entity_codec_tests.cpp",
         "tests/dxf_project_exchange_tests.cpp",
+        "assets/symbols/architectural_v2/index.json",
+        "assets/symbols/architectural_v2/SOURCE.md",
+        "scripts/generate_architectural_svg_catalog.py",
+        "tests/symbol_svg_desktop_tests.cpp",
         "scripts/validate_symbol_catalog.py",
         "tests/test_symbol_catalog_manifest.py",
         "docs/annotation-catalog.md",
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Source review correction (2026-09-20): Catalog quantity exists, but distinct artwork quality and user-level placement/edit/print usability have not passed the requirement. Deterministic catalog generation currently produces 468 scaled symbol variants across plumbing, furniture, storage, fixtures, appliances, accessibility, lighting, doors/windows, structural/site, and light-commercial equipment with physical-footprint validation, distinguishable family-specific vector motifs, placement metadata, and previews; typed Document persistence pins catalog revision 1 and fails closed on unsupported revisions, shared vector preview rendering, catalog-backed authoring, case-insensitive category/query filtering, family aliases that resolve to explicit nominal variants, inspector placement/visibility edits, a multi-family resize/rotation geometry matrix, resized DXF output coverage, and an offline vertex-cli symbols manifest for family/category/dimension/preview inspection are integrated. A production-complete library still requires final artwork review, explicit catalog migration coverage, and clean production save/print/export visual qualification. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "The user-supplied Vertex Architectural SVG Library v2 is preserved byte-for-byte: 320 SVG components in 25 categories plus the original indexes and README. Vertex embeds and renders the actual SVG documents for searchable thumbnails, canvas placement, shared print/export scenes, and save/reopen. The visible placement palette contains only these 320 components; 809 older procedural definitions remain hidden in the underlying compatibility catalog so existing projects retain stable IDs. Automated checks validate the archive identity, indexed paths, SVG metadata, category/search behavior, visible count, detailed sofa rendering, physical-footprint mapping, persistence, and all-assets renderability. Final human artwork review, explicit catalog artwork migration coverage, real drag gesture qualification, and production print/export visual qualification remain open."
     },
     {
       "id": "APX-TRACE-001",
@@ -2215,9 +2219,11 @@
         "tests/sheet_view_entity_codec_tests.cpp",
         "docs/sheets-views.md",
         "scripts/generate_workflow_acceptance_evidence.py",
-        "tests/test_workflow_acceptance_evidence.py"
+        "tests/test_workflow_acceptance_evidence.py",
+        "src/desktop/plan_canvas.cpp",
+        "tests/boundary_canvas_tests.cpp"
       ],
-      "implementation_note": "Source review correction (2026-09-20): Section annotations, detail overlays, effective detail levels and render/print fixtures remain incomplete. Section presentation settings are validated and persist through the typed Document entity; analytical solid-plane section edges and persisted section cut-depth consumption are implemented for supported objects, and the desktop view settings command edits cut/far depth, line widths, hatching and detail through Document history. A conservative object-level BRep-bounds far-depth filter culls solids wholly beyond the selected limit, while crossing solids are clipped with an exact OCCT half-space before projection. Enabled section projections now carry the persisted hatch pattern and scale into the retained canvas and draft output renderer, with fills limited to ordered closed paths; persisted cut and projection widths now become fixed paper-space strokes for section and elevation output. Complete section annotation/detail overlays, sheet layout, print fixtures, and production qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Persisted section text, detail-line, and explicit-endpoint dimension overlays now participate in validated Document history, detail-level visibility, save/reopen, interactive rendering, and the shared draft-output scene. Coarse detail suppresses hatching; section/elevation projection strokes use paper-space widths, and dimension end ticks retain a fixed 2.5 mm printed length across device DPI and viewport model scale. Analytical solid-plane section edges, cut/far-depth clipping, hatch settings, and overlay presentation are covered by focused Debug/Release fixtures. Associative object/edge dimension references, production visual comparison, physical-print calibration, and full qualification remain open."
     },
     {
       "id": "ARCH-SCH-001",
@@ -2756,9 +2762,13 @@
         "src/core/ifc_project_exchange.cpp",
         "tests/ifc_project_exchange_tests.cpp",
         "scripts/generate_workflow_acceptance_evidence.py",
-        "tests/test_workflow_acceptance_evidence.py"
+        "tests/test_workflow_acceptance_evidence.py",
+        "include/sketch/project_import_worker.hpp",
+        "src/desktop/main_window.cpp",
+        "tests/ifc_desktop_workflow_tests.cpp",
+        "docs/import-worker-security.md"
       ],
-      "implementation_note": "Source review correction (2026-09-20): Editable reconstruction and desktop import fidelity are incomplete, worker isolation is absent, and Reference View qualification remains open. A bounded IFC4 STEP project mapper now exports linear boundaries, wall axes, hosted opening products, wall void relationships, slab footprints and optional swept solids, and retains bounded native properties in a standard Pset_VertexExchange_v1 container. Import reconstructs typed straight walls, closed slabs, and rectangular hosted openings when dimensions, translation-only placement, metre units, and unambiguous void relationships are reliable; otherwise it returns identifiable boundary candidates with source-retention diagnostics. Opening assembly parts, worker isolation, Reference View conformance, full standardized types/properties/materials/relationship reconstruction, desktop source retention, and representative cross-application fixtures remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "The bounded IFC4 STEP path now exports project/site/building/storey hierarchy, spatial containment, typed wall bodies, hosted openings and void relationships, slabs, elevations, homogeneous materials, ordered wall layer sets, and bounded native property metadata. Import reconstructs reliable typed walls, slabs, and hosted openings. Required native semantics that cannot be represented faithfully round-trip as inert ifc_reference records with the complete bounded native payload; the desktop accepts these without floor/layer assignment, retains exact source bytes, and preserves both through save/reopen and re-export. IFC parsing runs through the AppContainer import worker and publishes mapped objects plus the source receipt as one undoable transaction. The fidelity report explicitly flags missing occurrence-relative wall layer placement. Reference View conformance, complete standardized semantic reconstruction, external-application interoperability fixtures, and installed-runtime qualification remain open."
     },
     {
       "id": "IO-DXF-001",

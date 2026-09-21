@@ -312,6 +312,21 @@ int main(int argc, char** argv) {
         const auto ifc_result = run_project_codec(QByteArray::fromStdString(ifc), sketch::ProjectImportKind::ifc, true);
         require(ifc_result.entities.size() == 1 && ifc_result.entities[0].type == "wall",
                 "IFC wall must cross worker as editable semantic geometry");
+        sketch::Entity retained{"ifc-42", "ifc_reference",
+            {{"ifc_name", "Unsupported native object"}, {"ifc_type", "IFCBUILDINGELEMENTPROXY"}}, false,
+            {{"ifc_source", {{"record_id", 42}, {"record_type", "IFCBUILDINGELEMENTPROXY"},
+                {"arguments", "'retained'"}}}, {"ifc_vertex_properties", {{"native_entity", {{"id", "roof-1"}}}}}}};
+        sketch::ProjectImportCandidate retained_candidate;
+        retained_candidate.kind = sketch::ProjectImportKind::ifc;
+        retained_candidate.entities = {retained};
+        retained_candidate.source_retention_required = true;
+        auto retained_report = successfulReply();
+        retained_report.output = sketch::encode_project_import_candidate(retained_candidate);
+        const auto retained_result = sketch::decode_project_import_candidate(
+            retained_report, sketch::ProjectImportKind::ifc);
+        require(retained_result.entities == std::vector<sketch::Entity>{retained} &&
+                retained_result.source_retention_required && retained_result.isolation_controls_attested,
+                "unsupported IFC references must cross the isolated candidate boundary without semantic loss");
         (void)run_project_codec("invalid", sketch::ProjectImportKind::dxf, false);
         (void)run_project_codec("invalid", sketch::ProjectImportKind::ifc, false);
         const auto run_codec = [&](const QByteArray& input, const QString& format, int page, bool success) {

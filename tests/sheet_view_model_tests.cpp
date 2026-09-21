@@ -204,7 +204,7 @@ void serialization() {
     }
     auto invalid = saved; invalid["views"][0]["direction"].push_back(0);
     rejects([&] { (void)sketch::SheetViewModel::from_json(invalid); });
-    for (const auto& version : {nlohmann::json(3), nlohmann::json(2.0), nlohmann::json("2")}) {
+    for (const auto& version : {nlohmann::json(4), nlohmann::json(2.0), nlohmann::json("2")}) {
         invalid = saved; invalid["version"] = version;
         rejects([&] { (void)sketch::SheetViewModel::from_json(invalid); });
     }
@@ -249,11 +249,41 @@ void invalid_values() {
     rejects([&] { (void)model.with_view(view); });
     require(model.to_json() == saved, "validation failures preserve snapshot");
 }
+void section_overlays() {
+    auto model = fixture();
+    auto view = model.views().back();
+    sketch::SectionOverlay note; note.id = "note"; note.text = "Section note";
+    sketch::SectionOverlay line; line.id = "line"; line.kind = sketch::SectionOverlayKind::detail_line;
+    line.minimum_detail = sketch::ViewDetail::fine;
+    auto dimension = line; dimension.id = "dimension"; dimension.kind = sketch::SectionOverlayKind::dimension;
+    dimension.minimum_detail = sketch::ViewDetail::coarse;
+    view.overlays = {note, line, dimension};
+    model = model.with_view(view);
+    require(sketch::SheetViewModel::from_json(model.to_json()).to_json() == model.to_json(), "overlay round trip");
+    require(!sketch::section_overlay_visible(line, sketch::ViewDetail::medium) &&
+        sketch::section_overlay_visible(line, sketch::ViewDetail::fine), "detail controls inclusion");
+    auto legacy = model.to_json(); legacy["version"] = 2;
+    for (auto& v : legacy["views"]) v.erase("overlays");
+    require(sketch::SheetViewModel::from_json(legacy).views().back().overlays.empty(), "v2 upgrade");
+    const auto invalid = [&](auto edit) {
+        auto candidate = view; edit(candidate); rejects([&] { (void)model.with_view(candidate); });
+    };
+    invalid([](auto& v) { v.overlays.push_back(v.overlays[0]); });
+    invalid([](auto& v) { v.kind = sketch::CoordinatedViewKind::plan; });
+    invalid([](auto& v) { v.overlays[0].text = " "; });
+    invalid([](auto& v) { v.overlays[1].end_m = v.overlays[1].start_m; });
+    invalid([](auto& v) { v.overlays[0].start_m[0] = std::numeric_limits<double>::infinity(); });
+    invalid([](auto& v) { v.overlays[0].object_id = "missing"; });
+    invalid([](auto& v) { v.overlays[0].text_height_mm = 21; });
+    invalid([](auto& v) { v.overlays.resize(1001); });
+    auto malformed = model.to_json(); malformed["views"][2]["overlays"][0]["start_m"].push_back(0);
+    rejects([&] { (void)sketch::SheetViewModel::from_json(malformed); });
+}
 } // namespace
 int main() {
     sketch::testing::noninteractive_errors();
     try {
-        coordination_and_isolation(); sheet_lifecycle(); serialization(); invalid_values();
+        coordination_and_isolation(); sheet_lifecycle(); serialization(); invalid_values(); section_overlays();
         std::cout << "sheet/view model tests passed\n";
         return 0;
     } catch (const std::exception& error) {

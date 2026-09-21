@@ -138,7 +138,9 @@ if(MSVC)
 endif()
 add_library(sketch_ifc_project_exchange src/core/ifc_project_exchange.cpp)
 target_include_directories(sketch_ifc_project_exchange PUBLIC include)
-target_link_libraries(sketch_ifc_project_exchange PUBLIC sketch_document sketch_precision)
+target_link_libraries(sketch_ifc_project_exchange
+  PUBLIC sketch_document sketch_precision
+  PRIVATE sketch_wall_semantics)
 if(MSVC)
   target_compile_options(sketch_ifc_project_exchange PRIVATE /W4 /permissive- /utf-8)
 endif()
