@@ -101,8 +101,9 @@ def validate_manifest(manifest):
         if not isinstance(category_name, str) or not category_name:
             errors.append(label + ".category: nonempty string required")
             category_name = ""
-        if family and identifier and not identifier.startswith(family + "-"):
-            errors.append(label + ": id must begin with family name")
+        if (family and identifier and identifier != family and
+                not identifier.startswith(family + "-")):
+            errors.append(label + ": id must match its family or begin with the family name")
         if family and category_name:
             computed_categories[category_name] = computed_categories.get(category_name, 0) + 1
             family_record = computed_families.setdefault(

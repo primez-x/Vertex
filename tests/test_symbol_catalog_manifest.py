@@ -75,6 +75,21 @@ class SymbolCatalogManifestTests(unittest.TestCase):
         self.assertTrue(report["valid"], report["errors"])
         self.assertEqual(report["entry_count"], 600)
 
+    def test_single_variant_id_may_equal_its_family(self):
+        manifest = self.make_manifest()
+        entry = next(item for item in manifest["entries"]
+                     if item["family"].startswith("family-"))
+        entry["id"] = entry["family"]
+        manifest["entries"].sort(key=lambda item: item["id"])
+        report = validation.validate_manifest(manifest)
+        self.assertTrue(report["valid"], report["errors"])
+
+        entry["id"] = "unrelated-identity"
+        manifest["entries"].sort(key=lambda item: item["id"])
+        report = validation.validate_manifest(manifest)
+        self.assertFalse(report["valid"])
+        self.assertTrue(any("match its family" in error for error in report["errors"]))
+
     def test_missing_category_and_representative_are_rejected(self):
         manifest = self.make_manifest()
         manifest["category_counts"].pop("commercial")
