@@ -29,6 +29,18 @@ does not publish assets or change document history. The deadline is 30 seconds
 and the worker Job Object memory ceiling is 512 MiB. Oversized raster images
 are rejected; PDF pages are rendered within the dimension ceiling.
 
+Desktop DXF and IFC imports use the same broker and no longer invoke the
+transport parsers in the desktop process. The worker accepts only fixed `dxf 0`
+or `ifc 0` modes, parses the bounded source inside AppContainer, and returns a
+versioned `PSIP0001` candidate graph. The desktop rejects duplicate keys and
+identities, excessive depth/count/bytes, foreign parent or layer references,
+unsupported entity types, non-finite values, incomplete diagnostics, and native
+document-graph validation failures before creating an ordinary atomic document
+command. Worker-supplied data cannot assert isolation; the committed source
+receipt records isolation only after the broker attests every sandbox control.
+Malformed input, worker failure, timeout, or invalid output leaves the document
+revision, entities, assets, and undo history unchanged.
+
 The runtime inventory entry points include the worker so its Qt Core, Gui,
 PDF and transitive DLL dependencies are packaged. The installed layout must
 keep `bin` and its sibling `plugins` directory read-only to the caller, and
@@ -61,7 +73,10 @@ to start a hidden PowerShell host outside the Codex parent Job Object and record
 binary hashes, host identity/job membership, process results, bounded output,
 and termination. Current Debug and Release captures pass live AppContainer echo,
 watchdog termination, output-limit rejection, and malformed-image launch-error
-preservation. The broker supplies required `LOCALAPPDATA`, `TEMP`, and `TMP`
+preservation. The runner also stages a read-only local worker runtime with
+explicit AppContainer read/execute access and executes the complete desktop DXF
+and IFC import workflows, including malformed-input project-survival checks.
+The broker supplies required `LOCALAPPDATA`, `TEMP`, and `TMP`
 values from its ACL-protected per-job directory; it does not expose the caller's
 profile. The runner and its exact evidence boundary are documented in
 `scripts/test-import-worker-independent.md`. These developer-host captures do

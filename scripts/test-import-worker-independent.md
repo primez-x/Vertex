@@ -21,14 +21,14 @@ in `capture_failure`; capture I/O errors receive a distinct `*_capture_failed`
 code. Truncated output cannot count as a passing fixture. The parent has a
 150-second deadline and
 retains the independent process handle to terminate its process tree on failure.
-Both fixtures run even when the worker fixture fails, so their evidence remains
+All four fixtures run even when an earlier fixture fails, so their evidence remains
 separate. PowerShell, fixture/probe/codec hashes, before/after binary timestamps
 and sizes, process identity, Job Object membership, exit codes, timeout flags,
 stdout/stderr hashes, and confirmed host exit are recorded beneath a new
 `artifacts/import-worker-independent/<configuration>-<uuid>/` directory.
 `launcher.json` records the launch; `result.json` records the fixtures.
 
-Exit zero requires a job-free host, two successful fixtures, stable binary
+Exit zero requires a job-free host, four successful fixtures, stable binary
 provenance, and confirmed process termination. Exit 77 from a fixture remains a
 skip and causes runner failure. A missing result, launch failure, changed binary,
 timeout, or nonzero fixture exit also causes failure. Keep the output directory
@@ -58,7 +58,12 @@ protected module directory for all cases, and treat pipe closure as input EOF.
 
 The corrected job-free Debug and Release captures pass echo, live deadline
 termination, oversized-output rejection, and malformed-image launch-error
-preservation. Assistance continues to pass while logging trusted-reference
+preservation. The runner creates a fixture-local read-only runtime containing the
+bundled worker and its fixed Qt dependencies, grants the worker AppContainer
+read/execute access, and runs the desktop DXF and IFC entry points from that
+runtime. Those workflows verify atomic insertion, broker-derived isolation
+receipts, source retention, undo/redo, save/reopen behavior, and unchanged
+projects after malformed input. Assistance continues to pass while logging trusted-reference
 fallback. The raw worker JSON records observed controls separately from test
 success: network denial is a check for absent network-capability SIDs, and
 parent-exit termination is a check of the kill-on-close job flag. These are not

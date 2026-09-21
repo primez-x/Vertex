@@ -11,6 +11,12 @@
 #include <algorithm>
 #include <map>
 #include <stdexcept>
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <Windows.h>
+#endif
 
 namespace {
 void require(bool value, const char* message) {
@@ -27,6 +33,13 @@ int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QApplication application(argc, argv);
     try {
+#ifdef _WIN32
+        BOOL in_job = FALSE;
+        if (!IsProcessInJob(GetCurrentProcess(), nullptr, &in_job) || in_job != FALSE) {
+            std::cout << "IFC desktop worker fixture skipped: host process is in a parent job\n";
+            return 77;
+        }
+#endif
         using namespace sketch;
         using namespace sketch::desktop;
         QTemporaryDir temporary;
@@ -64,7 +77,9 @@ int main(int argc, char** argv) {
         MainWindow destination;
         const auto initial = destination.document().snapshot();
         const auto before = destination.document().revision();
-        require(destination.importIfc(path), "native project must import IFC");
+        if (!destination.importIfc(path))
+            throw std::runtime_error(
+                "native project must import IFC: " + destination.lastError().toStdString());
         require(destination.document().revision() == before + 1,
                 "IFC import must be one document revision");
         const auto snapshot = destination.document().snapshot();
@@ -87,6 +102,8 @@ int main(int argc, char** argv) {
                 retained_source = true;
                 const auto asset_id = entity.properties.value("asset_id", "");
                 require(snapshot.assets().contains(asset_id), "IFC source asset must be retained");
+                require(entity.properties.value("isolated_import", false),
+                        "IFC source receipt must attest isolated worker parsing");
                 const auto& asset = snapshot.assets().at(asset_id);
                 require(QByteArray(reinterpret_cast<const char*>(asset.bytes.data()),
                                   static_cast<qsizetype>(asset.bytes.size())) == raw,

@@ -1,4 +1,6 @@
 #include "reference_import.hpp"
+#include "sketch/project_import_worker.hpp"
+#include "sketch/ifc_project_exchange.hpp"
 #include "support/noninteractive_errors.hpp"
 #include <QCoreApplication>
 #include <QGuiApplication>
@@ -161,6 +163,157 @@ int main(int argc, char** argv) {
         // Codec/protocol checks use generated fixtures in a direct child. These
         // do not claim AppContainer execution or production sandbox acceptance.
         require(argc == 2, "worker codec tests require the built worker path");
+        const auto run_project_codec = [&](const QByteArray& input, sketch::ProjectImportKind kind,
+                                           bool success) {
+            QProcess process;
+            process.start(QString::fromLocal8Bit(argv[1]),
+                {QString::fromLatin1(sketch::project_import_kind_name(kind)), "0"});
+            require(process.waitForStarted(5000), "project codec worker must start");
+            require(process.write(input) == input.size(), "project input must be queued");
+            process.closeWriteChannel();
+            if (!process.waitForFinished(10000)) {
+                process.kill(); process.waitForFinished(5000);
+                throw std::runtime_error("project codec worker exceeded deadline");
+            }
+            const auto bytes = process.readAllStandardOutput();
+            if (!success) {
+                require(process.exitCode() != 0 && bytes.isEmpty(), "malformed project must publish no candidate");
+                return sketch::ProjectImportCandidate{};
+            }
+            require(process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0,
+                    "project worker must decode supported fixture");
+            auto reply = successfulReply();
+            reply.output.resize(static_cast<std::size_t>(bytes.size()));
+            std::memcpy(reply.output.data(), bytes.constData(), reply.output.size());
+            const auto source = std::span(reinterpret_cast<const std::byte*>(input.constData()),
+                                          static_cast<std::size_t>(input.size()));
+            int project_calls = 0;
+            const auto broker = [&](const sketch::WindowsImportWorkerOptions& options) {
+                ++project_calls;
+                require(options.arguments == std::vector<std::wstring>{
+                    kind == sketch::ProjectImportKind::dxf ? L"dxf" : L"ifc", L"0"} &&
+                    options.input.size() == source.size() && options.max_output_bytes == sketch::project_import_output_limit &&
+                    options.timeout_ms == 30000 && options.max_active_processes == 1 && options.proj_offline_required,
+                    "project request must have fixed kind and bounded broker policy");
+                return reply;
+            };
+            const auto result = sketch::import_project_in_worker(source, kind, {}, broker);
+            require(project_calls == 1 && result.kind == kind && result.isolation_controls_attested,
+                    "project response must retain matching kind and broker attestation");
+            const auto good = reply;
+            for (const auto status : {sketch::WindowsImportWorkerStatus::timed_out,
+                                      sketch::WindowsImportWorkerStatus::failed,
+                                      sketch::WindowsImportWorkerStatus::launch_failed}) {
+                reply = good; reply.status = status;
+                rejects([&] { (void)sketch::import_project_in_worker(source, kind, {}, broker); });
+            }
+            reply = good; reply.network_denial_verified = false;
+            rejects([&] { (void)sketch::import_project_in_worker(source, kind, {}, broker); });
+            reply = good; reply.output.pop_back();
+            rejects([&] { (void)sketch::decode_project_import_candidate(reply, kind); });
+            reply = good;
+            rejects([&] { (void)sketch::decode_project_import_candidate(reply,
+                kind == sketch::ProjectImportKind::dxf ? sketch::ProjectImportKind::ifc : sketch::ProjectImportKind::dxf); });
+            auto json = nlohmann::json::parse(bytes.constData(), bytes.constData() + bytes.size());
+            require(!json.contains("isolation_controls_attested"), "worker cannot assert broker attestation");
+            const auto set_wire = [&](const auto& value) {
+                const auto wire = value.dump();
+                reply = good; reply.output.resize(wire.size());
+                std::memcpy(reply.output.data(), wire.data(), wire.size());
+            };
+            auto invalid = json; invalid["entities"][0]["type"] = "reference_asset";
+            set_wire(invalid);
+            rejects([&] { (void)sketch::decode_project_import_candidate(reply, kind); });
+            if (kind == sketch::ProjectImportKind::dxf) {
+                invalid = json;
+                invalid["entities"][0]["properties"]["boundary"] = nlohmann::json::array();
+                set_wire(invalid);
+                rejects([&] { (void)sketch::decode_project_import_candidate(reply, kind); });
+                invalid = json;
+                auto& segment = invalid["entities"][0]["properties"]["boundary"][0];
+                segment["end"] = segment["start"];
+                set_wire(invalid);
+                rejects([&] { (void)sketch::decode_project_import_candidate(reply, kind); });
+                invalid = json;
+                const auto repeated = invalid["entities"][0]["properties"]["boundary"][0];
+                invalid["entities"][0]["properties"]["boundary"] = nlohmann::json::array();
+                for (int index = 0; index < 2048; ++index)
+                    invalid["entities"][0]["properties"]["boundary"].push_back(repeated);
+                set_wire(invalid);
+                rejects([&] { (void)sketch::decode_project_import_candidate(reply, kind); });
+            } else {
+                invalid = json;
+                invalid["entities"][0]["properties"].erase("baseline");
+                set_wire(invalid);
+                rejects([&] { (void)sketch::decode_project_import_candidate(reply, kind); });
+                invalid = json;
+                invalid["entities"][0]["properties"]["thickness_m"] = -0.2;
+                set_wire(invalid);
+                rejects([&] { (void)sketch::decode_project_import_candidate(reply, kind); });
+                invalid = json;
+                invalid["entities"][0]["properties"]["slope_rise_m"] = -5.0;
+                set_wire(invalid);
+                rejects([&] { (void)sketch::decode_project_import_candidate(reply, kind); });
+                invalid = json;
+                invalid["entities"].push_back({
+                    {"id", "unhosted-opening"}, {"type", "opening"},
+                    {"properties", {{"wall_id", "missing-wall"}, {"offset_m", 0.2},
+                        {"width_m", 0.9}, {"sill_m", 0.0}, {"height_m", 2.0}}},
+                    {"extensions", nlohmann::json::object()}});
+                set_wire(invalid);
+                rejects([&] { (void)sketch::decode_project_import_candidate(reply, kind); });
+                invalid = json;
+                invalid["entities"].push_back({
+                    {"id", "invalid-slab"}, {"type", "slab"},
+                    {"properties", {{"boundary", nlohmann::json::array()},
+                        {"holes", nlohmann::json::array()}, {"thickness_m", -0.1},
+                        {"elevation_m", 0.0}}}, {"extensions", nlohmann::json::object()}});
+                set_wire(invalid);
+                rejects([&] { (void)sketch::decode_project_import_candidate(reply, kind); });
+            }
+            const auto duplicated = std::string("{\"kind\":\"dxf\",") + json.dump().substr(1);
+            reply = good; reply.output.resize(duplicated.size());
+            std::memcpy(reply.output.data(), duplicated.data(), duplicated.size());
+            rejects([&] { (void)sketch::decode_project_import_candidate(reply, kind); });
+            invalid = json; invalid["entities"].push_back(invalid["entities"][0]);
+            set_wire(invalid);
+            rejects([&] { (void)sketch::decode_project_import_candidate(reply, kind); });
+            invalid = json; invalid["entities"][0]["properties"]["parent_id"] = "foreign-floor";
+            set_wire(invalid);
+            rejects([&] { (void)sketch::decode_project_import_candidate(reply, kind); });
+            invalid = json; invalid["diagnostics"] = {{{"source_id", ""}, {"source_kind", ""}, {"code", "loss"}}};
+            invalid["source_retention_required"] = false;
+            set_wire(invalid);
+            rejects([&] { (void)sketch::decode_project_import_candidate(reply, kind); });
+            invalid = json;
+            nlohmann::json deep = nlohmann::json::object();
+            for (int depth = 0; depth < 40; ++depth) deep = {{"nested", std::move(deep)}};
+            invalid["entities"][0]["extensions"] = std::move(deep);
+            set_wire(invalid);
+            rejects([&] { (void)sketch::decode_project_import_candidate(reply, kind); });
+            reply = good; reply.output.resize(sketch::project_import_output_limit + 1);
+            rejects([&] { (void)sketch::decode_project_import_candidate(reply, kind); });
+            const auto calls_before = project_calls;
+            std::vector<std::byte> oversized(sketch::project_import_input_limit + 1);
+            rejects([&] { (void)sketch::import_project_in_worker(oversized, kind, {}, broker); });
+            rejects([&] { (void)sketch::import_project_in_worker({}, kind, {}, broker); });
+            require(project_calls == calls_before, "invalid source must be rejected before broker launch");
+            return result;
+        };
+        const QByteArray dxf("0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1027\n9\n$INSUNITS\n70\n6\n0\nENDSEC\n"
+            "0\nSECTION\n2\nENTITIES\n0\nLINE\n10\n0\n20\n0\n11\n4\n21\n0\n0\nENDSEC\n0\nEOF\n");
+        const auto dxf_result = run_project_codec(dxf, sketch::ProjectImportKind::dxf, true);
+        require(dxf_result.entities.size() == 1 && dxf_result.entities[0].type == "boundary",
+                "DXF line must cross worker as an editable boundary");
+        sketch::Entity wall{"wall-1", "wall",
+            {{"baseline", {{"start", {0, 0}}, {"end", {4, 0}}, {"sweep_radians", 0.0}}},
+             {"thickness_m", 0.2}, {"height_m", 2.5}, {"elevation_m", 0.0}}, false, nlohmann::json::object()};
+        const auto ifc = sketch::export_project_ifc(sketch::Document::create({wall}).snapshot()).step;
+        const auto ifc_result = run_project_codec(QByteArray::fromStdString(ifc), sketch::ProjectImportKind::ifc, true);
+        require(ifc_result.entities.size() == 1 && ifc_result.entities[0].type == "wall",
+                "IFC wall must cross worker as editable semantic geometry");
+        (void)run_project_codec("invalid", sketch::ProjectImportKind::dxf, false);
+        (void)run_project_codec("invalid", sketch::ProjectImportKind::ifc, false);
         const auto run_codec = [&](const QByteArray& input, const QString& format, int page, bool success) {
             QProcess process;
             process.start(QString::fromLocal8Bit(argv[1]), {format, QString::number(page)});

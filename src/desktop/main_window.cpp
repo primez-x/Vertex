@@ -26,6 +26,7 @@
 #include "sketch/document_digest.hpp"
 #include "sketch/dxf_project_exchange.hpp"
 #include "sketch/ifc_project_exchange.hpp"
+#include "sketch/project_import_worker.hpp"
 #include "sketch/geometry_operations.hpp"
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/model_phases.hpp"
@@ -14111,6 +14112,23 @@ public:
         }
     }
 
+    ProjectImportCandidate importProjectCandidate(const QByteArray& raw,
+                                                  ProjectImportKind kind) const {
+        WindowsImportWorkerOptions options;
+        const auto root = std::filesystem::path(
+            QCoreApplication::applicationDirPath().toStdWString());
+        options.executable = root / "vertex-import-worker.exe";
+        options.immutable_module_roots = {root};
+        const auto plugin_root = root.parent_path() / "plugins";
+        if (std::filesystem::is_directory(plugin_root))
+            options.immutable_module_roots.push_back(plugin_root);
+        options.temporary_root = std::filesystem::path(QDir::tempPath().toStdWString());
+        const auto bytes = std::span(
+            reinterpret_cast<const std::byte*>(raw.constData()),
+            static_cast<std::size_t>(raw.size()));
+        return import_project_in_worker(bytes, kind, std::move(options));
+    }
+
     bool importDxf(const QString& path) {
         if (path.trimmed().isEmpty()) {
             setError(QStringLiteral("Choose a DXF file to import."));
@@ -14128,8 +14146,9 @@ public:
                 throw std::invalid_argument("The DXF file could not be opened.");
             const auto raw = input.readAll();
             if (raw.size() != info.size()) throw std::invalid_argument("The DXF file could not be read completely.");
-            const auto mapped = import_project_dxf(
-                std::string_view(raw.constData(), static_cast<std::size_t>(raw.size())));
+            const auto mapped = importProjectCandidate(raw, ProjectImportKind::dxf);
+            if (!mapped.isolation_controls_attested)
+                throw std::runtime_error("The DXF import worker did not attest its sandbox controls.");
             const auto source = authoringSnapshot();
             if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
 
@@ -14194,10 +14213,12 @@ public:
             auto asset = Asset::create(asset_id, "application/dxf", std::move(source_bytes),
                 {{"format", "DXF R2013"}, {"source_path", info.fileName().toStdString()},
                  {"mapped_entity_count", mapped.entities.size()},
+                 {"isolated_import", true},
                  {"source_retention_required", mapped.source_retention_required}});
             auto source_entity = Entity::create("dxf_source",
                 {{"asset_id", asset_id}, {"format", "DXF R2013"},
                  {"source_path", info.fileName().toStdString()},
+                 {"isolated_import", true},
                  {"mapped_entity_count", mapped.entities.size()}, {"diagnostics", json::array()}});
             for (const auto& item : mapped.diagnostics)
                 source_entity.properties["diagnostics"].push_back({{"source_id", item.source_id},
@@ -14295,8 +14316,9 @@ public:
             const auto raw = input.readAll();
             if (raw.size() != info.size())
                 throw std::invalid_argument("The IFC file could not be read completely.");
-            const auto mapped = import_project_ifc(
-                std::string_view(raw.constData(), static_cast<std::size_t>(raw.size())));
+            const auto mapped = importProjectCandidate(raw, ProjectImportKind::ifc);
+            if (!mapped.isolation_controls_attested)
+                throw std::runtime_error("The IFC import worker did not attest its sandbox controls.");
             const auto source = authoringSnapshot();
             if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
 
@@ -14353,6 +14375,7 @@ public:
                     {"source_kind", item.source_kind}, {"code", item.code}});
             auto provenance = report;
             provenance["source_path"] = info.fileName().toStdString();
+            provenance["isolated_import"] = true;
             auto asset = Asset::create(asset_id, "application/step", std::move(source_bytes),
                 provenance);
             provenance["asset_id"] = asset_id;

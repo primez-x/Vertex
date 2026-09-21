@@ -1,4 +1,7 @@
 #include "reference_import.hpp"
+#include "sketch/project_import_worker.hpp"
+#include "sketch/dxf_project_exchange.hpp"
+#include "sketch/ifc_project_exchange.hpp"
 
 #include <QBuffer>
 #include <QCoreApplication>
@@ -106,6 +109,34 @@ int main(int argc, char** argv) {
         }
     }
     if (input.isEmpty()) return 3;
+    if (args[1] == "dxf" || args[1] == "ifc") {
+        if (page != 0) return 2;
+        try {
+            sketch::ProjectImportCandidate candidate;
+            const std::string_view bytes(input.constData(), static_cast<std::size_t>(input.size()));
+            const auto copy_result = [&](auto result) {
+                candidate.entities = std::move(result.entities);
+                candidate.source_retention_required = result.source_retention_required;
+                for (auto& diagnostic : result.diagnostics)
+                    candidate.diagnostics.push_back({std::move(diagnostic.source_id),
+                        std::move(diagnostic.source_kind), std::move(diagnostic.code)});
+            };
+            if (args[1] == "dxf") {
+                candidate.kind = sketch::ProjectImportKind::dxf;
+                copy_result(sketch::import_project_dxf(bytes));
+            } else {
+                candidate.kind = sketch::ProjectImportKind::ifc;
+                copy_result(sketch::import_project_ifc(bytes));
+            }
+            // Serialize fully before writing: malformed input and candidate
+            // validation failures never publish a partial result.
+            const auto output = sketch::encode_project_import_candidate(candidate);
+            if (std::fwrite(output.data(), 1, output.size(), stdout) != output.size()) return 5;
+            return std::fflush(stdout) == 0 ? 0 : 5;
+        } catch (...) {
+            return 4;
+        }
+    }
     QBuffer buffer(&input);
     if (!buffer.open(QIODevice::ReadOnly)) return 3;
     QImage image;

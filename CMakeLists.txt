@@ -468,7 +468,9 @@ if(SKETCH_BUILD_DESKTOP)
   add_executable(vertex-import-worker src/desktop/reference_import_worker.cpp
     resources/windows/vertex-import-worker.rc)
   target_include_directories(vertex-import-worker PRIVATE include)
-  target_link_libraries(vertex-import-worker PRIVATE sketch_json Qt6::Gui Qt6::Pdf)
+  target_link_libraries(vertex-import-worker PRIVATE
+    sketch_dxf_project_exchange sketch_ifc_project_exchange sketch_wall_semantics
+    Qt6::Gui Qt6::Pdf)
   if(WIN32)
     target_link_libraries(vertex-import-worker PRIVATE windowscodecs ole32)
   endif()
@@ -517,7 +519,8 @@ if(SKETCH_BUILD_DESKTOP)
     qt_add_resources(sheet_layout_dialog_tests sheet_layout_test_fonts PREFIX "/fonts" BASE assets/fonts
       FILES assets/fonts/Inter.ttf)
     add_test(NAME sheet_layout_dialog COMMAND sheet_layout_dialog_tests)
-    target_link_libraries(reference_import_tests PRIVATE sketch_reference_import)
+    target_link_libraries(reference_import_tests PRIVATE
+      sketch_reference_import sketch_ifc_project_exchange sketch_wall_semantics)
     add_dependencies(reference_import_tests vertex-import-worker)
     add_test(NAME reference_import COMMAND reference_import_tests "$<TARGET_FILE:vertex-import-worker>")
   endif()
@@ -633,6 +636,8 @@ if(SKETCH_BUILD_DESKTOP)
     add_test(NAME assistance_workflow COMMAND assistance_workflow_tests)
     add_test(NAME dxf_desktop_workflow COMMAND dxf_desktop_workflow_tests)
     add_test(NAME ifc_desktop_workflow COMMAND ifc_desktop_workflow_tests)
+    set_tests_properties(dxf_desktop_workflow ifc_desktop_workflow
+      PROPERTIES SKIP_RETURN_CODE 77)
     get_target_property(SKETCH_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
     get_filename_component(SKETCH_QT_BIN "${SKETCH_QMAKE_EXECUTABLE}" DIRECTORY)
     get_filename_component(SKETCH_QT_PREFIX "${SKETCH_QT_BIN}" DIRECTORY)

@@ -640,11 +640,16 @@
         "src/core/ifc_project_exchange.cpp",
         "tests/ifc_project_exchange_tests.cpp",
         "tests/ifc_desktop_workflow_tests.cpp",
+        "include/sketch/project_import_worker.hpp",
+        "src/desktop/reference_import_worker.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/reference_import_tests.cpp",
+        "scripts/test-import-worker-independent.ps1",
         "docs/interchange-profiles.md",
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Source review correction (2026-09-20): Desktop IFC and DXF import still execute parsers in-process instead of through the isolated worker boundary. Fail-closed IFC/DXF/PDF/PROJ worker declarations and attestations are implemented; deterministic native IFC and DXF project-mapping slices now have core and desktop transaction tests, while real worker binaries, broker/runtime enforcement, active worker isolation, and representative cross-application fixtures remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Desktop IFC and DXF imports now send bounded source bytes through the fail-closed AppContainer broker and accept only a versioned, validated native candidate graph after every sandbox control is attested. Real job-free development-host fixtures exercise both desktop entry points, atomic commit/undo behavior, retained source and diagnostics, and unchanged projects after malformed input. Export still runs in-process because it consumes the trusted native document, while external cross-application fixtures, adapter manifests, licensing review, installed-runtime qualification, and clean-machine production evidence remain open."
     },
     {
       "id": "COMP-IO-002",
@@ -2885,6 +2890,12 @@
         "tests/import_worker_policy_tests.cpp",
         "include/sketch/windows_import_worker.hpp",
         "src/core/windows_import_worker.cpp",
+        "include/sketch/project_import_worker.hpp",
+        "src/desktop/reference_import_worker.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/reference_import_tests.cpp",
+        "tests/dxf_desktop_workflow_tests.cpp",
+        "tests/ifc_desktop_workflow_tests.cpp",
         "tests/windows_import_worker_tests.cpp",
         "tests/windows_import_worker_probe.cpp",
         "docs/import-worker-security.md",
@@ -2893,7 +2904,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Fail-closed worker policy and attestation/resource/path checks are implemented. The Windows broker provisions an AppContainer profile, ACL-protected job directory, explicit handle list, broker-owned LOCALAPPDATA/TEMP paths, a controlled environment, suspended launch, Job Object limits, and post-launch token/network-capability attestation. A current-user WMI runner now launches the development fixtures outside the Codex parent Job Object; local Debug and Release runs verify the AppContainer token, absent network-capability SIDs, bounded output, stable binary provenance, and live watchdog termination. Active network denial, parent-exit kill-on-close, module-planting, installed-runtime, and clean-machine observations remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Fail-closed worker policy and attestation/resource/path checks are implemented. The Windows broker provisions an AppContainer profile, ACL-protected job directory, explicit handle list, broker-owned LOCALAPPDATA/TEMP paths, a controlled environment, suspended launch, Job Object limits, and post-launch token/network-capability attestation. A current-user WMI runner launches the development fixtures outside the Codex parent Job Object; the worker runtime and complete desktop DXF/IFC import entry points pass through a fixture-local read-only module root with AppContainer access. Active network denial, parent-exit kill-on-close, module-planting, installed-runtime, and clean-machine observations remain open."
     },
     {
       "id": "SEC-WORKER-002",
@@ -2917,6 +2928,12 @@
         "tests/import_worker_policy_tests.cpp",
         "include/sketch/windows_import_worker.hpp",
         "src/core/windows_import_worker.cpp",
+        "include/sketch/project_import_worker.hpp",
+        "src/desktop/reference_import_worker.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/reference_import_tests.cpp",
+        "tests/dxf_desktop_workflow_tests.cpp",
+        "tests/ifc_desktop_workflow_tests.cpp",
         "tests/windows_import_worker_tests.cpp",
         "tests/windows_import_worker_probe.cpp",
         "docs/import-worker-security.md",
@@ -2925,7 +2942,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Malformed input, traversal, expansion, timeout, child-process, crash, and module-path rejection decisions are covered by policy tests. The native broker rejects unsafe roots and limits output, terminates the whole Job Object on watchdog or output failure, and never returns partial output. Job-free local Debug and Release fixtures now pass live echo, deadline termination, output-limit rejection, and malformed-image launch-error preservation. Decoder-crash, module-planting, child-process escape, installed PDF/raster, clean-machine, and project-survival evidence remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Malformed input, traversal, expansion, timeout, child-process, crash, and module-path rejection decisions are covered by policy tests. The native broker rejects unsafe roots and limits output, terminates the whole Job Object on watchdog or output failure, and never returns partial output. The DXF/IFC candidate protocol rejects malformed graphs before desktop mutation, and job-free desktop fixtures prove project survival after malformed DXF and IFC input. Decoder-crash, module-planting, child-process escape, installed PDF/raster, clean-machine, and active network-attempt evidence remain open."
     },
     {
       "id": "SEC-PROJ-001",
