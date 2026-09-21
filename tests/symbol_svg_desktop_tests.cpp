@@ -1,12 +1,15 @@
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/annotation_catalog.hpp"
+#include "sketch/annotation_entity_codec.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <QApplication>
 #include <QComboBox>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QDragEnterEvent>
+#include <QDrag>
 #include <QDropEvent>
 #include <QFile>
 #include <QImage>
@@ -16,19 +19,39 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMimeData>
+#include <QMouseEvent>
 #include <QPainter>
+#include <QPdfDocument>
+#include <QPushButton>
+#include <QTimer>
 #include <QStandardPaths>
 #include <QSvgRenderer>
 #include <QTemporaryDir>
+#include <QTabWidget>
 #include <QUuid>
+#include <QWindow>
+#include <QtTest/qtestmouse.h>
 
 #include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <set>
+#include <array>
 #include <stdexcept>
 
 namespace {
+void pointer(QWidget* widget, QEvent::Type type, QPoint point,
+             Qt::MouseButton button, Qt::MouseButtons buttons) {
+    const auto global = widget->mapToGlobal(point);
+    auto* window = widget->window()->windowHandle();
+    // Use the same QPA injection as QTest's QWindow overloads so Qt's global
+    // button state and drag manager see a genuine pressed pointer sequence.
+    static int timestamp = 1000;
+    qt_handleMouseEvent(window, QPointF(window->mapFromGlobal(global)), QPointF(global),
+                        buttons, button, type, Qt::NoModifier, timestamp += 100);
+    QApplication::processEvents();
+}
+
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
@@ -102,6 +125,45 @@ QImage renderSymbol(sketch::desktop::CanvasEntity entity) {
     return image;
 }
 
+QByteArray recoloredArtwork(QByteArray document) {
+    const auto original = document;
+    document.replace("#e6e7e8", "#ff0000");
+    require(document != original, "SVG artwork fixture could not be made visibly distinct");
+    QSvgRenderer renderer(document);
+    require(renderer.isValid(), "modified historical SVG fixture is invalid");
+    return document;
+}
+
+void requireIndependentArtworkCache(sketch::desktop::CanvasEntity current,
+                                    const QByteArray& historical_document) {
+    current.selected = false;
+    auto historical = current;
+    current.svg_symbol->position = {2.0, 2.0};
+    historical.svg_symbol->position = {5.0, 2.0};
+    historical.svg_symbol->document = historical_document;
+    historical.svg_symbol->artwork_sha256 = QCryptographicHash::hash(
+        historical_document, QCryptographicHash::Sha256).toHex();
+    sketch::desktop::PlanCanvas canvas;
+    canvas.setGridEnabled(false);
+    canvas.setSnapEnabled(false);
+    const auto render = [&](std::vector<sketch::desktop::CanvasEntity> entities) {
+        canvas.setEntities(std::move(entities));
+        QImage image(1000, 500, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::white);
+        QPainter painter(&image);
+        canvas.renderSceneAt(painter, QRectF(image.rect()), 180.0, {3.5, 2.0}, Qt::white);
+        painter.end();
+        return image;
+    };
+    const auto forward = render({current, historical});
+    const auto reverse = render({historical, current});
+    require(forward == reverse,
+            "SVG renderer cache aliases different pinned artwork with one catalog ID");
+    historical.svg_symbol->position = current.svg_symbol->position;
+    require(renderSymbol(current) != renderSymbol(historical),
+            "historical SVG fixture is not visually distinct from installed artwork");
+}
+
 void requireAllBundledSvgsRenderable() {
     std::size_t count = 0;
     for (const auto& definition : sketch::default_symbol_catalog()) {
@@ -163,17 +225,94 @@ void requireSvgDropAccepted(const QString& symbol_id) {
                 std::isfinite(dropped_position.x) && std::isfinite(dropped_position.y),
             "canvas did not commit the intended SVG library drop");
 }
+
+QString dragVisibleLibraryItem(sketch::desktop::MainWindow& window, QListWidget* library) {
+    auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("sidebarTabs"));
+    require(tabs != nullptr, "sidebar tabs are missing");
+    tabs->setCurrentWidget(window.findChild<QWidget*>(QStringLiteral("symbolsPanel")));
+    QApplication::processEvents();
+    auto* canvas = dynamic_cast<sketch::desktop::PlanCanvas*>(window.findChild<QWidget*>(
+        QStringLiteral("measurementPlanCanvas")));
+    require(canvas && canvas->isVisible() && library->isVisible(),
+            "drag qualification requires the visible palette and canvas");
+    const auto count = canvas->entities().size();
+    library->scrollToItem(library->item(0));
+    const auto source = library->visualItemRect(library->item(0)).center();
+    const auto target = canvas->rect().center();
+    require(library->viewport()->rect().contains(source), "SVG source item is outside the viewport");
+    require(library->itemAt(source) == library->item(0), "SVG pointer origin does not hit the item");
+    // QDrag owns a nested event loop. These pointer events traverse Qt's
+    // platform drag implementation; no fabricated MIME or drop event is used.
+    QTimer movement;
+    movement.setSingleShot(true);
+    QObject::connect(&movement, &QTimer::timeout, canvas, [=] {
+        pointer(canvas, QEvent::MouseMove, target, Qt::NoButton, Qt::LeftButton);
+        pointer(canvas, QEvent::MouseButtonRelease, target, Qt::LeftButton, Qt::NoButton);
+    });
+    QTimer watchdog;
+    watchdog.setSingleShot(true);
+    QObject::connect(&watchdog, &QTimer::timeout, [] { QDrag::cancel(); });
+    pointer(library->viewport(), QEvent::MouseButtonPress, source, Qt::LeftButton, Qt::LeftButton);
+    require(library->item(0)->isSelected(), "pointer press did not select the SVG library item");
+    pointer(library->viewport(), QEvent::MouseMove, source + QPoint(1, 0),
+            Qt::NoButton, Qt::LeftButton);
+    movement.start(100);
+    watchdog.start(3000);
+    pointer(library->viewport(), QEvent::MouseMove,
+            source + QPoint(QApplication::startDragDistance() + 8, 0),
+            Qt::NoButton, Qt::LeftButton);
+    QApplication::processEvents();
+    watchdog.stop();
+    require(canvas->entities().size() == count + 1,
+            "pointer drag from the visible SVG palette did not place one entity");
+    const auto found = std::find_if(canvas->entities().begin(), canvas->entities().end(),
+        [](const auto& entity) { return entity.svg_symbol.has_value(); });
+    require(found != canvas->entities().end(), "pointer-dropped entity has no SVG artwork");
+    return found->id;
+}
+
+std::array<QImage, 3> renderExports(sketch::desktop::MainWindow& window,
+                                   const QTemporaryDir& directory, const QString& stem) {
+    const auto pdf_path = directory.filePath(stem + QStringLiteral(".pdf"));
+    const auto svg_path = directory.filePath(stem + QStringLiteral(".svg"));
+    const auto png_path = directory.filePath(stem + QStringLiteral(".png"));
+    if (!window.exportDraftPdf(pdf_path) || !window.exportDraftSvg(svg_path) ||
+        !window.exportDraftImage(png_path))
+        throw std::runtime_error("SVG scene failed production PDF/SVG/PNG export: " +
+                                 window.lastError().toStdString());
+    QPdfDocument pdf;
+    require(pdf.load(pdf_path) == QPdfDocument::Error::None && pdf.pageCount() == 1,
+            "SVG scene PDF cannot be decoded");
+    QSvgRenderer svg(svg_path);
+    require(svg.isValid(), "SVG scene vector export cannot be decoded");
+    QImage svg_image(1680, 1188, QImage::Format_ARGB32_Premultiplied);
+    svg_image.fill(Qt::white);
+    QPainter painter(&svg_image);
+    svg.render(&painter, QRectF(svg_image.rect()));
+    painter.end();
+    std::array<QImage, 3> result{pdf.render(0, QSize(1680, 1188)),
+                               svg_image, QImage(png_path)};
+    for (const auto& image : result) require(!image.isNull(), "export produced no rasterizable page");
+    return result;
+}
 } // namespace
 
 int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QStandardPaths::setTestModeEnabled(true);
+    // Qt's offscreen QOffscreenDrag unconditionally ignores every drag.
+    // Minimal remains headless but exercises QSimpleDrag's real event loop.
+    if (qEnvironmentVariable("QT_QPA_PLATFORM") == QStringLiteral("offscreen"))
+        qputenv("QT_QPA_PLATFORM", "minimal:enable_fonts");
     QApplication app(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("Vertex-svg-test-") +
         QUuid::createUuid().toString(QUuid::WithoutBraces));
     try {
         const auto symbol_id = QStringLiteral("svg-v2-04_living-sofa-three-seat");
         sketch::desktop::MainWindow window;
+        window.resize(1500, 1000);
+        window.show();
+        QApplication::processEvents();
         requireAllBundledSvgsRenderable();
         auto* categories = window.findChild<QComboBox*>(QStringLiteral("annotationSymbolCategory"));
         auto* search = window.findChild<QLineEdit*>(QStringLiteral("annotationSymbolSearch"));
@@ -213,6 +352,27 @@ int main(int argc, char** argv) {
         require(!thumbnail.isNull(), "SVG library thumbnail is missing");
         requireInteriorDetail(thumbnail, QRect(thumbnail.width() / 4, thumbnail.height() * 3 / 8,
                                                thumbnail.width() / 2, thumbnail.height() / 4));
+        const auto dragged_id = dragVisibleLibraryItem(window, library);
+        require(window.selectEntity(dragged_id), "pointer-dropped SVG cannot be selected");
+        const auto set_property = [&](const char* name, const char* value) {
+            auto* control = window.findChild<QLineEdit*>(QString::fromLatin1(name));
+            require(control != nullptr, "annotation inspector control is missing");
+            control->setText(QString::fromLatin1(value));
+        };
+        set_property("annotationX", "3");
+        set_property("annotationY", "2");
+        set_property("annotationRotation", "30");
+        set_property("annotationScale", "1.5");
+        auto* apply = window.findChild<QPushButton*>(QStringLiteral("applyAnnotation"));
+        require(apply && apply->isEnabled(), "annotation inspector apply is unavailable");
+        apply->click();
+        const auto transformed = retainedSymbol(window, dragged_id);
+        require(transformed.svg_symbol &&
+                    std::abs(transformed.svg_symbol->position.x - 3.0) < 1e-9 &&
+                    std::abs(transformed.svg_symbol->position.y - 2.0) < 1e-9 &&
+                    std::abs(transformed.svg_symbol->rotation_radians - std::acos(-1.0) / 6.0) < 1e-9 &&
+                    std::abs(transformed.svg_symbol->width_metres - 3.375) < 1e-9,
+                "inspector move, resize, and rotate did not reach retained SVG artwork");
 
         const auto walls_category = categories->findData(QStringLiteral("16_walls_openings"));
         require(walls_category >= 0, "SVG walls and openings category is missing");
@@ -230,6 +390,8 @@ int main(int argc, char** argv) {
         require(!instance_id.isEmpty(), "MainWindow rejected the SVG catalog ID");
         const auto entity = retainedSymbol(window, instance_id);
         const auto bytes = checkedPayload(entity);
+        const auto historical_bytes = recoloredArtwork(bytes);
+        requireIndependentArtworkCache(entity, historical_bytes);
         require(bytes.contains("sofa-three-seat--title"), "placed payload belongs to another SVG asset");
         const auto before = renderSymbol(entity);
         const auto capture_directory = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
@@ -247,10 +409,110 @@ int main(int argc, char** argv) {
         require(directory.isValid(), "temporary project directory is unavailable");
         const auto path = directory.filePath(QStringLiteral("svg-sofa.bldproj"));
         require(window.saveProjectAs(path), "SVG placement project failed to save");
+        const auto output_before = renderExports(window, directory, QStringLiteral("before"));
         require(window.openProject(path), "SVG placement project failed to reopen");
         const auto restored = retainedSymbol(window, instance_id);
         require(checkedPayload(restored) == bytes, "save/reopen lost or changed the SVG payload");
         require(renderSymbol(restored) == before, "save/reopen changed the SVG rendering");
+        const auto restored_drag = retainedSymbol(window, dragged_id);
+        require(restored_drag.svg_symbol &&
+                    restored_drag.svg_symbol->document == transformed.svg_symbol->document &&
+                    restored_drag.svg_symbol->position.x == transformed.svg_symbol->position.x &&
+                    restored_drag.svg_symbol->position.y == transformed.svg_symbol->position.y &&
+                    restored_drag.svg_symbol->rotation_radians == transformed.svg_symbol->rotation_radians &&
+                    restored_drag.svg_symbol->width_metres == transformed.svg_symbol->width_metres &&
+                    restored_drag.svg_symbol->depth_metres == transformed.svg_symbol->depth_metres,
+                "save/reopen changed the pointer-dropped SVG transform or artwork");
+        const auto output_after = renderExports(window, directory, QStringLiteral("after"));
+        require(output_before == output_after,
+                "save/reopen changed rasterized production PDF/SVG/PNG artwork");
+
+        // Simulate a project that pins an older definition. The UI must keep
+        // rendering its saved SVG until the user explicitly accepts migration.
+        auto migration_source = window.document().snapshot();
+        auto annotation = std::find_if(
+            migration_source.entities().begin(), migration_source.entities().end(),
+            [](const auto& entry) { return entry.second.type == sketch::kAnnotationEntityType; });
+        require(annotation != migration_source.entities().end(),
+                "migration fixture has no annotation entity");
+        auto stale_state = sketch::decode_annotation_entity(annotation->second);
+        auto stale_instance = std::find_if(
+            stale_state.symbols.begin(), stale_state.symbols.end(),
+            [&](const auto& candidate) { return candidate.id == instance_id.toStdString(); });
+        require(stale_instance != stale_state.symbols.end() && stale_instance->definition,
+                "migration fixture has no pinned definition");
+        stale_instance->definition->artwork_revision += 1;
+        stale_instance->definition->svg_asset->sha256 =
+            QCryptographicHash::hash(historical_bytes, QCryptographicHash::Sha256)
+                .toHex().toStdString();
+        stale_instance->pinned_svg = historical_bytes.toStdString();
+        auto stale_entity = annotation->second;
+        stale_entity.properties = sketch::make_annotation_entity(
+            stale_entity.id, stale_state).properties;
+        (void)window.document().apply(sketch::ApplyEntityChanges{
+            migration_source.revision(), {sketch::EntityChange::upsert(stale_entity)}, {},
+            "inject historical symbol fixture"});
+        require(window.selectEntity(instance_id), "historical component cannot be selected");
+        auto* migration_status = window.findChild<QLabel*>(
+            QStringLiteral("symbolMigrationStatus"));
+        auto* migrate = window.findChild<QPushButton*>(
+            QStringLiteral("migrateSymbolArtwork"));
+        // Selection prepares quick properties; the floating editor itself is
+        // opened by double-click/right-click in the production interaction.
+        // isHidden() verifies that these controls will be exposed when that
+        // editor opens without making this persistence test synthesize a
+        // second, unrelated canvas gesture.
+        require(migration_status && !migration_status->isHidden() &&
+                    migration_status->text().contains(QStringLiteral("saved component artwork")) &&
+                    migrate && !migrate->isHidden() && migrate->isEnabled(),
+                "historical component does not expose an explicit artwork migration action");
+        const auto stale_render = renderSymbol(retainedSymbol(window, instance_id));
+        const auto migration_revision = window.document().revision();
+        migrate->click();
+        auto migrated_state = sketch::decode_annotation_entity(
+            window.document().snapshot().entities().at(stale_entity.id));
+        auto migrated_instance = std::find_if(
+            migrated_state.symbols.begin(), migrated_state.symbols.end(),
+            [&](const auto& candidate) { return candidate.id == instance_id.toStdString(); });
+        require(window.document().revision() == migration_revision + 1 &&
+                    migrated_instance != migrated_state.symbols.end() &&
+                    !sketch::symbol_requires_migration(
+                        *migrated_instance, sketch::default_symbol_catalog()) &&
+                    !migrated_instance->pinned_svg.empty(),
+                "explicit component migration did not commit the installed artwork once");
+        const auto migrated_render = renderSymbol(retainedSymbol(window, instance_id));
+        require(migrated_render == before && migrated_render != stale_render,
+                "explicit migration did not replace the saved historical artwork");
+        require(window.undoCommand(), "component migration must undo");
+        auto undone_state = sketch::decode_annotation_entity(
+            window.document().snapshot().entities().at(stale_entity.id));
+        const auto undone_instance = std::find_if(
+            undone_state.symbols.begin(), undone_state.symbols.end(),
+            [&](const auto& candidate) { return candidate.id == instance_id.toStdString(); });
+        require(undone_instance != undone_state.symbols.end() &&
+                    sketch::symbol_requires_migration(
+                        *undone_instance, sketch::default_symbol_catalog()),
+                "undo did not restore historical component artwork state");
+        require(renderSymbol(retainedSymbol(window, instance_id)) == stale_render,
+                "undo did not restore the exact historical SVG artwork");
+        require(window.redoCommand() && window.saveProject() && window.openProject(path),
+                "migrated component must redo, save and reopen");
+        const auto reopened_migration_state = sketch::decode_annotation_entity(
+            window.document().snapshot().entities().at(stale_entity.id));
+        const auto reopened_migrated = std::find_if(
+            reopened_migration_state.symbols.begin(), reopened_migration_state.symbols.end(),
+            [&](const auto& candidate) { return candidate.id == instance_id.toStdString(); });
+        require(reopened_migrated != reopened_migration_state.symbols.end() &&
+                    !sketch::symbol_requires_migration(
+                        *reopened_migrated, sketch::default_symbol_catalog()),
+                "save/reopen lost the explicit component artwork migration");
+        require(renderSymbol(retainedSymbol(window, instance_id)) == before,
+                "save/reopen changed migrated SVG artwork");
+        require(window.deleteAnnotation(dragged_id), "cannot remove drag fixture for output control");
+        const auto without_drag = renderExports(window, directory, QStringLiteral("without-drag"));
+        for (std::size_t index = 0; index < output_after.size(); ++index)
+            require(output_after[index] != without_drag[index],
+                    "production export omitted the pointer-dropped, transformed SVG instance");
         std::cout << "symbol SVG desktop checks passed\n";
         return 0;
     } catch (const std::exception& error) {

@@ -4,6 +4,7 @@ Run after importing the raw archive under assets/symbols/architectural_v2.
 --check verifies the checked-in output without modifying it. No dependencies.
 """
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path, PurePosixPath
@@ -32,7 +33,8 @@ def generate(directory):
             raise ValueError("Unsafe or duplicate asset identity/path")
         ids.add(identity)
         paths.add(str(path))
-        svg = ET.fromstring((directory / path).read_bytes())
+        svg_bytes = (directory / path).read_bytes()
+        svg = ET.fromstring(svg_bytes)
         if svg.tag != "{http://www.w3.org/2000/svg}svg":
             raise ValueError("Not an SVG document")
         box = [float(v) for v in svg.attrib["viewBox"].split()]
@@ -53,6 +55,7 @@ def generate(directory):
         result.append("    {" + ", ".join([
             quote(identity), quote(row["name"]), quote(row["category"]),
             quote(row["id"]), quote("symbols/architectural_v2/" + str(path)),
+            quote(hashlib.sha256(svg_bytes).hexdigest()),
             format(width, ".12g"), format(depth, ".12g"), numbers(box),
             numbers(footprint), "true" if nominal else "false"]) + "},")
     actual_paths = {p.relative_to(directory).as_posix() for p in (directory / "symbols").rglob("*.svg")}

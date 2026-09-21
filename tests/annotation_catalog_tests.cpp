@@ -23,6 +23,59 @@ template<class F> void rejected(F f) {
 int main() {
     using namespace sketch;
     const auto catalog = default_symbol_catalog();
+    {
+        const auto original = filter_symbol_catalog(catalog, "Toilet Close Coupled", "01_bathroom").front();
+        AnnotationState placed;
+        placed.symbols.push_back({"pinned", original.id, {{3, 4}, 0.5, 1.4, "ground"}, {}, false});
+        const auto saved = encode_annotation_state(placed, {original});
+        require(saved.at("symbols")[0].contains("definition"), "Placed symbols must persist a definition snapshot");
+        auto hash_changed = original;
+        hash_changed.svg_asset->sha256[0] =
+            hash_changed.svg_asset->sha256[0] == '0' ? '1' : '0';
+        const auto hash_reopened = decode_annotation_state(saved, {hash_changed});
+        require(symbol_requires_migration(hash_reopened.symbols.front(), {hash_changed}),
+                "Artwork digest change must require explicit migration without a revision bump");
+        auto updated = original;
+        updated.artwork_revision = 2;
+        updated.name = "Revised toilet";
+        auto reopened = decode_annotation_state(saved, {updated});
+        auto legacy_saved = saved;
+        legacy_saved["version"] = 1;
+        legacy_saved["symbols"][0].erase("definition");
+        legacy_saved["symbols"][0].erase("pinned_svg");
+        require(encode_annotation_state(decode_annotation_state(legacy_saved, {original}), {original}) == saved,
+                "Legacy state must pin its original definition on upgrade");
+        rejected([&] { (void)decode_annotation_state(legacy_saved, {updated}); });
+        require(symbol_requires_migration(reopened.symbols.front(), {updated}), "Revision change must be flagged");
+        require(!resolved_symbol_definition(reopened.symbols.front(), {updated}).svg_asset,
+                "Stale path must never load replacement artwork");
+        require(resolved_symbol_definition(reopened.symbols.front(), {updated}).name == original.name,
+                "Reopen must retain original definition");
+        require(encode_annotation_state(reopened, {updated}) == saved, "Saving must not migrate a pinned instance");
+        const auto migrated = migrate_symbol_definition(reopened, "pinned", {updated}, "<svg/>");
+        require(!symbol_requires_migration(migrated.symbols.front(), {updated}) &&
+                    migrated.symbols.front().pinned_svg == "<svg/>", "Explicit migration must pin new artwork");
+        auto migrated_json = encode_annotation_state(migrated, {updated});
+        migrated_json["symbols"][0]["definition"] = saved["symbols"][0]["definition"];
+        migrated_json["symbols"][0]["pinned_svg"] = "";
+        require(migrated_json == saved, "Migration changed instance properties");
+        require(symbol_requires_migration(reopened.symbols.front(), {}), "Removed definitions must be flagged");
+        require(encode_annotation_state(decode_annotation_state(saved, {}), {}) == saved,
+                "Removed definitions must still reopen and save");
+        rejected([&] { (void)migrate_symbol_definition(reopened, "pinned", {}); });
+        updated.maximum_scale = 1;
+        rejected([&] { (void)migrate_symbol_definition(reopened, "pinned", {updated}); });
+        auto malformed_pin = saved;
+        malformed_pin["symbols"][0]["definition"]["id"] = "different";
+        rejected([&] { (void)decode_annotation_state(malformed_pin, {original}); });
+        malformed_pin = saved;
+        malformed_pin["symbols"][0]["pinned_svg"] =
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>";
+        rejected([&] { (void)decode_annotation_state(malformed_pin, {original}); });
+        malformed_pin["symbols"][0]["pinned_svg"] =
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"><path fill=\"url(https://example.test/a)\"/></svg>";
+        rejected([&] { (void)decode_annotation_state(malformed_pin, {original}); });
+    }
     require(catalog.size() == 1129, "Preserve 809 legacy symbols and add all 320 SVG symbols");
     const auto svg_toilets = filter_symbol_catalog(catalog, "Toilet Close Coupled", "01_bathroom");
     require(svg_toilets.size() == 1 &&
@@ -216,6 +269,7 @@ int main() {
     require(encode_annotation_state(decode_annotation_state(legacy,catalog),catalog) == encoded,
             "Legacy annotation state without a catalog revision must upgrade deterministically");
     auto unsupported_revision = encoded;
+    unsupported_revision["version"] = 1;
     unsupported_revision["catalog_revision"] = kSymbolCatalogRevision + 1;
     rejected([&]{(void)decode_annotation_state(unsupported_revision,catalog);});
     require(labels.front().content == "Bedroom","Instance edits mutated library template");
@@ -267,7 +321,7 @@ int main() {
     rejected([&]{(void)placed_symbol_preview(catalog.front(),{{},0,0.001});});
     auto malformed = encoded; malformed["version"] = 1.0;
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});
-    malformed = encoded; malformed["version"] = 2;
+    malformed = encoded; malformed["version"] = 3;
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});
     malformed = encoded; malformed["labels"][0]["visible"] = "false";
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});

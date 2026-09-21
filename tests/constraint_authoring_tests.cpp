@@ -1,4 +1,8 @@
 #include "sketch/constraint_authoring.hpp"
+#include "sketch/boundary_entity.hpp"
+#include "sketch/boundary_dimension.hpp"
+#include "sketch/boundary_receipt.hpp"
+#include "sketch/boundary_integrity.hpp"
 #include "sketch/project_store.hpp"
 #include "support/noninteractive_errors.hpp"
 
@@ -829,9 +833,202 @@ void test_noop_and_cancel_leave_revision_saved_state_and_history_unchanged() {
 
 }  // namespace
 
+void test_boundary_horizontal_authoring() {
+    IdentifiedBoundary boundary{"measure", "measurement_boundary", {
+        {"ab", "a", "b", {{0, 0}, {4, 1}, 0}},
+        {"bc", "b", "c", {{4, 1}, {4, 4}, 0}},
+        {"cd", "c", "d", {{4, 4}, {0, 4}, 0}},
+        {"da", "d", "a", {{0, 4}, {0, 0}, 0}}}};
+    auto document = Document::create({encode_identified_boundary_entity(boundary)});
+    const auto before = document.snapshot();
+    ConstraintAuthoringIntent intent;
+    intent.relation_mutations.push_back(ConstraintRelationMutation::upsert(relation(
+        "level", ConstraintRelationKind::horizontal,
+        {{"measure", WallEndpointRole::start, "ab", "a"},
+         {"measure", WallEndpointRole::end, "ab", "b"}})));
+    intent.relation_anchor = WallEndpointBinding{"measure", WallEndpointRole::start, "ab", "a"};
+    const auto preview = preview_constraint_authoring(before, intent);
+    require_accepted(preview, "boundary horizontal solve rejected");
+    require(preview.degrees_of_freedom() == 5, "boundary shared vertices have incorrect degrees of freedom");
+    require(preview.changed_boundaries().size() == 1, "boundary preview omitted changed geometry");
+    require(document.snapshot().entities() == before.entities(), "boundary preview mutated source");
+    (void)apply_constraint_authoring(document, preview);
+    const auto solved = decode_identified_boundary_entity(document.snapshot().entities().at("measure"));
+    require_near(solved.segments[0].segment.end.y, 0, 1e-7, "boundary endpoint not horizontal");
+    require(solved.segments[0].end_vertex_id == "b" && solved.segments[1].start_vertex_id == "b",
+            "boundary vertex identity lost");
+    require_near(solved.segments[1].segment.start.y, 0, 1e-7, "shared vertex not moved together");
+    const auto committed = document.snapshot().entities();
+    require_rejected_unchanged(document, preview, "stale boundary preview accepted");
+    document.undo(document.revision());
+    require(document.snapshot().entities() == before.entities(), "boundary undo lost original state");
+    document.redo(document.revision());
+    require(document.snapshot().entities() == committed, "boundary redo lost solved state");
+    const auto path = std::filesystem::temp_directory_path() / ("constraint-boundary-" + make_stable_id() + ".bldproj");
+    (void)ProjectStore::save(path, document.snapshot());
+    auto reopened = ProjectStore::load(path);
+    std::filesystem::remove(path);
+    require(reopened.document.snapshot().entities() == committed, "boundary locks lost on reopen");
+    reopened.document.undo(reopened.document.revision());
+    require(reopened.document.snapshot().entities() == before.entities(), "reopened boundary undo lost original state");
+
+    auto contradictory = intent;
+    auto pin = relation("pin-b", ConstraintRelationKind::fixed_anchor,
+                       {{"measure", WallEndpointRole::end, "ab", "b"}});
+    pin.anchor = Vec2{4, 1};
+    contradictory.relation_mutations.push_back(ConstraintRelationMutation::upsert(pin));
+    const auto conflict = preview_constraint_authoring(before, contradictory);
+    require(!conflict.accepted() && conflict.candidate_entities() == before.entities(),
+            "contradictory boundary relation leaked candidate changes");
+    auto bad_binding = intent;
+    bad_binding.relation_mutations[0].constraint.bindings[1].vertex_id = "c";
+    require(!preview_constraint_authoring(before, bad_binding).accepted(), "incorrect stable vertex binding accepted");
+    boundary.segments[0].segment.sweep_radians = 0.2;
+    auto curved = Document::create({encode_identified_boundary_entity(boundary)});
+    require(!preview_constraint_authoring(curved.snapshot(), intent).accepted(), "curved boundary constraint accepted");
+}
+
+void test_boundary_cross_relations_and_fixed_length() {
+    const auto rectangle = [](std::string id, double x, double tilt) {
+        return encode_identified_boundary_entity(IdentifiedBoundary{std::move(id), "measurement_boundary", {
+            {"ab", "a", "b", {{x, 0}, {x + 4, tilt}, 0}},
+            {"bc", "b", "c", {{x + 4, tilt}, {x + 4, 4}, 0}},
+            {"cd", "c", "d", {{x + 4, 4}, {x, 4}, 0}},
+            {"da", "d", "a", {{x, 4}, {x, 0}, 0}}}});
+    };
+    for (const auto kind : {ConstraintRelationKind::parallel, ConstraintRelationKind::perpendicular,
+                            ConstraintRelationKind::coincident, ConstraintRelationKind::fixed_length,
+                            ConstraintRelationKind::vertical}) {
+        auto document = Document::create({rectangle("first", 0, 0.5), rectangle("second", 10, 0)});
+        auto relation_value = relation("cross", kind,
+            {{"first", WallEndpointRole::start, "ab", "a"},
+             {"first", WallEndpointRole::end, "ab", "b"}});
+        if (kind == ConstraintRelationKind::parallel || kind == ConstraintRelationKind::perpendicular) {
+            // A perpendicular target is a vertical side, avoiding a branch-flipping solve.
+            const bool perpendicular = kind == ConstraintRelationKind::perpendicular;
+            relation_value.bindings.push_back({"second", WallEndpointRole::start,
+                perpendicular ? "bc" : "ab", perpendicular ? "b" : "a"});
+            relation_value.bindings.push_back({"second", WallEndpointRole::end,
+                perpendicular ? "bc" : "ab", perpendicular ? "c" : "b"});
+        } else if (kind == ConstraintRelationKind::coincident) {
+            relation_value.bindings[0] = {"first", WallEndpointRole::end, "ab", "b"};
+            relation_value.bindings[1] = {"second", WallEndpointRole::start, "ab", "a"};
+        } else if (kind == ConstraintRelationKind::fixed_length) {
+            relation_value.length = parse_quantity("5 m");
+        } else {
+            relation_value.bindings = {{"first", WallEndpointRole::start, "bc", "b"},
+                                       {"first", WallEndpointRole::end, "bc", "c"}};
+        }
+        ConstraintAuthoringIntent intent;
+        intent.relation_anchor = WallEndpointBinding{"first", WallEndpointRole::start, "ab", "a"};
+        intent.relation_mutations.push_back(ConstraintRelationMutation::upsert(relation_value));
+        const auto preview = preview_constraint_authoring(document.snapshot(), intent);
+        require_accepted(preview, "boundary relation fixture rejected");
+        (void)apply_constraint_authoring(document, preview);
+        const auto lock = decode_constraint_entity(document.snapshot().entities().at("cross"));
+        require(lock.supported() && lock.constraint->bindings == relation_value.bindings,
+                "cross-boundary relation identity changed");
+    }
+}
+
+void test_boundary_receipt_and_dimension_preview() {
+    IdentifiedBoundary boundary{"receipt-boundary", "measurement_boundary", {}};
+    BoundaryConstructionRecord record;
+    record.boundary_id = boundary.id;
+    record.anchor = {0, 0};
+    const Vec2 points[]{{0, 0}, {4, 1}, {4, 4}, {0, 4}};
+    const char* rises[]{"1 m", "3 m", "0 m", "-4 m"};
+    const char* runs[]{"4 m", "0 m", "-4 m", "0 m"};
+    for (std::size_t i = 0; i < 4; ++i) {
+        const auto segment = "edge-" + std::to_string(i);
+        const auto start = "vertex-" + std::to_string(i);
+        const auto end = "vertex-" + std::to_string((i + 1) % 4);
+        ConstructionReceipt receipt;
+        receipt.segment_id = segment;
+        receipt.kind = BoundaryConstructionKind::line_rise_run;
+        receipt.start = points[i];
+        receipt.rise = parse_quantity(rises[i]);
+        receipt.run = parse_quantity(runs[i]);
+        record.edges.push_back({segment, start, end, receipt});
+        boundary.segments.push_back({segment, start, end, {points[i], points[(i + 1) % 4], 0}});
+    }
+    auto owner = encode_identified_boundary_entity(boundary);
+    const auto receipt = encode_boundary_receipt_envelope(record);
+    owner.properties["boundary_authoring"] = receipt;
+    BoundaryDimension dimension;
+    dimension.id = "dimension";
+    dimension.boundary_id = boundary.id;
+    dimension.segment_id = "edge-0";
+    const auto dimension_entity = encode_boundary_dimension_entity(dimension);
+    auto document = Document::create({owner, dimension_entity});
+    ConstraintAuthoringIntent intent;
+    intent.relation_anchor = WallEndpointBinding{boundary.id, WallEndpointRole::start, "edge-0", "vertex-0"};
+    intent.relation_mutations.push_back(ConstraintRelationMutation::upsert(relation(
+        "level", ConstraintRelationKind::horizontal,
+        {*intent.relation_anchor, {boundary.id, WallEndpointRole::end, "edge-0", "vertex-1"}})));
+    const auto preview = preview_constraint_authoring(document.snapshot(), intent);
+    require_accepted(preview, "receipt-backed boundary preview rejected");
+    const auto& candidate = preview.candidate_entities().at(boundary.id);
+    require(candidate.extensions.at("boundary_geometry_derivation").at("source_boundary_authoring") == receipt,
+            "constraint solve rewrote original construction receipt");
+    require(preview.candidate_entities().at("dimension") == dimension_entity,
+            "constraint solve changed attached dimension identity or presentation");
+    require_near(dimension.resolve(candidate).segment_length(), 4, 1e-7,
+                 "dimension did not resolve solved geometry");
+    require(!validate_boundary_integrity(preview.candidate_entities()), "derived receipt failed independent replay");
+    require(!preview.boundary_edits().empty(), "preview omitted replayable boundary edit intents");
+
+    // Move the entire receipt-backed boundary beyond its width. Moving vertex-0
+    // first self-intersects; only the simultaneous solved result is valid.
+    auto remote = boundary;
+    remote.id = "remote";
+    for (auto& edge : remote.segments) {
+        edge.segment.start.x += 10;
+        edge.segment.end.x += 10;
+    }
+    auto translated = Document::create({owner, dimension_entity, encode_identified_boundary_entity(remote)});
+    const auto initial = translated.snapshot();
+    ConstraintAuthoringIntent translate;
+    translate.relation_anchor = WallEndpointBinding{"remote", WallEndpointRole::start, "edge-0", "vertex-0"};
+    for (std::size_t i = 0; i < 4; ++i) {
+        const auto edge = "edge-" + std::to_string(i);
+        const auto vertex = "vertex-" + std::to_string(i);
+        const WallEndpointBinding destination{"remote", WallEndpointRole::start, edge, vertex};
+        auto pin = relation("pin-" + std::to_string(i), ConstraintRelationKind::fixed_anchor, {destination});
+        pin.anchor = Vec2{points[i].x + 10, points[i].y};
+        translate.relation_mutations.push_back(ConstraintRelationMutation::upsert(pin));
+        translate.relation_mutations.push_back(ConstraintRelationMutation::upsert(relation(
+            "match-" + std::to_string(i), ConstraintRelationKind::coincident,
+            {{boundary.id, WallEndpointRole::start, edge, vertex}, destination})));
+    }
+    const auto moved_preview = preview_constraint_authoring(initial, translate);
+    require_accepted(moved_preview, "simultaneous boundary translation preview rejected");
+    (void)apply_constraint_authoring(translated, moved_preview);
+    const auto moved = translated.snapshot();
+    require(moved.revision() == 1 && moved.entities() == moved_preview.candidate_entities(),
+            "simultaneous authoring did not commit the preview in one revision");
+    const auto geometry = decode_identified_boundary_entity(moved.entities().at(boundary.id));
+    for (std::size_t i = 0; i < 4; ++i)
+        require_near(geometry.segments[i].segment.start.x, points[i].x + 10, 1e-7,
+                     "simultaneous solve lost a vertex destination");
+    require(!validate_boundary_integrity(moved.entities()), "batch receipt replay failed");
+    const auto path = std::filesystem::temp_directory_path() / ("constraint-batch-" + make_stable_id() + ".bldproj");
+    (void)ProjectStore::save(path, moved);
+    auto reopened = ProjectStore::load(path);
+    std::filesystem::remove(path);
+    require(reopened.document.snapshot().entities() == moved.entities(), "batch reopen differs");
+    reopened.document.undo(reopened.document.revision());
+    require(reopened.document.snapshot().entities() == initial.entities(), "batch reopened undo differs");
+    reopened.document.redo(reopened.document.revision());
+    require(reopened.document.snapshot().entities() == moved.entities(), "batch reopened redo differs");
+}
+
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_boundary_horizontal_authoring();
+        test_boundary_cross_relations_and_fixed_length();
+        test_boundary_receipt_and_dimension_preview();
         test_resize_twelve_to_fourteen_feet_with_either_anchor_and_exact_receipt();
         test_nested_metadata_and_receipt_validation();
         test_rigid_transform_rebases_length_receipt_without_losing_metadata();

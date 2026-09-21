@@ -1330,7 +1330,18 @@ QString symbol_svg_resource_path(const SymbolSvgAsset& asset) {
 QByteArray load_symbol_svg(const SymbolSvgAsset& asset) {
     static QHash<QString, QByteArray> cache;
     const auto resource_path = symbol_svg_resource_path(asset);
-    if (const auto found = cache.constFind(resource_path); found != cache.cend()) return *found;
+    const auto validate_digest = [&](const QByteArray& document) {
+        const auto digest = QCryptographicHash::hash(document, QCryptographicHash::Sha256)
+                                .toHex().toStdString();
+        if (digest != asset.sha256) {
+            throw std::runtime_error(
+                "Bundled symbol SVG differs from its catalog definition.");
+        }
+    };
+    if (const auto found = cache.constFind(resource_path); found != cache.cend()) {
+        validate_digest(*found);
+        return *found;
+    }
     QFile file(resource_path);
     if (!file.open(QIODevice::ReadOnly)) {
         throw std::runtime_error("Bundled symbol SVG could not be opened.");
@@ -1340,6 +1351,7 @@ QByteArray load_symbol_svg(const SymbolSvgAsset& asset) {
     if (document.isEmpty() || !renderer.isValid()) {
         throw std::runtime_error("Bundled symbol SVG is invalid.");
     }
+    validate_digest(document);
     cache.insert(resource_path, document);
     return document;
 }
@@ -8686,6 +8698,10 @@ public:
             symbol.placement.position = position;
             symbol.placement.scale = scale;
             symbol.placement.layer_id = context->layer_id;
+            symbol.definition = *definition;
+            if (definition->svg_asset) {
+                symbol.pinned_svg = load_symbol_svg(*definition->svg_asset).toStdString();
+            }
             state.symbols.push_back(symbol);
             const auto command = ApplyEntityChanges{
                 source.revision(),
@@ -8841,6 +8857,53 @@ public:
             return true;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Delete annotation: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    bool migrateSelectedSymbolArtwork() {
+        try {
+            if (!m_document->is_editable()) {
+                throw std::invalid_argument("This document is read-only.");
+            }
+            const auto source = authoringSnapshot();
+            const auto wanted = m_selected_id.toStdString();
+            if (wanted.empty()) throw std::invalid_argument("Select a component to update.");
+            const auto annotation = std::find_if(
+                source.entities().begin(), source.entities().end(),
+                [](const auto& entry) { return entry.second.type == kAnnotationEntityType; });
+            if (annotation == source.entities().end()) {
+                throw std::invalid_argument("The project has no annotation state entity.");
+            }
+            const auto state = decode_annotation_entity(annotation->second);
+            const auto instance = std::find_if(
+                state.symbols.begin(), state.symbols.end(),
+                [&](const auto& symbol) { return symbol.id == wanted; });
+            if (instance == state.symbols.end()) {
+                throw std::invalid_argument("The selected component was not found.");
+            }
+            const auto& catalog = desktop_symbol_catalog();
+            const auto definition = std::find_if(
+                catalog.begin(), catalog.end(),
+                [&](const auto& candidate) { return candidate.id == instance->symbol_id; });
+            if (definition == catalog.end()) {
+                throw std::invalid_argument(
+                    "The installed catalog no longer contains this component definition.");
+            }
+            std::string svg;
+            if (definition->svg_asset) {
+                svg = load_symbol_svg(*definition->svg_asset).toStdString();
+            }
+            auto command = make_symbol_migration_command(
+                source, annotation->first, wanted, std::move(svg));
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Update component artwork: %1")
+                         .arg(QString::fromUtf8(error.what())));
             return false;
         }
     }
@@ -17846,7 +17909,7 @@ public:
              [this] { showBuildingObjectDialog(false); }},
             {QStringLiteral("Edit selected building object"),
              [this] { showBuildingObjectDialog(true); }},
-            {QStringLiteral("Wall dimensions and constraints"), [this] { showConstraintEditor(); }},
+            {QStringLiteral("Dimensions and constraints"), [this] { showConstraintEditor(); }},
             {QStringLiteral("Toggle grid"), [this] { toggleGrid(); }},
             {QStringLiteral("Toggle snap"), [this] { toggleSnap(); }},
             {QStringLiteral("Toggle overview map"), [this] { toggleOverviewMap(); }},
@@ -20138,6 +20201,18 @@ private:
         m_annotation_visible_check = new QCheckBox(QStringLiteral("Visible"), m_annotation_group);
         m_annotation_visible_check->setObjectName(QStringLiteral("annotationVisible"));
         annotation_layout->addRow(m_annotation_visible_check);
+        m_symbol_migration_status = new QLabel(m_annotation_group);
+        m_symbol_migration_status->setObjectName(QStringLiteral("symbolMigrationStatus"));
+        m_symbol_migration_status->setWordWrap(true);
+        m_symbol_migration_status->setVisible(false);
+        annotation_layout->addRow(m_symbol_migration_status);
+        m_migrate_symbol_button = new QPushButton(
+            QStringLiteral("Update component artwork"), m_annotation_group);
+        m_migrate_symbol_button->setObjectName(QStringLiteral("migrateSymbolArtwork"));
+        m_migrate_symbol_button->setVisible(false);
+        annotation_layout->addRow(m_migrate_symbol_button);
+        QObject::connect(m_migrate_symbol_button, &QPushButton::clicked, owner,
+                         [this] { (void)migrateSelectedSymbolArtwork(); });
         m_apply_annotation_button = new QPushButton(QStringLiteral("Apply annotation"), m_annotation_group);
         m_apply_annotation_button->setObjectName(QStringLiteral("applyAnnotation"));
         annotation_layout->addRow(m_apply_annotation_button);
@@ -20698,6 +20773,11 @@ private:
                         QObject::connect(length, &QAction::triggered, owner,
                                          [this] { showConstraintEditor(); });
                     }
+                    if (entity && ConstraintDialog::supportsEntity(*entity)) {
+                        auto* constraints = menu.addAction(QStringLiteral("Dimensions and constraints…"));
+                        QObject::connect(constraints, &QAction::triggered, owner,
+                                         [this] { showConstraintEditor(); });
+                    }
                 }
                 const auto selected = selectedEntity();
                 if (selected && is_closed_boundary_entity(selected->type) &&
@@ -21227,15 +21307,9 @@ private:
                 }
                 for (const auto& symbol : state.symbols) {
                     if (!symbol.visible) continue;
-                    const auto definition = std::find_if(
-                        catalog.begin(), catalog.end(), [&](const auto& candidate) {
-                            return candidate.id == symbol.symbol_id;
-                        });
-                    if (definition == catalog.end()) {
-                        throw std::invalid_argument("annotation symbol definition is missing");
-                    }
+                    const auto definition = resolved_symbol_definition(symbol, catalog);
                     Boundary preview;
-                    for (const auto& stroke : placed_symbol_preview(*definition, symbol.placement)) {
+                    for (const auto& stroke : placed_symbol_preview(definition, symbol.placement)) {
                         preview.push_back({stroke.start, stroke.end, 0.0});
                     }
                     annotation_child_layers.emplace_back(symbol.id, symbol.placement.layer_id);
@@ -21256,11 +21330,15 @@ private:
                         QString::fromStdString(symbol.style.fill_pattern);
                     canvas_symbol.filled = symbol.style.fill_pattern != "none" &&
                                            canvas_symbol.fill_color.isValid();
-                    if (definition->svg_asset.has_value()) {
-                        const auto& asset = *definition->svg_asset;
+                    if (definition.svg_asset.has_value()) {
+                        const auto& asset = *definition.svg_asset;
                         CanvasSvgSymbol svg_symbol;
-                        svg_symbol.catalog_id = QString::fromStdString(definition->id);
-                        svg_symbol.document = load_symbol_svg(asset);
+                        svg_symbol.catalog_id = QString::fromStdString(definition.id);
+                        svg_symbol.document = symbol.pinned_svg.empty()
+                            ? load_symbol_svg(asset)
+                            : QByteArray::fromStdString(symbol.pinned_svg);
+                        svg_symbol.artwork_sha256 = QCryptographicHash::hash(
+                            svg_symbol.document, QCryptographicHash::Sha256).toHex();
                         svg_symbol.view_box = QRectF(asset.view_box[0], asset.view_box[1],
                                                     asset.view_box[2], asset.view_box[3]);
                         svg_symbol.footprint_view_box =
@@ -21268,8 +21346,8 @@ private:
                                    asset.footprint_view_box[2], asset.footprint_view_box[3]);
                         svg_symbol.position = symbol.placement.position;
                         svg_symbol.rotation_radians = symbol.placement.rotation_radians;
-                        svg_symbol.width_metres = definition->width_metres * symbol.placement.scale;
-                        svg_symbol.depth_metres = definition->depth_metres * symbol.placement.scale;
+                        svg_symbol.width_metres = definition.width_metres * symbol.placement.scale;
+                        svg_symbol.depth_metres = definition.depth_metres * symbol.placement.scale;
                         canvas_symbol.svg_symbol = std::move(svg_symbol);
                     }
                     all_geometry.push_back(std::move(canvas_symbol));
@@ -21595,15 +21673,21 @@ private:
                 return presentation_hidden_ids.contains(id);
             });
             if (restricted) {
-                // Hosted openings are represented by their wall's clipped
-                // solid in every architectural projection. Referencing an
-                // opening therefore admits its host as a derived dependency.
+                // Referencing an opening admits its host as a derived
+                // dependency; referencing a host also retains its independently
+                // selectable opening assemblies. Neither creates model copies.
                 for (const auto& [id, entity] : snapshot.entities()) {
                     if (entity.type != "opening" || !referenced.contains(id)) continue;
                     const auto host = entity.properties.find("wall_id");
                     if (host != entity.properties.end() && host->is_string() &&
                         !presentation_hidden_ids.contains(host->get<std::string>())) {
                         referenced.insert(host->get<std::string>());
+                    }
+                }
+                for (const auto& [id, entity] : snapshot.entities()) {
+                    if (entity.type == "opening" && !presentation_hidden_ids.contains(id) &&
+                        referenced.contains(read_string(entity.properties, "wall_id").value_or(""))) {
+                        referenced.insert(id);
                     }
                 }
                 // A placed assembly is a transformed copy of its host. Keep
@@ -21746,6 +21830,52 @@ private:
                     continue;
                 }
                 try {
+                    if (entity.type == "opening") {
+                        const auto wall_id = read_string(entity.properties, "wall_id");
+                        const auto host = wall_id ? snapshot.entities().find(*wall_id)
+                                                  : snapshot.entities().end();
+                        if (host == snapshot.entities().end() || host->second.type != "wall") {
+                            throw std::invalid_argument("opening host wall is missing");
+                        }
+                        if (presentation_hidden_ids.contains(*wall_id)) continue;
+                        std::vector<const Entity*> siblings;
+                        for (const auto& [sibling_id, sibling] : snapshot.entities()) {
+                            if (sibling.type == "opening" &&
+                                read_string(sibling.properties, "wall_id") == wall_id) {
+                                siblings.push_back(&sibling);
+                            }
+                        }
+                        Wall wall;
+                        std::string error;
+                        if (!read_document_wall(resolve_vertical_placement(snapshot, host->second),
+                                                siblings, wall, error)) {
+                            throw std::invalid_argument(error);
+                        }
+                        const auto opening = read_hosted_opening(entity);
+                        const auto opening_kind = parse_opening_assembly_kind(
+                            read_string(entity.properties, "opening_kind").value_or(""));
+                        if (!opening || !opening_kind) {
+                            throw std::invalid_argument("opening geometry or kind is incomplete");
+                        }
+                        const auto assembly = entity.properties.contains("opening_assembly")
+                            ? parse_opening_assembly(entity.properties.at("opening_assembly"))
+                            : default_opening_assembly(*opening_kind);
+                        std::optional<DoorOperation> operation;
+                        if (assembly.kind == OpeningAssemblyKind::door &&
+                            entity.properties.contains("door_operation")) {
+                            operation = decode_door_operation(entity.properties.at("door_operation"));
+                        }
+                        const auto shape = clip_to_view(make_opening_assembly(wall, *opening, assembly, operation));
+                        if (shape.IsNull()) continue;
+                        auto projection = project_shape_view(shape, kind, frame);
+                        if (projection.empty()) continue;
+                        // Keep the semantic opening ID so ordinary selection,
+                        // typed properties, history, and schedules share one source.
+                        result.push_back(decorate_projection(CanvasEntity{
+                            id_from(id), QStringLiteral("opening"), std::move(projection), 0.0,
+                            id_from(id) == m_selected_id}));
+                        continue;
+                    }
                     if (entity.type == "terrain_surface") {
                         const auto model = TerrainSurface::from_json(
                             entity.properties.at("model"));
@@ -23103,10 +23233,19 @@ private:
                         [&](const auto& value) { return value.id == wanted; });
                     if (symbol != state.symbols.end()) {
                         selected_annotation_symbol = *symbol;
-                        auto component_name = QString::fromStdString(symbol->symbol_id);
-                        component_name.remove(QRegularExpression(QStringLiteral("-w\\d+-d\\d+$")));
-                        component_name.replace(QLatin1Char('-'), QLatin1Char(' '));
-                        if (!component_name.isEmpty()) component_name[0] = component_name[0].toUpper();
+                        const auto& catalog = desktop_symbol_catalog();
+                        const auto resolved = resolved_symbol_definition(*symbol, catalog);
+                        auto component_name = QString::fromStdString(
+                            resolved.name.empty() ? resolved.family : resolved.name);
+                        if (component_name.isEmpty()) {
+                            component_name = QString::fromStdString(symbol->symbol_id);
+                            component_name.remove(QRegularExpression(QStringLiteral("-w\\d+-d\\d+$")));
+                            component_name.replace(QLatin1Char('-'), QLatin1Char(' '));
+                            if (!component_name.isEmpty()) component_name[0] = component_name[0].toUpper();
+                        }
+                        if (symbol_requires_migration(*symbol, catalog)) {
+                            component_name += QStringLiteral(" — artwork update available");
+                        }
                         annotation_context = component_name;
                         break;
                     }
@@ -23117,8 +23256,10 @@ private:
             }
         }
         const bool wall = entity.has_value() && entity->type == "wall";
-        m_constraint_button->setVisible(wall);
-        m_constraint_button->setEnabled(wall && m_document->is_editable());
+        const bool constraint_target = entity.has_value() &&
+            ConstraintDialog::supportsEntity(*entity);
+        m_constraint_button->setVisible(constraint_target);
+        m_constraint_button->setEnabled(constraint_target && m_document->is_editable());
         const bool curved_wall = [&] {
             if (!wall) return false;
             const auto baseline = read_required_segment(entity->properties, "baseline");
@@ -23242,6 +23383,23 @@ private:
         m_delete_annotation_button->setEnabled(editable && annotation_context.has_value());
         m_annotation_group->setVisible(annotation_context.has_value());
         m_annotation_group->setEnabled(editable && annotation_context.has_value());
+        const bool symbol_migration_required = selected_annotation_symbol &&
+            symbol_requires_migration(*selected_annotation_symbol, desktop_symbol_catalog());
+        const bool symbol_migration_available = symbol_migration_required &&
+            std::any_of(desktop_symbol_catalog().begin(), desktop_symbol_catalog().end(),
+                [&](const auto& definition) {
+                    return definition.id == selected_annotation_symbol->symbol_id;
+                });
+        m_symbol_migration_status->setVisible(symbol_migration_required);
+        m_migrate_symbol_button->setVisible(symbol_migration_required);
+        if (symbol_migration_required) {
+            m_symbol_migration_status->setText(symbol_migration_available
+                ? QStringLiteral(
+                      "This project keeps its saved component artwork until you explicitly update it.")
+                : QStringLiteral(
+                      "This component is no longer in the installed catalog. Its saved artwork remains unchanged."));
+            m_migrate_symbol_button->setEnabled(editable && symbol_migration_available);
+        }
         m_project_details_group->setVisible(project_entity);
         m_project_details_group->setEnabled(editable && project_entity);
         m_area_attributes_group->setVisible(area_entity);
@@ -23754,15 +23912,16 @@ private:
                         [&](const auto& candidate) { return candidate.id == id; });
                     symbol != state.symbols.end()) {
                     const auto& catalog = desktop_symbol_catalog();
-                    const auto definition = std::find_if(catalog.begin(), catalog.end(),
-                        [&](const auto& candidate) { return candidate.id == symbol->symbol_id; });
-                    auto name = definition == catalog.end()
-                        ? QString::fromStdString(symbol->symbol_id)
-                        : QString::fromStdString(definition->name.empty()
-                              ? definition->family : definition->name);
-                    if (definition == catalog.end() || definition->name.empty()) {
+                    const auto definition = resolved_symbol_definition(*symbol, catalog);
+                    auto name = QString::fromStdString(
+                        definition.name.empty() ? definition.family : definition.name);
+                    if (name.isEmpty()) {
+                        name = QString::fromStdString(symbol->symbol_id);
                         name.replace(QLatin1Char('-'), QLatin1Char(' '));
                         if (!name.isEmpty()) name[0] = name[0].toUpper();
+                    }
+                    if (symbol_requires_migration(*symbol, catalog)) {
+                        name += QStringLiteral(" (artwork update available)");
                     }
                     return QStringLiteral("Selected: %1").arg(name);
                 }
@@ -24568,8 +24727,10 @@ public:
 
     void showConstraintEditor(const QString& initial_length = {}) {
         const auto entity = selectedEntity();
-        if (!entity || entity->type != "wall" || !m_document->is_editable()) {
-            setError(QStringLiteral("Select an editable straight wall to change dimensions or constraints."));
+        if (!entity || !ConstraintDialog::supportsEntity(*entity) ||
+            !m_document->is_editable()) {
+            setError(QStringLiteral(
+                "Select an editable straight wall or identified straight measurement boundary."));
             return;
         }
         const auto context = captureModalContext();
@@ -25571,6 +25732,8 @@ private:
     QCheckBox* m_annotation_bold_check{};
     QCheckBox* m_annotation_italic_check{};
     QCheckBox* m_annotation_visible_check{};
+    QLabel* m_symbol_migration_status{};
+    QPushButton* m_migrate_symbol_button{};
     QPushButton* m_apply_annotation_button{};
     QGroupBox* m_reference_group{};
     QLineEdit* m_reference_x_edit{};

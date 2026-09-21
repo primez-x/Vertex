@@ -29,9 +29,15 @@ enum class WallEndpointRole { start, end };
 struct WallEndpointBinding {
     std::string owner_id;
     WallEndpointRole role{WallEndpointRole::start};
+    // Empty for a wall baseline; both IDs are required for an identified
+    // boundary endpoint. The vertex ID is the shared solver identity.
+    std::string segment_id;
+    std::string vertex_id;
 
     bool operator==(const WallEndpointBinding&) const = default;
 };
+
+using ConstraintEndpointBinding = WallEndpointBinding;
 
 struct PersistentConstraint {
     std::string id;
@@ -57,12 +63,15 @@ struct ConstraintEntityDecodeResult {
 [[nodiscard]] std::string_view wall_endpoint_role_name(WallEndpointRole role);
 
 // Decodes a first-class type="constraint" entity. Malformed envelope or
-// malformed known v1 semantics throw std::invalid_argument. A structurally
+// malformed known v1/v2 semantics throw std::invalid_argument. Version two
+// adds stable boundary segment/vertex bindings and generic entity_ids owners.
+// A structurally
 // valid but unknown relation or version returns an unsupported result carrying
 // the original entity.
 [[nodiscard]] ConstraintEntityDecodeResult decode_constraint_entity(const Entity& entity);
 
-// Encodes known v1 semantics. When original is provided, its stable id/type,
+// Encodes baseline-only relations as v1 and boundary relations as v2.
+// When original is provided, its stable id/type,
 // required flag, unrelated properties, extensions, and opaque future fields
 // are retained while canonical v1 fields are replaced. The original must be a
 // constraint entity with the same id.

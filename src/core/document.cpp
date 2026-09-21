@@ -1292,6 +1292,47 @@ Asset Asset::create(std::string media_type, std::vector<std::byte> bytes,
     return create(make_stable_id(), std::move(media_type), std::move(bytes), std::move(metadata));
 }
 
+std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const ApplyBoundaryConstraintChanges& command) {
+    if (command.boundary_edits.empty())
+        document_error(DocumentErrorCode::invalid_entity,
+                       "Boundary constraint transaction requires geometry edits");
+    auto result = source;
+    try {
+        result = edited_boundary_entities_batch(result, command.boundary_edits);
+    } catch (const std::exception& error) {
+        document_error(DocumentErrorCode::invalid_entity, error.what());
+    }
+    std::unordered_set<std::string> touched;
+    for (const auto& change : command.entity_changes) {
+        if (change.kind != EntityChangeKind::upsert && change.kind != EntityChangeKind::erase)
+            document_error(DocumentErrorCode::invalid_entity, "Invalid constraint change kind");
+        const auto& id = change.kind == EntityChangeKind::upsert
+            ? change.entity.id : change.entity_id;
+        if (!touched.insert(id).second)
+            document_error(DocumentErrorCode::duplicate_change,
+                           "Constraint is changed more than once: " + id);
+        const auto previous = source.find(id);
+        if (!is_valid_identifier(id) ||
+            (previous != source.end() && previous->second.type != "constraint"))
+            document_error(DocumentErrorCode::invalid_entity,
+                           "Boundary constraint transaction may only change constraints");
+        if (change.kind == EntityChangeKind::upsert) {
+            if (change.entity.type != "constraint")
+                document_error(DocumentErrorCode::invalid_entity,
+                               "Boundary constraint transaction may only upsert constraints");
+            validate_entity(change.entity);
+            result.insert_or_assign(id, change.entity);
+        } else {
+            if (previous == source.end())
+                document_error(DocumentErrorCode::invalid_entity, "Removed constraint does not exist");
+            result.erase(id);
+        }
+    }
+    return result;
+}
+
 namespace {
 
 void command_exact_fields(const nlohmann::json& value,
@@ -1485,6 +1526,19 @@ nlohmann::json command_to_json(const Command& command) {
             return nlohmann::json{{"version", 1}, {"kind", "apply_entity_changes"},
                                   {"expected_revision", typed.expected_revision}, {"message", typed.message},
                                   {"entity_changes", std::move(entities)}, {"asset_changes", std::move(assets)}};
+        } else if constexpr (std::is_same_v<T, ApplyBoundaryConstraintChanges>) {
+            auto encoded = command_to_json(ApplyEntityChanges{
+                typed.expected_revision, typed.entity_changes, {}, typed.message});
+            encoded["kind"] = "apply_boundary_constraint_changes";
+            encoded.erase("asset_changes");
+            encoded["boundary_edits"] = nlohmann::json::array();
+            try {
+                for (const auto& edit : typed.boundary_edits)
+                    encoded["boundary_edits"].push_back(encode_boundary_geometry_edit(edit));
+            } catch (const std::exception& error) {
+                document_error(DocumentErrorCode::invalid_entity, error.what());
+            }
+            return encoded;
         } else if constexpr (std::is_same_v<T, NameRevision>) {
             validate_revision_name(typed.name);
             return nlohmann::json{{"version", 1}, {"kind", "name_revision"},
@@ -1526,6 +1580,27 @@ Command command_from_json(const nlohmann::json& value) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
         const auto kind = value.at("kind").get<std::string>();
+        if (kind == "apply_boundary_constraint_changes") {
+            command_exact_fields(value, {"version", "kind", "expected_revision", "message",
+                                          "entity_changes", "boundary_edits"},
+                                 DocumentErrorCode::invalid_entity, "serialized boundary constraint command");
+            if (!value.at("boundary_edits").is_array() || value.at("boundary_edits").empty())
+                document_error(DocumentErrorCode::invalid_entity, "Boundary edits must be a nonempty array");
+            auto ordinary = value;
+            ordinary["kind"] = "apply_entity_changes";
+            ordinary.erase("boundary_edits");
+            ordinary["asset_changes"] = nlohmann::json::array();
+            const auto changes = std::get<ApplyEntityChanges>(command_from_json(ordinary));
+            ApplyBoundaryConstraintChanges result{
+                changes.expected_revision, {}, changes.entity_changes, changes.message};
+            try {
+                for (const auto& edit : value.at("boundary_edits"))
+                    result.boundary_edits.push_back(decode_boundary_geometry_edit(edit));
+            } catch (const std::exception& error) {
+                document_error(DocumentErrorCode::invalid_entity, error.what());
+            }
+            return result;
+        }
         if (kind == "apply_entity_changes") {
             command_exact_fields(value, {"version", "kind", "expected_revision", "message",
                                           "entity_changes", "asset_changes"},
@@ -1824,6 +1899,22 @@ Revision Document::apply(const Command& command) {
                 validate_boundary_change(boundary_identity_history_, current.entities, next.entities,
                                          next.action == "Propagate room relationships");
                 record_boundary_identity_transition(next_identity_history, current.entities, next.entities);
+            } else if constexpr (std::is_same_v<CommandType, ApplyBoundaryConstraintChanges>) {
+                next.action = typed_command.message.empty()
+                    ? "Apply boundary constraints" : typed_command.message;
+                validate_action(next.action);
+                next.boundary_constraint_changes = typed_command;
+                next.entities = boundary_constraint_entities(current.entities, typed_command);
+                next_unsupported_constraints = validate_state(next.entities, next.assets);
+                validate_constraint_change(current.entities, next.entities);
+                try {
+                    validate_boundary_identity_transition(
+                        boundary_identity_history_, current.entities, next.entities);
+                } catch (const std::exception& error) {
+                    document_error(DocumentErrorCode::invalid_entity, error.what());
+                }
+                if (same_state(next, current)) return head_revision_;
+                record_boundary_identity_transition(next_identity_history, current.entities, next.entities);
             } else if constexpr (std::is_same_v<CommandType, TranslateBoundary>) {
                 next.action = "Translate boundary";
                 next.boundary_translation = typed_command.translation;
@@ -2012,6 +2103,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
         if (index == 0) {
             if (record.parent_revision.has_value() || record.source_revision.has_value() || record.boundary_translation.has_value() ||
                 record.boundary_transform.has_value() || record.boundary_geometry_edit.has_value() ||
+                record.boundary_constraint_changes.has_value() ||
                 record.name.has_value() || record.action != "create" ||
                 !record.undo_stack.empty() || !record.redo_stack.empty()) {
                 document_error(DocumentErrorCode::invalid_history,
@@ -2025,7 +2117,8 @@ Document Document::restore(DocumentSnapshot snapshot) {
         const auto boundary_proof_count =
             static_cast<unsigned>(record.boundary_translation.has_value()) +
             static_cast<unsigned>(record.boundary_transform.has_value()) +
-            static_cast<unsigned>(record.boundary_geometry_edit.has_value());
+            static_cast<unsigned>(record.boundary_geometry_edit.has_value()) +
+            static_cast<unsigned>(record.boundary_constraint_changes.has_value());
         if (boundary_proof_count > 1)
             document_error(DocumentErrorCode::invalid_history, "Boundary derivation proofs are mutually exclusive");
         if (record.boundary_transform && (record.name || record.source_revision))
@@ -2037,6 +2130,9 @@ Document Document::restore(DocumentSnapshot snapshot) {
         if (record.boundary_geometry_edit && (record.name || record.source_revision))
             document_error(DocumentErrorCode::invalid_history,
                            "Boundary geometry edit proof is not valid on history navigation or named revisions");
+        if (record.boundary_constraint_changes && (record.name || record.source_revision))
+            document_error(DocumentErrorCode::invalid_history,
+                           "Boundary constraint proof is not valid on history navigation or named revisions");
         // Unknown locks retain the read-only latch, but must not suppress
         // stable-endpoint checks for known relations in the same history.
         validate_constraint_change(previous.entities, record.entities);
@@ -2161,6 +2257,22 @@ Document Document::restore(DocumentSnapshot snapshot) {
                 if (same_state(expected, previous))
                     document_error(DocumentErrorCode::invalid_history,
                                    "Unchanged boundary geometry edit cannot create a history record");
+            } else if (record.boundary_constraint_changes) {
+                const auto& proof = *record.boundary_constraint_changes;
+                const auto action = proof.message.empty() ? "Apply boundary constraints" : proof.message;
+                if (proof.expected_revision != previous.revision || record.action != action)
+                    document_error(DocumentErrorCode::invalid_history,
+                                   "Boundary constraint transaction proof does not match revision");
+                auto expected = previous;
+                try {
+                    expected.entities = boundary_constraint_entities(previous.entities, proof);
+                    validate_boundary_identity_transition(identity_history, previous.entities, record.entities);
+                } catch (const std::exception& error) {
+                    document_error(DocumentErrorCode::invalid_history, error.what());
+                }
+                if (!same_state(expected, record) || same_state(expected, previous))
+                    document_error(DocumentErrorCode::invalid_history,
+                                   "Boundary constraint state differs from deterministic reconstruction");
             } else validate_boundary_change(identity_history, previous.entities, record.entities,
                                             record.action == "Propagate room relationships");
             record_boundary_identity_transition(identity_history, previous.entities, record.entities);

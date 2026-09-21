@@ -1,4 +1,4 @@
-# Vertex project formats v1 through v7
+# Vertex project formats v1 through v8
 
 Vertex projects are standalone SQLite files containing one immutable logical
 document snapshot and the complete command history known when that snapshot was captured.
@@ -20,9 +20,9 @@ dimension in retained history requires v2, including an undone or deleted
 identified boundary. Both SQLite `user_version` and `metadata.format_version`
 must agree, and the logical digest includes that version. The reader accepts
 v1 legacy history, v2 identity history, v3 construction-receipt history, v5
-translation history, v6 transform history, and v7 boundary-coordinate edit
-history, plus v4 through v7 archives through recovery-aware APIs.
-Under-versioned semantic data and versions above 7 reject. Legacy-only history
+translation history, v6 transform history, v7 boundary-coordinate edit
+history, and v8 boundary-constraint transactions, plus v4 through v8 archives through recovery-aware APIs.
+Under-versioned semantic data and versions above 8 reject. Legacy-only history
 is still written as v1. Unknown boundary entity
 versions in v2 remain preserved read-only. See `boundary-entity-format.md`.
 Version 2 also recognizes `dimension` entities. Segment-length dimensions refer
@@ -598,3 +598,27 @@ qualified against real machine power loss, filesystem filter drivers, or disk-fu
 every write. Save fails closed unless Windows identifies the destination as a local fixed disk
 using NTFS or ReFS; UNC paths, mapped network drives, removable media, and other filesystems are
 outside the durability boundary and are rejected before staging.
+
+## Boundary-constraint transaction history (v8)
+
+Version 8 adds nullable `revisions.boundary_constraint_changes_json`. A present
+value is the strict versioned `apply_boundary_constraint_changes` command
+envelope, including expected revision, ordered geometry edits, constraint entity
+changes, and message. It belongs only to the originating transaction revision;
+undo and redo retain that revision and its proof without copying the proof onto
+navigation records. Any retained proof requires v8, including undone history.
+
+The column participates in aggregate JSON byte and value limits, the project
+logical digest, document snapshot digests, and authoring source history digests.
+Loading decodes the exact command kind and validates its replay against the
+parent and resulting entity state. Missing, malformed, or forged proof rejects
+even when the file's logical digest has been recomputed. Recovery-aware APIs
+preserve the column and recovery ledger together; document-only APIs continue
+to reject recovery-bearing files. JSON/assets exchange uses version 5 and emits
+`boundary_constraint_changes` on the originating revision.
+
+Older supported files load without this optional proof and retain their existing
+minimum storage version when saved. No source file is modified by loading or
+migration; a new save containing the command writes both format markers as 8
+and the v8 schema. Absent proofs remain omitted from digest manifests, preserving
+legacy digest vectors.

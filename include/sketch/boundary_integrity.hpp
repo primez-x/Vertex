@@ -16,6 +16,11 @@ namespace sketch {
 [[nodiscard]] std::map<std::string, Entity, std::less<>> edited_boundary_entities(
     const std::map<std::string, Entity, std::less<>>& source,
     const BoundaryGeometryEdit& edit);
+// Applies solved vertex positions together when sequential intermediate geometry
+// would be invalid. Existing sequential derivations remain byte-compatible.
+[[nodiscard]] std::map<std::string, Entity, std::less<>> edited_boundary_entities_batch(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const std::vector<BoundaryGeometryEdit>& edits);
 // Validate every supported boundary, qualified construction receipt and
 // dimension, including stable child references, even when another entity has an unknown version. Unknown
 // versions return a document-wide read-only reason.

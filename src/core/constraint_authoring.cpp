@@ -1,6 +1,7 @@
 #include "sketch/constraint_authoring.hpp"
 
 #include "sketch/constraint_integrity.hpp"
+#include "sketch/boundary_integrity.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/constraint_tolerances.hpp"
 #include "sketch/project_organization.hpp"
@@ -182,16 +183,30 @@ std::string digest_shown_result(const ConstraintAuthoringPreview& preview) {
                            {"old", segment_json(change.old_baseline)},
                            {"proposed", segment_json(change.proposed_baseline)}});
     }
+    auto boundary_changes = ordered_json::array();
+    for (const auto& change : preview.changed_boundaries()) {
+        boundary_changes.push_back({{"before", encode_identified_boundary_entity(change.before).properties},
+                                    {"after", encode_identified_boundary_entity(change.after).properties}});
+    }
+    auto boundary_edits = ordered_json::array();
+    for (const auto& edit : preview.boundary_edits())
+        boundary_edits.push_back(encode_boundary_geometry_edit(edit));
     return digest_json({{"accepted", preview.accepted()},
                         {"document_id", preview.document_id()},
                         {"revision", preview.expected_revision()},
                         {"source_digest", preview.source_snapshot_digest()},
                         {"candidate_digest", preview.candidate_digest()},
                         {"changes", std::move(changes)},
+                        {"boundary_changes", std::move(boundary_changes)},
+                        {"degrees_of_freedom", preview.degrees_of_freedom()},
+                        {"boundary_edits", std::move(boundary_edits)},
                         {"diagnostics", preview.diagnostics()}});
 }
 
 std::string point_id(const WallEndpointBinding& binding) {
+    if (!binding.vertex_id.empty())
+        return std::to_string(binding.owner_id.size()) + ":" + binding.owner_id +
+            ":vertex:" + binding.vertex_id;
     return std::to_string(binding.owner_id.size()) + ":" + binding.owner_id +
         (binding.role == WallEndpointRole::start ? ":start" : ":end");
 }
@@ -949,7 +964,121 @@ class ConstraintAuthoringBuilder final {
 public:
     static ConstraintAuthoringPreview build(const DocumentSnapshot& snapshot,
                                              const ConstraintAuthoringIntent& raw_intent);
+    static void solve_boundaries(ConstraintAuthoringPreview& result, Entities candidate,
+        std::set<std::string, std::less<>> affected, bool has_upsert);
 };
+
+void ConstraintAuthoringBuilder::solve_boundaries(ConstraintAuthoringPreview& result,
+    Entities candidate, std::set<std::string, std::less<>> affected, bool has_upsert) {
+    const auto& intent = result.normalized_intent_;
+    if (intent.wall_resize) invalid("Boundary relations cannot be combined with a wall resize");
+    const auto constraints = decode_supported_constraints(candidate);
+    bool expanded = true;
+    while (expanded) {
+        expanded = false;
+        for (const auto& [id, relation] : constraints) {
+            (void)id;
+            if (!std::any_of(relation.bindings.begin(), relation.bindings.end(),
+                    [&](const auto& binding) { return affected.contains(binding.owner_id); })) continue;
+            for (const auto& binding : relation.bindings)
+                expanded = affected.insert(binding.owner_id).second || expanded;
+        }
+    }
+    std::map<std::string, IdentifiedBoundary, std::less<>> boundaries;
+    std::map<std::string, Vec2, std::less<>> positions;
+    std::map<std::string, WallEndpointBinding, std::less<>> bindings;
+    ConstraintSolveRequest request;
+    request.expected_revision = result.expected_revision_;
+    for (const auto& id : affected) {
+        const auto owner = candidate.find(id);
+        if (owner == candidate.end()) invalid("Boundary constraint owner does not exist: " + id);
+        if (!can_recognize_boundary_entity_type(owner->second.type))
+            invalid("Mixed wall and boundary constraint components are not supported");
+        auto boundary = decode_identified_boundary_entity(owner->second);
+        WindingInvariant winding;
+        winding.orientation = signed_area(boundary_geometry(boundary)) > 0
+            ? WindingOrientation::counter_clockwise : WindingOrientation::clockwise;
+        for (const auto& edge : boundary.segments) {
+            if (edge.segment.sweep_radians != 0.0)
+                invalid("Boundary constraint solving requires an entirely straight boundary");
+            WallEndpointBinding binding{id, WallEndpointRole::start, edge.segment_id, edge.start_vertex_id};
+            const auto key = point_id(binding);
+            positions.emplace(key, edge.segment.start);
+            bindings.emplace(key, binding);
+            winding.loop.push_back(key);
+        }
+        request.winding_invariants.push_back(std::move(winding));
+        boundaries.emplace(id, std::move(boundary));
+    }
+    const auto resolve = [&](const WallEndpointBinding& binding) {
+        const auto owner = boundaries.find(binding.owner_id);
+        if (owner == boundaries.end()) invalid("Boundary anchor is outside the affected component");
+        const auto& edges = owner->second.segments;
+        const auto edge = std::find_if(edges.begin(), edges.end(),
+            [&](const auto& e) { return e.segment_id == binding.segment_id; });
+        if (edge == edges.end() ||
+            (binding.role == WallEndpointRole::start ? edge->start_vertex_id : edge->end_vertex_id)
+                != binding.vertex_id)
+            invalid("Boundary binding does not resolve its stable segment endpoint");
+        return point_id(binding);
+    };
+    std::set<std::string, std::less<>> persistent_ids;
+    SolverConstraintDescriptions descriptions;
+    for (const auto& [id, relation] : constraints) {
+        if (!affected.contains(relation.bindings.front().owner_id)) continue;
+        for (const auto& binding : relation.bindings) (void)resolve(binding);
+        append_relation(request, relation);
+        persistent_ids.insert(id);
+        descriptions.emplace(id, std::string(constraint_relation_name(relation.relation)) + " relation " + id);
+    }
+    std::optional<std::string> anchor;
+    if (has_upsert && intent.relation_anchor) anchor = resolve(*intent.relation_anchor);
+    std::map<std::string, Vec2, std::less<>> fixed;
+    std::size_t index = 0;
+    for (const auto& [id, position] : positions) {
+        request.points.push_back({id, position.x, position.y});
+        if (!anchor || *anchor == id ||
+            (!intent.relation_move_connected_walls &&
+             bindings.at(id).owner_id != intent.relation_anchor->owner_id)) {
+            fixed.emplace(id, position);
+            const auto temporary = unique_temporary_id(persistent_ids, index++);
+            request.constraints.push_back(FixedAnchorConstraint{temporary, id, position.x, position.y});
+            descriptions.emplace(temporary, "fixed boundary vertex " + bindings.at(id).vertex_id);
+        }
+    }
+    const auto solved = solve_planar_constraints(request);
+    result.degrees_of_freedom_ = solved.degrees_of_freedom;
+    result.diagnostics_ = solver_diagnostics(solved, descriptions);
+    if (!solved.accepted()) return;
+    // Use the existing semantic edit adapter so dimensions retain their stable
+    // references and construction receipts become replayable derivation proof.
+    for (const auto& point : solved.points) {
+        auto position = Vec2{point.x, point.y};
+        if (fixed.contains(point.id)) position = fixed.at(point.id);
+        if (points_near(position, positions.at(point.id))) continue;
+        const auto& binding = bindings.at(point.id);
+        BoundaryGeometryEdit edit;
+        edit.boundary_id = binding.owner_id;
+        edit.target_id = binding.vertex_id;
+        edit.target_position = position;
+        result.boundary_edits_.push_back(edit);
+    }
+    candidate = edited_boundary_entities_batch(candidate, result.boundary_edits_);
+    (void)validate_boundary_integrity(candidate);
+    (void)validate_constraint_integrity(candidate);
+    for (const auto& [id, before] : boundaries) {
+        const auto after = decode_identified_boundary_entity(candidate.at(id));
+        if (after != before) result.changed_boundaries_.push_back({before, after});
+    }
+    if (candidate == result.candidate_entities_) {
+        result.diagnostics_.push_back("Constraint authoring intent makes no document change");
+        return;
+    }
+    result.accepted_ = true;
+    result.candidate_entities_ = std::move(candidate);
+    result.candidate_digest_ = entity_map_digest(result.candidate_entities_);
+    result.shown_result_digest_ = digest_shown_result(result);
+}
 
 ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
     const DocumentSnapshot& snapshot, const ConstraintAuthoringIntent& raw_intent) {
@@ -1014,9 +1143,18 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             seeds.insert(intent.wall_resize->wall_id);
         }
         const auto constraints = decode_supported_constraints(candidate);
+        if (std::any_of(seeds.begin(), seeds.end(), [&](const auto& id) {
+                const auto found = candidate.find(id);
+                return found != candidate.end() && can_recognize_boundary_entity_type(found->second.type);
+            })) {
+            solve_boundaries(result, std::move(candidate), seeds, has_upsert);
+            return result;
+        }
         std::map<std::string, std::set<std::string, std::less<>>, std::less<>> adjacency;
         for (const auto& [id, value] : constraints) {
             (void)id;
+            if (std::any_of(value.bindings.begin(), value.bindings.end(),
+                    [](const auto& b) { return !b.segment_id.empty(); })) continue;
             std::set<std::string, std::less<>> owners;
             for (const auto& binding : value.bindings) {
                 validate_binding(binding);
@@ -1194,6 +1332,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                 "fixed endpoint: " + endpoint_description(candidate, point_bindings.at(id)));
         }
         const auto solver_preview = solve_planar_constraints(request);
+        result.degrees_of_freedom_ = solver_preview.degrees_of_freedom;
         result.diagnostics_ = solver_diagnostics(solver_preview, constraint_descriptions);
         if (!solver_preview.accepted()) {
             if (result.diagnostics_.empty()) {
@@ -1268,6 +1407,8 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
     } catch (const std::exception& error) {
         result.accepted_ = false;
         result.changed_walls_.clear();
+        result.changed_boundaries_.clear();
+        result.boundary_edits_.clear();
         result.candidate_entities_ = snapshot.entities();
         result.candidate_digest_.clear();
         result.shown_result_digest_.clear();
@@ -1302,6 +1443,13 @@ const std::string& ConstraintAuthoringPreview::candidate_digest() const noexcept
 }
 const std::vector<ConstraintWallChange>& ConstraintAuthoringPreview::changed_walls() const noexcept {
     return changed_walls_;
+}
+const std::vector<ConstraintBoundaryChange>& ConstraintAuthoringPreview::changed_boundaries() const noexcept {
+    return changed_boundaries_;
+}
+int ConstraintAuthoringPreview::degrees_of_freedom() const noexcept { return degrees_of_freedom_; }
+const std::vector<BoundaryGeometryEdit>& ConstraintAuthoringPreview::boundary_edits() const noexcept {
+    return boundary_edits_;
 }
 const Entities& ConstraintAuthoringPreview::candidate_entities() const noexcept {
     return candidate_entities_;
@@ -1363,6 +1511,31 @@ Revision apply_constraint_authoring(Document& document,
     if (changes.empty()) {
         throw DocumentError(DocumentErrorCode::invalid_entity,
                             "Constraint preview does not contain a document change");
+    }
+    if (!recomputed.boundary_edits_.empty()) {
+        std::vector<EntityChange> constraint_changes;
+        for (const auto& change : changes) {
+            const auto id = change.kind == EntityChangeKind::upsert
+                ? change.entity.id : change.entity_id;
+            const auto before = current.entities().find(id);
+            const bool was_constraint = before != current.entities().end() &&
+                before->second.type == "constraint";
+            const bool is_constraint = change.kind == EntityChangeKind::upsert &&
+                change.entity.type == "constraint";
+            if (was_constraint || is_constraint) {
+                constraint_changes.push_back(change);
+            }
+        }
+        ApplyBoundaryConstraintChanges command{
+            current.revision(), recomputed.boundary_edits_,
+            std::move(constraint_changes), recomputed.normalized_intent_.message};
+        const auto verified = Document::preview_command(current, Command{command});
+        if (verified.entities() != recomputed.candidate_entities_ ||
+            verified.assets() != current.assets()) {
+            throw DocumentError(DocumentErrorCode::invalid_entity,
+                                "Typed boundary constraint replay does not reproduce the shown result");
+        }
+        return document.apply(Command{std::move(command)});
     }
     return document.apply(ApplyEntityChanges{
         .expected_revision = current.revision(),

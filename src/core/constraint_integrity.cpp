@@ -1,6 +1,7 @@
 #include "sketch/constraint_integrity.hpp"
 
 #include "sketch/constraint_entity.hpp"
+#include "sketch/boundary_entity.hpp"
 #include "sketch/constraint_tolerances.hpp"
 #include "sketch/wall_semantics.hpp"
 
@@ -135,7 +136,8 @@ std::optional<std::string> validate_constraint_integrity(const Entities& entitie
         if (entity.type != "constraint") continue;
         try {
             const auto decoded = decode_constraint_entity(entity);
-            for (const auto& owner_id : typed_wall_ids(entity)) {
+            for (const auto& owner_id : entity.properties.contains("wall_ids")
+                     ? typed_wall_ids(entity) : std::vector<std::string>{}) {
                 auto found = owners.find(owner_id);
                 if (found == owners.end()) {
                     found = owners.emplace(owner_id,
@@ -144,16 +146,42 @@ std::optional<std::string> validate_constraint_integrity(const Entities& entitie
                 if (decoded.constraint) require_straight_wall(found->second);
             }
             if (!decoded.constraint) {
+                if (entity.properties.contains("entity_ids")) {
+                    for (const auto& value : entity.properties.at("entity_ids")) {
+                        const auto owner = entities.find(value.get<std::string>());
+                        if (owner == entities.end()) invalid("Constraint owner does not exist");
+                        if (owner->second.type == "wall")
+                            (void)read_wall(owner->first, entities, openings_by_wall);
+                        else
+                            (void)decode_identified_boundary_entity(owner->second);
+                    }
+                }
                 if (!unsupported) unsupported = "Constraint " + id + ": " + decoded.unsupported_reason;
                 continue;
             }
             const auto& constraint = *decoded.constraint;
             std::vector<Vec2> points;
             for (const auto& binding : constraint.bindings) {
+                if (!binding.segment_id.empty()) {
+                    const auto owner = entities.find(binding.owner_id);
+                    if (owner == entities.end()) invalid("Boundary constraint owner is missing");
+                    const auto boundary = decode_identified_boundary_entity(owner->second);
+                    const auto edge = std::find_if(boundary.segments.begin(), boundary.segments.end(),
+                        [&](const auto& value) { return value.segment_id == binding.segment_id; });
+                    if (edge == boundary.segments.end()) invalid("Boundary constraint segment is missing");
+                    if (edge->segment.sweep_radians != 0.0)
+                        invalid("Boundary constraints require straight segments");
+                    const bool start = binding.role == WallEndpointRole::start;
+                    if ((start ? edge->start_vertex_id : edge->end_vertex_id) != binding.vertex_id)
+                        invalid("Boundary constraint endpoint identity does not match its segment");
+                    points.push_back(start ? edge->segment.start : edge->segment.end);
+                    continue;
+                }
                 auto found = owners.find(binding.owner_id);
                 if (found == owners.end())
                     found = owners.emplace(binding.owner_id,
                         read_wall(binding.owner_id, entities, openings_by_wall)).first;
+                require_straight_wall(found->second);
                 points.push_back(binding.role == WallEndpointRole::start
                     ? found->second.baseline.start : found->second.baseline.end);
             }
@@ -205,6 +233,7 @@ void validate_constraint_transition(const Entities& before, const Entities& afte
         const auto decoded = decode_constraint_entity(entity);
         if (!decoded.constraint) continue; // Unsupported documents are read-only.
         for (const auto& binding : decoded.constraint->bindings) {
+            if (!binding.segment_id.empty()) continue;
             if (reversed.contains(binding.owner_id) || !after.contains(binding.owner_id)) continue;
             const auto& old_baseline = before.at(binding.owner_id).properties.at("baseline");
             const auto& new_baseline = after.at(binding.owner_id).properties.at("baseline");

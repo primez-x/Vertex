@@ -51,4 +51,16 @@ void validate_annotation_entity(const Entity& entity) {
     (void)decode_annotation_entity(entity);
 }
 
+ApplyEntityChanges make_symbol_migration_command(const DocumentSnapshot& snapshot,
+    std::string_view entity_id, std::string_view instance_id, std::string pinned_svg) {
+    const auto found = snapshot.entities().find(entity_id);
+    require(found != snapshot.entities().end(), "annotation entity not found");
+    auto entity = found->second;
+    const auto state = migrate_symbol_definition(decode_annotation_entity(entity), instance_id,
+                                                 catalog(), std::move(pinned_svg));
+    entity.properties["state"] = encode_annotation_state(state, catalog());
+    return {snapshot.revision(), {EntityChange::upsert(std::move(entity))}, {},
+            "Migrate symbol artwork revision"};
+}
+
 }  // namespace sketch

@@ -64,6 +64,52 @@ int main() {
                 "annotation entity did not survive save/reopen");
         std::filesystem::remove(path);
 
+        // An old pinned definition is valid even when the installed catalog has
+        // moved on. Only an explicit Document command may replace it.
+        auto historical = fixture();
+        const auto svg = sketch::filter_symbol_catalog(sketch::default_symbol_catalog(),
+            "Toilet Close Coupled", "01_bathroom").front();
+        historical.symbols.front().symbol_id = svg.id;
+        historical.symbols.front().definition = svg;
+        historical.symbols.front().definition->artwork_revision = 99;
+        historical.symbols.front().pinned_svg = "<svg xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M0 0L1 1\"/></svg>";
+        historical.symbols.front().visible = false;
+        auto historical_entity = sketch::make_annotation_entity("annotations", historical);
+        historical_entity.extensions["owner_context"] = "retain-me";
+        historical_entity.required = true;
+        auto migration_document = sketch::Document::create({historical_entity});
+        const auto command = sketch::make_symbol_migration_command(
+            migration_document.snapshot(), "annotations", "symbol-1", "<svg/>");
+        (void)migration_document.apply(command);
+        const auto migrated_entity = migration_document.snapshot().entities().at("annotations");
+        const auto migrated_state = sketch::decode_annotation_entity(migrated_entity);
+        require(!sketch::symbol_requires_migration(migrated_state.symbols.front(), sketch::default_symbol_catalog()),
+                "migration command did not adopt current revision");
+        auto preserved = migrated_entity;
+        preserved.properties["state"]["symbols"][0]["definition"] = historical_entity.properties["state"]["symbols"][0]["definition"];
+        preserved.properties["state"]["symbols"][0]["pinned_svg"] = historical_entity.properties["state"]["symbols"][0]["pinned_svg"];
+        require(preserved == historical_entity,
+                "migration changed label, transform, layer, style, visibility or entity metadata");
+        (void)migration_document.undo(migration_document.revision());
+        require(migration_document.snapshot().entities().at("annotations") == historical_entity,
+                "undo did not restore exact historical artwork");
+        const auto historical_receipt = sketch::ProjectStore::save(path, migration_document.snapshot());
+        auto migration_reopened = sketch::ProjectStore::load(path).document;
+        require(migration_reopened.snapshot().entities().at("annotations") == historical_entity,
+                "save/reopen lost historical artwork");
+        (void)migration_reopened.redo(migration_reopened.revision());
+        require(migration_reopened.snapshot().entities().at("annotations") == migrated_entity,
+                "redo after reopen did not restore migrated artwork");
+        sketch::SaveOptions migration_save_options;
+        migration_save_options.expected_destination_sha256 = historical_receipt.file_sha256;
+        const auto migration_receipt = sketch::ProjectStore::save(path, migration_reopened.snapshot(), migration_save_options);
+        auto migrated_reopened = sketch::ProjectStore::load(path).document;
+        (void)migrated_reopened.undo(migrated_reopened.revision());
+        require(migrated_reopened.snapshot().entities().at("annotations") == historical_entity,
+                "undo after migrated save/reopen did not restore historical artwork");
+        std::filesystem::remove(path);
+        if (migration_receipt.backup_path) std::filesystem::remove(*migration_receipt.backup_path);
+
         entity.properties["version"] = 2;
         rejects_document([&] { (void)sketch::Document::create({entity}); });
         entity = sketch::make_annotation_entity("annotations", state);

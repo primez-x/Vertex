@@ -128,6 +128,93 @@ void both_workspace_entrypoints() {
         require(window.undoCommand(), "workspace constraint edit cannot undo");
     }
 }
+Entity boundary(std::string id, double x = 0, double tilt = 1) {
+    return encode_identified_boundary_entity(IdentifiedBoundary{std::move(id), "measurement_boundary", {
+        {"ab", "a", "b", {{x, 0}, {x + 4, tilt}, 0}},
+        {"bc", "b", "c", {{x + 4, tilt}, {x + 4, 4}, 0}},
+        {"cd", "c", "d", {{x + 4, 4}, {x, 4}, 0}},
+        {"da", "d", "a", {{x, 4}, {x, 0}, 0}}}});
+}
+void select_relation(ConstraintDialog& dialog, ConstraintRelationKind kind) {
+    auto& field = combo(dialog, "constraintRelation");
+    field.setCurrentIndex(field.findData(static_cast<int>(kind)));
+}
+void boundary_relationship_workflows() {
+    auto document = Document::create({boundary("first"), boundary("second", 10, 0), wall()});
+    const auto original = document.snapshot();
+    ConstraintDialog add(original, "first", true);
+    require(ConstraintDialog::supportsEntity(original.entities().at("first")), "straight boundary unavailable");
+    require(combo(add, "constraintOperation").count() == 3 && combo(add, "constraintOperation").currentData().toInt() == 1,
+        "boundary must default to Add and omit wall resize");
+    require(combo(add, "constraintBinding0").count() == 16, "boundary endpoints include walls or miss stable edges");
+    require(add.previewEdit() && add.submit(), "boundary horizontal preview failed");
+    const auto preview = *add.acceptedPreview();
+    require(preview.changed_boundaries().size() == 1 && document.snapshot().entities() == original.entities(), "boundary preview mutated state or omitted geometry");
+    capture(add, "boundary-horizontal");
+    apply_constraint_authoring(document, preview);
+    const auto solved = decode_identified_boundary_entity(document.snapshot().entities().at("first"));
+    require_near(solved.segments[0].segment.end.y, 0);
+    bool stale_rejected = false;
+    try { apply_constraint_authoring(document, preview); } catch (const std::exception&) { stale_rejected = true; }
+    require(stale_rejected, "stale boundary preview applied twice");
+    const auto horizontal = document.snapshot();
+    document.undo(document.revision());
+    require(document.snapshot().entities() == original.entities(), "boundary dialog undo was incomplete");
+    document.redo(document.revision());
+    require(document.snapshot().entities() == horizontal.entities(), "boundary dialog redo was incomplete");
+    ConstraintDialog edit(document.snapshot(), "first", true);
+    combo(edit, "constraintOperation").setCurrentIndex(1);
+    select_relation(edit, ConstraintRelationKind::fixed_length);
+    edit.setLengthExpression("5 m");
+    require(edit.previewEdit() && edit.submit(), "boundary constraint edit failed");
+    apply_constraint_authoring(document, *edit.acceptedPreview());
+    const auto locked = document.snapshot();
+    ConstraintDialog conflict(locked, "first", true);
+    select_relation(conflict, ConstraintRelationKind::fixed_length);
+    conflict.setLengthExpression("6 m");
+    require(!conflict.previewEdit() && !conflict.submit() && !conflict.lastError().isEmpty(), "boundary conflict was not explained and rejected");
+    require(document.snapshot().entities() == locked.entities(), "boundary conflict changed document");
+    ConstraintDialog remove(locked, "first", true);
+    combo(remove, "constraintOperation").setCurrentIndex(2);
+    require(remove.previewEdit() && remove.submit(), "boundary removal preview failed");
+    require(remove.acceptedPreview()->changed_boundaries().empty(), "removing constraint moved geometry");
+    apply_constraint_authoring(document, *remove.acceptedPreview());
+    document.undo(document.revision());
+    require(document.snapshot().entities() == locked.entities(), "boundary removal undo failed");
+    for (const auto kind : {ConstraintRelationKind::parallel, ConstraintRelationKind::perpendicular,
+                           ConstraintRelationKind::coincident, ConstraintRelationKind::vertical,
+                           ConstraintRelationKind::fixed_anchor}) {
+        auto fixture = Document::create({boundary("first", 0, 0.5), boundary("second", 10, 0)});
+        ConstraintDialog relation(fixture.snapshot(), "first", true);
+        select_relation(relation, kind);
+        if (kind == ConstraintRelationKind::perpendicular) {
+            combo(relation, "constraintBinding2").setCurrentIndex(10);
+            combo(relation, "constraintBinding3").setCurrentIndex(11);
+        } else if (kind == ConstraintRelationKind::coincident) {
+            combo(relation, "constraintBinding0").setCurrentIndex(1);
+            combo(relation, "constraintBinding1").setCurrentIndex(8);
+        } else if (kind == ConstraintRelationKind::vertical) {
+            combo(relation, "constraintBinding0").setCurrentIndex(2);
+            combo(relation, "constraintBinding1").setCurrentIndex(3);
+        }
+        if (!relation.previewEdit()) throw std::runtime_error(relation.lastError().toStdString());
+        require(relation.submit(), "boundary relation submit failed");
+        apply_constraint_authoring(fixture, *relation.acceptedPreview());
+        bool found = false;
+        const auto committed = fixture.snapshot();
+        for (const auto& [id, entity] : committed.entities()) if (entity.type == "constraint") {
+            const auto constraint = decode_constraint_entity(entity);
+            require(constraint.constraint->relation == kind, "dialog saved wrong relation");
+            for (const auto& binding : constraint.constraint->bindings)
+                require(!binding.segment_id.empty() && !binding.vertex_id.empty(), "dialog dropped stable boundary identity");
+            found = true;
+        }
+        require(found, "boundary relationship was not persisted");
+    }
+    auto curved = decode_identified_boundary_entity(boundary("curve"));
+    curved.segments[0].segment.sweep_radians = 0.2;
+    require(!ConstraintDialog::supportsEntity(encode_identified_boundary_entity(curved)), "curved boundary offered unsupported constraints");
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -138,6 +225,7 @@ int main(int argc, char** argv) {
     try {
         resize_preview_anchor_and_invalidation();
         relationship_create_edit_conflict_remove();
+        boundary_relationship_workflows();
         both_workspace_entrypoints();
         std::cout << "Constraint dialog workflows passed\n";
         return 0;

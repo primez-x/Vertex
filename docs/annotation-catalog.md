@@ -117,10 +117,13 @@ overrides. Decoding rejects malformed fields, unsupported versions, duplicate
 instance IDs/override targets, unknown symbols, invalid scales/colors, nonfinite
 coordinates, and excessive collection sizes. IDs are limited to 256 bytes and
 label content to 65,536 bytes. Annotation state records the built-in symbol
-catalog revision; legacy states without that field upgrade to revision 1, while
-an unsupported revision fails closed until an explicit migration is provided.
-Decode is atomic and returns a new state. The catalog is supplied separately;
-instance JSON does not serialize custom catalog definitions. Unknown JSON fields
+catalog revision. Version 2 state pins a validated definition snapshot on each
+instance, including artwork/catalog revisions, physical dimensions, anchor,
+scale limits, preview, human name and SVG coordinate metadata. Optional
+`pinned_svg` retains the exact SVG bytes independently of installed asset files.
+Version 1 records upgrade only against their original revision-1 definitions;
+unknown legacy revisions fail closed. Decode is atomic and returns a new state.
+Unknown JSON fields
 are ignored and are not retained; this is not an opaque forward-compatible
 document envelope. The
 `sketch.annotation_entity` Document codec wraps this state in a strict typed
@@ -133,6 +136,38 @@ catalog usable at its full size. Navigator rows and canvas hit testing expose
 stable child IDs, deletion is undoable, and the inspector edits label text or
 either annotation kind's position, rotation, scale, and visibility through
 typed history.
+
+`symbol_requires_migration` reports changed or removed installed definitions;
+it also detects changed metadata even if a publisher forgot to bump the revision.
+`resolved_symbol_definition` retains saved geometry and suppresses a stale
+external SVG path when exact bytes were not captured, leaving the saved vector
+preview as the honest fallback. Rendering must prefer `pinned_svg` over reading
+an installed path, and visibly indicate a migration requirement. Bundled artwork
+records its exact SHA-256 in `SymbolSvgAsset`; the desktop verifies that digest
+before rendering. Definition comparison therefore detects artwork changes even
+when geometry metadata is unchanged. Publishers also increment
+`SymbolDefinition::artwork_revision` to state the intended revision explicitly.
+
+`migrate_symbol_definition` explicitly replaces just the selected snapshot and
+SVG payload. It preserves the instance ID, transform, layer, style and visibility,
+plus all labels, siblings and presentation overrides. A target whose scale limits
+exclude the existing scale is rejected atomically. Removed definitions remain
+saveable but cannot migrate until a target is available.
+`make_symbol_migration_command` wraps this in a revision-checked Document upsert,
+preserving the annotation entity's required flag and extensions. Applying that
+command supports ordinary undo/redo, including history restored by save/reopen.
+Desktop integration captures SVG bytes at placement and explicit migration,
+renders through the resolver, exposes the stale indicator and migration action,
+and applies the command through the normal workspace history path. New placements capture the exact
+bundled SVG, every renderer prefers the pinned bytes, stale instances keep their
+saved definition and artwork, and the Component properties popover displays an
+**Update component artwork** action only when a newer installed definition is
+available. The update is one ordinary undoable Document command. Pinned SVGs
+are limited to 256 KiB each and 32 MiB per annotation state and reject scripts,
+event handlers, external references, embedded images, doctypes, entities and
+non-fragment CSS URLs before they can reach Qt's SVG renderer. Renderer caches
+are keyed by exact artwork digest rather than catalog ID, so historical and
+current instances of the same component can coexist without visual aliasing.
 
 Stored stroke/fill colors, fill patterns, paper-independent text height,
 bold/italic emphasis, and symbol stroke width now flow into the same renderer

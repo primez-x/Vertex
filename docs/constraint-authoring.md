@@ -4,8 +4,8 @@ This is the implementation contract for connecting the existing planar solver
 to document editing. The solver already produces independently checked point
 previews. The [versioned wall constraint codec](constraint-entity-format.md) and
 document integrity checks are implemented. A command service and interactive
-preview/Apply dialog now connect them to both workspaces and are undergoing
-integrated verification as part of the full production gate.
+preview/Apply dialog connect them to both workspaces for straight walls and
+identified straight measurement boundaries.
 
 ## Semantic authority
 
@@ -14,22 +14,21 @@ relationships to that geometry, never a second editable copy of its points.
 Solver requests derive coordinates from one immutable document snapshot.
 
 A point reference needs a stable owner ID and a stable semantic endpoint ID.
-Straight walls already have named baseline `start` and `end` roles. Boundary
-segment array indexes are not stable identities: vertex insertion, reversal,
-reopening and cloning can change them. Boundary constraint binding therefore
-requires persistent vertex identities and an explicit topology mapping before
-it is enabled. Coincident coordinates alone do not establish a relationship.
+Straight walls have named baseline `start` and `end` roles. Boundary segment
+array indexes are not stable identities, so boundary bindings name the retained
+`segment_id` and `vertex_id` plus the endpoint role. Coincident coordinates
+alone do not establish a relationship.
 While a wall has attached constraints, a reverse operation must either remap
 all endpoint bindings atomically or reject. Swapping coordinate fields cannot
 silently redefine the endpoint identities.
 
-Constraint records require a versioned codec, stable constraint ID, relation
-kind, typed owner references, endpoint roles, and any exact entered quantity.
-They are first-class `constraint` entities, not serialized solver DTOs. A
-binding names `{owner_id, feature: "baseline", role: "start" | "end"}`.
-A sorted, unique top-level `wall_ids` list provides typed ownership and
-structural deletion protection. It must match all nested endpoint owners for
-this codec; a redundant generic `refs` list is not required.
+Constraint records use a versioned codec, stable constraint ID, relation kind,
+typed owner references, endpoint roles, and any exact entered quantity. They
+are first-class `constraint` entities, not serialized solver DTOs. Version 1
+wall bindings name the owner and baseline endpoint role. Version 2 boundary
+bindings additionally name the segment and vertex identities. Its sorted,
+unique top-level `entity_ids` list supplies typed ownership and structural
+deletion protection and must match every nested endpoint owner.
 Unknown optional fields must survive an unrelated edit. Unknown versions or
 relations must not be silently solved as a known relation. Preserve unsupported
 constraint data but make the document read-only until its lock semantics can
@@ -129,10 +128,10 @@ semantics do not change merely because a constraint is added.
 - Inspect preview, conflict and cancellation states with keyboard navigation at
   normal and 150 percent display scaling in both workspaces.
 
-The first integration can bind named endpoints of straight walls while the
-stable boundary-vertex model is built. That ordering does not complete the
-broader constraint requirements or remove curve, topology or level work from
-the production scope.
+The implemented desktop dialog binds named endpoints of straight walls and
+stable endpoints of identified straight measurement boundaries. Curved
+boundary relations and mixed wall/boundary components reject explicitly; they
+remain open production scope rather than being approximated as line geometry.
 
 ## Implemented command and receipt boundary
 
@@ -174,3 +173,12 @@ not presented as the explanation. The dialog retains a scrollable, selectable
 plain-text diagnostic panel; rejected previews leave Apply disabled and preserve
 the document. Focused tests cover a locked 12-foot wall resized to 14 feet and
 require readable fixed-length and fixed-endpoint explanations.
+
+Boundary solves commit through `ApplyBoundaryConstraintChanges`. The typed
+transaction replays ordered semantic vertex edits before applying constraint
+entity changes, preserves construction receipts as geometry-derivation proof,
+and advances history once. Project format 8 stores the exact command envelope;
+document restore, save/reopen, exchange, digests, recovery budgets and archive
+paths validate it by deterministic replay. The dialog omits the wall-only
+baseline-resize operation in boundary mode and previews current/proposed edges,
+changed lengths, maximum endpoint movement, degrees of freedom and conflicts.

@@ -1,5 +1,54 @@
 # Implementation status
 
+## Supplied SVG component durability and qualified placement (2026-09-21)
+
+The visible component library contains all 320 SVG files supplied in
+`Vertex_Architectural_SVG_Library_v2.zip`, organized in 25 categories. Pointer
+drag now traverses the visible palette and Qt drag manager into the plan canvas;
+click placement remains available. A Release regression moves, resizes and
+rotates the placed sofa, saves and reopens it, and raster-compares PDF, SVG and
+PNG output before and after reopen. Removing the instance changes every output,
+which proves the component participates in production rendering.
+
+New placements pin both the definition snapshot and exact SVG bytes. Canvas,
+inspector, print and export resolve saved artwork before installed catalog files.
+If an installed definition changes, the project keeps its saved appearance and
+shows **Update component artwork** in quick properties. That explicit action is
+one revision-fenced, undoable command and survives save/reopen. Pinned SVG input
+has per-instance and aggregate byte limits and rejects scripts, handlers,
+embedded images, external references, doctypes, entities and non-fragment URLs.
+Every bundled definition includes an exact SVG SHA-256 that is checked before
+rendering, and the bounded renderer cache keys by artwork digest so two revisions
+of one catalog component can coexist correctly.
+Native Windows OLE drag behavior, human artwork review and Apex catalog
+certification remain production qualification work.
+
+## Measurement-boundary constraints (2026-09-21)
+
+The constraint editor now supports straight walls and identified straight
+measurement boundaries. Boundary mode uses stable segment and vertex IDs,
+supports horizontal, vertical, coincident, fixed-length, parallel,
+perpendicular and fixed-anchor relationships, shows proposed geometry and
+conflicts, and omits the wall-only baseline resize operation. The same action is
+available from quick properties, the canvas context menu and command search.
+
+Boundary constraint solves commit through one typed transaction that replays
+semantic geometry edits, retains construction receipts and stable identities,
+and then applies constraint mutations. Format 8 persists the deterministic
+proof through digests, exchange, recovery budgets, archives, save/reopen and
+undo/redo. Curved-boundary relations and mixed wall/boundary components remain
+explicit unsupported cases pending their own solver semantics.
+
+## Coordinated cross-view object editing (2026-09-21)
+
+Elevation and section projections now retain selectable source identities for
+hosted openings as well as walls and roofs. A desktop workflow selects and
+double-clicks projected geometry, edits a wall from elevation and an opening
+from section, and verifies plan/elevation/section refresh, schedule changes,
+invalid-input rejection, undo/redo, stable identities and exact save/reopen
+without duplicated entities. Roof-specific projected click coverage and full
+hidden-line and production-output qualification remain open.
+
 ## Named-view model crop extents (2026-09-21)
 
 Named plans, elevations and sections now store an optional left/right/bottom/top
@@ -16,8 +65,8 @@ the view's rotated frame before projection. The shared result feeds canvas,
 sheet, PDF, SVG, image, and print paths. Focused tests cover migration, invalid
 data, all four sides, oversized and partial plan crops, rotated frames, curved
 solids, terrain surfaces, clearing, undo, save/reopen, and source preservation.
-Annotation crops, associative section annotations, complete cross-view editing
-evidence, and production visual qualification remain open.
+Annotation crops, associative section annotations, roof-specific projected edit
+coverage, and production visual qualification remain open.
 
 ## Geometry-admitted wall and roof joins (2026-09-21)
 
@@ -514,23 +563,26 @@ semantic annotation/style records with a 320-component visible SVG library in
 procedural definitions across 393 legacy families solely for existing-project
 reopen and migration. The SVG entries carry searchable human names,
 physical footprint metadata and editable scale limits; they are the only entries
-shown in the visible placement library and render from their original bundled documents in thumbnails,
-the plan canvas and shared print/export scenes. Annotation state pins built-in
-catalog revision 1 and rejects
-unsupported revisions until an explicit migration is available. Family-specific
+shown in the visible placement library and render from their original bundled
+documents in thumbnails, the plan canvas and shared print/export scenes.
+Annotation state pins a complete per-instance definition and, for SVG entries,
+the exact validated artwork bytes. Changed installed artwork never replaces a
+saved instance silently; quick properties exposes an explicit revision migration
+that is undoable and persists through save/reopen. Family-specific
 appliance, storage, plumbing, furniture, and commercial motifs now remain
 distinguishable instead of relying on count-only generic geometry.
-Representative symbol resize/placement now has a desktop regression
-fixture and a multi-family scale/rotation geometry matrix, and resized symbols
-are covered by vector DXF output. SVG payload, detailed-pixel rendering,
-save/reopen identity, physical-footprint bounds, family-specific motifs, and
-case-insensitive catalog search/filtering are now covered. Authoring also accepts a
+Representative pointer drag, resize, rotation, save/reopen and shared
+PDF/SVG/PNG output now have a desktop regression fixture, alongside a
+multi-family scale/rotation geometry matrix and vector DXF output. SVG payload,
+detailed-pixel rendering, save/reopen identity, physical-footprint bounds,
+family-specific motifs, and case-insensitive catalog search/filtering are now
+covered. Authoring also accepts a
 case-insensitive family alias and stores the resolved `-w2-d2` nominal variant
 explicitly. The offline `vertex-cli symbols` command emits a deterministic
 catalog manifest with category/family counts, physical dimensions, scale
-limits, anchors, and vector previews for review without opening the UI. Final
-print/export visual qualification and artwork review remain production-gate
-work. The release artifact can also be checked offline with
+limits, anchors, and vector previews for review without opening the UI. Human
+artwork review, native OLE drag and physical-print qualification remain
+production-gate work. The release artifact can also be checked offline with
 `scripts/validate_symbol_catalog.py`, which rejects filtered manifests, missing
 required categories or representative families, duplicate/unsorted entries,
 invalid dimensions, and preview strokes outside their declared footprints.

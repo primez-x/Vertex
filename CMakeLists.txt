@@ -578,6 +578,9 @@ if(SKETCH_BUILD_DESKTOP)
       FILES assets/fonts/Inter.ttf)
     add_executable(symbol_svg_desktop_tests tests/symbol_svg_desktop_tests.cpp)
     target_link_libraries(symbol_svg_desktop_tests PRIVATE sketch_desktop)
+    qt_add_resources(symbol_svg_desktop_tests symbol_svg_test_fonts
+      PREFIX "/fonts" BASE assets/fonts
+      FILES assets/fonts/Inter.ttf)
     add_executable(desktop_performance_tests tests/desktop_performance_tests.cpp)
     target_link_libraries(desktop_performance_tests PRIVATE sketch_desktop)
     add_executable(desktop_workspace_recovery_tests tests/desktop_workspace_recovery_tests.cpp)

@@ -115,8 +115,18 @@ struct EditBoundaryGeometry {
     BoundaryGeometryEdit edit;
 };
 
+// Boundary geometry is replayed before the relation changes are validated.
+// Entity changes may contain only constraints; boundary payloads are never
+// accepted as substitutes for their typed, receipt-preserving edits.
+struct ApplyBoundaryConstraintChanges {
+    Revision expected_revision = 0;
+    std::vector<BoundaryGeometryEdit> boundary_edits;
+    std::vector<EntityChange> entity_changes;
+    std::string message;
+};
+
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,
-                             TransformBoundary, EditBoundaryGeometry>;
+                             TransformBoundary, EditBoundaryGeometry, ApplyBoundaryConstraintChanges>;
 
 // Commands cross worker, workspace, and persistence boundaries as a strict,
 // versioned JSON envelope.  The codec preserves typed command identity and
@@ -162,6 +172,7 @@ struct RevisionRecord {
     std::optional<BoundaryTranslation> boundary_translation;
     std::optional<BoundaryTransformation> boundary_transform;
     std::optional<BoundaryGeometryEdit> boundary_geometry_edit;
+    std::optional<ApplyBoundaryConstraintChanges> boundary_constraint_changes;
 };
 
 class DocumentSnapshot {

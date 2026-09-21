@@ -41,6 +41,9 @@ enum class CanvasTool {
 struct CanvasSvgSymbol {
     QString catalog_id;
     QByteArray document;
+    // SHA-256 of document, computed when the retained scene is built so paint
+    // never hashes every SVG on every frame.
+    QByteArray artwork_sha256;
     QRectF view_box;
     QRectF footprint_view_box;
     Vec2 position{};

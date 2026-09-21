@@ -1,5 +1,8 @@
 #include "sketch/document.hpp"
 #include "sketch/document_digest.hpp"
+#include "sketch/boundary_receipt.hpp"
+#include "sketch/boundary_dimension.hpp"
+#include "sketch/constraint_entity.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
@@ -1130,11 +1133,169 @@ void test_typed_command_codec_round_trips_and_rejects_tampering() {
         "command decode rejection must not mutate a source snapshot");
 }
 
+void test_boundary_constraint_transaction_preserves_proof_and_is_atomic() {
+    using namespace sketch;
+    BoundaryConstructionRecord receipt;
+    receipt.boundary_id = "boundary";
+    receipt.anchor = {0, 0};
+    const Vec2 points[]{{0, 0}, {2, 0}, {2, 1}, {0, 1}};
+    const char* rises[]{"0 m", "1 m", "0 m", "-1 m"};
+    const char* runs[]{"2 m", "0 m", "-2 m", "0 m"};
+    IdentifiedBoundary boundary{"boundary", "measurement_boundary", {}};
+    for (std::size_t i = 0; i < 4; ++i) {
+        const auto edge = "edge-" + std::to_string(i);
+        const auto start = "vertex-" + std::to_string(i);
+        const auto end = "vertex-" + std::to_string((i + 1) % 4);
+        ConstructionReceipt step;
+        step.segment_id = edge;
+        step.kind = BoundaryConstructionKind::line_rise_run;
+        step.start = points[i];
+        step.rise = parse_quantity(rises[i]);
+        step.run = parse_quantity(runs[i]);
+        receipt.edges.push_back({edge, start, end, step});
+        boundary.segments.push_back({edge, start, end, {points[i], points[(i + 1) % 4], 0}});
+    }
+    auto original = encode_identified_boundary_entity(boundary);
+    const auto original_receipt = encode_boundary_receipt_envelope(receipt);
+    original.properties["boundary_authoring"] = original_receipt;
+    const auto dimension = encode_boundary_dimension_entity(
+        BoundaryDimension{"dimension", "boundary", "edge-0", {1, -0.5}});
+    PersistentConstraint relation;
+    relation.id = "length";
+    relation.relation = ConstraintRelationKind::fixed_length;
+    relation.bindings = {{"boundary", WallEndpointRole::start, "edge-0", "vertex-0"},
+                         {"boundary", WallEndpointRole::end, "edge-0", "vertex-1"}};
+    relation.length = parse_quantity("2 m");
+    auto document = Document::create({original, dimension, encode_constraint_entity(relation)});
+    const auto before = document.snapshot();
+    relation.length = parse_quantity("3 m");
+    {
+        auto translated = Document::fork(before);
+        ApplyBoundaryConstraintChanges translation{0, {}, {}, "Translate constrained rectangle"};
+        for (std::size_t i = 0; i < 4; ++i)
+            translation.boundary_edits.push_back({"boundary", BoundaryGeometryEditKind::move_vertex,
+                "vertex-" + std::to_string(i), {points[i].x + 5, points[i].y}});
+        auto crossing = translation;
+        std::swap(crossing.boundary_edits[1].target_position, crossing.boundary_edits[2].target_position);
+        require_error([&] { translated.apply(crossing); }, DocumentErrorCode::invalid_entity,
+                      "batch must reject a self-intersecting final polygon");
+        auto reversed = translation;
+        for (std::size_t i = 0; i < 4; ++i)
+            reversed.boundary_edits[i].target_position.x = 5 - points[i].x;
+        require_error([&] { translated.apply(reversed); }, DocumentErrorCode::invalid_entity,
+                      "batch must reject reversed winding");
+        auto duplicate = translation;
+        duplicate.boundary_edits.push_back(duplicate.boundary_edits.front());
+        require_error([&] { translated.apply(duplicate); }, DocumentErrorCode::invalid_entity,
+                      "batch must reject duplicate vertex destinations");
+        require(translated.revision() == 0 && translated.snapshot().entities() == before.entities(),
+                "rejected batch changed the document");
+        const auto preview = Document::preview_command(before, translation);
+        require(translated.apply(command_from_json(command_to_json(translation))) == 1,
+                "simultaneous translation must create one revision");
+        const auto after_translation = translated.snapshot();
+        require(preview.entities() == after_translation.entities(), "batch preview and apply differ");
+        const auto moved = decode_identified_boundary_entity(after_translation.entities().at("boundary"));
+        for (std::size_t i = 0; i < 4; ++i)
+            require(moved.segments[i].segment.start.x == points[i].x + 5 &&
+                    moved.segments[i].segment.start.y == points[i].y &&
+                    moved.segments[i].segment_id == boundary.segments[i].segment_id,
+                    "simultaneous translation lost final coordinates or identity");
+        require(after_translation.entities().at("dimension") == dimension,
+                "simultaneous translation changed dimension references");
+        auto replayed = Document::fork(after_translation);
+        replayed.undo(replayed.revision());
+        require(replayed.snapshot().entities() == before.entities(), "batch undo is not exact");
+        replayed.redo(replayed.revision());
+        require(replayed.snapshot().entities() == after_translation.entities(), "batch redo is not exact");
+    }
+    ApplyBoundaryConstraintChanges command{
+        0,
+        {{"boundary", BoundaryGeometryEditKind::move_vertex, "vertex-1", {3, 0}},
+         {"boundary", BoundaryGeometryEditKind::move_vertex, "vertex-2", {3, 1}}},
+        {EntityChange::upsert(encode_constraint_entity(relation))},
+        "Resize constrained boundary"};
+    const auto unchanged = [&] {
+        require(document.revision() == 0 && document.snapshot().entities() == before.entities(),
+                "rejected boundary constraint transaction must be atomic");
+    };
+    auto invalid = command;
+    invalid.expected_revision = 1;
+    require_error([&] { document.apply(invalid); }, DocumentErrorCode::stale_revision,
+                  "stale typed boundary constraint transaction must fail");
+    unchanged();
+    invalid = command;
+    invalid.boundary_edits.back().target_id = "missing-vertex";
+    require_error([&] { document.apply(invalid); }, DocumentErrorCode::invalid_entity,
+                  "a malformed second edit must roll back the first");
+    unchanged();
+    invalid = command;
+    invalid.entity_changes.clear();
+    require_error([&] { document.apply(invalid); }, DocumentErrorCode::constraint_violation,
+                  "partial geometry change must not violate retained relation");
+    unchanged();
+    invalid = command;
+    invalid.entity_changes.push_back(invalid.entity_changes.front());
+    require_error([&] { document.apply(invalid); }, DocumentErrorCode::duplicate_change,
+                  "duplicate relation changes must fail");
+    unchanged();
+    invalid = command;
+    invalid.entity_changes.push_back(EntityChange::upsert(original));
+    require_error([&] { document.apply(invalid); }, DocumentErrorCode::invalid_entity,
+                  "raw boundary payload must not enter typed transaction");
+    unchanged();
+    const auto encoded = command_to_json(command);
+    require(command_to_json(command_from_json(encoded)) == encoded,
+            "boundary constraint command must round-trip");
+    auto malformed = encoded;
+    malformed["boundary_edits"][1]["unexpected"] = true;
+    require_error([&] { (void)command_from_json(malformed); }, DocumentErrorCode::invalid_entity,
+                  "typed transaction codec must reject unknown fields");
+    require(document.apply(command_from_json(encoded)) == 1,
+            "typed boundary constraint transaction must create exactly one revision");
+    const auto after = document.snapshot();
+    const auto& edited = after.entities().at("boundary");
+    const auto& proof = edited.extensions.at("boundary_geometry_derivation");
+    require(proof.at("source_boundary_authoring") == original_receipt &&
+                proof.at("operations").size() == 2,
+            "typed transaction must retain original receipt and ordered edit evidence");
+    const auto edited_boundary = decode_identified_boundary_entity(edited);
+    for (std::size_t i = 0; i < boundary.segments.size(); ++i)
+        require(edited_boundary.segments[i].segment_id == boundary.segments[i].segment_id &&
+                    edited_boundary.segments[i].start_vertex_id == boundary.segments[i].start_vertex_id &&
+                    edited_boundary.segments[i].end_vertex_id == boundary.segments[i].end_vertex_id,
+                "boundary transaction must preserve every segment and vertex identity");
+    require(after.entities().at("dimension") == dimension &&
+                decode_boundary_dimension_entity(dimension).dimension->resolve(edited).segment_length() == 3,
+            "dimension must keep its identity and resolve new constrained geometry");
+    auto restored = Document::fork(after);
+    auto tampered_history = after;
+    auto& tampered_records = const_cast<std::vector<RevisionRecord>&>(tampered_history.history());
+    tampered_records.back().boundary_constraint_changes->boundary_edits.pop_back();
+    require_error([&] { (void)Document::fork(tampered_history); }, DocumentErrorCode::invalid_history,
+                  "history restore must reject an incomplete boundary transaction proof");
+    tampered_history = after;
+    auto& missing_records = const_cast<std::vector<RevisionRecord>&>(tampered_history.history());
+    missing_records.back().boundary_constraint_changes.reset();
+    require_error([&] { (void)Document::fork(tampered_history); }, DocumentErrorCode::invalid_entity,
+                  "history restore must reject stripped receipt mutation proof");
+    restored.undo(restored.revision());
+    require(restored.snapshot().entities() == before.entities(), "one undo must restore entire transaction");
+    restored.redo(restored.revision());
+    require(restored.snapshot().entities() == after.entities(), "one redo must restore entire transaction");
+    auto raw = Document::fork(before);
+    require_error([&] {
+        raw.apply(ApplyEntityChanges{0, {EntityChange::upsert(edited),
+            EntityChange::upsert(after.entities().at("length"))}, {}, command.message});
+    }, DocumentErrorCode::invalid_entity, "raw edits must still reject receipt laundering");
+}
+
 }  // namespace
 
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_boundary_constraint_transaction_preserves_proof_and_is_atomic();
         test_room_volume_validation_is_atomic();
         test_connected_stair_level_edit();
         test_compound_change_is_atomic_and_references_are_checked();

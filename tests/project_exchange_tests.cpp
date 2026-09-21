@@ -87,6 +87,19 @@ void test_translation_export(const std::filesystem::path& root) {
             sketch::encode_boundary_geometry_edit(edit) &&
         !edit_rows[8].contains("boundary_geometry_edit"),
         "exchange must preserve an undone boundary edit proof on only its command revision");
+  sketch::ApplyBoundaryConstraintChanges transaction{document.revision(), {edit}, {}, "constrained edit"};
+  document.apply(transaction);
+  document.apply(sketch::EditBoundaryGeometry{document.revision(), edit});
+  document.undo(document.revision());
+  sketch::extract_project(document.snapshot(), root / "constraint-edit");
+  std::ifstream constraint_input(root / "constraint-edit" / "project.json");
+  const auto constraint_json = nlohmann::json::parse(constraint_input);
+  check(constraint_json.at("exchange_version") == 5,
+        "later geometry edit must not downgrade constraint exchange version");
+  check(constraint_json.at("revisions")[9].at("boundary_constraint_changes") ==
+            sketch::command_to_json(transaction) &&
+        !constraint_json.at("revisions")[10].contains("boundary_constraint_changes"),
+        "exchange must preserve exact typed constraint proof only on its command row");
 }
 } // namespace
 int main() {

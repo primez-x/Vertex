@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/constraint_entity.hpp"
+#include "sketch/boundary_entity.hpp"
 #include "sketch/constraints.hpp"
 #include "sketch/document.hpp"
 #include "sketch/geometry.hpp"
@@ -59,6 +60,11 @@ struct ConstraintWallChange {
     Segment proposed_baseline;
 };
 
+struct ConstraintBoundaryChange {
+    IdentifiedBoundary before;
+    IdentifiedBoundary after;
+};
+
 // A preview is copyable for dialog ownership but cannot be constructed or
 // modified through the public API. candidate_entities() is a read-only display
 // and independent geometry-validation surface; Apply never trusts it as commit
@@ -76,6 +82,9 @@ public:
     [[nodiscard]] const std::string& source_snapshot_digest() const noexcept;
     [[nodiscard]] const std::string& candidate_digest() const noexcept;
     [[nodiscard]] const std::vector<ConstraintWallChange>& changed_walls() const noexcept;
+    [[nodiscard]] const std::vector<ConstraintBoundaryChange>& changed_boundaries() const noexcept;
+    [[nodiscard]] int degrees_of_freedom() const noexcept;
+    [[nodiscard]] const std::vector<BoundaryGeometryEdit>& boundary_edits() const noexcept;
     [[nodiscard]] const std::map<std::string, Entity, std::less<>>&
     candidate_entities() const noexcept;
     [[nodiscard]] const std::vector<std::string>& diagnostics() const noexcept;
@@ -90,6 +99,9 @@ private:
     std::string candidate_digest_;
     std::string shown_result_digest_;
     std::vector<ConstraintWallChange> changed_walls_;
+    std::vector<ConstraintBoundaryChange> changed_boundaries_;
+    int degrees_of_freedom_{-1};
+    std::vector<BoundaryGeometryEdit> boundary_edits_;
     std::map<std::string, Entity, std::less<>> candidate_entities_;
     std::vector<std::string> diagnostics_;
     ConstraintAuthoringIntent normalized_intent_;

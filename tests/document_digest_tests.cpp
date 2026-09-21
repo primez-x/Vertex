@@ -40,6 +40,8 @@ void test_full_snapshot_binding() {
         [](auto& record) { record.source_revision = 0; },
         [](auto& record) { record.undo_stack.push_back(0); },
         [](auto& record) { record.redo_stack.push_back(0); },
+        [](auto& record) { record.boundary_constraint_changes = ApplyBoundaryConstraintChanges{0,
+            {{"boundary-1", BoundaryGeometryEditKind::move_vertex, "vertex-1", {3, 1}}}, {}, "proof"}; },
         [](auto& record) { record.boundary_translation = BoundaryTranslation{"boundary-1", {8, -4}}; },
     };
     for (const auto& mutate : mutations) {

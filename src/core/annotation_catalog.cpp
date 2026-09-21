@@ -66,6 +66,32 @@ std::string folded(std::string_view value) {
     }
     return result;
 }
+void validate_pinned_svg(std::string_view document) {
+    if (document.empty()) return;
+    check(document.size() <= 262144, "Pinned SVG exceeds the per-instance limit");
+    check(document.find('\0') == std::string_view::npos, "Pinned SVG contains a NUL byte");
+    const auto source = folded(document);
+    check(source.find("<svg") != std::string::npos, "Pinned SVG has no SVG root");
+    for (const auto token : {"<!doctype", "<!entity", "<script", "foreignobject",
+                             "<image", "href", "@import", "javascript:", "data:",
+                             "file:", "onload", "onerror",
+                             "onclick", "onmouse", "onfocus", "onbegin", "onend",
+                             "onrepeat"}) {
+        check(source.find(token) == std::string::npos,
+              "Pinned SVG contains active or external content");
+    }
+    for (auto position = source.find("url("); position != std::string::npos;
+         position = source.find("url(", position + 4)) {
+        auto content = position + 4;
+        while (content < source.size() &&
+               (std::isspace(static_cast<unsigned char>(source[content])) ||
+                source[content] == '\'' || source[content] == '"')) {
+            ++content;
+        }
+        check(content < source.size() && source[content] == '#',
+              "Pinned SVG URL must reference an internal fragment");
+    }
+}
 }
 
 std::vector<LabelTemplate> default_label_templates() {
@@ -808,6 +834,7 @@ std::vector<SymbolDefinition> default_symbol_catalog() {
         const char* category;
         const char* legacy_family;
         const char* path;
+        const char* sha256;
         double width;
         double depth;
         std::array<double, 4> view_box;
@@ -828,7 +855,7 @@ std::vector<SymbolDefinition> default_symbol_catalog() {
         symbol.name = record.name;
         symbol.width_metres = record.width;
         symbol.depth_metres = record.depth;
-        symbol.svg_asset = SymbolSvgAsset{record.path, record.view_box,
+        symbol.svg_asset = SymbolSvgAsset{record.path, record.sha256, record.view_box,
                                          record.footprint_view_box, record.nominal};
         const auto end = result.begin() + static_cast<std::ptrdiff_t>(legacy_count);
         const auto legacy = std::find_if(result.begin(), end, [&](const auto& entry) {
@@ -882,6 +909,8 @@ nlohmann::json encode_symbol_catalog_manifest(const std::vector<SymbolDefinition
         }
         encoded_entries.push_back({
             {"id", definition->id},
+            {"artwork_revision", definition->artwork_revision},
+            {"catalog_revision", definition->catalog_revision},
             {"family", definition->family},
             {"category", definition->category},
             {"width_metres", definition->width_metres},
@@ -895,7 +924,8 @@ nlohmann::json encode_symbol_catalog_manifest(const std::vector<SymbolDefinition
         if (definition->svg_asset) {
             const auto& asset = *definition->svg_asset;
             encoded_entries.back()["svg_asset"] = {
-                {"relative_path", asset.relative_path}, {"view_box", asset.view_box},
+                {"relative_path", asset.relative_path}, {"sha256", asset.sha256},
+                {"view_box", asset.view_box},
                 {"footprint_view_box", asset.footprint_view_box},
                 {"dimensions_are_nominal", asset.dimensions_are_nominal}};
         }
@@ -937,6 +967,7 @@ void validate_symbol_catalog(const std::vector<SymbolDefinition>& catalog) {
     std::set<std::string> ids;
     for (const auto& s : catalog) {
         unique_id(ids,s.id); point(s.anchor);
+        check(s.artwork_revision > 0 && s.catalog_revision > 0, "Invalid symbol revision");
         check(!s.family.empty() && !s.category.empty(), "Missing symbol metadata");
         if (s.svg_asset) {
             const auto& asset = *s.svg_asset;
@@ -946,6 +977,12 @@ void validate_symbol_catalog(const std::vector<SymbolDefinition>& catalog) {
                       asset.relative_path.find_first_not_of(
                           "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-/.") == std::string::npos,
                   "Invalid relative SVG asset path");
+            check(asset.sha256.size() == 64 &&
+                      std::all_of(asset.sha256.begin(), asset.sha256.end(), [](unsigned char value) {
+                          return (value >= '0' && value <= '9') ||
+                                 (value >= 'a' && value <= 'f');
+                      }),
+                  "Invalid symbol SVG SHA-256");
             for (const auto& box : {asset.view_box, asset.footprint_view_box}) {
                 check(std::all_of(box.begin(), box.end(), [](double v) { return std::isfinite(v); }) &&
                           box[2] > 0 && box[3] > 0, "Invalid SVG coordinate bounds");
@@ -991,11 +1028,18 @@ void validate_annotation_state(const AnnotationState& state, const std::vector<S
         unique_id(ids,label.id); placement(label.placement); style(label.style);
         check(label.content.size() <= 65536 && label.template_id.size() <= 256, "Label text too large");
     }
+    std::size_t pinned_svg_bytes = 0;
     for (const auto& symbol : state.symbols) {
         unique_id(ids,symbol.id); style(symbol.style);
         auto it = std::find_if(catalog.begin(),catalog.end(),[&](const auto& s) { return s.id == symbol.symbol_id; });
-        check(it != catalog.end(), "Unknown symbol definition");
-        (void)placed_symbol_preview(*it,symbol.placement);
+        check(symbol.definition || it != catalog.end(), "Unknown symbol definition");
+        check(!symbol.definition || symbol.definition->id == symbol.symbol_id, "Pinned symbol ID mismatch");
+        validate_pinned_svg(symbol.pinned_svg);
+        pinned_svg_bytes += symbol.pinned_svg.size();
+        check(pinned_svg_bytes <= 33554432 &&
+                  (symbol.pinned_svg.empty() || (symbol.definition && symbol.definition->svg_asset)),
+              "Invalid pinned SVG payload");
+        (void)placed_symbol_preview(symbol.definition ? *symbol.definition : *it,symbol.placement);
     }
     std::set<std::pair<std::string,std::string>> targets;
     for (const auto& o : state.overrides) {
@@ -1008,12 +1052,18 @@ void validate_annotation_state(const AnnotationState& state, const std::vector<S
 
 json encode_annotation_state(const AnnotationState& state, const std::vector<SymbolDefinition>& catalog) {
     validate_annotation_state(state,catalog);
-    json j{{"version",1},{"catalog_revision",kSymbolCatalogRevision},
+    json j{{"version",2},{"catalog_revision",kSymbolCatalogRevision},
            {"labels",json::array()},{"symbols",json::array()},{"overrides",json::array()}};
     for (const auto& l : state.labels) j["labels"].push_back({{"id",l.id},{"template_id",l.template_id},{"content",l.content},
         {"style",encode_style(l.style)},{"placement",encode_placement(l.placement)},{"visible",l.visible}});
-    for (const auto& s : state.symbols) j["symbols"].push_back({{"id",s.id},{"symbol_id",s.symbol_id},
-        {"style",encode_style(s.style)},{"placement",encode_placement(s.placement)},{"visible",s.visible}});
+    for (const auto& s : state.symbols) {
+        const auto& definition = s.definition ? *s.definition : *std::find_if(catalog.begin(), catalog.end(),
+            [&](const auto& entry) { return entry.id == s.symbol_id; });
+        j["symbols"].push_back({{"id",s.id},{"symbol_id",s.symbol_id},
+            {"style",encode_style(s.style)},{"placement",encode_placement(s.placement)},{"visible",s.visible},
+            {"definition",encode_symbol_catalog_manifest({definition}).at("entries").at(0)},
+            {"pinned_svg",s.pinned_svg}});
+    }
     for (const auto& o : state.overrides) j["overrides"].push_back({{"target_kind",o.target_kind},{"target_id",o.target_id},
         {"style",encode_style(o.style)},{"visible",o.visible}});
     return j;
@@ -1021,12 +1071,13 @@ json encode_annotation_state(const AnnotationState& state, const std::vector<Sym
 
 AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolDefinition>& catalog) {
     try {
-        check(j.at("version").is_number_integer() && j.at("version") == 1, "Unsupported annotation version");
+        check(j.at("version").is_number_integer() && (j.at("version") == 1 || j.at("version") == 2), "Unsupported annotation version");
+        const bool pinned = j.at("version") == 2;
         const auto catalog_revision = j.contains("catalog_revision")
             ? j.at("catalog_revision")
             : json(kLegacySymbolCatalogRevision);
         check(catalog_revision.is_number_integer() &&
-                  catalog_revision == kSymbolCatalogRevision,
+                  catalog_revision.get<int>() > 0 && (pinned || catalog_revision == kLegacySymbolCatalogRevision),
               "Unsupported symbol catalog revision");
         for (const char* key : {"labels","symbols","overrides"})
             check(j.at(key).is_array() && j.at(key).size() <= 100000, "Invalid annotation collection");
@@ -1034,11 +1085,79 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
         for (const auto& l : j.at("labels")) state.labels.push_back({l.at("id").get<std::string>(),
             l.at("template_id").get<std::string>(),l.at("content").get<std::string>(),decode_style(l.at("style")),
             decode_placement(l.at("placement")),l.at("visible").get<bool>()});
-        for (const auto& s : j.at("symbols")) state.symbols.push_back({s.at("id").get<std::string>(),
-            s.at("symbol_id").get<std::string>(),decode_placement(s.at("placement")),decode_style(s.at("style")),s.at("visible").get<bool>()});
+        for (const auto& s : j.at("symbols")) {
+            SymbolInstance instance{s.at("id").get<std::string>(), s.at("symbol_id").get<std::string>(),
+                decode_placement(s.at("placement")),decode_style(s.at("style")),s.at("visible").get<bool>()};
+            if (pinned) {
+                const auto& d = s.at("definition");
+                SymbolDefinition definition;
+                definition.id = d.at("id").get<std::string>();
+                definition.family = d.at("family").get<std::string>();
+                definition.category = d.at("category").get<std::string>();
+                definition.name = d.value("name", std::string{});
+                definition.width_metres = d.at("width_metres").get<double>();
+                definition.depth_metres = d.at("depth_metres").get<double>();
+                definition.anchor = {d.at("anchor").at("x").get<double>(), d.at("anchor").at("y").get<double>()};
+                definition.minimum_scale = d.at("minimum_scale").get<double>();
+                definition.maximum_scale = d.at("maximum_scale").get<double>();
+                check(d.at("artwork_revision").is_number_integer() && d.at("catalog_revision").is_number_integer(),
+                      "Invalid pinned revision");
+                definition.artwork_revision = d.at("artwork_revision").get<int>();
+                definition.catalog_revision = d.at("catalog_revision").get<int>();
+                check(d.at("preview").is_array() && d.at("preview").size() <= 10000, "Invalid pinned preview");
+                for (const auto& stroke : d.at("preview")) definition.preview.push_back({
+                    {stroke.at("start").at("x").get<double>(), stroke.at("start").at("y").get<double>()},
+                    {stroke.at("end").at("x").get<double>(), stroke.at("end").at("y").get<double>()}});
+                if (d.contains("svg_asset")) {
+                    const auto& asset = d.at("svg_asset");
+                    definition.svg_asset = SymbolSvgAsset{asset.at("relative_path").get<std::string>(),
+                        asset.at("sha256").get<std::string>(),
+                        asset.at("view_box").get<std::array<double, 4>>(),
+                        asset.at("footprint_view_box").get<std::array<double, 4>>(),
+                        asset.at("dimensions_are_nominal").get<bool>()};
+                }
+                instance.definition = std::move(definition);
+                instance.pinned_svg = s.at("pinned_svg").get<std::string>();
+            } else {
+                const auto found = std::find_if(catalog.begin(), catalog.end(), [&](const auto& d) { return d.id == instance.symbol_id; });
+                check(found != catalog.end() && found->catalog_revision == kLegacySymbolCatalogRevision && found->artwork_revision == 1,
+                      "Legacy symbol requires its original definition");
+                instance.definition = *found;
+            }
+            state.symbols.push_back(std::move(instance));
+        }
         for (const auto& o : j.at("overrides")) state.overrides.push_back({o.at("target_kind").get<std::string>(),
             o.at("target_id").get<std::string>(),decode_style(o.at("style")),o.at("visible").get<bool>()});
         validate_annotation_state(state,catalog); return state;
     } catch (const json::exception&) { throw std::invalid_argument("Malformed annotation JSON"); }
+}
+
+bool symbol_requires_migration(const SymbolInstance& instance, const std::vector<SymbolDefinition>& catalog) {
+    const auto found = std::find_if(catalog.begin(), catalog.end(), [&](const auto& d) { return d.id == instance.symbol_id; });
+    if (found == catalog.end()) return true;
+    return instance.definition && encode_symbol_catalog_manifest({*instance.definition}).at("entries") !=
+        encode_symbol_catalog_manifest({*found}).at("entries");
+}
+
+SymbolDefinition resolved_symbol_definition(const SymbolInstance& instance, const std::vector<SymbolDefinition>& catalog) {
+    const auto found = std::find_if(catalog.begin(), catalog.end(), [&](const auto& d) { return d.id == instance.symbol_id; });
+    check(instance.definition || found != catalog.end(), "Unknown symbol definition");
+    auto definition = instance.definition ? *instance.definition : *found;
+    if (instance.pinned_svg.empty() && symbol_requires_migration(instance, catalog)) definition.svg_asset.reset();
+    return definition;
+}
+
+AnnotationState migrate_symbol_definition(const AnnotationState& state, std::string_view instance_id,
+    const std::vector<SymbolDefinition>& catalog, std::string pinned_svg) {
+    validate_annotation_state(state, catalog);
+    auto result = state;
+    auto instance = std::find_if(result.symbols.begin(), result.symbols.end(), [&](const auto& s) { return s.id == instance_id; });
+    check(instance != result.symbols.end(), "Unknown symbol instance");
+    const auto definition = std::find_if(catalog.begin(), catalog.end(), [&](const auto& d) { return d.id == instance->symbol_id; });
+    check(definition != catalog.end(), "No migration target definition");
+    instance->definition = *definition;
+    instance->pinned_svg = std::move(pinned_svg);
+    validate_annotation_state(result, catalog);
+    return result;
 }
 } // namespace sketch

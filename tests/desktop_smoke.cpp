@@ -5292,6 +5292,136 @@ void test_architectural_authoring_commands() {
             "read-only projects must reject wall joins without mutation");
 }
 
+void test_cross_view_source_editing() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    window.setMetricUnits(true);
+    window.setWorkspace(desktop::Workspace::architectural);
+    const auto wall = window.createStraightWall({0, 0}, {6, 0}, "exterior");
+    require(!wall.isEmpty() && window.selectEntity(wall), "cross-view host wall");
+    const auto opening = window.createHostedOpening("window", "2 m", "1 m", "0.5 m", "1.5 m");
+    require(!opening.isEmpty(), "cross-view hosted window");
+    auto* canvas = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("architecturalPlanCanvas"));
+    auto* views = window.findChild<QComboBox*>("architecturalView");
+    require(canvas && views, "cross-view canvas and named view selector");
+    canvas->setFixedSize(900, 650);
+    canvas->setTool(desktop::CanvasTool::select);
+    const auto select_view = [&](const char* id) {
+        const auto index = views->findData(QString::fromLatin1(id), Qt::UserRole + 1);
+        require(index >= 0, "named coordinated view exists");
+        views->setCurrentIndex(index);
+        canvas->fitView();
+    };
+    const auto projection = [&](const QString& id) {
+        const auto found = std::find_if(canvas->entities().begin(), canvas->entities().end(),
+            [&](const auto& entity) { return entity.id == id; });
+        require(found != canvas->entities().end() && !found->segments.empty(),
+                "non-plan projection must retain an independently selectable source entity");
+        return *found;
+    };
+    const auto bounds = [](const desktop::CanvasEntity& entity) {
+        double left = std::numeric_limits<double>::infinity(), right = -left;
+        double bottom = left, top = right;
+        for (const auto& edge : entity.segments) {
+            left = std::min({left, edge.start.x, edge.end.x});
+            right = std::max({right, edge.start.x, edge.end.x});
+            bottom = std::min({bottom, edge.start.y, edge.end.y});
+            top = std::max({top, edge.start.y, edge.end.y});
+        }
+        return QRectF(QPointF(left, bottom), QPointF(right, top));
+    };
+    const auto double_click_source = [&](const QString& id) {
+        const auto entity = projection(id);
+        const auto model = bounds(entity);
+        // Measure the actual retained selection frame without changing the
+        // window selection; the following mouse event must resolve the source.
+        canvas->setSelectedId(id);
+        const auto frame = canvas->selectionBounds();
+        require(frame.has_value(), "source projection has screen bounds");
+        const auto scale = entity.type == "wall"
+            ? frame->width() / (model.width() + entity.thickness_metres)
+            : (frame->width() - 3.0) / model.width();
+        require(window.selectEntity({}), "clear selection before projected hit");
+        for (const auto& edge : entity.segments) {
+            const QPointF midpoint((edge.start.x + edge.end.x) * 0.5,
+                                   (edge.start.y + edge.end.y) * 0.5);
+            const QPointF point(frame->center().x() + (midpoint.x() - model.center().x()) * scale,
+                                frame->center().y() - (midpoint.y() - model.center().y()) * scale);
+            QMouseEvent press(QEvent::MouseButtonPress, point, point,
+                              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QMouseEvent release(QEvent::MouseButtonRelease, point, point,
+                                Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &press);
+            QApplication::sendEvent(canvas, &release);
+            if (window.selectedEntityId() != id) continue;
+            QMouseEvent event(QEvent::MouseButtonDblClick, point, point,
+                              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &event);
+            if (window.selectedEntityId() == id) break;
+        }
+        require(window.selectedEntityId() == id, "projected double-click resolves semantic source ID");
+    };
+    select_view("view-elevation");
+    const auto original_wall = bounds(projection(wall));
+    (void)projection(opening);
+    double_click_source(wall);
+    const auto before_wall = window.document().snapshot();
+    auto* height = window.findChild<QLineEdit*>("inspectorHeight");
+    require(height && height->isEnabled() && !height->isHidden(), "projected wall exposes typed height");
+    height->setText("4 m");
+    QMetaObject::invokeMethod(height, "editingFinished", Qt::DirectConnection);
+    require(window.document().revision() == before_wall.revision() + 1 &&
+            window.document().snapshot().entities().at(wall.toStdString()).properties.at("height_m") == 4.0 &&
+            bounds(projection(wall)).height() > original_wall.height(),
+            "wall quick edit updates the same source and elevation in one command");
+    require(window.undoCommand() && window.document().snapshot().entities() == before_wall.entities() &&
+            window.redoCommand(), "projected wall edit participates in undo and redo");
+    select_view("view-section");
+    const auto original_opening = bounds(projection(opening));
+    double_click_source(opening);
+    const auto before_opening = window.document().snapshot();
+    auto* width = window.findChild<QLineEdit*>("inspectorLength");
+    require(width && width->isEnabled() && !width->isHidden(), "projected opening exposes typed width");
+    width->setText("20 m");
+    width->setModified(true);
+    QMetaObject::invokeMethod(width, "editingFinished", Qt::DirectConnection);
+    require(window.document().revision() == before_opening.revision() &&
+            window.document().snapshot().entities() == before_opening.entities(),
+            "invalid projected opening width rejects atomically without changing source history");
+    width->setText("1.5 m");
+    width->setModified(true);
+    QMetaObject::invokeMethod(width, "editingFinished", Qt::DirectConnection);
+    const auto edited = window.document().snapshot();
+    require(edited.revision() == before_opening.revision() + 1 &&
+            edited.entities().at(opening.toStdString()).properties.at("width_m") == 1.5 &&
+            edited.entities().at(opening.toStdString()).properties.at("wall_id") == wall.toStdString() &&
+            edited.entities().size() == before_opening.entities().size() &&
+            bounds(projection(opening)).width() > original_opening.width(),
+            "section opening edit changes the shared hosted source without derived duplicates");
+    require(window.undoCommand() && window.document().snapshot().entities() == before_opening.entities() &&
+            window.redoCommand(), "projected opening edit participates in undo and redo");
+    for (const auto* view : {"view-plan", "view-elevation", "view-section"}) {
+        select_view(view);
+        require(std::abs(bounds(projection(opening)).width() - 1.5) < 1e-7,
+                "all coordinated views refresh the edited opening width");
+    }
+    const auto schedule = window.scheduleSnapshot();
+    require(schedule.snapshot.revision == window.document().revision(), "schedule follows projected edit revision");
+    const auto row = std::find_if(schedule.snapshot.rows.begin(), schedule.snapshot.rows.end(),
+        [&](const auto& item) { return item.object_id == opening.toStdString(); });
+    require(row != schedule.snapshot.rows.end() &&
+            std::get<ScheduleQuantity>(row->cells.at("width").value).value == 1.5,
+            "edited opening retains its source schedule row and updated width");
+    QTemporaryDir directory;
+    const auto path = directory.filePath("cross-view.bldproj");
+    require(window.saveProjectAs(path) && window.openProject(path) &&
+            window.document().snapshot().entities() == edited.entities(),
+            "cross-view edits preserve exact semantic entities through save and reopen");
+    select_view("view-elevation");
+    require(std::abs(bounds(projection(opening)).width() - 1.5) < 1e-7,
+            "reopened elevation projects the edited source");
+}
+
 void test_section_overlay_workflow() {
     sketch::desktop::MainWindow window;
     auto* action = window.findChild<QAction*>("manageNamedViews");
@@ -5391,6 +5521,12 @@ int main(int argc, char** argv) {
         std::cout << "Room volume workflow tests passed\n";
         return 0;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--cross-view-editing-only") {
+        test_cross_view_source_editing();
+        std::cout << "Cross-view source editing tests passed\n";
+        return 0;
+    }
+    test_cross_view_source_editing();
     test_architectural_authoring_commands();
     test_section_overlay_workflow();
     if (argc == 2 && std::string_view(argv[1]) == "--architectural-authoring-only") return 0;

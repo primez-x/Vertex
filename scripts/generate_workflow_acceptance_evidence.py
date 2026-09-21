@@ -491,7 +491,11 @@ WORKFLOW_RULES.update({
             "src/core/constraints.cpp",
             "include/sketch/constraint_authoring.hpp",
             "src/core/constraint_authoring.cpp",
+            "include/sketch/document.hpp",
+            "src/core/document.cpp",
+            "src/core/project_store.cpp",
             "src/desktop/constraint_dialog.cpp",
+            "src/desktop/main_window.cpp",
             "tests/constraint_entity_tests.cpp",
             "tests/constraints_tests.cpp",
             "tests/constraint_integrity_tests.cpp",
@@ -511,9 +515,10 @@ WORKFLOW_RULES.update({
         ),
         "tests": ("constraints", "constraint_entities", "constraint_integrity", "constraint_authoring", "constraint_dialog"),
         "qualification_boundary": (
-            "This evidence covers persistent straight-wall relation authoring, solver previews, "
-            "degrees-of-freedom checks, and save/reopen behavior in Debug and Release. Boundary-vertex "
-            "and curve relations plus production qualification remain open."
+            "This evidence covers persistent straight-wall and identified straight measurement-boundary "
+            "relations, stable segment/vertex bindings, solver previews, typed receipt-preserving commits, "
+            "degrees-of-freedom checks, undo/redo, and save/reopen behavior. Curved-boundary relations, "
+            "mixed wall/boundary components, and production qualification remain open."
         ),
     },
     "GEO-CON-002": {
@@ -1435,9 +1440,10 @@ WORKFLOW_RULES.update({
     },
     "APX-SYM-001": {
         "acceptance": (
-            "The local symbol catalog contains 1,129 residential and light-commercial entries, "
-            "including all 320 supplied SVG symbols, with deterministic previews, filtering, "
-            "resizing, rotation, and output metadata."
+            "The visible local library contains all 320 supplied production SVG components in 25 "
+            "categories. Hidden legacy definitions remain reopen-only compatibility data. Pointer drag "
+            "and click placement, resizing, rotation, exact artwork pinning, explicit migration, "
+            "save/reopen, and representative PDF/SVG/PNG output use the same retained artwork."
         ),
         "sources": (
             "include/sketch/annotation_catalog.hpp",
@@ -1469,6 +1475,9 @@ WORKFLOW_RULES.update({
             "commercial",
             "preview",
             "catalog_revision",
+            "pinned_svg",
+            "sha256",
+            "Update component artwork",
             "resize",
             "rotation",
             "symbols",
@@ -1483,8 +1492,10 @@ WORKFLOW_RULES.update({
             "desktop_workflow",
         ),
         "qualification_boundary": (
-            "This evidence covers the deterministic local symbol library and manifest checks. Final "
-            "print/export legibility and complete Apex catalog certification remain open."
+            "This evidence covers the complete supplied SVG library, deterministic manifests, real Qt "
+            "pointer drag, transform editing, exact saved artwork, explicit migration, and rasterized "
+            "representative PDF/SVG/PNG output. Human artwork review, native Windows OLE drag, physical "
+            "print qualification, and complete Apex catalog certification remain open."
         ),
     },
     "APX-TRACE-001": {
@@ -1819,11 +1830,11 @@ WORKFLOW_RULES.update({
         "qualification_boundary": "This evidence covers direct native room editing through the shared semantic document and its derived quantity/persistence paths. Direct resize/rotate gizmos, equivalent editors for remaining object types, GPU-driver behavior, and full production 3D qualification remain open.",
     },
     "ARCH-VIEW-001": {
-        "acceptance": "Plan, elevation, and section definitions project the same semantic building objects and remain linked to typed sheet view definitions and persisted viewports.",
+        "acceptance": "Plan, elevation, and section project the same semantic objects with their source IDs. Editing a wall from elevation or a hosted opening from section refreshes every linked view and schedule and survives undo/redo and save/reopen without duplication.",
         "sources": ("include/sketch/building_view_projection.hpp", "src/architecture/building_view_projection.cpp", "tests/building_view_projection_tests.cpp", "src/desktop/main_window.cpp", "tests/desktop_smoke.cpp", "docs/architectural-projections.md", "include/sketch/sheet_view_model.hpp", "src/core/sheet_view_model.cpp", "tests/sheet_view_model_tests.cpp", "include/sketch/sheet_view_entity_codec.hpp", "src/core/sheet_view_entity_codec.cpp", "tests/sheet_view_entity_codec_tests.cpp", "docs/sheets-views.md"),
-        "anchors": ("BuildingViewKind", "project_building_view", "CoordinatedView", "plan", "elevation", "section", "SheetViewModel", "viewport"),
+        "anchors": ("BuildingViewKind", "project_building_view", "CoordinatedView", "plan", "elevation", "section", "source_id", "opening", "schedule", "undo", "SheetViewModel", "viewport"),
         "tests": ("building_view_projection", "sheet_view_model", "sheet_view_entity_codec", "desktop_workflow"),
-        "qualification_boundary": "This evidence covers deterministic local projection and view persistence. Complete hidden-line/detail production behavior, printer calibration, and native Apex compatibility remain open.",
+        "qualification_boundary": "This evidence covers source-backed wall and hosted-opening edits across linked plan/elevation/section projections, schedules, history and persistence. Roof-specific projected-click coverage, complete hidden-line/detail production behavior, printer calibration, and native Apex compatibility remain open.",
     },
     "ARCH-VIEW-002": {
         "acceptance": "Section and coordinated view definitions retain cut depth, line treatment, material hatching, detail level, annotations, callouts, and overlay metadata through validation and persistence.",

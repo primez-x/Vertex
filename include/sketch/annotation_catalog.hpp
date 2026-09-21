@@ -10,10 +10,7 @@
 
 namespace sketch {
 
-// Built-in symbol definitions are versioned independently from the annotation
-// entity schema.  A future catalog revision must provide an explicit migration
-// before an existing project can be opened, preventing silent reinterpretation
-// of saved symbol IDs.
+// Catalog and artwork revisions are independent from the entity schema.
 inline constexpr int kSymbolCatalogRevision = 1;
 // States written before the revision field was introduced are explicitly
 // treated as revision 1; they must still pass the current-revision check.
@@ -66,6 +63,9 @@ struct SymbolStroke { Vec2 start; Vec2 end; };
 struct SymbolSvgAsset {
     // Relative to the application's asset root. No runtime archive dependency.
     std::string relative_path;
+    // Lower-case SHA-256 of the exact bundled SVG. Definition snapshots use
+    // it to detect artwork changes even when geometry metadata is unchanged.
+    std::string sha256;
     std::array<double, 4> view_box; // x, y, width, height in SVG coordinates
     // Maps physical width/depth to SVG coordinates, excluding artwork padding.
     std::array<double, 4> footprint_view_box;
@@ -83,6 +83,8 @@ struct SymbolDefinition {
     std::vector<SymbolStroke> preview;
     std::string name; // Human-readable searchable name; legacy entries may be empty.
     std::optional<SymbolSvgAsset> svg_asset;
+    int artwork_revision{1};
+    int catalog_revision{kSymbolCatalogRevision};
 };
 
 struct SymbolInstance {
@@ -91,6 +93,11 @@ struct SymbolInstance {
     AnnotationPlacement placement;
     AnnotationStyle style;
     bool visible{true};
+    // Persisted snapshot, never automatically replaced by a newer catalog.
+    std::optional<SymbolDefinition> definition;
+    // Optional exact SVG bytes captured by the asset-owning desktop layer.
+    // Without bytes, stale definitions render their saved vector preview.
+    std::string pinned_svg;
 };
 
 struct AnnotationState {
@@ -120,6 +127,17 @@ void validate_annotation_state(const AnnotationState&, const std::vector<SymbolD
 void validate_symbol_catalog(const std::vector<SymbolDefinition>&);
 [[nodiscard]] std::vector<SymbolStroke> placed_symbol_preview(
     const SymbolDefinition&, const AnnotationPlacement&);
+[[nodiscard]] bool symbol_requires_migration(
+    const SymbolInstance&, const std::vector<SymbolDefinition>&);
+// Returns saved geometry; suppresses a stale external SVG path. A renderer
+// should prefer pinned_svg when present and visibly flag migration status.
+[[nodiscard]] SymbolDefinition resolved_symbol_definition(
+    const SymbolInstance&, const std::vector<SymbolDefinition>&);
+// Pure explicit replacement; callers commit the resulting state in one normal
+// Document command. Other instance properties and sibling annotations survive.
+[[nodiscard]] AnnotationState migrate_symbol_definition(
+    const AnnotationState&, std::string_view instance_id,
+    const std::vector<SymbolDefinition>&, std::string pinned_svg = {});
 [[nodiscard]] nlohmann::json encode_annotation_state(
     const AnnotationState&, const std::vector<SymbolDefinition>&);
 [[nodiscard]] AnnotationState decode_annotation_state(

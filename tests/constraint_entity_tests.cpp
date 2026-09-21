@@ -630,6 +630,26 @@ void test_large_binding_envelopes_have_bounded_validation() {
 
 int main() {
     sketch::testing::noninteractive_errors();
+    {
+        PersistentConstraint boundary;
+        boundary.id = "boundary-level";
+        boundary.bindings = {{"outline", WallEndpointRole::start, "edge", "a"},
+                             {"outline", WallEndpointRole::end, "edge", "b"}};
+        auto entity = encode_constraint_entity(boundary);
+        require(entity.properties.at("version") == 2 && !entity.properties.contains("wall_ids") &&
+                    entity.properties.at("entity_ids") == nlohmann::json::array({"outline"}),
+                "boundary lock must use version two generic owner references");
+        require(decode_constraint_entity(entity).constraint->bindings == boundary.bindings,
+                "boundary stable IDs did not round trip");
+        entity.properties["bindings"][0]["vendor"] = "retained";
+        const auto merged = encode_constraint_entity(boundary, &entity);
+        require(merged.properties.at("bindings")[0].at("vendor") == "retained",
+                "boundary binding opaque metadata was lost");
+        entity.properties["bindings"][0].erase("vertex_id");
+        require_invalid([&] { (void)decode_constraint_entity(entity); }, "boundary vertex ID is required");
+        boundary.bindings[0].vertex_id.clear();
+        require_invalid([&] { (void)encode_constraint_entity(boundary); }, "incomplete boundary binding encoded");
+    }
     test_all_relations_round_trip();
     test_wall_ids_are_sorted_and_complete();
     test_exact_fixed_length_receipt_is_preserved();

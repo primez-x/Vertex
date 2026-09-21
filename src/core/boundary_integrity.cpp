@@ -128,6 +128,34 @@ nlohmann::json geometry_edit_operation(const BoundaryGeometryEdit& edit) {
     return {{"kind", "geometry_edit"}, {"value", encode_boundary_geometry_edit(edit)}};
 }
 
+IdentifiedBoundary apply_vertex_batch(const IdentifiedBoundary& source,
+                                      const std::vector<BoundaryGeometryEdit>& edits) {
+    if (edits.empty()) throw std::invalid_argument("Empty boundary vertex batch");
+    auto result = source;
+    std::set<std::string, std::less<>> touched;
+    for (const auto& edit : edits) {
+        validate_boundary_geometry_edit(edit);
+        if (edit.boundary_id != source.id || edit.kind != BoundaryGeometryEditKind::move_vertex ||
+            !touched.insert(edit.target_id).second)
+            throw std::invalid_argument("Boundary vertex batch has invalid owner, kind or duplicate target");
+        bool found = false;
+        for (auto& edge : result.segments) {
+            if (edge.segment.sweep_radians != 0)
+                throw std::invalid_argument("Boundary vertex batch requires straight segments");
+            if (edge.start_vertex_id == edit.target_id) {
+                edge.segment.start = edit.target_position;
+                found = true;
+            }
+            if (edge.end_vertex_id == edit.target_id) edge.segment.end = edit.target_position;
+        }
+        if (!found) throw std::invalid_argument("Unknown batch vertex ID");
+    }
+    (void)encode_identified_boundary_entity(result);
+    if (signed_area(boundary_geometry(source)) * signed_area(boundary_geometry(result)) <= 0)
+        throw std::invalid_argument("Boundary vertex batch must preserve winding");
+    return result;
+}
+
 nlohmann::json geometry_transform_operation(const BoundaryTransformation& transformation) {
     return {{"kind", "transform"}, {"value", encode_boundary_transform(transformation)}};
 }
@@ -160,6 +188,13 @@ IdentifiedBoundary replay_geometry_derivation(const Entity& entity) {
         if (kind == "geometry_edit") {
             result = apply_geometry_edit(
                 result, decode_boundary_geometry_edit(operation.at("value")));
+        } else if (kind == "vertex_batch") {
+            if (!operation.at("value").is_array())
+                throw std::invalid_argument("Boundary vertex batch must be an array");
+            std::vector<BoundaryGeometryEdit> edits;
+            for (const auto& edit : operation.at("value"))
+                edits.push_back(decode_boundary_geometry_edit(edit));
+            result = apply_vertex_batch(result, edits);
         } else if (kind == "transform") {
             result = apply_geometry_transform(
                 result, decode_boundary_transform(operation.at("value")));
@@ -394,9 +429,9 @@ std::map<std::string, Entity, std::less<>> transformed_boundary_entities(
     return result;
 }
 
-std::map<std::string, Entity, std::less<>> edited_boundary_entities(
+static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
     const std::map<std::string, Entity, std::less<>>& source,
-    const BoundaryGeometryEdit& edit) {
+    const BoundaryGeometryEdit& edit, const std::vector<BoundaryGeometryEdit>* batch) {
     validate_boundary_geometry_edit(edit);
     const auto found = source.find(edit.boundary_id);
     if (found == source.end()) throw std::invalid_argument("Edited boundary does not exist");
@@ -406,7 +441,8 @@ std::map<std::string, Entity, std::less<>> edited_boundary_entities(
         throw std::invalid_argument("Boundary geometry editing requires a supported identified boundary");
     if (const auto unsupported = validate_boundary_integrity(source))
         throw std::invalid_argument(*unsupported);
-    const auto edited = apply_geometry_edit(decode_identified_boundary_entity(original), edit);
+    const auto edited = batch ? apply_vertex_batch(decode_identified_boundary_entity(original), *batch)
+                              : apply_geometry_edit(decode_identified_boundary_entity(original), edit);
     if (edited == decode_identified_boundary_entity(original)) return source;
 
     auto metadata = original;
@@ -427,7 +463,13 @@ std::map<std::string, Entity, std::less<>> edited_boundary_entities(
         if (had_derivation &&
             replay_geometry_derivation(original) != decode_identified_boundary_entity(original))
             throw std::invalid_argument("Boundary geometry derivation does not reproduce its source");
-        derivation->at("operations").push_back(geometry_edit_operation(edit));
+        if (batch) {
+            auto values = nlohmann::json::array();
+            for (const auto& item : *batch) values.push_back(encode_boundary_geometry_edit(item));
+            derivation->at("operations").push_back({{"kind", "vertex_batch"}, {"value", values}});
+        } else {
+            derivation->at("operations").push_back(geometry_edit_operation(edit));
+        }
     }
     auto encoded = encode_identified_boundary_entity(edited, &metadata);
     if (encoded.properties.contains("boundary")) {
@@ -442,6 +484,31 @@ std::map<std::string, Entity, std::less<>> edited_boundary_entities(
     auto result = source;
     result.at(edit.boundary_id) = std::move(encoded);
     return result;
+}
+
+std::map<std::string, Entity, std::less<>> edited_boundary_entities(
+    const std::map<std::string, Entity, std::less<>>& source, const BoundaryGeometryEdit& edit) {
+    return edited_boundary_entities_impl(source, edit, nullptr);
+}
+
+std::map<std::string, Entity, std::less<>> edited_boundary_entities_batch(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const std::vector<BoundaryGeometryEdit>& edits) {
+    // Preserve already persisted format-8 proofs exactly whenever sequential
+    // replay is valid. An invalid intermediate state is never published.
+    try {
+        auto sequential = source;
+        for (const auto& edit : edits) sequential = edited_boundary_entities(sequential, edit);
+        return sequential;
+    } catch (const std::invalid_argument&) {
+        std::map<std::string, std::vector<BoundaryGeometryEdit>, std::less<>> groups;
+        for (const auto& edit : edits) groups[edit.boundary_id].push_back(edit);
+        auto result = source;
+        for (const auto& [id, group] : groups)
+            result = edited_boundary_entities_impl(result, group.front(), &group);
+        (void)validate_boundary_integrity(result);
+        return result;
+    }
 }
 
 std::optional<std::string> validate_boundary_integrity(

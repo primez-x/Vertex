@@ -4,6 +4,7 @@
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/boundary_translation.hpp"
 #include "sketch/boundary_transform.hpp"
+#include "sketch/constraint_entity.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <sqlite3.h>
@@ -250,7 +251,10 @@ void rewrite_logical_digest(const std::filesystem::path& path) {
     sqlite3_stmt* statement = nullptr;
     require(sqlite3_prepare_v2(
                 database,
-                format >= 7
+                format >= 8
+                    ? "SELECT revision,parent_revision,source_revision,action,name,undo_stack_json,"
+                      "redo_stack_json,boundary_translation_json,boundary_transform_json,boundary_edit_json,boundary_constraint_changes_json FROM revisions ORDER BY revision"
+                    : format >= 7
                     ? "SELECT revision,parent_revision,source_revision,action,name,undo_stack_json,"
                       "redo_stack_json,boundary_translation_json,boundary_transform_json,boundary_edit_json FROM revisions ORDER BY revision"
                     : format >= 6
@@ -286,6 +290,9 @@ void rewrite_logical_digest(const std::filesystem::path& path) {
         if (format >= 7 && sqlite3_column_type(statement, 9) != SQLITE_NULL)
             manifest["history"].back()["boundary_geometry_edit"] =
                 nlohmann::json::parse(sqlite_text(statement, 9));
+        if (format >= 8 && sqlite3_column_type(statement, 10) != SQLITE_NULL)
+            manifest["history"].back()["boundary_constraint_changes"] =
+                nlohmann::json::parse(sqlite_text(statement, 10));
     }
     sqlite3_finalize(statement);
 
@@ -959,6 +966,85 @@ void test_boundary_geometry_edit_proof_storage_and_forgery_rejection() {
     require_error([&] { (void)ProjectStore::load(downgraded); },
                   StorageErrorCode::unsupported_format,
                   "downgraded boundary edit history must fail its minimum format guard");
+}
+
+void test_boundary_constraint_proof_storage() {
+    TempDirectory temp;
+    const auto file = temp.path / "boundary-constraint-v8.psketch";
+    sketch::PersistentConstraint relation;
+    relation.id = "length";
+    relation.relation = sketch::ConstraintRelationKind::fixed_length;
+    relation.bindings = {{"translated-boundary", sketch::WallEndpointRole::start, "edge-0", "vertex-0"},
+                         {"translated-boundary", sketch::WallEndpointRole::end, "edge-0", "vertex-1"}};
+    relation.length = sketch::parse_quantity("2 m");
+    auto document = Document::create({translation_fixture(), sketch::encode_constraint_entity(relation)});
+    const auto initial = document.snapshot().entities();
+    relation.length = sketch::parse_quantity("3 m");
+    sketch::ApplyBoundaryConstraintChanges command{0,
+        {{"translated-boundary", sketch::BoundaryGeometryEditKind::move_vertex,
+          "vertex-0", {5.0, 0.0}},
+         {"translated-boundary", sketch::BoundaryGeometryEditKind::move_vertex,
+          "vertex-1", {8.0, 0.0}},
+         {"translated-boundary", sketch::BoundaryGeometryEditKind::move_vertex,
+          "vertex-2", {8.0, 1.0}},
+         {"translated-boundary", sketch::BoundaryGeometryEditKind::move_vertex,
+          "vertex-3", {5.0, 1.0}}},
+        {EntityChange::upsert(sketch::encode_constraint_entity(relation))}, "constraint transaction"};
+    document.apply(command);
+    const auto edited = document.snapshot().entities();
+    document.undo(document.revision());
+    require(ProjectStore::required_format_version(document.snapshot()) == 8,
+            "undone constraint proof must require v8");
+    (void)ProjectStore::save(file, document.snapshot());
+    auto loaded = ProjectStore::load(file);
+    const auto proof = loaded.document.snapshot().history().at(1).boundary_constraint_changes;
+    require(proof && sketch::command_to_json(*proof) == sketch::command_to_json(command),
+            "constraint proof must survive reopen exactly");
+    require(loaded.document.snapshot().entities() == initial && loaded.document.can_redo(),
+            "reopen must preserve undone transaction");
+    loaded.document.redo(loaded.document.revision());
+    require(loaded.document.snapshot().entities() == edited, "redo after reopen must replay transaction");
+    loaded.document.undo(loaded.document.revision());
+    require(loaded.document.snapshot().entities() == initial, "undo after reopen must restore source");
+    const auto copy = temp.path / "boundary-constraint-copy.psketch";
+    (void)ProjectStore::save(copy, loaded.document.snapshot());
+    require(ProjectStore::load(copy).document.can_redo(), "resaved navigation must survive reopen");
+
+    sketch::ProjectWorkspace workspace(document.snapshot());
+    const auto workspace_snapshot = workspace.capture();
+    const auto history = sketch::capture_workspace_history_record(workspace_snapshot);
+    sketch::RecoveryLedger ledger{{"history", "workspace_history",
+        sketch::encode_workspace_history_record(workspace_snapshot.document(), history, std::nullopt)}};
+    const auto archive_file = temp.path / "constraint-archive.psketch";
+    (void)ProjectStore::save_archive(archive_file,
+        {workspace_snapshot.document(), ledger, sketch::ArchiveRole::ordinary});
+    const auto archive = ProjectStore::load_archive(archive_file, sketch::ArchiveRole::ordinary);
+    require(archive.supported() && archive.archive->document().history().at(1).boundary_constraint_changes &&
+                sketch::command_to_json(*archive.archive->document().history().at(1).boundary_constraint_changes) ==
+                    sketch::command_to_json(command),
+            "recovery archive must preserve the proof and its history binding");
+    require_error([&] { (void)ProjectStore::load(archive_file); }, StorageErrorCode::unsupported_format,
+                  "document-only load must not discard the v8 recovery ledger");
+
+    const auto missing = temp.path / "missing-constraint.psketch";
+    std::filesystem::copy_file(file, missing);
+    execute_sql(missing, "UPDATE revisions SET boundary_constraint_changes_json=NULL WHERE revision=1");
+    rewrite_logical_digest(missing);
+    require_error([&] { (void)ProjectStore::load(missing); }, StorageErrorCode::integrity_failure,
+                  "recomputed digest cannot authorize missing constraint proof");
+    const auto forged = temp.path / "forged-constraint.psketch";
+    std::filesystem::copy_file(file, forged);
+    execute_sql(forged, "UPDATE revisions SET boundary_constraint_changes_json="
+        "json_set(boundary_constraint_changes_json,'$.boundary_edits[0].position[0]',4.0) WHERE revision=1");
+    rewrite_logical_digest(forged);
+    require_error([&] { (void)ProjectStore::load(forged); }, StorageErrorCode::integrity_failure,
+                  "recomputed digest cannot authorize forged constraint proof");
+    const auto wrong_kind = temp.path / "wrong-constraint-kind.psketch";
+    std::filesystem::copy_file(file, wrong_kind);
+    execute_sql(wrong_kind, "UPDATE revisions SET boundary_constraint_changes_json="
+        "json_set(boundary_constraint_changes_json,'$.kind','apply_entity_changes') WHERE revision=1");
+    require_error([&] { (void)ProjectStore::load(wrong_kind); }, StorageErrorCode::integrity_failure,
+                  "constraint column must reject other command kinds");
 }
 
 void test_boundary_authoring_receipt_after_v2_entity_requires_v3() {
@@ -1654,6 +1740,7 @@ int main() {
         test_translation_proof_storage_and_forgery_rejection();
         test_transform_proof_storage_and_forgery_rejection();
         test_boundary_geometry_edit_proof_storage_and_forgery_rejection();
+        test_boundary_constraint_proof_storage();
         test_boundary_authoring_receipt_after_v2_entity_requires_v3();
         test_unqualified_authoring_property_collisions_remain_v1_and_opaque();
         test_unknown_boundary_model_collision_requires_v2();

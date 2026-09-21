@@ -215,6 +215,8 @@ struct RawBinding {
     std::string owner_id;
     std::string feature;
     std::string role;
+    std::string segment_id;
+    std::string vertex_id;
 };
 
 std::vector<RawBinding> decode_binding_envelope(const json& properties) {
@@ -225,7 +227,7 @@ std::vector<RawBinding> decode_binding_envelope(const json& properties) {
 
     std::vector<RawBinding> bindings;
     bindings.reserve(value.size());
-    std::set<std::tuple<std::string, std::string, std::string>> seen;
+    std::set<std::tuple<std::string, std::string, std::string, std::string>> seen;
     for (const auto& item : value) {
         if (!item.is_object()) {
             invalid("constraint binding must be a JSON object");
@@ -245,10 +247,12 @@ std::vector<RawBinding> decode_binding_envelope(const json& properties) {
         if (feature_name.empty() || role_name_text.empty()) {
             invalid("constraint binding feature and role must be non-empty");
         }
-        if (!seen.emplace(owner_id, feature_name, role_name_text).second) {
+        const auto segment_id = item.value("segment_id", std::string{});
+        const auto vertex_id = item.value("vertex_id", std::string{});
+        if (!seen.emplace(owner_id, feature_name, role_name_text, segment_id).second) {
             invalid("constraint bindings contain a duplicate endpoint");
         }
-        bindings.push_back(RawBinding{owner_id, feature_name, role_name_text});
+        bindings.push_back(RawBinding{owner_id, feature_name, role_name_text, segment_id, vertex_id});
     }
     return bindings;
 }
@@ -257,7 +261,7 @@ std::vector<WallEndpointBinding> decode_v1_bindings(const std::vector<RawBinding
     std::vector<WallEndpointBinding> bindings;
     bindings.reserve(raw_bindings.size());
     for (const auto& raw : raw_bindings) {
-        if (raw.feature != "baseline") {
+        if (raw.feature != "baseline" && raw.feature != "boundary_segment") {
             invalid("constraint binding feature must be baseline");
         }
         const auto endpoint_role = role_from_name(raw.role);
@@ -266,14 +270,23 @@ std::vector<WallEndpointBinding> decode_v1_bindings(const std::vector<RawBinding
         }
         // Raw envelope validation already checked unique owner/feature/role;
         // the known v1 role mapping is one-to-one.
-        bindings.push_back({raw.owner_id, *endpoint_role});
+        if (raw.feature == "boundary_segment") {
+            if (!valid_identifier(raw.segment_id) || !valid_identifier(raw.vertex_id))
+                invalid("boundary binding requires stable segment and vertex IDs");
+        } else if (!raw.segment_id.empty() || !raw.vertex_id.empty()) {
+            invalid("baseline binding cannot contain boundary IDs");
+        }
+        bindings.push_back({raw.owner_id, *endpoint_role, raw.segment_id, raw.vertex_id});
     }
     return bindings;
 }
 
 std::vector<std::string> decode_wall_ids(const json& properties,
                                          const std::vector<std::string>& binding_owners) {
-    const auto& value = required_property(properties, "wall_ids");
+    const auto version = properties.at("version");
+    const auto key = version == 1 ? "wall_ids" :
+        (version == 2 || properties.contains("entity_ids")) ? "entity_ids" : "wall_ids";
+    const auto& value = required_property(properties, key);
     if (!value.is_array() || value.empty()) {
         invalid("constraint wall_ids must be a non-empty JSON array");
     }
@@ -521,6 +534,10 @@ void validate_model(const PersistentConstraint& constraint) {
         if (!valid_identifier(binding.owner_id)) {
             invalid("constraint binding owner_id is empty or invalid");
         }
+        if (binding.segment_id.empty() != binding.vertex_id.empty() ||
+            (!binding.segment_id.empty() && (!valid_identifier(binding.segment_id) ||
+                                             !valid_identifier(binding.vertex_id))))
+            invalid("boundary binding requires valid segment and vertex IDs");
         if (binding.role != WallEndpointRole::start && binding.role != WallEndpointRole::end) {
             invalid("constraint binding role is invalid");
         }
@@ -577,14 +594,20 @@ json encode_bindings(const std::vector<WallEndpointBinding>& bindings,
                 const auto role = candidate.find("role");
                 if (owner != candidate.end() && role != candidate.end() && owner->is_string() &&
                     role->is_string() && owner->get<std::string>() == binding.owner_id &&
-                    role->get<std::string>() == role_name(binding.role)) {
+                    role->get<std::string>() == role_name(binding.role) &&
+                    candidate.value("segment_id", std::string{}) == binding.segment_id &&
+                    candidate.value("vertex_id", std::string{}) == binding.vertex_id) {
                     item = candidate;
                     break;
                 }
             }
         }
         item["owner_id"] = binding.owner_id;
-        item["feature"] = "baseline";
+        item["feature"] = binding.segment_id.empty() ? "baseline" : "boundary_segment";
+        if (!binding.segment_id.empty()) {
+            item["segment_id"] = binding.segment_id;
+            item["vertex_id"] = binding.vertex_id;
+        }
         item["role"] = role_name(binding.role);
         result.push_back(std::move(item));
     }
@@ -662,7 +685,7 @@ ConstraintEntityDecodeResult decode_constraint_entity(const Entity& entity) {
     }
 
     const auto relation = relation_from_name(relation_text);
-    if (version == 1 && relation) {
+    if ((version == 1 || version == 2) && relation) {
         const auto& bindings = required_property(properties, "bindings");
         if (!bindings.is_array() || bindings.size() != expected_binding_count(*relation))
             invalid("constraint has the wrong number of endpoint bindings");
@@ -675,7 +698,7 @@ ConstraintEntityDecodeResult decode_constraint_entity(const Entity& entity) {
     }
     (void)decode_wall_ids(properties, binding_owners);
 
-    if (version != 1 || !relation.has_value()) {
+    if ((version != 1 && version != 2) || !relation.has_value()) {
         std::string reason;
         if (version != 1) {
             reason = "unsupported constraint entity version";
@@ -696,6 +719,9 @@ ConstraintEntityDecodeResult decode_constraint_entity(const Entity& entity) {
     }
 
     const auto bindings = decode_v1_bindings(raw_bindings);
+    if (version == 1 && std::any_of(bindings.begin(), bindings.end(),
+            [](const auto& b) { return !b.segment_id.empty(); }))
+        invalid("boundary bindings require constraint version two");
     validate_binding_count(bindings, *relation);
     PersistentConstraint result;
     result.id = entity.id;
@@ -740,10 +766,13 @@ Entity encode_constraint_entity(const PersistentConstraint& constraint, const En
     }
 
     auto& properties = result.properties;
-    properties["version"] = 1;
+    const bool boundary = std::any_of(constraint.bindings.begin(), constraint.bindings.end(),
+        [](const auto& b) { return !b.segment_id.empty(); });
+    properties["version"] = boundary ? 2 : 1;
     properties["relation"] = std::string(constraint_relation_name(constraint.relation));
     properties["bindings"] = encode_bindings(constraint.bindings, original_bindings);
-    properties["wall_ids"] = encode_wall_ids(constraint.bindings);
+    properties.erase(boundary ? "wall_ids" : "entity_ids");
+    properties[boundary ? "entity_ids" : "wall_ids"] = encode_wall_ids(constraint.bindings);
 
     if (constraint.relation == ConstraintRelationKind::fixed_length) {
         properties["length_m"] = constraint.length->metres;

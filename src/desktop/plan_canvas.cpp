@@ -2289,10 +2289,23 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
 
     if (entity.svg_symbol.has_value()) {
         const auto& symbol = *entity.svg_symbol;
-        auto renderer = m_svg_renderers.value(symbol.catalog_id);
+        // Artwork is pinned per instance. The catalog ID alone is therefore
+        // not a rendering identity: two saved revisions of one component may
+        // intentionally coexist in the same project.
+        const auto cacheable = symbol.artwork_sha256.size() == 64;
+        const auto artwork_key = cacheable
+            ? QString::fromLatin1(symbol.artwork_sha256) : QString{};
+        auto renderer = cacheable ? m_svg_renderers.value(artwork_key)
+                                  : QSharedPointer<QSvgRenderer>{};
         if (!renderer || !renderer->isValid()) {
             renderer = QSharedPointer<QSvgRenderer>::create(symbol.document);
-            if (renderer->isValid()) m_svg_renderers.insert(symbol.catalog_id, renderer);
+            if (renderer->isValid() && cacheable) {
+                // Bound memory even while opening many projects or revisions.
+                // Clearing at the limit keeps the policy deterministic and
+                // avoids retaining obsolete project artwork indefinitely.
+                if (m_svg_renderers.size() >= 128) m_svg_renderers.clear();
+                m_svg_renderers.insert(artwork_key, renderer);
+            }
         }
         const auto footprint = symbol.footprint_view_box;
         if (renderer && renderer->isValid() && footprint.width() > 0.0 &&

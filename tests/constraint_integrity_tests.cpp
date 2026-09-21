@@ -1,4 +1,6 @@
 #include "sketch/document.hpp"
+#include "sketch/boundary_entity.hpp"
+#include "sketch/constraint_entity.hpp"
 #include "sketch/project_store.hpp"
 #include "support/noninteractive_errors.hpp"
 
@@ -311,6 +313,34 @@ void test_save_reopen_preserves_enforcement_and_history() {
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        {
+            IdentifiedBoundary boundary{"outline", "measurement_boundary", {
+                {"ab", "a", "b", {{0, 0}, {4, 0}, 0}},
+                {"bc", "b", "c", {{4, 0}, {4, 4}, 0}},
+                {"cd", "c", "d", {{4, 4}, {0, 4}, 0}},
+                {"da", "d", "a", {{0, 4}, {0, 0}, 0}}}};
+            PersistentConstraint lock;
+            lock.id = "level";
+            lock.bindings = {{"outline", WallEndpointRole::start, "ab", "a"},
+                             {"outline", WallEndpointRole::end, "ab", "b"}};
+            auto document = Document::create({encode_identified_boundary_entity(boundary),
+                                              encode_constraint_entity(lock)});
+            boundary.segments[0].segment.end.y = 1;
+            boundary.segments[1].segment.start.y = 1;
+            rejected_unchanged(document, [&] {
+                document.apply(ApplyEntityChanges{document.revision(),
+                    {EntityChange::upsert(encode_identified_boundary_entity(boundary))}, {}, "bypass boundary lock"});
+            }, "raw geometry edit bypassed boundary relation");
+            rejected_unchanged(document, [&] {
+                document.apply(ApplyEntityChanges{document.revision(),
+                    {EntityChange::erase("outline")}, {}, "delete boundary owner"});
+            }, "missing boundary constraint owner accepted");
+            lock.bindings[1].vertex_id = "c";
+            rejected_unchanged(document, [&] {
+                document.apply(ApplyEntityChanges{document.revision(),
+                    {EntityChange::upsert(encode_constraint_entity(lock))}, {}, "retarget wrong vertex"});
+            }, "mismatched boundary segment vertex accepted");
+        }
         test_direct_edits_cannot_bypass_a_persisted_relation();
         test_relation_removal_and_geometry_edit_are_one_reversible_command();
         test_wall_shortening_cannot_strand_a_hosted_opening();

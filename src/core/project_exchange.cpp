@@ -585,9 +585,13 @@ void extract_project(const DocumentSnapshot &snapshot,
         row["boundary_transform"] = encode_boundary_transform(*revision.boundary_transform);
       }
       if (revision.boundary_geometry_edit) {
-        result["exchange_version"] = 4;
+        if (result["exchange_version"].get<int>() < 4) result["exchange_version"] = 4;
         row["boundary_geometry_edit"] =
             encode_boundary_geometry_edit(*revision.boundary_geometry_edit);
+      }
+      if (revision.boundary_constraint_changes) {
+        result["exchange_version"] = 5;
+        row["boundary_constraint_changes"] = command_to_json(*revision.boundary_constraint_changes);
       }
       for (const auto &[id, entity] : revision.entities) {
         (void)id;
