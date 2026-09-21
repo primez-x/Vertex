@@ -2223,7 +2223,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Source review correction (2026-09-21): Users can create and edit multiple named plans, elevations and vertical sections with persisted names, origins, directions, up vectors, cut/far depths, source filters and section overlays. The Architectural selector and sheet model consume those stable view identities, and analytical plan/elevation plus solid-plane section projection uses each persisted frame. Remaining gaps are explicit lateral/vertical model crop extents, complete shared-object cross-view editing evidence, flexible sheet placement workflows, Apex compatibility and production qualification."
+      "implementation_note": "Source review correction (2026-09-21): Users can create and edit multiple named plans, elevations and vertical sections with persisted names, origins, directions, up vectors, cut/far depths, source filters, section overlays and optional left/right/bottom/top model crop extents. Schema-v5 crops migrate older views uncropped. Conventional plans clip retained analytical line/arc geometry while preserving doors, windows, measurement boundaries, dimensions and component annotations; other frames clip resolved solids and terrain surfaces through the rotated view frame before projection. Canvas, sheet, print and export consume the same result. Remaining gaps are complete shared-object cross-view editing evidence, richer sheet placement workflows, annotation crops, Apex compatibility and production qualification."
     },
     {
       "id": "ARCH-VIEW-002",
@@ -2254,7 +2254,7 @@
         "src/desktop/plan_canvas.cpp",
         "tests/boundary_canvas_tests.cpp"
       ],
-      "implementation_note": "Persisted section text, detail-line, and explicit-endpoint dimension overlays now participate in validated Document history, detail-level visibility, save/reopen, interactive rendering, and the shared draft-output scene. Coarse detail suppresses hatching; section/elevation projection strokes use paper-space widths, and dimension end ticks retain a fixed 2.5 mm printed length across device DPI and viewport model scale. Analytical solid-plane section edges, cut/far-depth clipping, hatch settings, and overlay presentation are covered by focused Debug/Release fixtures. Associative object/edge dimension references, production visual comparison, physical-print calibration, and full qualification remain open."
+      "implementation_note": "Persisted section text, detail-line, and explicit-endpoint dimension overlays participate in validated Document history, detail-level visibility, save/reopen, interactive rendering, and the shared draft-output scene. Coarse detail suppresses hatching; section/elevation strokes use paper-space widths, dimension end ticks retain fixed printed size, far depth clips along the viewing direction, and optional schema-v5 crops cover all four view-plane sides. Conventional-plan model linework uses exact analytic line/arc clipping; rotated frames use OCCT half-spaces for solids and face-based terrain before projection. Focused fixtures cover plan content retention, sheet output, rotated frames, curved solids, terrain, clearing, undo, save/reopen and source preservation. Associative object/edge dimension references, annotation crops, production visual comparison, physical-print calibration and full qualification remain open."
     },
     {
       "id": "ARCH-SCH-001",

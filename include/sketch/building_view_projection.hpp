@@ -19,6 +19,17 @@ struct BuildingViewFrame {
     Vec3 up{0.0, 1.0, 0.0};
 };
 
+// Model-metre bounds in the view frame, unbounded along the viewing direction.
+// Horizontal is cross(up, -direction); vertical is up. Bounds must be finite,
+// within +/-1e6 metres, and span more than 1e-6 metres on each axis.
+struct BuildingViewCrop {
+    BuildingViewFrame frame;
+    double min_horizontal_m;
+    double max_horizontal_m;
+    double min_vertical_m;
+    double max_vertical_m;
+};
+
 // A depth range used by view adapters before deriving linework. The origin and
 // direction use the same model-space convention as BuildingViewFrame. The
 // bounds filter is conservative; clip_shape_to_view_depth performs the exact
@@ -62,5 +73,18 @@ enum class BuildingViewKind { plan, elevation, section };
 // modified. Infinity returns the original shape.
 [[nodiscard]] TopoDS_Shape clip_shape_to_view_depth(const TopoDS_Shape& shape,
                                                    const BuildingViewDepth& depth);
+
+// Conservative bounding-box filter; true does not guarantee an intersection.
+// Invalid crops throw std::invalid_argument, including for null input shapes.
+[[nodiscard]] bool shape_intersects_view_crop(const TopoDS_Shape& shape,
+                                              const BuildingViewCrop& crop);
+
+// Intersect a derived solid or face-based surface with the four view-aligned
+// crop half-spaces before projection. Fully contained shapes are returned
+// unchanged; disjoint shapes return null. Source geometry is never modified.
+// OCCT failures throw std::invalid_argument. No tessellation or projected-curve
+// approximation occurs.
+[[nodiscard]] TopoDS_Shape clip_shape_to_view_crop(const TopoDS_Shape& shape,
+                                                  const BuildingViewCrop& crop);
 
 }  // namespace sketch

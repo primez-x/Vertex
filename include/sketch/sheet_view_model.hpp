@@ -27,6 +27,15 @@ struct SectionOverlay {
     bool operator==(const SectionOverlay&) const = default;
 };
 [[nodiscard]] bool section_overlay_visible(const SectionOverlay& overlay, ViewDetail detail);
+// Metres relative to the view origin along the renderer's view-right and up axes.
+// Both spans must exceed 1e-6 m; every coordinate must be within +/-1e6 m.
+struct ViewCrop {
+    double min_horizontal_m{};
+    double max_horizontal_m{};
+    double min_vertical_m{};
+    double max_vertical_m{};
+    bool operator==(const ViewCrop&) const = default;
+};
 struct ViewPresentation {
     double cut_depth_m{1.2};
     double far_depth_m{100.0};
@@ -36,6 +45,7 @@ struct ViewPresentation {
     std::string hatch_pattern{"solid"};
     double hatch_scale{1.0};
     ViewDetail detail{ViewDetail::medium};
+    std::optional<ViewCrop> crop;
     bool operator==(const ViewPresentation&) const = default;
 };
 struct CoordinatedView {

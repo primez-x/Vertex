@@ -2,6 +2,12 @@
 #include "sketch/architecture.hpp"
 
 #include <algorithm>
+#include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
+#include <BRepBuilderAPI_Transform.hxx>
+#include <gp_Trsf.hxx>
+#include <gp_Ax1.hxx>
+#include <limits>
 #include <cmath>
 #include <iostream>
 #include <numbers>
@@ -262,6 +268,154 @@ void test_conservative_far_depth_filter() {
         "far-depth filtering must reject a negative limit");
 }
 
+void test_view_crop() {
+    const auto shape = BRepPrimAPI_MakeBox(4.0, 6.0, 2.0).Shape();
+    const sketch::BuildingViewCrop inside{{}, -1, 5, -1, 7};
+    require(sketch::shape_intersects_view_crop(shape, inside), "inside crop intersects");
+    require(sketch::clip_shape_to_view_crop(shape, inside).IsSame(shape),
+            "inside crop preserves original shape");
+    near(sketch::solid_volume(shape), 48, 1e-6, "source volume");
+    require(sketch::clip_shape_to_view_crop(shape, {{}, 0,4,0,6}).IsSame(shape),
+            "crop exactly on solid boundary preserves source");
+    for (const auto crop : {sketch::BuildingViewCrop{{}, 5, 7, -1, 7},
+                            sketch::BuildingViewCrop{{}, -3, -1, -1, 7},
+                            sketch::BuildingViewCrop{{}, -1, 5, 7, 8},
+                            sketch::BuildingViewCrop{{}, -1, 5, -3, -1}}) {
+        require(!sketch::shape_intersects_view_crop(shape, crop), "outside crop misses");
+        require(sketch::clip_shape_to_view_crop(shape, crop).IsNull(), "outside crop is null");
+    }
+    for (const auto crop : {sketch::BuildingViewCrop{{}, 1, 5, -1, 7},
+                            sketch::BuildingViewCrop{{}, -1, 3, -1, 7},
+                            sketch::BuildingViewCrop{{}, -1, 5, 1, 7},
+                            sketch::BuildingViewCrop{{}, -1, 5, -1, 5},
+                            sketch::BuildingViewCrop{{}, 1, 3, 1, 5}}) {
+        require(sketch::shape_intersects_view_crop(shape, crop), "crossing crop intersects");
+        const auto clipped = sketch::clip_shape_to_view_crop(shape, crop);
+        const auto x0 = std::max(0.0, crop.min_horizontal_m);
+        const auto x1 = std::min(4.0, crop.max_horizontal_m);
+        const auto y0 = std::max(0.0, crop.min_vertical_m);
+        const auto y1 = std::min(6.0, crop.max_vertical_m);
+        near(sketch::solid_volume(clipped), (x1-x0)*(y1-y0)*2, 1e-6, "crossing crop volume");
+        const auto extent = bounds(sketch::project_shape_view(clipped, BuildingViewKind::plan));
+        near(extent.min_x, x0, 1e-6, "crop minimum horizontal");
+        near(extent.max_x, x1, 1e-6, "crop maximum horizontal");
+        near(extent.min_y, y0, 1e-6, "crop minimum vertical");
+        near(extent.max_y, y1, 1e-6, "crop maximum vertical");
+    }
+    // Rotate both the shape and view about a non-axis-aligned axis, then translate.
+    gp_Trsf transform;
+    transform.SetRotation(gp_Ax1(gp_Pnt(0,0,0), gp_Dir(1,2,3)), 0.7);
+    transform.SetTranslationPart(gp_Vec(12,-7,4));
+    const auto moved = BRepBuilderAPI_Transform(shape, transform, true).Shape();
+    const auto direction = gp_Vec(0,0,-1).Transformed(transform);
+    const auto up = gp_Vec(0,1,0).Transformed(transform);
+    const BuildingViewFrame frame{{12,-7,4}, {direction.X(),direction.Y(),direction.Z()},
+                                  {up.X(),up.Y(),up.Z()}};
+    require(sketch::clip_shape_to_view_crop(moved, {frame, -1,5,-1,7}).IsSame(moved),
+            "rotated contained crop preserves original shape");
+    const auto clipped = sketch::clip_shape_to_view_crop(moved, {frame, 1,3,1,5});
+    near(sketch::solid_volume(clipped), 16, 1e-6, "rotated translated crop volume");
+    const auto extent = bounds(sketch::project_shape_view(clipped, BuildingViewKind::plan, frame));
+    near(extent.min_x, 1, 1e-6, "rotated crop minimum horizontal");
+    near(extent.max_x, 3, 1e-6, "rotated crop maximum horizontal");
+    near(extent.min_y, 1, 1e-6, "rotated crop minimum vertical");
+    near(extent.max_y, 5, 1e-6, "rotated crop maximum vertical");
+    near(sketch::solid_volume(shape), 48, 1e-6, "crop never changes source volume");
+    require(!sketch::shape_intersects_view_crop({}, inside), "null shape misses crop");
+    require(sketch::clip_shape_to_view_crop({}, inside).IsNull(), "null shape stays null");
+
+    const auto cylinder = BRepPrimAPI_MakeCylinder(2.0, 2.0).Shape();
+    const sketch::BuildingViewCrop corner{{}, 1.5,2.5,1.5,2.5};
+    require(sketch::shape_intersects_view_crop(cylinder, corner),
+            "conservative bbox may overlap an empty corner");
+    require(sketch::clip_shape_to_view_crop(cylinder, corner).IsNull(),
+            "exact empty boolean intersection returns null");
+    const auto half_cylinder = sketch::clip_shape_to_view_crop(cylinder, {{}, 0,3,-3,3});
+    near(sketch::solid_volume(half_cylinder), 4 * std::numbers::pi, 1e-6,
+         "crop preserves analytic curved solid volume");
+    const auto curved_projection = sketch::project_shape_view(half_cylinder, BuildingViewKind::plan);
+    require(std::any_of(curved_projection.begin(), curved_projection.end(),
+                       [](const auto& edge) { return edge.sweep_radians != 0.0; }),
+            "cropped circular solid retains analytic projected arcs");
+}
+
+void test_terrain_crop_preserves_crossing_faces() {
+    const sketch::TerrainSurface terrain(
+        "cropped projection fixture",
+        {sketch::TerrainPoint{"p0", 0.0, 0.0, 0.0},
+         sketch::TerrainPoint{"p1", 6.0, 0.0, 1.0},
+         sketch::TerrainPoint{"p2", 6.0, 5.0, 3.0},
+         sketch::TerrainPoint{"p3", 0.0, 5.0, 1.0}},
+        {sketch::TerrainTriangle{{0, 1, 2}}, sketch::TerrainTriangle{{0, 2, 3}}});
+    const auto shape = sketch::make_terrain_surface(terrain);
+    const sketch::BuildingViewCrop crop{{}, 1.0, 4.0, 1.0, 4.0};
+    const auto clipped = sketch::clip_shape_to_view_crop(shape, crop);
+    require(!clipped.IsNull(), "a terrain surface crossing a crop must retain clipped faces");
+    for (const auto kind : {BuildingViewKind::plan, BuildingViewKind::elevation}) {
+        require(!sketch::project_shape_view(clipped, kind).empty(),
+                "cropped terrain must still project in plan and elevation");
+    }
+    const auto section = sketch::project_shape_view(
+        clipped, BuildingViewKind::section,
+        BuildingViewFrame{{0.0, 0.0, 1.0}, {0.0, 0.0, -1.0}, {0.0, 1.0, 0.0}});
+    require(!section.empty(), "cropped terrain must still intersect a section plane");
+
+    gp_Trsf transform;
+    transform.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(1, 2, 3)), 0.45);
+    transform.SetTranslationPart(gp_Vec(7, -3, 2));
+    const auto moved = BRepBuilderAPI_Transform(shape, transform, true).Shape();
+    const auto direction = gp_Vec(0, 0, -1).Transformed(transform);
+    const auto up = gp_Vec(0, 1, 0).Transformed(transform);
+    const BuildingViewFrame frame{{7, -3, 2},
+        {direction.X(), direction.Y(), direction.Z()},
+        {up.X(), up.Y(), up.Z()}};
+    const auto rotated = sketch::clip_shape_to_view_crop(
+        moved, {frame, 1.0, 4.0, 1.0, 4.0});
+    require(!rotated.IsNull() &&
+                !sketch::project_shape_view(rotated, BuildingViewKind::plan, frame).empty(),
+            "rotated view crops must retain crossing terrain faces");
+
+    const sketch::Vec3 depth_origin{
+        frame.origin.x - frame.direction.x * 4.0,
+        frame.origin.y - frame.direction.y * 4.0,
+        frame.origin.z - frame.direction.z * 4.0};
+    const sketch::BuildingViewDepth depth{depth_origin, frame.direction, 2.5};
+    const auto depth_clipped = sketch::clip_shape_to_view_depth(moved, depth);
+    require(!depth_clipped.IsNull() && !depth_clipped.IsSame(moved),
+            "far-depth clipping must remove part of a crossing terrain surface");
+    const auto combined = sketch::clip_shape_to_view_crop(
+        depth_clipped, {frame, 1.0, 4.0, 1.0, 4.0});
+    require(!combined.IsNull() && !combined.IsSame(depth_clipped) &&
+                !sketch::project_shape_view(combined, BuildingViewKind::plan, frame).empty(),
+            "combined far-depth and crop clipping must retain terrain faces");
+}
+
+void test_invalid_view_crop() {
+    const auto shape = BRepPrimAPI_MakeBox(1.0,1.0,1.0).Shape();
+    const sketch::BuildingViewCrop valid{{}, -1,2,-1,2};
+    const auto check = [&](const sketch::BuildingViewCrop& crop) {
+        rejected([&] { (void)sketch::shape_intersects_view_crop(shape, crop); }, "invalid crop filter rejected");
+        rejected([&] { (void)sketch::clip_shape_to_view_crop(shape, crop); }, "invalid crop clip rejected");
+    };
+    for (int index = 0; index < 4; ++index) {
+        for (double value : {std::numeric_limits<double>::infinity(),
+                             std::numeric_limits<double>::quiet_NaN(), -1000001.0, 1000001.0}) {
+            auto crop = valid;
+            double* fields[]{&crop.min_horizontal_m, &crop.max_horizontal_m,
+                             &crop.min_vertical_m, &crop.max_vertical_m};
+            *fields[index] = value;
+            check(crop);
+        }
+    }
+    auto crop = valid; crop.max_horizontal_m = crop.min_horizontal_m; check(crop);
+    crop = valid; crop.max_vertical_m = -2; check(crop);
+    crop = valid; crop.max_horizontal_m = crop.min_horizontal_m + 0.5e-6; check(crop);
+    crop = valid; crop.max_vertical_m = crop.min_vertical_m + 0.5e-6; check(crop);
+    crop = valid; crop.frame.direction = {}; check(crop);
+    crop = valid; crop.frame.up = crop.frame.direction; check(crop);
+    crop = valid; crop.frame.origin.x = std::numeric_limits<double>::infinity(); check(crop);
+}
+
 }  // namespace
 
 void test_hip_roof_views() {
@@ -294,6 +448,9 @@ int main() {
         test_invalid_frame_and_missed_section_fail_closed();
         test_terrain_shape_projects_in_all_views();
         test_conservative_far_depth_filter();
+        test_view_crop();
+        test_terrain_crop_preserves_crossing_faces();
+        test_invalid_view_crop();
         std::cout << "Building view projection tests passed\n";
         return 0;
     } catch (const std::exception& error) {

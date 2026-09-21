@@ -2235,6 +2235,7 @@ struct ArchitecturalViewContext {
     std::vector<std::string> object_ids;
     std::string view_id;
     std::vector<SectionOverlay> overlays;
+    std::optional<BuildingViewCrop> crop;
 };
 
 std::vector<CanvasLabel> section_overlay_labels(const CoordinatedView& view, bool metric_units) {
@@ -2295,6 +2296,12 @@ ArchitecturalViewContext architectural_view_context(const CoordinatedView& view)
         result.frame.origin.x += base.direction.x * view.presentation.cut_depth_m;
         result.frame.origin.y += base.direction.y * view.presentation.cut_depth_m;
         result.frame.origin.z += base.direction.z * view.presentation.cut_depth_m;
+    }
+    if (view.presentation.crop) {
+        const auto& crop = *view.presentation.crop;
+        result.crop = BuildingViewCrop{result.frame,
+            crop.min_horizontal_m, crop.max_horizontal_m,
+            crop.min_vertical_m, crop.max_vertical_m};
     }
     return result;
 }
@@ -3817,7 +3824,7 @@ public:
         const QString& view_id, const QString& cut_depth_m, const QString& far_depth_m,
         const QString& cut_line_mm, const QString& projection_line_mm, bool hatch_enabled,
         const QString& hatch_pattern, const QString& hatch_scale, const QString& detail,
-        const QString& object_ids_text) {
+        const QString& object_ids_text, std::optional<QString> crop_bounds_text) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
             return false;
@@ -3854,6 +3861,18 @@ public:
             if (std::adjacent_find(object_ids.begin(), object_ids.end()) != object_ids.end()) {
                 throw std::invalid_argument("View source object IDs must be unique");
             }
+            std::optional<ViewCrop> crop;
+            if (crop_bounds_text && !crop_bounds_text->trimmed().isEmpty()) {
+                const auto parts = crop_bounds_text->split(u',');
+                if (parts.size() != 4) {
+                    throw std::invalid_argument(
+                        "View crop must contain left, right, bottom, and top in metres");
+                }
+                crop = ViewCrop{parse_finite(parts[0], "Crop left"),
+                                parse_finite(parts[1], "Crop right"),
+                                parse_finite(parts[2], "Crop bottom"),
+                                parse_finite(parts[3], "Crop top")};
+            }
             const auto source = authoringSnapshot();
             const Entity* view_entity = nullptr;
             std::optional<SheetViewModel> model;
@@ -3889,6 +3908,7 @@ public:
             replacement.presentation.hatch_pattern = pattern;
             replacement.presentation.hatch_scale = hatch_scale_value;
             replacement.presentation.detail = detail_value;
+            if (crop_bounds_text) replacement.presentation.crop = crop;
             replacement.object_ids = std::move(object_ids);
             const auto updated_model = model->with_view(std::move(replacement));
             auto updated_entity = *view_entity;
@@ -16483,6 +16503,11 @@ public:
         auto* up = new QLineEdit(&dialog); up->setObjectName(QStringLiteral("namedViewUp"));
         auto* cut = new QLineEdit(&dialog); cut->setObjectName(QStringLiteral("namedViewCut"));
         auto* far = new QLineEdit(&dialog); far->setObjectName(QStringLiteral("namedViewFar"));
+        auto* crop_enabled = new QCheckBox(QStringLiteral("Crop to view extents"), &dialog);
+        crop_enabled->setObjectName(QStringLiteral("namedViewCropEnabled"));
+        auto* crop_bounds = new QLineEdit(&dialog);
+        crop_bounds->setObjectName(QStringLiteral("namedViewCropBounds"));
+        crop_bounds->setPlaceholderText(QStringLiteral("left, right, bottom, top"));
         form->addRow(QStringLiteral("View"), selection);
         form->addRow(QStringLiteral("Name"), name);
         form->addRow(QStringLiteral("Kind"), kind);
@@ -16491,6 +16516,11 @@ public:
         form->addRow(QStringLiteral("Up direction X, Y, Z"), up);
         form->addRow(QStringLiteral("Section cut depth (m)"), cut);
         form->addRow(QStringLiteral("Far depth (m)"), far);
+        form->addRow(crop_enabled);
+        form->addRow(QStringLiteral("Crop left, right, bottom, top (m)"), crop_bounds);
+        crop_bounds->setEnabled(false);
+        QObject::connect(crop_enabled, &QCheckBox::toggled,
+                         crop_bounds, &QWidget::setEnabled);
         auto* overlays = new QTableWidget(0, 8, &dialog);
         overlays->setObjectName(QStringLiteral("sectionOverlays"));
         overlays->setHorizontalHeaderLabels({QStringLiteral("ID"), QStringLiteral("Kind"),
@@ -16550,6 +16580,16 @@ public:
             up->setText(vector_text(value.up));
             cut->setText(QString::number(value.presentation.cut_depth_m, 'g', 17));
             far->setText(QString::number(value.presentation.far_depth_m, 'g', 17));
+            crop_enabled->setChecked(value.presentation.crop.has_value());
+            crop_bounds->clear();
+            if (value.presentation.crop) {
+                const auto& crop = *value.presentation.crop;
+                crop_bounds->setText(QStringLiteral("%1, %2, %3, %4")
+                    .arg(QString::number(crop.min_horizontal_m, 'g', 17),
+                         QString::number(crop.max_horizontal_m, 'g', 17),
+                         QString::number(crop.min_vertical_m, 'g', 17),
+                         QString::number(crop.max_vertical_m, 'g', 17)));
+            }
             overlays->setRowCount(0);
             for (const auto& overlay : value.overlays) append_overlay(overlay);
         };
@@ -16581,6 +16621,17 @@ public:
                 value.kind = static_cast<CoordinatedViewKind>(kind->currentData().toInt());
                 value.origin_m = vector(origin); value.direction = vector(direction); value.up = vector(up);
                 value.presentation.cut_depth_m = scalar(cut->text()); value.presentation.far_depth_m = scalar(far->text());
+                if (crop_enabled->isChecked()) {
+                    const auto parts = crop_bounds->text().split(u',');
+                    if (parts.size() != 4) {
+                        throw std::invalid_argument(
+                            "View crop must contain left, right, bottom, and top in metres.");
+                    }
+                    value.presentation.crop = ViewCrop{
+                        scalar(parts[0]), scalar(parts[1]), scalar(parts[2]), scalar(parts[3])};
+                } else {
+                    value.presentation.crop.reset();
+                }
                 const auto previous_overlays = value.overlays;
                 value.overlays.clear();
                 for (int row = 0; row < overlays->rowCount(); ++row) {
@@ -16756,6 +16807,8 @@ public:
             auto* hatch = new QCheckBox(QStringLiteral("Enable material hatching"), &dialog);
             auto* detail = new QComboBox(&dialog);
             auto* object_ids = new QLineEdit(&dialog);
+            auto* crop_enabled = new QCheckBox(QStringLiteral("Crop to view extents"), &dialog);
+            auto* crop_bounds = new QLineEdit(&dialog);
             QStringList object_id_values;
             for (const auto& object_id : found->object_ids)
                 object_id_values.push_back(QString::fromStdString(object_id));
@@ -16771,7 +16824,20 @@ public:
             hatch->setObjectName(QStringLiteral("viewHatchEnabled"));
             detail->setObjectName(QStringLiteral("viewDetail"));
             object_ids->setObjectName(QStringLiteral("viewObjectIds"));
+            crop_enabled->setObjectName(QStringLiteral("viewCropEnabled"));
+            crop_bounds->setObjectName(QStringLiteral("viewCropBounds"));
+            crop_bounds->setPlaceholderText(QStringLiteral("left, right, bottom, top"));
             hatch->setChecked(found->presentation.hatch_enabled);
+            if (found->presentation.crop) {
+                const auto& crop = *found->presentation.crop;
+                crop_enabled->setChecked(true);
+                crop_bounds->setText(QStringLiteral("%1, %2, %3, %4")
+                    .arg(number(crop.min_horizontal_m), number(crop.max_horizontal_m),
+                         number(crop.min_vertical_m), number(crop.max_vertical_m)));
+            }
+            crop_bounds->setEnabled(crop_enabled->isChecked());
+            QObject::connect(crop_enabled, &QCheckBox::toggled,
+                             crop_bounds, &QWidget::setEnabled);
             form->addRow(QStringLiteral("Cut depth (m)"), cut);
             form->addRow(QStringLiteral("Far depth (m)"), far);
             form->addRow(QStringLiteral("Cut line width (mm)"), cut_line);
@@ -16781,6 +16847,8 @@ public:
             form->addRow(hatch);
             form->addRow(QStringLiteral("Detail"), detail);
             form->addRow(QStringLiteral("Source object IDs"), object_ids);
+            form->addRow(crop_enabled);
+            form->addRow(QStringLiteral("Crop left, right, bottom, top (m)"), crop_bounds);
             auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
             form->addRow(buttons);
             QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
@@ -16789,7 +16857,9 @@ public:
             (void)editArchitecturalViewPresentation(
                 QString::fromStdString(found->id), cut->text(), far->text(), cut_line->text(),
                 projection_line->text(), hatch->isChecked(), pattern->text(), hatch_scale->text(),
-                detail->currentText(), object_ids->text());
+                detail->currentText(), object_ids->text(),
+                crop_enabled->isChecked() ? std::optional<QString>(crop_bounds->text())
+                                          : std::optional<QString>(QString{}));
         } catch (const std::exception& error) {
             setError(QStringLiteral("Architectural view settings: %1")
                          .arg(QString::fromUtf8(error.what())));
@@ -21548,22 +21618,65 @@ private:
             // Conventional plans retain analytical boundaries and annotations;
             // other frames/depth limits use the shape projection below.
             const auto& plan_frame = view_context.frame;
-            const bool conventional_plan = kind == BuildingViewKind::plan &&
+            const bool conventional_plan_frame = kind == BuildingViewKind::plan &&
                 plan_frame.origin.x == 0.0 && plan_frame.origin.y == 0.0 &&
                 plan_frame.origin.z == 0.0 && plan_frame.direction.x == 0.0 &&
                 plan_frame.direction.y == 0.0 && plan_frame.direction.z == -1.0 &&
-                plan_frame.up.x == 0.0 && plan_frame.up.y == 1.0 && plan_frame.up.z == 0.0 &&
-                (view_context.depth.far_depth_m == ViewPresentation{}.far_depth_m ||
-                 std::isinf(view_context.depth.far_depth_m));
-            if (conventional_plan) {
+                plan_frame.up.x == 0.0 && plan_frame.up.y == 1.0 && plan_frame.up.z == 0.0;
+            const bool default_plan_depth =
+                view_context.depth.far_depth_m == ViewPresentation{}.far_depth_m ||
+                std::isinf(view_context.depth.far_depth_m);
+            if (conventional_plan_frame && default_plan_depth) {
                 std::vector<CanvasEntity> filtered;
                 filtered.reserve(all_geometry.size());
                 for (const auto& entity : all_geometry) {
                     if (!presentation_hidden_ids.contains(entity.id.toStdString()) &&
                         (!restricted || referenced.contains(entity.id.toStdString()))) {
-                        filtered.push_back(entity);
-                        filtered.back().output_stroke_width_mm =
+                        auto retained = entity;
+                        const bool annotation =
+                            retained.type == QStringLiteral("symbol") ||
+                            retained.type == QStringLiteral("dimension_line");
+                        if (view_context.crop && !annotation) {
+                            const Bounds2 crop_bounds{
+                                {view_context.crop->min_horizontal_m,
+                                 view_context.crop->min_vertical_m},
+                                {view_context.crop->max_horizontal_m,
+                                 view_context.crop->max_vertical_m}};
+                            bool clipped = false;
+                            const auto clip_path = [&](const Boundary& path) {
+                                if (path.empty()) return Boundary{};
+                                const auto extent = boundary_bounds(path);
+                                const bool contained =
+                                    extent.minimum.x >= crop_bounds.minimum.x &&
+                                    extent.maximum.x <= crop_bounds.maximum.x &&
+                                    extent.minimum.y >= crop_bounds.minimum.y &&
+                                    extent.maximum.y <= crop_bounds.maximum.y;
+                                if (contained) return path;
+                                clipped = true;
+                                return clip_boundary_to_bounds(path, crop_bounds);
+                            };
+                            retained.segments = clip_path(retained.segments);
+                            std::vector<Boundary> retained_holes;
+                            retained_holes.reserve(retained.holes.size());
+                            for (const auto& hole : retained.holes) {
+                                auto clipped_hole = clip_path(hole);
+                                if (!clipped_hole.empty()) {
+                                    retained_holes.push_back(std::move(clipped_hole));
+                                }
+                            }
+                            retained.holes = std::move(retained_holes);
+                            if (retained.segments.empty() && retained.holes.empty()) continue;
+                            if (clipped) {
+                                // A clipped outline is derived presentation
+                                // linework, never a replacement closed area or
+                                // an editable copy of its source vertices.
+                                retained.vertex_handles.clear();
+                                retained.filled = false;
+                            }
+                        }
+                        retained.output_stroke_width_mm =
                             view_context.presentation.projection_line_mm;
+                        filtered.push_back(std::move(retained));
                     }
                 }
                 return filtered;
@@ -21572,6 +21685,18 @@ private:
             result.reserve(snapshot.entities().size());
             const auto& frame = view_context.frame;
             const auto& depth = view_context.depth;
+            const auto clip_to_view = [&](const TopoDS_Shape& shape) {
+                if (!shape_intersects_view_depth(shape, depth) ||
+                    (view_context.crop &&
+                     !shape_intersects_view_crop(shape, *view_context.crop))) {
+                    return TopoDS_Shape{};
+                }
+                auto clipped = clip_shape_to_view_depth(shape, depth);
+                if (!clipped.IsNull() && view_context.crop) {
+                    clipped = clip_shape_to_view_crop(clipped, *view_context.crop);
+                }
+                return clipped;
+            };
             const auto decorate_projection = [&](CanvasEntity entity) {
                 const auto& presentation = view_context.presentation;
                 const auto line_width_mm = kind == BuildingViewKind::section
@@ -21605,6 +21730,14 @@ private:
                     << depth.origin.x << ',' << depth.origin.y << ',' << depth.origin.z << ';'
                     << depth.direction.x << ',' << depth.direction.y << ',' << depth.direction.z << ';'
                     << depth.far_depth_m;
+                if (view_context.crop) {
+                    key << ";crop=" << view_context.crop->min_horizontal_m << ','
+                        << view_context.crop->max_horizontal_m << ','
+                        << view_context.crop->min_vertical_m << ','
+                        << view_context.crop->max_vertical_m;
+                } else {
+                    key << ";crop=none";
+                }
                 return key.str();
             }();
             for (const auto& [id, entity] : snapshot.entities()) {
@@ -21618,8 +21751,7 @@ private:
                             entity.properties.at("model"));
                         if (!model.visible()) continue;
                         const auto shape = make_terrain_surface(model);
-                        if (!shape_intersects_view_depth(shape, depth)) continue;
-                        const auto clipped_shape = clip_shape_to_view_depth(shape, depth);
+                        const auto clipped_shape = clip_to_view(shape);
                         if (clipped_shape.IsNull()) continue;
                         const auto projection = project_shape_view(
                             clipped_shape, kind, frame);
@@ -21632,8 +21764,7 @@ private:
                         const auto resolved = resolve_vertical_placement(snapshot, entity);
                         const auto decoded = decode_building_entity(resolved);
                         const auto shape = make_building_shape(decoded);
-                        if (!shape_intersects_view_depth(shape, depth)) continue;
-                        const auto clipped_shape = clip_shape_to_view_depth(shape, depth);
+                        const auto clipped_shape = clip_to_view(shape);
                         if (clipped_shape.IsNull()) continue;
                         const auto key = "view:" + std::to_string(static_cast<int>(kind)) +
                                          '\n' + frame_cache_key + '\n' + resolved.type +
@@ -21673,8 +21804,7 @@ private:
                         }
                         validate_wall_semantics(wall);
                         const auto shape = make_wall(wall);
-                        if (!shape_intersects_view_depth(shape, depth)) continue;
-                        const auto clipped_shape = clip_shape_to_view_depth(shape, depth);
+                        const auto clipped_shape = clip_to_view(shape);
                         if (clipped_shape.IsNull()) continue;
                         const auto projection = project_shape_view(
                             clipped_shape, kind, frame);
@@ -21699,8 +21829,7 @@ private:
                             projection_slab.layers = parse_slab_layers(*layers, *thickness);
                         }
                         const auto shape = make_slab(projection_slab);
-                        if (!shape_intersects_view_depth(shape, depth)) continue;
-                        const auto clipped_shape = clip_shape_to_view_depth(shape, depth);
+                        const auto clipped_shape = clip_to_view(shape);
                         if (clipped_shape.IsNull()) continue;
                         const auto projection = project_shape_view(
                             clipped_shape, kind, frame);
@@ -21717,8 +21846,7 @@ private:
                             throw std::invalid_argument(room_error);
                         }
                         const auto shape = make_room_volume(room);
-                        if (!shape_intersects_view_depth(shape, depth)) continue;
-                        const auto clipped_shape = clip_shape_to_view_depth(shape, depth);
+                        const auto clipped_shape = clip_to_view(shape);
                         if (clipped_shape.IsNull()) continue;
                         const auto projection = project_shape_view(
                             clipped_shape, kind, frame);
@@ -21744,8 +21872,7 @@ private:
                 try {
                     const auto transformed = transform_assembly_shape(
                         make_assembly_host_shape(assembly.host_entity_id), assembly.placement);
-                    if (!shape_intersects_view_depth(transformed, depth)) continue;
-                    const auto clipped_shape = clip_shape_to_view_depth(transformed, depth);
+                    const auto clipped_shape = clip_to_view(transformed);
                     if (clipped_shape.IsNull()) continue;
                     auto projection = project_shape_view(clipped_shape, kind, frame);
                     auto entity = decorate_projection(CanvasEntity{
@@ -25615,10 +25742,10 @@ bool MainWindow::editArchitecturalViewPresentation(
     const QString& view_id, const QString& cut_depth_m, const QString& far_depth_m,
     const QString& cut_line_mm, const QString& projection_line_mm, bool hatch_enabled,
     const QString& hatch_pattern, const QString& hatch_scale, const QString& detail,
-    const QString& object_ids) {
+    const QString& object_ids, std::optional<QString> crop_bounds) {
     return m_impl->editArchitecturalViewPresentation(
         view_id, cut_depth_m, far_depth_m, cut_line_mm, projection_line_mm, hatch_enabled,
-        hatch_pattern, hatch_scale, detail, object_ids);
+        hatch_pattern, hatch_scale, detail, object_ids, std::move(crop_bounds));
 }
 
 Workspace MainWindow::workspace() const noexcept {

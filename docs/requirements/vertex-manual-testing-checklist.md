@@ -1517,7 +1517,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U281 — Create and edit named elevations and sections**
-  - Expected: Open **Named elevations and sections...**, create at least two elevations and one vertical section with distinct names, origins, directions and depth limits. Place the views on sheets, edit one frame, and confirm its other sheet references stay linked. Undo/redo and save/reopen preserve every named view and its distinct projected geometry.
+  - Expected: Open **Named elevations and sections...**, create at least two elevations and one vertical section with distinct names, origins, directions, depth limits and model crop extents. Confirm model geometry crossing the left/right/bottom/top crop is clipped while geometry outside it is absent; doors/windows inside or crossing the crop retain their plan detail, and plan dimensions, labels and placed component symbols remain visible. Place the views on sheets, edit one frame/crop, and confirm its other sheet references stay linked. Undo/redo and save/reopen preserve every named view and the same cropped geometry on canvas, print and export.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

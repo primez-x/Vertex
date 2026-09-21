@@ -1,5 +1,24 @@
 # Implementation status
 
+## Named-view model crop extents (2026-09-21)
+
+Named plans, elevations and sections now store an optional left/right/bottom/top
+crop in view-plane metres. Both named-view and architectural-view editors expose
+the crop without conflating it with paper viewport bounds. Schema version 5
+migrates versions 1 through 4 with cropping disabled, validates finite ordered
+extents, and preserves stable view and sheet references.
+
+Conventional plans clip retained lines and circular arcs analytically while
+preserving plan-only doors, windows, measurement boundaries, dimensions, and
+component annotations. Rotated plans, elevations, and sections apply far depth
+and exact four-plane OCCT clipping to derived solids and face-based terrain in
+the view's rotated frame before projection. The shared result feeds canvas,
+sheet, PDF, SVG, image, and print paths. Focused tests cover migration, invalid
+data, all four sides, oversized and partial plan crops, rotated frames, curved
+solids, terrain surfaces, clearing, undo, save/reopen, and source preservation.
+Annotation crops, associative section annotations, complete cross-view editing
+evidence, and production visual qualification remain open.
+
 ## Geometry-admitted wall and roof joins (2026-09-21)
 
 The Windows architectural workflow now routes menu, command-search and canvas

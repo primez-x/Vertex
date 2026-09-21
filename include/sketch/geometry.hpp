@@ -52,6 +52,15 @@ struct Bounds2 {
 [[nodiscard]] Bounds2 segment_bounds(const Segment& segment);
 [[nodiscard]] Bounds2 boundary_bounds(const Boundary& boundary);
 
+// Clip line and circular-arc segments to a closed axis-aligned rectangle.
+// Surviving arc pieces retain their exact circular representation; the helper
+// never tessellates or invents edges along the crop rectangle. Segment order
+// is preserved and an empty result means no nonzero-length geometry survives.
+// Invalid bounds or source segments throw std::invalid_argument.
+[[nodiscard]] Boundary clip_boundary_to_bounds(
+    const Boundary& boundary, const Bounds2& bounds,
+    double tolerance_metres = default_geometry_tolerance_metres);
+
 enum class BoundaryIssue {
     empty_boundary,
     non_finite,

@@ -373,6 +373,54 @@ void test_analytic_bounds() {
     require(rejected,"invalid arc values must reject bounds");
 }
 
+void test_boundary_crop_preserves_analytic_segments() {
+    using namespace sketch;
+    const Bounds2 crop{{-1.0, -2.0}, {1.0, 1.0}};
+
+    const Boundary contained{{{-0.5, -0.5}, {0.5, 0.5}, 0.0}};
+    const auto unchanged = clip_boundary_to_bounds(contained, crop);
+    require(unchanged.size() == 1 &&
+                unchanged.front().start.x == contained.front().start.x &&
+                unchanged.front().start.y == contained.front().start.y &&
+                unchanged.front().end.x == contained.front().end.x &&
+                unchanged.front().end.y == contained.front().end.y,
+            "a contained segment must preserve its exact endpoints");
+
+    const auto line = clip_boundary_to_bounds(
+        Boundary{{{-3.0, 0.25}, {4.0, 0.25}, 0.0}}, crop);
+    require(line.size() == 1 && line.front().sweep_radians == 0.0,
+            "a crossing line must retain one exact line interval");
+    require_near(line.front().start.x, -1.0, 1e-12, "cropped line left endpoint");
+    require_near(line.front().end.x, 1.0, 1e-12, "cropped line right endpoint");
+    require_near(line.front().start.y, 0.25, 1e-12, "cropped line height");
+
+    const Segment lower_semicircle{{-2.0, 0.0}, {2.0, 0.0}, std::numbers::pi};
+    const auto arc = clip_boundary_to_bounds(Boundary{lower_semicircle}, crop);
+    require(arc.size() == 1 && arc.front().sweep_radians != 0.0,
+            "a cropped circular arc must remain one analytic arc");
+    require_near(arc.front().start.x, -1.0, 1e-12, "cropped arc left endpoint");
+    require_near(arc.front().end.x, 1.0, 1e-12, "cropped arc right endpoint");
+    require_near(arc.front().start.y, -std::sqrt(3.0), 1e-12,
+                 "cropped arc start height");
+    require_near(arc.front().end.y, -std::sqrt(3.0), 1e-12,
+                 "cropped arc end height");
+    require_near(arc.front().sweep_radians, std::numbers::pi / 3.0, 1e-12,
+                 "cropped arc sweep");
+
+    require(clip_boundary_to_bounds(
+                Boundary{{{2.0, -3.0}, {2.0, 3.0}, 0.0}}, crop).empty(),
+            "a line outside the crop must disappear");
+    require_invalid_argument(
+        [&] { (void)clip_boundary_to_bounds(contained, {{1.0, 0.0}, {1.0, 2.0}}); },
+        "a zero-width crop must be rejected");
+    require_invalid_argument(
+        [&] {
+            (void)clip_boundary_to_bounds(contained,
+                {{0.0, 0.0}, {std::numeric_limits<double>::infinity(), 2.0}});
+        },
+        "a nonfinite crop must be rejected");
+}
+
 void test_planar_transforms() {
     using namespace sketch;
     const PlanarTransform transform{{2,1},std::numbers::pi/2,true,false,{5,-3}};
@@ -402,6 +450,7 @@ void test_planar_transforms() {
 int main() {
     test_planar_transforms();
     test_analytic_bounds();
+    test_boundary_crop_preserves_analytic_segments();
     test_linear_boundaries();
     test_arcs_have_analytic_length_and_area();
     test_area_and_length_are_transform_invariant();

@@ -643,6 +643,113 @@ Bounds2 boundary_bounds(const Boundary& boundary) {
     return result;
 }
 
+Boundary clip_boundary_to_bounds(const Boundary& boundary, const Bounds2& bounds,
+                                 double tolerance_metres) {
+    if (!finite(bounds.minimum) || !finite(bounds.maximum) ||
+        !std::isfinite(tolerance_metres) || !(tolerance_metres > 0.0) ||
+        bounds.maximum.x - bounds.minimum.x <= tolerance_metres ||
+        bounds.maximum.y - bounds.minimum.y <= tolerance_metres) {
+        throw std::invalid_argument(
+            "boundary crop requires finite ordered bounds and a positive tolerance");
+    }
+    const auto inside = [&](Vec2 point) {
+        return point.x >= bounds.minimum.x - tolerance_metres &&
+               point.x <= bounds.maximum.x + tolerance_metres &&
+               point.y >= bounds.minimum.y - tolerance_metres &&
+               point.y <= bounds.maximum.y + tolerance_metres;
+    };
+    Boundary result;
+    for (const auto& segment : boundary) {
+        require_finite_segment(segment);
+        const auto source_length = segment_length(segment);
+        const auto parameter_tolerance = std::min(
+            0.25, tolerance_metres / std::max(source_length, tolerance_metres));
+        std::vector<double> parameters{0.0, 1.0};
+        const auto add_parameter = [&](double value) {
+            if (!std::isfinite(value) || value < -parameter_tolerance ||
+                value > 1.0 + parameter_tolerance) return;
+            parameters.push_back(std::clamp(value, 0.0, 1.0));
+        };
+
+        std::optional<ArcGeometry> arc;
+        if (segment.sweep_radians == 0.0) {
+            const auto dx = segment.end.x - segment.start.x;
+            const auto dy = segment.end.y - segment.start.y;
+            if (dx != 0.0) {
+                add_parameter((bounds.minimum.x - segment.start.x) / dx);
+                add_parameter((bounds.maximum.x - segment.start.x) / dx);
+            }
+            if (dy != 0.0) {
+                add_parameter((bounds.minimum.y - segment.start.y) / dy);
+                add_parameter((bounds.maximum.y - segment.start.y) / dy);
+            }
+        } else {
+            arc = arc_geometry(segment);
+            const auto add_angle = [&](double angle) {
+                const Vec2 point{arc->center.x + arc->radius * std::cos(angle),
+                                 arc->center.y + arc->radius * std::sin(angle)};
+                add_parameter(arc_parameter(*arc, point));
+            };
+            for (const auto x : {bounds.minimum.x, bounds.maximum.x}) {
+                const auto ratio = (x - arc->center.x) / arc->radius;
+                const auto margin = tolerance_metres / arc->radius;
+                if (ratio >= -1.0 - margin && ratio <= 1.0 + margin) {
+                    const auto angle = std::acos(std::clamp(ratio, -1.0, 1.0));
+                    add_angle(angle);
+                    add_angle(-angle);
+                }
+            }
+            for (const auto y : {bounds.minimum.y, bounds.maximum.y}) {
+                const auto ratio = (y - arc->center.y) / arc->radius;
+                const auto margin = tolerance_metres / arc->radius;
+                if (ratio >= -1.0 - margin && ratio <= 1.0 + margin) {
+                    const auto angle = std::asin(std::clamp(ratio, -1.0, 1.0));
+                    add_angle(angle);
+                    add_angle(std::numbers::pi - angle);
+                }
+            }
+        }
+
+        std::sort(parameters.begin(), parameters.end());
+        parameters.erase(std::unique(parameters.begin(), parameters.end(),
+            [&](double left, double right) {
+                return std::abs(left - right) <= parameter_tolerance;
+            }), parameters.end());
+        const auto point_at_parameter = [&](double parameter) {
+            if (parameter <= parameter_tolerance) return segment.start;
+            if (parameter >= 1.0 - parameter_tolerance) return segment.end;
+            if (arc) return point_at(*arc, parameter);
+            return Vec2{segment.start.x + (segment.end.x - segment.start.x) * parameter,
+                        segment.start.y + (segment.end.y - segment.start.y) * parameter};
+        };
+        std::optional<double> retained_start;
+        double retained_end = 0.0;
+        const auto flush_retained = [&] {
+            if (!retained_start) return;
+            const auto start = point_at_parameter(*retained_start);
+            const auto end = point_at_parameter(retained_end);
+            if (distance(start, end) > tolerance_metres) {
+                result.push_back({start, end,
+                    segment.sweep_radians * (retained_end - *retained_start)});
+            }
+            retained_start.reset();
+        };
+        for (std::size_t index = 0; index + 1 < parameters.size(); ++index) {
+            const auto first = parameters[index];
+            const auto last = parameters[index + 1];
+            if (last - first <= parameter_tolerance) continue;
+            if (inside(point_at_parameter(std::midpoint(first, last)))) {
+                if (!retained_start) retained_start = first;
+                retained_end = last;
+            } else {
+                flush_retained();
+            }
+        }
+        flush_retained();
+    }
+    return result;
+}
+
 double segment_length(const Segment& segment) {
     require_finite_segment(segment);
     if (segment.sweep_radians == 0.0) {

@@ -4998,6 +4998,148 @@ void test_coordinated_view_output_identity() {
         require(original.copy(left) == rotated.copy(left) && original.copy(right) != rotated.copy(right),
                 "each same-kind viewport must render its own persisted frame");
     }
+
+    sketch::desktop::MainWindow crop_window;
+    const auto crop_wall = crop_window.createStraightWall({0, 0}, {8, 0});
+    require(!crop_wall.isEmpty() && crop_window.selectEntity(crop_wall),
+            "cropped plan wall fixture");
+    const auto door = crop_window.createHostedOpening(
+        QStringLiteral("door"), QStringLiteral("0.5 m"), QStringLiteral("1 m"),
+        QStringLiteral("0 m"), QStringLiteral("2.1 m"), std::nullopt,
+        sketch::DoorOperation{});
+    require(!door.isEmpty() && crop_window.selectEntity(crop_wall),
+            "cropped plan door fixture");
+    const auto window_id = crop_window.createHostedOpening(
+        QStringLiteral("window"), QStringLiteral("5.5 m"), QStringLiteral("1 m"),
+        QStringLiteral("1 m"), QStringLiteral("1 m"));
+    const sketch::Boundary measurement{{{-1, 1}, {6, 1}, 0}, {{6, 1}, {6, 4}, 0},
+                                        {{6, 4}, {-1, 4}, 0}, {{-1, 4}, {-1, 1}, 0}};
+    const auto boundary_id = crop_window.createBoundary(measurement);
+    const sketch::Boundary room_outline{{{-5, -5}, {10, -5}, 0},
+                                         {{10, -5}, {10, 10}, 0},
+                                         {{10, 10}, {-5, 10}, 0},
+                                         {{-5, 10}, {-5, -5}, 0}};
+    const sketch::Boundary room_hole{{{1, 1}, {2, 1}, 0}, {{2, 1}, {2, 2}, 0},
+                                     {{2, 2}, {1, 2}, 0}, {{1, 2}, {1, 1}, 0}};
+    const auto room_id = crop_window.createRoomVolumeFromBoundary(
+        room_outline, QStringLiteral("2.4 m"), QStringLiteral("0 m"), {room_hole});
+    require(!window_id.isEmpty() && !boundary_id.isEmpty(),
+            "cropped plan window and boundary fixtures");
+    require(!room_id.isEmpty(), "cropped plan room-with-hole fixture");
+    const auto identified = sketch::decode_identified_boundary_entity(
+        crop_window.document().snapshot().entities().at(boundary_id.toStdString()));
+    const auto dimension_id = crop_window.createLengthDimension(
+        boundary_id, QString::fromStdString(identified.segments.front().segment_id), {2.5, 0.5});
+    const auto symbol_id = crop_window.createAnnotationSymbol(
+        QStringLiteral("svg-v2-04_living-sofa-three-seat"), {10, 6});
+    require(!dimension_id.isEmpty() && !symbol_id.isEmpty(),
+            "cropped plan dimension and annotation fixtures");
+    auto* crop_canvas = dynamic_cast<sketch::desktop::PlanCanvas*>(
+        crop_window.findChild<QWidget*>(QStringLiteral("architecturalPlanCanvas")));
+    require(crop_canvas != nullptr, "cropped plan architectural canvas");
+    const auto canvas_has = [&](const QString& id, const QString& type) {
+        return std::any_of(crop_canvas->entities().begin(), crop_canvas->entities().end(),
+            [&](const auto& entity) { return entity.id == id && entity.type == type; });
+    };
+    const auto require_complete_plan_content = [&] {
+        require(canvas_has(door, QStringLiteral("opening")) &&
+                    canvas_has(window_id, QStringLiteral("window")) &&
+                    canvas_has(boundary_id, QStringLiteral("measurement_boundary")) &&
+                    canvas_has(room_id, QStringLiteral("room")) &&
+                    canvas_has(dimension_id, QStringLiteral("dimension_line")) &&
+                    canvas_has(symbol_id, QStringLiteral("symbol")),
+                "plan views must retain openings, boundaries, dimensions and annotation symbols");
+    };
+    require_complete_plan_content();
+    QTemporaryDir crop_output;
+    require(crop_output.isValid(), "cropped plan output directory");
+    const auto render_plan_sheet = [&](const QString& name) {
+        const auto path = crop_output.filePath(name + QStringLiteral(".pdf"));
+        require(crop_window.exportDraftPdf(path), "cropped plan sheet must export");
+        QPdfDocument pdf;
+        require(pdf.load(path) == QPdfDocument::Error::None,
+                "cropped plan sheet PDF must load");
+        const auto image = pdf.render(0, QSize(1680, 1188));
+        require(!image.isNull(), "cropped plan sheet PDF must render");
+        return image;
+    };
+    const auto uncropped_sheet = render_plan_sheet(QStringLiteral("uncropped"));
+    const auto view_revision = crop_window.document().revision();
+    require(crop_window.editArchitecturalViewPresentation(
+                QStringLiteral("view-plan"), QStringLiteral("1.2"), QStringLiteral("100"),
+                QStringLiteral("0.5"), QStringLiteral("0.18"), true,
+                QStringLiteral("solid"), QStringLiteral("1"), QStringLiteral("medium"), {},
+                QStringLiteral("-20, 20, -20, 20")),
+            "oversized plan crop must commit");
+    require(crop_window.document().revision() == view_revision + 1,
+            "plan crop must be one undoable command");
+    require_complete_plan_content();
+    const auto oversized_sheet = render_plan_sheet(QStringLiteral("oversized"));
+    require(uncropped_sheet == oversized_sheet,
+            "an oversized plan crop must preserve sheet content exactly");
+
+    require(crop_window.editArchitecturalViewPresentation(
+                QStringLiteral("view-plan"), QStringLiteral("1.2"), QStringLiteral("100"),
+                QStringLiteral("0.5"), QStringLiteral("0.18"), true,
+                QStringLiteral("solid"), QStringLiteral("1"), QStringLiteral("medium"), {},
+                QStringLiteral("0, 3, -1, 3")),
+            "smaller plan crop must commit");
+    require(canvas_has(door, QStringLiteral("opening")) &&
+                !canvas_has(window_id, QStringLiteral("window")) &&
+                canvas_has(boundary_id, QStringLiteral("measurement_boundary")) &&
+                canvas_has(room_id, QStringLiteral("room")) &&
+                canvas_has(dimension_id, QStringLiteral("dimension_line")) &&
+                canvas_has(symbol_id, QStringLiteral("symbol")),
+            "smaller crop must clip model linework while retaining annotations");
+    const auto boundary_projection = std::find_if(
+        crop_canvas->entities().begin(), crop_canvas->entities().end(),
+        [&](const auto& entity) { return entity.id == boundary_id; });
+    require(boundary_projection != crop_canvas->entities().end() &&
+                !boundary_projection->filled && boundary_projection->holes.empty() &&
+                boundary_projection->vertex_handles.empty(),
+            "cropped area outlines must remain derived unfilled fragments");
+    const auto room_projection = std::find_if(
+        crop_canvas->entities().begin(), crop_canvas->entities().end(),
+        [&](const auto& entity) { return entity.id == room_id; });
+    require(room_projection != crop_canvas->entities().end() &&
+                room_projection->segments.empty() && room_projection->holes.size() == 1 &&
+                !room_projection->holes.front().empty() && !room_projection->filled &&
+                room_projection->vertex_handles.empty(),
+            "a crop containing only room-hole edges must retain those interior strokes");
+    const auto cropped_sheet = render_plan_sheet(QStringLiteral("cropped"));
+    require(cropped_sheet != uncropped_sheet,
+            "a smaller model crop must visibly change coordinated sheet output");
+
+    require(crop_window.editArchitecturalViewPresentation(
+                QStringLiteral("view-plan"), QStringLiteral("1.2"), QStringLiteral("100"),
+                QStringLiteral("0.5"), QStringLiteral("0.18"), true,
+                QStringLiteral("solid"), QStringLiteral("1"), QStringLiteral("medium"), {},
+                QStringLiteral("")),
+            "blank crop bounds must clear the plan crop");
+    auto crop_model = sketch::decode_sheet_view_entity(
+        crop_window.document().snapshot().entities().at("sheet-view-1"));
+    auto crop_view = std::find_if(crop_model.views().begin(), crop_model.views().end(),
+        [](const auto& view) { return view.id == "view-plan"; });
+    require(crop_view != crop_model.views().end() && !crop_view->presentation.crop,
+            "clearing crop bounds must persist a null crop");
+    require(crop_window.undoCommand(), "clearing a crop must undo");
+    crop_model = sketch::decode_sheet_view_entity(
+        crop_window.document().snapshot().entities().at("sheet-view-1"));
+    crop_view = std::find_if(crop_model.views().begin(), crop_model.views().end(),
+        [](const auto& view) { return view.id == "view-plan"; });
+    require(crop_view != crop_model.views().end() && crop_view->presentation.crop ==
+                std::optional(sketch::ViewCrop{0, 3, -1, 3}),
+            "crop clearing undo must restore exact model-space extents");
+    const auto project_path = crop_output.filePath(QStringLiteral("crop-roundtrip.bldproj"));
+    require(crop_window.saveProjectAs(project_path) && crop_window.openProject(project_path),
+            "cropped coordinated view must save and reopen");
+    crop_model = sketch::decode_sheet_view_entity(
+        crop_window.document().snapshot().entities().at("sheet-view-1"));
+    crop_view = std::find_if(crop_model.views().begin(), crop_model.views().end(),
+        [](const auto& view) { return view.id == "view-plan"; });
+    require(crop_view != crop_model.views().end() && crop_view->presentation.crop ==
+                std::optional(sketch::ViewCrop{0, 3, -1, 3}),
+            "save/reopen must preserve exact coordinated-view crop extents");
 }
 
 void test_architectural_authoring_commands() {
@@ -5096,6 +5238,13 @@ void test_architectural_authoring_commands() {
         require(window.document().revision() == revision && !dialog->findChild<QLabel*>("namedViewError")->text().isEmpty(),
                 "invalid view frame must remain editable without document mutation");
         dialog->findChild<QLineEdit*>("namedViewDirection")->setText("1, 0, 0");
+        dialog->findChild<QCheckBox*>("namedViewCropEnabled")->setChecked(true);
+        dialog->findChild<QLineEdit*>("namedViewCropBounds")->setText("2, 1, -1, 4");
+        dialog->findChild<QPushButton*>("saveNamedView")->click();
+        require(window.document().revision() == revision &&
+                    !dialog->findChild<QLabel*>("namedViewError")->text().isEmpty(),
+                "invalid named-view crop must remain editable without document mutation");
+        dialog->findChild<QLineEdit*>("namedViewCropBounds")->setText("-1, 5, -0.5, 4");
         dialog->findChild<QPushButton*>("saveNamedView")->click();
     });
     views->trigger();
@@ -5107,7 +5256,9 @@ void test_architectural_authoring_commands() {
         const auto model = sketch::decode_sheet_view_entity(entity);
         for (const auto& view : model.views()) {
             if (view.name == "East elevation") {
-                found_view = view.kind == sketch::CoordinatedViewKind::elevation && view.direction[0] == 1;
+                found_view = view.kind == sketch::CoordinatedViewKind::elevation &&
+                    view.direction[0] == 1 && view.presentation.crop ==
+                        std::optional(sketch::ViewCrop{-1, 5, -0.5, 4});
             }
         }
     }

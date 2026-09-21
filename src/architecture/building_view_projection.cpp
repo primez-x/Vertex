@@ -8,6 +8,7 @@
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
+#include <BRepBuilderAPI_Transform.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepPrimAPI_MakeHalfSpace.hxx>
 #include <Geom2d_Circle.hxx>
@@ -31,6 +32,8 @@
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Shape.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Ax3.hxx>
+#include <gp_Trsf.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
@@ -467,6 +470,92 @@ TopoDS_Face make_depth_plane(const TopoDS_Shape& shape,
     return face.Face();
 }
 
+FrameBasis crop_basis(const BuildingViewCrop& crop) {
+    const auto result = basis(crop.frame);
+    for (const auto bound : {crop.min_horizontal_m, crop.max_horizontal_m,
+                              crop.min_vertical_m, crop.max_vertical_m}) {
+        if (!std::isfinite(bound) || std::abs(bound) > 1e6) {
+            projection_error("Building view crop bounds must be finite and within one million metres");
+        }
+    }
+    if (crop.max_horizontal_m - crop.min_horizontal_m <= 1e-6 ||
+        crop.max_vertical_m - crop.min_vertical_m <= 1e-6) {
+        projection_error("Building view crop spans must exceed 1e-6 metres");
+    }
+    return result;
+}
+
+struct CropBounds {
+    double min_horizontal;
+    double max_horizontal;
+    double min_vertical;
+    double max_vertical;
+};
+
+CropBounds crop_bounds(const TopoDS_Shape& shape, const FrameBasis& frame) {
+    // Bounding in view coordinates avoids the severe overestimate obtained by
+    // projecting a world-axis box for rotated views. No source topology is edited.
+    gp_Trsf to_view;
+    to_view.SetTransformation(gp_Ax3(frame.origin, gp_Dir(frame.normal),
+                                     gp_Dir(frame.horizontal)));
+    const auto local = BRepBuilderAPI_Transform(shape, to_view, true).Shape();
+    Bnd_Box box;
+    BRepBndLib::AddOptimal(local, box, false, false);
+    if (box.IsVoid()) return {1, -1, 1, -1};
+    if (box.IsOpen()) projection_error("Building view crop requires bounded geometry");
+    double xmin, ymin, zmin, xmax, ymax, zmax;
+    box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    for (auto value : {xmin, ymin, zmin, xmax, ymax, zmax}) {
+        if (!std::isfinite(value)) projection_error("Building view crop exceeded numeric range");
+    }
+    return {xmin, xmax, ymin, ymax};
+}
+
+bool crop_disjoint(const CropBounds& bounds, const BuildingViewCrop& crop) {
+    return bounds.min_horizontal > bounds.max_horizontal ||
+           bounds.min_vertical > bounds.max_vertical ||
+           bounds.max_horizontal < crop.min_horizontal_m - tolerance ||
+           bounds.min_horizontal > crop.max_horizontal_m + tolerance ||
+           bounds.max_vertical < crop.min_vertical_m - tolerance ||
+           bounds.min_vertical > crop.max_vertical_m + tolerance;
+}
+
+TopoDS_Shape intersect_crop_plane(const TopoDS_Shape& shape, const gp_Pnt& origin,
+                                  const gp_Vec& outward) {
+    const bool source_has_solids = TopExp_Explorer(shape, TopAbs_SOLID).More();
+    const bool source_has_faces = TopExp_Explorer(shape, TopAbs_FACE).More();
+    if (!source_has_solids && !source_has_faces) {
+        projection_error("Building view crop requires solid or surface geometry");
+    }
+    const BuildingViewDepth plane_depth{{origin.X(), origin.Y(), origin.Z()},
+                                        {outward.X(), outward.Y(), outward.Z()}, 0.0};
+    const auto face = make_depth_plane(shape, plane_depth);
+    BRepPrimAPI_MakeHalfSpace half_space(face, origin.Translated(-outward));
+    if (half_space.Solid().IsNull()) projection_error("Building view crop half-space is invalid");
+    BRepAlgoAPI_Common operation;
+    NCollection_List<TopoDS_Shape> arguments, tools;
+    arguments.Append(shape);
+    tools.Append(half_space.Solid());
+    operation.SetArguments(arguments);
+    operation.SetTools(tools);
+    operation.SetNonDestructive(true);
+    operation.Build();
+    if (!operation.IsDone() || operation.HasErrors() || operation.Shape().IsNull() ||
+        !BRepCheck_Analyzer(operation.Shape()).IsValid()) {
+        projection_error("Building view crop clipping failed");
+    }
+    // Boolean Common represents an empty intersection as an empty compound.
+    // Solids require retained volume so a tangential face does not masquerade
+    // as a clipped object. Surface sources (notably terrain triangle compounds)
+    // legitimately return faces and must not be discarded for lacking solids.
+    if (source_has_solids) {
+        if (!TopExp_Explorer(operation.Shape(), TopAbs_SOLID).More()) return {};
+    } else if (!TopExp_Explorer(operation.Shape(), TopAbs_FACE).More()) {
+        return {};
+    }
+    return operation.Shape();
+}
+
 }  // namespace
 
 Boundary project_shape_view(const TopoDS_Shape& shape, BuildingViewKind kind,
@@ -538,6 +627,42 @@ TopoDS_Shape clip_shape_to_view_depth(const TopoDS_Shape& shape,
     } catch (const Standard_Failure& error) {
         throw std::invalid_argument(std::string("Building view far-depth clipping failed: ") +
                                      (error.what() ? error.what() : "OCCT error"));
+    }
+}
+
+bool shape_intersects_view_crop(const TopoDS_Shape& shape, const BuildingViewCrop& crop) {
+    try {
+        const auto frame = crop_basis(crop);
+        if (shape.IsNull()) return false;
+        return !crop_disjoint(crop_bounds(shape, frame), crop);
+    } catch (const Standard_Failure& error) {
+        projection_error(std::string("Building view crop filtering failed: ") + error.what());
+    }
+}
+
+TopoDS_Shape clip_shape_to_view_crop(const TopoDS_Shape& shape, const BuildingViewCrop& crop) {
+    try {
+        const auto frame = crop_basis(crop);
+        if (shape.IsNull()) return {};
+        const auto bounds = crop_bounds(shape, frame);
+        if (crop_disjoint(bounds, crop)) return {};
+        const bool contained = bounds.min_horizontal >= crop.min_horizontal_m - tolerance &&
+                               bounds.max_horizontal <= crop.max_horizontal_m + tolerance &&
+                               bounds.min_vertical >= crop.min_vertical_m - tolerance &&
+                               bounds.max_vertical <= crop.max_vertical_m + tolerance;
+        if (contained) return shape;
+        auto result = shape;
+        for (const auto& [axis, limit] : {
+                 std::pair{-frame.horizontal, -crop.min_horizontal_m},
+                 std::pair{frame.horizontal, crop.max_horizontal_m},
+                 std::pair{-frame.vertical, -crop.min_vertical_m},
+                 std::pair{frame.vertical, crop.max_vertical_m}}) {
+            result = intersect_crop_plane(result, frame.origin.Translated(axis * limit), axis);
+            if (result.IsNull()) return {};
+        }
+        return result;
+    } catch (const Standard_Failure& error) {
+        projection_error(std::string("Building view crop clipping failed: ") + error.what());
     }
 }
 

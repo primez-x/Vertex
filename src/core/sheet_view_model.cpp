@@ -70,6 +70,16 @@ void validate_view(const CoordinatedView& view) {
     require(p.cut_depth_m <= p.far_depth_m, "cut depth exceeds far depth");
     positive(p.cut_line_mm); positive(p.projection_line_mm); positive(p.hatch_scale);
     identifier(p.hatch_pattern);
+    if (p.crop) {
+        const auto& crop = *p.crop;
+        for (double coordinate : {crop.min_horizontal_m, crop.max_horizontal_m,
+                                  crop.min_vertical_m, crop.max_vertical_m})
+            require(std::isfinite(coordinate) && std::abs(coordinate) <= 1e6,
+                "view crop coordinate outside finite bounds");
+        require(crop.max_horizontal_m - crop.min_horizontal_m > 1e-6 &&
+            crop.max_vertical_m - crop.min_vertical_m > 1e-6,
+            "view crop spans must exceed 1e-6 metres");
+    }
     for (const auto& object_id : view.object_ids) identifier(object_id);
     require(view.overlays.size() <= 1000, "section overlay count exceeds 1000");
     require(view.overlays.empty() || view.kind == CoordinatedViewKind::section,
@@ -157,8 +167,27 @@ void from_json(const nlohmann::json& value, ViewDetail& detail) {
     else if (value == "fine") detail = ViewDetail::fine;
     else throw std::invalid_argument("unknown view detail level");
 }
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ViewPresentation, cut_depth_m, far_depth_m, cut_line_mm,
-    projection_line_mm, hatch_enabled, hatch_pattern, hatch_scale, detail)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ViewCrop, min_horizontal_m, max_horizontal_m,
+    min_vertical_m, max_vertical_m)
+void to_json(nlohmann::json& value, const ViewPresentation& p) {
+    value = {{"cut_depth_m", p.cut_depth_m}, {"far_depth_m", p.far_depth_m},
+        {"cut_line_mm", p.cut_line_mm}, {"projection_line_mm", p.projection_line_mm},
+        {"hatch_enabled", p.hatch_enabled}, {"hatch_pattern", p.hatch_pattern},
+        {"hatch_scale", p.hatch_scale}, {"detail", p.detail},
+        {"crop", p.crop ? nlohmann::json(*p.crop) : nlohmann::json(nullptr)}};
+}
+void from_json(const nlohmann::json& value, ViewPresentation& p) {
+    value.at("cut_depth_m").get_to(p.cut_depth_m);
+    value.at("far_depth_m").get_to(p.far_depth_m);
+    value.at("cut_line_mm").get_to(p.cut_line_mm);
+    value.at("projection_line_mm").get_to(p.projection_line_mm);
+    value.at("hatch_enabled").get_to(p.hatch_enabled);
+    value.at("hatch_pattern").get_to(p.hatch_pattern);
+    value.at("hatch_scale").get_to(p.hatch_scale);
+    value.at("detail").get_to(p.detail);
+    const auto& crop = value.at("crop");
+    p.crop = crop.is_null() ? std::nullopt : std::optional(crop.get<ViewCrop>());
+}
 void to_json(nlohmann::json& value, const SectionOverlayKind& kind) {
     switch (kind) {
     case SectionOverlayKind::text: value = "text"; return;
@@ -436,7 +465,7 @@ SheetViewModel SheetViewModel::with_removed_callout(const std::string& sheet_id,
 }
 
 nlohmann::json SheetViewModel::to_json() const {
-    return {{"schema", "sketch.sheet_view_model"}, {"version", 4}, {"views", views_},
+    return {{"schema", "sketch.sheet_view_model"}, {"version", 5}, {"views", views_},
         {"sheets", sheets_}, {"schedule_ids", schedule_ids_}, {"sheet_order", sheet_order_}};
 }
 SheetViewModel SheetViewModel::from_json(const nlohmann::json& value) {
@@ -444,7 +473,7 @@ SheetViewModel SheetViewModel::from_json(const nlohmann::json& value) {
         require(value.at("schema") == "sketch.sheet_view_model" &&
             value.at("version").is_number_integer() &&
             (value.at("version") == 1 || value.at("version") == 2 ||
-             value.at("version") == 3 || value.at("version") == 4),
+             value.at("version") == 3 || value.at("version") == 4 || value.at("version") == 5),
             "unsupported sheet/view schema");
         auto normalized = value;
         if (value.at("version") == 1) {
@@ -463,13 +492,20 @@ SheetViewModel SheetViewModel::from_json(const nlohmann::json& value) {
             for (auto& view : normalized.at("views"))
                 if (!view.contains("overlays")) view["overlays"] = nlohmann::json::array();
         }
-        if (value.at("version") != 4) {
+        if (value.at("version") < 4) {
             normalized["version"] = 4;
             std::vector<std::string> order;
             for (const auto& sheet : normalized.at("sheets"))
                 order.push_back(sheet.at("id").get<std::string>());
             std::sort(order.begin(), order.end());
             normalized["sheet_order"] = std::move(order);
+        }
+        if (value.at("version") < 5) {
+            normalized["version"] = 5;
+            for (auto& view : normalized.at("views")) {
+                auto& presentation = view.at("presentation");
+                if (!presentation.contains("crop")) presentation["crop"] = nullptr;
+            }
         }
         auto result = create(normalized.at("views").get<std::vector<CoordinatedView>>(),
             normalized.at("sheets").get<std::vector<DrawingSheet>>(),

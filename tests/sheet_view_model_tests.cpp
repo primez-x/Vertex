@@ -282,7 +282,7 @@ void presentation_order() {
 }
 void serialization() {
     const auto saved = fixture().to_json();
-    require(saved.at("version") == 4, "sheet order requires schema version 4");
+    require(saved.at("version") == 5, "view crops require schema version 5");
     require(saved.at("sheet_order") == nlohmann::json({"a", "b"}),
             "default presentation order must use canonical sheet IDs");
     require(sketch::SheetViewModel::from_json(saved).to_json().dump() == saved.dump(), "canonical roundtrip");
@@ -317,10 +317,84 @@ void serialization() {
     }
     auto invalid = saved; invalid["views"][0]["direction"].push_back(0);
     rejects([&] { (void)sketch::SheetViewModel::from_json(invalid); });
-    for (const auto& version : {nlohmann::json(5), nlohmann::json(2.0), nlohmann::json("2")}) {
+    for (const auto& version : {nlohmann::json(6), nlohmann::json(2.0), nlohmann::json("2")}) {
         invalid = saved; invalid["version"] = version;
         rejects([&] { (void)sketch::SheetViewModel::from_json(invalid); });
     }
+}
+void view_crops() {
+    const auto original = fixture().with_sheet_order({"b", "a"});
+    const auto saved = original.to_json();
+    for (const auto& view : original.views()) require(!view.presentation.crop, "default crop is absent");
+    for (const auto& view : saved.at("views"))
+        require(view.at("presentation").at("crop").is_null(), "absent crop persists as null");
+    auto view = original.views()[1];
+    const sketch::ViewCrop crop{-12.5, 21.75, -3.0, 6.0};
+    view.presentation.crop = crop;
+    const auto changed = original.with_view(view);
+    view.presentation.crop->min_horizontal_m = -100;
+    require(changed.views()[1].presentation.crop == crop, "crop must own detached input");
+    require(!changed.views()[0].presentation.crop && !changed.views()[2].presentation.crop,
+            "crop update must preserve other views");
+    require(changed.sheets() == original.sheets() && changed.sheet_order() == original.sheet_order(),
+            "crop update must preserve shared viewport references, scales, and sheet order");
+    require(original.to_json() == saved, "crop update must preserve original snapshot");
+    const auto json = changed.to_json();
+    require(sketch::SheetViewModel::from_json(json).to_json().dump() == json.dump(), "crop canonical roundtrip");
+    auto cleared = changed.views()[1]; cleared.presentation.crop.reset();
+    require(changed.with_view(cleared).to_json() == saved, "crop clear roundtrip");
+    for (int version : {1, 2, 3, 4}) {
+        auto legacy = saved; legacy["version"] = version;
+        for (auto& item : legacy["views"]) {
+            item["presentation"].erase("crop");
+            if (version < 3) item.erase("overlays");
+            if (version == 1) item.erase("object_ids");
+        }
+        if (version < 4) legacy.erase("sheet_order");
+        const auto migrated = sketch::SheetViewModel::from_json(legacy);
+        for (const auto& item : migrated.views()) require(!item.presentation.crop, "legacy crop defaults to absent");
+        require(migrated.to_json().at("version") == 5, "legacy crop schema upgrade");
+        require(migrated.sheet_order() == (version == 4 ? original.sheet_order() : fixture().sheet_order()),
+                "crop migration must preserve version-specific sheet ordering");
+        if (version == 4) require(migrated.to_json() == saved, "v4 crop migration preserves graph");
+    }
+    const std::array<double sketch::ViewCrop::*, 4> coordinates{
+        &sketch::ViewCrop::min_horizontal_m, &sketch::ViewCrop::max_horizontal_m,
+        &sketch::ViewCrop::min_vertical_m, &sketch::ViewCrop::max_vertical_m};
+    for (const auto coordinate : coordinates) {
+        for (const double invalid : {std::numeric_limits<double>::infinity(),
+                 -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN(),
+                 1000001.0, -1000001.0}) {
+            auto candidate = changed.views()[1]; (*candidate.presentation.crop).*coordinate = invalid;
+            rejects([&] { (void)changed.with_view(candidate); });
+        }
+    }
+    for (const auto invalid : {sketch::ViewCrop{1, 0, 0, 1}, sketch::ViewCrop{0, 0, 0, 1},
+             sketch::ViewCrop{0, 1, 1, 0}, sketch::ViewCrop{0, 1, 0, 0},
+             sketch::ViewCrop{0, 1e-6, 0, 1}, sketch::ViewCrop{0, 1, 0, 1e-6}}) {
+        auto candidate = changed.views()[1]; candidate.presentation.crop = invalid;
+        rejects([&] { (void)changed.with_view(candidate); });
+    }
+    auto boundary = changed.views()[1]; boundary.presentation.crop = {-1e6, 1e6, -1e6, 1e6};
+    require(changed.with_view(boundary).views()[1] == boundary, "crop coordinate limits inclusive");
+    auto malformed = json; malformed["views"][1]["presentation"].erase("crop");
+    rejects([&] { (void)sketch::SheetViewModel::from_json(malformed); });
+    for (const auto& invalid : {nlohmann::json(true), nlohmann::json(4), nlohmann::json("crop"),
+                               nlohmann::json::array(), nlohmann::json::object()}) {
+        malformed = json; malformed["views"][1]["presentation"]["crop"] = invalid;
+        rejects([&] { (void)sketch::SheetViewModel::from_json(malformed); });
+    }
+    for (const char* key : {"min_horizontal_m", "max_horizontal_m", "min_vertical_m", "max_vertical_m"}) {
+        malformed = json; malformed["views"][1]["presentation"]["crop"].erase(key);
+        rejects([&] { (void)sketch::SheetViewModel::from_json(malformed); });
+        for (const auto& invalid : {nlohmann::json(nullptr), nlohmann::json(true), nlohmann::json("1"),
+                                   nlohmann::json::array(), nlohmann::json(1e7)}) {
+            malformed = json; malformed["views"][1]["presentation"]["crop"][key] = invalid;
+            rejects([&] { (void)sketch::SheetViewModel::from_json(malformed); });
+        }
+    }
+    malformed = json; malformed["views"][1]["presentation"]["crop"]["extra"] = 1;
+    rejects([&] { (void)sketch::SheetViewModel::from_json(malformed); });
 }
 void invalid_values() {
     const auto model = fixture();
@@ -397,7 +471,7 @@ void section_overlays() {
 int main() {
     sketch::testing::noninteractive_errors();
     try {
-        coordination_and_isolation(); sheet_lifecycle(); placement_lifecycle(); serialization(); presentation_order(); invalid_values(); section_overlays();
+        coordination_and_isolation(); sheet_lifecycle(); placement_lifecycle(); serialization(); presentation_order(); view_crops(); invalid_values(); section_overlays();
         std::cout << "sheet/view model tests passed\n";
         return 0;
     } catch (const std::exception& error) {

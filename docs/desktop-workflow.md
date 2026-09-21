@@ -400,6 +400,18 @@ default plan view and A-101 sheet. It is validated and saved with the same
 Document revision as geometry; interactive sheet editing and layout rendering
 remain under qualification.
 
+**Named elevations and sections...** creates and edits persisted plan,
+elevation, and section frames. Enable **Crop to view extents** to enter
+left, right, bottom, and top bounds in view-plane metres. Crop bounds follow
+the view's right and up axes, so translated and rotated views keep the authored
+window. Vertex validates the complete frame and crop before one undoable edit;
+clearing the checkbox restores an uncropped view. Conventional plans clip their
+retained analytical line and circular-arc geometry without changing the source
+boundary; dimensions, labels, and component annotations remain whole. Rotated
+plans, elevations, and sections crop derived solids and terrain surfaces before
+analytical projection. The same result appears on the canvas, sheet viewports,
+print, and exported output.
+
 ## Named revisions and comparison
 
 The **Named revisions** command is available from **More** and the command

@@ -55,6 +55,15 @@ Physical calibration and paired production-output certification remain open.
 Views identify plan, elevation and section definitions by stable ID. A view owns
 its finite origin in metres, orthonormal direction/up frame, cut and far depths,
 paper line widths, hatch enable/pattern/scale and detail level. It can also carry
+an optional left/right/bottom/top model crop in view-plane metres. Horizontal
+coordinates follow the renderer's view-right axis and vertical coordinates
+follow the persisted up vector; the crop is independent of each paper viewport's
+placement and scale. Conventional plans clip retained model lines and circular
+arcs analytically while leaving plan dimensions, labels, and component symbols
+whole. Other view frames cull shapes outside the crop and intersect crossing
+solids or face-based terrain with four OCCT half-spaces before analytical
+projection. Both paths preserve exact lines and arcs in interactive and printed
+output without changing authoritative geometry. It can also carry
 an ordered, deduplicated list of stable semantic object IDs for the walls,
 rooms, slabs, openings, terrain, and other source objects represented by that
 view. Document admission resolves those IDs and rejects a view that would keep
@@ -100,13 +109,15 @@ lexical order. The desktop editor exposes the persisted revision and callout
 collections with typed graph validation; callout target sheet and viewport
 references are never inferred from display labels.
 
-Version 4 JSON uses `sketch.sheet_view_model`, persists section overlays and an
-explicit `sheet_order` that is an exact permutation of the sheet identities, and
+Version 5 JSON uses `sketch.sheet_view_model`, persists an explicit crop object
+or `null` for every view, section overlays, and an explicit `sheet_order` that is
+an exact permutation of the sheet identities, and
 rejects unknown/missing fields,
 invalid enum names, nonfinite numeric values, malformed frames and dangling
-references. Version 1 through 3 documents remain readable, normalize missing
+references. Version 1 through 4 documents remain readable, normalize missing
 `object_ids` or overlay collections to empty lists, and derive page order from
-the canonical sheet-ID sequence before strict validation. Definition collections
+the canonical sheet-ID sequence where required; all legacy views migrate with
+cropping disabled before strict validation. Definition collections
 serialize in ID order (schedule registry lexically), while `sheet_order` retains
 the user-visible page sequence,
 independent of insertion order. JSON output and caller inputs are detached from
