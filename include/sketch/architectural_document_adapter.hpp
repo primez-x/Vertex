@@ -6,6 +6,25 @@
 
 namespace sketch {
 
+enum class RoomFootprintAnchor { first_corner, center, opposite_corner };
+
+// Width follows boundary segment 0; depth follows segment 1. Supply both
+// dimensions to resize a rectangular, hole-free footprint, or neither to
+// change only height/elevation on any valid room. All lengths are metres.
+struct RoomDimensionEdit {
+    std::optional<double> width_metres;
+    std::optional<double> depth_metres;
+    double height_metres{};
+    double elevation_metres{};
+    RoomFootprintAnchor anchor{RoomFootprintAnchor::first_corner};
+};
+
+[[nodiscard]] Entity resized_room_volume_entity(const Entity& source,
+                                               const RoomDimensionEdit& edit);
+[[nodiscard]] ApplyEntityChanges room_dimension_update_command(
+    const DocumentSnapshot& source, const std::string& entity_id,
+    const RoomDimensionEdit& edit, Revision expected_revision);
+
 // Typed semantic edits retain the container's identity, extensions and unrelated
 // properties. Apply through Document for atomic admission and revision fencing.
 [[nodiscard]] ApplyEntityChanges assembly_type_update_command(

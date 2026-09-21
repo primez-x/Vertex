@@ -6,6 +6,7 @@
 #include "sketch/wall_semantics.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <set>
 #include <stdexcept>
@@ -554,6 +555,98 @@ ApplyEntityChanges make_command(const DocumentSnapshot& source, const Architectu
 }
 
 }  // namespace
+
+Entity resized_room_volume_entity(const Entity& source, const RoomDimensionEdit& edit) {
+    if (source.type != "room")
+        throw std::invalid_argument("room dimension edit target must be a room");
+    if (edit.width_metres.has_value() != edit.depth_metres.has_value())
+        throw std::invalid_argument("room width and depth must be supplied together");
+    if (!std::isfinite(edit.height_metres) || edit.height_metres <= 0 ||
+        !std::isfinite(edit.elevation_metres))
+        throw std::invalid_argument("room height must be positive and dimensions finite");
+    double anchor_fraction{};
+    switch (edit.anchor) {
+    case RoomFootprintAnchor::first_corner: anchor_fraction = 0; break;
+    case RoomFootprintAnchor::center: anchor_fraction = 0.5; break;
+    case RoomFootprintAnchor::opposite_corner: anchor_fraction = 1; break;
+    default: throw std::invalid_argument("unknown room footprint anchor");
+    }
+    RoomVolume room;
+    std::string error;
+    if (!read_document_room(source, room, error)) throw std::invalid_argument(error);
+    Entity result = source;
+    if (edit.width_metres) {
+        const double width = *edit.width_metres, depth = *edit.depth_metres;
+        if (!std::isfinite(width) || !std::isfinite(depth) || width <= 0 || depth <= 0)
+            throw std::invalid_argument("room width and depth must be positive and finite");
+        if (!room.holes.empty())
+            throw std::invalid_argument("room footprint resize does not support holes");
+        if (room.boundary.size() != 4 || std::any_of(room.boundary.begin(), room.boundary.end(),
+                [](const Segment& edge) { return edge.sweep_radians != 0; }))
+            throw std::invalid_argument("room footprint resize requires four straight rectangle edges");
+        const auto origin = room.boundary[0].start;
+        const auto& first = room.boundary[0];
+        const auto& second = room.boundary[1];
+        const double old_width = std::hypot(first.end.x-first.start.x, first.end.y-first.start.y);
+        const double old_depth = std::hypot(second.end.x-second.start.x, second.end.y-second.start.y);
+        if (!std::isfinite(old_width) || !std::isfinite(old_depth) || old_width <= 0 || old_depth <= 0)
+            throw std::invalid_argument("room rectangle dimensions are degenerate");
+        const Vec2 u{(first.end.x-first.start.x)/old_width, (first.end.y-first.start.y)/old_width};
+        const Vec2 v{(second.end.x-second.start.x)/old_depth, (second.end.y-second.start.y)/old_depth};
+        if (std::abs(u.x*v.x + u.y*v.y) > 1e-10)
+            throw std::invalid_argument("room footprint edges must be orthogonal");
+        const auto corner = [&](double x, double y) {
+            return Vec2{origin.x + u.x*x + v.x*y, origin.y + u.y*x + v.y*y};
+        };
+        const std::array<Vec2, 4> expected{origin, corner(old_width, 0),
+            corner(old_width, old_depth), corner(0, old_depth)};
+        const auto close = [](Vec2 a, Vec2 b) {
+            return std::hypot(a.x-b.x, a.y-b.y) <= default_geometry_tolerance_metres;
+        };
+        for (std::size_t i = 0; i < 4; ++i) {
+            if (!close(room.boundary[i].start, expected[i]) ||
+                !close(room.boundary[i].end, expected[(i+1)%4]))
+                throw std::invalid_argument("room footprint must be a closed rectangle");
+        }
+        const auto unchanged_length = [](double requested, double current) {
+            const double scale = std::max({1.0, std::abs(requested), std::abs(current)});
+            return std::abs(requested - current) <= 1e-13 * scale;
+        };
+        if (!unchanged_length(width, old_width) || !unchanged_length(depth, old_depth)) {
+            const double offset_x = anchor_fraction * (old_width-width);
+            const double offset_y = anchor_fraction * (old_depth-depth);
+            const std::array<Vec2, 4> resized{corner(offset_x, offset_y),
+                corner(offset_x+width, offset_y), corner(offset_x+width, offset_y+depth),
+                corner(offset_x, offset_y+depth)};
+            for (std::size_t i = 0; i < 4; ++i) {
+                room.boundary[i].start = resized[i];
+                room.boundary[i].end = resized[(i+1)%4];
+            }
+            for (const auto* key : {"boundary", "segments"}) {
+                if (result.properties.contains(key))
+                    result.properties[key] = updated_boundary_geometry(source.properties.at(key), room.boundary);
+            }
+        }
+    }
+    if (result.properties.contains("height_m") || !result.properties.contains("height"))
+        result.properties["height_m"] = edit.height_metres;
+    if (result.properties.contains("elevation_m") || !result.properties.contains("elevation"))
+        result.properties["elevation_m"] = edit.elevation_metres;
+    if (result.properties.contains("height")) result.properties["height"] = edit.height_metres;
+    if (result.properties.contains("elevation")) result.properties["elevation"] = edit.elevation_metres;
+    // Decode the exact returned JSON, including aliases, through the shared
+    // solid admission path. No caller state changes if any validation fails.
+    if (!read_document_room(result, room, error)) throw std::invalid_argument(error);
+    (void)make_room_volume(room);
+    return result;
+}
+
+ApplyEntityChanges room_dimension_update_command(const DocumentSnapshot& source,
+    const std::string& entity_id, const RoomDimensionEdit& edit, Revision expected_revision) {
+    auto entity = semantic_entity(source, entity_id, "room", expected_revision);
+    entity = resized_room_volume_entity(entity, edit);
+    return {expected_revision, {EntityChange::upsert(std::move(entity))}, {}, "Resize room volume"};
+}
 
 ApplyEntityChanges assembly_type_update_command(const DocumentSnapshot& source,
     const std::string& entity_id, AssemblyType replacement, Revision expected_revision) {

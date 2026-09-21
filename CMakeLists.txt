@@ -537,7 +537,7 @@ if(SKETCH_BUILD_DESKTOP)
   if(BUILD_TESTING)
     # Hardware/native-window checks run explicitly; ordinary CTest stays offscreen.
     add_executable(native_view_tests tests/native_view_tests.cpp)
-    target_link_libraries(native_view_tests PRIVATE sketch_visualization sketch_constraint_authoring)
+    target_link_libraries(native_view_tests PRIVATE sketch_visualization sketch_constraint_authoring sketch_desktop)
     add_executable(native_geometry_preparation_tests tests/native_geometry_preparation_tests.cpp)
     target_link_libraries(native_geometry_preparation_tests PRIVATE sketch_visualization sketch_workspace_regeneration_queue)
     add_executable(native_model_preparation_tests tests/native_model_preparation_tests.cpp)

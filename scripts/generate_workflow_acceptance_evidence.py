@@ -16,7 +16,7 @@ SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
 OPEN_ACCEPTANCE_GAPS = {
     "ARCH-VIEW-002": "Complete section annotation/detail overlays and render/print fixtures remain unverified.",
     "IO-IFC-001": "Reference View 1.2 conformance and representative geometry/type/property/material/relationship fidelity remain unverified.",
-    "ARCH-3D-001": "A native 3D edit propagated through all linked views, schedules, calculations and save/reopen remains unverified.",
+    "ARCH-3D-001": "Direct native resize/rotate gizmos, equivalent editors for remaining object types, and complete production 3D qualification remain unverified.",
     "APX-DOC-001": "The complete multipage metadata, ordering, independent-view and linked-model save/reopen fixture remains unverified.",
 }
 
@@ -1812,11 +1812,11 @@ WORKFLOW_RULES.update({
         "qualification_boundary": "This evidence covers deterministic phase semantics and local workspace switching. Full coordinated issue-set output, native Apex compatibility, and production acceptance remain open.",
     },
     "ARCH-3D-001": {
-        "acceptance": "The native 3D view consumes the same semantic document objects used by architectural and measurement workflows, supports selection/translation, and emits a deterministic native image path.",
-        "sources": ("src/visualization/native_model_view.cpp", "src/desktop/main_window.cpp", "tests/native_view_tests.cpp", "tests/desktop_smoke.cpp", "docs/native-3d-view.md"),
-        "anchors": ("NativeModelView", "setSnapshot", "exportViewImage", "AIS_Shape", "OCCT", "selection", "translation"),
-        "tests": ("desktop_workflow",),
-        "qualification_boundary": "This evidence covers shared semantic decoding and the desktop smoke path. Native OpenGL/window capture, GPU-driver behavior, and full production 3D qualification remain open.",
+        "acceptance": "The native 3D view targets the object under double-click or context click, and a room dimension edit updates the shared semantic footprint, height, elevation, schedule quantities, undo history, and persisted project.",
+        "sources": ("CMakeLists.txt", "include/sketch/architectural_document_adapter.hpp", "src/core/architectural_document_adapter.cpp", "src/core/project_organization.cpp", "include/sketch/visualization/native_model_view.hpp", "src/visualization/native_model_view.cpp", "include/sketch/desktop/main_window.hpp", "src/desktop/main_window.cpp", "tests/architectural_document_adapter_tests.cpp", "tests/project_organization_tests.cpp", "tests/native_view_tests.cpp", "tests/desktop_smoke.cpp", "scripts/test-native.ps1", "docs/native-3d-view.md", "docs/desktop-workflow.md", "docs/architectural-projections.md"),
+        "anchors": ("RoomDimensionEdit", "RoomFootprintAnchor", "room_dimension_update_command", "onEntityEditRequested", "Edit room dimensions", "schedule", "undo", "save"),
+        "tests": ("architectural_document_adapter", "project_organization", "desktop_workflow"),
+        "qualification_boundary": "This evidence covers direct native room editing through the shared semantic document and its derived quantity/persistence paths. Direct resize/rotate gizmos, equivalent editors for remaining object types, GPU-driver behavior, and full production 3D qualification remain open.",
     },
     "ARCH-VIEW-001": {
         "acceptance": "Plan, elevation, and section definitions project the same semantic building objects and remain linked to typed sheet view definitions and persisted viewports.",

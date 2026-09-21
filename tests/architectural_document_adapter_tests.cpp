@@ -11,6 +11,7 @@
 #include <cmath>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <numbers>
 #include <stdexcept>
 
@@ -404,8 +405,136 @@ void test_wall_duplicate_and_delete_manage_hosted_openings() {
             "wall deletion must remove only its owned opening graph");
 }
 
+void test_room_volume_dimensions() {
+    using namespace sketch;
+    for (const double winding : {1.0, -1.0}) {
+        for (const auto anchor : {RoomFootprintAnchor::first_corner,
+                                  RoomFootprintAnchor::center,
+                                  RoomFootprintAnchor::opposite_corner}) {
+            auto boundary = rectangle_json(4, 2 * winding);
+            // Rotate away from world axes and translate to exercise local dimensions.
+            for (auto& edge : boundary) {
+                for (const auto* key : {"start", "end"}) {
+                    const double x = edge[key][0], y = edge[key][1];
+                    edge[key] = {10 + 0.6*x - 0.8*y, -7 + 0.8*x + 0.6*y};
+                }
+                edge["survey_note"] = "retain";
+            }
+            auto room = Entity::create("room", {{"boundary", boundary}, {"segments", boundary},
+                {"height_m", 3}, {"height", 3}, {"elevation_m", 0}, {"elevation", 0}, {"note", "keep"}});
+            room.extensions["vendor"] = {{"opaque", true}};
+            auto doc = Document::create({room});
+            const auto before = doc.snapshot();
+            const RoomDimensionEdit dimensions{8, 6, 5, -2, anchor};
+            const auto preview = resized_room_volume_entity(room, dimensions);
+            RoomVolume decoded;
+            std::string error;
+            require(read_document_room(preview, decoded, error), "dimension preview must decode");
+            require(std::abs(segment_length(decoded.boundary[0]) - 8) < 1e-9 &&
+                    std::abs(segment_length(decoded.boundary[1]) - 6) < 1e-9,
+                    "dimensions must follow the first two local edges");
+            const double fraction = anchor == RoomFootprintAnchor::first_corner ? 0 :
+                anchor == RoomFootprintAnchor::center ? 0.5 : 1;
+            const Vec2 fixed{10 + fraction*(0.6*4 - 0.8*2*winding),
+                             -7 + fraction*(0.8*4 + 0.6*2*winding)};
+            const auto p = decoded.boundary[0].start;
+            const auto q = decoded.boundary[2].start;
+            require(std::abs(p.x + fraction*(q.x-p.x) - fixed.x) < 1e-9 &&
+                    std::abs(p.y + fraction*(q.y-p.y) - fixed.y) < 1e-9, "anchor must remain fixed");
+            require(signed_area(decoded.boundary)*winding > 0 &&
+                    std::abs(solid_volume(make_room_volume(decoded)) - 240) < 1e-7,
+                    "dimensions must preserve winding and produce requested volume");
+            require(preview.id == room.id && preview.extensions == room.extensions &&
+                    preview.properties["note"] == "keep" &&
+                    preview.properties["boundary"][0]["survey_note"] == "retain" &&
+                    preview.properties["boundary"] == preview.properties["segments"] &&
+                    preview.properties["height"] == 5 && preview.properties["elevation"] == -2,
+                    "dimension edit must preserve metadata and synchronize aliases");
+            require(resized_room_volume_entity(preview, dimensions) == preview,
+                    "reapplying exact dimensions must not perturb rotated rectangle coordinates or metadata");
+            const auto command = room_dimension_update_command(before, room.id, dimensions, before.revision());
+            require(doc.snapshot().entities() == before.entities(), "preview must not mutate source");
+            doc.apply(command);
+            require(doc.snapshot().entities().at(room.id) == preview, "command must equal preview");
+            const auto applied = doc.snapshot();
+            rejects([&] { doc.apply(command); });
+            rejects([&] { (void)room_dimension_update_command(doc.snapshot(), room.id, dimensions, before.revision()); });
+            require(doc.revision() == applied.revision() && doc.snapshot().entities() == applied.entities(),
+                    "stale room edits must not change state or history");
+            doc.undo(doc.revision());
+            require(doc.snapshot().entities() == before.entities(), "dimension undo must restore exact metadata");
+            doc.redo(doc.revision());
+            require(doc.snapshot().entities().at(room.id) == preview, "dimension redo must restore preview");
+        }
+    }
+    auto room = Entity::create("room", {{"boundary", rectangle_json(4, 2)}, {"height_m", 3}, {"elevation_m", 0}});
+    const auto original = room;
+    for (const auto dimensions : {RoomDimensionEdit{0,2,3,0}, {-1,2,3,0}, {4,2,0,0},
+            {4,2,3,std::numeric_limits<double>::infinity()},
+            {std::numeric_limits<double>::quiet_NaN(),2,3,0}, {4,1e-15,3,0}}) {
+        rejects([&] { (void)resized_room_volume_entity(room, dimensions); });
+    }
+    rejects([&] { (void)resized_room_volume_entity(room, {4,2,3,0, static_cast<RoomFootprintAnchor>(99)}); });
+    rejects([&] { (void)resized_room_volume_entity(room, {4,std::nullopt,3,0}); });
+    rejects([&] { (void)resized_room_volume_entity(room, {std::nullopt,2,3,0}); });
+    auto wrong_role = room;
+    wrong_role.type = "label";
+    auto doc = Document::create({room, Entity::create("label")});
+    const auto before_invalid = doc.snapshot();
+    rejects([&] { (void)resized_room_volume_entity(wrong_role, {4,2,3,0}); });
+    rejects([&] { (void)room_dimension_update_command(doc.snapshot(), "missing", {4,2,3,0}, doc.revision()); });
+    rejects([&] { doc.apply(room_dimension_update_command(doc.snapshot(), room.id, {0,2,3,0}, doc.revision())); });
+    require(doc.revision() == before_invalid.revision() && doc.snapshot().entities() == before_invalid.entities(),
+            "invalid room command must not mutate state or history");
+    auto skew = room;
+    skew.properties["boundary"][1]["end"] = {5,2};
+    skew.properties["boundary"][2]["start"] = {5,2};
+    rejects([&] { (void)resized_room_volume_entity(skew, {8,6,5,0}); });
+    const auto skew_vertical = resized_room_volume_entity(skew, {std::nullopt,std::nullopt,5,-3});
+    require(skew_vertical.properties["boundary"] == skew.properties["boundary"],
+            "height-only edit must accept a nonrectangular valid room");
+    auto curved = room;
+    curved.properties["boundary"][0]["sweep_radians"] = 0.1;
+    rejects([&] { (void)resized_room_volume_entity(curved, {8,6,5,0}); });
+    const auto curved_vertical = resized_room_volume_entity(curved, {std::nullopt,std::nullopt,5,2});
+    require(curved_vertical.properties["boundary"] == curved.properties["boundary"],
+            "height-only edit must preserve analytical curved boundary");
+    auto hole = rectangle_json(0.5, 0.5);
+    for (auto& edge : hole) {
+        for (const auto* key : {"start", "end"}) {
+            edge[key][0] = edge[key][0].get<double>() + 0.5;
+            edge[key][1] = edge[key][1].get<double>() + 0.5;
+        }
+        edge["opaque"] = {1,2,3};
+    }
+    room.properties["holes"] = nlohmann::json::array({hole});
+    rejects([&] { (void)resized_room_volume_entity(room, {8,6,5,0}); });
+    const auto vertical = resized_room_volume_entity(room, {std::nullopt,std::nullopt,5,1});
+    require(vertical.properties["holes"] == room.properties["holes"] &&
+            vertical.properties["boundary"] == room.properties["boundary"], "vertical edit must retain exact footprint JSON");
+    RoomVolume decoded;
+    std::string error;
+    require(read_document_room(vertical, decoded, error) &&
+            std::abs(solid_volume(make_room_volume(decoded)) - 38.75) < 1e-7, "vertical edit volume subtracts holes");
+    require(original.properties["boundary"] == room.properties["boundary"], "failed previews must not mutate input");
+    auto legacy = original;
+    legacy.properties["segments"] = legacy.properties["boundary"];
+    legacy.properties.erase("boundary");
+    legacy.properties["height"] = 3;
+    legacy.properties.erase("height_m");
+    legacy.properties["elevation"] = 0;
+    legacy.properties.erase("elevation_m");
+    const auto legacy_preview = resized_room_volume_entity(legacy, {8,6,5,1});
+    require(!legacy_preview.properties.contains("boundary") &&
+            legacy_preview.properties["height"] == 5 && legacy_preview.properties["elevation"] == 1 &&
+            read_document_room(legacy_preview, decoded, error) &&
+            std::abs(solid_volume(make_room_volume(decoded))-240) < 1e-7,
+            "legacy room aliases must resize and remain readable");
+}
+
 int main() {
     try {
+        test_room_volume_dimensions();
         test_material_assignments();
         test_building_transform_updates_canonical_geometry();
         test_railing_transform_updates_canonical_geometry();

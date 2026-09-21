@@ -273,6 +273,17 @@ void test_level_placement_resolves_without_mutating_source() {
         {"base_center_m", {2.0, 3.0, 0.15}},
         {"vertical_placement", {{"version", 1}, {"mode", "level"}, {"offset_m", 0.4}}},
     });
+    const auto room = make_entity("room", "room", {
+        {"layer_id", "layer"},
+        {"boundary", {{{"start", {0.0, 0.0}}, {"end", {4.0, 0.0}}, {"sweep_radians", 0.0}},
+                       {{"start", {4.0, 0.0}}, {"end", {4.0, 3.0}}, {"sweep_radians", 0.0}},
+                       {{"start", {4.0, 3.0}}, {"end", {0.0, 3.0}}, {"sweep_radians", 0.0}},
+                       {{"start", {0.0, 3.0}}, {"end", {0.0, 0.0}}, {"sweep_radians", 0.0}}}},
+        {"holes", nlohmann::json::array()},
+        {"height_m", 2.4},
+        {"elevation_m", 0.1},
+        {"vertical_placement", {{"version", 1}, {"mode", "level"}, {"offset_m", 0.4}}},
+    });
     const auto document = sketch::Document::create({
         make_entity("site", "property"),
         make_entity("building", "building", {{"property_id", "site"}}),
@@ -283,6 +294,7 @@ void test_level_placement_resolves_without_mutating_source() {
         make_entity("levels", "vertical_levels",
                     {{"model", nlohmann::json::parse(graph.serialize())}}),
         column,
+        room,
     });
     const auto snapshot = document.snapshot();
     const auto& source = snapshot.entities().at("column");
@@ -291,6 +303,11 @@ void test_level_placement_resolves_without_mutating_source() {
             "level placement must add the bound level elevation and local offset to Z");
     require(source.properties.at("base_center_m").at(2) == 0.15,
             "derived level placement must not mutate source geometry");
+    const auto& source_room = snapshot.entities().at("room");
+    const auto resolved_room = sketch::resolve_vertical_placement(snapshot, source_room);
+    require(std::abs(resolved_room.properties.at("elevation_m").get<double>() - 5.25) < 1e-9 &&
+                source_room.properties.at("elevation_m") == 0.1,
+            "level-bound room volumes must resolve project elevation without mutating source semantics");
 
     auto moved_graph = graph.with_elevation("upper", 6.0);
     auto moved = snapshot.entities().at("levels");

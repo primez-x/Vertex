@@ -1,6 +1,8 @@
 #include "sketch/desktop/main_window.hpp"
 
 #include "sketch/document.hpp"
+#include "sketch/architectural_document_adapter.hpp"
+#include "sketch/document_solid.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
 #include "sketch/assembly_model.hpp"
@@ -855,6 +857,256 @@ void test_room_volume_authoring_workflow() {
                 window.document().snapshot().entities().at(room_id.toStdString())
                     .properties.at("elevation_m") == -0.5,
             "room elevation inspector editing must accept below-grade coordinates");
+
+    const auto before_dimensions = window.document().snapshot();
+    constexpr double resized_width = 6.0004;
+    constexpr double resized_depth = 2.0007;
+    constexpr double resized_area = resized_width * resized_depth;
+    require(window.editSelectedRoomVolumeDimensions(
+                QStringLiteral("6.0004 m"), QStringLiteral("2.0007 m"),
+                QStringLiteral("4 m"), QStringLiteral("0.25 m"),
+                RoomFootprintAnchor::center, before_dimensions.revision()),
+            "selected room must accept one revision-fenced footprint and vertical dimension edit");
+    const auto dimension_snapshot = window.document().snapshot();
+    const auto dimension_entity = dimension_snapshot.entities().at(room_id.toStdString());
+    RoomVolume dimension_room;
+    std::string dimension_error;
+    require(read_document_room(dimension_entity, dimension_room, dimension_error) &&
+                std::abs(segment_length(dimension_room.boundary[0]) - resized_width) < 1e-9 &&
+                std::abs(segment_length(dimension_room.boundary[1]) - resized_depth) < 1e-9 &&
+                std::abs(dimension_room.height - 4.0) < 1e-9 &&
+                std::abs(dimension_room.elevation - 0.25) < 1e-9 &&
+                std::abs(dimension_room.boundary[0].start.x + 1.0002) < 1e-9 &&
+                std::abs(dimension_room.boundary[0].start.y - 0.49965) < 1e-9,
+            "room dimension edit must retain the original center and local edge directions");
+    auto* plan_canvas = dynamic_cast<desktop::PlanCanvas*>(
+        window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    auto* architectural_canvas = dynamic_cast<desktop::PlanCanvas*>(
+        window.findChild<QWidget*>(QStringLiteral("architecturalPlanCanvas")));
+    auto* architectural_view = window.findChild<QComboBox*>(QStringLiteral("architecturalView"));
+    require(plan_canvas && architectural_canvas && architectural_view,
+            "room dimension fixture must expose linked plan, elevation, and section views");
+    const auto plan_room = std::find_if(plan_canvas->entities().begin(), plan_canvas->entities().end(),
+        [&](const auto& entity) { return entity.id == room_id; });
+    require(plan_room != plan_canvas->entities().end() && plan_room->segments.size() == 4 &&
+                std::abs(segment_length(plan_room->segments[0]) - resized_width) < 1e-9 &&
+                std::abs(segment_length(plan_room->segments[1]) - resized_depth) < 1e-9,
+            "the shared plan projection must update from the resized room semantics");
+    const auto check_elevation_projection = [&] {
+        architectural_view->setCurrentText(QStringLiteral("Elevation"));
+        QApplication::processEvents();
+        const auto projected = std::find_if(
+            architectural_canvas->entities().begin(), architectural_canvas->entities().end(),
+            [&](const auto& entity) { return entity.id == room_id; });
+        require(projected != architectural_canvas->entities().end() && !projected->segments.empty(),
+                "resized room must remain present in every linked vertical projection");
+        double min_y = std::numeric_limits<double>::infinity();
+        double max_y = -std::numeric_limits<double>::infinity();
+        for (const auto& edge : projected->segments) {
+            min_y = std::min({min_y, edge.start.y, edge.end.y});
+            max_y = std::max({max_y, edge.start.y, edge.end.y});
+        }
+        require(std::abs(min_y - 0.25) < 1e-9 && std::abs(max_y - 4.25) < 1e-9,
+                "linked vertical projections must use the edited room elevation and height");
+    };
+    check_elevation_projection();
+    architectural_view->setCurrentText(QStringLiteral("Section · 1.2 m"));
+    QApplication::processEvents();
+    const auto section_room = std::find_if(
+        architectural_canvas->entities().begin(), architectural_canvas->entities().end(),
+        [&](const auto& entity) { return entity.id == room_id; });
+    require(section_room != architectural_canvas->entities().end() &&
+                !section_room->segments.empty(),
+            "the 1.2 m section plane must intersect the edited room volume");
+    double section_min_x = std::numeric_limits<double>::infinity();
+    double section_max_x = -std::numeric_limits<double>::infinity();
+    double section_min_y = std::numeric_limits<double>::infinity();
+    double section_max_y = -std::numeric_limits<double>::infinity();
+    for (const auto& edge : section_room->segments) {
+        section_min_x = std::min({section_min_x, edge.start.x, edge.end.x});
+        section_max_x = std::max({section_max_x, edge.start.x, edge.end.x});
+        section_min_y = std::min({section_min_y, edge.start.y, edge.end.y});
+        section_max_y = std::max({section_max_y, edge.start.y, edge.end.y});
+    }
+    require(std::abs((section_max_x - section_min_x) - resized_width) < 1e-8 &&
+                std::abs((section_max_y - section_min_y) - resized_depth) < 1e-8,
+            "the linked section must use the edited room footprint dimensions");
+
+    architectural_view->setCurrentText(QStringLiteral("Plan"));
+    const auto schedule = window.scheduleSnapshot();
+    const auto room_row = std::find_if(schedule.snapshot.rows.begin(), schedule.snapshot.rows.end(),
+        [&](const auto& row) { return row.object_id == room_id.toStdString(); });
+    require(room_row != schedule.snapshot.rows.end() &&
+                std::abs(std::get<ScheduleQuantity>(
+                    room_row->cells.at("gross_area").value).value - resized_area) < 1e-9 &&
+                std::abs(std::get<ScheduleQuantity>(
+                    room_row->cells.at("volume").value).value - resized_area * 4.0) < 1e-9,
+            "room dimensions must update the shared schedule area and volume");
+    require(window.undoCommand() &&
+                window.document().snapshot().entities() == before_dimensions.entities() &&
+                window.redoCommand() &&
+                window.document().snapshot().entities().at(room_id.toStdString()) == dimension_entity,
+            "room dimension edit must undo and redo as one exact command");
+    const auto stable_dimensions = window.document().snapshot();
+    require(window.editSelectedRoomVolumeDimensions(
+                QStringLiteral("6.0004 m"), QStringLiteral("2.0007 m"),
+                QStringLiteral("4 m"), QStringLiteral("0.25 m"),
+                RoomFootprintAnchor::center, stable_dimensions.revision()) &&
+                window.document().snapshot().revision() == stable_dimensions.revision(),
+            "an unchanged room dimension edit must not create document history");
+    const bool before_stale_dialog_units = window.metricUnits();
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("roomDimensionDialog"));
+        auto* buttons = dialog ? dialog->findChild<QDialogButtonBox*>(
+                                     QStringLiteral("roomDimensionButtons")) : nullptr;
+        require(buttons && buttons->button(QDialogButtonBox::Apply)->isEnabled(),
+                "an unchanged room dimension dialog must have a valid preview");
+        buttons->button(QDialogButtonBox::Apply)->click();
+    });
+    window.showRoomVolumeDimensions();
+    require(window.document().snapshot().revision() == stable_dimensions.revision() &&
+                window.document().snapshot().entities() == stable_dimensions.entities(),
+            "applying untouched rounded display text must retain exact room geometry and history");
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("roomDimensionDialog"));
+        auto* width = dialog ? dialog->findChild<QLineEdit*>(
+                                   QStringLiteral("roomDimensionWidth")) : nullptr;
+        auto* status = dialog ? dialog->findChild<QLabel*>(
+                                    QStringLiteral("roomDimensionStatus")) : nullptr;
+        auto* buttons = dialog ? dialog->findChild<QDialogButtonBox*>(
+                                     QStringLiteral("roomDimensionButtons")) : nullptr;
+        require(width && status && buttons, "valid preview cancellation needs dimension controls");
+        width->setText(QStringLiteral("7 m"));
+        require(buttons->button(QDialogButtonBox::Apply)->isEnabled() &&
+                    status->text().contains(QStringLiteral("floor area")),
+                "a valid room resize must produce a detached calculated preview");
+        buttons->button(QDialogButtonBox::Cancel)->click();
+    });
+    window.showRoomVolumeDimensions();
+    require(window.document().snapshot().revision() == stable_dimensions.revision() &&
+                window.document().snapshot().entities() == stable_dimensions.entities(),
+            "canceling a valid live preview must restore exact authoritative room geometry");
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("roomDimensionDialog"));
+        require(dialog != nullptr, "room dimension editor must expose one named dialog");
+        auto* width = dialog->findChild<QLineEdit*>(QStringLiteral("roomDimensionWidth"));
+        auto* status = dialog->findChild<QLabel*>(QStringLiteral("roomDimensionStatus"));
+        auto* buttons = dialog->findChild<QDialogButtonBox*>(QStringLiteral("roomDimensionButtons"));
+        require(width && status && buttons, "room dimension editor controls must be discoverable");
+        width->setText(QStringLiteral("invalid"));
+        require(!buttons->button(QDialogButtonBox::Apply)->isEnabled() &&
+                    status->text().startsWith(QStringLiteral("Preview:")),
+                "invalid room dimensions must disable Apply and explain the preview failure");
+        buttons->button(QDialogButtonBox::Cancel)->click();
+    });
+    window.showRoomVolumeDimensions();
+    require(window.document().snapshot().revision() == stable_dimensions.revision() &&
+                window.document().snapshot().entities() == stable_dimensions.entities(),
+            "canceling an invalid live preview must leave document history and entities unchanged");
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("roomDimensionDialog"));
+        auto* height = dialog ? dialog->findChild<QLineEdit*>(
+                                    QStringLiteral("roomDimensionHeight")) : nullptr;
+        auto* status = dialog ? dialog->findChild<QLabel*>(
+                                    QStringLiteral("roomDimensionStatus")) : nullptr;
+        auto* buttons = dialog ? dialog->findChild<QDialogButtonBox*>(
+                                     QStringLiteral("roomDimensionButtons")) : nullptr;
+        require(height && status && buttons, "stale room preview needs dimension controls");
+        window.setMetricUnits(!before_stale_dialog_units);
+        height->setText(QStringLiteral("15 ft"));
+        require(!buttons->button(QDialogButtonBox::Apply)->isEnabled() &&
+                    status->text().contains(QStringLiteral("changed while the dialog was open")),
+                "a changed unit context must stale and disable the room editor");
+        buttons->button(QDialogButtonBox::Cancel)->click();
+    });
+    window.showRoomVolumeDimensions();
+    window.setMetricUnits(before_stale_dialog_units);
+    require(window.document().snapshot().revision() == stable_dimensions.revision() &&
+                window.document().snapshot().entities() == stable_dimensions.entities(),
+            "a stale room dialog must not mutate geometry or history");
+    require(!window.editSelectedRoomVolumeDimensions(
+                QStringLiteral("8 m"), QStringLiteral("5 m"),
+                QStringLiteral("3 m"), QStringLiteral("0 m"),
+                RoomFootprintAnchor::first_corner, before_dimensions.revision()) &&
+                window.document().snapshot().revision() == stable_dimensions.revision() &&
+                window.document().snapshot().entities() == stable_dimensions.entities(),
+            "stale room dimension edit must reject without mutation");
+
+    auto sheet_entity = window.document().snapshot().entities().at("sheet-view-1");
+    auto sheet_model = decode_sheet_view_entity(sheet_entity);
+    const auto default_section = std::find_if(sheet_model.views().begin(), sheet_model.views().end(),
+        [](const auto& view) { return view.id == "view-section"; });
+    require(default_section != sheet_model.views().end() &&
+                std::abs(default_section->origin_m[2] - 2.4) < 1e-12 &&
+                std::abs(default_section->presentation.cut_depth_m - 1.2) < 1e-12,
+            "the built-in section must persist a reference origin and relative 1.2 m cut");
+    auto translated_section = *default_section;
+    translated_section.id = "translated-section";
+    translated_section.name = "Translated section";
+    translated_section.origin_m = {0.0, 0.0, 5.0};
+    translated_section.presentation.cut_depth_m = 0.5;
+    auto views = sheet_model.views();
+    views.push_back(translated_section);
+    sheet_entity.properties["model"] = SheetViewModel::create(
+        std::move(views), sheet_model.sheets(), sheet_model.schedule_ids(),
+        sheet_model.sheet_order()).to_json();
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(sheet_entity)}, {}, "add translated section fixture"});
+    require(window.selectEntity(room_id), "translated section fixture must refresh linked views");
+    QApplication::processEvents();
+    const auto translated_index = architectural_view->findData(
+        QStringLiteral("translated-section"), Qt::UserRole + 1);
+    require(translated_index >= 0, "translated named section must be available in the view selector");
+    architectural_view->setCurrentIndex(translated_index);
+    QApplication::processEvents();
+    require(std::none_of(architectural_canvas->entities().begin(),
+                         architectural_canvas->entities().end(),
+                         [&](const auto& entity) { return entity.id == room_id; }),
+            "a translated section cut beyond the room must remain empty instead of moving to a global plane");
+
+    auto holed_room = dimension_entity;
+    holed_room.id = "room-with-void";
+    holed_room.properties["name"] = "Room with void";
+    const nlohmann::json hole = nlohmann::json::array({
+        {{"start", {0.0, 1.0}}, {"end", {1.0, 1.0}}, {"sweep_radians", 0.0}},
+        {{"start", {1.0, 1.0}}, {"end", {1.0, 2.0}}, {"sweep_radians", 0.0}},
+        {{"start", {1.0, 2.0}}, {"end", {0.0, 2.0}}, {"sweep_radians", 0.0}},
+        {{"start", {0.0, 2.0}}, {"end", {0.0, 1.0}}, {"sweep_radians", 0.0}},
+    });
+    holed_room.properties["holes"] = nlohmann::json::array({hole});
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(holed_room)}, {}, "add holed room fixture"});
+    require(window.selectEntity(QStringLiteral("room-with-void")) &&
+                window.editSelectedRoomVolume(QStringLiteral("4.5 m"), QStringLiteral("0.4 m")),
+            "a holed room must allow vertical dimension edits without changing its footprint");
+    const auto holed_after = window.document().snapshot().entities().at("room-with-void");
+    require(holed_after.properties.at("holes") == nlohmann::json::array({hole}),
+            "vertical room edits must retain exact persisted hole geometry");
+    const auto holed_plan = std::find_if(plan_canvas->entities().begin(), plan_canvas->entities().end(),
+        [](const auto& entity) { return entity.id == QStringLiteral("room-with-void"); });
+    require(holed_plan != plan_canvas->entities().end() && holed_plan->segments.size() == 4 &&
+                holed_plan->holes.size() == 1 && holed_plan->holes.front().size() == 4,
+            "the conventional plan must retain both outer and inner room loops");
+    QTemporaryDir room_directory;
+    const auto room_path = room_directory.filePath(QStringLiteral("room-dimensions.bldproj"));
+    require(room_directory.isValid() && window.saveProjectAs(room_path),
+            "room dimension project must save");
+    desktop::MainWindow reopened;
+    require(reopened.openProject(room_path) &&
+                reopened.document().snapshot().entities().at(room_id.toStdString()) == dimension_entity &&
+                reopened.document().snapshot().entities().at("room-with-void") == holed_after,
+            "room footprint, height, elevation, voids, and metadata must survive save and reopen");
+    require(reopened.selectEntity(QStringLiteral("room-with-void")),
+            "reopened holed room must remain selectable");
+    auto* reopened_plan = dynamic_cast<desktop::PlanCanvas*>(
+        reopened.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    require(reopened_plan != nullptr, "reopened project must expose its measurement plan");
+    const auto reopened_holed_plan = std::find_if(
+        reopened_plan->entities().begin(), reopened_plan->entities().end(),
+        [](const auto& entity) { return entity.id == QStringLiteral("room-with-void"); });
+    require(reopened_holed_plan != reopened_plan->entities().end() &&
+                reopened_holed_plan->holes.size() == 1,
+            "save and reopen must restore the room void to the plan canvas");
 }
 
 void test_multiple_selection_clipboard_workflow() {
@@ -3923,6 +4175,59 @@ void test_vertical_levels_workflow() {
                 nlohmann::json{{"version", 1}, {"mode", "level"}, {"offset_m", 0.0}},
             "new architectural objects on a bound floor should persist level-driven placement");
 
+    const Boundary room_boundary{{{{0.0, 0.0}, {4.0004, 0.0}, 0.0},
+                                  {{4.0004, 0.0}, {4.0004, 2.0007}, 0.0},
+                                  {{4.0004, 2.0007}, {0.0, 2.0007}, 0.0},
+                                  {{0.0, 2.0007}, {0.0, 0.0}, 0.0}}};
+    const auto bound_room = window.createRoomVolumeFromBoundary(
+        room_boundary, QStringLiteral("2.4004 m"), QStringLiteral("0.1234 m"));
+    require(!bound_room.isEmpty(), "a bound floor should author a level-relative room volume");
+    auto placement_snapshot = window.document().snapshot();
+    auto placed_floor = placement_snapshot.entities().at("floor-1");
+    auto placed_room = placement_snapshot.entities().at(bound_room.toStdString());
+    placed_floor.properties["vertical_level_binding"]["level_id"] = "first";
+    placed_room.properties["vertical_placement"]["offset_m"] = 0.4;
+    window.document().apply(ApplyEntityChanges{
+        .expected_revision = placement_snapshot.revision(),
+        .entity_changes = {EntityChange::upsert(std::move(placed_floor)),
+                           EntityChange::upsert(std::move(placed_room))},
+        .message = "configure level-relative room fixture",
+    });
+    window.setMetricUnits(true);
+    require(window.selectEntity(bound_room), "the level-relative room must remain selectable");
+    const auto before_room_dialog = window.document().snapshot();
+    const auto before_room_boundary = before_room_dialog.entities()
+        .at(bound_room.toStdString()).properties.at("boundary");
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("roomDimensionDialog"));
+        auto* elevation_field = dialog ? dialog->findChild<QLineEdit*>(
+                                             QStringLiteral("roomDimensionElevation")) : nullptr;
+        auto* placement_note = dialog ? dialog->findChild<QLabel*>(
+                                            QStringLiteral("roomDimensionPlacement")) : nullptr;
+        auto* status = dialog ? dialog->findChild<QLabel*>(
+                                    QStringLiteral("roomDimensionStatus")) : nullptr;
+        auto* buttons = dialog ? dialog->findChild<QDialogButtonBox*>(
+                                     QStringLiteral("roomDimensionButtons")) : nullptr;
+        require(elevation_field && placement_note && status && buttons &&
+                    elevation_field->accessibleName().contains(QStringLiteral("bound level")) &&
+                    placement_note->text().contains(QStringLiteral("placement offset")) &&
+                    status->text().contains(QStringLiteral("project base")),
+                "a level-relative room editor must explain local and resolved elevation");
+        elevation_field->setText(QStringLiteral("0.2 m"));
+        require(buttons->button(QDialogButtonBox::Apply)->isEnabled() &&
+                    status->text().contains(QStringLiteral("3.600 m project base")),
+                "a local elevation preview must include level elevation and placement offset");
+        buttons->button(QDialogButtonBox::Apply)->click();
+    });
+    window.showRoomVolumeDimensions();
+    const auto edited_room = window.document().snapshot().entities().at(bound_room.toStdString());
+    const auto resolved_room = resolve_vertical_placement(window.document().snapshot(), edited_room);
+    require(window.document().revision() == before_room_dialog.revision() + 1 &&
+                edited_room.properties.at("boundary") == before_room_boundary &&
+                std::abs(edited_room.properties.at("elevation_m").get<double>() - 0.2) < 1e-9 &&
+                std::abs(resolved_room.properties.at("elevation_m").get<double>() - 3.6) < 1e-9,
+            "valid modal room editing must preserve untouched geometry and commit local/resolved elevation once");
+
     const auto find_model = [&] {
         const auto snapshot = window.document().snapshot();
         const auto found = std::find_if(snapshot.entities().begin(), snapshot.entities().end(),
@@ -3944,7 +4249,7 @@ void test_vertical_levels_workflow() {
     require(model.levels().size() == 2 && model.links().front().state == RelationshipState::frozen,
             "vertical level graph should survive project reopen");
     const auto reopened_floor = window.document().snapshot().entities().at("floor-1");
-    require(reopened_floor.properties.at("vertical_level_binding").at("level_id") == "ground",
+    require(reopened_floor.properties.at("vertical_level_binding").at("level_id") == "first",
             "floor vertical level binding should survive project reopen");
 }
 
@@ -4887,6 +5192,11 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string_view(argv[1]) == "--section-overlays-only") {
         test_section_overlay_workflow();
         std::cout << "Section overlay workflow tests passed\n";
+        return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--room-volume-only") {
+        test_room_volume_authoring_workflow();
+        std::cout << "Room volume workflow tests passed\n";
         return 0;
     }
     test_architectural_authoring_commands();

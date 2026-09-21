@@ -1,7 +1,7 @@
 param(
     [ValidateSet('Debug', 'Release')][string]$Configuration = 'Debug',
     [ValidateCount(1, 3)][ValidateSet('1', '1.5', '2')][string[]]$Scales = @('1', '1.5', '2'),
-    [ValidateCount(1, 4)][ValidateSet('geometry', 'forms', 'all', 'publication')][string[]]$Scenarios = @('geometry', 'forms', 'publication')
+    [ValidateCount(1, 5)][ValidateSet('geometry', 'forms', 'all', 'publication', 'gestures')][string[]]$Scenarios = @('geometry', 'forms', 'publication', 'gestures')
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot

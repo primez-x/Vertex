@@ -67,16 +67,21 @@ public:
     // representation of the complete snapshot. Exceptions from onError are
     // contained so observers cannot interrupt preparation or replace diagnostics.
     std::function<void(QString)> onEntitySelected;
+    // Stationary plain-left double-click release on a visible selectable entity.
+    // Receives its stable semantic ID after selection; never requests translation.
+    std::function<void(QString)> onEntityEditRequested;
     // Explicit Move mode requests a translation of a native architectural object.
     // The callback reports the stable entity ID and a world-space delta in
     // metres. The desktop shell owns the authoritative document transaction;
     // this view only previews the derived presentation and emits the request.
     std::function<void(QString, double, double, double)> onEntityTranslationRequested;
-    // Stationary right release; coordinates are global Qt logical pixels.
-    std::function<void(QPoint)> onContextMenuRequested;
+    // Stationary right release: hit entity ID (empty for background), followed
+    // by global Qt logical pixels. Hit selection is notified before the menu.
+    std::function<void(QString, QPoint)> onContextMenuRequested;
     std::function<void(QString)> onError;
 
     void setEntitySelectedCallback(std::function<void(QString)> callback);
+    void setEntityEditRequestedCallback(std::function<void(QString)> callback);
     void setEntityTranslationRequestedCallback(
         std::function<void(QString, double, double, double)> callback);
     void setErrorCallback(std::function<void(QString)> callback);

@@ -84,6 +84,10 @@ struct CanvasEntity {
     bool dimension_end_ticks{false};
     std::optional<CanvasSvgSymbol> svg_symbol;
     std::vector<CanvasVertexHandle> vertex_handles;
+    // Closed semantic voids retained with the outer boundary. They share the
+    // entity transform and stroke, while OddEvenFill keeps their interiors
+    // clear in the interactive canvas and in print/export output.
+    std::vector<Boundary> holes;
 };
 
 // A retained document annotation. Unlike BoundaryDraftPreview, labels are

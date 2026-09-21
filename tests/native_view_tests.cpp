@@ -2,15 +2,21 @@
 #include "sketch/building_entity.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/constraint_authoring.hpp"
+#include "sketch/desktop/main_window.hpp"
 #include "sketch/visualization/native_model_view.hpp"
 #include "support/noninteractive_errors.hpp"
 #include <QApplication>
 #include <QDir>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
 #include <QMouseEvent>
+#include <QPushButton>
 #include <QKeyEvent>
+#include <QLabel>
+#include <QLineEdit>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QWheelEvent>
@@ -101,11 +107,60 @@ void check_gestures(sketch::visualization::NativeModelView& view, const QString&
         ++translations;
     };
     QPoint menu_position;
-    view.onContextMenuRequested = [&](QPoint position) { ++menus; menu_position = position; };
+    view.onContextMenuRequested = [&](QString, QPoint position) { ++menus; menu_position = position; };
     const QPointF start(300, 230), end(330, 255);
     check(!view.beginMove(QStringLiteral("missing-native-entity")) && !view.isMoveActive(),
           "Move must reject absent targets without arming");
     const auto before = capture(view, temporary.filePath("gesture-before.png"));
+    int edits = 0;
+    view.onEntityEditRequested = [&](QString target) {
+        check(target == id, "Edit must report the picked stable entity ID");
+        ++edits;
+    };
+    const auto edit_point = before.centre / view.devicePixelRatioF();
+    mouse(view, QEvent::MouseButtonDblClick, edit_point, Qt::LeftButton, Qt::LeftButton);
+    check(edits == 0, "Edit must wait for a stationary release");
+    mouse(view, QEvent::MouseButtonRelease, edit_point, Qt::LeftButton, Qt::NoButton);
+    check(edits == 1 && selections == 1 && translations == 0,
+          "Stationary double click must select and request one entity edit");
+    mouse(view, QEvent::MouseButtonRelease, edit_point, Qt::LeftButton, Qt::NoButton);
+    check(edits == 1, "Duplicate release must not repeat the edit request");
+    for (const auto type : {QEvent::KeyPress, QEvent::WindowDeactivate, QEvent::FocusOut,
+                            QEvent::Hide, QEvent::UngrabMouse}) {
+        mouse(view, QEvent::MouseButtonDblClick, edit_point, Qt::LeftButton, Qt::LeftButton);
+        if (type == QEvent::KeyPress) {
+            QKeyEvent escape(type, Qt::Key_Escape, Qt::NoModifier);
+            QApplication::sendEvent(&view, &escape);
+        } else {
+            QEvent cancel(type);
+            QApplication::sendEvent(&view, &cancel);
+        }
+        mouse(view, QEvent::MouseButtonRelease, edit_point, Qt::LeftButton, Qt::NoButton);
+        check(edits == 1 && translations == 0, "Cancellation must suppress pending edit release");
+    }
+    check(view.beginMove(id), "Move must arm before edit drag test");
+    mouse(view, QEvent::MouseButtonDblClick, edit_point, Qt::LeftButton, Qt::LeftButton);
+    mouse(view, QEvent::MouseMove, edit_point + QPointF(30, 30), Qt::NoButton, Qt::LeftButton);
+    mouse(view, QEvent::MouseMove, edit_point, Qt::NoButton, Qt::LeftButton);
+    mouse(view, QEvent::MouseButtonRelease, edit_point, Qt::LeftButton, Qt::NoButton);
+    check(edits == 1 && translations == 0 && !view.isMoveActive(),
+          "Double click drag returning to its origin must neither edit nor translate");
+    mouse(view, QEvent::MouseButtonDblClick, edit_point, Qt::LeftButton, Qt::LeftButton);
+    mouse(view, QEvent::MouseButtonRelease, edit_point + QPointF(30, 30), Qt::LeftButton, Qt::NoButton);
+    check(edits == 1, "Release displacement without move events must suppress edit");
+    mouse(view, QEvent::MouseButtonDblClick, {2, 2}, Qt::LeftButton, Qt::LeftButton);
+    mouse(view, QEvent::MouseButtonRelease, {2, 2}, Qt::LeftButton, Qt::NoButton);
+    check(edits == 1 && selections == 1, "Background double click must preserve selection without editing");
+    mouse(view, QEvent::MouseButtonDblClick, edit_point, Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
+    mouse(view, QEvent::MouseButtonRelease, edit_point, Qt::LeftButton, Qt::NoButton);
+    check(edits == 1, "Modified double click must not request editing");
+    mouse(view, QEvent::MouseButtonPress, edit_point, Qt::LeftButton, Qt::LeftButton);
+    mouse(view, QEvent::MouseButtonRelease, edit_point, Qt::LeftButton, Qt::NoButton);
+    mouse(view, QEvent::MouseButtonDblClick, edit_point, Qt::LeftButton, Qt::LeftButton);
+    mouse(view, QEvent::MouseButtonRelease, edit_point, Qt::LeftButton, Qt::NoButton);
+    check(edits == 2 && selections == 2 && translations == 0,
+          "Qt double click sequence must select once and edit once without translation");
+    selections = 0;
     mouse(view, QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
     mouse(view, QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton, Qt::ControlModifier);
     mouse(view, QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
@@ -152,6 +207,8 @@ void check_gestures(sketch::visualization::NativeModelView& view, const QString&
     check(menus == 0 && selections == 0, "Extra left button must not steal right gesture");
     mouse(view, QEvent::MouseButtonRelease, start, Qt::RightButton, Qt::NoButton);
     check(menus == 1 && menu_position == view.mapToGlobal(start.toPoint()), "Right click must expose global context position");
+    check(selections == 1, "Stationary context click must publish the hit selection");
+    selections = 0;
     mouse(view, QEvent::MouseButtonDblClick, start, Qt::RightButton, Qt::RightButton);
     mouse(view, QEvent::MouseButtonRelease, start, Qt::RightButton, Qt::NoButton);
     check(menus == 1, "Right double click must not open a duplicate context menu");
@@ -171,8 +228,102 @@ void check_gestures(sketch::visualization::NativeModelView& view, const QString&
     mouse(view, QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
     check(!view.isMoveActive() && translations == 1, "Double click must not start another Move");
     view.onEntitySelected = {};
+    view.onEntityEditRequested = {};
     view.onEntityTranslationRequested = {};
     view.onContextMenuRequested = {};
+}
+
+void check_context_target(sketch::visualization::NativeModelView& view, QTemporaryDir& temporary) {
+    auto a = sketch::encode_building_entity(sketch::RectangularColumn{"context-a", {-3,0,0}, 1,1,3,0});
+    auto b = sketch::encode_building_entity(sketch::RectangularColumn{"context-b", {3,0,0}, 1,1,3,0});
+    auto document = sketch::Document::create({a, b});
+    view.setSnapshot(document.snapshot());
+    check(ready_settled(view), "Context fixture must publish");
+    view.fitAll();
+    view.setSnapshot(document.snapshot(), sketch::visualization::NativeModelView::VisibleEntityIds{a.id});
+    const auto point_a = capture(view, temporary.filePath("context-a.png")).centre / view.devicePixelRatioF();
+    view.setSnapshot(document.snapshot(), sketch::visualization::NativeModelView::VisibleEntityIds{b.id});
+    const auto point_b = capture(view, temporary.filePath("context-b.png")).centre / view.devicePixelRatioF();
+    view.setSnapshot(document.snapshot());
+    check(ready_settled(view), "Both context targets must publish");
+    QString selected, target;
+    int menus = 0;
+    view.onEntitySelected = [&](QString id) { selected = id; };
+    view.onContextMenuRequested = [&](QString id, QPoint global) {
+        target = id;
+        ++menus;
+        check(selected == id, "Context target must be selected before its menu callback");
+        if (!id.isEmpty()) check(global == view.mapToGlobal(point_b.toPoint()),
+                                "Context callback must preserve global logical position");
+    };
+    mouse(view, QEvent::MouseButtonPress, point_a, Qt::LeftButton, Qt::LeftButton);
+    mouse(view, QEvent::MouseButtonRelease, point_a, Qt::LeftButton, Qt::NoButton);
+    check(selected == QString::fromStdString(a.id), "Context test must initially select A");
+    mouse(view, QEvent::MouseButtonPress, point_b, Qt::RightButton, Qt::RightButton);
+    mouse(view, QEvent::MouseButtonRelease, point_b, Qt::RightButton, Qt::NoButton);
+    check(menus == 1 && target == QString::fromStdString(b.id),
+          "Right click on B must target B even when A was selected");
+    mouse(view, QEvent::MouseButtonPress, {2,2}, Qt::RightButton, Qt::RightButton);
+    mouse(view, QEvent::MouseButtonRelease, {2,2}, Qt::RightButton, Qt::NoButton);
+    check(menus == 2 && target.isEmpty(), "Background context menu must receive an empty target");
+    view.onEntitySelected = {};
+    view.onContextMenuRequested = {};
+}
+
+void check_desktop_room_activation(QTemporaryDir& temporary) {
+    sketch::desktop::MainWindow window;
+    window.setAttribute(Qt::WA_DontShowOnScreen, true);
+    window.setAttribute(Qt::WA_ShowWithoutActivating, true);
+    window.resize(1200, 760);
+    window.setWorkspace(sketch::desktop::Workspace::architectural);
+    const sketch::Boundary boundary{{{{0.0,0.0},{4.0004,0.0},0.0},
+                                     {{4.0004,0.0},{4.0004,2.0007},0.0},
+                                     {{4.0004,2.0007},{0.0,2.0007},0.0},
+                                     {{0.0,2.0007},{0.0,0.0},0.0}}};
+    const auto room_id = window.createRoomVolumeFromBoundary(
+        boundary, QStringLiteral("2.4004 m"), QStringLiteral("0.1234 m"));
+    check(!room_id.isEmpty(), "Desktop native activation fixture must create a room");
+    sketch::visualization::NativeModelView* view = nullptr;
+    for (auto* widget : window.findChildren<QWidget*>()) {
+        if (auto* candidate = dynamic_cast<sketch::visualization::NativeModelView*>(widget)) {
+            view = candidate;
+            break;
+        }
+    }
+    check(view != nullptr, "Architectural workspace must contain the native model view");
+    view->setAttribute(Qt::WA_DontShowOnScreen, true);
+    view->setAttribute(Qt::WA_ShowWithoutActivating, true);
+    window.show();
+    QApplication::processEvents();
+    check(ready_settled(*view), "Desktop room must prepare in the native viewport");
+    view->fitAll();
+    const auto hit = capture(*view, temporary.filePath("desktop-room-activation.png")).centre /
+                     view->devicePixelRatioF();
+    const auto before = window.document().snapshot();
+    bool opened = false;
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("roomDimensionDialog"));
+        auto* width = dialog ? dialog->findChild<QLineEdit*>(
+                                   QStringLiteral("roomDimensionWidth")) : nullptr;
+        auto* status = dialog ? dialog->findChild<QLabel*>(
+                                    QStringLiteral("roomDimensionStatus")) : nullptr;
+        auto* buttons = dialog ? dialog->findChild<QDialogButtonBox*>(
+                                     QStringLiteral("roomDimensionButtons")) : nullptr;
+        check(dialog && width && status && buttons,
+              "Native room double click must open the shared dimension editor");
+        opened = true;
+        width->setText(QStringLiteral("5 m"));
+        check(buttons->button(QDialogButtonBox::Apply)->isEnabled() &&
+                  status->text().contains(QStringLiteral("floor area")),
+              "Native room editor must produce a valid detached preview");
+        buttons->button(QDialogButtonBox::Cancel)->click();
+    });
+    mouse(*view, QEvent::MouseButtonDblClick, hit, Qt::LeftButton, Qt::LeftButton);
+    mouse(*view, QEvent::MouseButtonRelease, hit, Qt::LeftButton, Qt::NoButton);
+    check(opened && window.document().snapshot().revision() == before.revision() &&
+              window.document().snapshot().entities() == before.entities(),
+          "Canceling the native-activated room preview must restore the authoritative document");
+    window.hide();
 }
 
 void check_publication_reuse(sketch::visualization::NativeModelView& view) {
@@ -281,6 +432,19 @@ int main(int argc,char** argv) {
             check(ready_settled(view),"Native viewport must be ready");
             if (scenario == "gestures") {
                 check_gestures(view, wall_id, temporary);
+                int hidden_edits = 0, hidden_selections = 0;
+                view.onEntityEditRequested = [&](QString) { ++hidden_edits; };
+                view.onEntitySelected = [&](QString) { ++hidden_selections; };
+                view.setSnapshot(document.snapshot(), sketch::visualization::NativeModelView::VisibleEntityIds{});
+                check(ready_settled(view), "Hidden geometry must publish successfully");
+                mouse(view, QEvent::MouseButtonDblClick, {350, 250}, Qt::LeftButton, Qt::LeftButton);
+                mouse(view, QEvent::MouseButtonRelease, {350, 250}, Qt::LeftButton, Qt::NoButton);
+                check(hidden_edits == 0 && hidden_selections == 0,
+                      "Hidden entities must not be selected or edited by double click");
+                view.onEntityEditRequested = {};
+                view.onEntitySelected = {};
+                check_context_target(view, temporary);
+                check_desktop_room_activation(temporary);
                 std::cout << "Native gesture checks passed at DPR " << ratio << '\n';
                 application.exit(0);
                 return;

@@ -231,22 +231,25 @@ Qt::BrushStyle hatch_style(QString pattern) {
     return Qt::BDiagPattern;
 }
 
-std::optional<QPainterPath> closed_entity_path(const CanvasEntity& entity) {
-    if (entity.segments.size() < 3) return std::nullopt;
+bool append_closed_boundary(QPainterPath& path, const Boundary& boundary) {
+    // Analytical loops are not polygons: a semicircle plus its closing chord
+    // is a valid two-segment boundary. Continuity and closure below are the
+    // relevant presentation checks; semantic geometry validation remains in
+    // the document model.
+    if (boundary.empty()) return false;
     constexpr double endpoint_tolerance = 1e-7;
-    const auto& first = entity.segments.front();
-    QPainterPath path;
+    const auto& first = boundary.front();
     path.moveTo(first.start.x, first.start.y);
     auto previous = first.start;
-    for (const auto& segment : entity.segments) {
+    for (const auto& segment : boundary) {
         if (distance(previous, segment.start) > endpoint_tolerance) {
-            return std::nullopt;
+            return false;
         }
         if (segment.sweep_radians == 0.0) {
             path.lineTo(segment.end.x, segment.end.y);
         } else {
             const auto arc = arc_info(segment);
-            if (!arc.has_value()) return std::nullopt;
+            if (!arc.has_value()) return false;
             const QRectF bounds(arc->center.x - arc->radius, arc->center.y - arc->radius,
                                arc->radius * 2.0, arc->radius * 2.0);
             path.arcTo(bounds, -arc->start_angle * 180.0 / pi,
@@ -254,9 +257,33 @@ std::optional<QPainterPath> closed_entity_path(const CanvasEntity& entity) {
         }
         previous = segment.end;
     }
-    if (distance(previous, first.start) > endpoint_tolerance) return std::nullopt;
+    if (distance(previous, first.start) > endpoint_tolerance) return false;
     path.closeSubpath();
+    return true;
+}
+
+std::optional<QPainterPath> closed_entity_path(const CanvasEntity& entity) {
+    QPainterPath path;
+    path.setFillRule(Qt::OddEvenFill);
+    if (!append_closed_boundary(path, entity.segments)) return std::nullopt;
+    for (const auto& hole : entity.holes) {
+        if (!append_closed_boundary(path, hole)) return std::nullopt;
+    }
     return path;
+}
+
+void append_boundary_strokes(QPainterPath& path, const Boundary& boundary) {
+    for (const auto& segment : boundary) {
+        path.moveTo(segment.start.x, segment.start.y);
+        if (segment.sweep_radians == 0.0) {
+            path.lineTo(segment.end.x, segment.end.y);
+        } else if (const auto arc = arc_info(segment)) {
+            path.arcTo(QRectF(arc->center.x - arc->radius, arc->center.y - arc->radius,
+                             2.0 * arc->radius, 2.0 * arc->radius),
+                       -arc->start_angle * 180.0 / pi,
+                       -segment.sweep_radians * 180.0 / pi);
+        }
+    }
 }
 
 }  // namespace
@@ -453,6 +480,18 @@ std::optional<std::pair<Vec2, Vec2>> PlanCanvas::contentBounds() const {
             } catch (const std::invalid_argument&) {
                 // Invalid retained presentation geometry still contributes its
                 // finite endpoints; semantic diagnostics belong to the model.
+            }
+        }
+        for (const auto& hole : entity.holes) {
+            for (const auto& segment : hole) {
+                include(segment.start);
+                include(segment.end);
+                try {
+                    const auto bounds = segment_bounds(segment);
+                    include(bounds.minimum);
+                    include(bounds.maximum);
+                } catch (const std::invalid_argument&) {
+                }
             }
         }
     }
@@ -822,21 +861,25 @@ void PlanCanvas::drawOverviewMap(QPainter& painter) const {
                  Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
         pen.setCosmetic(true);
         painter.setPen(pen);
-        for (const auto& segment : entity.segments) {
-            if (segment.sweep_radians == 0.0) {
-                painter.drawLine(to_map(segment.start), to_map(segment.end));
-                continue;
+        const auto draw_boundary = [&](const Boundary& boundary) {
+            for (const auto& segment : boundary) {
+                if (segment.sweep_radians == 0.0) {
+                    painter.drawLine(to_map(segment.start), to_map(segment.end));
+                    continue;
+                }
+                if (const auto arc = arc_info(segment)) {
+                    QPainterPath path;
+                    path.moveTo(to_map(segment.start));
+                    constexpr int samples = 32;
+                    for (int index = 1; index <= samples; ++index)
+                        path.lineTo(to_map(arc_point(segment, *arc,
+                                                     static_cast<double>(index) / samples)));
+                    painter.drawPath(path);
+                }
             }
-            if (const auto arc = arc_info(segment)) {
-                QPainterPath path;
-                path.moveTo(to_map(segment.start));
-                constexpr int samples = 32;
-                for (int index = 1; index <= samples; ++index)
-                    path.lineTo(to_map(arc_point(segment, *arc,
-                                                 static_cast<double>(index) / samples)));
-                painter.drawPath(path);
-            }
-        }
+        };
+        draw_boundary(entity.segments);
+        for (const auto& hole : entity.holes) draw_boundary(hole);
     }
     const auto visible_width = width() / std::max(m_scale, minimum_scale);
     const auto visible_height = height() / std::max(m_scale, minimum_scale);
@@ -1805,17 +1848,8 @@ QStringList PlanCanvas::rectangleHits(const QRectF& rectangle, bool crossing) co
     model_to_screen.translate(-m_view_center.x, -m_view_center.y);
     for (const auto& entity : m_entities) {
         QPainterPath path;
-        for (const auto& segment : entity.segments) {
-            path.moveTo(segment.start.x, segment.start.y);
-            if (segment.sweep_radians == 0.0) {
-                path.lineTo(segment.end.x, segment.end.y);
-            } else if (const auto arc = arc_info(segment)) {
-                path.arcTo(QRectF(arc->center.x - arc->radius, arc->center.y - arc->radius,
-                                 2.0 * arc->radius, 2.0 * arc->radius),
-                           -arc->start_angle * 180.0 / pi,
-                           -segment.sweep_radians * 180.0 / pi);
-            }
-        }
+        append_boundary_strokes(path, entity.segments);
+        for (const auto& hole : entity.holes) append_boundary_strokes(path, hole);
         QPainterPathStroker stroker;
         const auto width = entity.type == QStringLiteral("wall")
             ? std::max(entity.thickness_metres, 0.04) * m_scale
@@ -1860,35 +1894,51 @@ QString PlanCanvas::hitTest(QPointF point) const {
     auto best = std::numeric_limits<double>::max();
     for (const auto& entity : m_entities) {
         QPainterPath painted_footprint;
-        for (const auto& segment : entity.segments) {
-            const auto start = toScreen(segment.start, rect());
-            painted_footprint.moveTo(start);
-            if (segment.sweep_radians == 0.0) {
-                const auto end = toScreen(segment.end, rect());
-                painted_footprint.lineTo(end);
-                const auto candidate = point_segment_distance(point, start, end);
-                if (candidate < best) {
-                    best = candidate;
+        const auto test_boundary = [&](const Boundary& boundary) {
+            for (const auto& segment : boundary) {
+                const auto start = toScreen(segment.start, rect());
+                painted_footprint.moveTo(start);
+                if (segment.sweep_radians == 0.0) {
+                    const auto end = toScreen(segment.end, rect());
+                    painted_footprint.lineTo(end);
+                    const auto candidate = point_segment_distance(point, start, end);
+                    if (candidate < best) {
+                        best = candidate;
+                        result = entity.id;
+                    }
+                    continue;
+                }
+                const auto arc = arc_info(segment);
+                if (!arc.has_value()) {
+                    continue;
+                }
+                auto previous = start;
+                constexpr int samples = 40;
+                for (int index = 1; index <= samples; ++index) {
+                    const auto current = toScreen(
+                        arc_point(segment, *arc, static_cast<double>(index) / samples), rect());
+                    painted_footprint.lineTo(current);
+                    const auto candidate = point_segment_distance(point, previous, current);
+                    if (candidate < best) {
+                        best = candidate;
+                        result = entity.id;
+                    }
+                    previous = current;
+                }
+            }
+        };
+        test_boundary(entity.segments);
+        for (const auto& hole : entity.holes) test_boundary(hole);
+        if (entity.filled) {
+            if (const auto fill = closed_entity_path(entity)) {
+                QTransform model_to_screen;
+                model_to_screen.translate(QRectF(rect()).center().x(), QRectF(rect()).center().y());
+                model_to_screen.scale(m_scale, -m_scale);
+                model_to_screen.translate(-m_view_center.x, -m_view_center.y);
+                if (model_to_screen.map(*fill).contains(point)) {
+                    best = 0.0;
                     result = entity.id;
                 }
-                continue;
-            }
-            const auto arc = arc_info(segment);
-            if (!arc.has_value()) {
-                continue;
-            }
-            auto previous = start;
-            constexpr int samples = 40;
-            for (int index = 1; index <= samples; ++index) {
-                const auto current = toScreen(
-                    arc_point(segment, *arc, static_cast<double>(index) / samples), rect());
-                painted_footprint.lineTo(current);
-                const auto candidate = point_segment_distance(point, previous, current);
-                if (candidate < best) {
-                    best = candidate;
-                    result = entity.id;
-                }
-                previous = current;
             }
         }
         // Plan components are picked by their complete painted footprint, not
@@ -2322,25 +2372,11 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
     painter.setPen(pen);
     painter.setBrush(Qt::NoBrush);
     QPainterPath path;
-    for (const auto& segment : entity.segments) {
-        // Start each semantic segment independently. This preserves opening
-        // gaps when a wall baseline has been split around hosted openings and
-        // avoids connecting unrelated entities in one painter path.
-        path.moveTo(segment.start.x, segment.start.y);
-        if (segment.sweep_radians == 0.0) {
-            path.lineTo(segment.end.x, segment.end.y);
-            continue;
-        }
-        const auto arc = arc_info(segment);
-        if (!arc.has_value()) continue;
-        const QRectF bounds(arc->center.x - arc->radius, arc->center.y - arc->radius,
-                           arc->radius * 2.0, arc->radius * 2.0);
-        // QPainterPath defines arc angles with a screen-style inverted Y.
-        // Negate both angles in our Cartesian path before the view transform.
-        path.arcTo(bounds, -arc->start_angle * 180.0 / pi,
-                   -segment.sweep_radians * 180.0 / pi);
-    }
-    if (!entity.segments.empty()) {
+    // Start every semantic segment independently so hosted-opening gaps and
+    // unrelated paths never acquire synthetic connector strokes.
+    append_boundary_strokes(path, entity.segments);
+    for (const auto& hole : entity.holes) append_boundary_strokes(path, hole);
+    if (!entity.segments.empty() || !entity.holes.empty()) {
         painter.drawPath(path);
     }
     // Angular dimension overlays share the dimension_line type, but carry

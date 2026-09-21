@@ -792,6 +792,48 @@ void test_closed_entity_hatching_and_open_path_safety() {
     require(differing_pixels(outline, filled, QRect(150, 100, 340, 280)) > 100,
             "solid section presentation must fill the closed projected path");
 
+    square.holes = {Boundary{
+        sketch::arc_from_chord_angle({-0.6, 0.4}, {0.6, 0.4}, std::numbers::pi),
+        Segment{{0.6, 0.4}, {-0.6, 0.4}, 0.0},
+    }};
+    canvas.setEntities({square});
+    const auto with_void = render(canvas, true);
+    require(differing_pixels(filled, with_void, QRect(270, 170, 100, 140)) > 100,
+            "semantic holes must remain clear in filled screen and output paths");
+    canvas.setTool(CanvasTool::select);
+    QString selected;
+    canvas.setRightClicked([&](Vec2, QString id) { selected = std::move(id); });
+    const auto center = QRectF(canvas.rect()).center();
+    const auto context_click = [&](QPointF point) {
+        selected.clear();
+        QMouseEvent press(QEvent::MouseButtonPress, point, point, Qt::RightButton,
+                          Qt::RightButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &press);
+        QMouseEvent release(QEvent::MouseButtonRelease, point, point, Qt::RightButton,
+                            Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &release);
+    };
+    context_click(center);
+    require(selected.isEmpty(),
+            "clicking a two-segment curved semantic void must target canvas space");
+    canvas.setSelectedId(square.id);
+    const auto frame = canvas.selectionBounds();
+    require(frame.has_value(), "curved-hole fixture must expose its outer selection frame");
+    const auto body_point = frame->center() + QPointF(frame->width() * 0.30, 0.0);
+    context_click(body_point);
+    require(selected == square.id,
+            "filled room interior outside a curved void must remain selectable");
+    const auto chord_point = frame->center() - QPointF(0.0, frame->height() * 0.10);
+    context_click(chord_point);
+    require(selected == square.id, "the curved void outline must remain selectable");
+    square.holes.clear();
+    square.selected = false;
+    canvas.setEntities({square});
+    canvas.setSelectedId({});
+    context_click(center);
+    require(selected == square.id,
+            "the same point must select the painted entity after its void is removed");
+
     square.segments.pop_back();
     canvas.setEntities({square});
     const auto open_filled = render(canvas, true);

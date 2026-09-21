@@ -171,11 +171,20 @@ measurement or room boundary into a distinct architectural `room` entity. The
 command asks for explicit room height and base elevation, retains optional
 boundary holes, previews the shared solid kernel, and commits one undoable
 Document command. Selecting a room volume exposes editable height and base
-elevation fields in the contextual geometry inspector; the **Edit selected room
-volume** command remains available for editing both values together. All paths
-use the same validated command. Room volumes remain separate from
-`room_boundary` records and use the same geometry for plan, elevation, section,
-native 3D, schedules, and save/reopen.
+elevation fields in the contextual geometry inspector. Double-clicking a room
+in the native 3D view, choosing **Edit room dimensions…** from its 3D context
+menu, or running **Edit selected room volume** opens the same revision-fenced
+dimension editor. A rectangular, hole-free room can change local width and
+depth while keeping its first corner, center, or opposite corner fixed; every
+valid room can change height and base elevation. Valid values preview in 3D
+with calculated floor area and volume before **Apply** commits one undoable
+command. For a room bound to a building level, the elevation field is labeled
+as local to that level and the dialog also reports its resolved project base,
+including the separate placement offset. Invalid values, Cancel, a stale
+selection, or a changed document leave
+the document and history untouched. Room volumes remain separate from
+`room_boundary` records and use the same semantic geometry for plan, elevation,
+section, native 3D, schedules, calculations, and save/reopen.
 
 The `Reference` command imports a local PNG, JPEG, BMP, TIFF, or a selected page
 of a PDF into the portable Document Asset store and creates a `reference_asset`

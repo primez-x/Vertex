@@ -28,6 +28,7 @@
 #include <QKeyEvent>
 #include <QPaintEngine>
 #include <QPaintEvent>
+#include <QPointer>
 #include <QResizeEvent>
 #include <QShowEvent>
 #include <QWheelEvent>
@@ -154,7 +155,7 @@ public:
     occ::handle<WNT_Window> window;
     std::map<std::string, CachedSolid, std::less<>> solids;
 
-    enum class Gesture { none, select, pan, orbit, move };
+    enum class Gesture { none, select, edit, pan, orbit, move };
     Gesture gesture = Gesture::none;
     Qt::MouseButton initiating_button = Qt::NoButton;
     QPoint navigation_start;
@@ -552,21 +553,32 @@ public:
         }
     }
 
-    QString select_at(const NativeInputPoint point) {
+    QString select_at(const NativeInputPoint point, bool editing = false) {
         if (!native_ready || !geometry_status.isEmpty() || context.IsNull() || view.IsNull()) {
             return {};
         }
         const auto x = point.x;
         const auto y = point.y;
         context->MoveTo(x, y, view, false);
+        // Background and nonsemantic presentations cannot clear selection or
+        // open an editor. Picking still uses OCCT's visibility/selection filters.
+        if (editing && (!context->HasDetected() ||
+                        entity_id_for_presentation(context->DetectedInteractive()).isEmpty()))
+            return {};
+        const auto previous_id = context->NbSelected() > 0
+            ? entity_id_for_presentation(context->FirstSelectedObject()) : QString{};
         context->ClearSelected(false);
         context->SelectDetected(AIS_SelectionScheme_Replace);
         const auto selected = context->FirstSelectedObject();
         const auto selected_id = entity_id_for_presentation(selected);
-        if (owner->onEntitySelected) {
-            owner->onEntitySelected(selected_id);
-        }
         viewer->Redraw();
+        const auto selected_callback = owner->onEntitySelected;
+        const auto edit_callback = owner->onEntityEditRequested;
+        const QPointer<NativeModelView> owner_guard(owner);
+        if (selected_callback && (!editing || selected_id != previous_id))
+            selected_callback(selected_id);
+        if (owner_guard && editing && !selected_id.isEmpty() && edit_callback)
+            edit_callback(selected_id);
         return selected_id;
     }
 
@@ -729,6 +741,10 @@ void NativeModelView::setEntitySelectedCallback(std::function<void(QString)> cal
     onEntitySelected = std::move(callback);
 }
 
+void NativeModelView::setEntityEditRequestedCallback(std::function<void(QString)> callback) {
+    onEntityEditRequested = std::move(callback);
+}
+
 void NativeModelView::setEntityTranslationRequestedCallback(
     std::function<void(QString, double, double, double)> callback) {
     onEntityTranslationRequested = std::move(callback);
@@ -846,9 +862,18 @@ void NativeModelView::mousePressEvent(QMouseEvent* event) {
 }
 
 void NativeModelView::mouseDoubleClickEvent(QMouseEvent* event) {
-    // Qt has already delivered the first click. Consume its double-click
-    // press and trailing release without another selection or Move commit.
+    // The second press belongs to Edit, never to an armed Move. Delay the
+    // request until release so a drag or cancellation cannot open an editor.
+    const bool can_edit = isReady() && event->button() == Qt::LeftButton &&
+                          event->buttons() == Qt::LeftButton &&
+                          event->modifiers() == Qt::NoModifier &&
+                          m_impl->initiating_button == Qt::NoButton;
     cancelInteraction();
+    if (can_edit) {
+        m_impl->gesture = Impl::Gesture::edit;
+        m_impl->initiating_button = Qt::LeftButton;
+        m_impl->left_press = event->position();
+    }
     event->accept();
 }
 
@@ -915,11 +940,16 @@ void NativeModelView::mouseReleaseEvent(QMouseEvent* event) {
         const auto global_position = event->globalPosition().toPoint();
         cancelInteraction();
         const auto callback = onContextMenuRequested;
-        if (context_click && callback) callback(global_position);
         event->accept();
+        if (context_click) {
+            const QPointer<NativeModelView> owner_guard(this);
+            const auto target = m_impl->select_at(point);
+            if (owner_guard && callback) callback(target, global_position);
+        }
         return;
     }
     if (event->button() == Qt::LeftButton) {
+        const auto was_edit = m_impl->gesture == Impl::Gesture::edit && !m_impl->left_moved;
         const auto was_click = m_impl->gesture == Impl::Gesture::select && !m_impl->left_moved;
         const auto was_translation = m_impl->gesture == Impl::Gesture::move && m_impl->left_moved &&
                                      m_impl->translation_entity_id.has_value() &&
@@ -931,6 +961,11 @@ void NativeModelView::mouseReleaseEvent(QMouseEvent* event) {
         const auto translation_id = m_impl->translation_entity_id;
         const auto translation_start = m_impl->translation_start;
         cancelInteraction();
+        if (was_edit && isReady()) {
+            m_impl->select_at(point, true);
+            event->accept();
+            return;
+        }
         if (was_translation && end_world.has_value() && translation_id.has_value() &&
             translation_start.has_value()) {
             const auto dx = end_world->x - translation_start->x;

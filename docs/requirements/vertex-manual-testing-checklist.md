@@ -1073,8 +1073,11 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
-- [ ] **U199 — Edit a selected 3D object's position or dimensions**
-  - Expected: The plan and other views show the same change.
+- [ ] **U199 — Resize a room from the 3D view**
+  - Steps: Create a rectangular room volume, open 3D, then double-click the room. Change its width, depth, height and base elevation; choose **Keep center**; confirm the live preview; then select **Apply**.
+  - Expected: One **Room dimensions** dialog opens for the room under the pointer. The preview reports updated floor area and volume. The room retains its center, and plan, elevation, section, 3D and the room schedule all show the new dimensions. One Undo restores every prior value; Redo reapplies them. Save and reopen preserves the edit.
+  - Additional check: Enter an invalid width, verify **Apply** is disabled, then select **Cancel**. No geometry, schedule value or undo-history entry changes.
+  - Level check: Bind the room's floor to a nonzero building level and reopen the editor. The elevation field identifies that it is local to the bound level, while the preview reports the resolved project base including any placement offset.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

@@ -2,6 +2,7 @@
 
 #include "sketch/document.hpp"
 #include "sketch/document_schedule_adapter.hpp"
+#include "sketch/architectural_document_adapter.hpp"
 #include "sketch/geometry.hpp"
 #include "sketch/door_operation.hpp"
 #include "sketch/boundary_authoring_session.hpp"
@@ -223,6 +224,20 @@ public:
         QString height,
         QString elevation,
         std::optional<Revision> expected_revision = std::nullopt);
+    // Updates a rectangular room footprint in its local edge directions and
+    // edits its vertical dimensions in the same revision-fenced command.
+    // Empty width/depth expressions retain the footprint for nonrectangular
+    // rooms while still allowing height and elevation editing.
+    [[nodiscard]] bool editSelectedRoomVolumeDimensions(
+        QString width,
+        QString depth,
+        QString height,
+        QString elevation,
+        RoomFootprintAnchor anchor,
+        std::optional<Revision> expected_revision = std::nullopt);
+    // Opens the same dimension editor used by native 3D double-click and the
+    // room context menu. It previews without mutating document history.
+    void showRoomVolumeDimensions();
     // Detects all simple bounded faces in the selected wall's floor/layer
     // graph and creates one independent room boundary per face in one atomic
     // Document command. Open wall stubs are ignored; invalid segment graphs

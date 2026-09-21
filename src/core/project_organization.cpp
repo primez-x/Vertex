@@ -606,8 +606,7 @@ Entity resolve_vertical_placement(const DocumentSnapshot& snapshot,
         return entity;
     }
     if (entity.type == "opening" || entity.type == "boundary" ||
-        entity.type == "measurement_boundary" || entity.type == "room_boundary" ||
-        entity.type == "room") {
+        entity.type == "measurement_boundary" || entity.type == "room_boundary") {
         throw std::invalid_argument("level placement is supported only for 3D objects and slabs");
     }
 
@@ -671,7 +670,7 @@ Entity resolve_vertical_placement(const DocumentSnapshot& snapshot,
         (*value)[2] = z + shift;
         return true;
     };
-    if (entity.type == "wall" || entity.type == "slab") {
+    if (entity.type == "wall" || entity.type == "slab" || entity.type == "room") {
         auto value = result.properties.find("elevation_m");
         if (value == result.properties.end() || !value->is_number()) {
             throw std::invalid_argument("level placement requires a finite elevation_m");

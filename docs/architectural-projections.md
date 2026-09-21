@@ -27,8 +27,11 @@ draft output
 through that canvas; placed assembly instances use transformed host solids in
 all three views, and the section plane is the frame origin plane. Persisted
 coordinated-view frames and section cut depth now drive the selector when a
-matching typed sheet/view entity is present; the built-in 1.2 m frame remains a
-safe fallback. A conservative object-level far-depth filter now culls solids
+matching typed sheet/view entity is present. Cut depth is measured from each
+view's authored frame origin along its viewing direction, preserving translated
+and oblique named sections. The built-in frame uses a 2.4 m reference origin and
+a 1.2 m downward cut to present the expected 1.2 m section; the exact legacy
+built-in frame is interpreted compatibly without changing custom views. A conservative object-level far-depth filter now culls solids
 whose BRep bounding range lies wholly beyond the persisted limit. Objects that
 cross a finite far plane are clipped with an OCCT half-space before hidden-line
 or section projection; objects wholly before the plane reuse their source solid.

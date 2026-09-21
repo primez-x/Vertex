@@ -38,6 +38,27 @@ is mapped back to the stable document entity ID and delivered through
 `onEntitySelected`. A click on empty space delivers an empty `QString`, which
 lets the inspector clear its selection.
 
+A stationary plain-left double-click hit-tests, selects, and then emits one
+`onEntityEditRequested` callback for the visible semantic entity. Dragging,
+Escape, deactivation, modified double-clicks, hidden geometry, and background
+double-clicks do not request an edit. The desktop opens the room-dimension
+editor for a room and the normal contextual property editor for other
+supported objects. A stationary right-click also hit-tests first and passes
+the target ID with its screen position to the context-menu callback, so actions
+operate on the object under the pointer instead of an older selection. A
+right-drag remains orbit navigation and opens no menu; a background context
+menu contains navigation actions only.
+
+For rooms, the dimension editor produces a detached semantic preview from the
+captured document revision. Rectangular, hole-free footprints can resize along
+their first two local edges from a first-corner, center, or opposite-corner
+anchor. Irregular, curved, or holed rooms retain their footprint but can still
+change height and base elevation. Applying commits one revision-fenced command;
+level-bound rooms expose the stored local elevation beside their resolved
+project base and placement offset. Untouched fields retain their exact source
+values even when display text is rounded. Invalid input, cancellation, or stale
+context restores the authoritative view without adding history.
+
 Ctrl+left-drag directly translates a native architectural object. The press
 selects a supported wall, fused wall join, slab, room, column, beam, stair, railing, roof, or fused roof join,
 converts the cursor to the current view projection plane, and previews the

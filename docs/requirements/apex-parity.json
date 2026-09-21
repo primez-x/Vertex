@@ -2175,13 +2175,26 @@
       "package": 5,
       "blocker": null,
       "implementation_sources": [
+        "CMakeLists.txt",
+        "include/sketch/architectural_document_adapter.hpp",
+        "src/core/architectural_document_adapter.cpp",
+        "src/core/project_organization.cpp",
+        "include/sketch/visualization/native_model_view.hpp",
         "src/visualization/native_model_view.cpp",
+        "include/sketch/desktop/main_window.hpp",
         "src/desktop/main_window.cpp",
+        "tests/architectural_document_adapter_tests.cpp",
+        "tests/project_organization_tests.cpp",
         "tests/native_view_tests.cpp",
+        "tests/desktop_smoke.cpp",
+        "scripts/test-native.ps1",
+        "docs/desktop-workflow.md",
+        "docs/native-3d-view.md",
+        "docs/architectural-projections.md",
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Source review correction (2026-09-20): Native 3D supports selection/navigation/translation only; direct resize, rotate, dimension and object-authoring workflows are incomplete. Native solids, selection, linked inspector edits and navigation are implemented. Architectural room volumes now create validated OCCT solids from the shared boundary/height/elevation model and use the same geometry in plan, elevation, section, and native 3D. Full 3D authoring/gizmos, remaining object types, and production evidence remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Native 3D now hit-tests the object under a stationary double-click or context click and opens a shared room-dimension workflow. Rectangular hole-free rooms support local width/depth resizing from first-corner, center, or opposite-corner anchors; every valid room supports height/elevation edits. The detached preview, exact untouched values, revision-fenced command, undo/redo, level-relative local/resolved placement, linked plan/elevation/section projections, schedule area/volume, and save/reopen paths use the same semantic room entity. Direct resize/rotate gizmos, equivalent native editors for the remaining object types, and complete production 3D qualification remain open, so the requirement remains in progress."
     },
     {
       "id": "ARCH-VIEW-001",
