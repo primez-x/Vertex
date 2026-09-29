@@ -634,7 +634,8 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U115 — Change a symbol's width and depth**
-  - Expected: The footprint matches the requested dimensions or unsupported resizing is clearly identified.
+  - Steps: Select a symbol. Drag its right/left side handle, then its top/bottom side handle. Double-click it and enter exact width and depth.
+  - Expected: Each side handle changes only its corresponding dimension; the opposite edge stays fixed. Dimensions appear on the canvas, including on rotated symbols. Exact entries update the footprint and undo restores each edit.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -644,7 +645,8 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U117 — Rotate a symbol**
-  - Expected: The angle and visual orientation match your entry.
+  - Steps: Drag the rotation handle to 45, 90 and 180 degrees. Release and rotate again. Hold Shift to choose an angle between snapping points. Return to zero degrees.
+  - Expected: The selection box and rotation handle retain the object's angle after release. Rotation snaps every 15 degrees, Shift permits fine adjustment, and a live angle matches the saved orientation. Zero restores the original orientation; undo/redo and save/reopen preserve it.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -654,7 +656,8 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U119 — Flip a symbol**
-  - Expected: Its orientation mirrors correctly.
+  - Steps: Double-click an asymmetric symbol and try horizontal and vertical flip separately, then together.
+  - Expected: The artwork mirrors about its local axes without changing its dimensions or rotation. Undo/redo, save/reopen and exported drawings preserve the result.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

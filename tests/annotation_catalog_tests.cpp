@@ -24,6 +24,16 @@ int main() {
     using namespace sketch;
     const auto catalog = default_symbol_catalog();
     {
+        AnnotationState placed;
+        placed.symbols.push_back({"sized", catalog.front().id, {}, {}, true});
+        const auto saved = encode_annotation_state(placed, catalog);
+        require(saved.at("version") == 3 && saved.at("symbols")[0].contains("width_scale") &&
+                    saved.at("symbols")[0].contains("depth_scale") &&
+                    saved.at("symbols")[0].contains("flip_horizontal") &&
+                    saved.at("symbols")[0].contains("flip_vertical"),
+                "Symbol independent dimensions and mirrors must have a versioned persisted representation");
+    }
+    {
         const auto original = filter_symbol_catalog(catalog, "Toilet Close Coupled", "01_bathroom").front();
         AnnotationState placed;
         placed.symbols.push_back({"pinned", original.id, {{3, 4}, 0.5, 1.4, "ground"}, {}, false});
@@ -43,6 +53,8 @@ int main() {
         legacy_saved["version"] = 1;
         legacy_saved["symbols"][0].erase("definition");
         legacy_saved["symbols"][0].erase("pinned_svg");
+        for (const auto* key : {"width_scale", "depth_scale", "flip_horizontal", "flip_vertical"})
+            legacy_saved["symbols"][0].erase(key);
         require(encode_annotation_state(decode_annotation_state(legacy_saved, {original}), {original}) == saved,
                 "Legacy state must pin its original definition on upgrade");
         rejected([&] { (void)decode_annotation_state(legacy_saved, {updated}); });
@@ -55,6 +67,15 @@ int main() {
         const auto migrated = migrate_symbol_definition(reopened, "pinned", {updated}, "<svg/>");
         require(!symbol_requires_migration(migrated.symbols.front(), {updated}) &&
                     migrated.symbols.front().pinned_svg == "<svg/>", "Explicit migration must pin new artwork");
+        const auto migrated_saved = encode_annotation_state(migrated, {updated});
+        auto pinned_v2 = migrated_saved;
+        pinned_v2["version"] = 2;
+        for (const auto* key : {"width_scale", "depth_scale", "flip_horizontal", "flip_vertical"})
+            pinned_v2["symbols"][0].erase(key);
+        const auto pinned_upgrade = decode_annotation_state(pinned_v2, {original});
+        require(pinned_upgrade.symbols.front().pinned_svg == "<svg/>" &&
+                    encode_annotation_state(pinned_upgrade, {original}) == migrated_saved,
+                "Version2 upgrade must retain exact SVG bytes and historical definition when catalog artwork differs");
         auto migrated_json = encode_annotation_state(migrated, {updated});
         migrated_json["symbols"][0]["definition"] = saved["symbols"][0]["definition"];
         migrated_json["symbols"][0]["pinned_svg"] = "";
@@ -75,6 +96,108 @@ int main() {
         malformed_pin["symbols"][0]["pinned_svg"] =
             "<svg xmlns=\"http://www.w3.org/2000/svg\"><path fill=\"url(https://example.test/a)\"/></svg>";
         rejected([&] { (void)decode_annotation_state(malformed_pin, {original}); });
+    }
+    {
+        // An off-origin, asymmetric marker catches use of the wrong anchor,
+        // world-axis reflection, and scaling after rotation.
+        SymbolDefinition marker{"marker", "markers", "test", 4, 6, {2, -3},
+                                0.01, 100, {{{3, -1}, {0, -4}}}};
+        SymbolInstance instance{"marker-1", marker.id, {{10, 20}, std::numbers::pi / 2, 2}, {}, true};
+        instance.width_scale = 1.5;
+        instance.depth_scale = 0.25;
+        const auto close = [](Vec2 actual, Vec2 expected) {
+            return std::abs(actual.x - expected.x) < 1e-12 &&
+                   std::abs(actual.y - expected.y) < 1e-12;
+        };
+        const auto assert_stroke = [&](Vec2 start, Vec2 end) {
+            const auto result = transformed_symbol_preview(marker, instance);
+            require(result.size() == 1 && close(result[0].start, start) && close(result[0].end, end),
+                    "Symbol transform must resize and mirror local axes about the saved anchor before rotation");
+            require(close(transformed_symbol_point(marker, instance, marker.preview[0].start), start),
+                    "Footprint point transform must agree with artwork geometry");
+            require(close(transformed_symbol_point(marker, instance, marker.anchor), {10, 20}),
+                    "Independent dimensions and mirrors must preserve the placement anchor");
+        };
+        assert_stroke({9, 23}, {10.5, 14});
+        instance.flip_horizontal = true;
+        assert_stroke({9, 17}, {10.5, 26});
+        instance.flip_horizontal = false;
+        instance.flip_vertical = true;
+        assert_stroke({11, 23}, {9.5, 14});
+        instance.flip_horizontal = true;
+        assert_stroke({11, 17}, {9.5, 26});
+        AnnotationState edited;
+        edited.symbols.push_back(instance);
+        const auto saved = encode_annotation_state(edited, {marker});
+        require(encode_annotation_state(decode_annotation_state(saved, {}), {}) == saved,
+                "Independent dimensions and both mirrors must roundtrip with a removed pinned catalog definition");
+        for (const auto invalid : {0.0, -1.0, std::numeric_limits<double>::quiet_NaN(),
+                                   std::numeric_limits<double>::infinity(), 0.001, 100.0}) {
+            auto bad = instance;
+            bad.width_scale = invalid;
+            rejected([&] { (void)transformed_symbol_preview(marker, bad); });
+            bad = instance;
+            bad.depth_scale = invalid;
+            rejected([&] { (void)transformed_symbol_point(marker, bad, marker.anchor); });
+        }
+        // Limits apply to each effective axis, not to the independent factor.
+        auto within_limits = instance;
+        within_limits.placement.scale = 200;
+        within_limits.width_scale = within_limits.depth_scale = 0.25;
+        require(!transformed_symbol_preview(marker, within_limits).empty(),
+                "Combined axis scale must govern limits even when uniform scale alone exceeds them");
+        within_limits.placement.scale = 1;
+        within_limits.width_scale = marker.minimum_scale;
+        within_limits.depth_scale = marker.maximum_scale;
+        require(!transformed_symbol_preview(marker, within_limits).empty(),
+                "Both inclusive per-axis catalog boundaries must be supported");
+        auto overflowing = instance;
+        overflowing.width_scale = std::numeric_limits<double>::max();
+        rejected([&] { (void)transformed_symbol_preview(marker, overflowing); });
+        AnnotationState invalid_state;
+        invalid_state.symbols.push_back(overflowing);
+        rejected([&] { validate_annotation_state(invalid_state, {marker}); });
+        auto oversized_definition = marker;
+        oversized_definition.width_metres = std::numeric_limits<double>::max();
+        rejected([&] { (void)transformed_symbol_preview(oversized_definition, instance); });
+        rejected([&] { (void)transformed_symbol_point(marker, instance,
+            {std::numeric_limits<double>::max(), 0}); });
+        rejected([&] { (void)transformed_symbol_point(marker, instance,
+            {std::numeric_limits<double>::infinity(), 0}); });
+        for (const auto* key : {"width_scale", "depth_scale", "flip_horizontal", "flip_vertical"}) {
+            auto malformed = saved;
+            malformed["symbols"][0].erase(key);
+            rejected([&] { (void)decode_annotation_state(malformed, {marker}); });
+        }
+        auto malformed = saved;
+        malformed["symbols"][0]["extra_transform"] = 1;
+        rejected([&] { (void)decode_annotation_state(malformed, {marker}); });
+        malformed = saved;
+        malformed["symbols"][0]["flip_horizontal"] = 1;
+        rejected([&] { (void)decode_annotation_state(malformed, {marker}); });
+        malformed = saved;
+        malformed["symbols"][0]["width_scale"] = "2";
+        rejected([&] { (void)decode_annotation_state(malformed, {marker}); });
+        malformed = saved;
+        malformed["version"] = 2;
+        rejected([&] { (void)decode_annotation_state(malformed, {marker}); });
+        AnnotationState original;
+        original.symbols.push_back({"legacy", marker.id, {{10, 20}, std::numbers::pi / 2, 2}, {}, true});
+        const auto original_saved = encode_annotation_state(original, {marker});
+        auto legacy = original_saved;
+        legacy["version"] = 2;
+        for (const auto* key : {"width_scale", "depth_scale", "flip_horizontal", "flip_vertical"})
+            legacy["symbols"][0].erase(key);
+        const auto upgraded = decode_annotation_state(legacy, {});
+        const auto geometry = transformed_symbol_preview(marker, upgraded.symbols[0]);
+        require(close(geometry[0].start, {6, 22}) && close(geometry[0].end, {12, 16}) &&
+                    encode_annotation_state(upgraded, {}) == original_saved,
+                "Version2 upgrade must preserve exact old geometry and pinned definition");
+        legacy["version"] = 1;
+        legacy["symbols"][0].erase("definition");
+        legacy["symbols"][0].erase("pinned_svg");
+        require(encode_annotation_state(decode_annotation_state(legacy, {marker}), {marker}) == original_saved,
+                "Version1 upgrade must preserve old geometry and pin the original catalog definition");
     }
     require(catalog.size() == 1131, "Preserve 809 legacy symbols and expose 322 SVG symbols");
     const auto svg_toilets = filter_symbol_catalog(catalog, "Toilet Close Coupled", "01_bathroom");
@@ -321,7 +444,7 @@ int main() {
     rejected([&]{(void)placed_symbol_preview(catalog.front(),{{},0,0.001});});
     auto malformed = encoded; malformed["version"] = 1.0;
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});
-    malformed = encoded; malformed["version"] = 3;
+    malformed = encoded; malformed["version"] = 4;
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});
     malformed = encoded; malformed["labels"][0]["visible"] = "false";
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});

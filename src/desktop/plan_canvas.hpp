@@ -14,6 +14,7 @@
 #include <QSharedPointer>
 #include <QString>
 #include <QStringList>
+#include <QTransform>
 #include <QWidget>
 
 #include <functional>
@@ -50,6 +51,8 @@ struct CanvasSvgSymbol {
     double rotation_radians{};
     double width_metres{};
     double depth_metres{};
+    bool flip_horizontal{};
+    bool flip_vertical{};
 };
 
 // Stable, screen-only edit point supplied by the document projection. Handles
@@ -59,6 +62,16 @@ struct CanvasVertexHandle {
     QString id;
     Vec2 position{};
     std::uint64_t source_revision{};
+};
+
+// Physical local axes for semantic objects whose retained strokes do not
+// themselves preserve an instance's orientation. SVG symbols supply these
+// values directly from their footprint. Positive dimensions are in metres.
+struct CanvasSelectionFrame {
+    Vec2 center{};
+    double rotation_radians{};
+    double width_metres{};
+    double depth_metres{};
 };
 
 struct CanvasEntity {
@@ -91,6 +104,7 @@ struct CanvasEntity {
     // entity transform and stroke, while OddEvenFill keeps their interiors
     // clear in the interactive canvas and in print/export output.
     std::vector<Boundary> holes;
+    std::optional<CanvasSelectionFrame> resize_frame;
 };
 
 // A retained document annotation. Unlike BoundaryDraftPreview, labels are
@@ -202,6 +216,7 @@ public:
     // and is intentionally excluded from print/export rendering.
     void setSelectionCaption(QString caption);
     void setSelectionTransformEnabled(bool resize_enabled, bool rotate_enabled);
+    void setSelectionAxisResizeEnabled(bool enabled);
     void setLabels(std::vector<CanvasLabel> labels);
     [[nodiscard]] const std::vector<CanvasLabel>& labels() const noexcept { return m_labels; }
     void setReference(std::optional<CanvasReference> reference);
@@ -259,6 +274,10 @@ public:
     // Commits a single-selection transform after the interactive preview.
     // Scale is relative and uniform; rotation is a relative radian delta.
     void setEntityTransformRequested(std::function<bool(QString, double, double)> callback);
+    // Local-axis scales around the model-space midpoint of the opposite edge.
+    // Capability gating belongs to the document; rejected previews restore.
+    void setEntityAxisResizeRequested(
+        std::function<bool(QString, double, double, Vec2)> callback);
     // Commits one selected boundary vertex at an absolute model-space point.
     // The canvas previews locally and restores document geometry if rejected.
     void setBoundaryVertexMoveRequested(
@@ -298,17 +317,24 @@ private:
 
     void pointerPress(QPointF position, Qt::MouseButton button,
                       Qt::KeyboardModifiers modifiers = Qt::NoModifier);
-    void pointerMove(QPointF position);
-    void pointerRelease(QPointF position, Qt::MouseButton button);
+    void pointerMove(QPointF position, Qt::KeyboardModifiers modifiers = Qt::NoModifier);
+    void pointerRelease(QPointF position, Qt::MouseButton button,
+                        Qt::KeyboardModifiers modifiers = Qt::NoModifier);
     void resetGesture();
     [[nodiscard]] std::optional<std::pair<Vec2, Vec2>> contentBounds() const;
     [[nodiscard]] std::optional<QRectF> selectionBounds(const QRectF& viewport) const;
     [[nodiscard]] std::optional<QRectF> selectionFrame(const QRectF& viewport) const;
-    enum class SelectionHandle { none, resize, rotate };
+    enum class SelectionHandle { none, resize, rotate, left, right, top, bottom };
+    [[nodiscard]] std::optional<CanvasSelectionFrame> entitySelectionAxes(
+        const CanvasEntity& entity) const;
+    [[nodiscard]] std::optional<CanvasSelectionFrame> selectionAxes() const;
+    [[nodiscard]] CanvasLabel presentedLabel(const CanvasLabel& label, bool output) const;
+    [[nodiscard]] QTransform selectionControlTransform(const QRectF& viewport) const;
+    [[nodiscard]] QRectF selectionControlRect(const QRectF& viewport) const;
+    [[nodiscard]] QPointF selectionRotationPoint(const QRectF& viewport) const;
+    void drawSelectionDimensions(QPainter& painter, const QRectF& viewport) const;
     [[nodiscard]] SelectionHandle selectionHandleAt(QPointF point,
                                                      const QRectF& viewport) const;
-    [[nodiscard]] QPointF rotationHandlePoint(const QRectF& frame,
-                                              const QRectF& viewport) const;
     struct VertexHandleHit {
         QString entity_id;
         QString vertex_id;
@@ -379,7 +405,7 @@ private:
     std::optional<QPointF> m_last_mouse_position;
     bool m_panning{false};
     enum class LeftGesture {
-        none, canvas_pan, object_move, selection_resize, selection_rotate,
+        none, canvas_pan, object_move, selection_resize, selection_rotate, selection_axis_resize,
         vertex_move, marquee, space_pan
     };
     LeftGesture m_left_gesture{LeftGesture::none};
@@ -390,11 +416,19 @@ private:
     std::optional<Vec2> m_move_preview_delta;
     bool m_selection_resize_enabled{};
     bool m_selection_rotate_enabled{};
+    bool m_selection_axis_resize_enabled{};
     std::optional<QRectF> m_transform_frame_start;
     QPointF m_transform_center;
     QPointF m_transform_start;
     double m_transform_scale_preview{1.0};
     double m_transform_rotation_preview{};
+    SelectionHandle m_axis_handle{SelectionHandle::none};
+    Vec2 m_axis_anchor{};
+    double m_axis_rotation{};
+    double m_axis_extent{};
+    double m_axis_scale_x_preview{1.0};
+    double m_axis_scale_y_preview{1.0};
+    double m_transform_initial_rotation{};
     std::optional<VertexHandleHit> m_vertex_move_handle;
     std::optional<Vec2> m_vertex_move_preview;
     bool m_space_pan_armed{false};
@@ -419,6 +453,7 @@ private:
     std::function<void(QStringList, bool)> m_entities_selected;
     std::function<bool(QStringList, Vec2)> m_entities_move_requested;
     std::function<bool(QString, double, double)> m_entity_transform_requested;
+    std::function<bool(QString, double, double, Vec2)> m_entity_axis_resize_requested;
     std::function<bool(QString, QString, Vec2, std::uint64_t)>
         m_boundary_vertex_move_requested;
     std::function<void(QString, double, Vec2)> m_symbol_dropped;

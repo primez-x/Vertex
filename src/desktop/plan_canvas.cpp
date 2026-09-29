@@ -418,6 +418,14 @@ void PlanCanvas::setSelectionTransformEnabled(bool resize_enabled, bool rotate_e
     update();
 }
 
+void PlanCanvas::setSelectionAxisResizeEnabled(bool enabled) {
+    if (m_selection_axis_resize_enabled == enabled) return;
+    m_selection_axis_resize_enabled = enabled;
+    if (!enabled && m_left_gesture == LeftGesture::selection_axis_resize) resetGesture();
+    if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
+    update();
+}
+
 void PlanCanvas::setLabels(std::vector<CanvasLabel> labels) {
     m_labels = std::move(labels);
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
@@ -654,6 +662,13 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
             painter.translate(m_move_preview_delta->x, m_move_preview_delta->y);
             drawReference(painter, reference);
             painter.restore();
+        } else if (!output && reference.selected && m_transform_frame_start &&
+                   (m_left_gesture == LeftGesture::selection_resize ||
+                    m_left_gesture == LeftGesture::selection_rotate)) {
+            auto preview = reference;
+            preview.rotation_degrees += m_transform_rotation_preview * 180/pi;
+            preview.scale *= m_transform_scale_preview;
+            drawReference(painter, preview);
         } else {
             drawReference(painter, reference);
         }
@@ -683,6 +698,28 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
         } else if (!output && m_move_preview_delta && m_move_ids.contains(entity.id)) {
             painter.save();
             painter.translate(m_move_preview_delta->x, m_move_preview_delta->y);
+            drawEntity(painter, entity, output, background, paper_pixels_per_mm);
+            painter.restore();
+        } else if (!output && entity.selected && m_transform_frame_start &&
+                   m_left_gesture == LeftGesture::selection_axis_resize) {
+            painter.save();
+            painter.translate(m_axis_anchor.x, m_axis_anchor.y);
+            painter.rotate(m_axis_rotation * 180.0 / pi);
+            painter.scale(m_axis_scale_x_preview, m_axis_scale_y_preview);
+            painter.rotate(-m_axis_rotation * 180.0 / pi);
+            painter.translate(-m_axis_anchor.x, -m_axis_anchor.y);
+            drawEntity(painter, entity, output, background, paper_pixels_per_mm);
+            painter.restore();
+        } else if (!output && entity.selected && m_transform_frame_start &&
+                   (m_left_gesture == LeftGesture::selection_resize ||
+                    m_left_gesture == LeftGesture::selection_rotate)) {
+            const Vec2 center{view_center.x + (m_transform_center.x() - viewport.center().x()) / scale,
+                              view_center.y - (m_transform_center.y() - viewport.center().y()) / scale};
+            painter.save();
+            painter.translate(center.x, center.y);
+            painter.rotate(m_transform_rotation_preview * 180.0 / pi);
+            painter.scale(m_transform_scale_preview, m_transform_scale_preview);
+            painter.translate(-center.x, -center.y);
             drawEntity(painter, entity, output, background, paper_pixels_per_mm);
             painter.restore();
         } else {
@@ -755,6 +792,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     if (!output) {
         drawSelectionFrame(painter, viewport);
         drawVertexHandles(painter, viewport);
+        drawSelectionDimensions(painter, viewport);
         drawSelectionCaption(painter, viewport, background);
         drawCursorReadout(painter, viewport, background);
     }
@@ -1113,14 +1151,14 @@ bool PlanCanvas::event(QEvent* event) {
     }
     case QEvent::TabletMove: {
         auto* tablet = static_cast<QTabletEvent*>(event);
-        pointerMove(tablet->position());
+        pointerMove(tablet->position(), tablet->modifiers());
         event->accept();
         return true;
     }
     case QEvent::TabletRelease: {
         auto* tablet = static_cast<QTabletEvent*>(event);
         if (m_tablet_active) {
-            pointerRelease(tablet->position(), Qt::LeftButton);
+            pointerRelease(tablet->position(), Qt::LeftButton, tablet->modifiers());
             m_tablet_active = false;
         }
         event->accept();
@@ -1194,11 +1232,29 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
         m_move_ids = selectedIds();
         m_transform_frame_start = selectionFrame(QRectF(rect()));
         m_transform_center = m_transform_frame_start->center();
+        const auto axes = selectionAxes();
+        if (axes) m_transform_center = toScreen(axes->center, rect());
+        m_transform_initial_rotation = axes ? axes->rotation_radians : 0.0;
         m_transform_start = position;
         m_transform_scale_preview = 1.0;
         m_transform_rotation_preview = 0.0;
-        m_left_gesture = handle == SelectionHandle::resize
-            ? LeftGesture::selection_resize : LeftGesture::selection_rotate;
+        if (handle == SelectionHandle::resize) {
+            m_left_gesture = LeftGesture::selection_resize;
+        } else if (handle == SelectionHandle::rotate) {
+            m_left_gesture = LeftGesture::selection_rotate;
+        } else if (axes) {
+            m_left_gesture = LeftGesture::selection_axis_resize;
+            m_axis_handle = handle;
+            m_axis_rotation = axes->rotation_radians;
+            const bool horizontal = handle == SelectionHandle::left || handle == SelectionHandle::right;
+            const double sign = handle == SelectionHandle::right || handle == SelectionHandle::top ? 1.0 : -1.0;
+            m_axis_extent = horizontal ? axes->width_metres : axes->depth_metres;
+            const Vec2 direction = horizontal
+                ? Vec2{std::cos(m_axis_rotation), std::sin(m_axis_rotation)}
+                : Vec2{-std::sin(m_axis_rotation), std::cos(m_axis_rotation)};
+            m_axis_anchor = {axes->center.x - sign * direction.x * m_axis_extent * .5,
+                             axes->center.y - sign * direction.y * m_axis_extent * .5};
+        }
         return;
     }
     m_pressed_entity = hitTest(position);
@@ -1215,7 +1271,7 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
     }
 }
 
-void PlanCanvas::pointerMove(QPointF position) {
+void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) {
     m_last_mouse_position = position;
     if (m_gesture_button == Qt::RightButton &&
         (position - m_right_start).manhattanLength() >= QApplication::startDragDistance())
@@ -1247,6 +1303,27 @@ void PlanCanvas::pointerMove(QPointF position) {
             m_move_preview_delta = dragDelta(position);
             update();
         }
+    } else if (m_left_gesture == LeftGesture::selection_axis_resize) {
+        if (!m_left_dragging &&
+            (position - m_left_start).manhattanLength() >= QApplication::startDragDistance())
+            m_left_dragging = true;
+        if (m_left_dragging && m_axis_extent > 1e-9) {
+            const auto start = toModel(m_transform_start, rect());
+            const auto current = toModel(position, rect());
+            const bool horizontal = m_axis_handle == SelectionHandle::left || m_axis_handle == SelectionHandle::right;
+            const double sign = m_axis_handle == SelectionHandle::right || m_axis_handle == SelectionHandle::top ? 1.0 : -1.0;
+            const Vec2 direction = horizontal
+                ? Vec2{std::cos(m_axis_rotation), std::sin(m_axis_rotation)}
+                : Vec2{-std::sin(m_axis_rotation), std::cos(m_axis_rotation)};
+            const auto factor = 1.0 + sign * ((current.x-start.x)*direction.x +
+                                              (current.y-start.y)*direction.y) / m_axis_extent;
+            if (std::isfinite(factor)) {
+                if (horizontal) m_axis_scale_x_preview = std::clamp(factor, .05, 20.0);
+                else m_axis_scale_y_preview = std::clamp(factor, .05, 20.0);
+            }
+            setCursor(horizontal ? Qt::SizeHorCursor : Qt::SizeVerCursor);
+            update();
+        }
     } else if (m_left_gesture == LeftGesture::selection_resize ||
                m_left_gesture == LeftGesture::selection_rotate) {
         if (!m_left_dragging &&
@@ -1263,8 +1340,17 @@ void PlanCanvas::pointerMove(QPointF position) {
                                                            0.05, 20.0);
                 setCursor(Qt::SizeFDiagCursor);
             } else {
-                m_transform_rotation_preview = std::atan2(current.y(), current.x()) -
-                                               std::atan2(start.y(), start.x());
+                if (std::hypot(current.x(), current.y()) > 1e-6) {
+                    const auto delta = std::remainder(std::atan2(current.y(), current.x()) -
+                        std::atan2(start.y(), start.x()), 2.0 * pi);
+                    auto absolute = m_transform_initial_rotation - delta;
+                    if (!modifiers.testFlag(Qt::ShiftModifier)) {
+                        constexpr double step = pi / 12.0;
+                        absolute = std::round(absolute / step) * step;
+                    }
+                    m_transform_rotation_preview = std::remainder(
+                        absolute - m_transform_initial_rotation, 2.0 * pi);
+                }
                 setCursor(Qt::CrossCursor);
             }
             update();
@@ -1290,7 +1376,8 @@ void PlanCanvas::pointerMove(QPointF position) {
     updateCursor(position);
 }
 
-void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button) {
+void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
+                                Qt::KeyboardModifiers modifiers) {
     if (button != m_gesture_button) return;
     // Publish the final effective point before any click callback. A normal
     // click can cross a snap boundary between press and release without Qt
@@ -1306,6 +1393,11 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button) {
         return;
     }
     if (button == Qt::LeftButton) {
+        // Consume the final location even if the platform omitted a move event.
+        if (m_left_gesture == LeftGesture::selection_axis_resize ||
+            m_left_gesture == LeftGesture::selection_resize ||
+            m_left_gesture == LeftGesture::selection_rotate)
+            pointerMove(position, modifiers);
         const auto gesture = m_left_gesture;
         const auto start = m_left_start;
         const auto selection_start = m_selection_start;
@@ -1318,6 +1410,9 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button) {
         const auto delta = dragDelta(position);
         const auto transform_scale = m_transform_scale_preview;
         const auto transform_rotation = m_transform_rotation_preview;
+        const auto axis_scale_x = m_axis_scale_x_preview;
+        const auto axis_scale_y = m_axis_scale_y_preview;
+        const auto axis_anchor = m_axis_anchor;
         const auto vertex_handle = m_vertex_move_handle;
         // A tablet/touch/mouse release can cross the drag threshold without an
         // intermediate move event. Commit the actual snapped release point,
@@ -1369,6 +1464,10 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button) {
                     m_entity_selection_clicked({}, false);
                 }
             }
+        } else if (gesture == LeftGesture::selection_axis_resize && dragging &&
+                   move_ids.size() == 1 && m_entity_axis_resize_requested) {
+            (void)m_entity_axis_resize_requested(move_ids.front(), axis_scale_x,
+                                                axis_scale_y, axis_anchor);
         } else if ((gesture == LeftGesture::selection_resize ||
                     gesture == LeftGesture::selection_rotate) && dragging &&
                    move_ids.size() == 1 && m_entity_transform_requested) {
@@ -1402,6 +1501,9 @@ void PlanCanvas::resetGesture() {
     m_transform_frame_start.reset();
     m_transform_scale_preview = 1.0;
     m_transform_rotation_preview = 0.0;
+    m_axis_handle = SelectionHandle::none;
+    m_axis_scale_x_preview = 1.0;
+    m_axis_scale_y_preview = 1.0;
     m_vertex_move_handle.reset();
     m_vertex_move_preview.reset();
     if (m_space_pan_armed) {
@@ -1507,6 +1609,11 @@ std::optional<QRectF> PlanCanvas::selectionBounds(const QRectF& viewport) const 
 }
 
 std::optional<QRectF> PlanCanvas::selectionFrame(const QRectF& viewport) const {
+    if (selectionAxes()) {
+        const auto bounds = selectionControlTransform(viewport).mapRect(selectionControlRect(viewport));
+        const auto visible = bounds.intersected(viewport.adjusted(5.0, 5.0, -5.0, -5.0));
+        return visible.isEmpty() ? std::nullopt : std::optional<QRectF>{visible};
+    }
     auto bounds = selectionBounds(viewport);
     if (!bounds) return std::nullopt;
     // The painted frame is also the move hit target. A 44 px minimum keeps
@@ -1525,29 +1632,172 @@ std::optional<QRectF> PlanCanvas::selectionFrame(const QRectF& viewport) const {
     return frame.isEmpty() ? std::nullopt : std::optional<QRectF>{frame};
 }
 
-QPointF PlanCanvas::rotationHandlePoint(const QRectF& frame, const QRectF& viewport) const {
-    const auto outside = QPointF(frame.center().x(), frame.top() - 24.0);
-    if (viewport.adjusted(12.0, 12.0, -12.0, -12.0).contains(outside)) return outside;
-    return QPointF(frame.center().x(), std::min(frame.bottom() - 10.0, frame.top() + 24.0));
+std::optional<CanvasSelectionFrame> PlanCanvas::entitySelectionAxes(const CanvasEntity& entity) const {
+    const auto valid = [](const CanvasSelectionFrame& frame) {
+        return std::isfinite(frame.center.x) && std::isfinite(frame.center.y) &&
+            std::isfinite(frame.rotation_radians) && std::isfinite(frame.width_metres) &&
+            std::isfinite(frame.depth_metres) && frame.width_metres >= 0 &&
+            frame.depth_metres >= 0 && (frame.width_metres > 0 || frame.depth_metres > 0);
+    };
+    if (entity.svg_symbol) {
+        const auto& s = *entity.svg_symbol;
+        const CanvasSelectionFrame frame{s.position, s.rotation_radians, s.width_metres, s.depth_metres};
+        if (valid(frame)) return frame;
+    }
+    if (entity.resize_frame && valid(*entity.resize_frame)) return entity.resize_frame;
+    try {
+        const auto bounds = boundary_bounds(entity.segments);
+        const CanvasSelectionFrame frame{
+            {(bounds.minimum.x+ bounds.maximum.x)*.5, (bounds.minimum.y+bounds.maximum.y)*.5},
+            0, bounds.maximum.x-bounds.minimum.x, bounds.maximum.y-bounds.minimum.y};
+        if (valid(frame)) return frame;
+    } catch (const std::invalid_argument&) {}
+    return std::nullopt;
+}
+
+std::optional<CanvasSelectionFrame> PlanCanvas::selectionAxes() const {
+    if (selectedIds().size() != 1) return std::nullopt;
+    for (const auto& entity : m_entities)
+        if (entity.selected) return entitySelectionAxes(entity);
+    for (const auto& reference : m_references) {
+        if (!reference.selected || !reference.visible || reference.image.isNull()) continue;
+        const auto unit = reference.metres_per_source_unit*reference.scale;
+        if (!(unit > 0) || !std::isfinite(unit) || !std::isfinite(reference.rotation_degrees) ||
+            !std::isfinite(reference.position.x) || !std::isfinite(reference.position.y)) continue;
+        return CanvasSelectionFrame{reference.position, reference.rotation_degrees*pi/180,
+            reference.image.width()*unit, reference.image.height()*unit};
+    }
+    for (const auto& label : m_labels) {
+        if (!label.selected || !drawable_label(label) || !std::isfinite(label.rotation_radians)) continue;
+        const auto layout = label_layout(presentedLabel(label,false),font(),this,m_scale,logicalDpiY());
+        return CanvasSelectionFrame{label.position,label.rotation_radians,
+            layout.bounds.width()/m_scale,layout.bounds.height()/m_scale};
+    }
+    return std::nullopt;
+}
+
+CanvasLabel PlanCanvas::presentedLabel(const CanvasLabel& label, bool output) const {
+    auto presented = label;
+    if (!output && label.selected && m_transform_frame_start && m_move_ids.contains(label.id) &&
+        (m_left_gesture == LeftGesture::selection_resize || m_left_gesture == LeftGesture::selection_rotate)) {
+        presented.rotation_radians += m_transform_rotation_preview;
+        presented.scale *= m_transform_scale_preview;
+    }
+    return presented;
+}
+
+QRectF PlanCanvas::selectionControlRect(const QRectF& viewport) const {
+    if (const auto axes = selectionAxes()) {
+        double padding = 7.5;
+        for (const auto& entity : m_entities) {
+            if (!entity.selected) continue;
+            const auto width = wall_baseline_only(entity)
+                ? std::max(entity.thickness_metres, .04) : entity.stroke_width_metres;
+            if (std::isfinite(width) && width > 0) padding = 6.0 + width * m_scale * .5;
+        }
+        const bool label_selection = std::any_of(m_labels.begin(),m_labels.end(),
+            [](const CanvasLabel& label) { return label.selected; });
+        const auto sx = label_selection ? 1.0 : m_left_gesture == LeftGesture::selection_axis_resize
+            ? m_axis_scale_x_preview : m_transform_scale_preview;
+        const auto sy = label_selection ? 1.0 : m_left_gesture == LeftGesture::selection_axis_resize
+            ? m_axis_scale_y_preview : m_transform_scale_preview;
+        const auto width = std::max(44.0, axes->width_metres*m_scale*sx + 2*padding);
+        const auto depth = std::max(44.0, axes->depth_metres*m_scale*sy + 2*padding);
+        return {-width*.5, -depth*.5, width, depth};
+    }
+    return selectionFrame(viewport).value_or(QRectF{});
+}
+
+QTransform PlanCanvas::selectionControlTransform(const QRectF& viewport) const {
+    QTransform transform;
+    if (auto axes = selectionAxes()) {
+        if (m_transform_frame_start && m_left_gesture == LeftGesture::selection_axis_resize) {
+            const auto dx = axes->center.x-m_axis_anchor.x;
+            const auto dy = axes->center.y-m_axis_anchor.y;
+            const auto c = std::cos(m_axis_rotation), s = std::sin(m_axis_rotation);
+            const auto x = (dx*c+dy*s)*m_axis_scale_x_preview;
+            const auto y = (-dx*s+dy*c)*m_axis_scale_y_preview;
+            axes->center = {m_axis_anchor.x+x*c-y*s, m_axis_anchor.y+x*s+y*c};
+        } else if (m_transform_frame_start && m_left_gesture == LeftGesture::selection_rotate) {
+            axes->rotation_radians += m_transform_rotation_preview;
+        }
+        if (m_move_preview_delta && m_move_ids.contains(selectedIds().front())) {
+            axes->center.x += m_move_preview_delta->x;
+            axes->center.y += m_move_preview_delta->y;
+        }
+        const auto center = toScreen(axes->center, viewport);
+        transform.translate(center.x(), center.y());
+        transform.rotate(-axes->rotation_radians*180/pi);
+        return transform;
+    }
+    if (m_transform_frame_start && m_left_gesture == LeftGesture::selection_axis_resize) {
+        const auto anchor = toScreen(m_axis_anchor, viewport);
+        transform.translate(anchor.x(), anchor.y());
+        transform.rotate(-m_axis_rotation*180/pi);
+        transform.scale(m_axis_scale_x_preview, m_axis_scale_y_preview);
+        transform.rotate(m_axis_rotation*180/pi);
+        transform.translate(-anchor.x(), -anchor.y());
+    } else if (m_transform_frame_start &&
+               (m_left_gesture == LeftGesture::selection_resize ||
+                m_left_gesture == LeftGesture::selection_rotate)) {
+        transform.translate(m_transform_center.x(), m_transform_center.y());
+        transform.rotate(-m_transform_rotation_preview*180/pi);
+        transform.scale(m_transform_scale_preview, m_transform_scale_preview);
+        transform.translate(-m_transform_center.x(), -m_transform_center.y());
+    }
+    return transform;
+}
+
+QPointF PlanCanvas::selectionRotationPoint(const QRectF& viewport) const {
+    const auto frame = selectionControlRect(viewport);
+    const auto transform = selectionControlTransform(viewport);
+    const QPointF outside(frame.center().x(), frame.top()-24);
+    if (viewport.adjusted(12,12,-12,-12).contains(transform.map(outside))) return outside;
+    return {frame.center().x(), std::min(frame.bottom()-10, frame.top()+24)};
 }
 
 PlanCanvas::SelectionHandle PlanCanvas::selectionHandleAt(
     QPointF point, const QRectF& viewport) const {
     if (selectedIds().size() != 1) return SelectionHandle::none;
-    const auto frame = selectionFrame(viewport);
-    if (!frame) return SelectionHandle::none;
+    if (!selectionFrame(viewport)) return SelectionHandle::none;
+    const auto frame = selectionControlRect(viewport);
+    const auto transform = selectionControlTransform(viewport);
     constexpr qreal hit_size = 24.0;
     const auto hit = [&](QPointF center) {
+        center = transform.map(center);
         return QRectF(center.x() - hit_size * 0.5, center.y() - hit_size * 0.5,
                       hit_size, hit_size).contains(point);
     };
-    if (m_selection_rotate_enabled && hit(rotationHandlePoint(*frame, viewport)))
+    if (m_selection_rotate_enabled && hit(selectionRotationPoint(viewport)))
         return SelectionHandle::rotate;
+    // Resolve overlaps by proximity. Small objects can put a corner's touch
+    // region over a side handle; the point actually nearest the pointer wins.
+    SelectionHandle nearest = SelectionHandle::none;
+    double distance = std::numeric_limits<double>::infinity();
+    const auto consider = [&](QPointF center, SelectionHandle handle) {
+        if (!hit(center)) return;
+        const auto candidate = QLineF(point, transform.map(center)).length();
+        if (candidate < distance) { distance = candidate; nearest = handle; }
+    };
+    if (m_selection_axis_resize_enabled && m_entity_axis_resize_requested) {
+        if (const auto axes = selectionAxes()) {
+            if (axes->width_metres > 1e-9) {
+                consider({frame.left(), frame.center().y()}, SelectionHandle::left);
+                consider({frame.right(), frame.center().y()}, SelectionHandle::right);
+            }
+            if (axes->depth_metres > 1e-9) {
+                consider({frame.center().x(), frame.top()}, SelectionHandle::top);
+                consider({frame.center().x(), frame.bottom()}, SelectionHandle::bottom);
+            }
+        }
+    }
     if (m_selection_resize_enabled &&
-        (hit(frame->topLeft()) || hit(frame->topRight()) ||
-         hit(frame->bottomLeft()) || hit(frame->bottomRight())))
-        return SelectionHandle::resize;
-    return SelectionHandle::none;
+        (hit(frame.topLeft()) || hit(frame.topRight()) ||
+         hit(frame.bottomLeft()) || hit(frame.bottomRight()))) {
+        for (const auto p : {frame.topLeft(), frame.topRight(), frame.bottomLeft(), frame.bottomRight()})
+            consider(p, SelectionHandle::resize);
+    }
+    return nearest;
 }
 
 std::optional<PlanCanvas::VertexHandleHit> PlanCanvas::vertexHandleAt(
@@ -1591,42 +1841,141 @@ void PlanCanvas::drawVertexHandles(QPainter& painter, const QRectF& viewport) co
 }
 
 void PlanCanvas::drawSelectionFrame(QPainter& painter, const QRectF& viewport) const {
-    const auto frame = selectionFrame(viewport);
-    if (!frame) return;
+    if (!selectionFrame(viewport)) return;
+    const auto frame = selectionControlRect(viewport);
+    const auto transform = selectionControlTransform(viewport);
+    const auto polygon = transform.map(QPolygonF(frame));
     painter.save();
     painter.setClipRect(viewport, Qt::IntersectClip);
     painter.setRenderHint(QPainter::Antialiasing, true);
-    if (m_transform_frame_start &&
-        (m_left_gesture == LeftGesture::selection_resize ||
-         m_left_gesture == LeftGesture::selection_rotate)) {
-        painter.translate(m_transform_center);
-        painter.rotate(m_transform_rotation_preview * 180.0 / std::numbers::pi);
-        painter.scale(m_transform_scale_preview, m_transform_scale_preview);
-        painter.translate(-m_transform_center);
-    }
     painter.setBrush(Qt::NoBrush);
     // A white halo keeps the blue frame legible over dark fills and underlays.
     painter.setPen(QPen(QColor(255, 255, 255, 235), 4.0));
-    painter.drawRect(*frame);
+    painter.drawPolygon(polygon);
     if (selectedIds().size() == 1 &&
-        (m_selection_resize_enabled || m_selection_rotate_enabled)) {
+        (m_selection_resize_enabled || m_selection_rotate_enabled || m_selection_axis_resize_enabled)) {
         painter.setBrush(QColor(255, 255, 255));
         painter.setPen(QPen(QColor(37, 99, 235), 1.5));
         if (m_selection_resize_enabled) {
-            for (const auto point : {frame->topLeft(), frame->topRight(),
-                                     frame->bottomLeft(), frame->bottomRight()})
+            for (const auto corner : {frame.topLeft(), frame.topRight(),
+                                      frame.bottomLeft(), frame.bottomRight()}) {
+                const auto point = transform.map(corner);
                 painter.drawRect(QRectF(point.x() - 4.0, point.y() - 4.0, 8.0, 8.0));
+            }
+        }
+        if (m_selection_axis_resize_enabled && m_entity_axis_resize_requested) {
+            if (const auto axes = selectionAxes()) {
+                const auto draw_side = [&](QPointF p) {
+                    const auto point = transform.map(p);
+                    painter.drawRect(QRectF(point.x()-4.5, point.y()-4.5, 9, 9));
+                };
+                if (axes->width_metres > 1e-9) {
+                    draw_side({frame.left(),frame.center().y()});
+                    draw_side({frame.right(),frame.center().y()});
+                }
+                if (axes->depth_metres > 1e-9) {
+                    draw_side({frame.center().x(),frame.top()});
+                    draw_side({frame.center().x(),frame.bottom()});
+                }
+            }
         }
         if (m_selection_rotate_enabled) {
-            const auto handle = rotationHandlePoint(*frame, viewport);
-            painter.drawLine(QPointF(frame->center().x(), frame->top()), handle);
+            const auto handle = transform.map(selectionRotationPoint(viewport));
+            painter.drawLine(transform.map(QPointF(frame.center().x(), frame.top())), handle);
             painter.drawEllipse(handle, 5.0, 5.0);
         }
     }
     // Transform handles use a white fill; the placement frame must stay clear.
     painter.setBrush(Qt::NoBrush);
     painter.setPen(QPen(QColor(37, 99, 235), 1.5));
-    painter.drawRect(*frame);
+    painter.drawPolygon(polygon);
+    painter.restore();
+}
+
+void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewport) const {
+    painter.save();
+    painter.setClipRect(viewport, Qt::IntersectClip);
+    painter.setRenderHint(QPainter::TextAntialiasing, true);
+    auto dimension_font = font();
+    dimension_font.setPixelSize(11);
+    dimension_font.setWeight(QFont::Medium);
+    painter.setFont(dimension_font);
+    const QFontMetricsF metrics(dimension_font, painter.device());
+    const auto draw = [&](CanvasSelectionFrame axes, const QString& id, bool sizes_presented = false) {
+        if (!std::isfinite(axes.center.x) || !std::isfinite(axes.center.y) ||
+            !std::isfinite(axes.rotation_radians) || !std::isfinite(axes.width_metres) ||
+            !std::isfinite(axes.depth_metres) || axes.width_metres < 0 || axes.depth_metres < 0)
+            return;
+        auto width = axes.width_metres;
+        auto depth = axes.depth_metres;
+        auto center = axes.center;
+        const bool transforming = m_transform_frame_start && m_move_ids.contains(id);
+        if (transforming) {
+            if (m_left_gesture == LeftGesture::selection_axis_resize) {
+                width *= m_axis_scale_x_preview;
+                depth *= m_axis_scale_y_preview;
+                const auto dx = center.x-m_axis_anchor.x;
+                const auto dy = center.y-m_axis_anchor.y;
+                const auto c = std::cos(m_axis_rotation), s = std::sin(m_axis_rotation);
+                const auto x = (dx*c+dy*s)*m_axis_scale_x_preview;
+                const auto y = (-dx*s+dy*c)*m_axis_scale_y_preview;
+                center = {m_axis_anchor.x+x*c-y*s, m_axis_anchor.y+x*s+y*c};
+            } else {
+                if (!sizes_presented) {
+                    width *= m_transform_scale_preview;
+                    depth *= m_transform_scale_preview;
+                }
+                axes.rotation_radians += m_transform_rotation_preview;
+            }
+        }
+        if (m_move_preview_delta && m_move_ids.contains(id)) {
+            center.x += m_move_preview_delta->x;
+            center.y += m_move_preview_delta->y;
+        }
+        QString text = QStringLiteral("W %1  ×  D %2")
+            .arg(display_cursor_length(width, m_metric_units), display_cursor_length(depth, m_metric_units));
+        if (transforming && m_left_gesture == LeftGesture::selection_rotate) {
+            auto degrees = std::fmod(axes.rotation_radians * 180/pi, 360.0);
+            if (degrees < 0) degrees += 360;
+            if (std::abs(degrees-360) < 1e-6 || std::abs(degrees) < 1e-6) degrees = 0;
+            text += QStringLiteral("  ·  %1°").arg(degrees, 0, 'f', 1);
+        }
+        const auto c = std::cos(axes.rotation_radians), s = std::sin(axes.rotation_radians);
+        // Keep the upright callout outside the screen extent at every angle.
+        const auto middle = toScreen(center, viewport);
+        const auto lower = middle + QPointF(0,
+            (std::abs(s)*width + std::abs(c)*depth)*m_scale*.5);
+        auto panel = metrics.boundingRect(text).adjusted(-7,-4,7,4);
+        panel.moveCenter(lower + QPointF(0,28));
+        panel.moveLeft(std::clamp(panel.left(), viewport.left()+4,
+            std::max(viewport.left()+4, viewport.right()-panel.width()-4)));
+        panel.moveTop(std::clamp(panel.top(), viewport.top()+4,
+            std::max(viewport.top()+4, viewport.bottom()-panel.height()-4)));
+        const bool dark = m_canvas_background.lightnessF() < .45;
+        painter.setPen(QPen(dark ? QColor(125,179,255) : QColor(37,99,235),1));
+        painter.setBrush(dark ? QColor(27,52,87,238) : QColor(239,246,255,244));
+        painter.drawRoundedRect(panel,4,4);
+        painter.setPen(dark ? QColor(223,235,255) : QColor(29,78,216));
+        painter.drawText(panel,Qt::AlignCenter,text);
+    };
+    for (const auto& entity : m_entities) {
+        if (entity.selected) {
+            if (const auto axes = entitySelectionAxes(entity)) draw(*axes,entity.id);
+        }
+    }
+    for (const auto& reference : m_references) {
+        if (!reference.selected || !reference.visible || reference.image.isNull()) continue;
+        const auto unit = reference.metres_per_source_unit*reference.scale;
+        if (!std::isfinite(unit) || unit <= 0) continue;
+        draw({reference.position, reference.rotation_degrees*pi/180,
+              reference.image.width()*unit, reference.image.height()*unit},reference.id);
+    }
+    for (const auto& label : m_labels) {
+        if (!label.selected || !drawable_label(label)) continue;
+        const auto layout = label_layout(presentedLabel(label,false),font(),this,m_scale,logicalDpiY());
+        draw({label.position,label.rotation_radians,layout.bounds.width()/m_scale,
+              layout.bounds.height()/m_scale},label.id,true);
+    }
     painter.restore();
 }
 
@@ -1703,7 +2052,7 @@ void PlanCanvas::mouseMoveEvent(QMouseEvent* event) {
         return;
     }
     beginPerformanceMeasurement(PerformanceMetric::input);
-    pointerMove(event->position());
+    pointerMove(event->position(), event->modifiers());
     event->accept();
 }
 
@@ -1713,7 +2062,7 @@ void PlanCanvas::mouseReleaseEvent(QMouseEvent* event) {
         return;
     }
     beginPerformanceMeasurement(PerformanceMetric::input);
-    pointerRelease(event->position(), event->button());
+    pointerRelease(event->position(), event->button(), event->modifiers());
     event->accept();
 }
 
@@ -2048,8 +2397,10 @@ void PlanCanvas::updatePointerCursor(QPointF point) {
         }
         const auto handle = selectionHandleAt(point, QRectF(rect()));
         if (handle != SelectionHandle::none) {
-            setCursor(handle == SelectionHandle::resize ? Qt::SizeFDiagCursor
-                                                        : Qt::CrossCursor);
+            setCursor(handle == SelectionHandle::resize ? Qt::SizeFDiagCursor :
+                      handle == SelectionHandle::rotate ? Qt::CrossCursor :
+                      handle == SelectionHandle::left || handle == SelectionHandle::right
+                        ? Qt::SizeHorCursor : Qt::SizeVerCursor);
             return;
         }
         const auto frame = selectionFrame(QRectF(rect()));
@@ -2067,6 +2418,11 @@ void PlanCanvas::updatePointerCursor(QPointF point) {
 void PlanCanvas::setEntityTransformRequested(
     std::function<bool(QString, double, double)> callback) {
     m_entity_transform_requested = std::move(callback);
+}
+
+void PlanCanvas::setEntityAxisResizeRequested(
+    std::function<bool(QString, double, double, Vec2)> callback) {
+    m_entity_axis_resize_requested = std::move(callback);
 }
 
 void PlanCanvas::setBoundaryVertexMoveRequested(
@@ -2325,8 +2681,8 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
             // SVG coordinates grow downward. Mirror the local Y axis so the
             // outer Cartesian canvas transform restores the authored artwork
             // orientation while rotation remains model-space counterclockwise.
-            painter.scale(symbol.width_metres / footprint.width(),
-                          -symbol.depth_metres / footprint.height());
+            painter.scale((symbol.flip_horizontal ? -1.0 : 1.0) * symbol.width_metres / footprint.width(),
+                          (symbol.flip_vertical ? 1.0 : -1.0) * symbol.depth_metres / footprint.height());
             painter.translate(-footprint.center());
             renderer->render(&painter, symbol.view_box);
             painter.restore();
@@ -2481,8 +2837,9 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
     }
     for (const auto& label : m_labels) {
         if (!drawable_label(label)) continue;
+        const auto presented_label = presentedLabel(label,output);
         const auto paper = std::isfinite(label.paper_height_mm) && label.paper_height_mm > 0.0;
-        const auto layout = label_layout(label, paper ? font() : legacy_font,
+        const auto layout = label_layout(presented_label, paper ? font() : legacy_font,
                                           metrics_device, scale, dpi);
         painter.setFont(layout.font);
         const auto& bounds = layout.bounds;
@@ -2493,7 +2850,7 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
         }
         const auto center = to_screen(position);
         painter.save();
-        painter.setTransform(label_transform(label, center), true);
+        painter.setTransform(label_transform(presented_label, center), true);
         if (!output && label.selected) {
             painter.setPen(QPen(QColor(37, 99, 235), 1.0));
         } else {

@@ -98,6 +98,12 @@ struct SymbolInstance {
     // Optional exact SVG bytes captured by the asset-owning desktop layer.
     // Without bytes, stale definitions render their saved vector preview.
     std::string pinned_svg;
+    // Multipliers of the saved definition footprint and placement.scale.
+    // Mirroring acts on local axes about the definition anchor, before rotation.
+    double width_scale{1.0};
+    double depth_scale{1.0};
+    bool flip_horizontal{};
+    bool flip_vertical{};
 };
 
 struct AnnotationState {
@@ -127,6 +133,12 @@ void validate_annotation_state(const AnnotationState&, const std::vector<SymbolD
 void validate_symbol_catalog(const std::vector<SymbolDefinition>&);
 [[nodiscard]] std::vector<SymbolStroke> placed_symbol_preview(
     const SymbolDefinition&, const AnnotationPlacement&);
+// Shared geometry for artwork, footprints, selection, and SVG mapping. Each
+// effective axis scale must satisfy the saved definition's catalog limits.
+[[nodiscard]] Vec2 transformed_symbol_point(
+    const SymbolDefinition&, const SymbolInstance&, Vec2 local_point);
+[[nodiscard]] std::vector<SymbolStroke> transformed_symbol_preview(
+    const SymbolDefinition&, const SymbolInstance&);
 [[nodiscard]] bool symbol_requires_migration(
     const SymbolInstance&, const std::vector<SymbolDefinition>&);
 // Returns saved geometry; suppresses a stale external SVG path. A renderer

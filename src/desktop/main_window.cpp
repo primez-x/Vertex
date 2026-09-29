@@ -30,6 +30,7 @@
 #include "sketch/project_import_worker.hpp"
 #include "sketch/geometry_operations.hpp"
 #include "sketch/architectural_document_adapter.hpp"
+#include "sketch/plan_axis_resize.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
 #include "sketch/room_relationship_geometry_commit.hpp"
@@ -8825,7 +8826,9 @@ public:
                         bool visible, const QString& font_family,
                         const QString& text_height_mm, const QString& stroke_color,
                         const QString& fill_color, bool bold, bool italic,
-                        bool style_enabled) {
+                        bool style_enabled, std::optional<QString> width,
+                        std::optional<QString> depth, std::optional<bool> flip_horizontal,
+                        std::optional<bool> flip_vertical) {
         try {
             if (!m_document->is_editable()) {
                 throw std::invalid_argument("This document is read-only.");
@@ -8895,6 +8898,18 @@ public:
                     symbol.placement.position = {x, y};
                     symbol.placement.rotation_radians = rotation * std::numbers::pi / 180.0;
                     symbol.placement.scale = instance_scale;
+                    const auto definition = resolved_symbol_definition(symbol, desktop_symbol_catalog());
+                    const auto physical_size = [&](const QString& expression) {
+                        const auto value = parse_quantity(expression.toStdString(),
+                            m_metric_units ? Unit::metre : Unit::foot).metres;
+                        if (!std::isfinite(value) || value <= 0.0)
+                            throw std::invalid_argument("Component width and depth must be positive lengths.");
+                        return value;
+                    };
+                    if (width) symbol.width_scale = physical_size(*width) / (definition.width_metres * instance_scale);
+                    if (depth) symbol.depth_scale = physical_size(*depth) / (definition.depth_metres * instance_scale);
+                    if (flip_horizontal) symbol.flip_horizontal = *flip_horizontal;
+                    if (flip_vertical) symbol.flip_vertical = *flip_vertical;
                     symbol.visible = visible;
                     if (replacement_style) {
                         auto style = *replacement_style;
@@ -11511,6 +11526,59 @@ public:
         }
     }
 
+    bool resizeSelectionAxesFromCanvas(const QString& requested_id, double scale_x,
+                                       double scale_y, Vec2 anchor) {
+        try {
+            if (m_boundary_session || m_pending_wall_start || !m_pending_symbol_id.isEmpty())
+                throw std::invalid_argument("Finish or cancel the active drawing command before resizing an object.");
+            if (!m_document->is_editable() || m_selected_ids.size() != 1 ||
+                m_selected_ids.front() != requested_id)
+                throw std::invalid_argument("Select one editable object before resizing.");
+            if (!std::isfinite(scale_x) || !std::isfinite(scale_y) ||
+                scale_x <= 0.0 || scale_y <= 0.0 ||
+                !std::isfinite(anchor.x) || !std::isfinite(anchor.y))
+                throw std::invalid_argument("The resize dimensions are invalid.");
+            const auto source = authoringSnapshot();
+            const auto wanted = requested_id.toStdString();
+            for (const auto& [id, entity] : source.entities()) {
+                if (entity.type != kAnnotationEntityType) continue;
+                auto state = decode_annotation_entity(entity);
+                for (auto& symbol : state.symbols) {
+                    if (symbol.id != wanted) continue;
+                    const auto angle = symbol.placement.rotation_radians;
+                    const auto c = std::cos(angle), s = std::sin(angle);
+                    const auto dx = symbol.placement.position.x - anchor.x;
+                    const auto dy = symbol.placement.position.y - anchor.y;
+                    const auto x = (c * dx + s * dy) * scale_x;
+                    const auto y = (-s * dx + c * dy) * scale_y;
+                    symbol.placement.position = {anchor.x + c * x - s * y,
+                                                 anchor.y + s * x + c * y};
+                    symbol.width_scale *= scale_x;
+                    symbol.depth_scale *= scale_y;
+                    const auto command = ApplyEntityChanges{source.revision(),
+                        {EntityChange::upsert(make_annotation_entity(id, state))}, {},
+                        "Resize symbol dimensions"};
+                    (void)Document::preview_command(source, command);
+                    applyDocumentCommand(command);
+                    clearError();
+                    refresh();
+                    return true;
+                }
+            }
+            const auto& entity = source.entities().at(wanted);
+            const auto command = plan_axis_resize_command(source, wanted, scale_x, scale_y,
+                                                          anchor, plan_axis_resize_frame(entity));
+            applyDocumentCommand(command);
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Resize: %1").arg(QString::fromUtf8(error.what())));
+            refresh();
+            return false;
+        }
+    }
+
     bool transformSelectionFromCanvas(const QString& requested_id, double relative_scale,
                                       double rotation_radians) {
         if (!m_document->is_editable()) {
@@ -11587,13 +11655,41 @@ public:
             }
             const auto degrees = QString::number(
                 rotation_radians * 180.0 / std::numbers::pi, 'g', 15);
+            const auto* active_canvas = m_workspace == Workspace::measurement
+                ? m_measurementCanvas : m_architecturalCanvas;
+            std::optional<Vec2> canvas_pivot;
+            for (const auto& item : active_canvas->entities()) {
+                if (item.id == requested_id && item.resize_frame) {
+                    canvas_pivot = item.resize_frame->center;
+                    break;
+                }
+            }
+            const auto compensation = [&](Vec2 pivot, double scale) {
+                const auto c = std::cos(rotation_radians), s = std::sin(rotation_radians);
+                return Vec2{pivot.x-scale*(c*pivot.x-s*pivot.y),
+                            pivot.y-scale*(s*pivot.x+c*pivot.y)};
+            };
+            const auto metres = [](double value) {
+                return QString::number(value, 'g', 17) + QStringLiteral(" m");
+            };
             if (can_transform_architectural_entity_type(found->second.type)) {
+                if (!canvas_pivot) throw std::invalid_argument("The selected object's transform frame is unavailable.");
+                const auto offset = compensation(*canvas_pivot, relative_scale);
                 return transformSelectedArchitecturalObject(
-                    degrees, {}, {}, {}, QString::number(relative_scale, 'g', 15), false);
+                    degrees, metres(offset.x), metres(offset.y), {},
+                    QString::number(relative_scale, 'g', 15), false);
             }
             if (is_closed_boundary_entity(found->second.type) &&
                 std::abs(relative_scale - 1.0) <= 1e-9) {
-                return transformSelectedBoundary(degrees, false, false, {}, {}, false);
+                const auto bounds = boundary_bounds(boundary_geometry(
+                    decode_identified_boundary_entity(found->second)));
+                const Vec2 original_pivot{std::midpoint(bounds.minimum.x, bounds.maximum.x),
+                                          std::midpoint(bounds.minimum.y, bounds.maximum.y)};
+                const auto original_offset = compensation(original_pivot, 1.0);
+                const auto desired_offset = compensation(canvas_pivot.value_or(original_pivot), 1.0);
+                return transformSelectedBoundary(degrees, false, false,
+                    metres(desired_offset.x-original_offset.x),
+                    metres(desired_offset.y-original_offset.y), false);
             }
             throw std::invalid_argument(
                 "This selection does not support direct resize or rotation handles.");
@@ -20451,6 +20547,18 @@ private:
         m_annotation_scale_edit = new QLineEdit(m_annotation_group);
         m_annotation_scale_edit->setObjectName(QStringLiteral("annotationScale"));
         annotation_layout->addRow(QStringLiteral("Scale"), m_annotation_scale_edit);
+        m_symbol_width_edit = new QLineEdit(m_annotation_group);
+        m_symbol_width_edit->setObjectName(QStringLiteral("symbolWidth"));
+        annotation_layout->addRow(QStringLiteral("Width"), m_symbol_width_edit);
+        m_symbol_depth_edit = new QLineEdit(m_annotation_group);
+        m_symbol_depth_edit->setObjectName(QStringLiteral("symbolDepth"));
+        annotation_layout->addRow(QStringLiteral("Depth"), m_symbol_depth_edit);
+        m_symbol_flip_horizontal = new QCheckBox(QStringLiteral("Flip horizontally"), m_annotation_group);
+        m_symbol_flip_horizontal->setObjectName(QStringLiteral("symbolFlipHorizontal"));
+        annotation_layout->addRow(m_symbol_flip_horizontal);
+        m_symbol_flip_vertical = new QCheckBox(QStringLiteral("Flip vertically"), m_annotation_group);
+        m_symbol_flip_vertical->setObjectName(QStringLiteral("symbolFlipVertical"));
+        annotation_layout->addRow(m_symbol_flip_vertical);
         m_annotation_font_edit = new QLineEdit(m_annotation_group);
         m_annotation_font_edit->setObjectName(QStringLiteral("annotationFontFamily"));
         m_annotation_font_edit->setPlaceholderText(QStringLiteral("sans-serif"));
@@ -20508,7 +20616,12 @@ private:
                                  m_annotation_stroke_color_edit->text(),
                                  m_annotation_fill_color_edit->text(),
                                  m_annotation_bold_check->isChecked(),
-                                 m_annotation_italic_check->isChecked(), true);
+                                 m_annotation_italic_check->isChecked(), true,
+                                 m_symbol_width_edit->text() == m_symbol_width_original ? std::nullopt :
+                                    std::optional<QString>(m_symbol_width_edit->text()),
+                                 m_symbol_depth_edit->text() == m_symbol_depth_original ? std::nullopt :
+                                    std::optional<QString>(m_symbol_depth_edit->text()),
+                                 m_symbol_flip_horizontal->isChecked(), m_symbol_flip_vertical->isChecked());
         });
         m_reference_group = new QGroupBox(QStringLiteral("Reference image"), inspector_body);
         m_reference_group->setObjectName(QStringLiteral("referenceProperties"));
@@ -20978,6 +21091,10 @@ private:
             [this](QString id, double scale, double rotation) {
                 return transformSelectionFromCanvas(id, scale, rotation);
             });
+        canvas->setEntityAxisResizeRequested(
+            [this](QString id, double x, double y, Vec2 anchor) {
+                return resizeSelectionAxesFromCanvas(id, x, y, anchor);
+            });
         canvas->setBoundaryVertexMoveRequested(
             [this](QString id, QString vertex_id, Vec2 position,
                    std::uint64_t source_revision) {
@@ -21154,6 +21271,9 @@ private:
         const auto organization = organize_project(snapshot);
         m_plan_geometry_error.clear();
         std::erase_if(m_plan_projection_cache, [&](const auto& entry) {
+            return !snapshot.entities().contains(entry.first);
+        });
+        std::erase_if(m_plan_transform_frame_cache, [&](const auto& entry) {
             return !snapshot.entities().contains(entry.first);
         });
         std::erase_if(m_plan_slab_validation_cache, [&](const auto& entry) {
@@ -21616,7 +21736,7 @@ private:
                     if (!symbol.visible) continue;
                     const auto definition = resolved_symbol_definition(symbol, catalog);
                     Boundary preview;
-                    for (const auto& stroke : placed_symbol_preview(definition, symbol.placement)) {
+                    for (const auto& stroke : transformed_symbol_preview(definition, symbol)) {
                         preview.push_back({stroke.start, stroke.end, 0.0});
                     }
                     annotation_child_layers.emplace_back(symbol.id, symbol.placement.layer_id);
@@ -21637,6 +21757,10 @@ private:
                         QString::fromStdString(symbol.style.fill_pattern);
                     canvas_symbol.filled = symbol.style.fill_pattern != "none" &&
                                            canvas_symbol.fill_color.isValid();
+                    canvas_symbol.resize_frame = CanvasSelectionFrame{
+                        symbol.placement.position, symbol.placement.rotation_radians,
+                        definition.width_metres * symbol.placement.scale * symbol.width_scale,
+                        definition.depth_metres * symbol.placement.scale * symbol.depth_scale};
                     if (definition.svg_asset.has_value()) {
                         const auto& asset = *definition.svg_asset;
                         CanvasSvgSymbol svg_symbol;
@@ -21653,8 +21777,10 @@ private:
                                    asset.footprint_view_box[2], asset.footprint_view_box[3]);
                         svg_symbol.position = symbol.placement.position;
                         svg_symbol.rotation_radians = symbol.placement.rotation_radians;
-                        svg_symbol.width_metres = definition.width_metres * symbol.placement.scale;
-                        svg_symbol.depth_metres = definition.depth_metres * symbol.placement.scale;
+                        svg_symbol.width_metres = definition.width_metres * symbol.placement.scale * symbol.width_scale;
+                        svg_symbol.depth_metres = definition.depth_metres * symbol.placement.scale * symbol.depth_scale;
+                        svg_symbol.flip_horizontal = symbol.flip_horizontal;
+                        svg_symbol.flip_vertical = symbol.flip_vertical;
                         canvas_symbol.svg_symbol = std::move(svg_symbol);
                     }
                     all_geometry.push_back(std::move(canvas_symbol));
@@ -22503,6 +22629,56 @@ private:
                                  return plan_layer(left) < plan_layer(right);
                              });
         }
+        const auto attach_frames = [&](std::vector<CanvasEntity>& entities) {
+            for (auto& canvas_entity : entities) {
+                if (canvas_entity.svg_symbol || canvas_entity.segments.empty()) continue;
+                const auto found = snapshot.entities().find(canvas_entity.id.toStdString());
+                if (found == snapshot.entities().end()) continue;
+                try {
+                    double angle{};
+                    if (can_transform_architectural_entity_type(found->second.type)) {
+                        angle = plan_axis_resize_frame(found->second);
+                        if (canvas_entity.selected) {
+                            const auto key = found->second.properties.dump();
+                            auto cached = m_plan_transform_frame_cache.find(found->first);
+                            if (cached == m_plan_transform_frame_cache.end() || cached->second.first != key) {
+                                const auto bounds = plan_axis_resize_bounds(found->second);
+                                const auto x = std::midpoint(bounds.minimum.x, bounds.maximum.x);
+                                const auto y = std::midpoint(bounds.minimum.y, bounds.maximum.y);
+                                const auto c = std::cos(angle), s = std::sin(angle);
+                                cached = m_plan_transform_frame_cache.insert_or_assign(found->first,
+                                    std::make_pair(key, CanvasSelectionFrame{{c*x-s*y, s*x+c*y}, angle,
+                                        bounds.maximum.x-bounds.minimum.x,
+                                        bounds.maximum.y-bounds.minimum.y})).first;
+                            }
+                            canvas_entity.resize_frame = cached->second.second;
+                            continue;
+                        }
+                    } else if (is_closed_boundary_entity(found->second.type)) {
+                        const auto& edge = canvas_entity.segments.front();
+                        angle = std::atan2(edge.end.y - edge.start.y, edge.end.x - edge.start.x);
+                    } else continue;
+                    const auto c = std::cos(angle), s = std::sin(angle);
+                    const auto local = [&](Vec2 p) { return Vec2{c*p.x+s*p.y, -s*p.x+c*p.y}; };
+                    auto segments = canvas_entity.segments;
+                    for (auto& segment : segments) {
+                        segment.start = local(segment.start);
+                        segment.end = local(segment.end);
+                    }
+                    const auto bounds = boundary_bounds(segments);
+                    const auto x = (bounds.minimum.x + bounds.maximum.x) / 2.0;
+                    const auto y = (bounds.minimum.y + bounds.maximum.y) / 2.0;
+                    canvas_entity.resize_frame = CanvasSelectionFrame{
+                        {c*x-s*y, s*x+c*y}, angle,
+                        bounds.maximum.x-bounds.minimum.x,
+                        bounds.maximum.y-bounds.minimum.y};
+                } catch (const std::exception&) {
+                    // Geometry construction errors are reported by the projection path.
+                }
+            }
+        };
+        attach_frames(geometry);
+        attach_frames(visible_view_geometry[architectural_view_index(BuildingViewKind::plan)]);
         m_measurementCanvas->setEntities(geometry);
         m_architectural_view_entities = std::move(visible_view_geometry);
         m_architecturalCanvas->setEntities(
@@ -23838,6 +24014,11 @@ private:
             m_annotation_group->setTitle(text_label ? QStringLiteral("Text properties")
                                                     : QStringLiteral("Component properties"));
             if (m_annotation_layout) {
+                m_annotation_layout->setRowVisible(m_annotation_scale_edit, text_label);
+                m_annotation_layout->setRowVisible(m_symbol_width_edit, !text_label);
+                m_annotation_layout->setRowVisible(m_symbol_depth_edit, !text_label);
+                m_annotation_layout->setRowVisible(m_symbol_flip_horizontal, !text_label);
+                m_annotation_layout->setRowVisible(m_symbol_flip_vertical, !text_label);
                 m_annotation_layout->setRowVisible(m_annotation_content_edit, text_label);
                 m_annotation_layout->setRowVisible(m_annotation_font_edit, text_label);
                 m_annotation_layout->setRowVisible(m_annotation_text_height_edit, text_label);
@@ -23881,6 +24062,19 @@ private:
                                                 : selected_annotation_symbol->placement.scale;
                 m_annotation_scale_edit->setText(QString::number(instance_scale, 'g', 12));
             }
+            m_symbol_width_original.clear();
+            m_symbol_depth_original.clear();
+            if (selected_annotation_symbol) {
+                const auto definition = resolved_symbol_definition(*selected_annotation_symbol, desktop_symbol_catalog());
+                m_symbol_width_original = format_length(definition.width_metres *
+                    selected_annotation_symbol->placement.scale * selected_annotation_symbol->width_scale, m_metric_units);
+                m_symbol_depth_original = format_length(definition.depth_metres *
+                    selected_annotation_symbol->placement.scale * selected_annotation_symbol->depth_scale, m_metric_units);
+            }
+            m_symbol_width_edit->setText(m_symbol_width_original);
+            m_symbol_depth_edit->setText(m_symbol_depth_original);
+            m_symbol_flip_horizontal->setChecked(selected_annotation_symbol && selected_annotation_symbol->flip_horizontal);
+            m_symbol_flip_vertical->setChecked(selected_annotation_symbol && selected_annotation_symbol->flip_vertical);
             const auto& annotation_style = selected_annotation_label.has_value()
                                                ? selected_annotation_label->style
                                                : selected_annotation_symbol->style;
@@ -24304,6 +24498,27 @@ private:
         if (m_measurementCanvas) m_measurementCanvas->setSelectionCaption(caption);
         if (m_architecturalCanvas) m_architecturalCanvas->setSelectionCaption(caption);
         const auto [resize_selection, rotate_selection] = selectionTransformCapabilities();
+        bool axis_resize = false;
+        if (m_selected_ids.size() == 1 && m_document->is_editable()) {
+            const auto snapshot = m_document->snapshot();
+            const auto wanted = m_selected_ids.front().toStdString();
+            if (const auto found = snapshot.entities().find(wanted); found != snapshot.entities().end()) {
+                try { (void)plan_axis_resize_frame(found->second); axis_resize = true; }
+                catch (const std::exception&) {}
+            } else {
+                for (const auto& [id, entity] : snapshot.entities()) {
+                    (void)id;
+                    if (entity.type != kAnnotationEntityType) continue;
+                    const auto state = decode_annotation_entity(entity);
+                    axis_resize = std::any_of(state.symbols.begin(), state.symbols.end(),
+                        [&](const auto& symbol) { return symbol.id == wanted; });
+                    if (axis_resize) break;
+                }
+            }
+        }
+        if (m_measurementCanvas) m_measurementCanvas->setSelectionAxisResizeEnabled(axis_resize);
+        if (m_architecturalCanvas) m_architecturalCanvas->setSelectionAxisResizeEnabled(
+            axis_resize && m_architectural_view_kind == BuildingViewKind::plan);
         if (m_measurementCanvas)
             m_measurementCanvas->setSelectionTransformEnabled(resize_selection, rotate_selection);
         if (m_architecturalCanvas)
@@ -26056,6 +26271,7 @@ private:
     QString m_last_error;
     QString m_plan_geometry_error;
     std::map<std::string, std::pair<std::string, Boundary>> m_plan_projection_cache;
+    std::map<std::string, std::pair<std::string, CanvasSelectionFrame>> m_plan_transform_frame_cache;
     std::map<std::string, Entity, std::less<>> m_view_projection_sources;
     std::map<std::pair<std::string, std::string>, std::optional<Boundary>> m_view_projection_cache;
     std::map<std::string, std::pair<std::string, QString>, std::less<>>
@@ -26213,6 +26429,12 @@ private:
     QLineEdit* m_annotation_y_edit{};
     QLineEdit* m_annotation_rotation_edit{};
     QLineEdit* m_annotation_scale_edit{};
+    QLineEdit* m_symbol_width_edit{};
+    QLineEdit* m_symbol_depth_edit{};
+    QString m_symbol_width_original;
+    QString m_symbol_depth_original;
+    QCheckBox* m_symbol_flip_horizontal{};
+    QCheckBox* m_symbol_flip_vertical{};
     QLineEdit* m_annotation_font_edit{};
     QLineEdit* m_annotation_text_height_edit{};
     QLineEdit* m_annotation_stroke_color_edit{};
@@ -26806,11 +27028,14 @@ bool MainWindow::editAnnotation(const QString& annotation_id, const QString& con
                                 bool visible, QString font_family,
                                 QString text_height_mm, QString stroke_color,
                                 QString fill_color, bool bold, bool italic,
-                                bool style_enabled) {
+                                bool style_enabled, std::optional<QString> width,
+                                std::optional<QString> depth, std::optional<bool> flip_horizontal,
+                                std::optional<bool> flip_vertical) {
     return m_impl->editAnnotation(annotation_id, content, x_metres, y_metres,
                                   rotation_degrees, scale, visible, font_family,
                                   text_height_mm, stroke_color, fill_color, bold,
-                                  italic, style_enabled);
+                                  italic, style_enabled, std::move(width), std::move(depth),
+                                  flip_horizontal, flip_vertical);
 }
 
 bool MainWindow::deleteAnnotation(const QString& annotation_id) {

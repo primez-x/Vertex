@@ -74,7 +74,9 @@ presentation. A later mouse release cannot commit a cancelled move.
 
 ## Remaining interaction work
 
-- Direct vertex, endpoint, and rotation grips for post-draw editing.
+- Selected symbols use an oriented selection frame that retains their saved rotation. Corner handles scale proportionally; side handles resize local width or depth with the opposite edge anchored. Canvas dimensions show the current physical footprint.
+- Rotation uses a positive counterclockwise model angle. The handle and frame preview the resulting angle, snapping to absolute 15-degree increments; Shift bypasses snapping for fine adjustment. Release commits once, Escape restores the document, and editing controls never appear in output.
+- Direct endpoint grips for additional architectural object types.
 - 3D directional marquee selection and additive selection parity.
 - Pen barrel-button mapping, pinch zoom, and multi-touch navigation.
 - Overlap cycling for stacked selectable objects.

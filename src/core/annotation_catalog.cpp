@@ -22,6 +22,44 @@ void placement(const AnnotationPlacement& p) {
           "Invalid annotation placement");
     check(p.layer_id.size() <= 256, "Invalid annotation layer ID");
 }
+struct SymbolTransform {
+    Vec2 anchor;
+    Vec2 position;
+    double x_scale;
+    double y_scale;
+    double cosine;
+    double sine;
+    Vec2 operator()(Vec2 value) const {
+        point(value);
+        const double x = (value.x - anchor.x) * x_scale;
+        const double y = (value.y - anchor.y) * y_scale;
+        Vec2 result{position.x + cosine * x - sine * y,
+                    position.y + sine * x + cosine * y};
+        point(result);
+        return result;
+    }
+};
+SymbolTransform symbol_transform(const SymbolDefinition& definition,
+    const AnnotationPlacement& p, double width_scale = 1, double depth_scale = 1,
+    bool flip_horizontal = false, bool flip_vertical = false) {
+    validate_symbol_catalog({definition});
+    placement(p);
+    check(std::isfinite(width_scale) && width_scale > 0 &&
+              std::isfinite(depth_scale) && depth_scale > 0,
+          "Invalid independent symbol scale");
+    const double x_scale = p.scale * width_scale;
+    const double y_scale = p.scale * depth_scale;
+    for (const auto axis : {x_scale, y_scale})
+        check(std::isfinite(axis) && axis >= definition.minimum_scale && axis <= definition.maximum_scale,
+              "Symbol axis scale outside catalog limits");
+    const double width = definition.width_metres * x_scale;
+    const double depth = definition.depth_metres * y_scale;
+    check(std::isfinite(width) && width > 0 && std::isfinite(depth) && depth > 0,
+          "Invalid transformed symbol dimensions");
+    return {definition.anchor, p.position,
+            flip_horizontal ? -x_scale : x_scale, flip_vertical ? -y_scale : y_scale,
+            std::cos(p.rotation_radians), std::sin(p.rotation_radians)};
+}
 void color(const std::string& c) {
     check(c.size() == 7 && c[0] == '#' && c.find_first_not_of("0123456789abcdefABCDEF", 1) == std::string::npos,
           "Color must be #RRGGBB");
@@ -1007,13 +1045,20 @@ void validate_symbol_catalog(const std::vector<SymbolDefinition>& catalog) {
 }
 
 std::vector<SymbolStroke> placed_symbol_preview(const SymbolDefinition& s, const AnnotationPlacement& p) {
-    validate_symbol_catalog({s}); placement(p);
-    check(p.scale >= s.minimum_scale && p.scale <= s.maximum_scale, "Symbol scale outside catalog limits");
-    const double c = std::cos(p.rotation_radians), sn = std::sin(p.rotation_radians);
-    auto transform = [&](Vec2 v) {
-        const double x=(v.x-s.anchor.x)*p.scale, y=(v.y-s.anchor.y)*p.scale;
-        Vec2 result{p.position.x+c*x-sn*y,p.position.y+sn*x+c*y}; point(result); return result;
-    };
+    const auto transform = symbol_transform(s, p);
+    std::vector<SymbolStroke> result;
+    for (const auto& stroke : s.preview) result.push_back({transform(stroke.start),transform(stroke.end)});
+    return result;
+}
+
+Vec2 transformed_symbol_point(const SymbolDefinition& definition, const SymbolInstance& instance, Vec2 local_point) {
+    return symbol_transform(definition, instance.placement, instance.width_scale, instance.depth_scale,
+                            instance.flip_horizontal, instance.flip_vertical)(local_point);
+}
+
+std::vector<SymbolStroke> transformed_symbol_preview(const SymbolDefinition& s, const SymbolInstance& instance) {
+    const auto transform = symbol_transform(s, instance.placement, instance.width_scale, instance.depth_scale,
+                                            instance.flip_horizontal, instance.flip_vertical);
     std::vector<SymbolStroke> result;
     for (const auto& stroke : s.preview) result.push_back({transform(stroke.start),transform(stroke.end)});
     return result;
@@ -1039,7 +1084,7 @@ void validate_annotation_state(const AnnotationState& state, const std::vector<S
         check(pinned_svg_bytes <= 33554432 &&
                   (symbol.pinned_svg.empty() || (symbol.definition && symbol.definition->svg_asset)),
               "Invalid pinned SVG payload");
-        (void)placed_symbol_preview(symbol.definition ? *symbol.definition : *it,symbol.placement);
+        (void)transformed_symbol_preview(symbol.definition ? *symbol.definition : *it, symbol);
     }
     std::set<std::pair<std::string,std::string>> targets;
     for (const auto& o : state.overrides) {
@@ -1052,7 +1097,7 @@ void validate_annotation_state(const AnnotationState& state, const std::vector<S
 
 json encode_annotation_state(const AnnotationState& state, const std::vector<SymbolDefinition>& catalog) {
     validate_annotation_state(state,catalog);
-    json j{{"version",2},{"catalog_revision",kSymbolCatalogRevision},
+    json j{{"version",3},{"catalog_revision",kSymbolCatalogRevision},
            {"labels",json::array()},{"symbols",json::array()},{"overrides",json::array()}};
     for (const auto& l : state.labels) j["labels"].push_back({{"id",l.id},{"template_id",l.template_id},{"content",l.content},
         {"style",encode_style(l.style)},{"placement",encode_placement(l.placement)},{"visible",l.visible}});
@@ -1062,7 +1107,8 @@ json encode_annotation_state(const AnnotationState& state, const std::vector<Sym
         j["symbols"].push_back({{"id",s.id},{"symbol_id",s.symbol_id},
             {"style",encode_style(s.style)},{"placement",encode_placement(s.placement)},{"visible",s.visible},
             {"definition",encode_symbol_catalog_manifest({definition}).at("entries").at(0)},
-            {"pinned_svg",s.pinned_svg}});
+            {"pinned_svg",s.pinned_svg}, {"width_scale",s.width_scale}, {"depth_scale",s.depth_scale},
+            {"flip_horizontal",s.flip_horizontal}, {"flip_vertical",s.flip_vertical}});
     }
     for (const auto& o : state.overrides) j["overrides"].push_back({{"target_kind",o.target_kind},{"target_id",o.target_id},
         {"style",encode_style(o.style)},{"visible",o.visible}});
@@ -1071,8 +1117,11 @@ json encode_annotation_state(const AnnotationState& state, const std::vector<Sym
 
 AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolDefinition>& catalog) {
     try {
-        check(j.at("version").is_number_integer() && (j.at("version") == 1 || j.at("version") == 2), "Unsupported annotation version");
-        const bool pinned = j.at("version") == 2;
+        check(j.at("version").is_number_integer() &&
+                  (j.at("version") == 1 || j.at("version") == 2 || j.at("version") == 3),
+              "Unsupported annotation version");
+        const bool pinned = j.at("version") != 1;
+        const bool independent_transform = j.at("version") == 3;
         const auto catalog_revision = j.contains("catalog_revision")
             ? j.at("catalog_revision")
             : json(kLegacySymbolCatalogRevision);
@@ -1086,8 +1135,16 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
             l.at("template_id").get<std::string>(),l.at("content").get<std::string>(),decode_style(l.at("style")),
             decode_placement(l.at("placement")),l.at("visible").get<bool>()});
         for (const auto& s : j.at("symbols")) {
+            check(s.is_object() && s.size() == (independent_transform ? 11 : pinned ? 7 : 5),
+                  "Invalid symbol instance keys");
             SymbolInstance instance{s.at("id").get<std::string>(), s.at("symbol_id").get<std::string>(),
                 decode_placement(s.at("placement")),decode_style(s.at("style")),s.at("visible").get<bool>()};
+            if (independent_transform) {
+                instance.width_scale = s.at("width_scale").get<double>();
+                instance.depth_scale = s.at("depth_scale").get<double>();
+                instance.flip_horizontal = s.at("flip_horizontal").get<bool>();
+                instance.flip_vertical = s.at("flip_vertical").get<bool>();
+            }
             if (pinned) {
                 const auto& d = s.at("definition");
                 SymbolDefinition definition;

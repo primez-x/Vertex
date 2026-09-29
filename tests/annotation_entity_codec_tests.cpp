@@ -20,6 +20,10 @@ sketch::AnnotationState fixture() {
     state.labels.front().placement.layer_id = "layer-ground";
     state.symbols.push_back({"symbol-1", catalog.front().id,
                              {{4.0, 5.0}, 0.25, 1.5, "layer-ground"}, {}, true});
+    state.symbols.front().width_scale = 1.7;
+    state.symbols.front().depth_scale = 0.4;
+    state.symbols.front().flip_horizontal = true;
+    state.symbols.front().flip_vertical = true;
     state.overrides.push_back({"area", "area-1", {}, false});
     return state;
 }

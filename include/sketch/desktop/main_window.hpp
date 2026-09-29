@@ -533,7 +533,11 @@ public:
                                       QString fill_color = {},
                                       bool bold = false,
                                       bool italic = false,
-                                      bool style_enabled = false);
+                                      bool style_enabled = false,
+                                      std::optional<QString> width = std::nullopt,
+                                      std::optional<QString> depth = std::nullopt,
+                                      std::optional<bool> flip_horizontal = std::nullopt,
+                                      std::optional<bool> flip_vertical = std::nullopt);
     [[nodiscard]] bool deleteAnnotation(const QString& annotation_id);
     // Imports a local PNG/JPEG/BMP/TIFF raster or first-page PDF into the
     // project Asset store and creates a reference_asset entity with an

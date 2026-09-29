@@ -404,12 +404,13 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
                 const auto found = std::find_if(catalog.begin(), catalog.end(), [&](const auto& item) {
                     return item.id == symbol.symbol_id;
                 });
-                if (found == catalog.end()) {
+                if (found == catalog.end() && !symbol.definition) {
                     diagnostic(result.diagnostics, entity.id, entity.type, "symbol_definition_missing");
                     continue;
                 }
                 try {
-                    for (const auto& stroke : placed_symbol_preview(*found, symbol.placement))
+                    const auto definition = resolved_symbol_definition(symbol, catalog);
+                    for (const auto& stroke : transformed_symbol_preview(definition, symbol))
                         result.drawing.lines.push_back({{stroke.start.x, stroke.start.y},
                                                         {stroke.end.x, stroke.end.y}, "Symbols"});
                 } catch (const std::exception&) {

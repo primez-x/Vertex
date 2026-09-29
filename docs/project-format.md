@@ -1,5 +1,18 @@
 # Vertex project formats v1 through v8
 
+## Symbol instance transforms
+
+Annotation state version 3 adds `width_scale`, `depth_scale`, `flip_horizontal`
+and `flip_vertical` to each saved symbol. Dimensions equal the saved definition's
+physical width/depth multiplied by `placement.scale` and the corresponding axis
+factor. Mirroring and axis scaling act about the saved definition anchor before
+rotation and translation. Factors must be finite, positive and within the saved
+definition's effective scale limits. Rotation remains a model-space radian angle.
+Version 1 and 2 annotations migrate with axis factors of one and both flips false;
+their pinned definition and exact SVG bytes remain unchanged. Labels retain their
+existing placement model. Each resize, flip or rotation is a normal undoable
+document command, and rendering and export consume the same saved transforms.
+
 Vertex projects are standalone SQLite files containing one immutable logical
 document snapshot and the complete command history known when that snapshot was captured.
 The file is an interchange/save artifact. The current foundation keeps the working document

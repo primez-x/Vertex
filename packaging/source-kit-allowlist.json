@@ -2443,6 +2443,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/plan_axis_resize.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/product_scope.hpp"
     },
     {
@@ -2872,6 +2876,10 @@
     {
       "category": "source",
       "path": "src/architecture/document_solid.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/architecture/plan_axis_resize.cpp"
     },
     {
       "category": "source",
@@ -3387,6 +3395,10 @@
     },
     {
       "category": "source",
+      "path": "tests/axis_canvas_controls_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/batch_boundary_clone_desktop_tests.cpp"
     },
     {
@@ -3679,6 +3691,10 @@
     },
     {
       "category": "source",
+      "path": "tests/plan_axis_resize_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/product_scope_tests.cpp"
     },
     {
@@ -3840,6 +3856,10 @@
     {
       "category": "source",
       "path": "tests/symbol_svg_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/symbol_transform_desktop_tests.cpp"
     },
     {
       "category": "source",
