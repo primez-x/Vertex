@@ -58,8 +58,26 @@ Selecting a boundary carrying version-1 `survey_source` and opening **Survey
 traverse** restores its original input directly from the project. The dialog
 identifies this as the original source and recomputes it using the same input
 validation as report reopening. It does not infer revised calls from subsequent
-drawing edits or overwrite the selected boundary. Unsupported source versions
+drawing edits. Unsupported source versions
 show an error; viewing the source leaves project history unchanged.
+
+After correcting the calls and choosing **Calculate**, **Update boundary**
+replaces the selected survey outline in one undoable operation. Its identity,
+current starting point, layer, classification and factor remain intact. The
+entered bearings use north as their reference; this replaces later manual
+rotation or vertex edits rather than inferring new calls from them. The closure
+choice is restored when reopening and saved with the correction. The first
+correction preserves `original_report` and `original_closure`; subsequent
+reports remain recoverable through project history. `placement` records the
+current anchor and called-north orientation.
+
+Surviving call rows keep their vertex and edge identities when their original
+ownership can be established. Changes to leg count or a reordered boundary
+cycle allocate new child identities. Dependent dimensions and constraints must
+still resolve; conflicts block the update without changing the document.
+Receipt-backed and derived boundaries require a receipt-preserving workflow
+and are rejected here. Changing the project while the dialog is open also
+blocks the update until the dialog is reopened.
 
 New survey boundaries persist `properties.calculation_scope = "site"`.
 Earlier survey-classified boundaries without that field are interpreted as
@@ -89,5 +107,4 @@ shown for correction with report export disabled. The default-unit selector
 is explicit and independent of project display units. This is native report
 reopening, not Apex interchange or a signed survey attestation.
 
-Updating existing traverses from survey calls, Apex survey exchange,
-and production survey qualification remain incomplete.
+Apex survey exchange and production survey qualification remain incomplete.

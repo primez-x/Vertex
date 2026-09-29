@@ -31,6 +31,7 @@
 #include "sketch/geometry_operations.hpp"
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/plan_axis_resize.hpp"
+#include "sketch/survey_boundary_update.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
 #include "sketch/room_relationship_geometry_commit.hpp"
@@ -12086,8 +12087,34 @@ public:
         (void)dialog.exec();
     }
 
+    bool updateSurveyBoundary(const QString& boundary_id, const QString& report_json,
+                              bool adjust_final_endpoint, std::optional<Revision> expected_revision) {
+        try {
+            if (m_boundary_session || m_pending_wall_start || !m_pending_symbol_id.isEmpty())
+                throw std::invalid_argument("Finish or cancel the active drawing command before updating a survey.");
+            if (report_json.size() > 4 * 1024 * 1024)
+                throw std::invalid_argument("Survey report exceeds 4 MiB.");
+            const auto source = authoringSnapshot();
+            if (expected_revision && *expected_revision != source.revision())
+                throw std::invalid_argument("The project changed. Reopen the survey before updating its boundary.");
+            const auto command = survey_boundary_update_command(source, boundary_id.toStdString(),
+                json::parse(report_json.toStdString()), adjust_final_endpoint);
+            applyDocumentCommand(command);
+            m_selected_id = boundary_id;
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Update survey: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     void showSurveyCalculator() {
         auto drawing_context = captureModalContext();
+        const auto survey_target = selectedEntity();
+        const auto survey_target_id = survey_target && survey_target->extensions.contains("survey_source")
+            ? QString::fromStdString(survey_target->id) : QString{};
         QDialog dialog(owner);
         dialog.setObjectName(QStringLiteral("surveyCalculator"));
         dialog.setWindowTitle(QStringLiteral("Survey traverse"));
@@ -12148,6 +12175,10 @@ public:
         auto* add_boundary = buttons->addButton(QStringLiteral("Add boundary"), QDialogButtonBox::ActionRole);
         add_boundary->setObjectName(QStringLiteral("surveyAddBoundary"));
         add_boundary->setEnabled(false);
+        auto* update_boundary = buttons->addButton(QStringLiteral("Update boundary"), QDialogButtonBox::ActionRole);
+        update_boundary->setObjectName(QStringLiteral("surveyUpdateBoundary"));
+        update_boundary->setVisible(!survey_target_id.isEmpty());
+        update_boundary->setEnabled(false);
         auto* close_endpoint = new QCheckBox(QStringLiteral("Close the final leg at the origin (adjust its endpoint)"), &dialog);
         close_endpoint->setObjectName(QStringLiteral("surveyCloseEndpoint"));
         close_endpoint->setEnabled(false);
@@ -12186,6 +12217,7 @@ public:
         };
         const auto invalidate = [&] {
             report.reset(); result->clear(); export_report->setEnabled(false); add_boundary->setEnabled(false);
+            update_boundary->setEnabled(false);
             close_endpoint->setChecked(false);
             close_endpoint->setEnabled(false);
             preview->setEntities({});
@@ -12252,6 +12284,8 @@ public:
                 result->setText(summary);
                 export_report->setEnabled(true);
                 add_boundary->setEnabled(d.area_m2.has_value() && m_document->is_editable());
+                update_boundary->setEnabled(d.area_m2.has_value() && m_document->is_editable() &&
+                    !survey_target_id.isEmpty() && m_selected_id == survey_target_id);
                 close_endpoint->setEnabled(d.area_m2.has_value() && d.linear_error_m > 0.0);
                 refresh_preview();
             } catch (const std::exception& error) { result->setText(QString::fromUtf8(error.what())); }
@@ -12281,9 +12315,26 @@ public:
                                             json{{"east", -end.x}, {"north", -end.y}} : json(nullptr)}}}});
                 if (id.isEmpty()) { result->setText(lastError()); return; }
                 drawing_context = captureModalContext();
+                update_boundary->setEnabled(false);
                 fitView();
                 result->setText(QStringLiteral("Survey boundary added. Original measurements are preserved in its source metadata."));
             } catch (const std::exception& error) { result->setText(QString::fromUtf8(error.what())); }
+        });
+        QObject::connect(update_boundary, &QPushButton::clicked, &dialog, [&] {
+            if (!report || survey_target_id.isEmpty()) return;
+            if (!modalContextUnchanged(drawing_context)) {
+                result->setText(QStringLiteral("The project context changed. Reopen Survey traverse before updating geometry."));
+                return;
+            }
+            const bool adjust = close_endpoint->isEnabled() && close_endpoint->isChecked();
+            if (!updateSurveyBoundary(survey_target_id, *report, adjust, drawing_context.revision)) {
+                result->setText(lastError());
+                return;
+            }
+            drawing_context = captureModalContext();
+            update_boundary->setEnabled(false);
+            fitView();
+            result->setText(QStringLiteral("Survey boundary updated. Its identity and origin are retained; corrected calls and closure choice are saved together."));
         });
         const auto restore_input = [&](const json& loaded) {
                 if (!loaded.contains("version") || !loaded.at("version").is_number_integer() ||
@@ -12344,9 +12395,13 @@ public:
                 if (!source.contains("version") || !source.at("version").is_number_integer() || source.at("version") != 1)
                     throw std::invalid_argument("Unsupported stored survey source version.");
                 restore_input(source.at("report"));
-                dialog.setWindowTitle(QStringLiteral("Survey traverse — original source"));
+                if (close_endpoint->isEnabled())
+                    close_endpoint->setChecked(source.value("adjusted_final_endpoint", false));
+                dialog.setWindowTitle(QStringLiteral("Survey traverse — edit boundary calls"));
                 help->setText(help->text() + QStringLiteral(
-                    "\nLoaded original calls from the selected boundary. Later drawing edits are not part of these calls."));
+                    "\nLoaded calls from the selected boundary. Update replaces its current outline at its current origin, "
+                    "restoring the entered north bearings and lengths. Later drawing edits are not retained. "
+                    "Dimensions and constraints remain linked where their call identities survive; conflicting links prevent the update."));
             } catch (const std::exception& error) {
                 result->setText(QStringLiteral("Stored survey source: %1").arg(QString::fromUtf8(error.what())));
             }
@@ -26962,6 +27017,11 @@ bool MainWindow::editSelectedFactor(const QString& expression) {
 
 bool MainWindow::importDistoMeasurement(const QString& payload) {
     return m_impl->importDistoMeasurement(payload);
+}
+
+bool MainWindow::updateSurveyBoundary(const QString& boundary_id, const QString& report_json,
+    bool adjust_final_endpoint, std::optional<Revision> expected_revision) {
+    return m_impl->updateSurveyBoundary(boundary_id, report_json, adjust_final_endpoint, expected_revision);
 }
 
 bool MainWindow::editBoundaryDimension(const QString& id, const QString& x,

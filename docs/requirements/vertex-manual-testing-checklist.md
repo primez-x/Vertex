@@ -1337,6 +1337,12 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 
 ## Survey and georeferencing — when used
 
+- [ ] **U282 — Correct an existing survey boundary's calls**
+  - Steps: Select a survey boundary, open Survey traverse, change a bearing or distance, Calculate, then Update boundary. Undo, Redo, save and reopen it.
+  - Expected: The same boundary updates at its current starting point; its layer and area settings remain. Reopening restores the revised calls and closure choice. Conflicting dimensions or constraints show an error without partially changing the outline.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
 - [ ] **U247 — Enter survey bearings and distances**
   - Expected: The traverse follows the entered course sequence.
   - Result: Not tested

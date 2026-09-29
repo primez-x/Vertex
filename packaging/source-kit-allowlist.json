@@ -2547,6 +2547,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/survey_boundary_update.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/survey_contract.hpp"
     },
     {
@@ -3188,6 +3192,10 @@
     {
       "category": "source",
       "path": "src/core/slab_semantics.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/survey_boundary_update.cpp"
     },
     {
       "category": "source",
@@ -3851,7 +3859,15 @@
     },
     {
       "category": "source",
+      "path": "tests/survey_boundary_update_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/survey_contract_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/survey_update_desktop_tests.cpp"
     },
     {
       "category": "source",

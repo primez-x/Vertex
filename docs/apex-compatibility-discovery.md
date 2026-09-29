@@ -38,6 +38,37 @@ exists elsewhere. Native extensions and signatures must be verified from
 actual files or authoritative format evidence; similarly named products and
 file-extension directories are not sufficient evidence.
 
+## Official installer interface inspection — 2026-09-29
+
+The official downloads page links
+`https://apexwin.com/downloads/apexsketchv7/Apex-Sketchv7-USA.msi`.
+The downloaded installer was 21,577,728 bytes, SHA256
+`01ad13b988d3e8fee7862c98aac9e12dd2b3c40edbc4abcd97a3c52c001dffda`.
+Read-only inspection of its 396-entry File table found integration assemblies
+and `Apex.Integration.tlb`, but no native sketch sample files. This is a bounded
+inventory result, not proof that samples are unavailable elsewhere.
+
+Only the type library was extracted for metadata inspection with
+`LoadTypeLibEx(REGKIND_NONE)`. Its SHA256 was
+`873f588b3d4db9c554b0c845a13b505415381322b49fc990c6c7f5a15e87b605`.
+The installer was not run, installed, or registered. No vendor implementation
+or artwork was incorporated into Vertex.
+
+The public caller interface `ISketchClient` has IID
+`7ee40959-4d4c-41b4-a807-4de9e0848a80`. Creatable coclasses include
+`ApexSketch` (CLSID `8665ac21-01ae-4156-90f0-ea54df1cb6e2`) and
+`SketchClient` (CLSID `8336a4aa-e39c-487e-a34c-bc451f6e4775`). Signatures
+include `Open(string path)`, `OpenToPage(string path, int pageIndex)`,
+`OpenFromBase64String(string base64Sketch, int pageIndex)`,
+`SaveAsBase64String()`, and `ISketch.SaveAs(string path)`. Image and Base64-page
+exports have separate methods: rendered output must not be substituted for
+native sketch data.
+
+These signatures identify concrete interface discovery targets. Native data
+schema, Base64 payload semantics, export-options grammar, page-index origin,
+ProgIDs, activation dependencies and actual caller interoperability remain
+unestablished. No compatibility requirement is certified by metadata inspection.
+
 ## Required fixture capture
 
 Each source fixture needs its original hash, producing application/edition,

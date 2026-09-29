@@ -612,6 +612,20 @@ every write. Save fails closed unless Windows identifies the destination as a lo
 using NTFS or ReFS; UNC paths, mapped network drives, removable media, and other filesystems are
 outside the durability boundary and are rejected before staging.
 
+## Survey source corrections
+
+Survey measurement boundaries carry `extensions.survey_source.version = 1`.
+`report` contains the currently entered calls and their recomputed results;
+`added_closing_segment`, `adjusted_final_endpoint`, and `endpoint_adjustment_m`
+record the closure choice. The first call-based correction retains
+`original_report` and `original_closure`. Corrections also write `placement`
+with `version: 1`, metre `anchor_m: [x,y]`, and
+`orientation: "called_north_bearings"`. Other source extensions are preserved.
+These optional metadata fields use existing entity/history storage and do not
+raise the storage version. Undo and redo restore the geometry and source
+metadata together. See [survey contracts](survey-georeferencing-contracts.md)
+for input validation and dependent-target rules.
+
 ## Boundary-constraint transaction history (v8)
 
 Version 8 adds nullable `revisions.boundary_constraint_changes_json`. A present

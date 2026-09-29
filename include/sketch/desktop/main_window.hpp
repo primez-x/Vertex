@@ -447,6 +447,11 @@ public:
     // compatible field. The reading's original unit and capture provenance
     // are retained in the selected entity's extension metadata.
     [[nodiscard]] bool importDistoMeasurement(const QString& payload);
+    // Recomputes corrected survey calls and replaces the existing outline in
+    // one revision-fenced command. The current origin and identity remain.
+    [[nodiscard]] bool updateSurveyBoundary(const QString& boundary_id,
+        const QString& report_json, bool adjust_final_endpoint = false,
+        std::optional<Revision> expected_revision = std::nullopt);
     // Edits only the dimension's placement and presentation, preserving its
     // stable source target. X/Y use the current input units unless suffixed.
     [[nodiscard]] bool editBoundaryDimension(const QString& id, const QString& x,
