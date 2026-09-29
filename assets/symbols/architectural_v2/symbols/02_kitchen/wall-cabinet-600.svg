@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="666" height="416" viewBox="-33 -33 666 416" role="img" aria-labelledby="wall-cabinet-600--title wall-cabinet-600--desc" data-vertex-style="white-outline-2">
+<title id="wall-cabinet-600--title">Wall / upper cabinet · 600 mm</title>
+<desc id="wall-cabinet-600--desc">Overhead cabinet plan projection with dashed footprint and single door. Nominal footprint 600 by 350 millimetres. Front is +Y. Transparent background. No clearance or construction certification.</desc>
+<g id="wall-cabinet-600--artwork" fill="none" stroke="#111111" stroke-width="7" stroke-linejoin="round">
+<rect x="0" y="0" width="600" height="350" stroke-dasharray="24 14" />
+<path d="M12 338 H588" stroke-dasharray="24 14" />
+<path d="M20 20 L580 328 M580 20 L20 328" stroke="#b8b8b8" stroke-width="2" stroke-dasharray="12 12" />
+<path d="M475 344 H535" stroke-width="5" />
+</g>
+</svg>

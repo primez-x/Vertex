@@ -87,6 +87,20 @@
 
 namespace {
 
+class ScenarioTiming {
+public:
+    explicit ScenarioTiming(const char* name) : name_(name), start_(std::chrono::steady_clock::now()) {
+        std::cout << "[scenario start] " << name_ << std::endl;
+    }
+    ~ScenarioTiming() {
+        const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_).count();
+        std::cout << "[scenario end] " << name_ << " " << elapsed << "s" << std::endl;
+    }
+private:
+    const char* name_;
+    std::chrono::steady_clock::time_point start_;
+};
+
 [[noreturn]] void fail(std::string_view message) {
     std::cerr << "desktop_smoke: " << message << '\n';
     std::exit(1);
@@ -112,6 +126,7 @@ QTreeWidgetItem* navigator_item(sketch::desktop::MainWindow& window, const QStri
 }
 
 void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
+    const ScenarioTiming scenario_timing(__func__);
     const auto original_name = QCoreApplication::applicationName();
     const auto original_test_mode = QStandardPaths::isTestModeEnabled();
     QStandardPaths::setTestModeEnabled(true);
@@ -449,6 +464,7 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
 }
 
 void test_project_subject_metadata() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     require(window.selectEntity(QStringLiteral("property-1")),
@@ -500,6 +516,7 @@ void test_project_subject_metadata() {
 }
 
 void test_second_open_is_read_only() {
+    const ScenarioTiming scenario_timing(__func__);
     QTemporaryDir directory;
     require(directory.isValid(), "ownership fixture needs a temporary directory");
     const auto path = directory.filePath(QStringLiteral("owned-project.bldproj"));
@@ -520,6 +537,7 @@ void test_second_open_is_read_only() {
 }
 
 void test_plan_canvas_native_pointer_events() {
+    const ScenarioTiming scenario_timing(__func__);
     sketch::desktop::PlanCanvas canvas;
     canvas.resize(800, 600);
     canvas.setTool(sketch::desktop::CanvasTool::boundary);
@@ -598,6 +616,7 @@ void test_plan_canvas_native_pointer_events() {
 }
 
 void test_canvas_symbol_transform_persistence() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     const auto symbol_id = window.createAnnotationSymbol(
@@ -651,6 +670,7 @@ void test_canvas_symbol_transform_persistence() {
 }
 
 void test_external_project_change_blocks_save() {
+    const ScenarioTiming scenario_timing(__func__);
     QTemporaryDir directory;
     require(directory.isValid(), "external-change fixture needs a temporary directory");
     const auto path = directory.filePath(QStringLiteral("external-change.bldproj"));
@@ -674,6 +694,7 @@ void test_external_project_change_blocks_save() {
 }
 
 void test_workspace_profiles() {
+    const ScenarioTiming scenario_timing(__func__);
     const auto original_name = QCoreApplication::applicationName();
     const auto original_test_mode = QStandardPaths::isTestModeEnabled();
     QStandardPaths::setTestModeEnabled(true);
@@ -757,6 +778,7 @@ void test_workspace_profiles() {
 }
 
 void test_room_boundary_from_existing_geometry() {
+    const ScenarioTiming scenario_timing(__func__);
     sketch::desktop::MainWindow window;
     const auto first = window.createStraightWall({0.0, 0.0}, {4.0, 0.0}, QStringLiteral("exterior"));
     const auto second = window.createStraightWall({4.0, 0.0}, {4.0, 3.0}, QStringLiteral("exterior"));
@@ -789,6 +811,7 @@ void test_room_boundary_from_existing_geometry() {
 }
 
 void test_room_volume_authoring_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     const Boundary boundary = {
@@ -1110,6 +1133,7 @@ void test_room_volume_authoring_workflow() {
 }
 
 void test_multiple_selection_clipboard_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     const auto first = window.createStraightWall({0, 0}, {5, 0}, "exterior");
@@ -1169,6 +1193,7 @@ void test_multiple_selection_clipboard_workflow() {
 }
 
 void test_selection_clipboard_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     const auto wall_id = window.createStraightWall({0.0, 0.0}, {5.0, 0.0},
@@ -1244,6 +1269,7 @@ void test_selection_clipboard_workflow() {
 }
 
 void test_wall_transform_workflow(const QString& capture_directory) {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     const auto wall_id=window.createStraightWall({0,0},{4,0});
@@ -1378,6 +1404,7 @@ void test_wall_transform_workflow(const QString& capture_directory) {
 }
 
 void test_sloped_wall_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     const auto wall_id = window.createSlopedWall({0.0, 0.0}, {4.0, 0.0}, "1 m");
@@ -1410,6 +1437,7 @@ void test_sloped_wall_workflow() {
 }
 
 void test_material_clipboard_transfer() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow source;
     const auto wall_id=source.createStraightWall({0,0},{5,0});
@@ -1506,6 +1534,7 @@ void test_material_clipboard_transfer() {
 }
 
 void test_delete_selection_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     const auto wall_id = window.createStraightWall({0.0, 0.0}, {5.0, 0.0});
@@ -1544,6 +1573,7 @@ void test_delete_selection_workflow() {
 }
 
 void test_boundary_vertex_insertion_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     const auto boundary_id = window.createBoundary(
@@ -1645,6 +1675,7 @@ void test_boundary_vertex_insertion_workflow() {
 }
 
 void test_direct_boundary_geometry_edit_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     BoundaryAuthoringOptions options;
     BoundaryAuthoringSession session(BoundaryAuthoringMode::draw_first, options);
@@ -1832,6 +1863,7 @@ void test_direct_boundary_geometry_edit_workflow() {
 }
 
 void test_boundary_redefinition_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     const auto boundary_id = window.createBoundary(
@@ -1875,6 +1907,7 @@ void test_boundary_redefinition_workflow() {
 }
 
 void test_automatic_room_boundary_detection_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     const auto wall_ids = QStringList{
@@ -1915,6 +1948,7 @@ void test_automatic_room_boundary_detection_workflow() {
 }
 
 void test_explicit_boundary_geometry_operations() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     const auto same_point = [](Vec2 left, Vec2 right) {
@@ -1973,6 +2007,7 @@ void test_explicit_boundary_geometry_operations() {
 }
 
 void test_named_revisions() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     auto* action = window.findChild<QAction*>(QStringLiteral("revisionHistory"));
@@ -2046,6 +2081,7 @@ void test_named_revisions() {
 }
 
 void test_boundary_transform_workflow(const QString& capture_directory) {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     const auto boundary_id = window.createBoundary(
@@ -2227,6 +2263,7 @@ void test_boundary_transform_workflow(const QString& capture_directory) {
 }
 
 void test_organization_context() {
+    const ScenarioTiming scenario_timing(__func__);
     sketch::desktop::MainWindow window;
     const auto second_building = window.createBuilding("property-1", "Workshop");
     require(!second_building.isEmpty(), "create a second building");
@@ -2299,6 +2336,7 @@ void test_organization_context() {
 }
 
 void test_terrain_surface_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     const Boundary boundary{
@@ -2345,6 +2383,7 @@ void test_terrain_surface_workflow() {
 }
 
 void test_building_form_authoring_and_quantity_history() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     const std::vector<BuildingObject> objects{
@@ -2468,6 +2507,7 @@ void test_building_form_authoring_and_quantity_history() {
 }
 
 void test_contextual_building_dimension_inspector(const QString& capture_directory) {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     window.setMetricUnits(true);
@@ -2643,6 +2683,7 @@ void test_contextual_building_dimension_inspector(const QString& capture_directo
 }
 
 void test_material_assignment_inspector(const QString& capture_directory) {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     window.setWorkspace(desktop::Workspace::architectural);
@@ -2697,6 +2738,7 @@ void test_material_assignment_inspector(const QString& capture_directory) {
 }
 
 void test_roof_opening_authoring(const QString& capture_directory) {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     window.setMetricUnits(true);
@@ -2809,6 +2851,7 @@ void test_roof_opening_authoring(const QString& capture_directory) {
 }
 
 void test_hip_roof_authoring(const QString& capture_directory) {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     window.setWorkspace(desktop::Workspace::architectural);
@@ -2857,6 +2900,7 @@ void test_hip_roof_authoring(const QString& capture_directory) {
 }
 
 void test_contextual_roof_dimension_inspector() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     window.setWorkspace(desktop::Workspace::architectural);
@@ -2953,6 +2997,7 @@ void test_contextual_roof_dimension_inspector() {
 }
 
 void test_contextual_gable_roof_inspector(const QString& capture_directory) {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     window.setWorkspace(desktop::Workspace::architectural);
@@ -3026,6 +3071,7 @@ void test_contextual_gable_roof_inspector(const QString& capture_directory) {
 }
 
 void test_georeferencing_workflow(const QString& capture_directory) {
+    const ScenarioTiming scenario_timing(__func__);
     sketch::desktop::MainWindow window;
     QTemporaryDir directory;
     require(directory.isValid(), "georeferencing project directory");
@@ -3109,6 +3155,7 @@ void test_georeferencing_workflow(const QString& capture_directory) {
 }
 
 void test_survey_calculator(const QString& capture_directory) {
+    const ScenarioTiming scenario_timing(__func__);
     sketch::desktop::MainWindow window;
     QString survey_id;
     QTemporaryDir directory;
@@ -3264,6 +3311,7 @@ void test_survey_calculator(const QString& capture_directory) {
 }
 
 void test_survey_explicit_endpoint_closure() {
+    const ScenarioTiming scenario_timing(__func__);
     sketch::desktop::MainWindow window;
     auto* action = window.findChild<QAction*>("surveyTraverse");
     const auto revision = window.document().revision();
@@ -3310,6 +3358,7 @@ void test_survey_explicit_endpoint_closure() {
 }
 
 void test_design_phase_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     const auto wall_id = window.createStraightWall({0.0, 0.0}, {4.0, 0.0});
@@ -3486,6 +3535,7 @@ void test_design_phase_workflow() {
 }
 
 void test_phase_authoring_ownership() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     const auto legacy = window.createStraightWall({0, 0}, {4, 0});
@@ -3580,6 +3630,7 @@ void test_phase_authoring_ownership() {
 }
 
 void test_room_relationship_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     const auto wall_id = window.createStraightWall({0.0, 0.0}, {4.0, 0.0});
@@ -3771,6 +3822,7 @@ void test_room_relationship_workflow() {
 }
 
 void test_hosted_opening_editor(const QString& capture_directory) {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     window.setMetricUnits(true);
@@ -3889,6 +3941,7 @@ void test_hosted_opening_editor(const QString& capture_directory) {
 }
 
 void test_material_color_catalog(const QString& capture_directory) {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     const auto model = [&] {
@@ -3931,6 +3984,7 @@ void test_material_color_catalog(const QString& capture_directory) {
 }
 
 void test_assembly_catalog_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     auto* action = window.findChild<QAction*>(QStringLiteral("assemblyCatalog"));
@@ -4048,6 +4102,7 @@ void test_assembly_catalog_workflow() {
 }
 
 void test_assembly_placement_plan_preview() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     auto catalog = Entity::create("assembly_model", {
         {"model", AssemblyModel::create(
@@ -4103,6 +4158,7 @@ void test_assembly_placement_plan_preview() {
 }
 
 void test_vertical_levels_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     auto* action = window.findChild<QAction*>(QStringLiteral("verticalLevels"));
@@ -4254,6 +4310,7 @@ void test_vertical_levels_workflow() {
 }
 
 void test_reference_grid_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     auto* action = window.findChild<QAction*>(QStringLiteral("referenceGrids"));
@@ -4351,6 +4408,7 @@ void test_reference_grid_workflow() {
 }
 
 void test_calculation_deduction_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     const auto outer_id = window.createRoomBoundary(
@@ -4477,6 +4535,7 @@ void test_calculation_deduction_workflow() {
 }
 
 void test_market_scoped_architectural_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     const auto scope = ProductScopeProfile::production_scope();
     scope.validate();
@@ -4685,6 +4744,7 @@ void test_market_scoped_architectural_workflow() {
 }
 
 void test_pdf_export_atomicity() {
+    const ScenarioTiming scenario_timing(__func__);
     QTemporaryDir directory;
     require(directory.isValid(), "PDF atomicity fixture needs a temporary directory");
     sketch::desktop::MainWindow window;
@@ -4782,6 +4842,7 @@ void test_pdf_export_atomicity() {
 }
 
 void test_drawing_set_pdf_and_ordering() {
+    const ScenarioTiming scenario_timing(__func__);
     QTemporaryDir directory;
     require(directory.isValid(), "drawing-set fixture needs a temporary directory");
     sketch::desktop::MainWindow window;
@@ -4935,6 +4996,7 @@ void test_drawing_set_pdf_and_ordering() {
 }
 
 void test_coordinated_view_output_identity() {
+    const ScenarioTiming scenario_timing(__func__);
     QTemporaryDir directory;
     require(directory.isValid(), "view output fixture directory");
     sketch::desktop::MainWindow window;
@@ -5143,6 +5205,7 @@ void test_coordinated_view_output_identity() {
 }
 
 void test_architectural_authoring_commands() {
+    const ScenarioTiming scenario_timing(__func__);
     sketch::desktop::MainWindow window;
     auto* menu = window.findChild<QMenu*>(QStringLiteral("architecturalAuthoringMenu"));
     require(menu != nullptr, "architectural authoring must have a discoverable menu");
@@ -5293,6 +5356,7 @@ void test_architectural_authoring_commands() {
 }
 
 void test_cross_view_source_editing() {
+    const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
     desktop::MainWindow window;
     window.setMetricUnits(true);
@@ -5364,6 +5428,23 @@ void test_cross_view_source_editing() {
     select_view("view-elevation");
     const auto original_wall = bounds(projection(wall));
     (void)projection(opening);
+    const auto selection_revision = window.document().revision();
+    for (const auto* view : {"view-elevation", "view-section", "view-elevation"}) {
+        select_view(view);
+        const auto wall_bounds = bounds(projection(wall));
+        const auto opening_bounds = bounds(projection(opening));
+        for (int repeat = 0; repeat != 3; ++repeat) {
+            require(window.selectEntity(wall) && projection(wall).selected &&
+                        !projection(opening).selected &&
+                        window.selectEntity(opening) && projection(opening).selected &&
+                        !projection(wall).selected &&
+                        bounds(projection(wall)) == wall_bounds &&
+                        bounds(projection(opening)) == opening_bounds,
+                    "reused view projections must preserve geometry and apply current selection");
+        }
+    }
+    require(window.document().revision() == selection_revision,
+            "selection-only projection reuse must not change the source revision");
     double_click_source(wall);
     const auto before_wall = window.document().snapshot();
     auto* height = window.findChild<QLineEdit*>("inspectorHeight");
@@ -5423,6 +5504,7 @@ void test_cross_view_source_editing() {
 }
 
 void test_section_overlay_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
     sketch::desktop::MainWindow window;
     auto* action = window.findChild<QAction*>("manageNamedViews");
     require(action, "section overlay editor action");

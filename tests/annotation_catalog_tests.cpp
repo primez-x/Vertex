@@ -76,7 +76,7 @@ int main() {
             "<svg xmlns=\"http://www.w3.org/2000/svg\"><path fill=\"url(https://example.test/a)\"/></svg>";
         rejected([&] { (void)decode_annotation_state(malformed_pin, {original}); });
     }
-    require(catalog.size() == 1129, "Preserve 809 legacy symbols and add all 320 SVG symbols");
+    require(catalog.size() == 1131, "Preserve 809 legacy symbols and expose 322 SVG symbols");
     const auto svg_toilets = filter_symbol_catalog(catalog, "Toilet Close Coupled", "01_bathroom");
     require(svg_toilets.size() == 1 &&
                 svg_toilets.front().id == "svg-v2-01_bathroom-toilet-close-coupled",
@@ -93,7 +93,7 @@ int main() {
         require(!definition.name.empty() && asset.view_box[2] > 0 && asset.view_box[3] > 0,
                 "SVG renderers require human names and positive intrinsic bounds");
     }
-    require(svg_count == 320 && nominal_count == 208 && svg_categories.size() == 25,
+    require(svg_count == 322 && nominal_count == 210 && svg_categories.size() == 25,
             "Import complete SVG category coverage without inventing nominal dimensions");
     AnnotationState every_symbol;
     for (const auto& definition : catalog)

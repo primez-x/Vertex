@@ -24,7 +24,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - Text, labels and dimensions (11 tasks)
 - Reference plans and tracing (10 tasks)
 - Navigation and input (9 tasks)
-- Walls, doors and windows in 3D mode (14 tasks)
+- Walls, doors and windows in 2D and 3D (14 tasks)
 - Other building objects and levels (21 tasks)
 - Remodeling alternatives (6 tasks)
 - 3D views, elevations and sections (8 tasks)
@@ -604,7 +604,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 ## Symbols, furniture and component library
 
 - [ ] **U109 — Open the visible component library**
-  - Expected: The left-panel Symbols tab opens without a modal. All categories reports 320 placeable components from the supplied architectural SVG library. Old procedural compatibility definitions do not clutter the placement list.
+  - Expected: The left-panel Symbols tab opens without a modal. All categories reports 322 placeable components, including the supplied SVG library and two overhead wall cabinets. Search for base cabinet, wall cabinet, and fridge. Old procedural compatibility definitions do not clutter the placement list.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -848,10 +848,10 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 
-## Walls, doors and windows in 3D mode
+## Walls, doors and windows in 2D and 3D
 
 - [ ] **U156 — Draw a straight architectural wall**
-  - Expected: Clicking the start and end points on empty Architectural plan canvas creates a wall with editable length, height and thickness in plan and 3D.
+  - Expected: In the Library tab, choose Wall, enter thickness and height, then click its start and end points. Both faces of the wall appear at the entered physical thickness in 2D; 3D shows the same wall. Changing thickness later updates the footprint.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -876,7 +876,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U161 — Insert a door into a wall**
-  - Expected: It is hosted in the selected wall at the chosen position.
+  - Expected: Choose Door in the Library tab, set its width and height, then move onto an existing wall. A placement preview shows the opening and swing before clicking. The door cuts that wall and remains hosted there after save/reopen.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -896,7 +896,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U165 — Insert a window into a wall**
-  - Expected: The window and opening appear in the intended wall.
+  - Expected: Choose Window in the Library tab, set its width, height and sill, then click the placement preview on an existing wall. The window and opening appear in that wall in 2D, elevation and 3D.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -1099,7 +1099,8 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U203 — Add annotations or detail to a view**
-  - Expected: They belong to the intended view and persist after reopening.
+  - Steps: Open **Named elevations and sections**, select a section, and add a dimension annotation. Choose a wall under **Measure object**, choose **Width** or **Height**, and enter the line offset. Save, then change that wall's length or height.
+  - Expected: The dimension line, witnesses, and value follow the wall's new size. Changing the offset moves the dimension without changing its value. Undo/redo and save/reopen retain the binding; PDF uses the same value. Choose **Detached** to retain an independent endpoint measurement, then delete its former wall: the detached dimension remains.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

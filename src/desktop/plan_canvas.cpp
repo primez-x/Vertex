@@ -272,6 +272,12 @@ std::optional<QPainterPath> closed_entity_path(const CanvasEntity& entity) {
     return path;
 }
 
+bool wall_baseline_only(const CanvasEntity& entity) {
+    // Semantic projections already carry both wall faces and opening gaps.
+    // Only the legacy single-baseline representation needs a thickness pen.
+    return entity.type == QStringLiteral("wall") && entity.segments.size() == 1;
+}
+
 void append_boundary_strokes(QPainterPath& path, const Boundary& boundary) {
     for (const auto& segment : boundary) {
         path.moveTo(segment.start.x, segment.start.y);
@@ -1446,7 +1452,7 @@ std::optional<QRectF> PlanCanvas::selectionBounds(const QRectF& viewport) const 
         if (!entity.selected) continue;
         const auto preview = m_move_preview_delta && m_move_ids.contains(entity.id)
             ? *m_move_preview_delta : Vec2{};
-        const auto width = entity.type == QStringLiteral("wall")
+        const auto width = wall_baseline_only(entity)
             ? std::max(entity.thickness_metres, 0.04) : entity.stroke_width_metres;
         const auto padding = std::isfinite(width) && width > 0.0 ? width * m_scale * 0.5 : 1.5;
         for (const auto& segment : entity.segments) {
@@ -1617,6 +1623,8 @@ void PlanCanvas::drawSelectionFrame(QPainter& painter, const QRectF& viewport) c
             painter.drawEllipse(handle, 5.0, 5.0);
         }
     }
+    // Transform handles use a white fill; the placement frame must stay clear.
+    painter.setBrush(Qt::NoBrush);
     painter.setPen(QPen(QColor(37, 99, 235), 1.5));
     painter.drawRect(*frame);
     painter.restore();
@@ -1851,7 +1859,7 @@ QStringList PlanCanvas::rectangleHits(const QRectF& rectangle, bool crossing) co
         append_boundary_strokes(path, entity.segments);
         for (const auto& hole : entity.holes) append_boundary_strokes(path, hole);
         QPainterPathStroker stroker;
-        const auto width = entity.type == QStringLiteral("wall")
+        const auto width = wall_baseline_only(entity)
             ? std::max(entity.thickness_metres, 0.04) * m_scale
             : entity.stroke_width_metres * m_scale;
         stroker.setWidth(std::isfinite(width) ? std::max(3.0, width) : 3.0);
@@ -2344,7 +2352,7 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
         // turning their persisted geometry into model-space wall thickness.
         pen.setCosmetic(true);
         pen.setWidthF(std::max(1.15, entity.stroke_width_metres * m_scale));
-    } else if (entity.type == QStringLiteral("wall")) {
+    } else if (wall_baseline_only(entity)) {
         pen.setWidthF(std::max(entity.thickness_metres, 0.04));
     } else if (entity.stroke_width_metres > 0.0 &&
                std::isfinite(entity.stroke_width_metres)) {

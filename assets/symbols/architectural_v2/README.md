@@ -2,7 +2,7 @@
 
 Standalone residential architectural plan symbols for Vertex and other sketching/CAD applications.
 
-- 320 individual SVG files
+- 322 individual SVG files (320 imported symbols and two overhead wall cabinets)
 - Organized by category
 - 100×100 viewBox for newly added symbols; original Vertex components retain their native scalable viewBoxes
 - White fill, dark defined linework, minimal/no 3D depth
@@ -11,3 +11,8 @@ Standalone residential architectural plan symbols for Vertex and other sketching
 `index.json` and `index.csv` provide searchable filenames and categories.
 
 All symbols are individual editable SVG documents.
+
+The user-authorized print-friendly revision uses predominantly white surfaces,
+black structural outlines and subtle light-gray edge shading. Original detailed
+geometry and nominal sizes are retained. Dark screens, burners and openings stay
+dark, and highlight strokes remain subordinate. See `SOURCE.md` for provenance.

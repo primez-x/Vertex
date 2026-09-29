@@ -88,27 +88,30 @@ QByteArray checkedPayload(const sketch::desktop::CanvasEntity& entity) {
     return symbol.document;
 }
 
-void requireInteriorDetail(const QImage& image, QRect interior) {
+void requireInteriorDetail(const QImage& image, QRect interior, bool white_surfaces = true) {
     std::set<QRgb> colors;
-    int marked = 0;
+    int marked = 0, white = 0;
     interior = interior.intersected(image.rect());
     require(interior.width() > 10 && interior.height() > 10, "empty symbol detail sample");
     for (int y = interior.top(); y <= interior.bottom(); ++y) {
         for (int x = interior.left(); x <= interior.right(); ++x) {
             const auto color = image.pixelColor(x, y);
+            if (color.alpha() > 200 && std::min({color.red(), color.green(), color.blue()}) > 245)
+                ++white;
             if (color.alpha() > 200 && std::min({color.red(), color.green(), color.blue()}) < 240) {
                 ++marked;
                 colors.insert(color.rgb());
             }
         }
     }
-    // An unfilled rectangle has no interior marks; a flat filled rectangle has
-    // one color. The supplied sofa has cushion linework and shaded upholstery.
-    require(marked > interior.width() * interior.height() / 8 && colors.size() > 16,
-            "symbol rendering lost the SVG interior upholstery/cushion detail");
+    // White upholstery is intentional. Interior seams must still be present;
+    // neither a blank rectangle nor the previous broad gray fill satisfies this.
+    const auto area = interior.width() * interior.height();
+    require(marked > area / 200 && (!white_surfaces || white > area / 2) && colors.size() > 8,
+            "symbol rendering must retain cushion seams and primarily white surfaces");
 }
 
-QImage renderSymbol(sketch::desktop::CanvasEntity entity) {
+QImage renderSymbol(sketch::desktop::CanvasEntity entity, bool white_surfaces = true) {
     entity.selected = false;
     sketch::desktop::PlanCanvas canvas;
     canvas.setGridEnabled(false);
@@ -121,17 +124,87 @@ QImage renderSymbol(sketch::desktop::CanvasEntity entity) {
     painter.end();
     // At 200 px/m the known 2.25 x .95 m footprint is 450 x 190 px.
     // The crop excludes every footprint edge by 20 px, plus artwork padding.
-    requireInteriorDetail(image, QRect(245, 175, 410, 150));
+    requireInteriorDetail(image, QRect(245, 175, 410, 150), white_surfaces);
     return image;
 }
 
 QByteArray recoloredArtwork(QByteArray document) {
     const auto original = document;
-    document.replace("#e6e7e8", "#ff0000");
+    document.replace("#ffffff", "#ff0000");
     require(document != original, "SVG artwork fixture could not be made visibly distinct");
     QSvgRenderer renderer(document);
     require(renderer.isValid(), "modified historical SVG fixture is invalid");
     return document;
+}
+
+QImage requireTransparentSelection(const sketch::desktop::CanvasEntity& entity,
+                                  bool require_transparent_surroundings = false) {
+    sketch::desktop::PlanCanvas canvas;
+    canvas.resize(900, 500);
+    canvas.setGridEnabled(true);
+    canvas.setSnapEnabled(false);
+    canvas.setCanvasBackground(QColor(40, 48, 60));
+    canvas.setEntities({entity});
+    canvas.fitView();
+    const auto render = [&] {
+        QImage image(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        canvas.renderScene(painter, QRectF(canvas.rect()));
+        return image;
+    };
+    canvas.setSelectedIds({});
+    const auto unselected = render();
+    canvas.setEntities({});
+    const auto grid = render();
+    canvas.setEntities({entity});
+    canvas.setSelectedId(entity.id);
+    const auto frame = canvas.selectionBounds();
+    require(frame.has_value(), "selected SVG has no placement frame");
+    const auto interior = frame->adjusted(12, 12, -12, -12).toAlignedRect();
+    int artwork_pixels = 0;
+    int transparent_pixels = 0;
+    for (int y = interior.top(); y <= interior.bottom(); ++y) {
+        for (int x = interior.left(); x <= interior.right(); ++x) {
+            if (unselected.pixel(x, y) == grid.pixel(x, y)) ++transparent_pixels;
+            else ++artwork_pixels;
+        }
+    }
+    require(artwork_pixels > 100 &&
+                (!require_transparent_surroundings || transparent_pixels > 100),
+            "selection fixture must cover both artwork and transparent surroundings");
+    for (const auto handles : {std::pair{false, false}, std::pair{true, false},
+                               std::pair{false, true}, std::pair{true, true}}) {
+        canvas.setSelectionTransformEnabled(handles.first, handles.second);
+        const auto selected = render();
+        require(selected.copy(interior) == unselected.copy(interior),
+                "selection frame overpainted SVG detail or the grid outside its silhouette");
+        require(selected != unselected, "selected SVG must retain a visible placement frame");
+        require(canvas.selectionBounds() == frame,
+                "transform handles changed the symbol placement footprint");
+    }
+    return render();
+}
+
+sketch::desktop::CanvasEntity selectionFixture() {
+    sketch::desktop::CanvasEntity entity;
+    entity.id = QStringLiteral("selection-fixture");
+    entity.type = QStringLiteral("symbol");
+    entity.segments = {{{-1, -.5}, {1, -.5}, 0}, {{1, -.5}, {1, .5}, 0},
+                       {{1, .5}, {-1, .5}, 0}, {{-1, .5}, {-1, -.5}, 0}};
+    sketch::desktop::CanvasSvgSymbol symbol;
+    symbol.catalog_id = entity.id;
+    symbol.document = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+        <rect x="35" y="20" width="130" height="60" rx="15" fill="white" stroke="black"/>
+        <path d="M45 30H155M45 70H155M65 20V80M135 20V80" stroke="black" fill="none"/>
+        </svg>)";
+    symbol.artwork_sha256 = QCryptographicHash::hash(symbol.document,
+        QCryptographicHash::Sha256).toHex();
+    symbol.view_box = symbol.footprint_view_box = QRectF(0, 0, 200, 100);
+    symbol.width_metres = 2.0;
+    symbol.depth_metres = 1.0;
+    entity.svg_symbol = std::move(symbol);
+    return entity;
 }
 
 void requireIndependentArtworkCache(sketch::desktop::CanvasEntity current,
@@ -160,7 +233,7 @@ void requireIndependentArtworkCache(sketch::desktop::CanvasEntity current,
     require(forward == reverse,
             "SVG renderer cache aliases different pinned artwork with one catalog ID");
     historical.svg_symbol->position = current.svg_symbol->position;
-    require(renderSymbol(current) != renderSymbol(historical),
+    require(renderSymbol(current) != renderSymbol(historical, false),
             "historical SVG fixture is not visually distinct from installed artwork");
 }
 
@@ -193,7 +266,7 @@ void requireAllBundledSvgsRenderable() {
         }
         require(visible, "bundled SVG rendered no visible pixels");
     }
-    require(count == 320, "desktop bundle must contain every supplied SVG symbol");
+    require(count == 322, "desktop bundle must contain every supplied SVG symbol");
 }
 
 void requireSvgDropAccepted(const QString& symbol_id) {
@@ -308,6 +381,11 @@ int main(int argc, char** argv) {
     QCoreApplication::setApplicationName(QStringLiteral("Vertex-svg-test-") +
         QUuid::createUuid().toString(QUuid::WithoutBraces));
     try {
+        if (app.arguments().contains(QStringLiteral("--selection-only"))) {
+            requireTransparentSelection(selectionFixture(), true);
+            std::cout << "symbol selection transparency checks passed\n";
+            return 0;
+        }
         const auto symbol_id = QStringLiteral("svg-v2-04_living-sofa-three-seat");
         sketch::desktop::MainWindow window;
         window.resize(1500, 1000);
@@ -324,14 +402,14 @@ int main(int argc, char** argv) {
         categories->setCurrentIndex(0);
         search->clear();
         QApplication::processEvents();
-        require(library->count() == 320,
+        require(library->count() == 322,
                 "visible library must contain the complete supplied SVG set only");
         for (int index = 0; index < library->count(); ++index) {
             require(library->item(index)->data(Qt::UserRole).toString().startsWith(
                         QStringLiteral("svg-v2-")),
                     "legacy procedural compatibility symbol leaked into the visible library");
         }
-        require(status->text().contains(QStringLiteral("320 components")) &&
+        require(status->text().contains(QStringLiteral("322 components")) &&
                     !status->text().contains(QStringLiteral("detailed SVG")),
                 "library status must report the supplied component count without redundant tiers");
         require(library->dragEnabled() &&
@@ -394,6 +472,8 @@ int main(int argc, char** argv) {
         requireIndependentArtworkCache(entity, historical_bytes);
         require(bytes.contains("sofa-three-seat--title"), "placed payload belongs to another SVG asset");
         const auto before = renderSymbol(entity);
+        requireTransparentSelection(selectionFixture(), true);
+        const auto selected_canvas = requireTransparentSelection(entity);
         const auto capture_directory = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
         if (!capture_directory.isEmpty()) {
             require(QDir().mkpath(capture_directory), "SVG capture directory cannot be created");
@@ -403,6 +483,9 @@ int main(int argc, char** argv) {
             require(before.save(QDir(capture_directory).filePath(
                         QStringLiteral("symbol-svg-sofa-canvas.png"))),
                     "SVG canvas capture could not be written");
+            require(selected_canvas.save(QDir(capture_directory).filePath(
+                        QStringLiteral("symbol-svg-sofa-selected-grid.png"))),
+                    "selected SVG canvas capture could not be written");
         }
 
         QTemporaryDir directory;
@@ -466,7 +549,7 @@ int main(int argc, char** argv) {
                     migration_status->text().contains(QStringLiteral("saved component artwork")) &&
                     migrate && !migrate->isHidden() && migrate->isEnabled(),
                 "historical component does not expose an explicit artwork migration action");
-        const auto stale_render = renderSymbol(retainedSymbol(window, instance_id));
+        const auto stale_render = renderSymbol(retainedSymbol(window, instance_id), false);
         const auto migration_revision = window.document().revision();
         migrate->click();
         auto migrated_state = sketch::decode_annotation_entity(
@@ -493,7 +576,7 @@ int main(int argc, char** argv) {
                     sketch::symbol_requires_migration(
                         *undone_instance, sketch::default_symbol_catalog()),
                 "undo did not restore historical component artwork state");
-        require(renderSymbol(retainedSymbol(window, instance_id)) == stale_render,
+        require(renderSymbol(retainedSymbol(window, instance_id), false) == stale_render,
                 "undo did not restore the exact historical SVG artwork");
         require(window.redoCommand() && window.saveProject() && window.openProject(path),
                 "migrated component must redo, save and reopen");

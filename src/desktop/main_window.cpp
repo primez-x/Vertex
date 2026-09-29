@@ -55,6 +55,7 @@
 #include "sketch/quantity.hpp"
 #include "sketch/assistance_engine.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
+#include "sketch/section_dimension_resolution.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/georeferencing_entity_codec.hpp"
 #include "sketch/georeferencing_runtime.hpp"
@@ -1146,6 +1147,40 @@ Boundary wall_segments_without_openings(const Segment& baseline,
     return visible.empty() ? Boundary{baseline} : visible;
 }
 
+Boundary wall_plan_footprint(const Segment& baseline,
+                             const std::vector<HostedOpening>& openings,
+                             double thickness) {
+    Boundary result;
+    for (const auto& part : wall_segments_without_openings(baseline, openings)) {
+        const auto dx = part.end.x - part.start.x;
+        const auto dy = part.end.y - part.start.y;
+        const auto chord = std::hypot(dx, dy);
+        const auto offset_side = [&](double offset) {
+            if (part.sweep_radians == 0.0) {
+                const Vec2 normal{-dy / chord * offset, dx / chord * offset};
+                return Segment{{part.start.x + normal.x, part.start.y + normal.y},
+                               {part.end.x + normal.x, part.end.y + normal.y}, 0};
+            }
+            const auto factor = 1.0 / (2.0 * std::tan(part.sweep_radians * 0.5));
+            const Vec2 center{(part.start.x + part.end.x) * 0.5 - dy * factor,
+                              (part.start.y + part.end.y) * 0.5 + dx * factor};
+            const auto radius = std::hypot(part.start.x - center.x, part.start.y - center.y);
+            const auto ratio = (radius - std::copysign(1.0, part.sweep_radians) * offset) / radius;
+            return Segment{{center.x + (part.start.x - center.x) * ratio,
+                             center.y + (part.start.y - center.y) * ratio},
+                            {center.x + (part.end.x - center.x) * ratio,
+                             center.y + (part.end.y - center.y) * ratio}, part.sweep_radians};
+        };
+        const auto left = offset_side(thickness * 0.5);
+        const auto right = offset_side(-thickness * 0.5);
+        result.push_back(left);
+        result.push_back({left.end, right.end, 0});
+        result.push_back({right.end, right.start, -right.sweep_radians});
+        result.push_back({right.start, left.start, 0});
+    }
+    return result;
+}
+
 std::string trim_ascii(std::string_view value) {
     std::size_t first = 0;
     while (first < value.size() && std::isspace(static_cast<unsigned char>(value[first]))) {
@@ -1405,7 +1440,26 @@ QIcon symbol_library_thumbnail(const SymbolDefinition& definition) {
     bool rendered_svg = false;
     if (definition.svg_asset.has_value()) {
         try {
-            QSvgRenderer renderer(load_symbol_svg(*definition.svg_asset));
+            auto preview_svg = QString::fromUtf8(load_symbol_svg(*definition.svg_asset));
+            // A physical line weight can become a faint fraction of a pixel in
+            // a small library tile. Keep structural outlines legible here only;
+            // placed, pinned and exported artwork retains its physical strokes.
+            const auto minimum_preview_stroke = 0.9 * std::max(
+                definition.svg_asset->view_box[2] / 58.0,
+                definition.svg_asset->view_box[3] / 44.0);
+            static const QRegularExpression structural_stroke(QStringLiteral(
+                "(<[^>]*\\bstroke=\"#111111\"[^>]*\\bstroke-width=\")([0-9.eE+-]+)(\")"));
+            std::vector<std::pair<qsizetype, qsizetype>> widths;
+            auto matches = structural_stroke.globalMatch(preview_svg);
+            while (matches.hasNext()) {
+                const auto match = matches.next();
+                if (match.captured(2).toDouble() < minimum_preview_stroke)
+                    widths.emplace_back(match.capturedStart(2), match.capturedLength(2));
+            }
+            for (auto width = widths.rbegin(); width != widths.rend(); ++width)
+                preview_svg.replace(width->first, width->second,
+                    QString::number(minimum_preview_stroke, 'g', 8));
+            QSvgRenderer renderer(preview_svg.toUtf8());
             if (renderer.isValid()) {
                 renderer.render(&painter, QRectF(5.0, 5.0, 58.0, 44.0));
                 rendered_svg = true;
@@ -2248,21 +2302,36 @@ struct ArchitecturalViewContext {
     std::string view_id;
     std::vector<SectionOverlay> overlays;
     std::optional<BuildingViewCrop> crop;
+    bool restrict_to_objects{false};
 };
 
-std::vector<CanvasLabel> section_overlay_labels(const CoordinatedView& view, bool metric_units) {
+ArchitecturalViewContext architectural_view_context(const CoordinatedView& view);
+
+CoordinatedView dimension_view(const CoordinatedView& view) {
+    auto resolved = view;
+    const auto context = architectural_view_context(view);
+    resolved.origin_m = {context.frame.origin.x, context.frame.origin.y, context.frame.origin.z};
+    return resolved;
+}
+
+std::vector<CanvasLabel> section_overlay_labels(const DocumentSnapshot& snapshot,
+                                               const CoordinatedView& view, bool metric_units) {
     std::vector<CanvasLabel> result;
     for (const auto& overlay : view.overlays) {
         if (!section_overlay_visible(overlay, view.presentation.detail) ||
             overlay.kind == SectionOverlayKind::detail_line) continue;
         const bool dimension = overlay.kind == SectionOverlayKind::dimension;
+        std::optional<ResolvedSectionDimension> measured;
+        if (dimension) {
+            measured = resolve_section_dimension(snapshot, dimension_view(view), overlay).dimension;
+            if (!measured) continue;
+        }
         const auto text = dimension
-            ? format_length(std::hypot(overlay.end_m[0] - overlay.start_m[0],
-                overlay.end_m[1] - overlay.start_m[1]), metric_units)
+            ? format_length(measured->measured_metres, metric_units)
             : QString::fromStdString(overlay.text);
         CanvasLabel label{QString::fromStdString(view.id + "/overlay/" + overlay.id),
-            {dimension ? (overlay.start_m[0] + overlay.end_m[0]) / 2 : overlay.start_m[0],
-             dimension ? (overlay.start_m[1] + overlay.end_m[1]) / 2 : overlay.start_m[1]}, text};
+            {dimension ? (measured->line_start_m[0] + measured->line_end_m[0]) / 2 : overlay.start_m[0],
+             dimension ? (measured->line_start_m[1] + measured->line_end_m[1]) / 2 : overlay.start_m[1]}, text};
         label.paper_height_mm = overlay.text_height_mm;
         result.push_back(std::move(label));
     }
@@ -2301,6 +2370,7 @@ ArchitecturalViewContext architectural_view_context(const CoordinatedView& view)
     ArchitecturalViewContext result{base,
         BuildingViewDepth{base.origin, base.direction, view.presentation.far_depth_m},
         view.presentation, view.object_ids, view.id, view.overlays};
+    result.restrict_to_objects = view.restrict_to_objects;
     if (view.kind == CoordinatedViewKind::section) {
         // Cut and far depth are both measured from the authored view-frame
         // origin along its viewing direction. This preserves translated and
@@ -3322,6 +3392,31 @@ public:
                         edit.target_id = target->second;
                         operations.push_back({{"kind", "geometry_edit"},
                             {"value", encode_boundary_geometry_edit(edit)}});
+                    } else if (kind == "vertex_batch") {
+                        const auto& values = operation.at("value");
+                        if (!values.is_array() || values.empty())
+                            throw std::invalid_argument("Boundary vertex batch must be a nonempty array");
+                        auto remapped = json::array();
+                        std::set<std::string, std::less<>> targets;
+                        for (const auto& batch_value : values) {
+                            auto edit = decode_boundary_geometry_edit(batch_value);
+                            if (edit.boundary_id != original.id ||
+                                edit.kind != BoundaryGeometryEditKind::move_vertex ||
+                                !targets.insert(edit.target_id).second)
+                                throw std::invalid_argument(
+                                    "Boundary vertex batch has invalid owner, kind or duplicate target");
+                            const auto vertex = std::find_if(transformed.segments.begin(),
+                                transformed.segments.end(), [&](const auto& edge) {
+                                    return edge.start_vertex_id == edit.target_id;
+                                });
+                            if (vertex == transformed.segments.end())
+                                throw std::invalid_argument("Unknown batch vertex ID");
+                            edit.boundary_id = clone_id;
+                            edit.target_id = identities.at(edit.target_id);
+                            remapped.push_back(encode_boundary_geometry_edit(edit));
+                        }
+                        operations.push_back({{"kind", "vertex_batch"},
+                            {"value", std::move(remapped)}});
                     } else if (kind == "transform") {
                         auto transform = decode_boundary_transform(operation.at("value"));
                         if (transform.boundary_id != original.id)
@@ -3836,7 +3931,8 @@ public:
         const QString& view_id, const QString& cut_depth_m, const QString& far_depth_m,
         const QString& cut_line_mm, const QString& projection_line_mm, bool hatch_enabled,
         const QString& hatch_pattern, const QString& hatch_scale, const QString& detail,
-        const QString& object_ids_text, std::optional<QString> crop_bounds_text) {
+        const QString& object_ids_text, std::optional<QString> crop_bounds_text,
+        std::optional<bool> restrict_to_objects) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
             return false;
@@ -3921,7 +4017,11 @@ public:
             replacement.presentation.hatch_scale = hatch_scale_value;
             replacement.presentation.detail = detail_value;
             if (crop_bounds_text) replacement.presentation.crop = crop;
+            const auto restriction = restrict_to_objects.value_or(!object_ids.empty() ||
+                (replacement.restrict_to_objects && replacement.object_ids == object_ids));
             replacement.object_ids = std::move(object_ids);
+            replacement.restrict_to_objects = restriction;
+            if (!restriction) replacement.object_ids.clear();
             const auto updated_model = model->with_view(std::move(replacement));
             auto updated_entity = *view_entity;
             updated_entity.properties = make_sheet_view_entity(
@@ -5308,7 +5408,7 @@ public:
                         throw std::invalid_argument(error);
                     validate_wall_semantics(wall);
                     geometry.push_back({id_from(root), selected ? "wall" : "source",
-                        wall_segments_without_openings(wall.baseline, wall.openings), wall.thickness, selected});
+                        wall_plan_footprint(wall.baseline, wall.openings, wall.thickness), wall.thickness, selected});
                     for (const auto* opening : openings) {
                         if (opening->properties.value("opening_kind", std::string{}) != "door" ||
                             !opening->properties.contains("door_operation")) continue;
@@ -10334,13 +10434,24 @@ public:
             setError(QStringLiteral("Wall endpoints must be finite and distinct."));
             return {};
         }
+        double thickness = 0.14;
+        double height = 2.4384;
+        try {
+            const auto unit = m_metric_units ? Unit::metre : Unit::foot;
+            if (m_wall_draw_thickness) thickness = parse_quantity(m_wall_draw_thickness->text().toStdString(), unit).metres;
+            if (m_wall_draw_height) height = parse_quantity(m_wall_draw_height->text().toStdString(), unit).metres;
+            validate_wall_semantics(Wall{"", Segment{start, end, 0.0}, thickness, height, 0.0, {}});
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Wall dimensions: %1").arg(QString::fromUtf8(error.what())));
+            return {};
+        }
         const auto entity_id = new_id("wall");
         const auto id = id_from(entity_id);
         auto properties = json{{"floor_id", drawing_context->floor_id},
                                {"layer_id", drawing_context->layer_id},
                                {"baseline", segment_json(Segment{start, end, 0.0})},
-                               {"thickness_m", 0.14},
-                               {"height_m", 2.4384},
+                               {"thickness_m", thickness},
+                               {"height_m", height},
                                {"elevation_m", 0.0},
                                {"classification", classification.toStdString()}};
         add_default_level_placement(properties, *drawing_context);
@@ -10831,13 +10942,14 @@ public:
         }
         const auto wall_entity = selectedEntity();
         if (!wall_entity.has_value() || wall_entity->type != "wall") {
-            setError(QStringLiteral("Select a wall before creating a door or window."));
+            setError(QStringLiteral("Select a wall before creating a doorway, door or window."));
             return {};
         }
         const auto normalized_kind = kind.trimmed().toLower();
         if (normalized_kind != QStringLiteral("door") &&
-            normalized_kind != QStringLiteral("window")) {
-            setError(QStringLiteral("Opening type must be Door or Window."));
+            normalized_kind != QStringLiteral("window") &&
+            normalized_kind != QStringLiteral("opening")) {
+            setError(QStringLiteral("Opening type must be Doorway, Door or Window."));
             return {};
         }
         try {
@@ -10894,11 +11006,14 @@ public:
                                          {"height_m", height},
                                          {"opening_kind", normalized_kind.toStdString()},
                                          {"classification", normalized_kind.toStdString()}};
-            properties["opening_assembly"] = opening_assembly_json(
-                default_opening_assembly(normalized_kind == QStringLiteral("door")
-                                             ? OpeningAssemblyKind::door
-                                             : OpeningAssemblyKind::window));
-            if(door_operation) properties["door_operation"] = encode_door_operation(*door_operation);
+            if (normalized_kind != QStringLiteral("opening")) {
+                properties["opening_assembly"] = opening_assembly_json(
+                    default_opening_assembly(normalized_kind == QStringLiteral("door")
+                                                 ? OpeningAssemblyKind::door
+                                                 : OpeningAssemblyKind::window));
+            }
+            if (normalized_kind == QStringLiteral("door") && door_operation)
+                properties["door_operation"] = encode_door_operation(*door_operation);
             if (!applyEntity(Entity{entity_id, "opening", properties, false, json::object()},
                              "create hosted opening", revision)) {
                 return {};
@@ -13198,8 +13313,8 @@ public:
         }
         const auto value = classification.trimmed().toLower();
         if (entity->type == "opening" && value != QStringLiteral("door") &&
-            value != QStringLiteral("window")) {
-            setError(QStringLiteral("An opening classification must be Door or Window."));
+            value != QStringLiteral("window") && value != QStringLiteral("opening")) {
+            setError(QStringLiteral("An opening classification must be Door, Window or Opening."));
             return false;
         }
         bool appraisal_area = false;
@@ -13237,7 +13352,10 @@ public:
             }
             if (entity->type == "opening") {
                 properties["opening_kind"] = value.toStdString();
-                if (properties.contains("opening_assembly")) {
+                if (value == QStringLiteral("opening")) {
+                    properties.erase("opening_assembly");
+                    properties.erase("door_operation");
+                } else if (properties.contains("opening_assembly")) {
                     auto assembly = parse_opening_assembly(properties.at("opening_assembly"));
                     assembly.kind = value == QStringLiteral("door")
                         ? OpeningAssemblyKind::door : OpeningAssemblyKind::window;
@@ -14174,6 +14292,17 @@ public:
             for (const auto& viewport : sheet.viewports) {
                 const auto* view = find_view(viewport.view_id);
                 if (view == nullptr) continue;
+                for (const auto& overlay : view->overlays) {
+                    if (overlay.kind != SectionOverlayKind::dimension ||
+                        !section_overlay_visible(overlay, view->presentation.detail)) continue;
+                    const auto measured = resolve_section_dimension(snapshot, dimension_view(*view), overlay);
+                    if (!measured.dimension) {
+                        setError(QStringLiteral("Sheet output blocked: dimension %1: %2")
+                            .arg(QString::fromStdString(overlay.id),
+                                 QString::fromStdString(measured.diagnostic)));
+                        return false;
+                    }
+                }
                 const auto view_kind = architectural_view_kind(view->kind);
                 const QRectF viewport_rect(
                     page.left() + viewport.bounds.x_mm * paper_scale,
@@ -14196,14 +14325,14 @@ public:
                 temporary_canvas->setMetricUnits(m_metric_units);
                 temporary_canvas->setEntities(cached->second);
                 const auto includes = [&](const QString& id) {
-                    return view->object_ids.empty() ||
+                    return (!view->restrict_to_objects && view->object_ids.empty()) ||
                         std::find(view->object_ids.begin(), view->object_ids.end(),
                                   id.toStdString()) != view->object_ids.end();
                 };
                 std::vector<CanvasLabel> labels;
                 for (const auto& label : m_measurementCanvas->labels())
                     if (includes(label.id)) labels.push_back(label);
-                for (auto& label : section_overlay_labels(*view, m_metric_units)) labels.push_back(std::move(label));
+                for (auto& label : section_overlay_labels(snapshot, *view, m_metric_units)) labels.push_back(std::move(label));
                 temporary_canvas->setLabels(std::move(labels));
                 std::vector<CanvasReference> references;
                 for (const auto& reference : m_measurementCanvas->references())
@@ -16584,13 +16713,15 @@ public:
         crop_bounds->setEnabled(false);
         QObject::connect(crop_enabled, &QCheckBox::toggled,
                          crop_bounds, &QWidget::setEnabled);
-        auto* overlays = new QTableWidget(0, 8, &dialog);
+        auto* overlays = new QTableWidget(0, 11, &dialog);
         overlays->setObjectName(QStringLiteral("sectionOverlays"));
         overlays->setHorizontalHeaderLabels({QStringLiteral("ID"), QStringLiteral("Kind"),
             QStringLiteral("X m"), QStringLiteral("Y m"), QStringLiteral("End X m"),
-            QStringLiteral("End Y m"), QStringLiteral("Text"), QStringLiteral("Minimum detail")});
+            QStringLiteral("End Y m"), QStringLiteral("Text"), QStringLiteral("Minimum detail"),
+            QStringLiteral("Measure object"), QStringLiteral("Extent"), QStringLiteral("Offset m")});
         overlays->setToolTip(QStringLiteral("Section-plane metres. Kind: text, detail_line, dimension. "
-            "Detail: coarse, medium, fine. Dimensions measure explicit endpoints; they are not associative. "
+            "Detail: coarse, medium, fine. Choose an object and Width or Height for a dimension that follows model edits. "
+            "Offset positions its dimension line; Detached uses the explicit endpoint coordinates. "
             "Coarse sections omit hatching; higher levels include overlays at or below that detail."));
         form->addRow(QStringLiteral("Section annotations"), overlays);
         auto* add_overlay = new QPushButton(QStringLiteral("Add annotation"), &dialog);
@@ -16598,6 +16729,7 @@ public:
         auto* remove_overlay = new QPushButton(QStringLiteral("Remove selected annotation"), &dialog);
         remove_overlay->setObjectName(QStringLiteral("removeSectionOverlay"));
         form->addRow(add_overlay, remove_overlay);
+        const auto annotation_source = m_document->snapshot();
         const auto append_overlay = [&](const SectionOverlay& overlay) {
             const auto row = overlays->rowCount(); overlays->insertRow(row);
             const QStringList cells{QString::fromStdString(overlay.id),
@@ -16610,6 +16742,30 @@ public:
                     overlay.minimum_detail == ViewDetail::fine ? QStringLiteral("fine") : QStringLiteral("medium")};
             for (int column = 0; column < cells.size(); ++column)
                 overlays->setItem(row, column, new QTableWidgetItem(cells[column]));
+            auto* source = new QComboBox(overlays);
+            source->addItem(QStringLiteral("Detached"), QString{});
+            for (const auto& [id, entity] : annotation_source.entities()) {
+                if (entity.type != "wall" && entity.type != "opening" && entity.type != "room" &&
+                    entity.type != "slab" && entity.type != "roof" && entity.type != "stair" &&
+                    entity.type != "railing" && entity.type != "column" && entity.type != "beam" &&
+                    entity.type != "wall_join" && entity.type != "roof_join") continue;
+                const auto label = entity.properties.value("name", id);
+                source->addItem(QStringLiteral("%1 (%2)").arg(QString::fromStdString(label),
+                    QString::fromStdString(entity.type)), QString::fromStdString(id));
+            }
+            auto* axis = new QComboBox(overlays);
+            axis->addItem(QStringLiteral("Width"), static_cast<int>(SectionDimensionAxis::horizontal));
+            axis->addItem(QStringLiteral("Height"), static_cast<int>(SectionDimensionAxis::vertical));
+            overlays->setCellWidget(row, 8, source);
+            overlays->setCellWidget(row, 9, axis);
+            overlays->setItem(row, 10, new QTableWidgetItem(QString::number(
+                overlay.dimension_binding ? overlay.dimension_binding->line_offset_m : 0.3, 'g', 17)));
+            if (overlay.dimension_binding) {
+                const auto id = QString::fromStdString(overlay.dimension_binding->object_id);
+                if (source->findData(id) < 0) source->addItem(QStringLiteral("Missing: %1").arg(id), id);
+                source->setCurrentIndex(source->findData(id));
+                axis->setCurrentIndex(axis->findData(static_cast<int>(overlay.dimension_binding->axis)));
+            }
             overlays->item(row, 0)->setFlags(overlays->item(row, 0)->flags() & ~Qt::ItemIsEditable);
         };
         QObject::connect(add_overlay, &QPushButton::clicked, &dialog, [&] {
@@ -16713,6 +16869,25 @@ public:
                     else if (cell(7) == "medium") overlay.minimum_detail = ViewDetail::medium;
                     else if (cell(7) == "fine") overlay.minimum_detail = ViewDetail::fine;
                     else throw std::invalid_argument("Minimum detail must be coarse, medium, or fine.");
+                    const auto* source = qobject_cast<QComboBox*>(overlays->cellWidget(row, 8));
+                    const auto* axis = qobject_cast<QComboBox*>(overlays->cellWidget(row, 9));
+                    const auto target = source->currentData().toString().toStdString();
+                    if (target.empty()) {
+                        if (overlay.dimension_binding) overlay.object_id.clear();
+                        overlay.dimension_binding.reset();
+                    }
+                    else {
+                        if (overlay.kind != SectionOverlayKind::dimension)
+                            throw std::invalid_argument("Choose dimension as the annotation kind before linking an object.");
+                        overlay.dimension_binding = SectionDimensionBinding{target,
+                            static_cast<SectionDimensionAxis>(axis->currentData().toInt()), scalar(cell(10))};
+                        overlay.object_id = target;
+                        if ((value.restrict_to_objects || !value.object_ids.empty()) &&
+                            std::find(value.object_ids.begin(), value.object_ids.end(), target) == value.object_ids.end())
+                            value.object_ids.push_back(target);
+                        const auto measured = resolve_section_dimension(m_document->snapshot(), dimension_view(value), overlay);
+                        if (!measured.dimension) throw std::invalid_argument(measured.diagnostic);
+                    }
                     value.overlays.push_back(std::move(overlay));
                 }
                 if (found == views.end()) views.push_back(value); else *found = value;
@@ -16870,6 +17045,11 @@ public:
             auto* hatch = new QCheckBox(QStringLiteral("Enable material hatching"), &dialog);
             auto* detail = new QComboBox(&dialog);
             auto* object_ids = new QLineEdit(&dialog);
+            auto* restrict_objects = new QCheckBox(QStringLiteral("Show only selected source objects"), &dialog);
+            restrict_objects->setObjectName(QStringLiteral("viewRestrictObjects"));
+            restrict_objects->setChecked(found->restrict_to_objects || !found->object_ids.empty());
+            object_ids->setEnabled(restrict_objects->isChecked());
+            QObject::connect(restrict_objects, &QCheckBox::toggled, object_ids, &QWidget::setEnabled);
             auto* crop_enabled = new QCheckBox(QStringLiteral("Crop to view extents"), &dialog);
             auto* crop_bounds = new QLineEdit(&dialog);
             QStringList object_id_values;
@@ -16909,6 +17089,7 @@ public:
             form->addRow(QStringLiteral("Hatch scale"), hatch_scale);
             form->addRow(hatch);
             form->addRow(QStringLiteral("Detail"), detail);
+            form->addRow(restrict_objects);
             form->addRow(QStringLiteral("Source object IDs"), object_ids);
             form->addRow(crop_enabled);
             form->addRow(QStringLiteral("Crop left, right, bottom, top (m)"), crop_bounds);
@@ -16922,7 +17103,7 @@ public:
                 projection_line->text(), hatch->isChecked(), pattern->text(), hatch_scale->text(),
                 detail->currentText(), object_ids->text(),
                 crop_enabled->isChecked() ? std::optional<QString>(crop_bounds->text())
-                                          : std::optional<QString>(QString{}));
+                                          : std::optional<QString>(QString{}), restrict_objects->isChecked());
         } catch (const std::exception& error) {
             setError(QStringLiteral("Architectural view settings: %1")
                          .arg(QString::fromUtf8(error.what())));
@@ -18426,6 +18607,41 @@ private:
         auto authored_command = command;
         if (auto* changes = std::get_if<ApplyEntityChanges>(&authored_command)) {
             const auto source = authoringSnapshot();
+            std::set<std::string, std::less<>> removed_ids;
+            for (const auto& change : changes->entity_changes)
+                if (change.kind == EntityChangeKind::erase) removed_ids.insert(change.entity_id);
+            if (!removed_ids.empty()) {
+                for (const auto& [id, original] : source.entities()) {
+                    if (original.type != kSheetViewEntityType || removed_ids.contains(id)) continue;
+                    auto updated = original;
+                    for (const auto& change : changes->entity_changes)
+                        if (change.kind == EntityChangeKind::upsert && change.entity.id == id)
+                            updated = change.entity;
+                    const auto model = decode_sheet_view_entity(updated);
+                    auto views = model.views();
+                    bool changed = false;
+                    for (auto& view : views) {
+                        const auto references = view.object_ids.size();
+                        const auto restricted = view.restrict_to_objects || !view.object_ids.empty();
+                        std::erase_if(view.object_ids, [&](const auto& target) { return removed_ids.contains(target); });
+                        const auto annotations = view.overlays.size();
+                        std::erase_if(view.overlays, [&](const auto& overlay) {
+                            return (overlay.dimension_binding && removed_ids.contains(overlay.dimension_binding->object_id)) ||
+                                   (!overlay.object_id.empty() && removed_ids.contains(overlay.object_id));
+                        });
+                        changed |= references != view.object_ids.size() || annotations != view.overlays.size();
+                        if (references != view.object_ids.size()) view.restrict_to_objects = restricted;
+                    }
+                    if (!changed) continue;
+                    updated.properties = make_sheet_view_entity(id, SheetViewModel::create(std::move(views),
+                        model.sheets(), model.to_json().at("schedule_ids").get<std::vector<std::string>>(),
+                        model.sheet_order())).properties;
+                    std::erase_if(changes->entity_changes, [&](const auto& change) {
+                        return change.kind == EntityChangeKind::upsert && change.entity.id == id;
+                    });
+                    changes->entity_changes.push_back(EntityChange::upsert(std::move(updated)));
+                }
+            }
             if (const auto record = decode_phase_model(source); record &&
                 std::none_of(changes->entity_changes.begin(), changes->entity_changes.end(),
                     [&](const auto& change) {
@@ -19462,7 +19678,7 @@ private:
         symbols_layout->setContentsMargins(0, 8, 0, 0);
         symbols_layout->setSpacing(6);
         sidebar_tabs->addTab(layers_page, QStringLiteral("Layers"));
-        sidebar_tabs->addTab(symbols_page, QStringLiteral("Symbols"));
+        sidebar_tabs->addTab(symbols_page, QStringLiteral("Library"));
         // The project tree is the drawing-context control. Keep the legacy
         // objects hidden for compatibility with older automation while
         // removing the duplicated layer selector and breadcrumb from view.
@@ -19562,6 +19778,69 @@ private:
                                  (void)setContainerVisible(id, visible);
                              });
                          });
+
+        auto* architecture_palette = new QGroupBox(QStringLiteral("Walls & openings"), navigator_panel);
+        architecture_palette->setObjectName(QStringLiteral("wallOpeningPalette"));
+        architecture_palette->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+        auto* architecture_layout = new QVBoxLayout(architecture_palette);
+        architecture_layout->setContentsMargins(8, 6, 8, 6);
+        architecture_layout->setSpacing(4);
+        auto* architecture_buttons = new QHBoxLayout;
+        for (const auto& kind : {QStringLiteral("Wall"), QStringLiteral("Doorway"), QStringLiteral("Door"), QStringLiteral("Window")}) {
+            auto* button = new QPushButton(kind, architecture_palette);
+            button->setObjectName(QStringLiteral("library") + kind);
+            architecture_buttons->addWidget(button);
+            QObject::connect(button, &QPushButton::clicked, owner, [this, kind] {
+                // Author in world XY, independent of an active elevation or rotated named view.
+                setWorkspace(Workspace::measurement);
+                setTool(CanvasTool::wall);
+                if (m_tool != CanvasTool::wall) return;
+                if (kind != QStringLiteral("Wall")) {
+                    m_pending_opening_kind = kind == QStringLiteral("Doorway") ? QStringLiteral("opening") : kind.toLower();
+                    const bool window = kind == QStringLiteral("Window");
+                    m_opening_draw_width->setText(window ? QStringLiteral("1.2 m") : QStringLiteral("0.9 m"));
+                    m_opening_draw_height->setText(window ? QStringLiteral("1.2 m") : QStringLiteral("2.1 m"));
+                    m_opening_draw_sill->setText(window ? QStringLiteral("0.9 m") : QStringLiteral("0 m"));
+                }
+                m_opening_draw_fields->setVisible(!m_pending_opening_kind.isEmpty());
+                m_wall_draw_fields->setVisible(m_pending_opening_kind.isEmpty());
+                m_architecture_hint->show();
+                m_architecture_hint->setText(m_pending_opening_kind.isEmpty()
+                    ? QStringLiteral("Click wall start and end. Esc finishes the chain.")
+                    : QStringLiteral("Hover over a wall, then click to place. Esc cancels."));
+            });
+        }
+        architecture_layout->addLayout(architecture_buttons);
+        const auto dimension_field = [&](QFormLayout* form, const QString& label, const char* name, const QString& initial) {
+            auto* edit = new QLineEdit(initial, architecture_palette);
+            edit->setObjectName(QString::fromLatin1(name));
+            edit->setAccessibleName(label);
+            edit->setToolTip(QStringLiteral("Enter a length with units, for example 140 mm, 0.14 m, or 6 in."));
+            form->addRow(label, edit);
+            return edit;
+        };
+        m_wall_draw_fields = new QWidget(architecture_palette);
+        auto* wall_form = new QFormLayout(m_wall_draw_fields);
+        wall_form->setContentsMargins(0, 0, 0, 0);
+        wall_form->setVerticalSpacing(3);
+        m_wall_draw_thickness = dimension_field(wall_form, QStringLiteral("Thickness"), "wallDrawThickness", QStringLiteral("140 mm"));
+        m_wall_draw_height = dimension_field(wall_form, QStringLiteral("Height"), "wallDrawHeight", QStringLiteral("8 ft"));
+        architecture_layout->addWidget(m_wall_draw_fields);
+        m_opening_draw_fields = new QWidget(architecture_palette);
+        auto* opening_form = new QFormLayout(m_opening_draw_fields);
+        opening_form->setContentsMargins(0, 0, 0, 0);
+        opening_form->setVerticalSpacing(3);
+        m_opening_draw_width = dimension_field(opening_form, QStringLiteral("Width"), "openingDrawWidth", QStringLiteral("0.9 m"));
+        m_opening_draw_height = dimension_field(opening_form, QStringLiteral("Height"), "openingDrawHeight", QStringLiteral("2.1 m"));
+        m_opening_draw_sill = dimension_field(opening_form, QStringLiteral("Sill"), "openingDrawSill", QStringLiteral("0 m"));
+        architecture_layout->addWidget(m_opening_draw_fields);
+        m_opening_draw_fields->hide();
+        m_architecture_hint = new QLabel(QStringLiteral("Draw real walls in 2D. Dimensions accept mm, m, in or ft."), architecture_palette);
+        m_architecture_hint->setWordWrap(true);
+        m_architecture_hint->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+        m_architecture_hint->hide();
+        architecture_layout->addWidget(m_architecture_hint);
+        symbols_layout->addWidget(architecture_palette);
 
         auto* components_header = new QWidget(navigator_panel);
         auto* components_header_layout = new QHBoxLayout(components_header);
@@ -19878,6 +20157,7 @@ private:
         m_workspaceTabs->addTab(architectural_body, QStringLiteral("Architectural"));
         QObject::connect(m_workspaceTabs, &QTabWidget::currentChanged, owner,
                          [this](int index) {
+                             if (!m_pending_opening_kind.isEmpty()) setTool(CanvasTool::select);
                              m_workspace = index == 0 ? Workspace::measurement
                                                        : Workspace::architectural;
                              if (m_inspector) refreshInspector();
@@ -20713,6 +20993,10 @@ private:
             if (canvas != active) return;
             m_last_cursor = point;
             refreshCursorLabel(point);
+            if (!m_pending_opening_kind.isEmpty()) {
+                updateOpeningPlacement(point, false);
+                return;
+            }
             if (m_boundary_session) {
                 m_boundary_session->set_pointer(point);
                 refreshBoundaryPreview();
@@ -20725,6 +21009,10 @@ private:
             if (m_inspector && m_inspector->isVisible()) positionContextEditor();
         });
         canvas->setRightClicked([this](Vec2 point, QString target) {
+            if (!m_pending_opening_kind.isEmpty()) {
+                cancelTool();
+                return;
+            }
             if (m_boundary_session) {
                 QMenu menu(owner);
                 auto* finish = menu.addAction(QStringLiteral("Finish boundary"));
@@ -21000,6 +21288,23 @@ private:
                             door_plan_symbol(*baseline,opening->offset,opening->width,
                                 decode_door_operation(entity.properties.at("door_operation"))),0,
                             id_from(id)==m_selected_id});
+                    } else if (kind == "opening") {
+                        const auto length = segment_length(*baseline);
+                        const Segment span{
+                            point_at_segment(*baseline, opening->offset / length).value(),
+                            point_at_segment(*baseline, (opening->offset + opening->width) / length).value(),
+                            baseline->sweep_radians * opening->width / length};
+                        const auto outline = wall_plan_footprint(span, {},
+                            read_number(host->second.properties, "thickness_m", 0.12));
+                        // Jambs and a light threshold retain the opening's own
+                        // hit target without suggesting a door leaf or glazing.
+                        Boundary symbol{outline.at(1), outline.at(3), span};
+                        CanvasEntity doorway{id_from(id), QStringLiteral("opening"),
+                            std::move(symbol), 0.0, id_from(id) == m_selected_id};
+                        doorway.stroke_color = QColor(110, 120, 130);
+                        doorway.dark_stroke_color = QColor(175, 188, 200);
+                        doorway.output_stroke_width_mm = 0.13;
+                        all_geometry.push_back(std::move(doorway));
                     } else if (kind == "window") {
                         const auto thickness = read_number(host->second.properties,
                                                            "thickness_m", 0.12);
@@ -21142,7 +21447,9 @@ private:
                                               .arg(id_from(id), QString::fromUtf8(error.what())));
                     continue;
                 }
-                segments = wall_segments_without_openings(segments.front(), openings_by_wall[id]);
+                // Retain the physical footprint in 2D as well as coordinated views.
+                // A thick baseline stroke has round caps and conceals the true jambs.
+                segments = wall_plan_footprint(segments.front(), openings_by_wall[id], *thickness);
             } else if (entity.type == "slab") {
                 const auto boundary = read_required_boundary(geometry_entity.properties, "boundary");
                 if (!boundary.has_value()) {
@@ -21664,11 +21971,18 @@ private:
             }
             return translated.Shape();
         };
+        // A source edit can affect other entities (hosted openings, levels,
+        // assemblies). Compare the complete entity state rather than a revision:
+        // undo and opening another document can reuse revision numbers.
+        if (m_view_projection_sources != snapshot.entities()) {
+            m_view_projection_cache.clear();
+            m_view_projection_sources = snapshot.entities();
+        }
         const auto build_architectural_geometry = [&](BuildingViewKind kind,
                                                        const ArchitecturalViewContext& view_context) {
             std::set<std::string, std::less<>> referenced(
                 view_context.object_ids.begin(), view_context.object_ids.end());
-            const bool restricted = !view_context.object_ids.empty();
+            const bool restricted = view_context.restrict_to_objects || !view_context.object_ids.empty();
             std::erase_if(referenced, [&](const auto& id) {
                 return presentation_hidden_ids.contains(id);
             });
@@ -21824,6 +22138,19 @@ private:
                 }
                 return key.str();
             }();
+            const auto cached_projection = [&](const std::string& id, const auto& make_shape) {
+                const auto key = std::make_pair(id,
+                    std::to_string(static_cast<int>(kind)) + '\n' + frame_cache_key);
+                if (const auto found = m_view_projection_cache.find(key);
+                    found != m_view_projection_cache.end()) return found->second;
+                const auto clipped = clip_to_view(make_shape());
+                auto projection = clipped.IsNull() ? std::optional<Boundary>{}
+                    : std::optional<Boundary>{project_shape_view(clipped, kind, frame)};
+                // Failed construction/projection throws before insertion, so an
+                // invalid model remains an error on every refresh.
+                m_view_projection_cache.emplace(key, projection);
+                return projection;
+            };
             for (const auto& [id, entity] : snapshot.entities()) {
                 if (presentation_hidden_ids.contains(id) ||
                     (restricted && !referenced.contains(id))) {
@@ -21852,6 +22179,29 @@ private:
                             throw std::invalid_argument(error);
                         }
                         const auto opening = read_hosted_opening(entity);
+                        if (opening && read_string(entity.properties, "opening_kind") ==
+                                           std::optional<std::string>{"opening"}) {
+                            const auto projection = cached_projection(id, [&] {
+                                const auto length = segment_length(wall.baseline);
+                                const Segment span{
+                                    point_at_segment(wall.baseline, opening->offset / length).value(),
+                                    point_at_segment(wall.baseline, (opening->offset + opening->width) / length).value(),
+                                    wall.baseline.sweep_radians * opening->width / length};
+                                // Only the projected void envelope is retained;
+                                // this never adds material to the native model.
+                                return make_wall(Wall{id, span, wall.thickness,
+                                    opening->height, wall.elevation + opening->sill, {}});
+                            });
+                            if (projection && !projection->empty()) {
+                                auto doorway = decorate_projection(CanvasEntity{
+                                    id_from(id), QStringLiteral("opening"), *projection, 0.0,
+                                    id_from(id) == m_selected_id});
+                                doorway.filled = false;
+                                doorway.hatch_pattern = QStringLiteral("none");
+                                result.push_back(std::move(doorway));
+                            }
+                            continue;
+                        }
                         const auto opening_kind = parse_opening_assembly_kind(
                             read_string(entity.properties, "opening_kind").value_or(""));
                         if (!opening || !opening_kind) {
@@ -21865,14 +22215,14 @@ private:
                             entity.properties.contains("door_operation")) {
                             operation = decode_door_operation(entity.properties.at("door_operation"));
                         }
-                        const auto shape = clip_to_view(make_opening_assembly(wall, *opening, assembly, operation));
-                        if (shape.IsNull()) continue;
-                        auto projection = project_shape_view(shape, kind, frame);
-                        if (projection.empty()) continue;
+                        auto projection = cached_projection(id, [&] {
+                            return make_opening_assembly(wall, *opening, assembly, operation);
+                        });
+                        if (!projection || projection->empty()) continue;
                         // Keep the semantic opening ID so ordinary selection,
                         // typed properties, history, and schedules share one source.
                         result.push_back(decorate_projection(CanvasEntity{
-                            id_from(id), QStringLiteral("opening"), std::move(projection), 0.0,
+                            id_from(id), QStringLiteral("opening"), std::move(*projection), 0.0,
                             id_from(id) == m_selected_id}));
                         continue;
                     }
@@ -21880,34 +22230,21 @@ private:
                         const auto model = TerrainSurface::from_json(
                             entity.properties.at("model"));
                         if (!model.visible()) continue;
-                        const auto shape = make_terrain_surface(model);
-                        const auto clipped_shape = clip_to_view(shape);
-                        if (clipped_shape.IsNull()) continue;
-                        const auto projection = project_shape_view(
-                            clipped_shape, kind, frame);
+                        const auto projection = cached_projection(id, [&] { return make_terrain_surface(model); });
+                        if (!projection) continue;
                         result.push_back(decorate_projection(CanvasEntity{
-                            id_from(id), QStringLiteral("terrain_surface"), projection, 0.0,
+                            id_from(id), QStringLiteral("terrain_surface"), *projection, 0.0,
                             id_from(id) == m_selected_id}));
                         continue;
                     }
                     if (can_recognize_building_entity_type(entity.type)) {
                         const auto resolved = resolve_vertical_placement(snapshot, entity);
                         const auto decoded = decode_building_entity(resolved);
-                        const auto shape = make_building_shape(decoded);
-                        const auto clipped_shape = clip_to_view(shape);
-                        if (clipped_shape.IsNull()) continue;
-                        const auto key = "view:" + std::to_string(static_cast<int>(kind)) +
-                                         '\n' + frame_cache_key + '\n' + resolved.type +
-                                         '\n' + resolved.properties.dump();
-                        auto cached = m_plan_projection_cache.find(id);
-                        if (cached == m_plan_projection_cache.end() || cached->second.first != key) {
-                            auto projection = project_shape_view(clipped_shape, kind, frame);
-                            cached = m_plan_projection_cache.insert_or_assign(
-                                id, std::make_pair(key, std::move(projection))).first;
-                        }
+                        const auto projection = cached_projection(id, [&] { return make_building_shape(decoded); });
+                        if (!projection) continue;
                         result.push_back(decorate_projection(CanvasEntity{
                             id_from(id), QString::fromStdString(entity.type),
-                            cached->second.second, 0.0, id_from(id) == m_selected_id}));
+                            *projection, 0.0, id_from(id) == m_selected_id}));
                         continue;
                     }
                     if (entity.type == "wall") {
@@ -21933,13 +22270,10 @@ private:
                             wall.slope_rise = slope->get<double>();
                         }
                         validate_wall_semantics(wall);
-                        const auto shape = make_wall(wall);
-                        const auto clipped_shape = clip_to_view(shape);
-                        if (clipped_shape.IsNull()) continue;
-                        const auto projection = project_shape_view(
-                            clipped_shape, kind, frame);
+                        const auto projection = cached_projection(id, [&] { return make_wall(wall); });
+                        if (!projection) continue;
                         result.push_back(decorate_projection(CanvasEntity{
-                            id_from(id), QStringLiteral("wall"), projection, *thickness,
+                            id_from(id), QStringLiteral("wall"), *projection, *thickness,
                             id_from(id) == m_selected_id}));
                         continue;
                     }
@@ -21958,13 +22292,10 @@ private:
                             layers != resolved.properties.end()) {
                             projection_slab.layers = parse_slab_layers(*layers, *thickness);
                         }
-                        const auto shape = make_slab(projection_slab);
-                        const auto clipped_shape = clip_to_view(shape);
-                        if (clipped_shape.IsNull()) continue;
-                        const auto projection = project_shape_view(
-                            clipped_shape, kind, frame);
+                        const auto projection = cached_projection(id, [&] { return make_slab(projection_slab); });
+                        if (!projection) continue;
                         result.push_back(decorate_projection(CanvasEntity{
-                            id_from(id), QStringLiteral("slab"), projection, *thickness,
+                            id_from(id), QStringLiteral("slab"), *projection, *thickness,
                             id_from(id) == m_selected_id}));
                         continue;
                     }
@@ -21975,13 +22306,10 @@ private:
                         if (!read_document_room(resolved, room, room_error)) {
                             throw std::invalid_argument(room_error);
                         }
-                        const auto shape = make_room_volume(room);
-                        const auto clipped_shape = clip_to_view(shape);
-                        if (clipped_shape.IsNull()) continue;
-                        const auto projection = project_shape_view(
-                            clipped_shape, kind, frame);
+                        const auto projection = cached_projection(id, [&] { return make_room_volume(room); });
+                        if (!projection) continue;
                         result.push_back(decorate_projection(CanvasEntity{
-                            id_from(id), QStringLiteral("room"), projection, 0.0,
+                            id_from(id), QStringLiteral("room"), *projection, 0.0,
                             id_from(id) == m_selected_id}));
                     }
                 } catch (const std::exception& error) {
@@ -22027,10 +22355,42 @@ private:
             for (const auto& overlay : view_context.overlays) {
                 if (!section_overlay_visible(overlay, view_context.presentation.detail) ||
                     overlay.kind == SectionOverlayKind::text) continue;
+                Boundary segments{Segment{{overlay.start_m[0], overlay.start_m[1]},
+                                          {overlay.end_m[0], overlay.end_m[1]}, 0.0}};
+                if (overlay.kind == SectionOverlayKind::dimension) {
+                    CoordinatedView source_view;
+                    source_view.id = view_context.view_id.empty() ? "section-dimension-view" : view_context.view_id;
+                    source_view.name = "Section";
+                    source_view.kind = CoordinatedViewKind::section;
+                    source_view.object_ids = view_context.object_ids;
+                    source_view.restrict_to_objects = view_context.restrict_to_objects;
+                    source_view.origin_m = {frame.origin.x, frame.origin.y, frame.origin.z};
+                    source_view.direction = {frame.direction.x, frame.direction.y, frame.direction.z};
+                    source_view.up = {frame.up.x, frame.up.y, frame.up.z};
+                    const auto measured = resolve_section_dimension(snapshot, source_view, overlay);
+                    if (!measured.dimension) {
+                        append_geometry_error(QStringLiteral("Dimension %1: %2")
+                            .arg(QString::fromStdString(overlay.id),
+                                 QString::fromStdString(measured.diagnostic)));
+                        continue;
+                    }
+                    const auto& d = *measured.dimension;
+                    segments.clear();
+                    if (d.associative) {
+                        for (const auto& pair : {std::pair{d.start_m, d.line_start_m},
+                                                std::pair{d.end_m, d.line_end_m}}) {
+                            if (pair.first == pair.second) continue;
+                            segments.push_back({{pair.first[0], pair.first[1]},
+                                                {pair.second[0], pair.second[1]}, 0.0});
+                        }
+                    }
+                    // PlanCanvas applies dimension ticks to the last segment.
+                    // Witnesses precede the authoritative dimension line.
+                    segments.push_back({{d.line_start_m[0], d.line_start_m[1]},
+                                        {d.line_end_m[0], d.line_end_m[1]}, 0.0});
+                }
                 CanvasEntity line{QString::fromStdString(view_context.view_id + "/overlay/" + overlay.id),
-                    QStringLiteral("section_overlay"), Boundary{Segment{
-                        {overlay.start_m[0], overlay.start_m[1]},
-                        {overlay.end_m[0], overlay.end_m[1]}, 0.0}}, 0.0};
+                    QStringLiteral("section_overlay"), std::move(segments), 0.0};
                 line.output_stroke_width_mm = overlay.line_width_mm;
                 line.dimension_end_ticks = overlay.kind == SectionOverlayKind::dimension;
                 result.push_back(std::move(line));
@@ -22237,7 +22597,7 @@ private:
                 for (const auto& view : record->model.views()) {
                     if (view.kind != CoordinatedViewKind::section ||
                         (!m_active_named_view.isEmpty() && view.id != m_active_named_view.toStdString())) continue;
-                    for (auto& label : section_overlay_labels(view, m_metric_units)) labels.push_back(std::move(label));
+                    for (auto& label : section_overlay_labels(snapshot, view, m_metric_units)) labels.push_back(std::move(label));
                     break;
                 }
             }
@@ -23273,7 +23633,7 @@ private:
         const bool opening = entity.has_value() && entity->type == "opening";
         m_door_swing_button->setVisible(opening && entity->properties.value("opening_kind", std::string{}) == "door");
         m_door_swing_button->setEnabled(m_document->is_editable());
-        m_opening_assembly_button->setVisible(opening);
+        m_opening_assembly_button->setVisible(opening && entity->properties.value("opening_kind", std::string{}) != "opening");
         m_opening_assembly_button->setEnabled(opening && m_document->is_editable());
         const bool reference_asset = entity.has_value() && entity->type == "reference_asset";
         const bool project_entity = entity.has_value() && entity->type == "property";
@@ -23692,7 +24052,9 @@ private:
         if (entity->type == "opening") {
             const auto wall_id = read_string(entity->properties, "wall_id");
             const auto kind = read_string(entity->properties, "opening_kind");
-            const auto kind_label = kind.has_value() && !kind->empty()
+            const auto kind_label = kind == std::optional<std::string>{"opening"}
+                                        ? QStringLiteral("doorway")
+                                        : kind.has_value() && !kind->empty()
                                         ? QString::fromStdString(*kind).toLower()
                                         : QStringLiteral("door/window");
             context = QStringLiteral("%1 opening\nHosted by wall %2")
@@ -24205,7 +24567,111 @@ private:
         return captured;
     }
 
+    void updateOpeningPlacement(Vec2 point, bool commit) {
+        BoundaryDraftPreview preview;
+        preview.instruction = QStringLiteral("Move onto a wall to place the %1").arg(m_pending_opening_kind);
+        try {
+            const auto unit = m_metric_units ? Unit::metre : Unit::foot;
+            const auto width = parse_quantity(m_opening_draw_width->text().toStdString(), unit).metres;
+            const auto height = parse_quantity(m_opening_draw_height->text().toStdString(), unit).metres;
+            const auto sill = parse_quantity(m_opening_draw_sill->text().toStdString(), unit).metres;
+            if (!std::isfinite(width) || width <= 0 || !std::isfinite(height) || height <= 0 ||
+                !std::isfinite(sill) || sill < 0) throw std::invalid_argument("Width and height must be positive; sill cannot be negative.");
+            const auto snapshot = m_document->snapshot();
+            const auto* canvas = m_workspace == Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+            std::optional<Entity> host_entity;
+            Wall host;
+            double offset = 0.0;
+            double nearest = std::numeric_limits<double>::infinity();
+            for (const auto& visible : canvas->entities()) {
+                const auto it = snapshot.entities().find(visible.id.toStdString());
+                if (it == snapshot.entities().end() || it->second.type != "wall") continue;
+                if (read_string(it->second.properties, "layer_id") != std::optional<std::string>{m_active_layer_id.toStdString()}) continue;
+                std::vector<const Entity*> openings;
+                for (const auto& [id, entity] : snapshot.entities()) {
+                    if (entity.type == "opening" && read_string(entity.properties, "wall_id") == std::optional<std::string>{it->first})
+                        openings.push_back(&entity);
+                }
+                Wall candidate;
+                std::string diagnostic;
+                if (!read_document_wall(it->second, openings, candidate, diagnostic)) continue;
+                const auto& baseline = candidate.baseline;
+                const auto distance = [&](double fraction) {
+                    const auto p = point_at_segment(baseline, fraction).value();
+                    return std::hypot(point.x - p.x, point.y - p.y);
+                };
+                double fraction = 0;
+                if (baseline.sweep_radians == 0.0) {
+                    const auto dx = baseline.end.x - baseline.start.x;
+                    const auto dy = baseline.end.y - baseline.start.y;
+                    fraction = std::clamp(((point.x - baseline.start.x) * dx + (point.y - baseline.start.y) * dy) / (dx * dx + dy * dy), 0.0, 1.0);
+                } else {
+                    // Locate the nearest arc interval, then refine against the analytical curve.
+                    for (int i = 1; i <= 64; ++i) if (distance(i / 64.0) < distance(fraction)) fraction = i / 64.0;
+                    double low = std::max(0.0, fraction - 1.0 / 64.0);
+                    double high = std::min(1.0, fraction + 1.0 / 64.0);
+                    for (int i = 0; i < 40; ++i) {
+                        const auto a = std::lerp(low, high, 1.0 / 3.0);
+                        const auto b = std::lerp(low, high, 2.0 / 3.0);
+                        if (distance(a) < distance(b)) high = b; else low = a;
+                    }
+                    fraction = (low + high) * 0.5;
+                }
+                const auto separation = distance(fraction);
+                if (separation > std::max(0.15, candidate.thickness * 0.5) || separation >= nearest) continue;
+                nearest = separation;
+                offset = fraction * segment_length(baseline) - width * 0.5;
+                host = std::move(candidate);
+                host_entity = it->second;
+            }
+            if (host_entity) {
+                host.openings.push_back(HostedOpening{"opening-placement-preview", offset, width, sill, height});
+                // Cheap analytical bounds, slope, layer, and overlap checks on hover.
+                // createHostedOpening performs full solid admission once on commit.
+                validate_wall_semantics(host);
+                const auto length = segment_length(host.baseline);
+                const auto a = point_at_segment(host.baseline, offset / length).value();
+                const auto b = point_at_segment(host.baseline, (offset + width) / length).value();
+                const auto chord = std::hypot(b.x - a.x, b.y - a.y);
+                const Vec2 normal{-(b.y - a.y) / chord * host.thickness * 0.5,
+                                   (b.x - a.x) / chord * host.thickness * 0.5};
+                const Vec2 a1{a.x + normal.x, a.y + normal.y}, a2{a.x - normal.x, a.y - normal.y};
+                const Vec2 b1{b.x + normal.x, b.y + normal.y}, b2{b.x - normal.x, b.y - normal.y};
+                preview.segments = {{a1, b1, 0}, {b1, b2, 0}, {b2, a2, 0}, {a2, a1, 0}};
+                if (m_pending_opening_kind == QStringLiteral("door")) {
+                    const auto swing = door_plan_symbol(host.baseline, offset, width, DoorOperation{});
+                    preview.segments.insert(preview.segments.end(), swing.begin(), swing.end());
+                }
+                preview.instruction = QStringLiteral("Click to place %1 • offset %2").arg(m_pending_opening_kind, format_length(offset, m_metric_units));
+                if (commit) {
+                    const auto previous = m_selected_id;
+                    m_selected_id = id_from(host_entity->id);
+                    const auto id = createHostedOpening(m_pending_opening_kind,
+                        QString::number(offset, 'g', 17) + QStringLiteral(" m"),
+                        m_opening_draw_width->text(), m_opening_draw_sill->text(), m_opening_draw_height->text(),
+                        snapshot.revision(), m_pending_opening_kind == QStringLiteral("door") ? std::optional{DoorOperation{}} : std::nullopt);
+                    if (id.isEmpty()) m_selected_id = previous;
+                    else {
+                        setTool(CanvasTool::select);
+                        m_architecture_hint->setText(QStringLiteral("Opening placed. Select it to edit its dimensions or position."));
+                        return;
+                    }
+                }
+            }
+        } catch (const std::exception& error) {
+            preview.segments.clear();
+            preview.instruction = QString::fromUtf8(error.what());
+        }
+        m_architecture_hint->setText(preview.instruction);
+        m_measurementCanvas->setBoundaryDraftPreview(preview);
+        m_architecturalCanvas->setBoundaryDraftPreview(std::move(preview));
+    }
+
     void onCanvasPoint(Vec2 point) {
+        if (!m_pending_opening_kind.isEmpty()) {
+            updateOpeningPlacement(point, true);
+            return;
+        }
         if (!m_pending_symbol_id.isEmpty()) {
             const auto symbol_id = m_pending_symbol_id;
             const auto scale = m_pending_symbol_scale;
@@ -24288,7 +24754,14 @@ private:
             }
             if (!id.isEmpty()) {
                 clearPreview();
-                setTool(CanvasTool::select);
+                if (m_tool == CanvasTool::wall) {
+                    m_pending_wall_start = point;
+                    m_measurementCanvas->setWallPreview(std::make_pair(point, point));
+                    m_architecturalCanvas->setWallPreview(std::make_pair(point, point));
+                    owner->statusBar()->showMessage(QStringLiteral("Click the next wall end • Esc finishes the chain"));
+                } else {
+                    setTool(CanvasTool::select);
+                }
             }
         }
     }
@@ -24475,6 +24948,10 @@ private:
     void toggleOverviewMap() { setOverviewMap(!m_overview_map_enabled); }
 
     void clearPreview(bool retire = true) {
+        m_pending_opening_kind.clear();
+        if (m_architecture_hint) m_architecture_hint->hide();
+        if (m_opening_draw_fields) m_opening_draw_fields->hide();
+        if (m_wall_draw_fields) m_wall_draw_fields->show();
         // A successful finish already retired its input. Other tool exits retire
         // only this document's matching session, never the incoming project's.
         if (retire && m_boundary_session && m_boundary_document == m_document && m_document->is_editable()) {
@@ -25579,6 +26056,8 @@ private:
     QString m_last_error;
     QString m_plan_geometry_error;
     std::map<std::string, std::pair<std::string, Boundary>> m_plan_projection_cache;
+    std::map<std::string, Entity, std::less<>> m_view_projection_sources;
+    std::map<std::pair<std::string, std::string>, std::optional<Boundary>> m_view_projection_cache;
     std::map<std::string, std::pair<std::string, QString>, std::less<>>
         m_plan_slab_validation_cache;
     std::array<std::vector<CanvasEntity>, 3> m_architectural_view_entities;
@@ -25594,6 +26073,15 @@ private:
     AssistanceSession m_assistance_session;
     QString m_last_boundary_classification{QStringLiteral("measurement")};
     std::optional<Vec2> m_pending_wall_start;
+    QString m_pending_opening_kind;
+    QWidget* m_wall_draw_fields{};
+    QWidget* m_opening_draw_fields{};
+    QLineEdit* m_wall_draw_thickness{};
+    QLineEdit* m_wall_draw_height{};
+    QLineEdit* m_opening_draw_width{};
+    QLineEdit* m_opening_draw_height{};
+    QLineEdit* m_opening_draw_sill{};
+    QLabel* m_architecture_hint{};
     BuildingViewKind m_architectural_view_kind{BuildingViewKind::plan};
     QString m_active_named_view;
 
@@ -25905,10 +26393,11 @@ bool MainWindow::editArchitecturalViewPresentation(
     const QString& view_id, const QString& cut_depth_m, const QString& far_depth_m,
     const QString& cut_line_mm, const QString& projection_line_mm, bool hatch_enabled,
     const QString& hatch_pattern, const QString& hatch_scale, const QString& detail,
-    const QString& object_ids, std::optional<QString> crop_bounds) {
+    const QString& object_ids, std::optional<QString> crop_bounds,
+    std::optional<bool> restrict_to_objects) {
     return m_impl->editArchitecturalViewPresentation(
         view_id, cut_depth_m, far_depth_m, cut_line_mm, projection_line_mm, hatch_enabled,
-        hatch_pattern, hatch_scale, detail, object_ids, std::move(crop_bounds));
+        hatch_pattern, hatch_scale, detail, object_ids, std::move(crop_bounds), restrict_to_objects);
 }
 
 Workspace MainWindow::workspace() const noexcept {

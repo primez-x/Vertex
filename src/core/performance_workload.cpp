@@ -145,7 +145,7 @@ nlohmann::json inspect_performance_workload(const DocumentSnapshot& snapshot) {
                 for (const auto& viewport : sheet.viewports) {
                     const auto view = std::find_if(model.views().begin(), model.views().end(),
                         [&](const auto& candidate) { return candidate.id == viewport.view_id; });
-                    if (view == model.views().end() || view->object_ids.empty())
+                    if (view == model.views().end() || (!view->restrict_to_objects && view->object_ids.empty()))
                         throw std::runtime_error("fixture viewport lacks explicit reference selection");
                     for (const auto& reference_id : view->object_ids) {
                         const auto& reference = snapshot.entities().at(reference_id);

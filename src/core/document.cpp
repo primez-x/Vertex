@@ -731,6 +731,22 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
                                     " references missing object " + object_id);
                         }
                     }
+                    for (const auto& overlay : view.overlays) {
+                        if (!overlay.dimension_binding) continue;
+                        const auto& target_id = overlay.dimension_binding->object_id;
+                        const auto target = entities.find(target_id);
+                        if (target == entities.end()) {
+                            document_error(DocumentErrorCode::dangling_reference,
+                                "section dimension " + overlay.id + " references missing object " + target_id);
+                        }
+                        static constexpr std::array<std::string_view, 11> dimension_types{
+                            "wall", "opening", "room", "slab", "roof", "stair", "railing",
+                            "column", "beam", "wall_join", "roof_join"};
+                        if (std::find(dimension_types.begin(), dimension_types.end(), target->second.type) == dimension_types.end()) {
+                            document_error(DocumentErrorCode::invalid_entity,
+                                "section dimension " + overlay.id + " references unsupported object " + target_id);
+                        }
+                    }
                 }
             } catch (const DocumentError&) {
                 throw;

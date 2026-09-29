@@ -37,9 +37,9 @@ dishwasher,Dishwasher,02_kitchen,symbols/02_kitchen/dishwasher.svg
 fridge-french-door,Fridge French Door,02_kitchen,symbols/02_kitchen/fridge-french-door.svg
 fridge-side-by-side,Fridge Side By Side,02_kitchen,symbols/02_kitchen/fridge-side-by-side.svg
 fridge-single,Fridge Single,02_kitchen,symbols/02_kitchen/fridge-single.svg
+kitchen-island,Kitchen Island,02_kitchen,symbols/02_kitchen/kitchen-island.svg
 kitchen-island-seating,Kitchen Island Seating,02_kitchen,symbols/02_kitchen/kitchen-island-seating.svg
 kitchen-island-sink,Kitchen Island Sink,02_kitchen,symbols/02_kitchen/kitchen-island-sink.svg
-kitchen-island,Kitchen Island,02_kitchen,symbols/02_kitchen/kitchen-island.svg
 microwave,Microwave,02_kitchen,symbols/02_kitchen/microwave.svg
 oven-built-in,Oven Built In,02_kitchen,symbols/02_kitchen/oven-built-in.svg
 range-hood,Range Hood,02_kitchen,symbols/02_kitchen/range-hood.svg
@@ -49,6 +49,8 @@ sink-farmhouse,Sink Farmhouse,02_kitchen,symbols/02_kitchen/sink-farmhouse.svg
 sink-stainless-double,Sink Stainless Double,02_kitchen,symbols/02_kitchen/sink-stainless-double.svg
 sink-stainless-single,Sink Stainless Single,02_kitchen,symbols/02_kitchen/sink-stainless-single.svg
 sink-with-drainer,Sink With Drainer,02_kitchen,symbols/02_kitchen/sink-with-drainer.svg
+wall-cabinet-600,Wall / Upper Cabinet 600,02_kitchen,symbols/02_kitchen/wall-cabinet-600.svg
+wall-cabinet-900,Wall / Upper Cabinet 900,02_kitchen,symbols/02_kitchen/wall-cabinet-900.svg
 wine-fridge,Wine Fridge,02_kitchen,symbols/02_kitchen/wine-fridge.svg
 air-handler,Air Handler,03_laundry_utility,symbols/03_laundry_utility/air-handler.svg
 dryer-front-load,Dryer Front Load,03_laundry_utility,symbols/03_laundry_utility/dryer-front-load.svg
@@ -89,8 +91,8 @@ bed-daybed,Bed Daybed,05_bedroom,symbols/05_bedroom/bed-daybed.svg
 bed-full,Bed Full,05_bedroom,symbols/05_bedroom/bed-full.svg
 bed-king,Bed King,05_bedroom,symbols/05_bedroom/bed-king.svg
 bed-queen,Bed Queen,05_bedroom,symbols/05_bedroom/bed-queen.svg
-bed-twin-xl,Bed Twin Xl,05_bedroom,symbols/05_bedroom/bed-twin-xl.svg
 bed-twin,Bed Twin,05_bedroom,symbols/05_bedroom/bed-twin.svg
+bed-twin-xl,Bed Twin Xl,05_bedroom,symbols/05_bedroom/bed-twin-xl.svg
 bedroom-bench,Bedroom Bench,05_bedroom,symbols/05_bedroom/bedroom-bench.svg
 crib,Crib,05_bedroom,symbols/05_bedroom/crib.svg
 dresser-six-drawer,Dresser Six Drawer,05_bedroom,symbols/05_bedroom/dresser-six-drawer.svg
@@ -119,8 +121,8 @@ keyboard,Keyboard,07_office,symbols/07_office/keyboard.svg
 laptop,Laptop,07_office,symbols/07_office/laptop.svg
 meeting-table,Meeting Table,07_office,symbols/07_office/meeting-table.svg
 monitor,Monitor,07_office,symbols/07_office/monitor.svg
-office-chair-armless,Office Chair Armless,07_office,symbols/07_office/office-chair-armless.svg
 office-chair,Office Chair,07_office,symbols/07_office/office-chair.svg
+office-chair-armless,Office Chair Armless,07_office,symbols/07_office/office-chair-armless.svg
 office-pedestal,Office Pedestal,07_office,symbols/07_office/office-pedestal.svg
 printer,Printer,07_office,symbols/07_office/printer.svg
 server-rack,Server Rack,07_office,symbols/07_office/server-rack.svg

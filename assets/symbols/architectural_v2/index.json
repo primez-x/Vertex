@@ -1,7 +1,7 @@
 {
   "library": "Vertex Architectural SVG Library",
   "version": "2.0",
-  "count": 320,
+  "count": 322,
   "symbols": [
     {
       "id": "basin-oval",
@@ -232,6 +232,12 @@
       "file": "symbols/02_kitchen/fridge-single.svg"
     },
     {
+      "id": "kitchen-island",
+      "name": "Kitchen Island",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/kitchen-island.svg"
+    },
+    {
       "id": "kitchen-island-seating",
       "name": "Kitchen Island Seating",
       "category": "02_kitchen",
@@ -242,12 +248,6 @@
       "name": "Kitchen Island Sink",
       "category": "02_kitchen",
       "file": "symbols/02_kitchen/kitchen-island-sink.svg"
-    },
-    {
-      "id": "kitchen-island",
-      "name": "Kitchen Island",
-      "category": "02_kitchen",
-      "file": "symbols/02_kitchen/kitchen-island.svg"
     },
     {
       "id": "microwave",
@@ -302,6 +302,18 @@
       "name": "Sink With Drainer",
       "category": "02_kitchen",
       "file": "symbols/02_kitchen/sink-with-drainer.svg"
+    },
+    {
+      "id": "wall-cabinet-600",
+      "name": "Wall / Upper Cabinet 600",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/wall-cabinet-600.svg"
+    },
+    {
+      "id": "wall-cabinet-900",
+      "name": "Wall / Upper Cabinet 900",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/wall-cabinet-900.svg"
     },
     {
       "id": "wine-fridge",
@@ -544,16 +556,16 @@
       "file": "symbols/05_bedroom/bed-queen.svg"
     },
     {
-      "id": "bed-twin-xl",
-      "name": "Bed Twin Xl",
-      "category": "05_bedroom",
-      "file": "symbols/05_bedroom/bed-twin-xl.svg"
-    },
-    {
       "id": "bed-twin",
       "name": "Bed Twin",
       "category": "05_bedroom",
       "file": "symbols/05_bedroom/bed-twin.svg"
+    },
+    {
+      "id": "bed-twin-xl",
+      "name": "Bed Twin Xl",
+      "category": "05_bedroom",
+      "file": "symbols/05_bedroom/bed-twin-xl.svg"
     },
     {
       "id": "bedroom-bench",
@@ -724,16 +736,16 @@
       "file": "symbols/07_office/monitor.svg"
     },
     {
-      "id": "office-chair-armless",
-      "name": "Office Chair Armless",
-      "category": "07_office",
-      "file": "symbols/07_office/office-chair-armless.svg"
-    },
-    {
       "id": "office-chair",
       "name": "Office Chair",
       "category": "07_office",
       "file": "symbols/07_office/office-chair.svg"
+    },
+    {
+      "id": "office-chair-armless",
+      "name": "Office Chair Armless",
+      "category": "07_office",
+      "file": "symbols/07_office/office-chair-armless.svg"
     },
     {
       "id": "office-pedestal",

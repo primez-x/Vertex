@@ -247,6 +247,14 @@
     },
     {
       "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/02_kitchen/wall-cabinet-600.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/02_kitchen/wall-cabinet-900.svg"
+    },
+    {
+      "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/02_kitchen/wine-fridge.svg"
     },
     {
@@ -2515,6 +2523,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/section_dimension_resolution.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/sheet_output_scene.hpp"
     },
     {
@@ -2755,6 +2767,10 @@
     },
     {
       "category": "source",
+      "path": "scripts/restyle_architectural_svg_library.py"
+    },
+    {
+      "category": "source",
       "path": "scripts/run.ps1"
     },
     {
@@ -2856,6 +2872,10 @@
     {
       "category": "source",
       "path": "src/architecture/document_solid.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/architecture/section_dimension_resolution.cpp"
     },
     {
       "category": "source",
@@ -3363,6 +3383,14 @@
     },
     {
       "category": "source",
+      "path": "tests/associative_section_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/batch_boundary_clone_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/boundary_active_recovery_tests.cpp"
     },
     {
@@ -3611,6 +3639,10 @@
     },
     {
       "category": "source",
+      "path": "tests/multipage_user_workflow_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/native_geometry_preparation_tests.cpp"
     },
     {
@@ -3763,6 +3795,10 @@
     },
     {
       "category": "source",
+      "path": "tests/section_dimension_resolution_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/sheet_layout_dialog_tests.cpp"
     },
     {
@@ -3816,6 +3852,10 @@
     {
       "category": "source",
       "path": "tests/test_apex_fixture_evidence.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_architectural_svg_style.py"
     },
     {
       "category": "source",
@@ -3936,6 +3976,10 @@
     {
       "category": "source",
       "path": "tests/wall_join_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/wall_opening_palette_tests.cpp"
     },
     {
       "category": "source",

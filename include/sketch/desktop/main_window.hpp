@@ -137,7 +137,8 @@ public:
         const QString& hatch_scale,
         const QString& detail,
         const QString& object_ids = {},
-        std::optional<QString> crop_bounds = std::nullopt);
+        std::optional<QString> crop_bounds = std::nullopt,
+        std::optional<bool> restrict_to_objects = std::nullopt);
 
     [[nodiscard]] Workspace workspace() const noexcept;
     void setWorkspace(Workspace workspace);

@@ -1521,9 +1521,10 @@
         "tests/multipage_document_tests.cpp",
         "docs/multipage-projects.md",
         "scripts/generate_workflow_acceptance_evidence.py",
-        "tests/test_workflow_acceptance_evidence.py"
+        "tests/test_workflow_acceptance_evidence.py",
+        "tests/multipage_user_workflow_tests.cpp"
       ],
-      "implementation_note": "Multipage subject/shared data, areas, stable links, page order, and view semantics are implemented as a standalone contract. The desktop sheet_view_model supports undoable page add/remove/reorder, reference-safe lifecycle validation, selected-page PDF/SVG/PNG/print output, ordered drawing-set PDF/print output, and save/reopen through Document. A distinct complete-set output scene binds exact page membership and order independently of the locally selected page. The property entity projects subject name/address/reference and bounded string attributes through the Project details inspector, and closed boundaries expose bounded area_attributes through the Area attributes inspector; both have undoable save/reopen coverage. Physical printer behavior and production qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Multipage subject/shared data, areas, stable links, page order, and view semantics are implemented as a standalone contract. The desktop sheet_view_model supports undoable page add/remove/reorder, reference-safe lifecycle validation, selected-page PDF/SVG/PNG/print output, ordered drawing-set PDF/print output, and save/reopen through Document. A distinct complete-set output scene binds exact page membership and order independently of the locally selected page. The property entity projects subject name/address/reference and bounded string attributes through the Project details inspector, and closed boundaries expose bounded area_attributes through the Area attributes inspector; both have undoable save/reopen coverage. Physical printer behavior and production qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit. An integrated Release desktop workflow now verifies subject/area inspector edits, shared model links, independent viewport settings, page lifecycle/order, undo/redo, exact independent save/reopen, selected-sheet PDF and ordered mixed-size drawing-set PDF. Physical printer qualification remains separate."
     },
     {
       "id": "APX-DOC-002",
@@ -2252,9 +2253,13 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py",
         "src/desktop/plan_canvas.cpp",
-        "tests/boundary_canvas_tests.cpp"
+        "tests/boundary_canvas_tests.cpp",
+        "include/sketch/section_dimension_resolution.hpp",
+        "src/architecture/section_dimension_resolution.cpp",
+        "tests/section_dimension_resolution_tests.cpp",
+        "tests/associative_section_desktop_tests.cpp"
       ],
-      "implementation_note": "Persisted section text, detail-line, and explicit-endpoint dimension overlays participate in validated Document history, detail-level visibility, save/reopen, interactive rendering, and the shared draft-output scene. Coarse detail suppresses hatching; section/elevation strokes use paper-space widths, dimension end ticks retain fixed printed size, far depth clips along the viewing direction, and optional schema-v5 crops cover all four view-plane sides. Conventional-plan model linework uses exact analytic line/arc clipping; rotated frames use OCCT half-spaces for solids and face-based terrain before projection. Focused fixtures cover plan content retention, sheet output, rotated frames, curved solids, terrain, clearing, undo, save/reopen and source preservation. Associative object/edge dimension references, annotation crops, production visual comparison, physical-print calibration and full qualification remain open."
+      "implementation_note": "Persisted section text, detail lines and dimensions participate in validated history, detail visibility, save/reopen and shared canvas/output rendering. Schema 6 adds stable object-bound horizontal/vertical extents and separate line offsets, while versions 1-5 retain detached endpoints. Dimensions resolve full authoritative BRep geometry in the actual view frame with floor placement and geometric witnesses, independently of crop/depth or mesh approximations. Unresolved sources produce diagnostics and withhold values; visible unresolved dimensions block sheet output. Source deletion removes linked dimensions atomically, explicit detachment clears the association, and restricted-empty views remain restricted through presentation edits. Focused Release core and actual modal desktop workflows pass for source edits, curved/oblique forms, units, undo/redo, lifecycle, persistence and SVG/PDF output. Cut, hatch, paper-space strokes and model crop behavior remain implemented. Pairwise edge anchors, annotation crops, production visual comparisons, physical-print calibration and full qualification remain open."
     },
     {
       "id": "ARCH-SCH-001",

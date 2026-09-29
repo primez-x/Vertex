@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="999" height="449" viewBox="-49.5 -49.5 999 449" role="img" aria-labelledby="wall-cabinet-900--title wall-cabinet-900--desc" data-vertex-style="white-outline-2">
+<title id="wall-cabinet-900--title">Wall / upper cabinet · 900 mm</title>
+<desc id="wall-cabinet-900--desc">Overhead cabinet plan projection with dashed footprint and paired doors. Nominal footprint 900 by 350 millimetres. Front is +Y. Transparent background. No clearance or construction certification.</desc>
+<g id="wall-cabinet-900--artwork" fill="none" stroke="#111111" stroke-width="7" stroke-linejoin="round">
+<rect x="0" y="0" width="900" height="350" stroke-dasharray="30 18" />
+<path d="M12 338 H888 M450 0 V350" stroke-dasharray="30 18" />
+<path d="M20 20 L430 328 M430 20 L20 328 M470 20 L880 328 M880 20 L470 328" stroke="#b8b8b8" stroke-width="2" stroke-dasharray="15 15" />
+<path d="M355 344 H415 M485 344 H545" stroke-width="6" />
+</g>
+</svg>

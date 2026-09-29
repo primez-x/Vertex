@@ -1840,6 +1840,41 @@ void test_dimension_ticks_respect_angular_geometry() {
     }
 }
 
+void test_wall_footprint_uses_geometry_thickness() {
+    PlanCanvas canvas;
+    canvas.resize(400, 300);
+    const Boundary footprint{{{-1, -.1}, {1, -.1}, 0},
+                             {{1, -.1}, {1, .1}, 0},
+                             {{1, .1}, {-1, .1}, 0},
+                             {{-1, .1}, {-1, -.1}, 0}};
+    CanvasEntity wall{QStringLiteral("wall"), QStringLiteral("wall"), footprint, .2};
+    const auto capture = [&] {
+        canvas.setEntities({wall});
+        QImage image(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::white);
+        QPainter painter(&image);
+        canvas.renderSceneAt(painter, image.rect(), 100, {}, Qt::white);
+        painter.end();
+        return image;
+    };
+    const auto physical = capture();
+    const auto center_x = physical.width() / 2;
+    const auto center_y = physical.height() / 2;
+    require(physical.pixelColor(center_x, center_y - 15) == QColor(Qt::white) &&
+                physical.pixelColor(center_x, center_y + 15) == QColor(Qt::white),
+            "wall outline must not add thickness beyond its projected faces");
+    require(physical.pixelColor(center_x, center_y - 10) != QColor(Qt::white) &&
+                physical.pixelColor(center_x, center_y + 10) != QColor(Qt::white),
+            "both accurately scaled wall faces must remain visible");
+    wall.thickness_metres = .4;
+    require(images_equal(physical, capture()),
+            "semantic footprint thickness must come from geometry, not a second thick pen");
+    wall.segments = {{{-1, 0}, {1, 0}, 0}};
+    wall.thickness_metres = .2;
+    require(capture().pixelColor(center_x, center_y - 5) != QColor(Qt::white),
+            "legacy baseline-only walls must retain their thickness presentation");
+}
+
 void test_dark_canvas_semantic_strokes_and_overrides() {
     PlanCanvas canvas;
     canvas.resize(640, 480);
@@ -1897,6 +1932,7 @@ int main(int argc, char** argv) {
         test_dimension_ticks_are_paper_space();
         test_dimension_ticks_respect_angular_geometry();
         test_dark_canvas_semantic_strokes_and_overrides();
+        test_wall_footprint_uses_geometry_thickness();
         test_selection_frame_for_styled_geometry();
         test_boundary_tool_uses_unified_selection_until_a_draft_starts();
         test_direct_canvas_manipulation_contract();

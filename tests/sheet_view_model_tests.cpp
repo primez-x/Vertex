@@ -136,6 +136,23 @@ void coordination_and_isolation() {
     views[0].id = "changed"; sheets[0].number = "changed";
     require(detached.to_json() == saved, "snapshot owns input values");
 }
+void empty_source_filter() {
+    auto model = fixture();
+    auto view = model.views().front();
+    view.object_ids.clear();
+    view.restrict_to_objects = true;
+    const auto restricted = model.with_view(view);
+    const auto reopened = sketch::SheetViewModel::from_json(restricted.to_json());
+    require(reopened.to_json() == restricted.to_json() && reopened.views().front().restrict_to_objects,
+        "restricted empty source set survives serialization");
+    auto legacy = model.to_json(); legacy["version"] = 5;
+    for (auto& item : legacy["views"]) {
+        item.erase("restrict_to_objects");
+        for (auto& overlay : item["overlays"]) overlay.erase("dimension_binding");
+    }
+    const auto migrated = sketch::SheetViewModel::from_json(legacy);
+    require(migrated.to_json() == model.to_json(), "older unrestricted empty source semantics are preserved");
+}
 void sheet_lifecycle() {
     const auto original = fixture();
     auto addition = original.sheets().front();
@@ -282,7 +299,7 @@ void presentation_order() {
 }
 void serialization() {
     const auto saved = fixture().to_json();
-    require(saved.at("version") == 5, "view crops require schema version 5");
+    require(saved.at("version") == 6, "associative dimensions require schema version 6");
     require(saved.at("sheet_order") == nlohmann::json({"a", "b"}),
             "default presentation order must use canonical sheet IDs");
     require(sketch::SheetViewModel::from_json(saved).to_json().dump() == saved.dump(), "canonical roundtrip");
@@ -317,7 +334,7 @@ void serialization() {
     }
     auto invalid = saved; invalid["views"][0]["direction"].push_back(0);
     rejects([&] { (void)sketch::SheetViewModel::from_json(invalid); });
-    for (const auto& version : {nlohmann::json(6), nlohmann::json(2.0), nlohmann::json("2")}) {
+    for (const auto& version : {nlohmann::json(7), nlohmann::json(2.0), nlohmann::json("2")}) {
         invalid = saved; invalid["version"] = version;
         rejects([&] { (void)sketch::SheetViewModel::from_json(invalid); });
     }
@@ -353,7 +370,7 @@ void view_crops() {
         if (version < 4) legacy.erase("sheet_order");
         const auto migrated = sketch::SheetViewModel::from_json(legacy);
         for (const auto& item : migrated.views()) require(!item.presentation.crop, "legacy crop defaults to absent");
-        require(migrated.to_json().at("version") == 5, "legacy crop schema upgrade");
+        require(migrated.to_json().at("version") == 6, "legacy crop schema upgrade");
         require(migrated.sheet_order() == (version == 4 ? original.sheet_order() : fixture().sheet_order()),
                 "crop migration must preserve version-specific sheet ordering");
         if (version == 4) require(migrated.to_json() == saved, "v4 crop migration preserves graph");
@@ -461,17 +478,61 @@ void section_overlays() {
     invalid([](auto& v) { v.overlays[0].text = " "; });
     invalid([](auto& v) { v.overlays[1].end_m = v.overlays[1].start_m; });
     invalid([](auto& v) { v.overlays[0].start_m[0] = std::numeric_limits<double>::infinity(); });
-    invalid([](auto& v) { v.overlays[0].object_id = "missing"; });
+    invalid([](auto& v) { v.object_ids = {"wall"}; v.overlays[0].object_id = "missing"; });
     invalid([](auto& v) { v.overlays[0].text_height_mm = 21; });
     invalid([](auto& v) { v.overlays.resize(1001); });
     auto malformed = model.to_json(); malformed["views"][2]["overlays"][0]["start_m"].push_back(0);
     rejects([&] { (void)sketch::SheetViewModel::from_json(malformed); });
 }
+void associative_dimensions() {
+    auto model = fixture();
+    auto view = model.views().back();
+    view.object_ids = {"wall-main", "room-main"};
+    sketch::SectionOverlay dimension;
+    dimension.id = "extent"; dimension.kind = sketch::SectionOverlayKind::dimension;
+    dimension.dimension_binding = sketch::SectionDimensionBinding{
+        "wall-main", sketch::SectionDimensionAxis::horizontal, 0.75};
+    // A bound dimension's placement does not have to imply a detached length.
+    dimension.end_m = dimension.start_m;
+    view.overlays = {dimension};
+    model = model.with_view(view);
+    const auto saved = model.to_json();
+    require(sketch::SheetViewModel::from_json(saved).to_json() == saved, "binding canonical roundtrip");
+    require(saved["views"][2]["overlays"][0]["dimension_binding"]["axis"] == "horizontal",
+            "binding axis is semantic, not a topology index");
+    const auto invalid = [&](auto edit) {
+        auto candidate = view; edit(candidate.overlays[0]);
+        rejects([&] { (void)model.with_view(candidate); });
+    };
+    invalid([](auto& o) { o.kind = sketch::SectionOverlayKind::detail_line; });
+    invalid([](auto& o) { o.dimension_binding->object_id = "missing"; });
+    invalid([](auto& o) { o.dimension_binding->object_id = " "; });
+    invalid([](auto& o) { o.object_id = "room-main"; });
+    invalid([](auto& o) { o.dimension_binding->axis = static_cast<sketch::SectionDimensionAxis>(99); });
+    invalid([](auto& o) { o.dimension_binding->line_offset_m = std::numeric_limits<double>::infinity(); });
+    auto malformed = saved;
+    malformed["views"][2]["overlays"][0]["dimension_binding"]["edge_index"] = 7;
+    rejects([&] { (void)sketch::SheetViewModel::from_json(malformed); });
+    malformed = saved; malformed["views"][2]["overlays"][0].erase("dimension_binding");
+    rejects([&] { (void)sketch::SheetViewModel::from_json(malformed); });
+    for (int version : {3, 4, 5}) {
+        auto detached = dimension; detached.dimension_binding.reset(); detached.end_m = {3, 4};
+        view.overlays = {detached};
+        const auto original = model.with_view(view).to_json();
+        auto legacy = original; legacy["version"] = version;
+        if (version < 4) legacy.erase("sheet_order");
+        if (version < 5) for (auto& v : legacy["views"]) v["presentation"].erase("crop");
+        for (auto& v : legacy["views"]) for (auto& o : v["overlays"]) o.erase("dimension_binding");
+        const auto migrated = sketch::SheetViewModel::from_json(legacy);
+        require(migrated.to_json() == original && !migrated.views().back().overlays[0].dimension_binding,
+                "legacy dimensions remain explicitly detached");
+    }
+}
 } // namespace
 int main() {
     sketch::testing::noninteractive_errors();
     try {
-        coordination_and_isolation(); sheet_lifecycle(); placement_lifecycle(); serialization(); presentation_order(); view_crops(); invalid_values(); section_overlays();
+        coordination_and_isolation(); empty_source_filter(); sheet_lifecycle(); placement_lifecycle(); serialization(); presentation_order(); view_crops(); invalid_values(); section_overlays(); associative_dimensions();
         std::cout << "sheet/view model tests passed\n";
         return 0;
     } catch (const std::exception& error) {

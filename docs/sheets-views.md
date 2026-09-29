@@ -66,7 +66,10 @@ projection. Both paths preserve exact lines and arcs in interactive and printed
 output without changing authoritative geometry. It can also carry
 an ordered, deduplicated list of stable semantic object IDs for the walls,
 rooms, slabs, openings, terrain, and other source objects represented by that
-view. Document admission resolves those IDs and rejects a view that would keep
+view. `restrict_to_objects` retains a restricted-empty view when its last
+source is deleted; an empty list without that flag represents all objects.
+The presentation editor exposes that choice explicitly. Document admission
+resolves those IDs and rejects a view that would keep
 a dangling object reference, so deletes cannot silently retarget presentation
 geometry. Hosted opening references admit their wall as a projection dependency,
 and selecting an assembly host admits its placed assembly preview; this keeps
@@ -79,13 +82,21 @@ desktop Architectural view settings command edits these presentation fields
 through typed Document history. The desktop renderer conservatively culls
 solids whose BRep bounding range lies wholly beyond far depth. Objects crossing
 the limit are clipped with an OCCT half-space before projection. Section views
-also own persisted text, detail-line, and explicit-endpoint dimension overlays.
+also own persisted text, detail-line, and dimension overlays.
 Every overlay has a stable ID, paper-space text/line sizing, and a minimum
 coarse/medium/fine detail level; the same retained canvas scene feeds the
 interactive view and draft output. Coarse presentation suppresses hatching,
 and dimension end ticks print at a fixed 2.5 mm total length independent of
-device DPI or viewport model scale. Overlay dimensions are intentionally
-non-associative until object/edge references are added. Production visual and
+device DPI or viewport model scale. A dimension may be detached, using its
+explicit endpoints, or linked through `dimension_binding` to a stable source
+object ID and its horizontal or vertical extent in the owning view frame.
+`line_offset_m` positions the dimension line independently of measurement.
+Source edits update the derived witnesses, line and label; crop and depth
+settings never change the measured extent. Missing or unsupported sources
+produce a diagnostic and withhold the dimension rather than using old endpoints.
+Sheet output rejects unresolved visible dimensions. Detaching clears the source
+link; deleting a source removes its linked dimensions in the same undoable
+command. Production visual and
 physical-print qualification remain open.
 
 Sheets have explicit positive page dimensions in millimetres, unique sheet
@@ -109,15 +120,18 @@ lexical order. The desktop editor exposes the persisted revision and callout
 collections with typed graph validation; callout target sheet and viewport
 references are never inferred from display labels.
 
-Version 5 JSON uses `sketch.sheet_view_model`, persists an explicit crop object
+Version 6 JSON uses `sketch.sheet_view_model`, persists dimension bindings and
+the explicit source-filter flag alongside an explicit crop object
 or `null` for every view, section overlays, and an explicit `sheet_order` that is
 an exact permutation of the sheet identities, and
 rejects unknown/missing fields,
 invalid enum names, nonfinite numeric values, malformed frames and dangling
-references. Version 1 through 4 documents remain readable, normalize missing
+references. Version 1 through 5 documents remain readable, normalize missing
 `object_ids` or overlay collections to empty lists, and derive page order from
 the canonical sheet-ID sequence where required; all legacy views migrate with
-cropping disabled before strict validation. Definition collections
+cropping disabled where absent before strict validation. Legacy dimensions
+migrate with `dimension_binding: null`, retaining their authored endpoints;
+the existing source-list behavior remains unchanged. Definition collections
 serialize in ID order (schedule registry lexically), while `sheet_order` retains
 the user-visible page sequence,
 independent of insertion order. JSON output and caller inputs are detached from

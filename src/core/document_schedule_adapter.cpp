@@ -97,6 +97,8 @@ void add_surface_kind(const Entity& entity, ScheduleRecord& record) {
 void add_opening(const Entity& entity, std::vector<ScheduleRecord>& records,
                  std::vector<std::string>& diagnostics) {
     const auto opening_kind = text_field(entity, "opening_kind");
+    // Bare wall voids have no door or window assembly to schedule.
+    if (opening_kind == std::optional<std::string>{"opening"}) return;
     if (!opening_kind || (*opening_kind != "door" && *opening_kind != "window")) {
         diagnostic(diagnostics, entity, "opening_kind must be door or window");
         return;

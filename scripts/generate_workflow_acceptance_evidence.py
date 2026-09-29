@@ -1440,7 +1440,7 @@ WORKFLOW_RULES.update({
     },
     "APX-SYM-001": {
         "acceptance": (
-            "The visible local library contains all 320 supplied production SVG components in 25 "
+            "The visible local library contains 322 SVG components, including all 320 supplied symbols, in 25 "
             "categories. Hidden legacy definitions remain reopen-only compatibility data. Pointer drag "
             "and click placement, resizing, rotation, exact artwork pinning, explicit migration, "
             "save/reopen, and representative PDF/SVG/PNG output use the same retained artwork."
@@ -1466,8 +1466,8 @@ WORKFLOW_RULES.update({
             "docs/annotation-catalog.md",
         ),
         "anchors": (
-            "1,129",
-            "320",
+            "1,131",
+            "322",
             "svg",
             "scale",
             "plumbing",
@@ -1838,10 +1838,10 @@ WORKFLOW_RULES.update({
     },
     "ARCH-VIEW-002": {
         "acceptance": "Section and coordinated view definitions retain cut depth, line treatment, material hatching, detail level, annotations, callouts, and overlay metadata through validation and persistence.",
-        "sources": ("include/sketch/building_view_projection.hpp", "src/architecture/building_view_projection.cpp", "tests/building_view_projection_tests.cpp", "include/sketch/sheet_view_model.hpp", "src/core/sheet_view_model.cpp", "tests/sheet_view_model_tests.cpp", "include/sketch/sheet_view_entity_codec.hpp", "src/core/sheet_view_entity_codec.cpp", "tests/sheet_view_entity_codec_tests.cpp", "docs/architectural-projections.md", "docs/sheets-views.md"),
+        "sources": ("include/sketch/building_view_projection.hpp", "src/architecture/building_view_projection.cpp", "tests/building_view_projection_tests.cpp", "include/sketch/sheet_view_model.hpp", "src/core/sheet_view_model.cpp", "tests/sheet_view_model_tests.cpp", "include/sketch/sheet_view_entity_codec.hpp", "src/core/sheet_view_entity_codec.cpp", "tests/sheet_view_entity_codec_tests.cpp", "docs/architectural-projections.md", "docs/sheets-views.md", "include/sketch/section_dimension_resolution.hpp", "src/architecture/section_dimension_resolution.cpp", "tests/section_dimension_resolution_tests.cpp", "src/desktop/main_window.cpp", "tests/associative_section_desktop_tests.cpp"),
         "anchors": ("cut_depth_m", "cut_line_mm", "hatch_pattern", "detail", "callout", "overlay", "section"),
-        "tests": ("building_view_projection", "sheet_view_model", "sheet_view_entity_codec"),
-        "qualification_boundary": "This evidence covers deterministic section/view metadata and persistence. Full detail-overlay authoring, production annotation standards, and print qualification remain open.",
+        "tests": ("building_view_projection", "sheet_view_model", "sheet_view_entity_codec", "section_dimension_resolution", "associative_section_desktop"),
+        "qualification_boundary": "This evidence covers section metadata, object-bound extent dimensions, actual desktop source edits, lifecycle, persistence and SVG/PDF output. Pairwise edge anchors, annotation crops, production annotation standards and physical-print qualification remain open.",
     },
     "ARCH-SCH-001": {
         "acceptance": "Door/window, room, material, assembly, and building schedule fixtures expose marks, dimensions, counts, areas, deductions, net quantities, and source references.",

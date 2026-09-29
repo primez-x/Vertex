@@ -12,8 +12,10 @@ later instance edits do not alter the library. Empty content is allowed. Styles
 support font family, physical text height/stroke width, RGB colors, bold/italic,
 and none/solid/hatch fills. Font availability and hatch rendering are not checked.
 
-The visible desktop placement library contains the **320 supplied SVG symbols**
-across 25 source categories. The underlying compatibility catalog also retains
+The visible desktop placement library contains **322 SVG symbols**: the 320
+supplied symbols and two overhead wall cabinets, across 25 source categories.
+White surfaces, dark outlines and restrained light-gray gradients preserve
+detail without the previous gray, shaded appearance. The compatibility catalog retains
 **809 legacy parametric footprint entries across 393 named families** so existing
 projects can reopen without losing stored symbol IDs. Those procedural
 compatibility definitions are not offered for new placement. The original 52
@@ -24,13 +26,16 @@ families cover plumbing, furniture, storage, fixtures, appliances, accessibility
 lighting, electrical, mechanical, doors/windows, structure, circulation, site,
 office, medical, recreation, safety, and light-commercial equipment.
 
-The SVG library is preserved byte-for-byte under
-`assets/symbols/architectural_v2/`, together with its original indexes and README.
+The SVG library lives under `assets/symbols/architectural_v2/`.
+The owner's requested palette revision preserves original geometry, stable IDs,
+viewBoxes and physical dimensions; `scripts/restyle_architectural_svg_library.py`
+records the repeatable presentation change. The two overhead cabinets have
+600/900 mm widths and 350 mm depth, with dashed overhead footprints.
 `SOURCE.md` records provenance, the absence of a separate archive license, and
 the project owner's direction to include these first-party assets under Vertex's
 GPL-3.0-or-later license. No unidentified third-party rights are inferred. Run
 `python scripts/generate_architectural_svg_catalog.py --check` to validate all
-320 indexed paths and the checked-in deterministic C++ metadata. Run without
+322 indexed paths and the checked-in deterministic C++ metadata. Run without
 `--check` to regenerate after an intentional source update. The core catalog
 does not parse files or depend on a working directory at runtime.
 
@@ -44,7 +49,7 @@ supplied SVG set. Names are searchable case-insensitively along with IDs, famili
 and categories.
 
 `SymbolDefinition::svg_asset` supplies an asset-root-relative path, native
-`view_box`, `footprint_view_box`, and `dimensions_are_nominal`. In 208 assets the
+`view_box`, `footprint_view_box`, and `dimensions_are_nominal`. In 210 assets the
 SVG description supplies nominal millimetres, converted to metres. Their
 footprint bounds exclude the surrounding artwork padding. The remaining 112
 assets have no physical-size claim: their editable default footprint has a
@@ -52,15 +57,17 @@ one-metre longest side and follows the viewBox aspect ratio. The flag is false
 for those defaults; it must not be presented as a measured or certified size.
 
 The Windows desktop embeds every SVG in its Qt resource bundle and presents the
-320 SVG entries as the complete new-placement library, with source names and
+322 SVG entries as the complete new-placement library, with source names and
 cleaned category labels. Library
-thumbnails and placed components use the original SVG document. The canvas maps
+thumbnails and placed components use the detailed SVG document. The canvas maps
 the declared footprint bounds—not the padded viewBox—to the physical
 width/depth centred on the placement anchor, retains the artwork padding, and
 accounts for the SVG Y-down axis before applying model-space rotation. The same
 retained SVG renderer feeds interactive views, fitted sheets, PDF, SVG and image
-output. Save/reopen stores the stable catalog ID and placement; it reloads the
-bundled artwork without an external path or archive dependency.
+output. Save/reopen pins the stable definition, placement and exact SVG bytes,
+so an installed artwork revision cannot silently change an existing project.
+Use **Update component artwork** in quick properties to adopt the current
+library version explicitly; that change supports undo and redo.
 Legacy strokes remain unchanged for old symbols. New SVG entries reuse an exact
 name-matched legacy family as a scaled fallback when available, otherwise a
 footprint rectangle. These fallback/DXF strokes are **not SVG tessellation** and

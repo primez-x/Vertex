@@ -11,8 +11,20 @@ namespace sketch {
 enum class CoordinatedViewKind { plan, elevation, section };
 enum class ViewDetail { coarse, medium, fine };
 enum class SectionOverlayKind { text, detail_line, dimension };
+enum class SectionDimensionAxis { horizontal, vertical };
+// Stable semantic handles are the minimum and maximum of the full source
+// silhouette along this axis in the owning section's frame. No BRep topology
+// identity, cached geometry or measured quantity is persisted.
+struct SectionDimensionBinding {
+    std::string object_id;
+    SectionDimensionAxis axis{SectionDimensionAxis::horizontal};
+    // Dimension-line placement from the maximum perpendicular silhouette
+    // coordinate, in view-plane metres; independent of the measured extent.
+    double line_offset_m{0.5};
+    bool operator==(const SectionDimensionBinding&) const = default;
+};
 // Detached view-plane coordinates in metres, never analytical model geometry.
-// Dimension values are measured between these explicit endpoints, not associative.
+// With no binding, dimensions retain their explicit endpoint measurement.
 struct SectionOverlay {
     std::string id;
     SectionOverlayKind kind{SectionOverlayKind::text};
@@ -22,8 +34,10 @@ struct SectionOverlay {
     double text_height_mm{2.5};
     double line_width_mm{0.18};
     ViewDetail minimum_detail{ViewDetail::medium};
-    // Optional source reference must occur in the owning view's object_ids.
+    // Optional source reference must occur in a restricted owning object_ids
+    // list. An empty list represents all document objects.
     std::string object_id;
+    std::optional<SectionDimensionBinding> dimension_binding;
     bool operator==(const SectionOverlay&) const = default;
 };
 [[nodiscard]] bool section_overlay_visible(const SectionOverlay& overlay, ViewDetail detail);
@@ -61,6 +75,9 @@ struct CoordinatedView {
     // owning Document when the sheet/view entity is admitted.
     std::vector<std::string> object_ids;
     std::vector<SectionOverlay> overlays;
+    // Retains an explicitly restricted, empty source set after deletion.
+    // Nonempty object_ids also restrict the view for legacy callers.
+    bool restrict_to_objects{false};
     bool operator==(const CoordinatedView&) const = default;
 };
 struct SheetRect {

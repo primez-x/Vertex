@@ -1,5 +1,41 @@
 # Implementation status
 
+## Library contrast and direct wall authoring (2026-09-29)
+
+The visible library contains 322 SVG components: the 320 supplied drawings and
+two added wall-cabinet variants. New artwork uses white surfaces, dark structural
+outlines and restrained gray shading; physically small components retain readable
+line weights. The supplied archive remains unchanged. Existing project instances
+retain their pinned artwork until the explicit update action is used.
+
+Selecting a symbol no longer fills its placement frame. Its artwork and exposed
+grid remain visible with resize/rotation handles. The Library tab also provides
+Wall, Doorway, Door and Window authoring with editable physical sizes. Walls
+render their actual thickness and hosted cuts in 2D; doorway voids do not create
+door leaves or door-schedule entries. The focused Release checks cover placement,
+selection pixels, semantic cuts, overlap rejection, undo/redo and save/reopen.
+
+The integrated multipage workflow regression passes for subject and area edits,
+page lifecycle/order, shared objects with independent viewport settings,
+save/reopen, selected-page PDF and ordered mixed-size drawing-set PDF. Physical
+printer qualification and Apex compatibility certification remain open.
+
+## Linked section dimensions (2026-09-29)
+
+The section annotation editor links Width or Height dimensions to stable model
+objects and keeps their line offsets independent of measurement. Schema 6
+migrates older dimensions as detached endpoint measurements. Canvas and output
+derive values from current source geometry and resolved floor placement; a
+missing or unresolved source cannot reuse stale endpoint values. Source deletion
+removes linked dimensions in the same undoable edit. Explicitly detached
+dimensions remain independent. Restricted views retain an empty source set after
+their final source is deleted, including when unrelated presentation settings
+are edited. Focused Release numerical and desktop workflows pass, including
+circular/oblique solids, translated frames, floor levels, object edits, units,
+undo/redo, detach/delete, save/reopen, SVG and PDF output. Thirteen focused
+Release checks pass across these changes and document/storage boundaries.
+This is development verification; the unified production gate remains open.
+
 ## Supplied SVG component durability and qualified placement (2026-09-21)
 
 The visible component library contains all 320 SVG files supplied in
