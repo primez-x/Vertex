@@ -65,3 +65,18 @@ and leave the document unchanged.
 The derived compound is not exported as authoritative project geometry;
 native DXF/IFC and full ARCH-MOD-002 export acceptance remain production-gate
 work.
+
+In an uncropped conventional plan, selecting a door, window or bare opening on
+a straight wall shows two width handles at its jambs and a **W × H** readout.
+Drag either handle to resize along the wall while pinning the opposite jamb.
+Height, sill, wall thickness, handing and manufactured frame dimensions remain
+unchanged. The preview regenerates the circular swing and wall cut together.
+Overlaps, an out-of-host span or insufficient clear frame width appear as an
+invalid proposal; release leaves the project unchanged. Final admission also
+regenerates the host, all sibling assemblies and affected wall joins.
+
+The drag commits one undoable revision-fenced command. Escape, focus loss or a
+refreshed document cancels it. Save/reopen retains width and offset. Print and
+export use committed geometry and exclude handles and drag proposals. Curved
+hosts, cropped plans and alternate projection frames retain dimension editing
+through properties; their plan-width handles are not available.

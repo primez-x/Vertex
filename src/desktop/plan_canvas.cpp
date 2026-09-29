@@ -39,6 +39,18 @@ constexpr double maximum_scale = 4000.0;
 constexpr double output_minimum_scale = minimum_scale;
 constexpr double pi = std::numbers::pi;
 
+Qt::CursorShape jamb_resize_cursor(const CanvasOpeningWidthControls& controls) {
+    const auto angle = std::atan2(-(controls.end_jamb.y-controls.start_jamb.y),
+                                  controls.end_jamb.x-controls.start_jamb.x);
+    const auto direction = (static_cast<int>(std::lround(angle*4/pi)) % 4 + 4) % 4;
+    switch (direction) {
+    case 1: return Qt::SizeFDiagCursor;
+    case 2: return Qt::SizeVerCursor;
+    case 3: return Qt::SizeBDiagCursor;
+    default: return Qt::SizeHorCursor;
+    }
+}
+
 bool drawable_label(const CanvasLabel& label) {
     return !label.text.isEmpty() && std::isfinite(label.position.x) &&
            std::isfinite(label.position.y);
@@ -306,6 +318,9 @@ PlanCanvas::PlanCanvas(QWidget* parent) : QWidget(parent) {
 }
 
 void PlanCanvas::setEntities(std::vector<CanvasEntity> entities) {
+    // Replacing the document projection invalidates the captured revision and
+    // its transient host-wall geometry, even when the selected ID survives.
+    if (m_opening_width_handle) resetGesture();
     m_entities = std::move(entities);
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     update();
@@ -394,6 +409,7 @@ void PlanCanvas::setSelectedId(const QString& entity_id) {
 }
 
 void PlanCanvas::setSelectedIds(const QStringList& entity_ids) {
+    if (m_opening_width_handle && selectedIds() != entity_ids) resetGesture();
     for (auto& entity : m_entities) {
         entity.selected = entity_ids.contains(entity.id);
     }
@@ -679,7 +695,9 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     }
     drawReferenceGrids(painter);
     for (const auto& entity : m_entities) {
-        if (!output && m_vertex_move_handle && m_vertex_move_preview &&
+        if (!output && &interactiveEntity(entity) != &entity) {
+            drawEntity(painter, interactiveEntity(entity), false, background, paper_pixels_per_mm);
+        } else if (!output && m_vertex_move_handle && m_vertex_move_preview &&
             m_vertex_move_handle->entity_id == entity.id) {
             auto preview = entity;
             const auto source = m_vertex_move_handle->source_position;
@@ -793,6 +811,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
         drawSelectionFrame(painter, viewport);
         drawVertexHandles(painter, viewport);
         drawSelectionDimensions(painter, viewport);
+        drawOpeningWidthHandles(painter, viewport);
         drawSelectionCaption(painter, viewport, background);
         drawCursorReadout(painter, viewport, background);
     }
@@ -1072,6 +1091,9 @@ bool PlanCanvas::eventFilter(QObject* watched, QEvent* event) {
 
 bool PlanCanvas::event(QEvent* event) {
     switch (event->type()) {
+    case QEvent::FocusOut:
+        if (m_opening_width_handle) resetGesture();
+        break;
     case QEvent::Hide:
     case QEvent::WindowBlocked:
     case QEvent::WindowDeactivate:
@@ -1218,6 +1240,15 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
     m_left_start = position;
     m_left_dragging = false;
     if (selectionInteractionEnabled()) {
+        if (const auto jamb = openingWidthHandleAt(position, QRectF(rect()))) {
+            m_left_gesture = LeftGesture::opening_width_resize;
+            m_opening_width_handle = *jamb;
+            m_opening_width_jamb_preview = jamb->keep_start_jamb
+                ? jamb->source.end_jamb : jamb->source.start_jamb;
+            m_opening_width_scale_preview = 1.0;
+            setCursor(jamb_resize_cursor(jamb->source));
+            return;
+        }
         if (const auto vertex = vertexHandleAt(position, QRectF(rect()))) {
             m_left_gesture = LeftGesture::vertex_move;
             m_vertex_move_handle = *vertex;
@@ -1301,6 +1332,14 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
         }
         if (m_left_dragging) {
             m_move_preview_delta = dragDelta(position);
+            update();
+        }
+    } else if (m_left_gesture == LeftGesture::opening_width_resize) {
+        if (!m_left_dragging &&
+            (position - m_left_start).manhattanLength() >= QApplication::startDragDistance())
+            m_left_dragging = true;
+        if (m_left_dragging && m_opening_width_handle) {
+            updateOpeningWidthPreview(position);
             update();
         }
     } else if (m_left_gesture == LeftGesture::selection_axis_resize) {
@@ -1396,7 +1435,8 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
         // Consume the final location even if the platform omitted a move event.
         if (m_left_gesture == LeftGesture::selection_axis_resize ||
             m_left_gesture == LeftGesture::selection_resize ||
-            m_left_gesture == LeftGesture::selection_rotate)
+            m_left_gesture == LeftGesture::selection_rotate ||
+            m_left_gesture == LeftGesture::opening_width_resize)
             pointerMove(position, modifiers);
         const auto gesture = m_left_gesture;
         const auto start = m_left_start;
@@ -1414,6 +1454,9 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
         const auto axis_scale_y = m_axis_scale_y_preview;
         const auto axis_anchor = m_axis_anchor;
         const auto vertex_handle = m_vertex_move_handle;
+        const auto opening_handle = m_opening_width_handle;
+        const auto opening_scale = m_opening_width_scale_preview;
+        const auto opening_valid = m_opening_width_preview_valid;
         // A tablet/touch/mouse release can cross the drag threshold without an
         // intermediate move event. Commit the actual snapped release point,
         // while a stationary press remains a no-op.
@@ -1464,6 +1507,11 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
                     m_entity_selection_clicked({}, false);
                 }
             }
+        } else if (gesture == LeftGesture::opening_width_resize && dragging &&
+                   opening_handle && opening_valid && m_opening_width_resize_requested &&
+                   std::abs(opening_scale - 1.0) > 1e-12) {
+            (void)m_opening_width_resize_requested(opening_handle->entity_id, opening_scale,
+                opening_handle->keep_start_jamb, opening_handle->source.source_revision);
         } else if (gesture == LeftGesture::selection_axis_resize && dragging &&
                    move_ids.size() == 1 && m_entity_axis_resize_requested) {
             (void)m_entity_axis_resize_requested(move_ids.front(), axis_scale_x,
@@ -1506,6 +1554,11 @@ void PlanCanvas::resetGesture() {
     m_axis_scale_y_preview = 1.0;
     m_vertex_move_handle.reset();
     m_vertex_move_preview.reset();
+    m_opening_width_handle.reset();
+    m_opening_width_jamb_preview.reset();
+    m_opening_width_entities_preview.clear();
+    m_opening_width_scale_preview = 1.0;
+    m_opening_width_preview_valid = false;
     if (m_space_pan_armed) {
         setCursor(Qt::OpenHandCursor);
     } else if (m_last_mouse_position) {
@@ -1550,8 +1603,9 @@ std::optional<QRectF> PlanCanvas::selectionBounds(const QRectF& viewport) const 
                                          std::max(result->bottom(), bounds.bottom())))
                         : bounds;
     };
-    for (const auto& entity : m_entities) {
-        if (!entity.selected) continue;
+    for (const auto& retained_entity : m_entities) {
+        if (!retained_entity.selected) continue;
+        const auto& entity = interactiveEntity(retained_entity);
         const auto preview = m_move_preview_delta && m_move_ids.contains(entity.id)
             ? *m_move_preview_delta : Vec2{};
         const auto width = wall_baseline_only(entity)
@@ -1658,7 +1712,7 @@ std::optional<CanvasSelectionFrame> PlanCanvas::entitySelectionAxes(const Canvas
 std::optional<CanvasSelectionFrame> PlanCanvas::selectionAxes() const {
     if (selectedIds().size() != 1) return std::nullopt;
     for (const auto& entity : m_entities)
-        if (entity.selected) return entitySelectionAxes(entity);
+        if (entity.selected) return entitySelectionAxes(interactiveEntity(entity));
     for (const auto& reference : m_references) {
         if (!reference.selected || !reference.visible || reference.image.isNull()) continue;
         const auto unit = reference.metres_per_source_unit*reference.scale;
@@ -1758,6 +1812,7 @@ QPointF PlanCanvas::selectionRotationPoint(const QRectF& viewport) const {
 
 PlanCanvas::SelectionHandle PlanCanvas::selectionHandleAt(
     QPointF point, const QRectF& viewport) const {
+    if (selectedOpening()) return SelectionHandle::none;
     if (selectedIds().size() != 1) return SelectionHandle::none;
     if (!selectionFrame(viewport)) return SelectionHandle::none;
     const auto frame = selectionControlRect(viewport);
@@ -1800,8 +1855,121 @@ PlanCanvas::SelectionHandle PlanCanvas::selectionHandleAt(
     return nearest;
 }
 
+const CanvasEntity* PlanCanvas::selectedOpening() const {
+    if (selectedIds().size() != 1) return nullptr;
+    for (const auto& entity : m_entities)
+        if (entity.selected && entity.opening_width_controls) return &entity;
+    return nullptr;
+}
+
+const CanvasEntity& PlanCanvas::interactiveEntity(const CanvasEntity& entity) const {
+    if (m_opening_width_handle && m_opening_width_preview_valid) {
+        for (const auto& preview : m_opening_width_entities_preview)
+            if (preview.id == entity.id) return preview;
+    }
+    return entity;
+}
+
+std::optional<PlanCanvas::OpeningWidthHandleHit> PlanCanvas::openingWidthHandleAt(
+    QPointF point, const QRectF& viewport) const {
+    const auto* entity = selectedOpening();
+    if (!entity || !m_opening_width_preview_requested || !m_opening_width_resize_requested)
+        return std::nullopt;
+    const auto& controls = *entity->opening_width_controls;
+    const auto length = std::hypot(controls.end_jamb.x - controls.start_jamb.x,
+                                   controls.end_jamb.y - controls.start_jamb.y);
+    if (!std::isfinite(controls.start_jamb.x) || !std::isfinite(controls.start_jamb.y) ||
+        !std::isfinite(controls.end_jamb.x) || !std::isfinite(controls.end_jamb.y) ||
+        !std::isfinite(length) || length <= 1e-6 ||
+        !std::isfinite(controls.width_metres) || controls.width_metres <= 0 ||
+        !std::isfinite(controls.height_metres) || controls.height_metres <= 0)
+        return std::nullopt;
+    const auto start_distance = QLineF(point, toScreen(controls.start_jamb, viewport)).length();
+    const auto end_distance = QLineF(point, toScreen(controls.end_jamb, viewport)).length();
+    constexpr qreal hit_radius = 13.0;
+    if (std::min(start_distance, end_distance) > hit_radius) return std::nullopt;
+    return OpeningWidthHandleHit{entity->id, controls, end_distance < start_distance};
+}
+
+void PlanCanvas::updateOpeningWidthPreview(QPointF point) {
+    if (!m_opening_width_handle) return;
+    const auto handle = *m_opening_width_handle;
+    const auto& source = handle.source;
+    const auto dx = source.end_jamb.x - source.start_jamb.x;
+    const auto dy = source.end_jamb.y - source.start_jamb.y;
+    const auto length = std::hypot(dx, dy);
+    const Vec2 direction{dx / length, dy / length};
+    const auto anchor = handle.keep_start_jamb ? source.start_jamb : source.end_jamb;
+    const auto target = toModel(point, rect());
+    const auto press = toModel(m_left_start, rect());
+    const auto displacement = (target.x - press.x) * direction.x +
+                              (target.y - press.y) * direction.y;
+    const auto projected = (handle.keep_start_jamb ? length : -length) + displacement;
+    const auto width = handle.keep_start_jamb ? projected : -projected;
+    m_opening_width_scale_preview = width / length;
+    m_opening_width_jamb_preview = Vec2{anchor.x + projected * direction.x,
+                                      anchor.y + projected * direction.y};
+    m_opening_width_preview_valid = false;
+    m_opening_width_entities_preview.clear();
+    // Crossing the fixed jamb is invalid; do not silently clamp or fabricate
+    // stretched opening artwork. Document validation owns further constraints.
+    if (!std::isfinite(width) || width <= 1e-6 || !m_opening_width_preview_requested) return;
+    auto preview = m_opening_width_preview_requested(handle.entity_id,
+        m_opening_width_scale_preview, handle.keep_start_jamb, source.source_revision);
+    // A projection callback may synchronously replace the scene or selection.
+    // Such replacement cancels the gesture; never revive its stale overrides.
+    if (!m_opening_width_handle || m_left_gesture != LeftGesture::opening_width_resize ||
+        m_opening_width_handle->entity_id != handle.entity_id ||
+        m_opening_width_handle->source.source_revision != source.source_revision) return;
+    if (!preview || std::none_of(preview->begin(), preview->end(),
+        [&](const CanvasEntity& entity) { return entity.id == handle.entity_id; })) return;
+    for (auto& entity : *preview) {
+        const auto original = std::find_if(m_entities.begin(), m_entities.end(),
+            [&](const CanvasEntity& item) { return item.id == entity.id; });
+        if (original != m_entities.end()) entity.selected = original->selected;
+    }
+    m_opening_width_entities_preview = std::move(*preview);
+    m_opening_width_preview_valid = true;
+}
+
+void PlanCanvas::drawOpeningWidthHandles(QPainter& painter, const QRectF& viewport) const {
+    if (!selectionInteractionEnabled()) return;
+    const auto* entity = selectedOpening();
+    if (!entity || !m_opening_width_preview_requested || !m_opening_width_resize_requested) return;
+    const auto& controls = *entity->opening_width_controls;
+    auto start = controls.start_jamb;
+    auto end = controls.end_jamb;
+    if (m_opening_width_handle && m_opening_width_jamb_preview) {
+        if (m_opening_width_handle->keep_start_jamb) end = *m_opening_width_jamb_preview;
+        else start = *m_opening_width_jamb_preview;
+    }
+    if (m_move_preview_delta && m_move_ids.contains(entity->id)) {
+        start.x += m_move_preview_delta->x; start.y += m_move_preview_delta->y;
+        end.x += m_move_preview_delta->x; end.y += m_move_preview_delta->y;
+    }
+    if (!std::isfinite(start.x) || !std::isfinite(start.y) ||
+        !std::isfinite(end.x) || !std::isfinite(end.y)) return;
+    const bool invalid = m_opening_width_handle && m_left_dragging && !m_opening_width_preview_valid;
+    const auto color = invalid ? QColor(220, 38, 38) : QColor(37, 99, 235);
+    painter.save();
+    painter.setClipRect(viewport, Qt::IntersectClip);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(QPen(color, 1.5));
+    if (m_opening_width_handle && m_left_dragging) {
+        painter.setBrush(Qt::NoBrush);
+        painter.drawLine(toScreen(start, viewport), toScreen(end, viewport));
+    }
+    painter.setBrush(QColor(255, 255, 255, 245));
+    for (const auto jamb : {start, end}) {
+        const auto screen = toScreen(jamb, viewport);
+        painter.drawRect(QRectF(screen.x() - 5.0, screen.y() - 5.0, 10.0, 10.0));
+    }
+    painter.restore();
+}
+
 std::optional<PlanCanvas::VertexHandleHit> PlanCanvas::vertexHandleAt(
     QPointF point, const QRectF& viewport) const {
+    if (selectedOpening()) return std::nullopt;
     if (selectedIds().size() != 1) return std::nullopt;
     constexpr qreal hit_radius = 13.0;
     for (const auto& entity : m_entities) {
@@ -1818,6 +1986,7 @@ std::optional<PlanCanvas::VertexHandleHit> PlanCanvas::vertexHandleAt(
 }
 
 void PlanCanvas::drawVertexHandles(QPainter& painter, const QRectF& viewport) const {
+    if (selectedOpening()) return;
     if (!selectionInteractionEnabled() || selectedIds().size() != 1) return;
     painter.save();
     painter.setClipRect(viewport, Qt::IntersectClip);
@@ -1852,7 +2021,7 @@ void PlanCanvas::drawSelectionFrame(QPainter& painter, const QRectF& viewport) c
     // A white halo keeps the blue frame legible over dark fills and underlays.
     painter.setPen(QPen(QColor(255, 255, 255, 235), 4.0));
     painter.drawPolygon(polygon);
-    if (selectedIds().size() == 1 &&
+    if (selectedIds().size() == 1 && !selectedOpening() &&
         (m_selection_resize_enabled || m_selection_rotate_enabled || m_selection_axis_resize_enabled)) {
         painter.setBrush(QColor(255, 255, 255));
         painter.setPen(QPen(QColor(37, 99, 235), 1.5));
@@ -1901,7 +2070,8 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
     dimension_font.setWeight(QFont::Medium);
     painter.setFont(dimension_font);
     const QFontMetricsF metrics(dimension_font, painter.device());
-    const auto draw = [&](CanvasSelectionFrame axes, const QString& id, bool sizes_presented = false) {
+    const auto draw = [&](CanvasSelectionFrame axes, const QString& id, bool sizes_presented = false,
+                          std::optional<CanvasOpeningWidthControls> opening = std::nullopt) {
         if (!std::isfinite(axes.center.x) || !std::isfinite(axes.center.y) ||
             !std::isfinite(axes.rotation_radians) || !std::isfinite(axes.width_metres) ||
             !std::isfinite(axes.depth_metres) || axes.width_metres < 0 || axes.depth_metres < 0)
@@ -1932,8 +2102,17 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
             center.x += m_move_preview_delta->x;
             center.y += m_move_preview_delta->y;
         }
-        QString text = QStringLiteral("W %1  ×  D %2")
-            .arg(display_cursor_length(width, m_metric_units), display_cursor_length(depth, m_metric_units));
+        const bool editing_opening = opening && m_opening_width_handle &&
+                                     m_opening_width_handle->entity_id == id;
+        const bool invalid_opening = editing_opening && m_left_dragging &&
+                                     !m_opening_width_preview_valid;
+        const auto dimension_width = opening ? opening->width_metres *
+            (editing_opening ? m_opening_width_scale_preview : 1.0) : width;
+        const auto dimension_depth = opening ? opening->height_metres : depth;
+        QString text = (opening ? QStringLiteral("W %1  ×  H %2") : QStringLiteral("W %1  ×  D %2"))
+            .arg(display_cursor_length(dimension_width, m_metric_units),
+                 display_cursor_length(dimension_depth, m_metric_units));
+        if (invalid_opening) text += QStringLiteral("  ·  Invalid");
         if (transforming && m_left_gesture == LeftGesture::selection_rotate) {
             auto degrees = std::fmod(axes.rotation_radians * 180/pi, 360.0);
             if (degrees < 0) degrees += 360;
@@ -1952,15 +2131,19 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
         panel.moveTop(std::clamp(panel.top(), viewport.top()+4,
             std::max(viewport.top()+4, viewport.bottom()-panel.height()-4)));
         const bool dark = m_canvas_background.lightnessF() < .45;
-        painter.setPen(QPen(dark ? QColor(125,179,255) : QColor(37,99,235),1));
-        painter.setBrush(dark ? QColor(27,52,87,238) : QColor(239,246,255,244));
+        painter.setPen(QPen(invalid_opening ? QColor(220,38,38)
+                           : dark ? QColor(125,179,255) : QColor(37,99,235),1));
+        painter.setBrush(invalid_opening ? QColor(254,226,226,244)
+                         : dark ? QColor(27,52,87,238) : QColor(239,246,255,244));
         painter.drawRoundedRect(panel,4,4);
-        painter.setPen(dark ? QColor(223,235,255) : QColor(29,78,216));
+        painter.setPen(invalid_opening ? QColor(185,28,28)
+                       : dark ? QColor(223,235,255) : QColor(29,78,216));
         painter.drawText(panel,Qt::AlignCenter,text);
     };
     for (const auto& entity : m_entities) {
         if (entity.selected) {
-            if (const auto axes = entitySelectionAxes(entity)) draw(*axes,entity.id);
+            if (const auto axes = entitySelectionAxes(interactiveEntity(entity)))
+                draw(*axes,entity.id,false,entity.opening_width_controls);
         }
     }
     for (const auto& reference : m_references) {
@@ -2391,6 +2574,10 @@ void PlanCanvas::updatePointerCursor(QPointF point) {
     } else if (m_space_pan_armed && m_gesture_button == Qt::NoButton) {
         setCursor(Qt::OpenHandCursor);
     } else if (selectionInteractionEnabled() && m_gesture_button == Qt::NoButton) {
+        if (const auto jamb = openingWidthHandleAt(point, QRectF(rect()))) {
+            setCursor(jamb_resize_cursor(jamb->source));
+            return;
+        }
         if (vertexHandleAt(point, QRectF(rect()))) {
             setCursor(Qt::SizeAllCursor);
             return;
@@ -2423,6 +2610,20 @@ void PlanCanvas::setEntityTransformRequested(
 void PlanCanvas::setEntityAxisResizeRequested(
     std::function<bool(QString, double, double, Vec2)> callback) {
     m_entity_axis_resize_requested = std::move(callback);
+}
+
+void PlanCanvas::setOpeningWidthPreviewRequested(std::function<std::optional<std::vector<CanvasEntity>>(
+    QString, double, bool, std::uint64_t)> callback) {
+    if (m_opening_width_handle) resetGesture();
+    m_opening_width_preview_requested = std::move(callback);
+    update();
+}
+
+void PlanCanvas::setOpeningWidthResizeRequested(
+    std::function<bool(QString, double, bool, std::uint64_t)> callback) {
+    if (m_opening_width_handle) resetGesture();
+    m_opening_width_resize_requested = std::move(callback);
+    update();
 }
 
 void PlanCanvas::setBoundaryVertexMoveRequested(

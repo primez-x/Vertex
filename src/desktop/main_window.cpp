@@ -31,6 +31,7 @@
 #include "sketch/geometry_operations.hpp"
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/plan_axis_resize.hpp"
+#include "sketch/hosted_opening_resize.hpp"
 #include "sketch/survey_boundary_update.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
@@ -11527,6 +11528,120 @@ public:
         }
     }
 
+    std::optional<std::vector<CanvasEntity>> previewOpeningWidthFromCanvas(
+        PlanCanvas* canvas, const QString& requested_id, double scale,
+        bool keep_start_jamb, std::uint64_t revision) const {
+        try {
+            if (!canvas || !m_document->is_editable() || m_selected_ids.size() != 1 ||
+                m_selected_ids.front() != requested_id || m_boundary_session ||
+                m_pending_wall_start || !m_pending_symbol_id.isEmpty()) return std::nullopt;
+            const auto source = authoringSnapshot();
+            if (source.revision() != revision || !std::isfinite(scale) || scale <= 0)
+                return std::nullopt;
+            const auto& original = source.entities().at(requested_id.toStdString());
+            const auto wall_id = original.properties.at("wall_id").get<std::string>();
+            const auto& host = source.entities().at(wall_id);
+            const auto frame = hosted_opening_resize_frame(source, original.id);
+            auto opening = read_hosted_opening(original).value();
+            opening.width *= scale;
+            if (!keep_start_jamb) opening.offset += frame.width_metres - opening.width;
+            std::vector<const Entity*> siblings;
+            for (const auto& [id, entity] : source.entities()) {
+                (void)id;
+                if (entity.type == "opening" &&
+                    read_string(entity.properties, "wall_id").value_or("") == wall_id)
+                    siblings.push_back(&entity);
+            }
+            Wall wall;
+            std::string error;
+            if (!read_document_wall(host, siblings, wall, error)) return std::nullopt;
+            for (auto& child : wall.openings) if (child.id == opening.id) child = opening;
+            validate_wall_semantics(wall);
+            for (const auto* sibling : siblings) {
+                const auto kind = sibling->properties.value("opening_kind", std::string{});
+                std::optional<OpeningAssembly> assembly;
+                if (sibling->properties.contains("opening_assembly"))
+                    assembly = parse_opening_assembly(sibling->properties.at("opening_assembly"));
+                else if (const auto parsed = parse_opening_assembly_kind(kind))
+                    assembly = default_opening_assembly(*parsed);
+                if (!assembly) continue;
+                const auto child = std::find_if(wall.openings.begin(), wall.openings.end(),
+                    [&](const auto& item) { return item.id == sibling->id; });
+                if (child == wall.openings.end() ||
+                    assembly->frame_width_m * 2.0 >= child->width - default_geometry_tolerance_metres)
+                    return std::nullopt;
+            }
+            std::vector<CanvasEntity> result;
+            for (const auto& retained : canvas->entities()) {
+                if (retained.id.toStdString() == wall_id) {
+                    auto preview = retained;
+                    preview.segments = wall_plan_footprint(wall.baseline, wall.openings, wall.thickness);
+                    result.push_back(std::move(preview));
+                } else if (retained.id == requested_id && retained.opening_width_controls) {
+                    auto preview = retained;
+                    const auto kind = original.properties.value("opening_kind", std::string{});
+                    if (kind == "door" && original.properties.contains("door_operation")) {
+                        preview.segments = door_plan_symbol(wall.baseline, opening.offset,
+                            opening.width, decode_door_operation(original.properties.at("door_operation")));
+                    } else if (kind == "window") {
+                        preview.segments = window_plan_symbol(wall.baseline, opening.offset,
+                                                              opening.width, wall.thickness);
+                    } else if (kind == "opening") {
+                        const auto length = segment_length(wall.baseline);
+                        const Segment span{
+                            point_at_segment(wall.baseline, opening.offset / length).value(),
+                            point_at_segment(wall.baseline, (opening.offset + opening.width) / length).value(), 0};
+                        const auto outline = wall_plan_footprint(span, {}, wall.thickness);
+                        preview.segments = {outline.at(1), outline.at(3), span};
+                    } else return std::nullopt;
+                    auto& controls = *preview.opening_width_controls;
+                    const auto length = segment_length(wall.baseline);
+                    controls.start_jamb = point_at_segment(wall.baseline, opening.offset / length).value();
+                    controls.end_jamb = point_at_segment(wall.baseline,
+                        (opening.offset + opening.width) / length).value();
+                    controls.width_metres = opening.width;
+                    const auto c = std::cos(frame.angle_radians), s = std::sin(frame.angle_radians);
+                    auto local = preview.segments;
+                    for (auto& edge : local) {
+                        edge.start = {c*edge.start.x+s*edge.start.y, -s*edge.start.x+c*edge.start.y};
+                        edge.end = {c*edge.end.x+s*edge.end.y, -s*edge.end.x+c*edge.end.y};
+                    }
+                    const auto bounds = boundary_bounds(local);
+                    const auto x = std::midpoint(bounds.minimum.x, bounds.maximum.x);
+                    const auto y = std::midpoint(bounds.minimum.y, bounds.maximum.y);
+                    preview.resize_frame = CanvasSelectionFrame{{c*x-s*y, s*x+c*y}, frame.angle_radians,
+                        bounds.maximum.x-bounds.minimum.x, bounds.maximum.y-bounds.minimum.y};
+                    result.push_back(std::move(preview));
+                }
+            }
+            if (std::none_of(result.begin(), result.end(), [&](const auto& entity) {
+                    return entity.id == requested_id; })) return std::nullopt;
+            return result;
+        } catch (const std::exception&) { return std::nullopt; }
+    }
+
+    bool resizeOpeningWidthFromCanvas(const QString& requested_id, double scale,
+                                      bool keep_start_jamb, std::uint64_t revision) {
+        try {
+            if (m_boundary_session || m_pending_wall_start || !m_pending_symbol_id.isEmpty() ||
+                m_selected_ids.size() != 1 || m_selected_ids.front() != requested_id)
+                throw std::invalid_argument("Select one opening and finish the active drawing command before resizing.");
+            const auto source = authoringSnapshot();
+            if (source.revision() != revision)
+                throw std::invalid_argument("The project changed during the drag. Select the opening again.");
+            const auto command = hosted_opening_width_resize_command(
+                source, requested_id.toStdString(), scale, keep_start_jamb);
+            applyDocumentCommand(command);
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Resize opening: %1").arg(QString::fromUtf8(error.what())));
+            refresh();
+            return false;
+        }
+    }
+
     bool resizeSelectionAxesFromCanvas(const QString& requested_id, double scale_x,
                                        double scale_y, Vec2 anchor) {
         try {
@@ -21150,6 +21265,14 @@ private:
             [this](QString id, double x, double y, Vec2 anchor) {
                 return resizeSelectionAxesFromCanvas(id, x, y, anchor);
             });
+        canvas->setOpeningWidthPreviewRequested(
+            [this, canvas](QString id, double scale, bool keep_start, std::uint64_t revision) {
+                return previewOpeningWidthFromCanvas(canvas, id, scale, keep_start, revision);
+            });
+        canvas->setOpeningWidthResizeRequested(
+            [this](QString id, double scale, bool keep_start, std::uint64_t revision) {
+                return resizeOpeningWidthFromCanvas(id, scale, keep_start, revision);
+            });
         canvas->setBoundaryVertexMoveRequested(
             [this](QString id, QString vertex_id, Vec2 position,
                    std::uint64_t source_revision) {
@@ -21493,6 +21616,30 @@ private:
                         window.dark_stroke_color = QColor(210, 226, 239);
                         window.output_stroke_width_mm = 0.22;
                         all_geometry.push_back(std::move(window));
+                    }
+                    if (snapshot.is_editable() && !all_geometry.empty() && all_geometry.back().id == id_from(id)) {
+                        try {
+                            const auto frame = hosted_opening_resize_frame(snapshot, id);
+                            auto& retained = all_geometry.back();
+                            retained.opening_width_controls = CanvasOpeningWidthControls{
+                                frame.start_jamb, frame.end_jamb, frame.width_metres,
+                                frame.height_metres, snapshot.revision()};
+                            const auto c = std::cos(frame.angle_radians), s = std::sin(frame.angle_radians);
+                            auto local = retained.segments;
+                            for (auto& edge : local) {
+                                edge.start = {c*edge.start.x+s*edge.start.y, -s*edge.start.x+c*edge.start.y};
+                                edge.end = {c*edge.end.x+s*edge.end.y, -s*edge.end.x+c*edge.end.y};
+                            }
+                            const auto bounds = boundary_bounds(local);
+                            const auto x = std::midpoint(bounds.minimum.x, bounds.maximum.x);
+                            const auto y = std::midpoint(bounds.minimum.y, bounds.maximum.y);
+                            retained.resize_frame = CanvasSelectionFrame{
+                                {c*x-s*y, s*x+c*y}, frame.angle_radians,
+                                bounds.maximum.x-bounds.minimum.x, bounds.maximum.y-bounds.minimum.y};
+                        } catch (const std::exception&) {
+                            // Unsupported hosts retain their property editor;
+                            // no planar jamb gesture is offered for curved geometry.
+                        }
                     }
                 } catch(const std::exception& error) {
                     append_geometry_error(QStringLiteral("Opening %1: %2")
@@ -22212,6 +22359,7 @@ private:
                     if (!presentation_hidden_ids.contains(entity.id.toStdString()) &&
                         (!restricted || referenced.contains(entity.id.toStdString()))) {
                         auto retained = entity;
+                        if (view_context.crop) retained.opening_width_controls.reset();
                         const bool annotation =
                             retained.type == QStringLiteral("symbol") ||
                             retained.type == QStringLiteral("dimension_line");
@@ -24500,6 +24648,12 @@ private:
             if (const auto name = read_string(found->second.properties, "name");
                 name && !name->empty()) {
                 return QStringLiteral("Selected: %1").arg(QString::fromStdString(*name));
+            }
+            if (found->second.type == "opening") {
+                const auto kind = found->second.properties.value("opening_kind", std::string{});
+                if (kind == "door") return QStringLiteral("Selected: Door");
+                if (kind == "window") return QStringLiteral("Selected: Window");
+                if (kind == "opening") return QStringLiteral("Selected: Doorway");
             }
             auto type = QString::fromStdString(found->second.type);
             type.replace(QLatin1Char('_'), QLatin1Char(' '));

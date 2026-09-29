@@ -85,6 +85,20 @@ presentation. A later mouse release cannot commit a cancelled move.
 
 ## Acceptance sequences
 
+Hosted doors, windows and bare openings on straight walls have two jamb
+handles in an uncropped conventional plan. Dragging one jamb projects the
+pointer displacement along the wall and keeps the other jamb fixed. Only
+width and the necessary host offset change; height, sill, wall thickness,
+handing and frame dimensions remain unchanged. The live readout shows the
+opening's actual width and height. Circular door-swing geometry and the wall
+cut are regenerated together for interactive preview, rather than stretching
+painted strokes. Invalid placements are shown as rejected proposals. A
+completed drag publishes one source-revision-fenced command after validating
+the host, sibling openings, manufactured assemblies and wall joins. Escape,
+focus loss or a refreshed source cancels the proposal. These handles and
+previews are excluded from printed and exported geometry. Curved, cropped or
+custom-frame presentations retain the existing property editor.
+
 Focused interaction checks cover click selection, object drag with one commit,
 empty-canvas click drawing, plain-drag pan, Space and middle-button pan, Ctrl-click toggle, directional Ctrl marquee, mixed-button
 release, stationary right click versus right drag, double-click properties and authoring suppression,

@@ -2395,6 +2395,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/hosted_opening_resize.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/ifc_project_exchange.hpp"
     },
     {
@@ -2880,6 +2884,10 @@
     {
       "category": "source",
       "path": "src/architecture/document_solid.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/architecture/hosted_opening_resize.cpp"
     },
     {
       "category": "source",
@@ -3624,6 +3632,14 @@
     {
       "category": "source",
       "path": "tests/georeferencing_runtime_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/hosted_opening_resize_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/hosted_opening_resize_tests.cpp"
     },
     {
       "category": "source",

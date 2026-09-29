@@ -884,6 +884,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U162 — Change a door's width and height**
+  - Canvas check: Select a door in the plan and drag either jamb handle. The opposite jamb stays fixed, the wall cut and circular swing update together, and the width/height readout follows the edit. Undo and Redo restore it. Use quick properties to change height.
   - Expected: The opening and door update together.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -904,6 +905,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U166 — Change window size and sill height**
+  - Canvas check: Select a window in the plan and drag either jamb handle. Its width changes along the wall while height and sill remain. Dragging into another opening or beyond the host wall is rejected without changing the saved geometry.
   - Expected: Plan, elevation and 3D agree.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________

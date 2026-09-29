@@ -74,6 +74,16 @@ struct CanvasSelectionFrame {
     double depth_metres{};
 };
 
+// Semantic, screen-only opening controls. The jamb points lie on the host
+// baseline; width editing pins the opposite jamb and never scales the artwork.
+struct CanvasOpeningWidthControls {
+    Vec2 start_jamb{};
+    Vec2 end_jamb{};
+    double width_metres{};
+    double height_metres{};
+    std::uint64_t source_revision{};
+};
+
 struct CanvasEntity {
     QString id;
     QString type;
@@ -105,6 +115,7 @@ struct CanvasEntity {
     // clear in the interactive canvas and in print/export output.
     std::vector<Boundary> holes;
     std::optional<CanvasSelectionFrame> resize_frame;
+    std::optional<CanvasOpeningWidthControls> opening_width_controls;
 };
 
 // A retained document annotation. Unlike BoundaryDraftPreview, labels are
@@ -278,6 +289,13 @@ public:
     // Capability gating belongs to the document; rejected previews restore.
     void setEntityAxisResizeRequested(
         std::function<bool(QString, double, double, Vec2)> callback);
+    // Analytical document projection supplies opening and host-wall overrides
+    // for interactive rendering only. nullopt rejects the candidate. The bool
+    // pins the start jamb when true, or the end jamb when false.
+    void setOpeningWidthPreviewRequested(std::function<std::optional<std::vector<CanvasEntity>>(
+        QString, double, bool, std::uint64_t)> callback);
+    void setOpeningWidthResizeRequested(
+        std::function<bool(QString, double, bool, std::uint64_t)> callback);
     // Commits one selected boundary vertex at an absolute model-space point.
     // The canvas previews locally and restores document geometry if rejected.
     void setBoundaryVertexMoveRequested(
@@ -344,6 +362,17 @@ private:
     [[nodiscard]] std::optional<VertexHandleHit> vertexHandleAt(
         QPointF point, const QRectF& viewport) const;
     void drawVertexHandles(QPainter& painter, const QRectF& viewport) const;
+    struct OpeningWidthHandleHit {
+        QString entity_id;
+        CanvasOpeningWidthControls source;
+        bool keep_start_jamb{};
+    };
+    [[nodiscard]] const CanvasEntity* selectedOpening() const;
+    [[nodiscard]] std::optional<OpeningWidthHandleHit> openingWidthHandleAt(
+        QPointF point, const QRectF& viewport) const;
+    [[nodiscard]] const CanvasEntity& interactiveEntity(const CanvasEntity& entity) const;
+    void updateOpeningWidthPreview(QPointF point);
+    void drawOpeningWidthHandles(QPainter& painter, const QRectF& viewport) const;
     void drawSelectionFrame(QPainter& painter, const QRectF& viewport) const;
     void drawSelectionCaption(QPainter& painter, const QRectF& viewport,
                               QColor background) const;
@@ -406,7 +435,7 @@ private:
     bool m_panning{false};
     enum class LeftGesture {
         none, canvas_pan, object_move, selection_resize, selection_rotate, selection_axis_resize,
-        vertex_move, marquee, space_pan
+        vertex_move, opening_width_resize, marquee, space_pan
     };
     LeftGesture m_left_gesture{LeftGesture::none};
     QPointF m_left_start;
@@ -431,6 +460,11 @@ private:
     double m_transform_initial_rotation{};
     std::optional<VertexHandleHit> m_vertex_move_handle;
     std::optional<Vec2> m_vertex_move_preview;
+    std::optional<OpeningWidthHandleHit> m_opening_width_handle;
+    std::optional<Vec2> m_opening_width_jamb_preview;
+    std::vector<CanvasEntity> m_opening_width_entities_preview;
+    double m_opening_width_scale_preview{1.0};
+    bool m_opening_width_preview_valid{};
     bool m_space_pan_armed{false};
     Qt::MouseButton m_gesture_button{Qt::NoButton};
     QPointF m_right_start;
@@ -454,6 +488,9 @@ private:
     std::function<bool(QStringList, Vec2)> m_entities_move_requested;
     std::function<bool(QString, double, double)> m_entity_transform_requested;
     std::function<bool(QString, double, double, Vec2)> m_entity_axis_resize_requested;
+    std::function<std::optional<std::vector<CanvasEntity>>(
+        QString, double, bool, std::uint64_t)> m_opening_width_preview_requested;
+    std::function<bool(QString, double, bool, std::uint64_t)> m_opening_width_resize_requested;
     std::function<bool(QString, QString, Vec2, std::uint64_t)>
         m_boundary_vertex_move_requested;
     std::function<void(QString, double, Vec2)> m_symbol_dropped;
