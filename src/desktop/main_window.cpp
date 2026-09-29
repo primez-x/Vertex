@@ -11586,7 +11586,7 @@ public:
                     } else if (kind == "window") {
                         preview.segments = window_plan_symbol(wall.baseline, opening.offset,
                                                               opening.width, wall.thickness);
-                    } else if (kind == "opening") {
+                    } else if (kind == "opening" || kind == "door") {
                         const auto length = segment_length(wall.baseline);
                         const Segment span{
                             point_at_segment(wall.baseline, opening.offset / length).value(),
@@ -21586,7 +21586,7 @@ private:
                             door_plan_symbol(*baseline,opening->offset,opening->width,
                                 decode_door_operation(entity.properties.at("door_operation"))),0,
                             id_from(id)==m_selected_id});
-                    } else if (kind == "opening") {
+                    } else if (kind == "opening" || kind == "door") {
                         const auto length = segment_length(*baseline);
                         const Segment span{
                             point_at_segment(*baseline, opening->offset / length).value(),

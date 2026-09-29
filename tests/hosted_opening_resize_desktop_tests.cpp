@@ -64,7 +64,7 @@ struct Fixture {
     QString wall, opening;
     Vec2 direction;
     double scale{};
-    Fixture(const QString& kind, bool rotated, bool sibling = false) : direction(rotated ? Vec2{0,1} : Vec2{1,0}) {
+    Fixture(const QString& kind, bool rotated, bool sibling = false, bool with_swing = true) : direction(rotated ? Vec2{0,1} : Vec2{1,0}) {
         window.setMetricUnits(true);
         window.resize(1500,1000);
         window.show();
@@ -73,7 +73,7 @@ struct Fixture {
         require(!wall.isEmpty() && window.selectEntity(wall), "opening fixture wall creation failed");
         require(window.editSelectedHeight("3.2 m"), "fixture wall height edit failed");
         opening = window.createHostedOpening(kind,"2 m","1 m",kind=="window" ? "1 m" : "0 m","2 m",
-            std::nullopt,kind=="door" ? std::optional<DoorOperation>{DoorOperation{false,true,90}} : std::nullopt);
+            std::nullopt,kind=="door" && with_swing ? std::optional<DoorOperation>{DoorOperation{false,true,90}} : std::nullopt);
         require(!opening.isEmpty(), "opening fixture creation failed");
         if (sibling) {
             require(window.selectEntity(wall) && !window.createHostedOpening("opening","4 m","1 m","0 m","2 m").isEmpty(),
@@ -195,6 +195,15 @@ void successfulGestures() {
         }
 }
 void rejectedAndStaleGestures() {
+    Fixture legacy("door",false,false,false);
+    require(!properties(legacy.window,legacy.opening).contains("door_operation"),
+            "legacy door fixture unexpectedly has swing data");
+    require(!retained(legacy.window,legacy.opening).segments.empty(),
+            "door without swing data is absent from the interactive plan");
+    legacy.drag(false,1.5);
+    dimensions(legacy.window,legacy.opening,2,1.5);
+    require(!properties(legacy.window,legacy.opening).contains("door_operation"),
+            "resizing a legacy door invented handedness or swing data");
     Fixture f("door",false,true);
     const auto original=properties(f.window,f.opening);
     auto revision=f.window.document().revision();

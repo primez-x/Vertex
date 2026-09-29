@@ -32,6 +32,9 @@ swing side are relative to the host wall's drawing direction. The optional
 `side: "left" | "right"`, and numeric `angle_degrees`. Unknown versions, invalid
 fields, and invalid angles are rejected by Document validation. Unspecified
 existing openings receive no inferred swing.
+Doors without swing data retain visible jamb and threshold linework in the
+plan and support the same straight-wall width handles; editing them does not
+create hinge or swing metadata.
 
 Plan output uses a straight leaf and an analytic circular arc, sharing geometry
 between the canvas and printed/exported plan scene. On curved walls, the closed
