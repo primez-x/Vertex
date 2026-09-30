@@ -139,6 +139,7 @@ function Assert-RuntimeInstall([string]$RootPath, [string]$ManifestName, [string
 
 function Get-OwnedModulePaths([string]$RootPath, $Manifest) {
     $paths = @{}
+    $parents = [Collections.Hashtable]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($entry in @($Manifest.files)) {
         $relative = ([string]$entry.path -replace '\\', '/')
         # The broker loads modules from bin and the sibling Qt plugin tree.
@@ -147,10 +148,15 @@ function Get-OwnedModulePaths([string]$RootPath, $Manifest) {
         if (Test-Path -LiteralPath $path -PathType Leaf) { $paths[$path] = $false }
         $parent = Split-Path -Path $path -Parent
         while (-not $parent.Equals($RootPath, [StringComparison]::OrdinalIgnoreCase)) {
-            Assert-NoReparseChain $RootPath $parent 'owned module directory'
-            if (Test-Path -LiteralPath $parent -PathType Container) { $paths[$parent] = $true }
+            $parents[$parent] = $true
             $parent = Split-Path -Path $parent -Parent
         }
+    }
+    # Every file above still resolves and checks its complete path chain.
+    # Inspect shared ancestors once per enumeration, never across calls.
+    foreach ($parent in $parents.Keys) {
+        Assert-NoReparseChain $RootPath $parent 'owned module directory'
+        if (Test-Path -LiteralPath $parent -PathType Container) { $paths[$parent] = $true }
     }
     return $paths
 }

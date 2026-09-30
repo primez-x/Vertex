@@ -120,7 +120,10 @@ an elevated administrator token when exercising the sandboxed import worker.
 
 Repair and uninstall restore deletion access only to declared objects, after
 ownership checks. Module hard links and reparse points are rejected before ACL
-changes; each native ACL write also validates its opened object. Failed repair
+changes; each native ACL write also validates its opened object. Module-path
+enumeration resolves and checks every manifest file's complete path chain.
+Shared parent-directory checks are deduplicated within that one enumeration;
+each later enumeration performs fresh checks. Failed repair
 that restores a partially removed backup protects its restored module paths
 again. If an unknown backup object has inherited permissions that cannot be
 preserved safely during refreezing, repair reports failure and retains both the

@@ -605,6 +605,110 @@ public static class FixtureNativeAcl {
         self.assertIn("Move-Item -LiteralPath $stagingRoot", installer)
         self.assertIn("$backupRoot", installer)
 
+    @unittest.skipUnless(os.name == "nt", "Windows module path inspection")
+    def test_owned_module_paths_checks_each_file_and_each_distinct_parent_per_call(self):
+        if shutil.which("pwsh") is None:
+            self.skipTest("PowerShell is unavailable")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary).resolve()
+            module_relatives = [
+                f"bin/cad-runtime/Lib/site-packages/sample/shared/layer/part-{index}.dll"
+                for index in range(64)
+            ] + ["plugins/platforms/qwindows.dll", "plugins/imageformats/deep/qjpeg.dll"]
+            expected = {}
+            for relative in module_relatives:
+                path = root.joinpath(*pathlib.PurePosixPath(relative).parts)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"module fixture")
+                expected[str(path).casefold()] = False
+                parent = path.parent
+                while parent != root:
+                    expected[str(parent).casefold()] = True
+                    parent = parent.parent
+            # Case variants must share their ancestors on Windows. Every file
+            # still passes through the actual resolver and complete chain check.
+            manifest_relatives = list(module_relatives)
+            manifest_relatives[1] = manifest_relatives[1].replace("bin/", "BIN/", 1)
+            ignored = root / "assets" / "ignored.txt"
+            ignored.parent.mkdir()
+            ignored.write_bytes(b"not a loadable module")
+            manifest_path = root / "fixture-manifest.json"
+            write_json(manifest_path, {"files": [
+                {"path": relative} for relative in manifest_relatives + ["assets/ignored.txt"]
+            ]})
+            script = r"""
+$ErrorActionPreference='Stop'
+$tokens=$null; $parseErrors=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile(INSTALLER_PATH,[ref]$tokens,[ref]$parseErrors)
+if ($parseErrors.Count) { throw 'Installer parse failed' }
+foreach ($name in @('Fail','Assert-NoReparseChain','Resolve-SafeChildPath','Get-OwnedModulePaths')) {
+    $definitions=@($ast.FindAll({ param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
+    },$true))
+    if ($definitions.Count -ne 1) { throw "Missing or duplicate helper: $name" }
+    . ([ScriptBlock]::Create($definitions[0].Extent.Text))
+}
+$script:actualResolve=(Get-Command Resolve-SafeChildPath).ScriptBlock
+$script:actualAssert=(Get-Command Assert-NoReparseChain).ScriptBlock
+$script:resolved=[Collections.Generic.List[string]]::new()
+$script:directoryAssertions=[Collections.Generic.List[string]]::new()
+$script:containerChecks=[Collections.Hashtable]::new([StringComparer]::OrdinalIgnoreCase)
+function Resolve-SafeChildPath([string]$RootPath,[string]$RelativePath,[string]$Field) {
+    $script:resolved.Add($RelativePath)
+    & $script:actualResolve $RootPath $RelativePath $Field
+}
+function Assert-NoReparseChain([string]$RootPath,[string]$Candidate,[string]$Field) {
+    if ($Field -eq 'owned module directory') { $script:directoryAssertions.Add($Candidate) }
+    & $script:actualAssert $RootPath $Candidate $Field
+}
+function Test-Path {
+    [CmdletBinding()]
+    param([string]$LiteralPath,[string]$PathType)
+    $parameters=@{LiteralPath=$LiteralPath}
+    if ($PathType) { $parameters.PathType=$PathType }
+    if ($PathType -eq 'Container') {
+        if (-not $script:containerChecks.ContainsKey($LiteralPath)) { $script:containerChecks[$LiteralPath]=0 }
+        $script:containerChecks[$LiteralPath]=1+$script:containerChecks[$LiteralPath]
+    }
+    Microsoft.PowerShell.Management\Test-Path @parameters
+}
+$manifest=Get-Content -LiteralPath MANIFEST_PATH -Raw | ConvertFrom-Json
+$first=Get-OwnedModulePaths FIXTURE_ROOT $manifest
+$firstResolutions=$script:resolved.ToArray()
+$firstAssertions=$script:directoryAssertions.ToArray()
+$firstChecks=$script:containerChecks.Clone()
+$second=Get-OwnedModulePaths FIXTURE_ROOT $manifest
+$allChecks=$script:containerChecks.Clone()
+$script:resolved.Clear()
+$bad=[pscustomobject]@{files=@($manifest.files)+@([pscustomobject]@{path='bin/../outside.dll'})}
+$rejected=$false; $diagnostic=''
+try { $null=Get-OwnedModulePaths FIXTURE_ROOT $bad } catch {
+    $rejected=$true; $diagnostic=$_.Exception.Message
+}
+@{paths=$first; second_paths=$second; resolutions=$firstResolutions;
+  directory_assertions=$firstAssertions; directory_checks=$firstChecks; two_call_checks=$allChecks;
+  unsafe_rejected=$rejected; unsafe_diagnostic=$diagnostic; unsafe_resolutions=$script:resolved.ToArray()} |
+    ConvertTo-Json -Depth 5 -Compress
+"""
+            for token, path in (("INSTALLER_PATH", SCRIPTS / "install-offline-bundle.ps1"),
+                                ("MANIFEST_PATH", manifest_path), ("FIXTURE_ROOT", root)):
+                script = script.replace(token, self.ps_path(path))
+            checked = self.run_powershell(script)
+            self.assertEqual(checked.returncode, 0, checked.stderr)
+            evidence = json.loads(checked.stdout)
+            canonical = lambda paths: {path.casefold(): value for path, value in paths.items()}
+            self.assertEqual(canonical(evidence["paths"]), expected)
+            self.assertEqual(canonical(evidence["second_paths"]), expected)
+            self.assertEqual(evidence["resolutions"], manifest_relatives)
+            parents = {path for path, is_directory in expected.items() if is_directory}
+            self.assertEqual({path.casefold() for path in evidence["directory_assertions"]}, parents)
+            self.assertEqual(len(evidence["directory_assertions"]), len(parents))
+            self.assertEqual(canonical(evidence["directory_checks"]), dict.fromkeys(parents, 1))
+            self.assertEqual(canonical(evidence["two_call_checks"]), dict.fromkeys(parents, 2))
+            self.assertTrue(evidence["unsafe_rejected"])
+            self.assertIn("unsafe path", evidence["unsafe_diagnostic"])
+            self.assertEqual(evidence["unsafe_resolutions"], manifest_relatives + ["bin/../outside.dll"])
+
     def lifecycle_fixture(self, installer_template=None):
         pwsh = shutil.which("pwsh")
         if pwsh is None:
