@@ -52,6 +52,11 @@ struct IfcProjectImportResult {
 // and material relationships. When the architecture bridge is enabled, curved
 // wall/void solids and door/window fill parts use closed native-kernel meshes
 // with maximum 1 mm deviation; fills remain separate from void features.
+// Fill meshes are opening-local: X spans the jamb chord, Z points up, and the
+// right-handed Y points toward the door swing side (host left for windows).
+// Explicit product placements preserve their actual native world geometry.
+// IFC fill OverallWidth is the opening body's local X envelope; retained native
+// curved width_m continues to measure stations along the host arc.
 // Unsupported required objects retain native payload
 // references with diagnostics; this subset does not claim MVD conformance.
 [[nodiscard]] IfcProjectExportResult export_project_ifc(
@@ -69,6 +74,8 @@ struct IfcProjectImportResult {
 // activate only after their regenerated geometry, dimensions, contexts, and
 // host/void/fill relationships agree. Foreign tessellations remain diagnosed
 // source data; metadata alone never activates native manufacturing semantics.
+// Fill placements compose bounded proper rigid Z-up frames and must agree with
+// the opening and handing; unsupported placement bases remain inactive.
 [[nodiscard]] IfcProjectImportResult import_project_ifc(
     std::string_view bytes,
     const IfcExchangeLimits& limits = {});

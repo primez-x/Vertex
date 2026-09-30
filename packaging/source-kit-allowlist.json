@@ -2407,6 +2407,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/hosted_opening_plan.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/hosted_opening_resize.hpp"
     },
     {
@@ -2900,6 +2904,10 @@
     {
       "category": "source",
       "path": "src/architecture/document_solid.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/architecture/hosted_opening_plan.cpp"
     },
     {
       "category": "source",
@@ -3588,6 +3596,10 @@
     {
       "category": "source",
       "path": "tests/curved_opening_resize_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/deferred_opening_preview_tests.cpp"
     },
     {
       "category": "source",

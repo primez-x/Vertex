@@ -6,6 +6,7 @@
 #include "sketch/opening_assembly.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/ifc_native_geometry.hpp"
+#include "sketch/hosted_opening_geometry.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -308,6 +309,31 @@ const StepRecord* find_record(const ParsedStep& parsed, int id) {
 }
 
 struct Point3 { double x{}, y{}, z{}; };
+
+// Supported native mesh placement subset: a proper rigid frame with global Z
+// up. Its derived Y is Z cross X, never a reflection or an independent scale.
+struct RigidFrame {
+    Point3 origin;
+    Vec2 x{1.0, 0.0};
+};
+
+Point3 world_point(const RigidFrame& frame, Point3 local) {
+    return {frame.origin.x + frame.x.x * local.x - frame.x.y * local.y,
+            frame.origin.y + frame.x.y * local.x + frame.x.x * local.y,
+            frame.origin.z + local.z};
+}
+
+bool bounded_point(Point3 point) {
+    return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z) &&
+        std::abs(point.x) <= 1e12 && std::abs(point.y) <= 1e12 && std::abs(point.z) <= 1e12;
+}
+
+bool same_frame(const RigidFrame& left, const RigidFrame& right) {
+    return std::abs(left.origin.x-right.origin.x) <= kTolerance &&
+        std::abs(left.origin.y-right.origin.y) <= kTolerance &&
+        std::abs(left.origin.z-right.origin.z) <= kTolerance &&
+        std::hypot(left.x.x-right.x.x, left.x.y-right.x.y) <= kTolerance;
+}
 
 Point3 point_record(const StepRecord& record, std::size_t& argument_count,
                     const IfcExchangeLimits& limits) {
@@ -638,14 +664,65 @@ std::optional<DoorOperation> native_operation(const Entity& entity) {
 }
 
 std::string door_operation_enum(const std::optional<DoorOperation>& operation) {
-    if (!operation) return ".NOTDEFINED.";
-    // IFC handing is viewed from the opening direction; both native hinge and
-    // swing side are retained exactly in the checked Vertex property set.
+    if (!operation) return ".USERDEFINED.";
+    // IfcDoorTypeOperationEnum defines hinge side while looking along local +Y.
+    // fill_frame makes +Y the swing side, reversing +X for native right swings.
+    // https://standards.buildingsmart.org/IFC/RELEASE/IFC4/ADD2_TC1/HTML/schema/ifcsharedbldgelements/lexical/ifcdoortypeoperationenum.htm
     return operation->hinge_at_end == operation->swing_left
         ? ".SINGLE_SWING_RIGHT." : ".SINGLE_SWING_LEFT.";
 }
 
+std::string door_operation_label(const std::optional<DoorOperation>& operation,
+                                 const IfcExchangeLimits& limits) {
+    // IFC4 permits this label only with USERDEFINED. NOTDEFINED would describe
+    // a lining with no panel, while this native profile contains a closed leaf.
+    // https://standards.buildingsmart.org/IFC/RELEASE/IFC4/ADD2_TC1/HTML/schema/ifcsharedbldgelements/lexical/ifcdoor.htm
+    return operation ? "$" : step_string("Closed leaf; hinge and swing unspecified", limits);
+}
+
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
+RigidFrame fill_frame(const Wall& wall, const HostedOpening& opening,
+                      const std::optional<DoorOperation>& operation) {
+    const auto span = hosted_opening_span(wall.baseline, opening.offset, opening.width);
+    const double length = std::hypot(span.end.x-span.start.x, span.end.y-span.start.y);
+    require(length > kTolerance && std::isfinite(length));
+    const bool reverse = operation && !operation->swing_left;
+    const auto origin = reverse ? span.end : span.start;
+    const double sign = reverse ? -1.0 : 1.0;
+    RigidFrame frame{{origin.x, origin.y, wall.elevation + opening.sill},
+        {sign*(span.end.x-span.start.x)/length, sign*(span.end.y-span.start.y)/length}};
+    require(bounded_point(frame.origin));
+    return frame;
+}
+
+double fill_overall_width(const Wall& wall, const HostedOpening& opening,
+                          const RigidFrame& frame) {
+    // IFC OverallWidth spans the opening body along local X. Native curved
+    // opening.width instead measures stations along the directed host arc.
+    const auto span = hosted_opening_span(wall.baseline, opening.offset, opening.width);
+    auto footprint = wall_plan_footprint(span, {}, wall.thickness);
+    const auto local = [&](Vec2 point) -> Vec2 {
+        const double dx=point.x-frame.origin.x, dy=point.y-frame.origin.y;
+        return {dx*frame.x.x+dy*frame.x.y,-dx*frame.x.y+dy*frame.x.x};
+    };
+    for (auto& segment : footprint) {
+        segment.start=local(segment.start); segment.end=local(segment.end);
+        // A proper rigid rotation preserves each directed arc sweep.
+    }
+    const auto bounds = boundary_bounds(footprint);
+    const double width = bounds.maximum.x-bounds.minimum.x;
+    require(std::isfinite(width) && width>kTolerance && width<=1e12);
+    return width;
+}
+
+int fill_placement(const RigidFrame& frame, ExportContext& context) {
+    const auto origin = context.builder.add("IFCCARTESIANPOINT", "(" +
+        real_text(frame.origin.x) + "," + real_text(frame.origin.y) + "," + real_text(frame.origin.z) + ")");
+    const auto x = context.builder.add("IFCDIRECTION", "(" + real_text(frame.x.x) + "," + real_text(frame.x.y) + ",0.)");
+    const auto axis = context.builder.add("IFCAXIS2PLACEMENT3D", ref(origin) + "," + ref(context.z_direction) + "," + ref(x));
+    return context.builder.add("IFCLOCALPLACEMENT", "$," + ref(axis));
+}
+
 int mesh_shape(const std::vector<IfcNativeMesh>& meshes, ExportContext& context) {
     std::string items;
     for (const auto& mesh : meshes) {
@@ -696,15 +773,26 @@ void export_fill(const DocumentSnapshot& document, const Entity& entity, int voi
     const auto operation = native_operation(entity);
     require(entity.properties.value("opening_kind", std::string{}) == opening_assembly_kind_name(profile.kind));
     require(profile.kind == OpeningAssemblyKind::door || !operation);
-    const auto meshes = ifc_native_fill_mesh(wall, opening, profile, operation,
+    auto meshes = ifc_native_fill_mesh(wall, opening, profile, operation,
         context.limits.max_mesh_vertices - context.mesh_vertices,
         context.limits.max_mesh_triangles - context.mesh_triangles);
+    const auto frame = fill_frame(wall, opening, operation);
+    // The bridge supplies the actual world geometry, including curved frames
+    // and swung leaves. Only its coordinate basis changes here.
+    for (auto& mesh : meshes)
+        for (auto& point : mesh.vertices) {
+            const double dx = point[0]-frame.origin.x, dy = point[1]-frame.origin.y;
+            point = {dx*frame.x.x + dy*frame.x.y, -dx*frame.x.y + dy*frame.x.x,
+                     point[2]-frame.origin.z};
+        }
     const auto shape = mesh_shape(meshes, context);
+    const auto placement = fill_placement(frame, context);
     const bool door = profile.kind == OpeningAssemblyKind::door;
     const auto fill = context.builder.add(door ? "IFCDOOR" : "IFCWINDOW",
-        context.root("fill:" + entity.id, entity.id + " fill") + ",$," + ref(context.placement) +
-        "," + ref(shape) + ",$," + real_text(opening.height) + "," + real_text(opening.width) +
-        (door ? ",.DOOR.," + door_operation_enum(operation) + ",$" : ",.WINDOW.,.NOTDEFINED.,$"));
+        context.root("fill:" + entity.id, entity.id + " fill") + ",$," + ref(placement) +
+        "," + ref(shape) + ",$," + real_text(opening.height) + "," + real_text(fill_overall_width(wall, opening, frame)) +
+        (door ? ",.DOOR.," + door_operation_enum(operation) + "," + door_operation_label(operation, context.limits)
+              : ",.WINDOW.,.NOTDEFINED.,$"));
     context.builder.add("IFCRELFILLSELEMENT", context.root("fills:" + entity.id, "") +
         "," + ref(void_id) + "," + ref(fill));
     context.contained_products.push_back(fill);
@@ -1041,7 +1129,78 @@ struct GeometryResult {
     double elevation{};
 };
 
-// Only translation-only placements are mapped. Parent placements are composed
+std::optional<Point3> unit_direction(const ParsedStep& parsed, std::string_view value,
+    Point3 fallback, std::size_t& count, const IfcExchangeLimits& limits) {
+    if (value == "$") return fallback;
+    const auto id = reference(value);
+    if (!id) return std::nullopt;
+    const auto* record = find_record(parsed, *id);
+    if (!record || record->type != "IFCDIRECTION") return std::nullopt;
+    const auto fields = split_top_level(record->args, count, limits);
+    if (fields.size() != 1) return std::nullopt;
+    const auto coordinates = split_top_level(inner_list(fields[0]), count, limits);
+    if (coordinates.size() != 3) return std::nullopt;
+    const Point3 direction{number<double>(coordinates[0]), number<double>(coordinates[1]), number<double>(coordinates[2])};
+    const double norm = std::hypot(direction.x, direction.y, direction.z);
+    if (std::abs(norm-1.0) > kTolerance) return std::nullopt;
+    return direction;
+}
+
+// Native fills accept only this bounded rigid Z-up subset. Parent rotations
+// transform the child origin and X direction, rather than adding translations.
+std::optional<RigidFrame> rigid_placement(const ParsedStep& parsed, int id,
+    std::set<int>& visited, std::size_t& count, const IfcExchangeLimits& limits) {
+    require(visited.size() < 128 && visited.insert(id).second);
+    const auto* record = find_record(parsed, id);
+    require(record != nullptr);
+    if (record->type != "IFCLOCALPLACEMENT") return std::nullopt;
+    const auto fields = split_top_level(record->args, count, limits);
+    require(fields.size() == 2);
+    RigidFrame parent;
+    if (fields[0] != "$") {
+        const auto parent_id = reference(fields[0]);
+        require(parent_id.has_value());
+        const auto resolved = rigid_placement(parsed, *parent_id, visited, count, limits);
+        if (!resolved) return std::nullopt;
+        parent = *resolved;
+    }
+    const auto axis_id = reference(fields[1]);
+    require(axis_id.has_value());
+    const auto* axis = find_record(parsed, *axis_id);
+    if (!axis || axis->type != "IFCAXIS2PLACEMENT3D") return std::nullopt;
+    const auto axis_fields = split_top_level(axis->args, count, limits);
+    require(axis_fields.size() == 3);
+    // IFC4 AxisAndRefDirProvision requires both directions or neither.
+    if ((axis_fields[1] == "$") != (axis_fields[2] == "$")) return std::nullopt;
+    const auto up = unit_direction(parsed, axis_fields[1], {0,0,1}, count, limits);
+    const auto x = unit_direction(parsed, axis_fields[2], {1,0,0}, count, limits);
+    if (!up || !x || std::abs(up->x)>kTolerance || std::abs(up->y)>kTolerance ||
+        std::abs(up->z-1.0)>kTolerance || std::abs(x->z)>kTolerance) return std::nullopt;
+    const auto origin_id = reference(axis_fields[0]);
+    require(origin_id.has_value());
+    const auto* origin = find_record(parsed, *origin_id);
+    require(origin && origin->type == "IFCCARTESIANPOINT");
+    const auto origin_fields = split_top_level(origin->args, count, limits);
+    require(origin_fields.size() == 1);
+    if (split_top_level(inner_list(origin_fields[0]), count, limits).size() != 3) return std::nullopt;
+    const double length = std::hypot(x->x, x->y);
+    const Vec2 unit_x{x->x/length, x->y/length};
+    RigidFrame result{world_point(parent, point_record(*origin, count, limits)),
+        {parent.x.x*unit_x.x-parent.x.y*unit_x.y, parent.x.y*unit_x.x+parent.x.x*unit_x.y}};
+    if (!bounded_point(result.origin)) return std::nullopt;
+    return result;
+}
+
+std::optional<RigidFrame> product_frame(const ParsedStep& parsed,
+    const std::vector<std::string>& fields, std::size_t& count, const IfcExchangeLimits& limits) {
+    require(fields.size() >= 7);
+    const auto placement = reference(fields[5]);
+    if (!placement) return std::nullopt;
+    std::set<int> visited;
+    return rigid_placement(parsed, *placement, visited, count, limits);
+}
+
+// Only translation-only swept solid placements are mapped. Parent placements are composed
 // explicitly; representation contexts must never overwrite a product placement.
 Point3 placement_translation(const ParsedStep& parsed, int id, std::set<int>& visited,
                              bool& unsupported, std::size_t& count,
@@ -1367,8 +1526,9 @@ std::optional<std::vector<IfcNativeMesh>> product_meshes(const ParsedStep& parse
     const auto rep_fields = split_top_level(representation->args, count, limits);
     require(rep_fields.size() == 4);
     if (rep_fields[1] != "'Body'" || rep_fields[2] != "'Tessellation'") return std::nullopt;
-    // World-coordinate native meshes cannot be interpreted under a shifted or
-    // rotated context, subcontext, or coordinate operation.
+    // The native subset requires an identity world context; product placements
+    // are resolved separately. Shifted contexts and coordinate operations do
+    // not gain trust merely because native metadata is present.
     const auto context_id = reference(rep_fields[0]);
     if (!context_id) return std::nullopt;
     const auto* context = find_record(parsed, *context_id);
@@ -1429,8 +1589,18 @@ std::optional<std::vector<IfcNativeMesh>> product_meshes(const ParsedStep& parse
         result.push_back(std::move(mesh));
     }
     if (result.empty()) return std::nullopt;
-    // The native bridge writes world coordinates under an identity placement.
-    if (fields[5] != "$") {
+    if (product.type == "IFCDOOR" || product.type == "IFCWINDOW") {
+        const auto frame = product_frame(parsed, fields, count, limits);
+        if (!frame) return std::nullopt;
+        for (auto& mesh : result)
+            for (auto& point : mesh.vertices) {
+                const auto world_vertex = world_point(*frame, {point[0],point[1],point[2]});
+                if (!bounded_point(world_vertex)) return std::nullopt;
+                point = {world_vertex.x,world_vertex.y,world_vertex.z};
+            }
+    } else if (fields[5] != "$") {
+        // Native wall and void mesh exports still use world coordinates under
+        // identity placement. Their admission remains deliberately unchanged.
         const auto placement = reference(fields[5]); require(placement.has_value());
         bool rotated = false; std::set<int> visited;
         const auto translation = placement_translation(parsed, *placement, visited, rotated, count, limits);
@@ -1867,19 +2037,29 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
             const auto profile = parse_opening_assembly(metadata.at("opening_assembly"));
             Entity candidate = opening; candidate.properties = metadata;
             const auto operation = native_operation(candidate);
+            // Swept-void projections on oblique hosts introduce roundoff in
+            // station/sill values. After agreement with that independent void
+            // geometry is proven above, regenerate using exact source values;
+            // even sub-ULP changes can alter native triangulation ordering.
+            const auto checked_opening = native_opening(candidate);
             const bool door = profile.kind == OpeningAssemblyKind::door;
             const auto* fill_record = find_record(parsed, fill_id);
             const auto fields = split_top_level(fill_record->args, argument_count, limits);
+            const auto frame = product_frame(parsed, fields, argument_count, limits);
             if (fields.size() != 13 || (door ? fill_record->type != "IFCDOOR" : fill_record->type != "IFCWINDOW") ||
                 metadata.value("opening_kind", "") != opening_assembly_kind_name(profile.kind) ||
                 void_metadata.value("opening_kind", "") != opening_assembly_kind_name(profile.kind) ||
                 (!door && operation) || fields[10] != (door ? ".DOOR." : ".WINDOW.") ||
-                fields[11] != (door ? door_operation_enum(operation) : ".NOTDEFINED.") || fields[12] != "$" ||
+                fields[11] != (door ? door_operation_enum(operation) : ".NOTDEFINED.") ||
+                fields[12] != (door ? door_operation_label(operation, limits) : "$") ||
                 std::abs(number<double>(fields[8]) - opening.properties.at("height_m").get<double>()) > kTolerance ||
-                std::abs(number<double>(fields[9]) - opening.properties.at("width_m").get<double>()) > kTolerance ||
+                !frame || !same_frame(*frame, fill_frame(native_wall(*host), checked_opening, operation)) ||
+                std::abs(number<double>(fields[9]) - fill_overall_width(native_wall(*host), checked_opening, *frame)) > kTolerance ||
                 !matching_meshes(meshes_by_id.at(fill_id), ifc_native_fill_mesh(native_wall(*host),
-                    native_opening(opening), profile, operation, limits.max_mesh_vertices, limits.max_mesh_triangles)))
+                    checked_opening, profile, operation, limits.max_mesh_vertices, limits.max_mesh_triangles)))
                 continue;
+            for (const auto* key : {"offset_m", "width_m", "sill_m", "height_m"})
+                opening.properties[key] = metadata.at(key);
             opening.properties["opening_kind"] = opening_assembly_kind_name(profile.kind);
             opening.properties["opening_assembly"] = metadata.at("opening_assembly");
             if (operation) opening.properties["door_operation"] = metadata.at("door_operation");

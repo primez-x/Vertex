@@ -48,8 +48,12 @@ struct DxfProjectImportResult {
 // Parses a bounded DXF R2013 drawing and reconstructs editable native
 // boundary/annotation entities and validated native wall/opening graphs. Native
 // VERTEX_ENTITY_V1 block metadata requires matching plan primitives and metre
-// units with identity INSERTs. This preserves 2D plan semantics, not solid
-// assembly geometry. The
+// units with identity INSERTs. Manufactured opening blocks additionally require
+// depiction MANUFACTURED_PLAN_V1 and an architecture-enabled mapper that admits
+// the host/assembly solids and regenerates their exact horizontal plan section.
+// Core-only builds retain symbolic visual fallback with explicit diagnostics;
+// they never activate manufactured native metadata. Legacy blocks without an
+// assembly profile retain their original plan contract. The
 // returned entities are unparented import candidates; a desktop adapter is
 // responsible for assigning the active floor/layer and committing one atomic
 // document command. Malformed transport input throws and returns no partial

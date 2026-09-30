@@ -79,23 +79,33 @@ products linked to their opening void with IfcRelFillsElement. Curved wall,
 void and fill solids use bounded triangulated geometry at a 1 mm mesh deviation.
 Native re-import requires matching regenerated geometry, identity representation
 context and valid host/fill relationships; metadata alone cannot activate a profile.
+Door/window fills have explicit opening-local placements: local X follows the
+jamb chord, Z is up, and local Y agrees with the physical swing side. Bounded
+proper Z-up parent placements compose before geometry comparison. Curved IFC
+OverallWidth is the opening body's local-X envelope; native width remains the
+host-arc station distance. A closed leaf with no specified operation carries a
+user-defined description instead of invented handing.
 This is a bounded IFC4 subset, not Reference View certification.
 
-DXF exports exact 2D wall footprints, jambs, window rails and door swing geometry.
+DXF exports exact 2D wall footprints and manufactured mid-height sections of
+door/window frames, panels and glazing, with analytic door swing geometry.
 Registered VERTEX_ENTITY_V1 block metadata preserves editable hosted identities,
 dimensions, assembly profiles and handing only when the complete host graph and
 visible primitives agree. Unsupported edits retain visual geometry and source
-bytes with diagnostics. DXF does not yet export manufactured profile geometry;
-full ARCH-MOD-002 export acceptance and external CAD compatibility remain open.
+bytes with diagnostics. Manufactured blocks carry a depiction-version marker
+and activate only when regenerated physical primitives agree. Full ARCH-MOD-002
+export acceptance and external CAD compatibility remain open.
 
 In an uncropped conventional plan, selecting a door, window or bare opening on
 a straight or circular wall shows two width handles at its jambs and a **W × H**
 readout (**Arc W × H** on circular hosts). Drag either handle to resize along
 the wall while pinning the opposite jamb. Curved width is measured along the
 host arc, rather than between the jambs in a straight line. Window rails follow
-concentric arcs; door swing geometry uses the straight jamb chord.
+concentric arcs; door swing geometry follows the actual trimmed manufactured leaf.
 Height, sill, wall thickness, handing and manufactured frame dimensions remain
-unchanged. The preview regenerates the circular swing and wall cut together.
+unchanged. The preview regenerates the manufactured section, swing and wall cut
+together from immutable source geometry. Immediate jamb feedback is neutral while
+exact geometry runs in a coalesced background queue; stale results are discarded.
 Overlaps, an out-of-host span or insufficient clear frame width appear as an
 invalid proposal; release leaves the project unchanged. Final admission also
 regenerates the host, all sibling assemblies and affected wall joins.

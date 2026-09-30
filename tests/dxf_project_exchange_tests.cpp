@@ -369,7 +369,7 @@ void test_unspecified_or_unsupported_units_fail_closed() {
     check(rejected, "unknown unit codes must fail closed");
 }
 
-sketch::Document native_hosted_document(bool curved) {
+sketch::Document native_hosted_document(bool curved, bool manufactured = false) {
     using namespace sketch;
     Entity wall{"native-wall", "wall", {{"baseline", {{"start", {2, 3}}, {"end", {10, 9}},
         {"sweep_radians", curved ? std::acos(-1.0) / 3 : 0.0}}},
@@ -382,7 +382,7 @@ sketch::Document native_hosted_document(bool curved) {
             {"opening_kind", kind}, {"offset_m", offset}, {"width_m", 1.2},
             {"sill_m", std::string(kind) == "window" ? 0.8 : 0.0}, {"height_m", 2.0}}, false,
             {{"opaque", nlohmann::json::array({1, 2, 3})}}};
-        if (std::string(kind) != "opening") {
+        if (manufactured && std::string(kind) != "opening") {
             auto assembly = default_opening_assembly(std::string(kind) == "door" ?
                 OpeningAssemblyKind::door : OpeningAssemblyKind::window);
             opening.properties["opening_assembly"] = opening_assembly_json(assembly);
@@ -392,6 +392,128 @@ sketch::Document native_hosted_document(bool curved) {
         entities.push_back(opening);
     }
     return Document::create(std::move(entities));
+}
+
+void test_manufactured_native_depiction() {
+    using namespace sketch;
+    for (const bool curved : {false, true}) {
+        auto source = native_hosted_document(curved, true).snapshot();
+        const auto exported = export_project_dxf(source);
+#ifdef SKETCH_DXF_NATIVE_GEOMETRY
+        check(exported.diagnostics.empty(), "manufactured horizontal cuts must export without loss");
+        if (const auto* capture = std::getenv("VERTEX_TEST_CAPTURE_DIR")) {
+            std::filesystem::create_directories(capture);
+            std::ofstream output(std::filesystem::path(capture) /
+                (curved ? "native-curved-manufactured.dxf" : "native-rotated-manufactured.dxf"), std::ios::binary);
+            output << export_dxf_ascii(exported.drawing);
+        }
+        const auto block_for = [](const DxfDrawing& drawing, const std::string& id) -> const DxfBlock& {
+            const auto block = std::find_if(drawing.blocks.begin(), drawing.blocks.end(), [&](const auto& value) {
+                return !value.vertex_entity_json.empty() && nlohmann::json::parse(value.vertex_entity_json).at("id") == id;
+            });
+            check(block != drawing.blocks.end(), "manufactured block must retain bounded native metadata");
+            return *block;
+        };
+        const auto& window = block_for(exported.drawing, "native-window");
+        check(nlohmann::json::parse(window.vertex_entity_json).at("depiction") == "MANUFACTURED_PLAN_V1",
+              "profile blocks require an explicit manufactured depiction contract");
+        check(curved ? window.arcs.size() >= 6 : window.lines.size() >= 12,
+              "horizontal cut must depict frame, sash and glass profiles");
+        check(window.polylines.empty(), "manufactured circular profiles must remain exact ARC records");
+        const auto& door = block_for(exported.drawing, "native-door");
+        check(std::any_of(door.arcs.begin(), door.arcs.end(), [](const auto& arc) {
+            return arc.radius > 1.0 && arc.radius < 1.1;
+        }), "door swing must use the physical clear leaf width, including curved frame fitting");
+        auto closed = source.entities();
+        closed.at("native-door").properties.erase("door_operation");
+        std::vector<Entity> closed_entities;
+        for (const auto& [id, entity] : closed) { (void)id; closed_entities.push_back(entity); }
+        const auto closed_export = export_project_dxf(Document::create(closed_entities).snapshot());
+        check(closed_export.diagnostics.empty(), "unspecified handing must preserve the closed manufactured leaf");
+        const auto& closed_door = block_for(closed_export.drawing, "native-door");
+        check(std::none_of(closed_door.arcs.begin(), closed_door.arcs.end(), [](const auto& arc) {
+            return arc.radius < 2.0;
+        }), "closed leaf must not fabricate an operation or a nominal swing arc");
+        const auto closed_import = import_project_dxf(export_dxf_ascii(closed_export.drawing));
+        check(closed_import.complete() && closed_import.entities.size() == 4,
+              "closed manufactured leaf must regenerate its native graph without an invented operation");
+        const auto fallback = [](DxfDrawing drawing) {
+            const auto imported = import_project_dxf(export_dxf_ascii(drawing));
+            check(imported.source_retention_required && std::none_of(imported.entities.begin(), imported.entities.end(),
+                [](const auto& entity) { return entity.type == "wall" || entity.type == "opening"; }),
+                "mismatched manufactured depiction must never activate any member of its host graph");
+        };
+        auto changed = source.entities();
+        auto profile = parse_opening_assembly(changed.at("native-window").properties.at("opening_assembly"));
+        profile.panel_thickness_m += 0.01; profile.inset_m = curved ? -0.035 : 0.035;
+        changed.at("native-window").properties["opening_assembly"] = opening_assembly_json(profile);
+        std::vector<Entity> entities;
+        for (const auto& [id, entity] : changed) { (void)id; entities.push_back(entity); }
+        const auto varied = export_project_dxf(Document::create(entities).snapshot());
+        check(varied.diagnostics.empty(), "signed manufactured inset must be admitted");
+        auto original_geometry = window; original_geometry.vertex_entity_json.clear();
+        auto varied_geometry = block_for(varied.drawing, "native-window"); varied_geometry.vertex_entity_json.clear();
+        DxfDrawing original_probe, varied_probe;
+        original_probe.blocks.push_back(original_geometry); varied_probe.blocks.push_back(varied_geometry);
+        check(export_dxf_ascii(original_probe) != export_dxf_ascii(varied_probe),
+              "manufactured dimensions and inset must change visible DXF primitives");
+        for (const auto* key : {"frame_width_m", "frame_depth_m", "panel_thickness_m", "glazing_thickness_m", "inset_m"}) {
+            auto dimension_change = source.entities();
+            auto& dimensions = dimension_change.at("native-window").properties["opening_assembly"];
+            dimensions[key] = dimensions.at(key).get<double>() + 0.005;
+            std::vector<Entity> changed_entities;
+            for (const auto& [id, entity] : dimension_change) { (void)id; changed_entities.push_back(entity); }
+            const auto dimension_export = export_project_dxf(Document::create(changed_entities).snapshot());
+            check(dimension_export.diagnostics.empty(), "valid independent profile dimensions must be admitted");
+            auto dimension_geometry = block_for(dimension_export.drawing, "native-window");
+            dimension_geometry.vertex_entity_json.clear();
+            DxfDrawing dimension_probe; dimension_probe.blocks.push_back(dimension_geometry);
+            check(export_dxf_ascii(original_probe) != export_dxf_ascii(dimension_probe),
+                  "each independent manufactured profile dimension must change primitive geometry");
+        }
+        for (const bool hinge_at_end : {false, true}) for (const bool swing_left : {false, true}) {
+            auto handed = source.entities();
+            handed.at("native-door").properties["door_operation"] = encode_door_operation({hinge_at_end, swing_left, 65});
+            handed.at("native-door").properties["opening_assembly"]["inset_m"] = swing_left ? 0.03 : -0.03;
+            std::vector<Entity> handed_entities;
+            for (const auto& [id, entity] : handed) { (void)id; handed_entities.push_back(entity); }
+            const auto handed_export = export_project_dxf(Document::create(handed_entities).snapshot());
+            check(handed_export.diagnostics.empty(), "all door handing and signed inset combinations must be admitted");
+            const auto handed_import = import_project_dxf(export_dxf_ascii(handed_export.drawing));
+            check(handed_import.complete() && handed_import.entities.size() == 4,
+                  "physical door handing must independently regenerate and activate its native graph");
+        }
+        auto tampered = exported.drawing;
+        auto& block = *std::find_if(tampered.blocks.begin(), tampered.blocks.end(), [](const auto& value) {
+            return nlohmann::json::parse(value.vertex_entity_json).at("id") == "native-window";
+        });
+        auto payload = nlohmann::json::parse(block.vertex_entity_json);
+        payload.erase("depiction"); block.vertex_entity_json = payload.dump(); fallback(tampered);
+        tampered = exported.drawing;
+        auto& profile_block = *std::find_if(tampered.blocks.begin(), tampered.blocks.end(), [](const auto& value) {
+            return nlohmann::json::parse(value.vertex_entity_json).at("id") == "native-window";
+        });
+        payload = nlohmann::json::parse(profile_block.vertex_entity_json);
+        payload["properties"]["opening_assembly"]["panel_thickness_m"] = 0.07;
+        profile_block.vertex_entity_json = payload.dump(); fallback(tampered);
+        payload["properties"]["opening_assembly"]["frame_depth_m"] = 0.5;
+        profile_block.vertex_entity_json = payload.dump(); fallback(tampered);
+        auto repeat = import_project_dxf(export_dxf_ascii(varied.drawing));
+        for (int cycle = 0; cycle < 3; ++cycle) {
+            check(repeat.complete() && repeat.entities.size() == 4, "manufactured graph must round trip repeatedly");
+            const auto next = export_project_dxf(Document::create(repeat.entities).snapshot());
+            repeat = import_project_dxf(export_dxf_ascii(next.drawing));
+        }
+#else
+        check(std::any_of(exported.diagnostics.begin(), exported.diagnostics.end(), [](const auto& item) {
+            return item.code == "manufactured_plan_geometry_unavailable";
+        }), "core-only export must explicitly report unavailable manufactured geometry");
+        const auto imported = import_project_dxf(export_dxf_ascii(exported.drawing));
+        check(imported.source_retention_required && std::none_of(imported.entities.begin(), imported.entities.end(),
+            [](const auto& entity) { return entity.type == "wall" || entity.type == "opening"; }),
+            "core-only symbols must never claim admitted manufactured native geometry");
+#endif
+    }
 }
 
 void test_native_hosted_roundtrip_and_fallback() {
@@ -500,6 +622,19 @@ void test_legacy_native_wall_candidates_are_canonical() {
           "active candidate must use canonical SI fields while original aliases remain opaque source evidence");
 }
 
+void test_native_architectural_sources_are_bounded() {
+    using namespace sketch;
+    const auto source = native_hosted_document(false).snapshot();
+    auto changed = source.entities();
+    changed.at("native-wall").properties["baseline"]["start"][0] = 2e7;
+    changed.at("native-wall").properties["baseline"]["end"][0] = 2e7 + 10;
+    std::vector<Entity> entities;
+    for (const auto& [id, entity] : changed) { (void)id; entities.push_back(entity); }
+    const auto exported = export_project_dxf(Document::create(entities).snapshot());
+    check(exported.drawing.blocks.empty() && exported.diagnostics.size() == 4,
+          "unbounded source coordinates must be rejected before native solid or section work");
+}
+
 } // namespace
 
 int main() {
@@ -511,7 +646,9 @@ int main() {
         test_non_linear_dimensions_are_not_flattened();
         test_hidden_linear_dimensions_stay_hidden_in_dxf_output();
         test_native_hosted_roundtrip_and_fallback();
+        test_manufactured_native_depiction();
         test_legacy_native_wall_candidates_are_canonical();
+        test_native_architectural_sources_are_bounded();
         std::cout << "DXF project exchange tests passed\n";
         return 0;
     } catch (const std::exception& error) {

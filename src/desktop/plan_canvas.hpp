@@ -294,10 +294,21 @@ public:
     void setEntityAxisResizeRequested(
         std::function<bool(QString, double, double, Vec2)> callback);
     // Analytical document projection supplies opening and host-wall overrides
-    // for interactive rendering only. nullopt rejects the candidate. The bool
-    // pins the start jamb when true, or the end jamb when false.
+    // for interactive rendering only. nullopt rejects the candidate unless
+    // the callback marks this serial pending for deferred exact projection.
+    // The bool pins the start jamb when true, or the end jamb when false.
     void setOpeningWidthPreviewRequested(std::function<std::optional<std::vector<CanvasEntity>>(
         QString, double, bool, std::uint64_t)> callback);
+    // UI-thread deferred preview protocol. Capture the serial inside the
+    // callback, mark it pending, and complete with exact proposal geometry.
+    // Cancellation, scene replacement, and each new proposal invalidate old
+    // serials, even when their parameters match. Completion never persists.
+    [[nodiscard]] std::uint64_t openingWidthPreviewSerial() const noexcept {
+        return m_opening_width_preview_serial;
+    }
+    bool markOpeningWidthPreviewPending(std::uint64_t serial);
+    bool completeOpeningWidthPreview(std::uint64_t serial,
+        std::optional<std::vector<CanvasEntity>> result);
     void setOpeningWidthResizeRequested(
         std::function<bool(QString, double, bool, std::uint64_t)> callback);
     // Commits one selected boundary vertex at an absolute model-space point.
@@ -376,6 +387,8 @@ private:
         QPointF point, const QRectF& viewport) const;
     [[nodiscard]] const CanvasEntity& interactiveEntity(const CanvasEntity& entity) const;
     void updateOpeningWidthPreview(QPointF point);
+    bool applyOpeningWidthPreview(std::uint64_t serial,
+        std::optional<std::vector<CanvasEntity>> result);
     void drawOpeningWidthHandles(QPainter& painter, const QRectF& viewport) const;
     void drawSelectionFrame(QPainter& painter, const QRectF& viewport) const;
     void drawSelectionCaption(QPainter& painter, const QRectF& viewport,
@@ -471,6 +484,10 @@ private:
     std::vector<CanvasEntity> m_opening_width_entities_preview;
     double m_opening_width_scale_preview{1.0};
     bool m_opening_width_preview_valid{};
+    bool m_opening_width_preview_pending{};
+    bool m_opening_width_preview_request_in_progress{};
+    std::uint64_t m_opening_width_preview_serial{};
+    std::optional<QPointF> m_opening_width_preview_pointer;
     bool m_space_pan_armed{false};
     Qt::MouseButton m_gesture_button{Qt::NoButton};
     QPointF m_right_start;

@@ -229,7 +229,9 @@ Unsupported block contents, geometry drift, bad profiles, incomplete relationshi
 or transformed inserts fall back to inert plan geometry with source retention.
 Desktop import remaps identities and assigns the active floor/layer atomically,
 then validates the newly imported wall and manufactured assembly solids.
-This is 2D plan exchange; manufactured profile geometry remains an explicit gap.
+This is 2D plan exchange. Manufactured frame/panel/glazing sections and actual
+leaf swing arcs use a versioned depiction marker; exact regeneration is required
+before native metadata activates. Older approximate depictions remain inert.
 
 With the architectural engine enabled, IFC4 exports native wall/void/fill meshes
 and `IfcRelFillsElement` relationships for door/window products. Import verifies
@@ -240,8 +242,10 @@ fidelity diagnostics instead of activating trusted native metadata. Builds witho
 the architectural engine report the unavailable native mesh capability.
 Full Reference View and third-party application certification remain open.
 
-Door-operation enum interoperability for oblique hosts is still unqualified:
-physical leaf orientation and native handing are preserved, but the current
-world-axis product placement is not an aligned door-local frame. Qualification
-must verify that standardized operation enums are interpreted consistently by
-external applications; this subset does not claim that result.
+Door/window fills now use explicit proper Z-up opening-local frames, including
+oblique straight and circular hosts. Import composes bounded parent placements
+and checks canonical handing frames against regenerated world geometry. Curved
+OverallWidth follows the opening body's local-X envelope. Closed leaves without
+specified handing use a user-defined operation description. Qualification must
+still verify standardized operation semantics in external applications; this
+subset does not claim full interoperability or Reference View conformance.

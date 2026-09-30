@@ -8,6 +8,10 @@
 #include "sketch/hosted_opening_geometry.hpp"
 #include "sketch/door_operation.hpp"
 #include "sketch/opening_assembly.hpp"
+#include "sketch/hosted_opening_plan.hpp"
+#ifdef SKETCH_DXF_NATIVE_GEOMETRY
+#include "sketch/architecture.hpp"
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -28,6 +32,7 @@ namespace {
 using Json = nlohmann::json;
 constexpr double kGeometryTolerance = 1e-7;
 constexpr double kFullTurn = 2.0 * std::numbers::pi;
+constexpr const char* kManufacturedDepiction = "MANUFACTURED_PLAN_V1";
 
 void diagnostic(std::vector<DxfProjectDiagnostic>& output, std::string id,
                 std::string kind, std::string code) {
@@ -259,7 +264,10 @@ Boundary architectural_plan(const DocumentSnapshot& document, const Entity& enti
     std::string error;
     if (!read_document_wall(*host, host_openings(document, host->id), wall, error))
         throw std::invalid_argument(error);
-    validate_wall_semantics(wall);
+    validate_hosted_opening_plan_source(wall);
+#ifdef SKETCH_DXF_NATIVE_GEOMETRY
+    (void)make_wall(wall);
+#endif
     if (entity.type == "wall")
         return wall_plan_footprint(wall.baseline, wall.openings, wall.thickness);
     const auto opening = std::find_if(wall.openings.begin(), wall.openings.end(),
@@ -272,6 +280,12 @@ Boundary architectural_plan(const DocumentSnapshot& document, const Entity& enti
         const auto assembly = parse_opening_assembly(entity.properties.at("opening_assembly"));
         if (opening_assembly_kind_name(assembly.kind) != kind)
             throw std::invalid_argument("opening kind differs from assembly");
+#ifdef SKETCH_DXF_NATIVE_GEOMETRY
+        const auto operation = kind == "door" && entity.properties.contains("door_operation")
+            ? std::optional<DoorOperation>(decode_door_operation(entity.properties.at("door_operation")))
+            : std::nullopt;
+        return project_hosted_opening_plan(wall, *opening, assembly, operation);
+#endif
     }
     if (kind == "door") {
         const auto operation = entity.properties.contains("door_operation")
@@ -293,7 +307,26 @@ DxfBlock architectural_block(const DocumentSnapshot& document, const Entity& ent
                               std::vector<DxfProjectDiagnostic>& diagnostics) {
     DxfDrawing plan;
     std::vector<DxfProjectDiagnostic> plan_diagnostics;
-    for (const auto& segment : architectural_plan(document, entity))
+    auto geometry = architectural_plan(document, entity);
+    if (geometry.size() > 4096) throw std::invalid_argument("native plan primitive limit");
+    // Canonical direction and order make the independently regenerated native
+    // plan stable across identity remapping and repeated transport round trips.
+    const bool manufactured = entity.type == "opening" && entity.properties.contains("opening_assembly");
+    if (manufactured) for (auto& segment : geometry) {
+        if (segment.sweep_radians < 0 || (segment.sweep_radians == 0 &&
+            (segment.end.x < segment.start.x || (segment.end.x == segment.start.x && segment.end.y < segment.start.y)))) {
+            std::swap(segment.start, segment.end);
+            segment.sweep_radians = -segment.sweep_radians;
+        }
+    }
+    if (manufactured) std::sort(geometry.begin(), geometry.end(), [](const auto& a, const auto& b) {
+        if (a.start.x != b.start.x) return a.start.x < b.start.x;
+        if (a.start.y != b.start.y) return a.start.y < b.start.y;
+        if (a.end.x != b.end.x) return a.end.x < b.end.x;
+        if (a.end.y != b.end.y) return a.end.y < b.end.y;
+        return a.sweep_radians < b.sweep_radians;
+    });
+    for (const auto& segment : geometry)
         add_segment_as_dxf(plan, segment, layer, plan_diagnostics, entity.id, entity.type);
     for (const auto& item : plan_diagnostics)
         if (item.code != "arc_exported_as_bulged_polyline") diagnostics.push_back(item);
@@ -305,9 +338,12 @@ Json native_payload(const DocumentSnapshot& document, const Entity& entity) {
     Json ids = Json::array();
     if (entity.type == "wall") for (const auto* opening : host_openings(document, entity.id))
         ids.push_back(opening->id);
-    return {{"version", 1}, {"id", entity.id}, {"type", entity.type},
+    Json result = {{"version", 1}, {"id", entity.id}, {"type", entity.type},
             {"properties", entity.properties}, {"extensions", entity.extensions},
             {"hosted_opening_ids", std::move(ids)}};
+    if (entity.type == "opening" && entity.properties.contains("opening_assembly"))
+        result["depiction"] = kManufacturedDepiction;
+    return result;
 }
 
 Json bounded_native_json(std::string_view bytes) {
@@ -330,16 +366,27 @@ Json bounded_native_json(std::string_view bytes) {
 void export_architectural_entity(const DocumentSnapshot& document, const Entity& entity,
                                 DxfProjectExportResult& result) {
     try {
+        // Reject unbounded metadata before potentially expensive solid/section
+        // work. Geometry cannot make an unbounded source into active metadata.
+        const auto payload = native_payload(document, entity).dump();
+        if (payload.size() > 16 * 1024) throw std::invalid_argument("native payload byte limit");
+        (void)bounded_native_json(payload);
         const auto layer = layer_for(document, entity, result.diagnostics);
         auto block = architectural_block(document, entity,
             "VERTEX_PLAN_" + std::to_string(result.drawing.blocks.size() + 1),
             entity.type == "opening" && layer == "0" ? "Openings" : layer, result.diagnostics);
-        block.vertex_entity_json = native_payload(document, entity).dump();
+        block.vertex_entity_json = payload;
+#ifndef SKETCH_DXF_NATIVE_GEOMETRY
+        if (entity.type == "opening" && entity.properties.contains("opening_assembly")) {
+            block.vertex_entity_json.clear();
+            diagnostic(result.diagnostics, entity.id, entity.type, "manufactured_plan_geometry_unavailable");
+        }
+#endif
         // Validate independently so an oversized native payload cannot erase
         // unrelated project output. The plan block still survives as fallback.
         DxfDrawing probe;
         probe.blocks.push_back(block);
-        try { (void)bounded_native_json(block.vertex_entity_json); (void)export_dxf_ascii(probe); }
+        try { if (!block.vertex_entity_json.empty()) (void)bounded_native_json(block.vertex_entity_json); (void)export_dxf_ascii(probe); }
         catch (const std::exception&) {
             block.vertex_entity_json.clear();
             diagnostic(result.diagnostics, entity.id, entity.type, "native_metadata_not_representable");
@@ -751,9 +798,19 @@ struct NativeCandidate {
 
 NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t insert_index) {
     const auto payload = bounded_native_json(block.vertex_entity_json);
-    const std::set<std::string> expected{"version", "id", "type", "properties", "extensions", "hosted_opening_ids"};
+    std::set<std::string> expected{"version", "id", "type", "properties", "extensions", "hosted_opening_ids"};
     std::set<std::string> actual;
     if (!payload.is_object()) throw std::invalid_argument("native payload must be object");
+    const bool manufactured = payload.contains("properties") && payload.at("properties").is_object() &&
+        payload.at("properties").contains("opening_assembly");
+    if (manufactured) {
+        expected.insert("depiction");
+        if (!payload.contains("depiction") || payload.at("depiction") != kManufacturedDepiction)
+            throw std::invalid_argument("manufactured depiction contract missing");
+#ifndef SKETCH_DXF_NATIVE_GEOMETRY
+        throw std::invalid_argument("manufactured plan geometry unavailable");
+#endif
+    }
     for (const auto& [key, value] : payload.items()) { (void)value; actual.insert(key); }
     if (actual != expected || !payload.at("version").is_number_integer() || payload.at("version") != 1 ||
         !payload.at("id").is_string() || !payload.at("type").is_string() ||
@@ -762,7 +819,8 @@ NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t inser
     NativeCandidate candidate{{payload.at("id").get<std::string>(), payload.at("type").get<std::string>(),
                                payload.at("properties"), false, payload.at("extensions")}, {}, insert_index, &block};
     if (candidate.entity.id.empty() || candidate.entity.id.size() > 255 ||
-        (candidate.entity.type != "wall" && candidate.entity.type != "opening"))
+        (candidate.entity.type != "wall" && candidate.entity.type != "opening") ||
+        (manufactured && candidate.entity.type != "opening"))
         throw std::invalid_argument("native entity type/id not allowed");
     std::set<std::string> hosted;
     for (const auto& id : payload.at("hosted_opening_ids")) {
@@ -848,8 +906,10 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
             auto candidate = decode_native_candidate(*block, i);
             const auto source_id = candidate.entity.id;
             if (!candidates.emplace(source_id, std::move(candidate)).second) duplicate_ids.insert(source_id);
-        } catch (const std::exception&) {
-            diagnostic(result.diagnostics, block->name, "BLOCK", "native_metadata_not_activated");
+        } catch (const std::exception& error) {
+            diagnostic(result.diagnostics, block->name, "BLOCK",
+                std::string_view(error.what()) == "manufactured plan geometry unavailable"
+                    ? "manufactured_plan_geometry_unavailable" : "native_metadata_not_activated");
         }
     }
     std::set<std::string> allocated_ids;
@@ -883,7 +943,8 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
                 std::vector<DxfProjectDiagnostic> geometry_diagnostics;
                 const auto expected_block = architectural_block(document, document.entities().at(ids.at(item->entity.id)),
                     block.name, layer, geometry_diagnostics);
-                if (!same_block_geometry(block, expected_block)) throw std::invalid_argument("native geometry differs");
+                if (!geometry_diagnostics.empty() || !same_block_geometry(block, expected_block))
+                    throw std::invalid_argument("native geometry differs");
             }
             for (const auto* item : group) activated.insert(item->insert_index);
             result.entities.insert(result.entities.end(), detached.begin(), detached.end());

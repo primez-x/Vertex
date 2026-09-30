@@ -482,7 +482,7 @@ TopoDS_Shape make_wall(const Wall& wall) {
     }
 }
 
-TopoDS_Shape make_opening_assembly(const Wall& wall, const HostedOpening& opening,
+OpeningAssemblyGeometry make_opening_assembly_geometry(const Wall& wall, const HostedOpening& opening,
                                    const OpeningAssembly& assembly,
                                    const std::optional<DoorOperation>& door_operation) {
     validate_opening_assembly(assembly);
@@ -526,6 +526,7 @@ TopoDS_Shape make_opening_assembly(const Wall& wall, const HostedOpening& openin
     const double panel_across = assembly.inset_m - assembly.panel_thickness_m * 0.5;
     const double frame_width = assembly.frame_width_m;
     const double clear_width = opening.width - 2.0 * frame_width;
+    std::optional<Segment> door_swing;
 
     TopoDS_Compound compound;
     BRep_Builder builder;
@@ -649,6 +650,14 @@ TopoDS_Shape make_opening_assembly(const Wall& wall, const HostedOpening& openin
             swing_angle = door_operation->angle_degrees * std::numbers::pi / 180.0 *
                           (door_operation->swing_left ? 1.0 : -1.0) *
                           (door_operation->hinge_at_end ? -1.0 : 1.0);
+            const double far_along = door_operation->hinge_at_end ? leaf_start : leaf_start + leaf_width;
+            const auto closed = opening_point(leaf_frame, far_along,
+                leaf_across + panel_depth * 0.5, base_elevation);
+            const double dx = closed.X() - hinge->X(), dy = closed.Y() - hinge->Y();
+            const Vec2 opened{hinge->X() + dx * std::cos(swing_angle) - dy * std::sin(swing_angle),
+                              hinge->Y() + dx * std::sin(swing_angle) + dy * std::cos(swing_angle)};
+            if (std::abs(swing_angle) > tolerance)
+                door_swing = arc_from_chord_angle({closed.X(), closed.Y()}, opened, swing_angle);
             leaf = rotate_opening_part(leaf, *hinge, swing_angle,
                                        "Opening assembly leaf rotation failed");
         }
@@ -691,7 +700,13 @@ TopoDS_Shape make_opening_assembly(const Wall& wall, const HostedOpening& openin
         solid_volume(compound) <= tolerance * tolerance * tolerance) {
         throw std::invalid_argument("Opening assembly did not produce valid solids");
     }
-    return compound;
+    return {compound, door_swing};
+}
+
+TopoDS_Shape make_opening_assembly(const Wall& wall, const HostedOpening& opening,
+                                  const OpeningAssembly& assembly,
+                                  const std::optional<DoorOperation>& door_operation) {
+    return make_opening_assembly_geometry(wall, opening, assembly, door_operation).shape;
 }
 
 TopoDS_Shape make_wall_join(const WallJoin& join, std::span<const Wall> walls) {

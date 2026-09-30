@@ -49,12 +49,16 @@ and MEP engineering are outside this initial product definition.
 
 ## System design
 
-The current implementation baseline is C++20, Qt 6 Widgets, Open CASCADE
+The current native implementation uses C++20, Qt 6 Widgets, Open CASCADE
 Technology for solid geometry and visualization, PlaneGCS/Eigen behind an
 application-owned planar constraint adapter, SQLite for project storage,
-IfcOpenShell and ezdxf in isolated local workers, Qt PDF/Print Support for
+bounded native IFC/DXF adapters in isolated local workers, Qt PDF/Print Support for
 document output, PROJ with bundled resources, and CMake/Ninja/MSVC for Windows
-builds. These are qualified dependencies, not assumed approvals. Exact
+builds. IfcOpenShell and ezdxf currently provide independent test validation;
+their selected production-worker integration, pinned offline dependency closure,
+licensing inventory and broader format qualification remain required work.
+This implementation statement does not remove those adapters from the plan.
+These are dependencies to qualify, not assumed approvals. Exact
 revisions, transitive packages, build options, and distribution obligations
 remain pending in Package 2.
 

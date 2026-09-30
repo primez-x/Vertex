@@ -64,6 +64,17 @@ struct RoomVolume {
     const Wall& wall, const HostedOpening& opening,
     const OpeningAssembly& assembly,
     const std::optional<DoorOperation>& door_operation = std::nullopt);
+// The same admitted manufactured shape with its physical clear-leaf swing.
+// The arc uses the actual leaf hinge, inset and extent computed by the solid
+// factory, including the fitted planar leaf in a curved frame.
+struct OpeningAssemblyGeometry {
+    TopoDS_Shape shape;
+    std::optional<Segment> door_swing;
+};
+[[nodiscard]] OpeningAssemblyGeometry make_opening_assembly_geometry(
+    const Wall& wall, const HostedOpening& opening,
+    const OpeningAssembly& assembly,
+    const std::optional<DoorOperation>& door_operation = std::nullopt);
 // Build the derived solid for a first-class fused roof join.  Source roof
 // solids remain authoritative semantic objects; this result is only the
 // coordinated-view union.

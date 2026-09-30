@@ -338,6 +338,7 @@ void PlanCanvas::setEntities(std::vector<CanvasEntity> entities) {
     // Replacing the document projection invalidates the captured revision and
     // its transient host-wall geometry, even when the selected ID survives.
     if (m_opening_width_handle) resetGesture();
+    else ++m_opening_width_preview_serial;
     m_entities = std::move(entities);
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     update();
@@ -1469,7 +1470,8 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
         if (m_left_gesture == LeftGesture::selection_axis_resize ||
             m_left_gesture == LeftGesture::selection_resize ||
             m_left_gesture == LeftGesture::selection_rotate ||
-            m_left_gesture == LeftGesture::opening_width_resize)
+            (m_left_gesture == LeftGesture::opening_width_resize &&
+             (!m_opening_width_preview_pointer || *m_opening_width_preview_pointer != position)))
             pointerMove(position, modifiers);
         const auto gesture = m_left_gesture;
         const auto start = m_left_start;
@@ -1489,7 +1491,11 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
         const auto vertex_handle = m_vertex_move_handle;
         const auto opening_handle = m_opening_width_handle;
         const auto opening_scale = m_opening_width_scale_preview;
-        const auto opening_valid = m_opening_width_preview_valid;
+        // Pending projection is not admission. The document command below
+        // performs final native validation; basic inverse widths never reach it.
+        const auto opening_valid = m_opening_width_preview_valid ||
+            (m_opening_width_preview_pending && std::isfinite(opening_scale) &&
+             opening_scale > 0.0);
         // A tablet/touch/mouse release can cross the drag threshold without an
         // intermediate move event. Commit the actual snapped release point,
         // while a stationary press remains a no-op.
@@ -1568,6 +1574,7 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
 }
 
 void PlanCanvas::resetGesture() {
+    ++m_opening_width_preview_serial;
     m_gesture_button = Qt::NoButton;
     m_panning = false;
     m_overview_dragging = false;
@@ -1594,6 +1601,9 @@ void PlanCanvas::resetGesture() {
     m_opening_width_entities_preview.clear();
     m_opening_width_scale_preview = 1.0;
     m_opening_width_preview_valid = false;
+    m_opening_width_preview_pending = false;
+    m_opening_width_preview_request_in_progress = false;
+    m_opening_width_preview_pointer.reset();
     if (m_space_pan_armed) {
         setCursor(Qt::OpenHandCursor);
     } else if (m_last_mouse_position) {
@@ -1928,9 +1938,13 @@ std::optional<PlanCanvas::OpeningWidthHandleHit> PlanCanvas::openingWidthHandleA
 
 void PlanCanvas::updateOpeningWidthPreview(QPointF point) {
     if (!m_opening_width_handle) return;
+    const auto serial = ++m_opening_width_preview_serial;
     const auto handle = *m_opening_width_handle;
     const auto& source = handle.source;
     m_opening_width_preview_valid = false;
+    m_opening_width_preview_pending = false;
+    m_opening_width_preview_request_in_progress = false;
+    m_opening_width_preview_pointer = point;
     m_opening_width_entities_preview.clear();
     m_opening_width_scale_preview = std::numeric_limits<double>::quiet_NaN();
     if (!m_opening_width_press_station || !m_opening_width_pointer_station) return;
@@ -1963,26 +1977,66 @@ void PlanCanvas::updateOpeningWidthPreview(QPointF point) {
     // stretched opening artwork. Document validation owns further constraints.
     if (!std::isfinite(width) || width <= 1e-6 || !m_opening_width_preview_requested) return;
     std::optional<std::vector<CanvasEntity>> preview;
+    m_opening_width_preview_request_in_progress = true;
     try {
         preview = m_opening_width_preview_requested(handle.entity_id,
             m_opening_width_scale_preview, handle.keep_start_jamb, source.source_revision);
     } catch (const std::exception&) {
+        if (m_opening_width_preview_serial == serial) {
+            m_opening_width_preview_request_in_progress = false;
+            m_opening_width_preview_pending = false;
+        }
         return;
     }
     // A projection callback may synchronously replace the scene or selection.
     // Such replacement cancels the gesture; never revive its stale overrides.
-    if (!m_opening_width_handle || m_left_gesture != LeftGesture::opening_width_resize ||
-        m_opening_width_handle->entity_id != handle.entity_id ||
-        m_opening_width_handle->source.source_revision != source.source_revision) return;
-    if (!preview || std::none_of(preview->begin(), preview->end(),
-        [&](const CanvasEntity& entity) { return entity.id == handle.entity_id; })) return;
-    for (auto& entity : *preview) {
+    if (m_opening_width_preview_serial != serial || !m_opening_width_preview_request_in_progress)
+        return;
+    m_opening_width_preview_request_in_progress = false;
+    if (!preview && m_opening_width_preview_pending) return;
+    (void)applyOpeningWidthPreview(serial, std::move(preview));
+}
+
+bool PlanCanvas::markOpeningWidthPreviewPending(std::uint64_t serial) {
+    if (serial != m_opening_width_preview_serial || !m_opening_width_preview_request_in_progress ||
+        !m_opening_width_handle || m_left_gesture != LeftGesture::opening_width_resize ||
+        !std::isfinite(m_opening_width_scale_preview) || m_opening_width_scale_preview <= 0.0)
+        return false;
+    m_opening_width_preview_pending = true;
+    update();
+    return true;
+}
+
+bool PlanCanvas::completeOpeningWidthPreview(std::uint64_t serial,
+    std::optional<std::vector<CanvasEntity>> result) {
+    if (!m_opening_width_preview_pending) return false;
+    return applyOpeningWidthPreview(serial, std::move(result));
+}
+
+bool PlanCanvas::applyOpeningWidthPreview(std::uint64_t serial,
+    std::optional<std::vector<CanvasEntity>> result) {
+    if (serial != m_opening_width_preview_serial || !m_opening_width_handle ||
+        m_left_gesture != LeftGesture::opening_width_resize) return false;
+    m_opening_width_preview_request_in_progress = false;
+    m_opening_width_preview_pending = false;
+    m_opening_width_preview_valid = false;
+    m_opening_width_entities_preview.clear();
+    // Exact projection must contain the captured opening. Further geometry
+    // constraints belong to the document projection and final resize command.
+    if (!result || std::none_of(result->begin(), result->end(),
+        [&](const CanvasEntity& entity) { return entity.id == m_opening_width_handle->entity_id; })) {
+        update();
+        return true;
+    }
+    for (auto& entity : *result) {
         const auto original = std::find_if(m_entities.begin(), m_entities.end(),
             [&](const CanvasEntity& item) { return item.id == entity.id; });
         if (original != m_entities.end()) entity.selected = original->selected;
     }
-    m_opening_width_entities_preview = std::move(*preview);
+    m_opening_width_entities_preview = std::move(*result);
     m_opening_width_preview_valid = true;
+    update();
+    return true;
 }
 
 void PlanCanvas::drawOpeningWidthHandles(QPainter& painter, const QRectF& viewport) const {
@@ -2002,7 +2056,8 @@ void PlanCanvas::drawOpeningWidthHandles(QPainter& painter, const QRectF& viewpo
     }
     if (!std::isfinite(start.x) || !std::isfinite(start.y) ||
         !std::isfinite(end.x) || !std::isfinite(end.y)) return;
-    const bool invalid = m_opening_width_handle && m_left_dragging && !m_opening_width_preview_valid;
+    const bool invalid = m_opening_width_handle && m_left_dragging &&
+                         !m_opening_width_preview_valid && !m_opening_width_preview_pending;
     const auto color = invalid ? QColor(220, 38, 38) : QColor(37, 99, 235);
     painter.save();
     painter.setClipRect(viewport, Qt::IntersectClip);
@@ -2158,7 +2213,7 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
         const bool editing_opening = opening && m_opening_width_handle &&
                                      m_opening_width_handle->entity_id == id;
         const bool invalid_opening = editing_opening && m_left_dragging &&
-                                     !m_opening_width_preview_valid;
+                                     !m_opening_width_preview_valid && !m_opening_width_preview_pending;
         const auto dimension_width = opening ? opening->width_metres *
             (editing_opening ? m_opening_width_scale_preview : 1.0) : width;
         const auto dimension_depth = opening ? opening->height_metres : depth;

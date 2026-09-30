@@ -6,6 +6,8 @@
 
 #include "sketch/architecture.hpp"
 #include "sketch/opening_assembly.hpp"
+#include "sketch/hosted_opening_plan.hpp"
+#include "sketch/workspace_regeneration_queue.hpp"
 #include "sketch/roof_join_semantics.hpp"
 #include <QColorDialog>
 #include <QDoubleSpinBox>
@@ -2624,6 +2626,18 @@ std::optional<json> merged_quantity_entries(const Entity* original, const Entity
 class MainWindow::Impl {
     friend class MainWindow;
 
+    struct PendingOpeningPreview {
+        QPointer<PlanCanvas> canvas;
+        std::uint64_t serial{};
+        std::shared_ptr<Document> document;
+        std::shared_ptr<const DocumentSnapshot> source;
+        QString entity_id;
+        double scale{};
+        bool keep_start{};
+        std::vector<CanvasEntity> retained;
+        std::shared_ptr<std::optional<std::vector<CanvasEntity>>> result;
+    };
+
 public:
     Impl(MainWindow* window, std::shared_ptr<Document> document)
         : owner(window), m_document(std::move(document)) {
@@ -2654,10 +2668,15 @@ public:
         m_save_timer->setInterval(100);
         QObject::connect(m_save_timer, &QTimer::timeout, owner, [this] { pollAutosave(); });
         m_save_timer->start();
+        m_opening_preview_timer = new QTimer(owner);
+        m_opening_preview_timer->setInterval(16);
+        QObject::connect(m_opening_preview_timer, &QTimer::timeout, owner, [this] { pollOpeningPreview(); });
     }
 
     ~Impl() {
         m_save_timer->stop();
+        m_opening_preview_timer->stop();
+        m_opening_preview_queue.shutdown(false);
         // Jobs own detached values only. Join before destroying any owner state.
         m_save_queue.shutdown(true);
         drainSaveCompletions();
@@ -11412,19 +11431,83 @@ public:
         }
     }
 
+    void startOpeningPreviewJob(PendingOpeningPreview request) {
+        auto result = request.result;
+        const auto source = request.source;
+        auto retained = request.retained;
+        const auto id = request.entity_id;
+        const auto scale = request.scale;
+        const auto keep_start = request.keep_start;
+        m_opening_preview_sequence = m_opening_preview_queue.enqueue(
+            [source, retained=std::move(retained), id, scale, keep_start, result]
+            (const RegenerationCancellationToken& cancellation) {
+                if (cancellation.is_cancelled()) return RegenerationReceipt{source->revision(), {}};
+                *result = computeOpeningWidthPreview(*source, retained, id, scale, keep_start);
+                return RegenerationReceipt{source->revision(), {}};
+            });
+        m_running_opening_preview = std::move(request);
+        m_opening_preview_timer->start();
+    }
+
     std::optional<std::vector<CanvasEntity>> previewOpeningWidthFromCanvas(
         PlanCanvas* canvas, const QString& requested_id, double scale,
-        bool keep_start_jamb, std::uint64_t revision) const {
+        bool keep_start_jamb, std::uint64_t revision) {
+        if (!canvas || !m_document->is_editable() || m_selected_ids.size()!=1 ||
+            m_selected_ids.front()!=requested_id || m_boundary_session || m_pending_wall_start ||
+            !m_pending_symbol_id.isEmpty() || m_document->revision()!=revision ||
+            !std::isfinite(scale) || scale<=0) return std::nullopt;
+        if (!m_opening_preview_source || m_opening_preview_document!=m_document ||
+            m_opening_preview_source->revision()!=revision) {
+            m_opening_preview_source=std::make_shared<DocumentSnapshot>(authoringSnapshot());
+            m_opening_preview_document=m_document;
+        }
+        const auto& entity=m_opening_preview_source->entities().at(requested_id.toStdString());
+        const auto host_id=entity.properties.at("wall_id").get<std::string>();
+        std::vector<CanvasEntity> retained;
+        for (const auto& item:canvas->entities())
+            if (item.id==requested_id || item.id.toStdString()==host_id) retained.push_back(item);
+        const auto serial=canvas->openingWidthPreviewSerial();
+        if (!canvas->markOpeningWidthPreviewPending(serial)) return std::nullopt;
+        PendingOpeningPreview request{canvas, serial, m_document, m_opening_preview_source,
+            requested_id, scale, keep_start_jamb, std::move(retained),
+            std::make_shared<std::optional<std::vector<CanvasEntity>>>()};
+        if (m_running_opening_preview) {
+            (void)m_opening_preview_queue.cancel(m_opening_preview_sequence);
+            // Keep just the most recent proposal while native work completes.
+            m_pending_opening_preview=std::move(request);
+        } else startOpeningPreviewJob(std::move(request));
+        return std::nullopt;
+    }
+
+    void pollOpeningPreview() {
+        for (auto& completion:m_opening_preview_queue.take_completed()) {
+            if (!m_running_opening_preview || completion.sequence!=m_opening_preview_sequence) continue;
+            auto request=std::move(*m_running_opening_preview);
+            m_running_opening_preview.reset();
+            if (completion.succeeded() && request.canvas && request.document==m_document &&
+                request.source->revision()==m_document->revision() &&
+                completion.receipt->source_revision==request.source->revision())
+                (void)request.canvas->completeOpeningWidthPreview(request.serial,std::move(*request.result));
+        }
+        if (!m_running_opening_preview && m_pending_opening_preview) {
+            auto request=std::move(*m_pending_opening_preview);
+            m_pending_opening_preview.reset();
+            if (request.canvas && request.document==m_document &&
+                request.source->revision()==m_document->revision() &&
+                request.canvas->openingWidthPreviewSerial()==request.serial)
+                startOpeningPreviewJob(std::move(request));
+        }
+        if (!m_running_opening_preview && !m_pending_opening_preview) m_opening_preview_timer->stop();
+    }
+
+    static std::optional<std::vector<CanvasEntity>> computeOpeningWidthPreview(
+        const DocumentSnapshot& source, const std::vector<CanvasEntity>& retained_scene,
+        const QString& requested_id, double scale, bool keep_start_jamb) {
         try {
-            if (!canvas || !m_document->is_editable() || m_selected_ids.size() != 1 ||
-                m_selected_ids.front() != requested_id || m_boundary_session ||
-                m_pending_wall_start || !m_pending_symbol_id.isEmpty()) return std::nullopt;
-            const auto source = authoringSnapshot();
-            if (source.revision() != revision || !std::isfinite(scale) || scale <= 0)
-                return std::nullopt;
+            if (!std::isfinite(scale) || scale <= 0) return std::nullopt;
             const auto& original = source.entities().at(requested_id.toStdString());
             const auto wall_id = original.properties.at("wall_id").get<std::string>();
-            const auto& host = source.entities().at(wall_id);
+            const auto host = resolve_vertical_placement(source, source.entities().at(wall_id));
             const auto frame = hosted_opening_resize_frame(source, original.id);
             auto opening = read_hosted_opening(original).value();
             opening.width *= scale;
@@ -11456,7 +11539,7 @@ public:
                     return std::nullopt;
             }
             std::vector<CanvasEntity> result;
-            for (const auto& retained : canvas->entities()) {
+            for (const auto& retained : retained_scene) {
                 if (retained.id.toStdString() == wall_id) {
                     auto preview = retained;
                     preview.segments = wall_plan_footprint(wall.baseline, wall.openings, wall.thickness);
@@ -11464,7 +11547,13 @@ public:
                 } else if (retained.id == requested_id && retained.opening_width_controls) {
                     auto preview = retained;
                     const auto kind = original.properties.value("opening_kind", std::string{});
-                    if (kind == "door" && original.properties.contains("door_operation")) {
+                    if (original.properties.contains("opening_assembly")) {
+                        const auto assembly = parse_opening_assembly(original.properties.at("opening_assembly"));
+                        std::optional<DoorOperation> operation;
+                        if (kind == "door" && original.properties.contains("door_operation"))
+                            operation = decode_door_operation(original.properties.at("door_operation"));
+                        preview.segments = project_hosted_opening_plan(wall, opening, assembly, operation);
+                    } else if (kind == "door" && original.properties.contains("door_operation")) {
                         preview.segments = door_plan_symbol(wall.baseline, opening.offset,
                             opening.width, decode_door_operation(original.properties.at("door_operation")));
                     } else if (kind == "window") {
@@ -21374,6 +21463,13 @@ private:
     }
 
     void refreshCanvases() {
+        // A shared Document can replace its head without changing its address
+        // or revision. Every refreshed scene needs a new immutable preview source.
+        m_opening_preview_source.reset();
+        m_opening_preview_document.reset();
+        m_pending_opening_preview.reset();
+        if (m_running_opening_preview)
+            (void)m_opening_preview_queue.cancel(m_opening_preview_sequence);
         const auto snapshot = m_document->snapshot();
         const auto organization = organize_project(snapshot);
         m_plan_geometry_error.clear();
@@ -21398,6 +21494,7 @@ private:
             m_plan_geometry_error += message;
         };
         std::map<std::string, std::vector<HostedOpening>, std::less<>> openings_by_wall;
+        std::map<std::string, std::vector<const Entity*>, std::less<>> opening_entities_by_wall;
         for (const auto& [id, entity] : snapshot.entities()) {
             if (entity.type == "reference_grid") {
                 try {
@@ -21500,6 +21597,7 @@ private:
                 continue;
             }
             openings_by_wall[*wall_id].push_back(*opening);
+            opening_entities_by_wall[*wall_id].push_back(&entity);
         }
         for (const auto& [id, entity] : snapshot.entities()) {
             if (entity.type == "opening") {
@@ -21510,7 +21608,36 @@ private:
                     const auto opening = read_hosted_opening(entity);
                     if(!baseline || !opening) throw std::invalid_argument("opening geometry is incomplete");
                     const auto kind = entity.properties.value("opening_kind", std::string{});
-                    if (kind == "door" && entity.properties.contains("door_operation")) {
+                    if (entity.properties.contains("opening_assembly")) {
+                        const auto resolved_host = resolve_vertical_placement(snapshot, host->second);
+                        Wall wall;
+                        std::string error;
+                        if (!read_document_wall(resolved_host, opening_entities_by_wall.at(host->first), wall, error))
+                            throw std::invalid_argument(error);
+                        const auto assembly = parse_opening_assembly(entity.properties.at("opening_assembly"));
+                        if (opening_assembly_kind_name(assembly.kind) != kind)
+                            throw std::invalid_argument("opening assembly kind differs from opening");
+                        std::optional<DoorOperation> operation;
+                        if (kind == "door" && entity.properties.contains("door_operation"))
+                            operation = decode_door_operation(entity.properties.at("door_operation"));
+                        json cuts=json::array();
+                        for (const auto& cut:wall.openings)
+                            cuts.push_back({cut.id,cut.offset,cut.width,cut.sill,cut.height});
+                        const auto key = std::string{"hosted-cut-v1\n"} + resolved_host.properties.dump() +
+                            '\n' + entity.properties.dump() + '\n' + cuts.dump();
+                        auto cached = m_plan_projection_cache.find(id);
+                        if (cached == m_plan_projection_cache.end() || cached->second.first != key) {
+                            auto projection = project_hosted_opening_plan(wall, *opening, assembly, operation);
+                            cached = m_plan_projection_cache.insert_or_assign(id,
+                                std::make_pair(key, std::move(projection))).first;
+                        }
+                        CanvasEntity component{id_from(id), kind == "window" ? QStringLiteral("window") : QStringLiteral("opening"),
+                            cached->second.second, 0.0, id_from(id) == m_selected_id};
+                        component.stroke_color = QColor(35, 43, 52);
+                        component.dark_stroke_color = QColor(220, 232, 244);
+                        component.output_stroke_width_mm = 0.16;
+                        all_geometry.push_back(std::move(component));
+                    } else if (kind == "door" && entity.properties.contains("door_operation")) {
                         all_geometry.push_back(CanvasEntity{id_from(id),"opening",
                             door_plan_symbol(*baseline,opening->offset,opening->width,
                                 decode_door_operation(entity.properties.at("door_operation"))),0,
@@ -26348,6 +26475,13 @@ private:
     std::uint64_t m_saved_edited_generation{};
     const std::string m_save_owner_token{make_stable_id()};
     WorkspaceSaveQueue m_save_queue;
+    WorkspaceRegenerationQueue m_opening_preview_queue;
+    QTimer* m_opening_preview_timer{};
+    std::uint64_t m_opening_preview_sequence{};
+    std::optional<PendingOpeningPreview> m_running_opening_preview;
+    std::optional<PendingOpeningPreview> m_pending_opening_preview;
+    std::shared_ptr<const DocumentSnapshot> m_opening_preview_source;
+    std::shared_ptr<Document> m_opening_preview_document;
     PerformanceTelemetry m_performance_telemetry;
     WorkspaceAutosaveScheduler m_autosave_scheduler;
     struct PendingAutosave {

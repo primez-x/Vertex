@@ -161,8 +161,10 @@ void successfulGestures() {
                 const auto arc=std::find_if(resized.segments.begin(),resized.segments.end(),[](const auto& s){return std::abs(s.sweep_radians)>1e-8;});
                 require(arc!=resized.segments.end() && closeEnough(std::abs(arc->sweep_radians),std::acos(-1.0)/2),
                         "door resize lost its analytic quarter-circle swing");
-                require(closeEnough(std::hypot(arc->end.x-arc->start.x,arc->end.y-arc->start.y),1.5*std::sqrt(2.0)),
-                        "door swing arc was distorted rather than rebuilt at the new radius");
+                const auto frame_width=changed.at("opening_assembly").at("frame_width_m").get<double>();
+                require(closeEnough(std::hypot(arc->end.x-arc->start.x,arc->end.y-arc->start.y),
+                                    (1.5-2*frame_width)*std::sqrt(2.0)),
+                        "door swing arc does not follow its resized clear leaf inside the frame");
                 require(changed.at("door_operation")==original.at("door_operation"),"resize altered door operation");
             }
             require(f.window.undoCommand() && properties(f.window,f.opening)==original,"undo did not restore exact opening properties");

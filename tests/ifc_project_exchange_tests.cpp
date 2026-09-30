@@ -3,6 +3,7 @@
 #include "sketch/document.hpp"
 #include "sketch/ifc_project_exchange.hpp"
 #include "sketch/door_operation.hpp"
+#include "sketch/ifc_native_geometry.hpp"
 #include "sketch/project_import_worker.hpp"
 
 #include <algorithm>
@@ -252,25 +253,27 @@ void desktop_hosted_worker_protocol() {
 
 void native_assemblies() {
     using namespace sketch;
-    for (const bool curved : {false, true}) {
+    for (const double sweep : {0.0, 1.0, -1.0}) {
+        const bool curved = sweep != 0;
         for (const bool window : {false, true}) {
             for (const bool hinge_end : {false, true}) {
+              for (const bool swing_left : {false, true}) {
                 auto wall = make_document().snapshot().entities().at("wall-1");
                 auto opening = make_document().snapshot().entities().at("opening-1");
                 wall.properties["elevation_m"] = 3.0;
-                if (curved) {
-                    wall.properties["baseline"]["start"] = {0, 0};
-                    wall.properties["baseline"]["end"] = {10, 0};
-                    wall.properties["baseline"]["sweep_radians"] = 1.0;
-                }
+                wall.properties["baseline"]["start"] = {5, -3};
+                wall.properties["baseline"]["end"] = {13, 3};
+                wall.properties["baseline"]["sweep_radians"] = sweep;
                 opening.properties["opening_kind"] = window ? "window" : "door";
                 opening.properties["opening_assembly"]["kind"] = window ? "window" : "door";
                 opening.properties["opening_assembly"]["glazing_thickness_m"] = 0.012;
                 opening.properties["opening_assembly"]["inset_m"] = -0.015;
                 if (!window) opening.properties["door_operation"] =
-                    encode_door_operation(DoorOperation{hinge_end, true, 67.0});
+                    encode_door_operation(DoorOperation{hinge_end, swing_left, 67.0});
                 const auto exported = export_project_ifc(Document::create({wall, opening}).snapshot());
                 const auto graph = records(exported.step);
+                const double radius=curved ? 5/std::sin(0.5) : 0;
+                const double overall_width=curved ? 2*(radius+0.1)*std::sin(1/(2*radius)) : 1.0;
                 std::string void_id, fill_id, host_id;
                 bool large_aggregate = false;
                 for (const auto& [id, record] : graph) {
@@ -279,11 +282,57 @@ void native_assemblies() {
                     if (record.type == (window ? "IFCWINDOW" : "IFCDOOR")) {
                         fill_id = id;
                         check(record.fields.size() == 13, "IFC4 fill must contain exactly 13 explicit attributes");
-                        check(std::stod(record.fields[8]) == 2.0 && std::stod(record.fields[9]) == 1.0,
-                              "fill dimensions must match the authoritative cut");
+                        check(std::stod(record.fields[8]) == 2.0 && std::abs(std::stod(record.fields[9])-overall_width)<1e-9,
+                              "IFC fill width must match opening-body local X envelope rather than curved arc stations");
+                        if (curved) check(std::abs(std::stod(record.fields[9])-1.0)>0.001,
+                              "curved standard fill width must differ from retained one-metre arc station width");
                         if (!window) check(record.fields[11] ==
-                            (hinge_end ? ".SINGLE_SWING_RIGHT." : ".SINGLE_SWING_LEFT."),
+                            (hinge_end == swing_left ? ".SINGLE_SWING_RIGHT." : ".SINGLE_SWING_LEFT."),
                             "both native handings must map to corresponding IFC door operations");
+                        const auto& placement = graph.at(record.fields[5]);
+                        check(placement.type == "IFCLOCALPLACEMENT" && placement.fields[0] == "$",
+                              "fill must declare an explicit absolute local placement");
+                        const auto& axis = graph.at(placement.fields[1]);
+                        check(axis.type == "IFCAXIS2PLACEMENT3D" && axis.fields[1] != "$" && axis.fields[2] != "$",
+                              "fill placement must declare width and up directions");
+                        const auto location = list(graph.at(axis.fields[0]).fields[0]);
+                        const auto up = list(graph.at(axis.fields[1]).fields[0]);
+                        const auto x = list(graph.at(axis.fields[2]).fields[0]);
+                        const Segment baseline{{5,-3},{13,3},sweep};
+                        // Independently evaluate the fixture's jamb stations;
+                        // the production opening-span helper is not the oracle.
+                        const auto station = [sweep](double distance) -> Vec2 {
+                            if (sweep==0) return {5+0.8*distance,-3+0.6*distance};
+                            const double factor=0.5/std::tan(sweep/2);
+                            const Vec2 center{9-6*factor,8*factor};
+                            const double radius=5/std::abs(std::sin(sweep/2));
+                            const double angle=(sweep>0 ? 1.0 : -1.0)*distance/radius;
+                            const double dx=5-center.x,dy=-3-center.y;
+                            return {center.x+dx*std::cos(angle)-dy*std::sin(angle),
+                                    center.y+dx*std::sin(angle)+dy*std::cos(angle)};
+                        };
+                        const Segment span{station(1),station(2),0};
+                        const bool reverse = !window && !swing_left;
+                        const auto origin = reverse ? span.end : span.start;
+                        const double sign = reverse ? -1.0 : 1.0;
+                        const double chord = std::hypot(span.end.x-span.start.x,span.end.y-span.start.y);
+                        check(std::abs(std::stod(location[0])-origin.x)<1e-9 &&
+                              std::abs(std::stod(location[1])-origin.y)<1e-9 &&
+                              std::abs(std::stod(location[2])-3.1)<1e-9,
+                              "fill origin must be its local left jamb at the opening sill");
+                        check(std::stod(up[0])==0 && std::stod(up[1])==0 && std::stod(up[2])==1 &&
+                              std::abs(std::stod(x[0])-sign*(span.end.x-span.start.x)/chord)<1e-9 &&
+                              std::abs(std::stod(x[1])-sign*(span.end.y-span.start.y)/chord)<1e-9 && std::stod(x[2])==0,
+                              "fill positive width axis must follow the jamb chord with right-handed swing-side Y");
+                        if (!window) {
+                            const auto symbol = door_plan_symbol(baseline,1.0,1.0,{hinge_end,swing_left,67.0});
+                            const auto hinge = symbol.front().start, tip = symbol.front().end;
+                            const double hx=(hinge.x-origin.x)*std::stod(x[0])+(hinge.y-origin.y)*std::stod(x[1]);
+                            const double ty=-(tip.x-hinge.x)*std::stod(x[1])+(tip.y-hinge.y)*std::stod(x[0]);
+                            check(ty>0 && ((record.fields[11]==".SINGLE_SWING_LEFT." && std::abs(hx)<1e-9) ||
+                                  (record.fields[11]==".SINGLE_SWING_RIGHT." && std::abs(hx-chord)<1e-9)),
+                                  "IFC operation enum and positive-Y swing must agree with physical hinge and leaf");
+                        }
                     }
                     if (record.type == "IFCCARTESIANPOINTLIST3D")
                         large_aggregate = large_aggregate || record.fields[0].size() > 4096;
@@ -318,6 +367,137 @@ void native_assemblies() {
                         check(edge.first == 2 && edge.second == 0, "closed meshes require opposite shared edge incidence");
                 }
                 check(!void_id.empty() && !fill_id.empty() && !host_id.empty(), "fill must preserve separate host and void products");
+                const auto replace_fields = [](std::string bytes, const std::string& id, const Record& record) {
+                    const auto begin=bytes.find(id+"="), end=bytes.find(';',begin);
+                    std::string row=id+"="+record.type+"(";
+                    for (const auto& value : record.fields) { if (row.back()!='(') row+=','; row+=value; }
+                    row+=");";
+                    bytes.replace(begin,end-begin+1,row);
+                    return bytes;
+                };
+                const auto real=[](double value) {
+                    std::ostringstream output; output.precision(17); output.setf(std::ios::showpoint);
+                    output<<value; return output.str();
+                };
+                const auto rejected_fill = [](const std::string& bytes) {
+                    const auto imported=import_project_ifc(bytes);
+                    check(std::none_of(imported.entities.begin(),imported.entities.end(),[](const auto& entity) {
+                        return entity.type=="opening" && entity.properties.contains("opening_assembly");
+                    }) && imported.source_retention_required,
+                    "placement, geometry or handing contradiction must leave native assembly inactive");
+                };
+                const auto& placement=graph.at(graph.at(fill_id).fields[5]);
+                const auto axis_id=placement.fields[1];
+                const auto& axis=graph.at(axis_id);
+                const auto location=list(graph.at(axis.fields[0]).fields[0]);
+                const auto x=list(graph.at(axis.fields[2]).fields[0]);
+                const double xx=std::stod(x[0]),xy=std::stod(x[1]);
+                if (curved) {
+                    const auto& void_shape=graph.at(graph.at(void_id).fields[6]);
+                    const auto& void_rep=graph.at(list(void_shape.fields[2])[0]);
+                    double minimum=1e9,maximum=-1e9;
+                    for (const auto& item : list(void_rep.fields[3]))
+                        for (const auto& coordinate : list(graph.at(graph.at(item).fields[0]).fields[0])) {
+                            const auto point=list(coordinate);
+                            const double local_x=(std::stod(point[0])-std::stod(location[0]))*xx+
+                                (std::stod(point[1])-std::stod(location[1]))*xy;
+                            minimum=std::min(minimum,local_x); maximum=std::max(maximum,local_x);
+                        }
+                    check(std::abs(maximum-minimum-overall_width)<1e-9,
+                          "independent actual void mesh local X bounds must agree with standard fill OverallWidth");
+                    auto arc_width=graph.at(fill_id); arc_width.fields[9]="1.";
+                    rejected_fill(replace_fields(exported.step,fill_id,arc_width));
+                }
+                const auto& fill_shape=graph.at(graph.at(fill_id).fields[6]);
+                const auto& fill_rep=graph.at(list(fill_shape.fields[2])[0]);
+                const auto items=list(fill_rep.fields[3]);
+                const Wall native_host{wall.id,{{5,-3},{13,3},sweep},0.2,2.5,3.0};
+                const HostedOpening native_cut{opening.id,1.0,1.0,0.1,2.0};
+                const auto expected=ifc_native_fill_mesh(native_host,native_cut,
+                    parse_opening_assembly(opening.properties.at("opening_assembly")),
+                    window ? std::optional<DoorOperation>{} : std::optional<DoorOperation>{{hinge_end,swing_left,67.0}},
+                    IfcExchangeLimits{}.max_mesh_vertices,IfcExchangeLimits{}.max_mesh_triangles);
+                check(items.size()==expected.size(),"local export must preserve every actual native solid");
+                for (std::size_t i=0;i<items.size();++i) {
+                    const auto coordinates=list(graph.at(graph.at(items[i]).fields[0]).fields[0]);
+                    check(coordinates.size()==expected[i].vertices.size(),"local export must preserve native tessellation vertices");
+                    for (std::size_t j=0;j<coordinates.size();++j) {
+                        const auto point=list(coordinates[j]);
+                        const double px=std::stod(point[0]),py=std::stod(point[1]);
+                        const std::array<double,3> world{std::stod(location[0])+xx*px-xy*py,
+                            std::stod(location[1])+xy*px+xx*py,std::stod(location[2])+std::stod(point[2])};
+                        for (std::size_t k=0;k<3;++k)
+                            check(std::abs(world[k]-expected[i].vertices[j][k])<1e-8,
+                                  "local placement must preserve native curved frame and actual swung leaf world geometry");
+                    }
+                }
+                if (!window) {
+                    auto wrong_enum=graph.at(fill_id);
+                    wrong_enum.fields[11]=wrong_enum.fields[11]==".SINGLE_SWING_LEFT." ? ".SINGLE_SWING_RIGHT." : ".SINGLE_SWING_LEFT.";
+                    rejected_fill(replace_fields(exported.step,fill_id,wrong_enum));
+                }
+                if (!window && !curved && !hinge_end && swing_left) {
+                    auto wrong_origin=graph.at(axis.fields[0]);
+                    wrong_origin.fields[0]="("+real(std::stod(location[0])+0.125)+","+location[1]+","+location[2]+")";
+                    const auto translated=replace_fields(exported.step,axis.fields[0],wrong_origin);
+                    rejected_fill(translated);
+                    // Even compensating every local vertex to preserve world
+                    // shape must not bless an incorrect standard door frame.
+                    auto compensated=translated;
+                    for (const auto& item : items) {
+                        const auto points_id=graph.at(item).fields[0];
+                        auto points=graph.at(points_id);
+                        std::string coordinates="(";
+                        for (const auto& coordinate : list(points.fields[0])) {
+                            const auto point=list(coordinate);
+                            if (coordinates.size()>1) coordinates+=',';
+                            coordinates+="("+real(std::stod(point[0])-xx*0.125)+","+
+                                real(std::stod(point[1])+xy*0.125)+","+point[2]+")";
+                        }
+                        coordinates+=')'; points.fields[0]=coordinates;
+                        compensated=replace_fields(compensated,points_id,points);
+                    }
+                    rejected_fill(compensated);
+                    for (const auto& direction : {std::string("(0.,0.,0.)"), std::string("(1.6,1.2,0.)"),
+                         std::string("(-0.8,-0.6,0.)"),std::string("(0.8,0.6,0.1)")}) {
+                        auto wrong_x=graph.at(axis.fields[2]); wrong_x.fields[0]=direction;
+                        rejected_fill(replace_fields(exported.step,axis.fields[2],wrong_x));
+                    }
+                    auto wrong_axis=axis; wrong_axis.fields[1]="#999975";
+                    auto tilted=replace_fields(exported.step,axis_id,wrong_axis);
+                    tilted.insert(tilted.find("ENDSEC;\nEND-ISO-10303-21;"),"#999975=IFCDIRECTION((0.,0.,-1.));\n");
+                    rejected_fill(tilted);
+                    auto partial_axis=axis; partial_axis.fields[1]="$";
+                    rejected_fill(replace_fields(exported.step,axis_id,partial_axis));
+                    const auto points_id=graph.at(items.front()).fields[0];
+                    auto wrong_points=graph.at(points_id);
+                    const auto vertex_end=wrong_points.fields[0].find(',',2);
+                    wrong_points.fields[0].replace(2,vertex_end-2,"0.123456");
+                    rejected_fill(replace_fields(exported.step,points_id,wrong_points));
+                }
+                // Equivalent parent +90 degree rotation and translation must
+                // compose before native comparison, for all host/handing cases.
+                const auto absolute=import_project_ifc(exported.step);
+                check(std::any_of(absolute.entities.begin(),absolute.entities.end(),[](const auto& entity) {
+                    return entity.type=="opening" && entity.properties.contains("opening_assembly");
+                }),"absolute oblique fill must reconstruct before equivalent parent placement is tested");
+                auto relative_placement=placement; relative_placement.fields[0]="#999974";
+                auto relative=replace_fields(exported.step,graph.at(fill_id).fields[5],relative_placement);
+                auto relative_origin=graph.at(axis.fields[0]);
+                relative_origin.fields[0]="("+real(std::stod(location[1])+5)+","+
+                    real(2-std::stod(location[0]))+","+real(std::stod(location[2])-1)+")";
+                relative=replace_fields(relative,axis.fields[0],relative_origin);
+                auto relative_x=graph.at(axis.fields[2]);
+                relative_x.fields[0]="("+x[1]+","+real(-xx)+",0.)";
+                relative=replace_fields(relative,axis.fields[2],relative_x);
+                relative.insert(relative.find("ENDSEC;\nEND-ISO-10303-21;"),
+                    "#999970=IFCCARTESIANPOINT((2.,-5.,1.));\n#999971=IFCDIRECTION((0.,0.,1.));\n"
+                    "#999972=IFCDIRECTION((0.,1.,0.));\n#999973=IFCAXIS2PLACEMENT3D(#999970,#999971,#999972);\n"
+                    "#999974=IFCLOCALPLACEMENT($,#999973);\n");
+                const auto composed=import_project_ifc(relative);
+                check(std::any_of(composed.entities.begin(),composed.entities.end(),[](const auto& entity) {
+                    return entity.type=="opening" && entity.properties.contains("opening_assembly");
+                }),"proper parent placement rotation and translation must reconstruct the same native fill");
                 bool fills = false, voids = false;
                 for (const auto& [id, record] : graph) {
                     if (record.type == "IFCRELFILLSELEMENT") fills = record.fields[4] == void_id && record.fields[5] == fill_id;
@@ -335,6 +515,7 @@ void native_assemblies() {
                 check(imported_wall != imported.entities.end() && imported_opening != imported.entities.end(),
                       "native curved/straight bodies must reconstruct an editable hosted graph");
                 check(imported_wall->properties.at("baseline") == wall.properties.at("baseline") &&
+                      imported_opening->properties.at("width_m")==opening.properties.at("width_m") &&
                       imported_opening->properties.at("opening_assembly") == opening.properties.at("opening_assembly") &&
                       imported_opening->properties.at("opening_kind") == opening.properties.at("opening_kind"),
                       "exact native baseline and signed assembly profile must survive roundtrip");
@@ -343,8 +524,8 @@ void native_assemblies() {
                 const auto saved_graph = Document::create(imported.entities);
                 const auto second_import = import_project_ifc(export_project_ifc(saved_graph.snapshot()).step);
                 (void)Document::create(second_import.entities);
-                const auto capture_name = std::string(curved ? "curved-" : "straight-") +
-                    (window ? "window-" : "door-") + (hinge_end ? "end" : "start");
+                const auto capture_name = std::string(curved ? (sweep>0 ? "curved-ccw-" : "curved-cw-") : "straight-") +
+                    (window ? "window-" : "door-") + (hinge_end ? "end-" : "start-") + (swing_left ? "left" : "right");
                 if (const auto* directory = std::getenv("VERTEX_TEST_CAPTURE_DIR")) {
                     std::filesystem::create_directories(directory);
                     std::ofstream output(std::filesystem::path(directory) / (capture_name + ".ifc"), std::ios::binary);
@@ -388,7 +569,65 @@ void native_assemblies() {
                 try { (void)export_project_ifc(Document::create({wall, opening}).snapshot(), small); }
                 catch (const std::invalid_argument&) { bounded = true; }
                 check(bounded, "insufficient native tessellation budget must fail closed");
+              }
             }
+        }
+    }
+}
+
+void closed_leaf_without_operation() {
+    using namespace sketch;
+    for (const double sweep : {0.0,1.0,-1.0}) {
+        auto wall=make_document().snapshot().entities().at("wall-1");
+        auto opening=make_document().snapshot().entities().at("opening-1");
+        wall.properties["baseline"]={{"start",{5,-3}},{"end",{13,3}},{"sweep_radians",sweep}};
+        wall.properties["elevation_m"]=3.0;
+        check(!opening.properties.contains("door_operation"),"closed-leaf fixture must have unspecified operation");
+        const auto exported=export_project_ifc(Document::create({wall,opening}).snapshot());
+        const auto graph=records(exported.step);
+        std::string fill_id;
+        for (const auto& [id,record] : graph) {
+            if (record.type!="IFCDOOR") continue;
+            fill_id=id;
+            check(record.fields[11]==".USERDEFINED." &&
+                  record.fields[12]=="'Closed leaf; hinge and swing unspecified'",
+                  "closed leaf with unknown handing must use IFC user-defined operation with explicit description");
+            const auto& shape=graph.at(record.fields[6]);
+            const auto& representation=graph.at(list(shape.fields[2])[0]);
+            check(list(representation.fields[3]).size()>=4,
+                  "unspecified operation must preserve the physical leaf as well as the frame solids");
+        }
+        check(!fill_id.empty(),"closed leaf must export an actual IFC door");
+        const auto imported=import_project_ifc(exported.step);
+        check(std::any_of(imported.entities.begin(),imported.entities.end(),[](const auto& entity) {
+            return entity.type=="opening" && entity.properties.contains("opening_assembly") &&
+                !entity.properties.contains("door_operation");
+        }),"closed native profile must roundtrip without inventing hinge or swing metadata");
+        verify_worker_candidate(imported);
+        const auto repeated=import_project_ifc(export_project_ifc(Document::create(imported.entities).snapshot()).step);
+        check(std::any_of(repeated.entities.begin(),repeated.entities.end(),[](const auto& entity) {
+            return entity.type=="opening" && entity.properties.contains("opening_assembly") &&
+                !entity.properties.contains("door_operation");
+        }),"closed leaf operation must remain unspecified after repeated roundtrip");
+        if (const auto* directory=std::getenv("VERTEX_TEST_CAPTURE_DIR")) {
+            std::filesystem::create_directories(directory);
+            const auto name=std::string("closed-door-")+(sweep==0 ? "straight" : sweep>0 ? "ccw" : "cw")+".ifc";
+            std::ofstream output(std::filesystem::path(directory)/name,std::ios::binary);
+            output<<exported.step;
+            check(output.good(),"closed leaf external qualification capture must be written completely");
+        }
+        for (const auto& replacement : {std::string("$"),std::string("'Different operation'")}) {
+            auto altered=exported.step;
+            const auto start=altered.find(fill_id+"="),end=altered.find(");\n",start)+1;
+            auto record=graph.at(fill_id); record.fields[12]=replacement;
+            std::string row=fill_id+"=IFCDOOR(";
+            for (const auto& value : record.fields) { if (row.back()!='(') row+=','; row+=value; }
+            row+=");"; altered.replace(start,end-start+1,row);
+            const auto rejected=import_project_ifc(altered);
+            check(std::none_of(rejected.entities.begin(),rejected.entities.end(),[](const auto& entity) {
+                return entity.type=="opening" && entity.properties.contains("opening_assembly");
+            }) && rejected.source_retention_required,
+            "contradictory user-defined closed-leaf description must not activate native assembly");
         }
     }
 }
@@ -716,6 +955,7 @@ void run() {
     check(rejected, "malformed IFC must fail closed");
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
     native_assemblies();
+    closed_leaf_without_operation();
     desktop_hosted_worker_protocol();
 #endif
 }

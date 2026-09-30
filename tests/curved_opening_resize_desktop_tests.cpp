@@ -155,13 +155,17 @@ void artwork(Fixture& f,double offset,double width) {
     for(const auto& segment:entity.segments) if(std::abs(segment.sweep_radians)>1e-8) {
         ++arcs;
         const auto geometry=circle(segment);
-        if(f.kind=="window"||f.kind=="opening") {
+        if(f.kind=="window"||f.kind=="opening"||closeEnough(geometry.center,f.host_circle.center)) {
             require(closeEnough(geometry.center,f.host_circle.center),"curved threshold or window is not concentric with its host");
             require(std::abs(geometry.radius-f.host_circle.radius)<.5,"curved window radius is displaced from wall faces");
         } else {
             const auto chord=distance(f.station(offset),f.station(offset+width));
-            require(closeEnough(geometry.radius,chord)&&closeEnough(std::abs(segment.sweep_radians),pi/2),
-                "curved door swing must remain a circle sized from the jamb chord");
+            require(geometry.radius > chord-.5 && geometry.radius < chord &&
+                closeEnough(std::abs(segment.sweep_radians),pi/2),
+                "manufactured door swing must follow the trimmed clear leaf instead of the nominal cut");
+            require(distance(geometry.center,f.station(offset)) < .5 ||
+                    distance(geometry.center,f.station(offset+width)) < .5,
+                "manufactured door swing hinge must remain within its frame jamb");
         }
     }
     require(arcs>0,"curved opening lost analytic arc linework");

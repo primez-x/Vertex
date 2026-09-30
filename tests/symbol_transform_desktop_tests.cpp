@@ -6,6 +6,7 @@
 #include "support/noninteractive_errors.hpp"
 
 #include <QApplication>
+#include <QFontDatabase>
 #include <QAbstractButton>
 #include <QMessageBox>
 #include <QTimer>
@@ -258,6 +259,13 @@ void rotateGesture(sketch::desktop::PlanCanvas& canvas, double from, double to,
     };
     mouse(QEvent::MouseButtonPress, pin(from));
     mouse(QEvent::MouseMove, pin(to));
+    const auto capture=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if (!capture.isEmpty() && close_enough(to,1.5707963267948966) &&
+        close_enough(from,0.5235987755982988)) {
+        require(QDir().mkpath(capture) &&
+                canvas.grab().save(QDir(capture).filePath("rotation-live-90.png")),
+                "live rotation capture failed");
+    }
     mouse(QEvent::MouseButtonRelease, pin(to));
     QApplication::processEvents();
 }
@@ -437,6 +445,11 @@ int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QStandardPaths::setTestModeEnabled(true);
     QApplication app(argc, argv);
+    const auto font_id=QFontDatabase::addApplicationFont(":/fonts/Inter.ttf");
+    require(font_id>=0,"bundled canvas font must load");
+    const auto families=QFontDatabase::applicationFontFamilies(font_id);
+    require(!families.isEmpty(),"bundled canvas font must expose its family");
+    app.setFont(QFont(families.front(),10));
     QCoreApplication::setApplicationName(QStringLiteral("Vertex-symbol-transform-test-") +
         QUuid::createUuid().toString(QUuid::WithoutBraces));
     try {
