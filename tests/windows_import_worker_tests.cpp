@@ -177,7 +177,48 @@ std::filesystem::path worker_profile_root() {
     return path;
 }
 
-void make_immutable_module_root(const std::filesystem::path& root, const std::filesystem::path& worker) {
+class ScopedDeleteChildDeny {
+public:
+    explicit ScopedDeleteChildDeny(const std::filesystem::path& root) : root_(root) {
+        require(GetNamedSecurityInfoW(const_cast<LPWSTR>(root_.c_str()), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+            nullptr, nullptr, &original_acl_, nullptr, &descriptor_) == ERROR_SUCCESS,
+            "fixture holder ACL must be read");
+        DWORD revision = 0;
+        require(GetSecurityDescriptorControl(descriptor_, &control_, &revision) != FALSE,
+                "fixture holder inheritance must be read");
+        auto user_storage = current_user_sid_storage();
+        auto* user_sid = reinterpret_cast<PTOKEN_USER>(user_storage.data())->User.Sid;
+        EXPLICIT_ACCESSW entry{};
+        entry.grfAccessPermissions = FILE_DELETE_CHILD;
+        entry.grfAccessMode = DENY_ACCESS;
+        entry.grfInheritance = NO_INHERITANCE;
+        BuildTrusteeWithSidW(&entry.Trustee, user_sid);
+        PACL acl = nullptr;
+        require(SetEntriesInAclW(1, &entry, original_acl_, &acl) == ERROR_SUCCESS,
+                "fixture holder deny ACL must be built");
+        const auto result = SetNamedSecurityInfoW(const_cast<LPWSTR>(root_.c_str()), SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION, nullptr, nullptr, acl, nullptr);
+        LocalFree(acl);
+        require(result == ERROR_SUCCESS, "fixture holder delete-child deny must be applied");
+    }
+    ~ScopedDeleteChildDeny() {
+        SetNamedSecurityInfoW(const_cast<LPWSTR>(root_.c_str()), SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | ((control_ & SE_DACL_PROTECTED) ?
+                PROTECTED_DACL_SECURITY_INFORMATION : UNPROTECTED_DACL_SECURITY_INFORMATION),
+            nullptr, nullptr, original_acl_, nullptr);
+        LocalFree(descriptor_);
+    }
+    ScopedDeleteChildDeny(const ScopedDeleteChildDeny&) = delete;
+    ScopedDeleteChildDeny& operator=(const ScopedDeleteChildDeny&) = delete;
+private:
+    std::filesystem::path root_;
+    PACL original_acl_{};
+    PSECURITY_DESCRIPTOR descriptor_{};
+    SECURITY_DESCRIPTOR_CONTROL control_{};
+};
+
+void make_immutable_module_root(const std::filesystem::path& root, const std::filesystem::path& worker,
+                                DWORD additional_right = 0) {
     std::error_code error;
     std::filesystem::remove_all(root, error);
     require(std::filesystem::create_directories(root, error) && !error,
@@ -194,7 +235,7 @@ void make_immutable_module_root(const std::filesystem::path& root, const std::fi
     auto* user_sid = reinterpret_cast<PTOKEN_USER>(user_storage.data())->User.Sid;
     PSID app_sid = worker_app_container_sid();
     EXPLICIT_ACCESSW entries[2]{};
-    entries[0].grfAccessPermissions = DELETE | FILE_DELETE_CHILD | GENERIC_READ | GENERIC_EXECUTE;
+    entries[0].grfAccessPermissions = GENERIC_READ | GENERIC_EXECUTE | additional_right;
     entries[1].grfAccessPermissions = GENERIC_READ | GENERIC_EXECUTE;
     for (auto& entry : entries) {
         entry.grfAccessMode = SET_ACCESS;
@@ -219,12 +260,56 @@ void make_immutable_module_root(const std::filesystem::path& root, const std::fi
     PACL file_acl = nullptr;
     require(SetEntriesInAclW(2, file_entries, nullptr, &file_acl) == ERROR_SUCCESS && file_acl,
             "worker fixture file ACL must be built");
-    require(SetNamedSecurityInfoW(const_cast<LPWSTR>(worker_copy.c_str()), SE_FILE_OBJECT,
-                                  DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                                  nullptr, nullptr, file_acl, nullptr) == ERROR_SUCCESS,
-            "worker fixture file ACL must be applied");
+    for (const auto& file : {worker_copy, root / "invalid-image.exe"})
+        require(SetNamedSecurityInfoW(const_cast<LPWSTR>(file.c_str()), SE_FILE_OBJECT,
+                                      DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                                      nullptr, nullptr, file_acl, nullptr) == ERROR_SUCCESS,
+                "worker fixture file ACL must be applied");
     LocalFree(file_acl);
     FreeSid(app_sid);
+}
+
+void partial_module_rights_fail_closed(const std::filesystem::path& holder,
+                                      const std::filesystem::path& worker) {
+    for (const auto right : {DWORD(FILE_ADD_FILE), DWORD(FILE_ADD_SUBDIRECTORY), DWORD(DELETE)}) {
+        const auto root = holder / ("partial-right-" + std::to_string(right));
+        make_immutable_module_root(root, worker, right);
+        const auto allowed = CreateFileW(root.c_str(), right,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        require(allowed != INVALID_HANDLE_VALUE, "partial-right fixture must grant its individual right");
+        CloseHandle(allowed);
+        const auto combined = CreateFileW(root.c_str(), FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | DELETE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        require(combined == INVALID_HANDLE_VALUE && GetLastError() == ERROR_ACCESS_DENIED,
+                "combined probe must mask the partial-right fixture");
+        const auto report = run_windows_import_worker(base_options(root / "worker-probe.exe"));
+        std::cout << "partial_module_rights_fail_closed " << right << ": " << report.to_json().dump() << '\n';
+        require(!report.launched && !report.immutable_module_roots_verified && has(report, "invalid_module_roots"),
+                "a partially writable or deletable module root must fail before launch");
+    }
+}
+
+void sharing_conflicts_do_not_attest_immutable_roots(const std::filesystem::path& holder,
+                                                   const std::filesystem::path& worker) {
+    // Keep a directory with writable rights open exclusively. Permission
+    // checks alone would permit the broker's ADD_FILE probe, but sharing
+    // prevents the open and must not be mistaken for immutable permissions.
+    const auto root = holder / "sharing-conflict";
+    make_immutable_module_root(root, worker, FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | DELETE);
+    const auto handle = CreateFileW(root.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING,
+                                   FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    require(handle != INVALID_HANDLE_VALUE, "sharing fixture must hold its directory exclusively");
+    struct Close { HANDLE handle; ~Close() { CloseHandle(handle); } } close{handle};
+    const auto blocked = CreateFileW(root.c_str(), FILE_ADD_FILE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    require(blocked == INVALID_HANDLE_VALUE && GetLastError() == ERROR_SHARING_VIOLATION,
+            "sharing fixture must produce a sharing conflict on the write probe");
+    const auto report = run_windows_import_worker(base_options(root / "worker-probe.exe"));
+    require(!report.launched && !report.immutable_module_roots_verified && has(report, "invalid_module_roots"),
+            "a sharing conflict must not attest immutable module roots");
 }
 #endif
 
@@ -350,12 +435,17 @@ void run(const std::filesystem::path& worker) {
     std::error_code profile_error;
     std::filesystem::create_directories(profile_root / "Temp", profile_error);
     require(!profile_error, "worker fixture profile temp root must be created");
-    const auto module_root = profile_root /
-        ("windows-import-worker-modules-" + std::to_string(GetCurrentProcessId()));
+    const auto holder = profile_root /
+        ("windows-import-worker-holder-" + std::to_string(GetCurrentProcessId()) + "-" + std::to_string(GetTickCount64()));
+    require(std::filesystem::create_directories(holder), "worker fixture holder must be created");
+    const auto module_root = holder / "modules";
     struct Cleanup {
         std::filesystem::path root;
         ~Cleanup() { std::error_code error; std::filesystem::remove_all(root, error); }
-    } cleanup{module_root};
+    } cleanup{holder};
+    ScopedDeleteChildDeny parent_deny(holder);
+    partial_module_rights_fail_closed(holder, worker);
+    sharing_conflicts_do_not_attest_immutable_roots(holder, worker);
     make_immutable_module_root(module_root, worker);
     const auto worker_copy = module_root / "worker-probe.exe";
     const auto executable_access = CreateFileW(worker_copy.c_str(), GENERIC_READ | GENERIC_EXECUTE,

@@ -9,6 +9,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$fixtureParentOriginalAcl = $null
+$fixtureParentPath = $null
 if (!$IsWindows) { throw 'This runner requires Windows.' }
 if ($PackagedRuntimeRoot) {
     if ($CaptureSelfTest -or $Configuration -ne 'Release') { throw 'Packaged CAD checking requires Release and no capture self-test.' }
@@ -115,6 +117,20 @@ public static class VertexAppContainerFixture {
             [Security.Principal.SecurityIdentifier]::new($sid), $full, $inheritance, $none, $allow))
     }
     Set-Acl -LiteralPath $runtime -AclObject $acl
+    # The containing capture directory otherwise grants DELETE on the runtime
+    # through FILE_DELETE_CHILD. This fixture-owned parent stays writable for
+    # stdout/stderr capture; remove only the alternate child-deletion route
+    # during the tests and restore its original access ACL in the child finally.
+    $existing = Get-Acl -LiteralPath $CaptureRoot
+    $script:fixtureParentOriginalAcl = [Security.AccessControl.DirectorySecurity]::new()
+    $script:fixtureParentOriginalAcl.SetSecurityDescriptorSddlForm(
+        $existing.Sddl, [Security.AccessControl.AccessControlSections]::Access)
+    $script:fixtureParentPath = $CaptureRoot
+    $parentAcl = [Security.AccessControl.DirectorySecurity]::new()
+    $parentAcl.SetSecurityDescriptorSddlForm($existing.Sddl, [Security.AccessControl.AccessControlSections]::Access)
+    $parentAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+        [Security.Principal.WindowsIdentity]::GetCurrent().User, 'DeleteSubdirectoriesAndFiles', 'Deny'))
+    [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($CaptureRoot), $parentAcl)
     return $runtime
 }
 if ($Child) {
@@ -280,6 +296,16 @@ public static class BoundedWorkerCapture {
             }
         }
     } catch { $report.error = $_.Exception.Message }
+    finally {
+        if ($null -ne $fixtureParentOriginalAcl) {
+            try {
+                [IO.FileSystemAclExtensions]::SetAccessControl(
+                    [IO.DirectoryInfo]::new($fixtureParentPath), $fixtureParentOriginalAcl)
+            } catch {
+                $report.error = "$($report.error); fixture parent ACL restoration failed: $($_.Exception.Message)"
+            }
+        }
+    }
     $report.finished_utc = [DateTime]::UtcNow.ToString('o')
     $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $CaptureDirectory 'result.json') -Encoding utf8
     if ($report.error -or $report.host_in_job -or (!$CaptureSelfTest -and @($report.tests | Where-Object {

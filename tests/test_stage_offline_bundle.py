@@ -752,13 +752,15 @@ public static class FixtureNativeAcl {
             for path in (target / "bin", target / "bin/helpers", target / "plugins",
                          target / "plugins/platforms", target / "bin/vertex.exe",
                          target / "bin/helpers/deep.dll", target / "plugins/platforms/qwindows.dll"):
-                access = 0x10006 if path.is_dir() else 0x40000000
-                handle = kernel.CreateFileW(str(path), access, 7, None, 3, 0x02200000, None)
-                error = ctypes.get_last_error()
-                if handle != ctypes.c_void_p(-1).value:
-                    kernel.CloseHandle(handle)
-                self.assertEqual(handle, ctypes.c_void_p(-1).value, f"runtime is writable: {path}")
-                self.assertEqual(error, 5, str(path))
+                accesses = (0x2, 0x4, 0x10000, 0x10006) if path.is_dir() else (0x40000000,)
+                for access in accesses:
+                    handle = kernel.CreateFileW(str(path), access, 7, None, 3, 0x02200000, None)
+                    error = ctypes.get_last_error()
+                    if handle != ctypes.c_void_p(-1).value:
+                        kernel.CloseHandle(handle)
+                    self.assertEqual(handle, ctypes.c_void_p(-1).value,
+                                     f"runtime permits access 0x{access:x}: {path}")
+                    self.assertEqual(error, 5, str(path))
             checked = self.run_powershell(
                 "$ErrorActionPreference='Stop'; "
                 f"$paths=@({self.ps_path(target / 'bin')},{self.ps_path(target / 'plugins/platforms/qwindows.dll')}); "
@@ -949,6 +951,42 @@ public static class FixtureNativeAcl {
             late.write_bytes(b"user content still writable")
             self.assertEqual(late.read_bytes(), b"user content still writable")
             self.assertEqual(len(list(target.parent.glob(".installed.backup-*"))), 1)
+
+    @unittest.skipUnless(os.name == "nt", "Windows install-root ACL preservation")
+    def test_install_root_delete_child_deny_preserves_unknown_native_descriptor(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            template = pathlib.Path(scratch) / "installer.ps1"
+            source = (SCRIPTS / "install-offline-bundle.ps1").read_text(encoding="utf-8")
+            anchor = "    Protect-ModuleParentDeletion $RootPath"
+            injected = """    if ($Action -eq 'Repair') {
+        $latePath = Join-Path $RootPath 'late-user.txt'
+        [IO.File]::WriteAllText($latePath, 'user content')
+""" + self.NATIVE_ACL_SNAPSHOT + """
+        Write-Output ('NATIVE_ACL:' + [FixtureNativeAcl]::Read($latePath))
+    }
+"""
+            self.assertEqual(source.count(anchor), 1)
+            template.write_text(source.replace(anchor, injected + anchor), encoding="utf-8")
+            _, target, run = self.lifecycle_fixture(template)
+            parent_before = self.run_powershell(self.NATIVE_ACL_SNAPSHOT +
+                                               f"\n[FixtureNativeAcl]::Read({self.ps_path(target.parent)})")
+            self.assertEqual(parent_before.returncode, 0, parent_before.stderr)
+            rejected = run("Repair")
+            self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+            self.assertIn("unowned", rejected.stderr)
+            late = target / "late-user.txt"
+            before = next(line.removeprefix("NATIVE_ACL:") for line in rejected.stdout.splitlines()
+                          if line.startswith("NATIVE_ACL:"))
+            after = self.run_powershell(self.NATIVE_ACL_SNAPSHOT +
+                                       f"\n[FixtureNativeAcl]::Read({self.ps_path(late)})")
+            self.assertEqual(after.returncode, 0, after.stderr)
+            self.assertEqual(before, after.stdout.strip())
+            late.write_bytes(b"user content still writable")
+            self.assertEqual(late.read_bytes(), b"user content still writable")
+            parent_after = self.run_powershell(self.NATIVE_ACL_SNAPSHOT +
+                                              f"\n[FixtureNativeAcl]::Read({self.ps_path(target.parent)})")
+            self.assertEqual(parent_after.returncode, 0, parent_after.stderr)
+            self.assertEqual(parent_before.stdout, parent_after.stdout)
 
     @unittest.skipUnless(os.name == "nt", "Windows thrown-cleanup rollback")
     def test_thrown_backup_cleanup_restores_complete_readonly_runtime(self):

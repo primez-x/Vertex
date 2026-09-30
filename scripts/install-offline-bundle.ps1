@@ -290,6 +290,19 @@ function Assert-PreservedModuleAcls([string]$RootPath, $Paths) {
     }
 }
 
+function Protect-ModuleParentDeletion([string]$RootPath) {
+    $existing = Get-Acl -LiteralPath $RootPath
+    $acl = [Security.AccessControl.DirectorySecurity]::new()
+    $acl.SetSecurityDescriptorSddlForm($existing.Sddl, [Security.AccessControl.AccessControlSections]::Access)
+    # DELETE on a child can be granted by its parent even when the child has
+    # no DELETE allow ACE. Deny that alternate route on the owned install root
+    # only, without inheriting this restriction or touching outside parents.
+    $userSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+        $userSid, 'DeleteSubdirectoriesAndFiles', 'Deny'))
+    Set-ModuleAccessAcl $RootPath $acl $true
+}
+
 function Protect-OwnedModuleTree([string]$RootPath, $Manifest, [bool]$PreserveUnowned = $false) {
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { return }
     $paths = Get-OwnedModulePaths $RootPath $Manifest
@@ -339,6 +352,7 @@ function Protect-OwnedModuleTree([string]$RootPath, $Manifest, [bool]$PreserveUn
         }
         Set-ModuleAccessAcl $path $acl $paths[$path]
     }
+    Protect-ModuleParentDeletion $RootPath
 }
 
 function Enable-OwnedModuleRemoval([string]$RootPath, $Manifest) {

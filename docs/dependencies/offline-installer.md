@@ -109,8 +109,13 @@ file and directory under `bin/` and `plugins/` with explicit, noninheriting
 permissions. The installing user and the specific `Vertex.ImportWorker`
 AppContainer profile receive read/execute access; SYSTEM and Administrators
 retain full control. This includes the embedded CAD runtime. The broker still
-checks that its module roots cannot be written by the current unelevated user;
-the installer does not relax that check. Run Vertex normally rather than with
+checks file creation, subdirectory creation, and deletion separately for each
+module root; a sharing conflict does not prove immutability. A noninheriting
+deny of `FILE_DELETE_CHILD` for the installing user on the installation root
+closes the parent-permission route to deleting `bin/` or `plugins/`. Other root
+ACL entries and the directory outside the installation remain unchanged.
+Known-file cleanup grants explicit deletion access on its declared objects.
+The installer does not relax the broker's check. Run Vertex normally rather than with
 an elevated administrator token when exercising the sandboxed import worker.
 
 Repair and uninstall restore deletion access only to declared objects, after

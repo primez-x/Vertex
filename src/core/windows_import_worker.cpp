@@ -219,18 +219,21 @@ bool same_or_below(const std::filesystem::path& parent, const std::filesystem::p
 }
 
 bool root_is_immutable(const std::filesystem::path& root) {
-    // A root that grants this process write access cannot be an immutable
-    // worker/module root. This check is advisory for ACLs inherited by files;
-    // the packaged release still has to ship the roots read-only.
-    const auto handle = CreateFileW(root.c_str(), FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | DELETE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
-        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-    if (handle == INVALID_HANDLE_VALUE) {
+    // Probe each right separately: a combined request fails when just one
+    // right is denied, masking a writable or deletable module directory.
+    // A sharing conflict provides no evidence of an immutable ACL or volume.
+    for (const DWORD access : {DWORD(FILE_ADD_FILE), DWORD(FILE_ADD_SUBDIRECTORY), DWORD(DELETE)}) {
+        const auto handle = CreateFileW(root.c_str(), access,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        if (handle != INVALID_HANDLE_VALUE) {
+            CloseHandle(handle);
+            return false;
+        }
         const auto error = GetLastError();
-        return error == ERROR_ACCESS_DENIED || error == ERROR_SHARING_VIOLATION || error == ERROR_WRITE_PROTECT;
+        if (error != ERROR_ACCESS_DENIED && error != ERROR_WRITE_PROTECT) return false;
     }
-    CloseHandle(handle);
-    return false;
+    return true;
 }
 
 bool verify_module_roots(const WindowsImportWorkerOptions& options, WindowsImportWorkerReport& report) {
