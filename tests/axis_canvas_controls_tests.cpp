@@ -176,6 +176,56 @@ void vector_frame_survives_projection_refresh() {
     mouse(canvas,QEvent::MouseButtonRelease,right90+QPointF(0,-80));
     require(resizes==1,"vector side handle must retain orientation after projection refresh");
 }
+void common_angle_snapping_and_cancelled_rotation() {
+    constexpr double radians=std::numbers::pi/180;
+    constexpr double radius=.5+(7.5+24)/80;
+    PlanCanvas canvas;setup(canvas,30*radians);
+    double angle=30*radians;
+    double expected=0;
+    int rotations=0;
+    bool accept=true;
+    canvas.setEntityTransformRequested([&](QString id,double scale,double delta) {
+        require(id=="object" && close_enough(scale,1),"rotation must preserve identity and scale");
+        require(close_enough(std::remainder(angle+delta,2*std::numbers::pi),
+                             std::remainder(expected,2*std::numbers::pi)),
+                "off-grid rotation must snap to an absolute common angle");
+        ++rotations;
+        if (accept) {
+            angle=expected;
+            canvas.setEntities({entity(angle)});
+        }
+        return accept;
+    });
+    const auto drag=[&](double pointer_degrees,double committed_degrees,
+                        Qt::KeyboardModifiers modifiers=Qt::NoModifier) {
+        expected=committed_degrees*radians;
+        const auto pin=screen(oriented(0,radius,angle));
+        const auto destination=screen(oriented(0,radius,pointer_degrees*radians));
+        mouse(canvas,QEvent::MouseButtonPress,pin,modifiers);
+        mouse(canvas,QEvent::MouseMove,destination,modifiers);
+        capture(canvas,QStringLiteral("rotation-%1-preview.png").arg(committed_degrees));
+        mouse(canvas,QEvent::MouseButtonRelease,destination,modifiers);
+    };
+    drag(52,45);
+    drag(103,90);
+    drag(169,180);
+    drag(203.5,203.5,Qt::ShiftModifier);
+    require(rotations==4,"each rotation must commit once from its persisted frame");
+    const auto committed=render(canvas);
+    accept=false;
+    drag(257,270);
+    require(rotations==5 && close_enough(angle,203.5*radians) && render(canvas)==committed,
+            "rejected rotation must restore the committed object-relative frame");
+    const auto pin=screen(oriented(0,radius,angle));
+    const auto destination=screen(oriented(0,radius,270*radians));
+    mouse(canvas,QEvent::MouseButtonPress,pin);
+    mouse(canvas,QEvent::MouseMove,destination);
+    QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);
+    QApplication::sendEvent(&canvas,&escape);
+    mouse(canvas,QEvent::MouseButtonRelease,destination);
+    require(rotations==5 && render(canvas)==committed,
+            "Escape must restore the committed object-relative frame without a callback");
+}
 void dimensions_are_physical_and_screen_only() {
     PlanCanvas canvas;setup(canvas);
     const auto metric=render(canvas);const auto output=render(canvas,true);
@@ -249,6 +299,7 @@ int main(int argc,char**argv) {
         require(!families.isEmpty(),"bundled canvas font must expose its family");
         app.setFont(QFont(families.front(),10));
         axis_gestures();rotated_symbol_and_rotation();vector_frame_survives_projection_refresh();
+        common_angle_snapping_and_cancelled_rotation();
         dimensions_are_physical_and_screen_only();label_and_reference_rotation_preview();
         std::cout<<"Axis canvas controls tests passed\n";return 0;
     } catch(const std::exception&e){std::cerr<<e.what()<<'\n';return 1;}

@@ -1418,7 +1418,7 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
                         std::atan2(start.y(), start.x()), 2.0 * pi);
                     auto absolute = m_transform_initial_rotation - delta;
                     if (!modifiers.testFlag(Qt::ShiftModifier)) {
-                        constexpr double step = pi / 12.0;
+                        constexpr double step = pi / 4.0;
                         absolute = std::round(absolute / step) * step;
                     }
                     m_transform_rotation_preview = std::remainder(

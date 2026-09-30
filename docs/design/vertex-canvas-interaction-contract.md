@@ -75,7 +75,7 @@ presentation. A later mouse release cannot commit a cancelled move.
 ## Remaining interaction work
 
 - Selected symbols use an oriented selection frame that retains their saved rotation. Corner handles scale proportionally; side handles resize local width or depth with the opposite edge anchored. Canvas dimensions show the current physical footprint.
-- Rotation uses a positive counterclockwise model angle. The handle and frame preview the resulting angle, snapping to absolute 15-degree increments; Shift bypasses snapping for fine adjustment. Release commits once, Escape restores the document, and editing controls never appear in output.
+- Rotation uses a positive counterclockwise model angle. The handle and frame retain the committed orientation and preview the resulting angle, snapping to absolute 45-degree increments (including 0°, 90°, 180° and 270°); Shift bypasses snapping for fine adjustment. The canvas callout displays the current angle while rotating. Release commits once, Escape restores the document, and editing controls never appear in output.
 - Circular columns retain the selection-frame angle even though their cylinder is rotationally symmetric. Property edits, history navigation and save/reopen preserve it, so the rotation pin remains attached to the committed frame.
 - Direct endpoint grips for additional architectural object types.
 - 3D directional marquee selection and additive selection parity.
