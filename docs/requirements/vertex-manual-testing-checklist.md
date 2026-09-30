@@ -647,7 +647,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 
 - [ ] **U117 — Rotate a symbol**
   - Steps: Drag the rotation handle to 45, 90 and 180 degrees. Release and rotate again. Hold Shift to choose an angle between snapping points. Return to zero degrees.
-  - Expected: The selection box and rotation handle retain the object's angle after release. Rotation snaps every 15 degrees, Shift permits fine adjustment, and a live angle matches the saved orientation. Zero restores the original orientation; undo/redo and save/reopen preserve it.
+  - Expected: The selection box and rotation handle retain the object's angle after release. Rotation snaps every 45 degrees, Shift permits fine adjustment, and a live angle matches the saved orientation. Zero restores the original orientation; undo/redo and save/reopen preserve it.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
