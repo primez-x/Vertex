@@ -1451,6 +1451,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/dependencies/ifc-source-build.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/dependencies/native-build.md"
     },
     {
@@ -2807,6 +2811,10 @@
     },
     {
       "category": "source",
+      "path": "scripts/prepare_ifc_source.py"
+    },
+    {
+      "category": "source",
       "path": "scripts/prepare_msvc_runtime.py"
     },
     {
@@ -4063,6 +4071,10 @@
     },
     {
       "category": "source",
+      "path": "tests/test_prepare_ifc_source.py"
+    },
+    {
+      "category": "source",
       "path": "tests/test_prepare_msvc_runtime.py"
     },
     {
@@ -4216,6 +4228,22 @@
     {
       "category": "source",
       "path": "third_party/distribution-components.json"
+    },
+    {
+      "category": "source",
+      "path": "third_party/ifc-source-lock.json"
+    },
+    {
+      "category": "source",
+      "path": "third_party/ifc-source/support/vcpkg.json"
+    },
+    {
+      "category": "source",
+      "path": "third_party/ifc-source/triplets/x64-windows-ifc-static.cmake"
+    },
+    {
+      "category": "source",
+      "path": "third_party/ifc-source/vcpkg.json"
     },
     {
       "category": "licenses",

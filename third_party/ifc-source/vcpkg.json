@@ -1,0 +1,11 @@
+{
+  "name": "vertex-ifc-source-kernel",
+  "version-string": "1",
+  "builtin-baseline": "0397b75952a7c874b68a7d4f9baf8d3c5951b371",
+  "dependencies": [
+    { "name": "opencascade", "default-features": false }
+  ],
+  "overrides": [
+    { "name": "opencascade", "version": "7.8.1", "port-version": 1 }
+  ]
+}

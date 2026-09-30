@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "platform": "win_amd64",
+  "source": {
+    "repository": "https://github.com/IfcOpenShell/IfcOpenShell.git",
+    "revision": "ff3c5b849eee2ef6343b537c885b971ae6bba452",
+    "path": ".deps/ifc-src"
+  },
+  "submodules": [
+    {
+      "path": "src/svgfill",
+      "repository": "https://github.com/IfcOpenShell/svgfill",
+      "revision": "29fbc17edec61b4f774ba8e87d4308983a75fc90",
+      "purpose": "Prepared source; compiled only with WITH_CGAL=ON"
+    },
+    {
+      "path": "src/ifcopenshell-python/ifcopenshell/mvd",
+      "repository": "https://github.com/opensourceBIM/python-mvdxml/",
+      "revision": "83c12fa494b9d6a5a370d8525dc1f76aa5c89d8d",
+      "purpose": "Python package source included by wrapper install glob"
+    },
+    {
+      "path": "src/ifcopenshell-python/ifcopenshell/simple_spf",
+      "repository": "https://github.com/IfcOpenShell/step-file-parser",
+      "revision": "2849a31788c4f82edca7d1b1046d0606fdf8b9be",
+      "purpose": "Python package source included by wrapper install glob"
+    }
+  ],
+  "swig": {
+    "version": "4.3.1",
+    "filename": "swigwin-4.3.1.zip",
+    "url": "https://downloads.sourceforge.net/project/swig/swigwin/swigwin-4.3.1/swigwin-4.3.1.zip",
+    "sha512": "ca7210684b6ccb1b9bb186797bf1b67bbf3e76f6d0e702fee78edf7456992a4298eb5fa0b5f602a4240161fedd422920fe56e12cd60b8c8fd71c2f784f3d0f43",
+    "hash_provenance": {
+      "repository": "https://github.com/microsoft/vcpkg.git",
+      "revision": "0397b75952a7c874b68a7d4f9baf8d3c5951b371",
+      "path": "scripts/cmake/vcpkg_find_acquire_program(SWIG).cmake"
+    }
+  },
+  "build_qualified": false,
+  "source_closure_qualified": false
+}

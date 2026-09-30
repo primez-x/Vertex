@@ -1,0 +1,41 @@
+{
+  "name": "vertex-ifc-source-support",
+  "version-string": "1",
+  "builtin-baseline": "6f29f12e82a8293156836ad81cc9bf5af41fe836",
+  "dependencies": [
+    "eigen3",
+    "boost-algorithm",
+    "boost-any",
+    "boost-circular-buffer",
+    "boost-date-time",
+    "boost-dynamic-bitset",
+    "boost-foreach",
+    "boost-function",
+    "boost-functional",
+    "boost-graph",
+    "boost-iterator",
+    "boost-lexical-cast",
+    "boost-locale",
+    "boost-logic",
+    "boost-math",
+    "boost-mpl",
+    "boost-multi-index",
+    "boost-optional",
+    "boost-preprocessor",
+    "boost-program-options",
+    "boost-property-map",
+    "boost-property-tree",
+    "boost-range",
+    "boost-regex",
+    "boost-scope-exit",
+    "boost-smart-ptr",
+    "boost-system",
+    "boost-thread",
+    "boost-unordered",
+    "boost-uuid",
+    "boost-variant"
+  ],
+  "overrides": [
+    { "name": "eigen3", "version-string": "3.3.9", "port-version": 1 }
+  ]
+}

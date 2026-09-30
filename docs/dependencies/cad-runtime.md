@@ -175,3 +175,20 @@ This mode runs the CAD fixtures against that installed immutable root in the
 independent AppContainer host. Developer SDK code generates only the input test
 files; the worker loads its own installed runtime. It remains development-host
 evidence, not clean-machine or complete compatibility certification.
+
+The internal `vertex-offline-20260929-cad-runtime-rights` bundle was installed
+without substituting SDK modules. All 12 native access probes denied their
+requested rights: file creation, directory creation, deletion and their combined
+mask on both `bin` and `plugins`, plus writes to the application, Python DLL,
+IFC extension and Qt platform plugin. The earlier installation's deletion
+failure is preserved separately rather than replaced by this result.
+The installed CAD fixture exited successfully in the independent AppContainer
+host. Six application runs also passed with a private profile and a System-only
+search path: measurement/residential and architectural/residential and
+light-commercial, each followed by reopening. Project bytes, sampled outputs,
+screenshots and applicable native 3D images matched their save/reopen pairs.
+These small fixtures establish installed execution and sampled persistence;
+they do not certify a complete architectural workflow or Apex compatibility.
+Local evidence is under `artifacts/runtime/installed-module-root-write-probes-rights.json`,
+`artifacts/import-worker-independent/release-ed329136726d43f7928a3b9acd1964d4/`,
+and `artifacts/installed-runtime-cad-rights-check/run-20260929-231420-814a058e/`.
