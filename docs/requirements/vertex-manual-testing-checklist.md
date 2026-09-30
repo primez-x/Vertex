@@ -977,7 +977,8 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U179 — Edit roof pitch, overhang or a supported opening**
-  - Expected: All affected views update and unsupported edits are explained.
+  - Steps: Create a shed, gable or hip roof. In its properties, add an opening and enter its local X/Y position, width and depth. Save, reopen the roof properties, change the opening size, and apply. Repeat for the other two roof forms. Inspect the cut in 3D, then remove the opening and undo.
+  - Expected: An opening can be added while creating the roof and edited in the same properties dialog afterward. Its size and location survive saving and reopening. Removing it closes the cut; undo restores it. Moving an opening outside the roof or overlapping another opening shows an error and leaves the roof unchanged.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

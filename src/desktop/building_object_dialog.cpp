@@ -8,6 +8,7 @@
 #include <QFrame>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QHeaderView>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -16,6 +17,8 @@
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QStackedWidget>
+#include <QTableWidget>
+#include <QUuid>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -34,6 +37,7 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace sketch::desktop {
 namespace {
@@ -42,6 +46,7 @@ using json = nlohmann::json;
 
 constexpr double geometry_tolerance = 1e-7;
 constexpr std::size_t maximum_risers = 10'000;
+constexpr std::array<const char*, 4> roof_opening_keys{"x_m", "y_m", "width_m", "depth_m"};
 
 struct FormInfo {
     std::string_view type;
@@ -346,6 +351,10 @@ public:
                 apply_quantity_entries(candidate_entity->properties,
                                        candidate_entity->properties);
             }
+            if (candidate_entity->type == "roof" && roof_openings_changed) {
+                candidate_entity->extensions["roof_opening_input"] =
+                    {{"version", 1}, {"entries", roof_opening_receipts}};
+            }
             clear_error();
             owner->accept();
             return true;
@@ -415,6 +424,7 @@ private:
         form_stack = new QStackedWidget(form_body);
         form_stack->setObjectName(QStringLiteral("buildingObjectFormStack"));
         form_body_layout->addWidget(form_stack);
+        setup_roof_openings(form_body_layout);
         scroll->setWidget(form_body);
         root->addWidget(scroll, 1);
 
@@ -464,6 +474,7 @@ private:
             }
             load_original_quantity_entries();
             original_object = decode_building_entity(*original_entity);
+            populate_roof_openings();
             const auto type = original_entity->type;
             const auto form = std::visit(
                 [](const auto& value) -> std::string_view {
@@ -715,6 +726,176 @@ private:
             populate_from_original();
         }
         refresh_pitch();
+        const bool roof = form_info(form) != nullptr && form_info(form)->type == "roof";
+        roof_openings_group->setVisible(roof || roof_openings_table->rowCount() != 0);
+        roof_openings_help->setText(roof
+            ? (form == "sloped_roof_panel"
+                ? QStringLiteral("Opening corner X/Y relative to the roof base. Width/depth are plan dimensions.")
+                : QStringLiteral("Opening corner X/Y relative to the roof centre. Width/depth are plan dimensions."))
+            : QStringLiteral("This form cannot contain roof openings. Remove them explicitly or choose a roof form."));
+    }
+
+    void setup_roof_openings(QVBoxLayout* layout) {
+        // Keep the draft outside the rebuilt form page so changing roof forms
+        // never silently deletes authored openings or their stable IDs.
+        roof_openings_group = new QGroupBox(QStringLiteral("Roof openings"), form_body);
+        roof_openings_group->setObjectName(QStringLiteral("buildingObjectRoofOpeningsGroup"));
+        auto* group_layout = new QVBoxLayout(roof_openings_group);
+        group_layout->setContentsMargins(6, 6, 6, 6);
+        group_layout->setSpacing(4);
+        roof_openings_help = new QLabel(roof_openings_group);
+        roof_openings_help->setWordWrap(true);
+        group_layout->addWidget(roof_openings_help);
+        roof_openings_table = new QTableWidget(0, 4, roof_openings_group);
+        roof_openings_table->setObjectName(QStringLiteral("buildingObjectRoofOpenings"));
+        roof_openings_table->setAccessibleName(QStringLiteral("Roof opening measurements"));
+        roof_openings_table->setHorizontalHeaderLabels({QStringLiteral("X"), QStringLiteral("Y"),
+                                                        QStringLiteral("Width"), QStringLiteral("Depth")});
+        roof_openings_table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+        roof_openings_table->setSelectionBehavior(QAbstractItemView::SelectRows);
+        roof_openings_table->setMinimumWidth(0);
+        roof_openings_table->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+        refresh_roof_opening_table_height();
+        group_layout->addWidget(roof_openings_table);
+        auto* actions = new QHBoxLayout;
+        auto* add = new QPushButton(QStringLiteral("Add opening"), roof_openings_group);
+        add->setObjectName(QStringLiteral("buildingObjectAddRoofOpening"));
+        add->setAutoDefault(false);
+        auto* remove = new QPushButton(QStringLiteral("Remove selected"), roof_openings_group);
+        remove->setObjectName(QStringLiteral("buildingObjectRemoveRoofOpening"));
+        remove->setAutoDefault(false);
+        actions->addWidget(add);
+        actions->addWidget(remove);
+        actions->addStretch();
+        group_layout->addLayout(actions);
+        layout->addWidget(roof_openings_group);
+        QObject::connect(add, &QPushButton::clicked, owner, [this] {
+            if (roof_openings_table->rowCount() >= 256) {
+                fail(QStringLiteral("A roof supports at most 256 openings."));
+                return;
+            }
+            clear_error();
+            append_roof_opening({QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString(),
+                                 0.5, 0.5, 0.5, 0.5});
+            roof_openings_table->setCurrentCell(roof_openings_table->rowCount() - 1, 0);
+        });
+        QObject::connect(remove, &QPushButton::clicked, owner, [this] {
+            const auto rows = roof_openings_table->selectionModel()->selectedRows();
+            std::vector<int> indices;
+            for (const auto& row : rows) indices.push_back(row.row());
+            std::sort(indices.rbegin(), indices.rend());
+            for (const auto row : indices) roof_openings_table->removeRow(row);
+            refresh_roof_opening_table_height();
+            clear_error();
+        });
+    }
+
+    void refresh_roof_opening_table_height() {
+        const auto rows = std::clamp(roof_openings_table->rowCount(), 1, 4);
+        roof_openings_table->setFixedHeight(roof_openings_table->horizontalHeader()->sizeHint().height() +
+            rows * roof_openings_table->verticalHeader()->defaultSectionSize() +
+            2 * roof_openings_table->frameWidth());
+    }
+
+    std::optional<Quantity> opening_receipt(const std::string& id, const char* key,
+                                            double authoritative) const {
+        try {
+            const auto& receipt = original_roof_opening_receipts.at(id).at(key);
+            const auto expression = receipt.at("original_expression").get<std::string>();
+            const auto unit_text = receipt.at("default_unit").get<std::string>();
+            if (expression.empty() || expression.size() > 4096 ||
+                (unit_text != "m" && unit_text != "ft")) return std::nullopt;
+            const auto quantity = parse_quantity(expression, unit_text == "m" ? Unit::metre : Unit::foot);
+            const auto numerator = json_int64(receipt.at("exact_metres").at("numerator"));
+            const auto denominator = json_int64(receipt.at("exact_metres").at("denominator"));
+            if (!numerator || !denominator || *denominator <= 0 ||
+                quantity.exact_metres != ExactRational{*numerator, *denominator} ||
+                quantity.metres != authoritative) return std::nullopt;
+            return quantity;
+        } catch (const std::exception&) {
+            return std::nullopt;
+        }
+    }
+
+    void append_roof_opening(const RoofOpening& opening) {
+        const auto row = roof_openings_table->rowCount();
+        roof_openings_table->insertRow(row);
+        const std::array<double, 4> values{opening.x, opening.y, opening.width, opening.depth};
+        for (int column = 0; column < 4; ++column) {
+            auto text = display_length(values[column], metric);
+            if (const auto receipt = opening_receipt(opening.id, roof_opening_keys[column], values[column]); receipt)
+                text = display_receipt_expression(*receipt, metric);
+            auto* item = new QTableWidgetItem(text);
+            item->setData(Qt::UserRole, qt_string(opening.id));
+            item->setData(Qt::UserRole + 1, text);
+            item->setData(Qt::UserRole + 2, values[column]);
+            roof_openings_table->setItem(row, column, item);
+        }
+        refresh_roof_opening_table_height();
+    }
+
+    void populate_roof_openings() {
+        const auto prior = original_entity->extensions.find("roof_opening_input");
+        if (prior != original_entity->extensions.end() && prior->is_object() &&
+            prior->value("version", json{}) == 1 && prior->contains("entries") && prior->at("entries").is_object())
+            original_roof_opening_receipts = prior->at("entries");
+        std::visit([this](const auto& object) {
+            using Object = std::decay_t<decltype(object)>;
+            if constexpr (std::is_same_v<Object, SlopedRoofPanel> || std::is_same_v<Object, GableRoof> ||
+                          std::is_same_v<Object, HipRoof>) {
+                for (const auto& opening : object.openings) append_roof_opening(opening);
+            }
+        }, *original_object);
+    }
+
+    std::optional<std::vector<RoofOpening>> read_roof_openings() {
+        std::vector<RoofOpening> openings;
+        auto entries = json::array();
+        auto receipts = original_roof_opening_receipts;
+        for (int row = 0; row < roof_openings_table->rowCount(); ++row) {
+            const auto id = roof_openings_table->item(row, 0)->data(Qt::UserRole).toString().toStdString();
+            std::array<double, 4> values{};
+            json entry{{"id", id}};
+            for (int column = 0; column < 4; ++column) {
+                const auto* item = roof_openings_table->item(row, column);
+                const auto text = item->text().trimmed();
+                if (text == item->data(Qt::UserRole + 1).toString()) {
+                    values[column] = item->data(Qt::UserRole + 2).toDouble();
+                } else {
+                    try {
+                        const auto quantity = parse_quantity(text.toStdString(), metric ? Unit::metre : Unit::foot);
+                        values[column] = quantity.metres;
+                        if (!receipts[id].is_object()) receipts[id] = json::object();
+                        receipts[id][roof_opening_keys[column]] =
+                            {{"original_expression", quantity.original_expression},
+                             {"default_unit", metric ? "m" : "ft"},
+                             {"exact_metres", {{"numerator", quantity.exact_metres.numerator},
+                                               {"denominator", quantity.exact_metres.denominator}}}};
+                    } catch (const std::exception& caught) {
+                        roof_openings_table->setCurrentCell(row, column);
+                        roof_openings_table->setFocus();
+                        fail(QStringLiteral("Opening %1, %2: %3").arg(row + 1)
+                            .arg(roof_openings_table->horizontalHeaderItem(column)->text())
+                            .arg(QString::fromUtf8(caught.what())));
+                        return std::nullopt;
+                    }
+                }
+                entry[roof_opening_keys[column]] = values[column];
+            }
+            openings.push_back({id, values[0], values[1], values[2], values[3]});
+            entries.push_back(std::move(entry));
+        }
+        for (auto receipt = receipts.begin(); receipt != receipts.end();) {
+            const bool retained = std::any_of(openings.begin(), openings.end(), [&](const auto& opening) {
+                return opening.id == receipt.key();
+            });
+            if (!retained) receipt = receipts.erase(receipt); else ++receipt;
+        }
+        const auto original_entries = original_entity
+            ? original_entity->properties.value("roof_openings", json::array()) : json::array();
+        roof_openings_changed = entries != original_entries || receipts != original_roof_opening_receipts;
+        roof_opening_receipts = std::move(receipts);
+        return openings;
     }
 
     std::string quantity_pointer_for_field(const char* name) const {
@@ -1334,6 +1515,11 @@ private:
 
     std::optional<BuildingObject> read_object() {
         const auto form = form_string(form_combo->currentData().toString());
+        if (roof_openings_table->rowCount() != 0 &&
+            (form_info(form) == nullptr || form_info(form)->type != "roof")) {
+            fail(QStringLiteral("Remove the roof openings or choose a roof form before submitting."));
+            return std::nullopt;
+        }
         if (form == "rectangular_column") {
             const auto* fallback = original_as<RectangularColumn>();
             const auto base = read_coordinate(
@@ -1491,10 +1677,12 @@ private:
                                        !dirty.contains("buildingObjectRise")
                                    ? fallback->pitch_radians
                                    : std::atan(*rise / *run);
+            const auto openings = read_roof_openings();
+            if (!openings) return std::nullopt;
             return SlopedRoofPanel{
                 original_entity.has_value() ? original_entity->id : std::string{},
                 *base, *orientation, *run, *span, *rise, pitch, *overhang, *thickness,
-                fallback ? fallback->openings : std::vector<RoofOpening>{}};
+                *openings};
         }
         if (form == "gable_roof" || form == "hip_roof") {
             const auto read_roof = [&]<typename Roof>() -> std::optional<BuildingObject> {
@@ -1527,10 +1715,12 @@ private:
                                            !dirty.contains("buildingObjectRise")
                                        ? fallback->pitch_radians
                                        : std::atan(*rise / (*span * 0.5));
+                const auto openings = read_roof_openings();
+                if (!openings) return std::nullopt;
                 return Roof{
                     original_entity.has_value() ? original_entity->id : std::string{},
                     *base, *orientation, *length, *span, *rise, pitch, *overhang, *thickness,
-                    fallback ? fallback->openings : std::vector<RoofOpening>{}};
+                    *openings};
             };
             return form == "hip_roof" ? read_roof.template operator()<HipRoof>()
                                       : read_roof.template operator()<GableRoof>();
@@ -1618,7 +1808,10 @@ private:
     bool metric{};
     bool loading{};
     bool original_invalid{};
+    bool roof_openings_changed{};
     QString error;
+    json original_roof_opening_receipts = json::object();
+    json roof_opening_receipts = json::object();
 
     QComboBox* type_combo{};
     QComboBox* form_combo{};
@@ -1632,6 +1825,9 @@ private:
     QPushButton* submit_button{};
     QCheckBox* landing_check{};
     QCheckBox* level_connection_check{};
+    QGroupBox* roof_openings_group{};
+    QLabel* roof_openings_help{};
+    QTableWidget* roof_openings_table{};
     std::map<std::string, QLineEdit*, std::less<>> fields;
     std::map<std::string, std::string, std::less<>> quantity_pointers;
     std::map<std::string, json, std::less<>> original_quantity_entries;

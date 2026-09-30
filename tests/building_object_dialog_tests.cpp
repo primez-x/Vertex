@@ -13,6 +13,9 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QTableWidget>
 
 #include <array>
 #include <cmath>
@@ -122,7 +125,7 @@ void require_quantity_receipt(const Entity& entity, const char* pointer,
             std::string("quantity receipt rational mismatch: ") + pointer);
 }
 
-void capture(BuildingObjectDialog& dialog, QString name) {
+void capture(BuildingObjectDialog& dialog, QString name, bool scroll_to_end = false) {
     if (!capture_directory.has_value()) {
         return;
     }
@@ -132,6 +135,12 @@ void capture(BuildingObjectDialog& dialog, QString name) {
     dialog.resize(440, 560);
     dialog.show();
     QCoreApplication::processEvents();
+    if (scroll_to_end) {
+        auto* scroll = dialog.findChild<QScrollArea*>("buildingObjectScrollArea");
+        require(scroll != nullptr, "dialog capture requires its scroll area");
+        scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());
+        QCoreApplication::processEvents();
+    }
     const auto path = QDir(directory).filePath(std::move(name) + QStringLiteral(".png"));
     require(dialog.grab().save(path), "dialog capture could not be written");
     dialog.hide();
@@ -622,6 +631,116 @@ void test_failed_submit_does_not_leak_receipts_across_candidates() {
             "receipts from the failed rectangular candidate must not leak into circular form");
 }
 
+QTableWidget& roof_openings(BuildingObjectDialog& dialog) {
+    auto* table = dialog.findChild<QTableWidget*>("buildingObjectRoofOpenings");
+    require(table != nullptr, "roof openings table should be available in the object dialog");
+    return *table;
+}
+
+void add_roof_opening(BuildingObjectDialog& dialog) {
+    auto* button = dialog.findChild<QPushButton*>("buildingObjectAddRoofOpening");
+    require(button != nullptr, "roof opening add control should be available");
+    button->click();
+}
+
+void test_roof_openings_create_edit_remove_and_preserve_units() {
+    for (const auto form : {"sloped_roof_panel", "gable_roof", "hip_roof"}) {
+        BuildingObjectDialog create(std::nullopt, false);
+        select_form(create, form);
+        add_roof_opening(create);
+        auto& table = roof_openings(create);
+        table.item(0, 0)->setText("1/3");
+        table.item(0, 1)->setText("1/3 ft");
+        table.item(0, 2)->setText("2 ft");
+        table.item(0, 3)->setText("1 ft");
+        if (std::string_view(form) == "hip_roof") capture(create, "hip-roof-openings", true);
+        require(create.submit(), std::string(form) + " should create an opening: " + create.lastError().toStdString());
+        const auto original = *create.candidate();
+        const auto original_entries = original.properties.at("roof_openings");
+        const auto opening_id = original_entries.at(0).at("id").get<std::string>();
+        require(!opening_id.empty() && original.properties.at("version") == 2,
+                "opening should have a stable ID and version 2 schema");
+        require_near(original_entries.at(0).at("x_m").get<double>(), 0.1016, 1e-12,
+                     "suffixless opening coordinate uses imperial default");
+        const auto original_receipts = original.extensions.at("roof_opening_input");
+
+        BuildingObjectDialog unchanged(original, true);
+        require(roof_openings(unchanged).item(0, 0)->text() == "1/3 ft",
+                "opening receipt should disambiguate suffixless units when display units change");
+        set_field(unchanged, "buildingObjectThickness", "90 mm");
+        require(unchanged.submit(), "unrelated roof dimension edit should preserve opening");
+        require(unchanged.candidate()->properties.at("roof_openings") == original_entries &&
+                    unchanged.candidate()->extensions.at("roof_opening_input") == original_receipts,
+                "untouched opening values and receipts should remain exact through unit changes");
+
+        BuildingObjectDialog edit(original, true);
+        roof_openings(edit).item(0, 2)->setText("700 mm");
+        require(edit.submit(), "opening width edit should submit");
+        const auto edited = *edit.candidate();
+        require(edited.id == original.id && edited.properties.at("roof_openings").at(0).at("id") == opening_id,
+                "opening edit should preserve roof and opening identity");
+        require_near(edited.properties.at("roof_openings").at(0).at("width_m").get<double>(), 0.7, 1e-12,
+                     "opening width edit should use shared unit parser");
+        require(edited.extensions.at("roof_opening_input").at("entries").at(opening_id).at("x_m") ==
+                    original_receipts.at("entries").at(opening_id).at("x_m"),
+                "opening edit should preserve untouched field receipt");
+
+        BuildingObjectDialog remove(edited, true);
+        roof_openings(remove).selectRow(0);
+        remove.findChild<QPushButton*>("buildingObjectRemoveRoofOpening")->click();
+        require(remove.submit(), "opening removal should submit");
+        require(!remove.candidate()->properties.contains("roof_openings") &&
+                    remove.candidate()->properties.at("version") == 1 &&
+                    remove.candidate()->extensions.at("roof_opening_input").at("entries").empty(),
+                "removing last opening should clear opening schema and receipt");
+    }
+}
+
+void test_roof_opening_validation_is_atomic() {
+    for (const auto form : {"sloped_roof_panel", "gable_roof", "hip_roof"}) {
+        BuildingObjectDialog dialog(std::nullopt, true);
+        select_form(dialog, form);
+        add_roof_opening(dialog);
+        auto& table = roof_openings(dialog);
+        for (const auto invalid_width : {"not a length", "0 m", "100 m"}) {
+            table.item(0, 2)->setText(invalid_width);
+            require(!dialog.submit() && !dialog.candidate().has_value() && !dialog.lastError().isEmpty(),
+                    "invalid opening must reject candidate with an inline error");
+        }
+        table.item(0, 2)->setText("0.5 m");
+        add_roof_opening(dialog);
+        require(!dialog.submit() && !dialog.candidate().has_value() &&
+                    dialog.lastError().contains("overlap"),
+                "overlapping openings should reject the complete candidate");
+        table.selectRow(1);
+        dialog.findChild<QPushButton*>("buildingObjectRemoveRoofOpening")->click();
+        require(dialog.submit(), "valid opening should submit after correcting failures");
+        const auto original = *dialog.candidate();
+        BuildingObjectDialog resize(original, true);
+        set_field(resize, "buildingObjectSpan", "0.7 m");
+        require(!resize.submit() && !resize.candidate().has_value(),
+                "roof resizing should reject invalid retained openings instead of dropping them");
+        require(original.properties.at("roof_openings").size() == 1,
+                "failed edit should not mutate original roof");
+    }
+}
+
+void test_roof_form_changes_preserve_opening_draft() {
+    BuildingObjectDialog dialog(std::nullopt, true);
+    select_form(dialog, "sloped_roof_panel");
+    add_roof_opening(dialog);
+    roof_openings(dialog).item(0, 2)->setText("600 mm");
+    select_form(dialog, "gable_roof");
+    select_form(dialog, "hip_roof");
+    require(roof_openings(dialog).rowCount() == 1 && roof_openings(dialog).item(0, 2)->text() == "600 mm",
+            "switching roof form should preserve opening draft");
+    require(dialog.submit() && dialog.candidate()->properties.at("roof_openings").size() == 1,
+            "retained opening should validate in the selected roof form");
+    select_form(dialog, "rectangular_column");
+    require(!dialog.submit() && !dialog.candidate().has_value(),
+            "changing away from roof should require explicit opening removal");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -658,6 +777,9 @@ int main(int argc, char** argv) {
         test_untouched_unknown_receipts_survive_unrelated_edit();
         test_stale_invalid_and_oversized_receipts_do_not_override_display();
         test_failed_submit_does_not_leak_receipts_across_candidates();
+        test_roof_openings_create_edit_remove_and_preserve_units();
+        test_roof_opening_validation_is_atomic();
+        test_roof_form_changes_preserve_opening_draft();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

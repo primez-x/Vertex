@@ -2742,6 +2742,10 @@
       "path": "scripts/bootstrap_cad_runtime.py"
     },
     {
+      "category": "source",
+      "path": "scripts/build-ifc-source.ps1"
+    },
+    {
       "category": "build",
       "path": "scripts/build.ps1"
     },
@@ -4012,6 +4016,10 @@
     {
       "category": "source",
       "path": "tests/test_bootstrap_cad_runtime.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_build_ifc_source.ps1"
     },
     {
       "category": "source",

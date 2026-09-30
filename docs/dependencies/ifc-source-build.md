@@ -64,7 +64,7 @@ the archive-derived SWIG file table. Both `build_qualified` and
 `source_closure_qualified` remain `false`. It is a selected-input preparation
 record, not a complete transitive source inventory or license conclusion.
 
-## Build configuration to qualify next
+## Candidate build configuration
 
 The pinned CMake entrypoint is `.deps/ifc-src/cmake/CMakeLists.txt`. Keep
 `BUILD_IFCGEOM=ON`, `BUILD_IFCPYTHON=ON`, `WITH_OPENCASCADE=ON`,
@@ -113,6 +113,10 @@ still needs actual import and geometry verification.
 
 With the pinned vcpkg checkout prepared, run these installs serially. vcpkg
 holds a shared package lock even when install prefixes differ.
+Its source HEAD must be `0397b75952a7c874b68a7d4f9baf8d3c5951b371`;
+the support manifest's older baseline selects Boost 1.86 independently of the
+manager checkout. Do not run these installs concurrently or reuse a buildtree
+from another dependency configuration.
 
 ```powershell
 $ifcRoot = (Resolve-Path .).Path
@@ -139,9 +143,71 @@ exception-handling and dynamic CRT settings. The application's newer native
 prefix must not supply fallback libraries.
 
 Actual source preparation and offline verification have passed on the
-development host. The separate OCCT 7.8.1 SDK compile has started; the support
-SDK and replacement IFC wrapper build remain pending. These manifests and
-commands describe candidate inputs, not a completed source-build qualification.
+development host. The separate OCCT 7.8.1 static Release SDK build completed
+successfully, as did the Boost 1.86/Eigen 3.3.9 support SDK install. The
+replacement IFC wrapper configured successfully with all eight schemas and
+entered Release compilation in `C:/Build/Vertex/ifc-candidate-784`. These
+manifests and commands describe candidate inputs, not a completed source-build
+qualification. Earlier failed preflight/configure attempts are retained in
+their separate candidate directories; they are not successful build evidence.
+
+After both SDK installs finish, run the actual candidate recipe from the
+repository root with PowerShell 7:
+
+```powershell
+pwsh -NoProfile -File scripts/build-ifc-source.ps1 `
+  -BuildRoot C:/Build/Vertex/ifc-candidate-7 -Parallel 4
+# Optional configure-only probe (also requires a new directory):
+pwsh -NoProfile -File scripts/build-ifc-source.ps1 `
+  -BuildRoot C:/Build/Vertex/ifc-configure-7 -ConfigureOnly
+pwsh -NoProfile -File tests/test_build_ifc_source.ps1
+```
+
+Omitting `-BuildRoot` selects a unique short path beneath `C:/Build/Vertex`.
+The root must be outside this workspace, at most 120 characters, and entirely
+new. Existing directories, CMake caches and foreign outputs are rejected and
+preserved; rerunning requires another new root. No cleanup or resume operation
+is offered. `-CMakeExecutable` can select an explicit CMake executable; by
+default the recipe uses the discovered Visual Studio 2022 CMake. CMake 3.31 or
+newer is required by policies used in this pinned source.
+
+The script invokes the locked Python executable for
+`prepare_ifc_source.py --offline --check`, checks the official vcpkg origin,
+pinned HEAD and tracked cleanliness, and requires installed package metadata
+and headers for OCCT 7.8.1#1, every declared Boost package at 1.86.0, and Eigen
+3.3.9#1 in their dedicated prefixes. It checks all OCCT libraries named by
+upstream CMake, the Python executable/header version and 64-bit architecture,
+and SWIG 4.3.1. It removes inherited feature and dependency overrides from the
+child environment, passes exact include/library/tool paths, and disables
+Boost system search and CMake package registries. Boost is resolved through
+the dedicated SDK's `share/boost/BoostConfig.cmake` exports, which name its
+static libraries directly instead of guessing their filename prefixes.
+The caller's environment is unchanged.
+
+Configuration uses Visual Studio 17 2022 x64, Release, static IFC libraries,
+the dynamic MSVC CRT and all eight schemas. It preserves default
+`CMAKE_CXX_FLAGS`, including `/EHsc`, and verifies the resulting cache settings,
+cache/source roots and discovered Boost/OCCT libraries before compilation.
+`OCCT_STATIC=OFF` avoids upstream's GNU archive-group flags on MSVC; the
+dedicated SDK supplies static `.lib` files and upstream sets `HAVE_NO_DLL`.
+The script rejects generated MSVC projects containing GNU linker flags.
+The build targets `ifcopenshell_wrapper` and its geometry dependencies. The
+extension remains under `<BuildRoot>/build/ifcwrap/Release`; generated wrapper
+Python source remains under `<BuildRoot>/build/ifcwrap`. The recipe never runs
+`cmake --install`, copies packages, imports the candidate, or replaces the
+runtime. Its candidate install destinations are precautionary only: the
+upstream recursive Python install glob still needs a reviewed packaging
+filter before any installation, including removal of nested `.git` metadata.
+
+Each command runs without a visible child window and records separate stdout
+and stderr logs, arguments, timestamps and exit codes. `build-evidence.json`
+records success or failure, exact inputs and SHA-256 hashes, SDK status and
+version headers, linked SDK library hashes, the configured cache, log hashes,
+and the candidate extension hash after a successful build. The source
+preparation manifest supplies the locked source file table. This evidence
+does not inventory every transitive dependency source or assert license
+closure. `build_qualified` and `source_closure_qualified` remain `false`, even
+after compilation succeeds.
 
 Remaining evidence is a recorded successful Release wrapper/geometry build,
 reviewed package contents and notices, source/dependency/license closure,

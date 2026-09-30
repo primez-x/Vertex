@@ -190,13 +190,13 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
                     window.findChild<QToolButton*>(QStringLiteral("toggleProjectPanel")) == nullptr &&
                     sidebar_tabs && sidebar_tabs->count() == 2 &&
                     sidebar_tabs->tabText(0) == QStringLiteral("Layers") &&
-                    sidebar_tabs->tabText(1) == QStringLiteral("Symbols") && status_controls &&
+                    sidebar_tabs->tabText(1) == QStringLiteral("Library") && status_controls &&
                     object_tool && object_tool->toolButtonStyle() == Qt::ToolButtonTextBesideIcon &&
                     object_tool->iconSize() == QSize(16, 16) &&
                     window.findChild<QToolButton*>(QStringLiteral("selectTool")) == nullptr &&
                     window.findChild<QToolButton*>(QStringLiteral("drawFirstBoundary")) == nullptr &&
                     window.findChild<QToolButton*>(QStringLiteral("defineFirstBoundary")) == nullptr,
-                "the canvas must have no top tool strip, use Layers/Symbols sidebar tabs, and retain one pointer surface");
+                "the canvas must have no top tool strip, use Layers/Library sidebar tabs, and retain one pointer surface");
         auto* settings = window.findChild<QAction*>(QStringLiteral("keyboardShortcutSettings"));
         auto* user_guide = window.findChild<QAction*>(QStringLiteral("userGuide"));
         auto* about = window.findChild<QAction*>(QStringLiteral("aboutAction"));
@@ -3296,18 +3296,33 @@ void test_survey_calculator(const QString& capture_directory) {
     const auto source_revision = window.document().revision();
     QTimer::singleShot(0, &window, [&] {
         auto* dialog = window.findChild<QDialog*>("surveyCalculator");
-        require(dialog && dialog->windowTitle().contains("original source"), "selected survey must reopen its original calls");
+        auto* update = dialog ? dialog->findChild<QPushButton*>("surveyUpdateBoundary") : nullptr;
+        require(dialog && update && !update->isHidden() && update->isEnabled(),
+                "selected survey must reopen its original calls for boundary correction");
         auto* input = dialog->findChild<QPlainTextEdit*>("surveyLegs");
         auto* source = dialog->findChild<QLineEdit*>("surveyProvenance");
         auto* result = dialog->findChild<QLabel*>("surveyResult");
-        require(input && input->toPlainText().startsWith("NE, 90, 100") && source->text() == "Deed fixture" &&
-                    result->text().contains("10000.0000 m²"),
+        auto* input_units = dialog->findChild<QComboBox*>("surveyInputUnits");
+        auto* tolerance = dialog->findChild<QLineEdit*>("surveyTolerance");
+        auto* calculate = dialog->findChild<QPushButton*>("surveyCalculate");
+        require(input && source && result && input_units && tolerance && calculate &&
+                    input->toPlainText() == QStringLiteral("NE, 90, 100\nSE, 0, 100\nSW, 90, 100\nNW, 0, 100") &&
+                    source->text() == "Deed fixture" && input_units->currentData().toString() == "m" &&
+                    tolerance->text() == "0.001 m" && result->text().contains("10000.0000 m²"),
                 "project-backed survey source must restore calls and recompute acreage after save/reopen");
+        input->setPlainText(QStringLiteral("NE, 90, 120\nSE, 0, 100\nSW, 90, 120\nNW, 0, 100"));
+        require(!update->isEnabled() && result->text().isEmpty(),
+                "editing restored calls must invalidate the prior correction result");
+        calculate->click();
+        require(update->isEnabled() && result->text().contains("12000.0000 m²") &&
+                    window.document().revision() == source_revision,
+                "calculating corrected survey calls must preview without updating the boundary");
         dialog->reject();
     });
     action->trigger();
-    require(window.document().revision() == source_revision,
-            "inspecting original survey calls must not change the project or insert another boundary");
+    require(window.document().revision() == source_revision &&
+                window.document().snapshot().entities().at(survey_id.toStdString()) == added,
+            "cancelling survey corrections must preserve original geometry and source without inserting a boundary");
 }
 
 void test_survey_explicit_endpoint_closure() {
@@ -4123,11 +4138,18 @@ void test_assembly_placement_plan_preview() {
     const auto found = std::find_if(canvas->entities().begin(), canvas->entities().end(),
         [](const auto& entity) { return entity.type == QStringLiteral("assembly_instance"); });
     require(found != canvas->entities().end(), "placed assembly should render a retained plan preview");
+    // Assembly previews transform the host's physical footprint, including its
+    // half-thickness offset on either side of the baseline.
     require(found->id == QStringLiteral("assembly-catalog:instance:lintel-1") &&
-                std::abs(found->segments.front().start.x - 1.0) < 1e-8 &&
+                found->segments.size() == 4 &&
+                std::abs(found->segments.front().start.x - 0.9) < 1e-8 &&
                 std::abs(found->segments.front().start.y - 2.0) < 1e-8 &&
-                std::abs(found->segments.front().end.x - 1.0) < 1e-8 &&
+                std::abs(found->segments.front().end.x - 0.9) < 1e-8 &&
                 std::abs(found->segments.front().end.y - 12.0) < 1e-8 &&
+                std::abs(found->segments.at(2).start.x - 1.1) < 1e-8 &&
+                std::abs(found->segments.at(2).start.y - 12.0) < 1e-8 &&
+                std::abs(found->segments.at(2).end.x - 1.1) < 1e-8 &&
+                std::abs(found->segments.at(2).end.y - 2.0) < 1e-8 &&
                 found->filled && found->fill_color == QColor("#d08030"),
             "assembly placement should apply its transform and material appearance");
 
