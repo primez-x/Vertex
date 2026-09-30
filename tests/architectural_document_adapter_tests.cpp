@@ -281,6 +281,59 @@ void test_building_transform_updates_canonical_geometry() {
             "architectural transform redo must restore canonical geometry");
 }
 
+void test_circular_column_transform_persists_orientation_and_zero_reset() {
+    using namespace sketch;
+    auto circular = encode_building_entity(CircularColumn{"rotated-circle", {}, .3, 3});
+    circular.properties["rotation_rad"] = .75;
+    circular.properties["mark"] = "C-1";
+    circular.extensions["opaque"] = {1, "retained"};
+    auto unrelated = Entity::create("label", {{"text", "untouched"}});
+    auto document = Document::create({circular, unrelated});
+    const auto rotate = [&](double delta) {
+        ArchitecturalOperation operation{ArchitecturalAction::transform, circular.id};
+        operation.transform = ArchitecturalTransform{0, 0, 0, delta, 1};
+        return ArchitecturalTransaction::create("rotate-circle", "r0", {circular.id},
+            {operation}, "Rotate circular column");
+    };
+    const auto rotation = rotate(2 * std::numbers::pi + .5);
+    const auto preview = preview_architectural_transaction(document.snapshot(), rotation);
+    require(std::abs(preview.entities().at(circular.id).properties.at("rotation_rad").get<double>() - 1.25) < 1e-9,
+            "circular column transform must accumulate and normalize orientation");
+    require(document.snapshot().entities().at(circular.id) == circular,
+            "circular orientation preview must not mutate the document");
+    apply_architectural_transaction(document, rotation, document.revision());
+    const auto rotated = document.snapshot().entities().at(circular.id);
+    require(rotated == preview.entities().at(circular.id),
+            "circular rotation commit must equal its detached preview");
+    require(rotated.properties.at("mark") == "C-1" && rotated.extensions == circular.extensions &&
+                document.snapshot().entities().at(unrelated.id) == unrelated,
+            "circular rotation must preserve unrelated properties, metadata and entities");
+    document.undo(document.revision());
+    require(document.snapshot().entities().at(circular.id) == circular,
+            "circular rotation undo must restore its previous orientation");
+    document.redo(document.revision());
+    require(document.snapshot().entities().at(circular.id) == rotated,
+            "circular rotation redo must restore its committed orientation");
+
+    apply_architectural_transaction(document, rotate(-1.25), document.revision());
+    const auto reset = document.snapshot().entities().at(circular.id);
+    require(std::abs(reset.properties.at("rotation_rad").get<double>()) < 1e-9,
+            "reset circular orientation to zero must overwrite its old angle");
+    const auto path = std::filesystem::temp_directory_path() / "vertex-circular-orientation.bldproj";
+    std::filesystem::remove(path);
+    (void)ProjectStore::save(path, document.snapshot());
+    auto reopened = ProjectStore::load(path).document;
+    require(reopened.snapshot().entities().at(circular.id) == reset,
+            "zero circular orientation must survive save and reopen");
+    reopened.undo(reopened.revision());
+    require(reopened.snapshot().entities().at(circular.id) == rotated,
+            "reopened history must restore the prior circular orientation");
+    reopened.redo(reopened.revision());
+    require(reopened.snapshot().entities().at(circular.id) == reset,
+            "reopened redo must restore zero circular orientation");
+    std::filesystem::remove(path);
+}
+
 void test_railing_transform_updates_canonical_geometry() {
     using namespace sketch;
     auto railing = encode_building_entity(Railing{
@@ -698,6 +751,7 @@ int main() {
         test_room_volume_dimensions();
         test_material_assignments();
         test_building_transform_updates_canonical_geometry();
+        test_circular_column_transform_persists_orientation_and_zero_reset();
         test_railing_transform_updates_canonical_geometry();
         test_shared_solid_transforms_update_canonical_geometry();
         test_hosted_assembly_scales_with_wall();

@@ -76,6 +76,7 @@ presentation. A later mouse release cannot commit a cancelled move.
 
 - Selected symbols use an oriented selection frame that retains their saved rotation. Corner handles scale proportionally; side handles resize local width or depth with the opposite edge anchored. Canvas dimensions show the current physical footprint.
 - Rotation uses a positive counterclockwise model angle. The handle and frame preview the resulting angle, snapping to absolute 15-degree increments; Shift bypasses snapping for fine adjustment. Release commits once, Escape restores the document, and editing controls never appear in output.
+- Circular columns retain the selection-frame angle even though their cylinder is rotationally symmetric. Property edits, history navigation and save/reopen preserve it, so the rotation pin remains attached to the committed frame.
 - Direct endpoint grips for additional architectural object types.
 - 3D directional marquee selection and additive selection parity.
 - Pen barrel-button mapping, pinch zoom, and multi-touch navigation.
@@ -85,9 +86,11 @@ presentation. A later mouse release cannot commit a cancelled move.
 
 ## Acceptance sequences
 
-Hosted doors, windows and bare openings on straight walls have two jamb
+Hosted doors, windows and bare openings on straight or circular walls have two jamb
 handles in an uncropped conventional plan. Dragging one jamb projects the
-pointer displacement along the wall and keeps the other jamb fixed. Only
+pointer displacement along the wall and keeps the other jamb fixed. Circular
+hosts use continuous arc stations, including across the angle branch seam;
+grabbing within the handle's hit area does not jump the jamb. Only
 width and the necessary host offset change; height, sill, wall thickness,
 handing and frame dimensions remain unchanged. The live readout shows the
 opening's actual width and height. Circular door-swing geometry and the wall
@@ -96,7 +99,7 @@ painted strokes. Invalid placements are shown as rejected proposals. A
 completed drag publishes one source-revision-fenced command after validating
 the host, sibling openings, manufactured assemblies and wall joins. Escape,
 focus loss or a refreshed source cancels the proposal. These handles and
-previews are excluded from printed and exported geometry. Curved, cropped or
+previews are excluded from printed and exported geometry. Cropped or
 custom-frame presentations retain the existing property editor.
 
 Focused interaction checks cover click selection, object drag with one commit,

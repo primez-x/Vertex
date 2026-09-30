@@ -1,4 +1,5 @@
 #include "plan_canvas.hpp"
+#include "sketch/hosted_opening_geometry.hpp"
 
 #include <QApplication>
 #include <QDialog>
@@ -39,9 +40,25 @@ constexpr double maximum_scale = 4000.0;
 constexpr double output_minimum_scale = minimum_scale;
 constexpr double pi = std::numbers::pi;
 
-Qt::CursorShape jamb_resize_cursor(const CanvasOpeningWidthControls& controls) {
-    const auto angle = std::atan2(-(controls.end_jamb.y-controls.start_jamb.y),
-                                  controls.end_jamb.x-controls.start_jamb.x);
+Qt::CursorShape jamb_resize_cursor(const CanvasOpeningWidthControls& controls,
+                                   bool keep_start_jamb, double width_scale = 1.0) {
+    auto tangent = std::atan2(controls.end_jamb.y-controls.start_jamb.y,
+                              controls.end_jamb.x-controls.start_jamb.x);
+    if (controls.host_baseline) {
+        const auto& host = *controls.host_baseline;
+        try {
+            const auto length = segment_length(host);
+            const auto station = controls.offset_metres + controls.width_metres *
+                (keep_start_jamb ? width_scale : 1.0 - width_scale);
+            tangent = std::atan2(host.end.y-host.start.y, host.end.x-host.start.x) -
+                host.sweep_radians / 2.0 + station * host.sweep_radians / length;
+        } catch (const std::exception&) {
+            return Qt::SizeHorCursor;
+        }
+    }
+    // Undefined geometry must never reach lround or escape a Qt event handler.
+    if (!std::isfinite(tangent)) return Qt::SizeHorCursor;
+    const auto angle = std::remainder(-tangent, 2.0*pi);
     const auto direction = (static_cast<int>(std::lround(angle*4/pi)) % 4 + 4) % 4;
     switch (direction) {
     case 1: return Qt::SizeFDiagCursor;
@@ -1246,7 +1263,23 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
             m_opening_width_jamb_preview = jamb->keep_start_jamb
                 ? jamb->source.end_jamb : jamb->source.start_jamb;
             m_opening_width_scale_preview = 1.0;
-            setCursor(jamb_resize_cursor(jamb->source));
+            const auto host = jamb->source.host_baseline.value_or(
+                Segment{jamb->source.start_jamb, jamb->source.end_jamb});
+            try {
+                const auto width = jamb->source.host_baseline
+                    ? jamb->source.width_metres : segment_length(host);
+                const auto offset = jamb->source.host_baseline ? jamb->source.offset_metres : 0.0;
+                const auto moving_station = offset + (jamb->keep_start_jamb ? width : 0.0);
+                const auto station = project_host_station(
+                    host, toModel(position, rect()), moving_station);
+                if (std::isfinite(station)) {
+                    m_opening_width_press_station = station;
+                    m_opening_width_pointer_station = station;
+                }
+            } catch (const std::exception&) {
+                // Keep the gesture available as an invalid red preview.
+            }
+            setCursor(jamb_resize_cursor(jamb->source, jamb->keep_start_jamb));
             return;
         }
         if (const auto vertex = vertexHandleAt(position, QRectF(rect()))) {
@@ -1555,6 +1588,8 @@ void PlanCanvas::resetGesture() {
     m_vertex_move_handle.reset();
     m_vertex_move_preview.reset();
     m_opening_width_handle.reset();
+    m_opening_width_press_station.reset();
+    m_opening_width_pointer_station.reset();
     m_opening_width_jamb_preview.reset();
     m_opening_width_entities_preview.clear();
     m_opening_width_scale_preview = 1.0;
@@ -1880,7 +1915,7 @@ std::optional<PlanCanvas::OpeningWidthHandleHit> PlanCanvas::openingWidthHandleA
                                    controls.end_jamb.y - controls.start_jamb.y);
     if (!std::isfinite(controls.start_jamb.x) || !std::isfinite(controls.start_jamb.y) ||
         !std::isfinite(controls.end_jamb.x) || !std::isfinite(controls.end_jamb.y) ||
-        !std::isfinite(length) || length <= 1e-6 ||
+        (!controls.host_baseline && (!std::isfinite(length) || length <= 1e-6)) ||
         !std::isfinite(controls.width_metres) || controls.width_metres <= 0 ||
         !std::isfinite(controls.height_metres) || controls.height_metres <= 0)
         return std::nullopt;
@@ -1895,27 +1930,45 @@ void PlanCanvas::updateOpeningWidthPreview(QPointF point) {
     if (!m_opening_width_handle) return;
     const auto handle = *m_opening_width_handle;
     const auto& source = handle.source;
-    const auto dx = source.end_jamb.x - source.start_jamb.x;
-    const auto dy = source.end_jamb.y - source.start_jamb.y;
-    const auto length = std::hypot(dx, dy);
-    const Vec2 direction{dx / length, dy / length};
-    const auto anchor = handle.keep_start_jamb ? source.start_jamb : source.end_jamb;
-    const auto target = toModel(point, rect());
-    const auto press = toModel(m_left_start, rect());
-    const auto displacement = (target.x - press.x) * direction.x +
-                              (target.y - press.y) * direction.y;
-    const auto projected = (handle.keep_start_jamb ? length : -length) + displacement;
-    const auto width = handle.keep_start_jamb ? projected : -projected;
-    m_opening_width_scale_preview = width / length;
-    m_opening_width_jamb_preview = Vec2{anchor.x + projected * direction.x,
-                                      anchor.y + projected * direction.y};
     m_opening_width_preview_valid = false;
     m_opening_width_entities_preview.clear();
+    m_opening_width_scale_preview = std::numeric_limits<double>::quiet_NaN();
+    if (!m_opening_width_press_station || !m_opening_width_pointer_station) return;
+    const auto host = source.host_baseline.value_or(Segment{source.start_jamb, source.end_jamb});
+    double width{};
+    try {
+        const auto original_width = source.host_baseline ? source.width_metres : segment_length(host);
+        const auto offset = source.host_baseline ? source.offset_metres : 0.0;
+        // Unwrap around the last finite pointer station, including across the
+        // atan2 branch cut. Subtract the press station to preserve halo grabs.
+        const auto station = project_host_station(
+            host, toModel(point, rect()), *m_opening_width_pointer_station);
+        if (!std::isfinite(station)) return;
+        m_opening_width_pointer_station = station;
+        const auto displacement = station - *m_opening_width_press_station;
+        width = original_width + (handle.keep_start_jamb ? displacement : -displacement);
+        const auto moving_station = handle.keep_start_jamb
+            ? offset + width : offset + original_width - width;
+        const auto moving_jamb = point_at_host_station(host, moving_station);
+        if (!std::isfinite(width) || !std::isfinite(moving_jamb.x) ||
+            !std::isfinite(moving_jamb.y)) return;
+        m_opening_width_scale_preview = width / original_width;
+        if (!std::isfinite(m_opening_width_scale_preview)) return;
+        m_opening_width_jamb_preview = moving_jamb;
+        setCursor(jamb_resize_cursor(source, handle.keep_start_jamb, m_opening_width_scale_preview));
+    } catch (const std::exception&) {
+        return;
+    }
     // Crossing the fixed jamb is invalid; do not silently clamp or fabricate
     // stretched opening artwork. Document validation owns further constraints.
     if (!std::isfinite(width) || width <= 1e-6 || !m_opening_width_preview_requested) return;
-    auto preview = m_opening_width_preview_requested(handle.entity_id,
-        m_opening_width_scale_preview, handle.keep_start_jamb, source.source_revision);
+    std::optional<std::vector<CanvasEntity>> preview;
+    try {
+        preview = m_opening_width_preview_requested(handle.entity_id,
+            m_opening_width_scale_preview, handle.keep_start_jamb, source.source_revision);
+    } catch (const std::exception&) {
+        return;
+    }
     // A projection callback may synchronously replace the scene or selection.
     // Such replacement cancels the gesture; never revive its stale overrides.
     if (!m_opening_width_handle || m_left_gesture != LeftGesture::opening_width_resize ||
@@ -2109,7 +2162,10 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
         const auto dimension_width = opening ? opening->width_metres *
             (editing_opening ? m_opening_width_scale_preview : 1.0) : width;
         const auto dimension_depth = opening ? opening->height_metres : depth;
-        QString text = (opening ? QStringLiteral("W %1  ×  H %2") : QStringLiteral("W %1  ×  D %2"))
+        const bool curved_opening = opening && opening->host_baseline &&
+                                    opening->host_baseline->sweep_radians != 0;
+        QString text = (curved_opening ? QStringLiteral("Arc W %1  ×  H %2")
+                       : opening ? QStringLiteral("W %1  ×  H %2") : QStringLiteral("W %1  ×  D %2"))
             .arg(display_cursor_length(dimension_width, m_metric_units),
                  display_cursor_length(dimension_depth, m_metric_units));
         if (invalid_opening) text += QStringLiteral("  ·  Invalid");
@@ -2575,7 +2631,7 @@ void PlanCanvas::updatePointerCursor(QPointF point) {
         setCursor(Qt::OpenHandCursor);
     } else if (selectionInteractionEnabled() && m_gesture_button == Qt::NoButton) {
         if (const auto jamb = openingWidthHandleAt(point, QRectF(rect()))) {
-            setCursor(jamb_resize_cursor(jamb->source));
+            setCursor(jamb_resize_cursor(jamb->source, jamb->keep_start_jamb));
             return;
         }
         if (vertexHandleAt(point, QRectF(rect()))) {

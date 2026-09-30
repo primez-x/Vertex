@@ -395,7 +395,8 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U069 — Rotate a selected object around a chosen pivot**
-  - Expected: Its angle and pivot behavior match the requested rotation.
+  - Steps: Rotate an area and a column to 90 degrees, release, then rotate again to 180 degrees and back to the original angle. Hold Shift for an angle between snapping points. Repeat with a circular column.
+  - Expected: The handle stays attached to the rotated selection box after release. Common angles snap, Shift permits fine adjustment, and degrees appear while dragging. Undo/redo and save/reopen retain the orientation.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -886,6 +887,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - [ ] **U162 — Change a door's width and height**
   - Canvas check: Select a door in the plan and drag either jamb handle. The opposite jamb stays fixed, the wall cut and circular swing update together, and the width/height readout follows the edit. Undo and Redo restore it. Use quick properties to change height.
   - Expected: The opening and door update together.
+  - Curved wall check: Repeat on a curved host with sufficient frame depth. The opposite jamb remains fixed; Arc W reports width along the wall, while the swing remains circular. An impossible leaf/frame fit rejects the edit without changing the project.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -907,6 +909,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - [ ] **U166 — Change window size and sill height**
   - Canvas check: Select a window in the plan and drag either jamb handle. Its width changes along the wall while height and sill remain. Dragging into another opening or beyond the host wall is rejected without changing the saved geometry.
   - Expected: Plan, elevation and 3D agree.
+  - Curved wall check: Resize both jambs separately. Rails follow the wall arc and Arc W measures along it; the native frame, sash and glass remain concentric with the host.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

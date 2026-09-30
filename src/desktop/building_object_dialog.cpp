@@ -1370,7 +1370,7 @@ private:
             }
             return CircularColumn{
                 original_entity.has_value() ? original_entity->id : std::string{},
-                *base, *radius, *height};
+                *base, *radius, *height, fallback != nullptr ? fallback->rotation_radians : 0.0};
         }
         if (form == "straight_beam") {
             const auto* fallback = original_as<Beam>();

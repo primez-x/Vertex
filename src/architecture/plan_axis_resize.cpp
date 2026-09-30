@@ -129,8 +129,8 @@ double wall_frame(const Entity& entity) {
 double building_frame(const BuildingObject& object) {
     return std::visit([](const auto& value) -> double {
         using T = std::decay_t<decltype(value)>;
-        if constexpr (std::is_same_v<T,RectangularColumn>) return value.rotation_radians;
-        else if constexpr (std::is_same_v<T,CircularColumn>) return 0;
+        if constexpr (std::is_same_v<T,RectangularColumn> || std::is_same_v<T,CircularColumn>)
+            return value.rotation_radians;
         else if constexpr (std::is_same_v<T,Beam>)
             return std::atan2(value.end.y-value.start.y,value.end.x-value.start.x);
         else return value.orientation_radians;
@@ -343,7 +343,7 @@ double plan_axis_resize_frame(const Entity& entity) {
     // authoritative fields here; resize admission still uses the full codec.
     const auto& p = entity.properties;
     const auto form = p.at("form").get<std::string>();
-    if (entity.type == "column" && form == "circular_column") return 0;
+    if (entity.type == "column" && form == "circular_column" && !p.contains("rotation_rad")) return 0;
     if (entity.type == "beam" && form == "straight_beam") {
         const auto& a = p.at("start_m"); const auto& b = p.at("end_m");
         if (!a.is_array() || !b.is_array() || a.size()!=3 || b.size()!=3)
@@ -355,7 +355,8 @@ double plan_axis_resize_frame(const Entity& entity) {
         return std::atan2(dy,dx);
     }
     const char* key = nullptr;
-    if (entity.type == "column" && form == "rectangular_column") key = "rotation_rad";
+    if (entity.type == "column" && (form == "rectangular_column" || form == "circular_column"))
+        key = "rotation_rad";
     else if ((entity.type == "stair" && form == "straight_stair_flight") ||
              (entity.type == "railing" && form == "straight_railing") ||
              (entity.type == "roof" && (form == "sloped_roof_panel" || form == "gable_roof" || form == "hip_roof")))

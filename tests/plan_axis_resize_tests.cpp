@@ -204,6 +204,34 @@ void roofs_beams_and_railings() {
     near(rail_bounds.maximum.x,5+.025,"railing bounds include end post");
 }
 
+void circular_column_orientation_survives_resize_history() {
+    auto circular = encode_building_entity(CircularColumn{"oriented-circle", {1,2,3}, .3, 3});
+    circular.properties["rotation_rad"] = .6;
+    circular.properties["mark"] = "C-1";
+    circular.extensions["opaque"] = {1, "retained"};
+    near(plan_axis_resize_frame(circular), .6, "circular selection frame must retain orientation");
+    auto legacy = circular;
+    legacy.properties.erase("rotation_rad");
+    near(plan_axis_resize_frame(legacy), 0, "legacy circular selection frame defaults to zero");
+    auto malformed = circular;
+    malformed.properties["rotation_rad"] = std::numeric_limits<double>::infinity();
+    rejects([&] { (void)plan_axis_resize_frame(malformed); });
+
+    auto doc = Document::create({circular});
+    doc.apply(plan_axis_resize_command(doc.snapshot(), circular.id, 2, 2, {1,2}, .6));
+    const auto resized = doc.snapshot().entities().at(circular.id);
+    near(resized.properties.at("radius_m").get<double>(), .6, "oriented circular radius resized");
+    near(plan_axis_resize_frame(resized), .6, "resize must retain circular orientation");
+    require(resized.properties.at("mark") == "C-1" && resized.extensions == circular.extensions,
+            "circular resize must retain unrelated properties and metadata");
+    doc.undo(doc.revision());
+    require(doc.snapshot().entities().at(circular.id) == circular,
+            "undo must restore exact circular orientation and dimensions");
+    doc.redo(doc.revision());
+    require(doc.snapshot().entities().at(circular.id) == resized,
+            "redo must restore exact circular orientation and dimensions");
+}
+
 void rotated_physical_footprints_match_gesture_and_anchor() {
     const double angle=.6, c=std::cos(angle), s=std::sin(angle);
     auto roof=encode_building_entity(SlopedRoofPanel{.id="anchored-roof", .base_position={5,4,3},
@@ -346,6 +374,7 @@ int main() {
         wall_openings_and_history();
         footprints_with_holes_and_arc_rejection();
         oriented_building_parameters();
+        circular_column_orientation_survives_resize_history();
         roofs_beams_and_railings();
         rotated_physical_footprints_match_gesture_and_anchor();
         connected_stair_retains_levels();

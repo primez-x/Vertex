@@ -82,6 +82,10 @@ struct CanvasOpeningWidthControls {
     double width_metres{};
     double height_metres{};
     std::uint64_t source_revision{};
+    // Exact analytical host and distance from its start to the start jamb.
+    // Omitted by legacy callers that supply straight jamb controls only.
+    std::optional<Segment> host_baseline;
+    double offset_metres{};
 };
 
 struct CanvasEntity {
@@ -461,6 +465,8 @@ private:
     std::optional<VertexHandleHit> m_vertex_move_handle;
     std::optional<Vec2> m_vertex_move_preview;
     std::optional<OpeningWidthHandleHit> m_opening_width_handle;
+    std::optional<double> m_opening_width_press_station;
+    std::optional<double> m_opening_width_pointer_station;
     std::optional<Vec2> m_opening_width_jamb_preview;
     std::vector<CanvasEntity> m_opening_width_entities_preview;
     double m_opening_width_scale_preview{1.0};

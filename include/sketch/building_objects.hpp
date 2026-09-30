@@ -32,6 +32,9 @@ struct CircularColumn {
     Vec3 base_center{};
     double radius{};
     double height{};
+    // The solid is rotationally symmetric; this angle retains the authoring
+    // frame used by selection, rotation and dimension handles.
+    double rotation_radians{};
 };
 
 [[nodiscard]] TopoDS_Shape make_rectangular_column(const RectangularColumn& column);

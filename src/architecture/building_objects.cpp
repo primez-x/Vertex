@@ -299,6 +299,7 @@ TopoDS_Shape make_rectangular_column(const RectangularColumn& column) {
 
 TopoDS_Shape make_circular_column(const CircularColumn& column) {
     finite_coordinate(column.base_center, "Circular column base must be finite");
+    finite_angle(column.rotation_radians, "Circular column rotation must be finite");
     positive_dimension(column.radius, "Circular column radius must be positive");
     positive_dimension(column.height, "Circular column height must be positive");
     const gp_Ax2 axes(point(column.base_center), gp_Dir(0.0, 0.0, 1.0));

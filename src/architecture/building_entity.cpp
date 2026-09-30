@@ -232,6 +232,7 @@ Entity encode_one(const CircularColumn& object, const Json& metadata) {
     properties["base_center_m"] = vec3_json(object.base_center);
     properties["radius_m"] = object.radius;
     properties["height_m"] = object.height;
+    properties["rotation_rad"] = object.rotation_radians;
     return create_entity("column", object, std::move(properties), metadata);
 }
 
@@ -381,6 +382,8 @@ BuildingObject decode_column(const Entity& entity, const Json& properties,
             .base_center = required_vec3(properties, "base_center_m"),
             .radius = required_number(properties, "radius_m"),
             .height = required_number(properties, "height_m"),
+            .rotation_radians = properties.contains("rotation_rad")
+                ? required_number(properties, "rotation_rad") : 0.0,
         };
     }
     invalid("Unsupported column building form: " + std::string(form));

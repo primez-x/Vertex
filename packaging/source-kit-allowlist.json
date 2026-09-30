@@ -2395,6 +2395,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/hosted_opening_geometry.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/hosted_opening_resize.hpp"
     },
     {
@@ -3055,6 +3059,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/hosted_opening_geometry.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/ifc_project_exchange.cpp"
     },
     {
@@ -3559,6 +3567,10 @@
     },
     {
       "category": "source",
+      "path": "tests/curved_opening_resize_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/desktop_performance_tests.cpp"
     },
     {
@@ -3632,6 +3644,10 @@
     {
       "category": "source",
       "path": "tests/georeferencing_runtime_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/hosted_opening_geometry_tests.cpp"
     },
     {
       "category": "source",

@@ -2,6 +2,7 @@
 
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/document_solid.hpp"
+#include "sketch/hosted_opening_geometry.hpp"
 #include "sketch/project_organization.hpp"
 
 #include <algorithm>
@@ -57,8 +58,6 @@ OpeningHost selected_host(const DocumentSnapshot& source, const std::string& ope
     if (!read_document_wall_id(found->second,wall_id,error)) throw std::invalid_argument(error);
     auto openings = hosted_openings(source,wall_id);
     auto wall = decode_host(source,wall_id,openings);
-    if (wall.baseline.sweep_radians != 0)
-        throw std::invalid_argument("Hosted opening width handles do not support curved host walls");
     const auto selected = std::find_if(wall.openings.begin(),wall.openings.end(),
         [&](const HostedOpening& opening) { return opening.id == opening_id; });
     if (selected == wall.openings.end())
@@ -132,13 +131,13 @@ HostedOpeningResizeFrame hosted_opening_resize_frame(const DocumentSnapshot& sou
     const auto& opening = wall.openings[host.selected_index];
     const double dx=wall.baseline.end.x-wall.baseline.start.x;
     const double dy=wall.baseline.end.y-wall.baseline.start.y;
-    const double length=std::hypot(dx,dy);
-    const auto point = [&](double offset) -> Vec2 {
-        return {wall.baseline.start.x+dx*(offset/length),
-                wall.baseline.start.y+dy*(offset/length)};
-    };
-    return {point(opening.offset),point(opening.offset+opening.width),wall.thickness,
-            std::atan2(dy,dx),opening.width,opening.height};
+    const double length=segment_length(wall.baseline);
+    const auto span = hosted_opening_span(wall.baseline,opening.offset,opening.width);
+    const double angle = std::atan2(dy,dx)+wall.baseline.sweep_radians*
+        ((opening.offset+opening.width*.5)/length-.5);
+    if (!std::isfinite(angle)) throw std::invalid_argument("Hosted opening tangent exceeds numeric range");
+    return {span.start,span.end,wall.thickness,angle,opening.width,opening.height,
+            wall.baseline,opening.offset};
 }
 
 ApplyEntityChanges hosted_opening_width_resize_command(const DocumentSnapshot& source,

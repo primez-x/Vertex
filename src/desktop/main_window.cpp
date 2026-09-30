@@ -32,6 +32,7 @@
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/plan_axis_resize.hpp"
 #include "sketch/hosted_opening_resize.hpp"
+#include "sketch/hosted_opening_geometry.hpp"
 #include "sketch/survey_boundary_update.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
@@ -755,33 +756,6 @@ Vec2 plan_label_anchor(const Boundary& boundary) {
     const auto bounds = boundary_bounds(boundary);
     return {std::midpoint(bounds.minimum.x, bounds.maximum.x),
             std::midpoint(bounds.minimum.y, bounds.maximum.y)};
-}
-
-Boundary window_plan_symbol(const Segment& baseline, double offset, double width,
-                            double wall_thickness) {
-    const auto dx = baseline.end.x - baseline.start.x;
-    const auto dy = baseline.end.y - baseline.start.y;
-    const auto length = std::hypot(dx, dy);
-    if (!(length > default_geometry_tolerance_metres) || !(width > 0.0) ||
-        !std::isfinite(length) || !std::isfinite(offset) || !std::isfinite(width)) {
-        return {};
-    }
-    const Vec2 tangent{dx / length, dy / length};
-    const Vec2 normal{-tangent.y, tangent.x};
-    const auto inset = std::clamp(std::abs(wall_thickness) * 0.22, 0.015, 0.06);
-    const Vec2 start{baseline.start.x + tangent.x * offset,
-                     baseline.start.y + tangent.y * offset};
-    const Vec2 end{start.x + tangent.x * width, start.y + tangent.y * width};
-    return {
-        {{start.x + normal.x * inset, start.y + normal.y * inset},
-         {end.x + normal.x * inset, end.y + normal.y * inset}, 0.0},
-        {{start.x - normal.x * inset, start.y - normal.y * inset},
-         {end.x - normal.x * inset, end.y - normal.y * inset}, 0.0},
-        {{start.x - normal.x * inset, start.y - normal.y * inset},
-         {start.x + normal.x * inset, start.y + normal.y * inset}, 0.0},
-        {{end.x - normal.x * inset, end.y - normal.y * inset},
-         {end.x + normal.x * inset, end.y + normal.y * inset}, 0.0},
-    };
 }
 
 json parse_bounded_string_attributes(const QString& encoded_value) {
@@ -11587,10 +11561,7 @@ public:
                         preview.segments = window_plan_symbol(wall.baseline, opening.offset,
                                                               opening.width, wall.thickness);
                     } else if (kind == "opening" || kind == "door") {
-                        const auto length = segment_length(wall.baseline);
-                        const Segment span{
-                            point_at_segment(wall.baseline, opening.offset / length).value(),
-                            point_at_segment(wall.baseline, (opening.offset + opening.width) / length).value(), 0};
+                        const auto span = hosted_opening_span(wall.baseline, opening.offset, opening.width);
                         const auto outline = wall_plan_footprint(span, {}, wall.thickness);
                         preview.segments = {outline.at(1), outline.at(3), span};
                     } else return std::nullopt;
@@ -11600,6 +11571,8 @@ public:
                     controls.end_jamb = point_at_segment(wall.baseline,
                         (opening.offset + opening.width) / length).value();
                     controls.width_metres = opening.width;
+                    controls.host_baseline = wall.baseline;
+                    controls.offset_metres = opening.offset;
                     const auto c = std::cos(frame.angle_radians), s = std::sin(frame.angle_radians);
                     auto local = preview.segments;
                     for (auto& edge : local) {
@@ -11786,7 +11759,9 @@ public:
                             pivot.y-scale*(s*pivot.x+c*pivot.y)};
             };
             const auto metres = [](double value) {
-                return QString::number(value, 'g', 17) + QStringLiteral(" m");
+                // The quantity grammar accepts decimal measurements, not
+                // exponent notation. Quarter turns can leave tiny offsets.
+                return QString::number(value, 'f', 17) + QStringLiteral(" m");
             };
             if (can_transform_architectural_entity_type(found->second.type)) {
                 if (!canvas_pivot) throw std::invalid_argument("The selected object's transform frame is unavailable.");
@@ -20006,10 +19981,15 @@ private:
                 const auto id = item->data(0, Qt::UserRole).toString();
                 const auto type = item->data(0, visibility_type_role).toString();
                 const auto document = m_document;
+                const auto revision = document->revision();
+                const auto selection = m_selected_ids;
                 // Defer rebuilding the tree until Qt finishes its keyboard or
                 // selection event; never retain a pointer to the old item.
-                QTimer::singleShot(0, owner, [this, id, type, document] {
-                    if (m_document != document || id.isEmpty()) return;
+                QTimer::singleShot(0, owner, [this, id, type, document, revision, selection] {
+                    const auto* current = m_navigator->currentItem();
+                    if (m_document != document || id.isEmpty() ||
+                        document->revision() != revision || m_selected_ids != selection ||
+                        !current || current->data(0, Qt::UserRole).toString() != id) return;
                     if (type == QStringLiteral("layer")) {
                         (void)setActiveLayer(id);
                     } else if (id != m_selected_id &&
@@ -21587,11 +21567,7 @@ private:
                                 decode_door_operation(entity.properties.at("door_operation"))),0,
                             id_from(id)==m_selected_id});
                     } else if (kind == "opening" || kind == "door") {
-                        const auto length = segment_length(*baseline);
-                        const Segment span{
-                            point_at_segment(*baseline, opening->offset / length).value(),
-                            point_at_segment(*baseline, (opening->offset + opening->width) / length).value(),
-                            baseline->sweep_radians * opening->width / length};
+                        const auto span = hosted_opening_span(*baseline, opening->offset, opening->width);
                         const auto outline = wall_plan_footprint(span, {},
                             read_number(host->second.properties, "thickness_m", 0.12));
                         // Jambs and a light threshold retain the opening's own
@@ -21623,7 +21599,8 @@ private:
                             auto& retained = all_geometry.back();
                             retained.opening_width_controls = CanvasOpeningWidthControls{
                                 frame.start_jamb, frame.end_jamb, frame.width_metres,
-                                frame.height_metres, snapshot.revision()};
+                                frame.height_metres, snapshot.revision(), frame.host_baseline,
+                                frame.offset_metres};
                             const auto c = std::cos(frame.angle_radians), s = std::sin(frame.angle_radians);
                             auto local = retained.segments;
                             for (auto& edge : local) {
@@ -21637,8 +21614,8 @@ private:
                                 {c*x-s*y, s*x+c*y}, frame.angle_radians,
                                 bounds.maximum.x-bounds.minimum.x, bounds.maximum.y-bounds.minimum.y};
                         } catch (const std::exception&) {
-                            // Unsupported hosts retain their property editor;
-                            // no planar jamb gesture is offered for curved geometry.
+                            // Unrepresentable source geometry is reported by
+                            // projection; do not offer a misleading jamb gesture.
                         }
                     }
                 } catch(const std::exception& error) {

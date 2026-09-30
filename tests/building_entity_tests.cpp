@@ -92,6 +92,7 @@ void test_all_forms_roundtrip_to_canonical_entities() {
             .base_center = {-3.0, 4.0, -0.5},
             .radius = 0.25,
             .height = 2.0,
+            .rotation_radians = 0.35,
         },
         "column", "circular_column", std::numbers::pi * 0.25 * 0.25 * 2.0);
     require_roundtrip(
@@ -381,6 +382,37 @@ void test_roof_opening_schema() {
     require(rejected, "version one cannot silently accept opening geometry");
 }
 
+void test_circular_column_rotation_is_persisted_and_validated() {
+    using namespace sketch;
+    auto entity = encode_building_entity(CircularColumn{
+        "column-orientation", {1.0, 2.0, 3.0}, 0.25, 2.0});
+    entity.properties["rotation_rad"] = 0.75;
+    const auto canonical = encode_building_entity(decode_building_entity(entity));
+    near(canonical.properties.at("rotation_rad").get<double>(), 0.75, 1e-12,
+         "circular column orientation must survive the codec");
+    near(solid_volume(make_building_shape(decode_building_entity(entity))),
+         std::numbers::pi * 0.25 * 0.25 * 2.0, 1e-8,
+         "interaction orientation must retain circular solid geometry");
+
+    auto legacy = entity;
+    legacy.properties.erase("rotation_rad");
+    const auto upgraded = encode_building_entity(decode_building_entity(legacy));
+    near(upgraded.properties.at("rotation_rad").get<double>(), 0.0, 1e-12,
+         "legacy circular columns default to zero orientation");
+    for (const auto& angle : {nlohmann::json("0.75"), nlohmann::json(nullptr),
+                             nlohmann::json(std::numeric_limits<double>::infinity()),
+                             nlohmann::json(std::numeric_limits<double>::quiet_NaN())}) {
+        auto malformed = entity;
+        malformed.properties["rotation_rad"] = angle;
+        rejected([&] { (void)decode_building_entity(malformed); },
+                 "present circular column orientation must be a finite number");
+    }
+    auto invalid = std::get<CircularColumn>(decode_building_entity(entity));
+    invalid.rotation_radians = std::numeric_limits<double>::infinity();
+    rejected([&] { (void)encode_building_entity(invalid); },
+             "semantic circular column orientation must reject non-finite values");
+}
+
 void test_room_volume_document_decoder_uses_shared_kernel() {
     using namespace sketch;
     const auto boundary = nlohmann::json::array({
@@ -413,6 +445,7 @@ int main() {
     try {
         test_all_forms_roundtrip_to_canonical_entities();
         test_recognized_type_is_distinct_from_decode_success();
+        test_circular_column_rotation_is_persisted_and_validated();
         test_unknown_versions_forms_and_metadata_are_handled_strictly();
         test_integer_stairs_optional_landing_and_geometry_validation();
         test_empty_object_id_uses_entity_factory_id();

@@ -167,6 +167,13 @@ void test_all_forms_submit_to_entities() {
         require(candidate.has_value() &&
                     candidate->properties.at("form") == "circular_column",
                 "circular column canonical discriminator");
+        auto rotated=*candidate;
+        rotated.properties["rotation_rad"]=1.234;
+        BuildingObjectDialog editor(rotated,true);
+        set_field(editor,"buildingObjectRadius","300 mm");
+        require(editor.submit() && editor.candidate().has_value() &&
+                    editor.candidate()->properties.at("rotation_rad")==1.234,
+                "circular column property edit reset its selection orientation");
     }
 
     {

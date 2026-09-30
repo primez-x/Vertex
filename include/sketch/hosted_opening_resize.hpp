@@ -6,7 +6,7 @@ namespace sketch {
 
 // Jambs follow increasing distance along the current host baseline. The frame
 // is derived from authoritative wall/opening parameters in model metres.
-// Curved hosts are explicitly unsupported by this straight width handle.
+// Curved hosts use exact arc stations and the tangent at the opening midpoint.
 struct HostedOpeningResizeFrame {
     Vec2 start_jamb;
     Vec2 end_jamb;
@@ -14,6 +14,8 @@ struct HostedOpeningResizeFrame {
     double angle_radians{};
     double width_metres{};
     double height_metres{};
+    Segment host_baseline;
+    double offset_metres{};
 };
 
 [[nodiscard]] HostedOpeningResizeFrame hosted_opening_resize_frame(

@@ -230,15 +230,19 @@ void requireArtworkGesturePreview(sketch::desktop::CanvasEntity entity) {
             "cancelled rotation retained a visual or document transform");
 }
 
-void rotateGesture(sketch::desktop::PlanCanvas& canvas, double from, double to) {
+void rotateGesture(sketch::desktop::PlanCanvas& canvas, double from, double to,
+                   Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
     canvas.setSnapEnabled(false);
     canvas.setOverviewMapEnabled(false);
     canvas.fitView();
+    // Keep the complete oriented frame and its outward pin inside the viewport;
+    // selectionBounds intentionally clips feedback at the canvas edge.
+    canvas.zoomBy(.7);
     const auto bounds = canvas.selectionBounds();
-    if (!bounds) throw std::runtime_error((QStringLiteral("No rotation frame on %1 (%2x%3, selected %4)")
+    if (!bounds) throw std::runtime_error((QStringLiteral("No rotation frame on %1 (%2x%3, selected %4, from %5 to %6)")
         .arg(canvas.objectName()).arg(canvas.width()).arg(canvas.height())
         .arg(std::count_if(canvas.entities().begin(), canvas.entities().end(),
-            [](const auto& entity) { return entity.selected; }))).toStdString());
+            [](const auto& entity) { return entity.selected; })).arg(from).arg(to)).toStdString());
     // Undo the screen AABB rotation to recover the padded local frame depth.
     const auto c = std::abs(std::cos(from)), s = std::abs(std::sin(from));
     const auto depth = (bounds->height()*c - bounds->width()*s)/(c*c-s*s);
@@ -249,7 +253,7 @@ void rotateGesture(sketch::desktop::PlanCanvas& canvas, double from, double to) 
     const auto mouse = [&](QEvent::Type type, QPointF point) {
         QMouseEvent event(type, point, canvas.mapToGlobal(point.toPoint()),
             type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
-            type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, Qt::NoModifier);
+            type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, modifiers);
         QApplication::sendEvent(&canvas, &event);
     };
     mouse(QEvent::MouseButtonPress, pin(from));
@@ -305,8 +309,17 @@ void requireCommittedGestures(const QTemporaryDir& directory) {
     require(window.redoCommand(), "symbol gesture cannot redo");
     check_symbol(half_pi);
     require(window.selectEntity(id), "symbol cannot be reselected after history navigation");
+    require(canvas->selectionBounds().has_value(), "reselected symbol has no frame");
     // A second drag starts at the newly projected pin, proving refresh orientation.
     rotateGesture(*canvas, half_pi, 2*half_pi);
+    check_symbol(2*half_pi);
+    rotateGesture(*canvas, 2*half_pi, 0);
+    check_symbol(0);
+    rotateGesture(*canvas, 0, 23.5*half_pi/90, Qt::ShiftModifier);
+    check_symbol(23.5*half_pi/90);
+    require(window.undoCommand(), "fine symbol gesture cannot undo");
+    check_symbol(0);
+    require(window.undoCommand(), "reset symbol gesture cannot undo");
     check_symbol(2*half_pi);
     require(window.undoCommand(), "second symbol gesture cannot undo");
     const auto path = directory.filePath("gesture-commits.bldproj");
@@ -342,6 +355,31 @@ void requireCommittedGestures(const QTemporaryDir& directory) {
     check_column(half_pi);
     require(window.saveProjectAs(path) && window.openProject(path), "column gesture cannot reopen");
     check_column(half_pi);
+    const auto circle_id = window.commitBuildingObject(encode_building_entity(
+        CircularColumn{"", {3, 2, 0}, .4, 3}), window.document().revision());
+    require(!circle_id.isEmpty() && window.selectEntity(circle_id), "circular column setup failed");
+    const auto check_circle = [&](double angle) {
+        const auto model=decode_building_entity(window.document().snapshot().entities().at(circle_id.toStdString()));
+        const auto& column=std::get<CircularColumn>(model);
+        const auto found=std::find_if(plan->entities().begin(),plan->entities().end(),
+            [&](const auto& entity){return entity.id==circle_id;});
+        require(close_enough(column.rotation_radians,angle) &&
+                    close_enough(column.base_center.x,3) && close_enough(column.base_center.y,2) &&
+                    found!=plan->entities().end() && found->resize_frame &&
+                    close_enough(found->resize_frame->rotation_radians,angle),
+                "circular column pin lost its committed orientation");
+    };
+    rotateGesture(*plan,0,half_pi);
+    check_circle(half_pi);
+    rotateGesture(*plan,half_pi,2*half_pi);
+    check_circle(2*half_pi);
+    rotateGesture(*plan,2*half_pi,0);
+    check_circle(0);
+    require(window.undoCommand(), "circular rotation reset cannot undo");
+    check_circle(2*half_pi);
+    require(window.saveProjectAs(path) && window.openProject(path), "circular rotation cannot reopen");
+    require(window.selectEntity(circle_id), "circular column cannot be reselected");
+    check_circle(2*half_pi);
     window.setWorkspace(Workspace::measurement);
     const Boundary triangle{{{1,2},{4,3},0},{{4,3},{2,6},0},{{2,6},{1,2},0}};
     const auto boundary_id = window.createBoundary(triangle);
@@ -363,6 +401,35 @@ void requireCommittedGestures(const QTemporaryDir& directory) {
                 close_enough(transformed[index].start.y,pivot.y+std::sin(delta)*x+std::cos(delta)*y),
                 "asymmetric boundary commit used a different pivot from its canvas preview");
     }
+    const auto refreshed=std::find_if(canvas->entities().begin(),canvas->entities().end(),
+        [&](const auto& entity){return entity.id==boundary_id;});
+    require(refreshed!=canvas->entities().end() && refreshed->resize_frame &&
+                refreshed->selected && close_enough(refreshed->resize_frame->rotation_radians,half_pi),
+            "boundary pin reset after rotation release");
+    rotateGesture(*canvas,half_pi,2*half_pi);
+    if(!window.lastError().isEmpty()) throw std::runtime_error(window.lastError().toStdString());
+    const auto boundary_frame=[&] {
+        const auto found=std::find_if(canvas->entities().begin(),canvas->entities().end(),
+            [&](const auto& entity){return entity.id==boundary_id;});
+        return found->resize_frame.value();
+    };
+    if(!close_enough(std::abs(boundary_frame().rotation_radians),2*half_pi))
+        throw std::runtime_error((QStringLiteral("second boundary drag angle %1 center %2,%3 (initial center %4,%5)")
+            .arg(boundary_frame().rotation_radians,0,'g',15).arg(boundary_frame().center.x)
+            .arg(boundary_frame().center.y).arg(pivot.x).arg(pivot.y)).toStdString());
+    require(close_enough(boundary_frame().center.x,pivot.x) &&
+                close_enough(boundary_frame().center.y,pivot.y),"second boundary drag shifted its pivot");
+    rotateGesture(*canvas,2*half_pi,initial_angle,Qt::ShiftModifier);
+    require(close_enough(boundary_frame().rotation_radians,initial_angle),
+            "fine boundary drag did not restore its original angle");
+    const auto restored=boundary_geometry(decode_identified_boundary_entity(
+        window.document().snapshot().entities().at(boundary_id.toStdString())));
+    for(std::size_t index=0;index<triangle.size();++index)
+        if(!close_enough(restored[index].start.x,triangle[index].start.x) ||
+                    !close_enough(restored[index].start.y,triangle[index].start.y))
+            throw std::runtime_error((QStringLiteral("boundary could not return: vertex %1 actual %2,%3 expected %4,%5")
+                .arg(index).arg(restored[index].start.x,0,'g',15).arg(restored[index].start.y,0,'g',15)
+                .arg(triangle[index].start.x).arg(triangle[index].start.y)).toStdString());
 }
 } // namespace
 

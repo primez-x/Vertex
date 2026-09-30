@@ -1,4 +1,5 @@
 #include "sketch/hosted_opening_resize.hpp"
+#include "sketch/hosted_opening_geometry.hpp"
 #include "sketch/architecture.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/project_store.hpp"
@@ -148,14 +149,6 @@ void test_failures_and_noop() {
     require(document.snapshot().entities() == source.entities() && document.revision() == source.revision(),
             "failure mutated the source");
 
-    auto wall = source.entities().at("wall");
-    wall.properties["baseline"]["sweep_radians"] = .5;
-    document.apply(ApplyEntityChanges{document.revision(),{EntityChange::upsert(wall)}, {},"Curve host"});
-    const auto curved = document.snapshot();
-    rejects([&] { (void)hosted_opening_resize_frame(curved,"opening"); }, "curved");
-    rejects([&] { (void)hosted_opening_width_resize_command(curved,"opening",1.5,true); }, "curved");
-    require(document.snapshot().entities() == curved.entities(), "curved rejection mutated host");
-
     auto bad_sibling = source.entities().at("sibling");
     bad_sibling.properties["width_m"] = -1;
     auto invalid = Document::fork(source);
@@ -171,6 +164,93 @@ void test_failures_and_noop() {
     invalid_frame.apply(ApplyEntityChanges{invalid_frame.revision(),{EntityChange::upsert(bad_assembly)}, {},"Bad frame"});
     rejects([&] { (void)hosted_opening_width_resize_command(invalid_frame.snapshot(),"opening",1.2,true); },
             "clear opening width");
+}
+
+void test_curved_jambs_and_history() {
+    for (const auto* kind : {"door","window","opening"}) {
+        for (double sweep : {std::numbers::pi/2,-std::numbers::pi/2,
+                             3*std::numbers::pi/2,-3*std::numbers::pi/2}) {
+            for (bool keep_start : {false,true}) {
+                auto document = fixture(kind);
+                const auto expected_point = [](double angle) {
+                    return Vec2{4+10*std::cos(angle),-3+10*std::sin(angle)};
+                };
+                const auto start=expected_point(.7),end=expected_point(.7+sweep);
+                auto wall = document.snapshot().entities().at("wall");
+                wall.properties["baseline"] = {{"start",{start.x,start.y}},
+                    {"end",{end.x,end.y}},{"sweep_radians",sweep}};
+                auto opening=document.snapshot().entities().at("opening");
+                if(kind==std::string_view("door")) {
+                    auto profile=parse_opening_assembly(opening.properties.at("opening_assembly"));
+                    // A wide planar leaf on a curved host needs head depth for
+                    // its chord sagitta; retain that explicit manufactured size.
+                    profile.frame_depth_m=.3;
+                    opening.properties["opening_assembly"]=opening_assembly_json(profile);
+                }
+                document.apply(ApplyEntityChanges{document.revision(),
+                    {EntityChange::upsert(wall),EntityChange::upsert(opening)}, {},"Curve host"});
+                const auto before = document.snapshot();
+                const double sign = sweep > 0 ? 1 : -1;
+                const auto frame = hosted_opening_resize_frame(before,"opening");
+                require(near(frame.start_jamb,expected_point(.7+sign*.3)) &&
+                    near(frame.end_jamb,expected_point(.7+sign*.5)) && near(frame.width_metres,2) &&
+                    near(frame.offset_metres,3) && near(frame.host_baseline.sweep_radians,sweep),
+                    "curved frame must locate jambs by measured arc station");
+                const double angle = .7+sign*.4+sign*std::numbers::pi/2;
+                require(near(std::cos(frame.angle_radians),std::cos(angle)) &&
+                    near(std::sin(frame.angle_radians),std::sin(angle)),
+                    "curved frame angle must follow the midpoint tangent");
+                const auto command = hosted_opening_width_resize_command(before,"opening",1.5,keep_start);
+                const auto preview = Document::preview_command(before,command);
+                const auto resized = hosted_opening_resize_frame(preview,"opening");
+                require(near(resized.start_jamb,expected_point(.7+sign*(keep_start?.3:.2))) &&
+                    near(resized.end_jamb,expected_point(.7+sign*(keep_start?.6:.5))) &&
+                    near(resized.width_metres,3), "curved resize must move one jamb by arc length");
+                require(near(keep_start ? frame.start_jamb : frame.end_jamb,
+                    keep_start ? resized.start_jamb : resized.end_jamb), "curved resize must pin opposite jamb");
+                require(near(segment_length(hosted_opening_span(resized.host_baseline,resized.offset_metres,3)),3) &&
+                    std::hypot(resized.end_jamb.x-resized.start_jamb.x,
+                               resized.end_jamb.y-resized.start_jamb.y) < 3,
+                    "curved width must remain arc length rather than the jamb chord");
+                for (const auto& [id,entity] : before.entities())
+                    if (id != "opening") require(preview.entities().at(id) == entity,"curved resize changed another entity");
+                const auto& old_opening = before.entities().at("opening");
+                const auto& new_opening = preview.entities().at("opening");
+                for (const auto* key : {"height_m","sill_m","opening_kind","mark"})
+                    require(new_opening.properties.at(key) == old_opening.properties.at(key),
+                        "curved resize changed authoritative opening metadata");
+                for (const auto* key : {"opening_assembly","door_operation"})
+                    if (old_opening.properties.contains(key))
+                        require(new_opening.properties.at(key) == old_opening.properties.at(key),
+                            "curved resize changed manufactured dimensions or door operation");
+                require(new_opening.extensions == old_opening.extensions &&
+                    !new_opening.properties.at("quantity_entries").contains("/width_m") &&
+                    new_opening.properties.at("quantity_entries").contains("/height_m") &&
+                    new_opening.properties.at("quantity_entries").contains("/offset_m") == keep_start,
+                    "curved resize must retain unrelated metadata and invalidate only changed receipts");
+                rejects([&] { (void)hosted_opening_width_resize_command(before,"opening",2.5,true); },"overlap");
+                rejects([&] { (void)hosted_opening_width_resize_command(before,"opening",4,false); });
+                require(document.snapshot().entities() == before.entities(),"curved preview or rejection mutated source");
+                document.apply(command);
+                rejects_document([&] { document.apply(command); },DocumentErrorCode::stale_revision);
+                document.undo(document.revision());
+                require(document.snapshot().entities() == before.entities(),"curved undo lost exact source");
+                document.redo(document.revision());
+                require(document.snapshot().entities() == preview.entities(),"curved redo lost exact resized state");
+                if (kind == std::string_view("window") && keep_start && sweep == 3*std::numbers::pi/2) {
+                    const auto path = std::filesystem::temp_directory_path() / ("curved-resize-"+make_stable_id()+".sketch");
+                    (void)ProjectStore::save(path,document.snapshot());
+                    auto reopened = ProjectStore::load(path).document;
+                    require(reopened.snapshot().entities() == preview.entities(),"save/reopen lost curved resize");
+                    reopened.undo(reopened.revision());
+                    require(reopened.snapshot().entities() == before.entities(),"reopened curved undo failed");
+                    reopened.redo(reopened.revision());
+                    require(reopened.snapshot().entities() == preview.entities(),"reopened curved redo failed");
+                    std::filesystem::remove(path);
+                }
+            }
+        }
+    }
 }
 
 void test_join_admission() {
@@ -199,6 +279,7 @@ int main() {
     try {
         test_jambs_metadata_and_history();
         test_failures_and_noop();
+        test_curved_jambs_and_history();
         test_join_admission();
         std::cout << "hosted opening resize tests passed\n";
         return 0;

@@ -1,4 +1,5 @@
 #include "sketch/architecture.hpp"
+#include "sketch/hosted_opening_geometry.hpp"
 
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
@@ -242,9 +243,18 @@ Boundary strip_range(const Segment& baseline, double inner_offset, double outer_
     }
     const auto origin = centre(baseline);
     const double radius = std::hypot(baseline.start.x - origin.x, baseline.start.y - origin.y);
-    if (radius + inner_offset <= tolerance) throw std::invalid_argument("Wall layer crosses its arc centre");
+    // Offsets always follow the directed baseline's left normal. For a
+    // counterclockwise arc that normal points inward; for clockwise it is outward.
+    const double direction = baseline.sweep_radians > 0.0 ? 1.0 : -1.0;
+    const double first_radius = radius - direction * inner_offset;
+    const double last_radius = radius - direction * outer_offset;
+    const double minimum_radius = std::min(first_radius, last_radius);
+    const double maximum_radius = std::max(first_radius, last_radius);
+    if (minimum_radius <= tolerance || !std::isfinite(maximum_radius)) {
+        throw std::invalid_argument("Wall layer crosses its arc centre");
+    }
     const auto radial = [&](Vec2 point, double offset) -> Vec2 {
-        const double scale = (radius + offset) / radius;
+        const double scale = (radius - direction * offset) / radius;
         return {origin.x + (point.x - origin.x) * scale, origin.y + (point.y - origin.y) * scale};
     };
     const auto a = radial(baseline.start, outer_offset);
@@ -524,29 +534,106 @@ TopoDS_Shape make_opening_assembly(const Wall& wall, const HostedOpening& openin
         if (part.IsNull()) throw std::invalid_argument("Opening assembly contains an empty part");
         builder.Add(compound, part);
     };
-    add(opening_box(frame, 0.0, frame_across, frame_width,
+    const bool curved = wall.baseline.sweep_radians != 0.0;
+    const auto fitted_part = [&](double along, double across, double length,
+                                 double depth, double height, double elevation,
+                                 const char* message) -> TopoDS_Shape {
+        if (!curved) {
+            return opening_box(frame, along, across, length, depth, height, elevation, message);
+        }
+        positive(length, message);
+        positive(depth, message);
+        positive(height, message);
+        try {
+            const auto span = hosted_opening_span(wall.baseline, opening.offset + along, length);
+            return extrude(strip_range(span, across, across + depth), elevation, height);
+        } catch (const Standard_Failure& error) {
+            throw std::invalid_argument(std::string(message) + ": " + error.what());
+        }
+    };
+    add(fitted_part(0.0, frame_across, frame_width,
                    assembly.frame_depth_m, opening.height, base_elevation,
                    "Opening assembly jamb construction failed"));
-    add(opening_box(frame, opening.width - frame_width, frame_across, frame_width,
+    add(fitted_part(opening.width - frame_width, frame_across, frame_width,
                    assembly.frame_depth_m, opening.height, base_elevation,
                    "Opening assembly jamb construction failed"));
-    add(opening_box(frame, frame_width, frame_across, clear_width,
+    add(fitted_part(frame_width, frame_across, clear_width,
                    assembly.frame_depth_m, frame_width,
                    base_elevation + opening.height - frame_width,
                    "Opening assembly head construction failed"));
     if (window) {
-        add(opening_box(frame, frame_width, frame_across, clear_width,
+        add(fitted_part(frame_width, frame_across, clear_width,
                        assembly.frame_depth_m, frame_width, base_elevation,
                        "Window assembly sill construction failed"));
     }
 
     const double panel_depth = assembly.panel_thickness_m;
-    const auto panel = [&](double along, double across, double length, double height) {
-        return opening_box(frame, along, across, length, panel_depth, height, base_elevation,
-                           "Opening assembly panel construction failed");
-    };
     if (!window) {
-        auto leaf = panel(frame_width, panel_across, clear_width, clear_height);
+        auto leaf_frame = frame;
+        double leaf_start = frame_width;
+        double leaf_width = clear_width;
+        double leaf_across = panel_across;
+        double glazing_across = assembly.inset_m - assembly.glazing_thickness_m * 0.5;
+        if (curved) {
+            const auto origin = centre(wall.baseline);
+            const double radius = std::hypot(wall.baseline.start.x - origin.x,
+                                            wall.baseline.start.y - origin.y);
+            const double direction = wall.baseline.sweep_radians > 0.0 ? 1.0 : -1.0;
+            const double inset_radius = radius - direction * assembly.inset_m;
+            const double half_angle = clear_width / (2.0 * radius);
+            if (!std::isfinite(half_angle) || half_angle <= 0.0 ||
+                half_angle >= std::numbers::pi * 0.5) {
+                throw std::invalid_argument("Curved door clear span cannot support a planar leaf");
+            }
+            const double apothem = inset_radius * std::cos(half_angle);
+            const double half_leaf = (apothem - panel_depth * 0.5) * std::tan(half_angle)
+                                     - 2.0 * tolerance;
+            if (!std::isfinite(half_leaf) || half_leaf <= tolerance ||
+                apothem - panel_depth * 0.5 <
+                    inset_radius - assembly.frame_depth_m * 0.5 - tolerance ||
+                std::hypot(half_leaf, apothem + panel_depth * 0.5) >
+                    inset_radius + assembly.frame_depth_m * 0.5 + tolerance) {
+                throw std::invalid_argument("Curved door leaf does not fit its radial jambs and frame head");
+            }
+            // The finite-thickness rectangle ends short of the clear station
+            // centres so its inward corners fit the radial jamb support planes.
+            const auto midpoint = opening_frame(wall.baseline,
+                (opening.offset + opening.width * 0.5) / wall_length);
+            const double scale = apothem / radius;
+            const Vec2 chord_midpoint{origin.x + (midpoint.origin.x - origin.x) * scale,
+                                     origin.y + (midpoint.origin.y - origin.y) * scale};
+            leaf_frame = {{chord_midpoint.x - midpoint.along.x * half_leaf,
+                           chord_midpoint.y - midpoint.along.y * half_leaf},
+                          midpoint.along, midpoint.left};
+            leaf_start = 0.0;
+            leaf_width = 2.0 * half_leaf;
+            leaf_across = -panel_depth * 0.5;
+            glazing_across = -assembly.glazing_thickness_m * 0.5;
+        }
+        auto leaf = opening_box(leaf_frame, leaf_start, leaf_across, leaf_width,
+                                panel_depth, clear_height, base_elevation,
+                                "Opening assembly panel construction failed");
+        std::optional<TopoDS_Shape> glazing;
+        if (assembly.glazing_thickness_m > tolerance) {
+            const double glazing_width = leaf_width * 0.65;
+            const double glazing_height = clear_height * 0.65;
+            const double glazing_start = leaf_start + leaf_width * 0.175;
+            const double glazing_elevation = base_elevation + clear_height * 0.175;
+            // The pane replaces leaf material rather than overlapping it.
+            // Extend well past the leaf faces: a tolerance-sized overrun can
+            // make OCCT treat the tool face as coincident and retain its vertices.
+            const double aperture_overrun = std::max(panel_depth, 100.0 * tolerance);
+            const auto aperture = opening_box(leaf_frame, glazing_start,
+                leaf_across - aperture_overrun, glazing_width,
+                panel_depth + 2.0 * aperture_overrun,
+                glazing_height, glazing_elevation,
+                "Door assembly glazing aperture construction failed");
+            leaf = cut(leaf, aperture);
+            glazing = opening_box(leaf_frame, glazing_start, glazing_across,
+                                   glazing_width, assembly.glazing_thickness_m,
+                                   glazing_height, glazing_elevation,
+                                   "Door assembly glazing construction failed");
+        }
         std::optional<gp_Pnt> hinge;
         double swing_angle = 0.0;
         if (door_operation.has_value()) {
@@ -555,9 +642,9 @@ TopoDS_Shape make_opening_assembly(const Wall& wall, const HostedOpening& openin
             (void)door_plan_symbol(wall.baseline, opening.offset, opening.width,
                                    *door_operation);
             const double hinge_along = door_operation->hinge_at_end
-                                           ? opening.width - frame_width
-                                           : frame_width;
-            hinge = opening_point(frame, hinge_along, panel_across + panel_depth * 0.5,
+                                           ? leaf_start + leaf_width
+                                           : leaf_start;
+            hinge = opening_point(leaf_frame, hinge_along, leaf_across + panel_depth * 0.5,
                                   base_elevation);
             swing_angle = door_operation->angle_degrees * std::numbers::pi / 180.0 *
                           (door_operation->swing_left ? 1.0 : -1.0) *
@@ -566,42 +653,33 @@ TopoDS_Shape make_opening_assembly(const Wall& wall, const HostedOpening& openin
                                        "Opening assembly leaf rotation failed");
         }
         add(leaf);
-        if (assembly.glazing_thickness_m > tolerance) {
-            const double glazing_width = clear_width * 0.65;
-            const double glazing_height = clear_height * 0.65;
-            auto glazing = opening_box(frame,
-                                       frame_width + clear_width * 0.175,
-                                       assembly.inset_m - assembly.glazing_thickness_m * 0.5,
-                                       glazing_width, assembly.glazing_thickness_m,
-                                       glazing_height,
-                                       base_elevation + clear_height * 0.175,
-                                       "Door assembly glazing construction failed");
+        if (glazing.has_value()) {
             if (hinge.has_value()) {
-                glazing = rotate_opening_part(glazing, *hinge, swing_angle,
+                *glazing = rotate_opening_part(*glazing, *hinge, swing_angle,
                                               "Door assembly glazing rotation failed");
             }
-            add(glazing);
+            add(*glazing);
         }
     } else {
         const double sash_bar = std::min(frame_width * 0.6, clear_width * 0.2);
         if (sash_bar <= tolerance || clear_height - 2.0 * sash_bar <= tolerance) {
             throw std::invalid_argument("Window assembly leaves no clear glazing pane");
         }
-        add(opening_box(frame, frame_width, panel_across, sash_bar, panel_depth,
+        add(fitted_part(frame_width, panel_across, sash_bar, panel_depth,
                         clear_height, base_elevation + frame_width,
                         "Window assembly sash construction failed"));
-        add(opening_box(frame, opening.width - frame_width - sash_bar, panel_across,
+        add(fitted_part(opening.width - frame_width - sash_bar, panel_across,
                         sash_bar, panel_depth, clear_height, base_elevation + frame_width,
                         "Window assembly sash construction failed"));
-        add(opening_box(frame, frame_width + sash_bar, panel_across,
+        add(fitted_part(frame_width + sash_bar, panel_across,
                         clear_width - 2.0 * sash_bar, panel_depth, sash_bar,
                         base_elevation + frame_width,
                         "Window assembly sash construction failed"));
-        add(opening_box(frame, frame_width + sash_bar, panel_across,
+        add(fitted_part(frame_width + sash_bar, panel_across,
                         clear_width - 2.0 * sash_bar, panel_depth, sash_bar,
                         base_elevation + opening.height - frame_width - sash_bar,
                         "Window assembly sash construction failed"));
-        add(opening_box(frame, frame_width + sash_bar,
+        add(fitted_part(frame_width + sash_bar,
                         assembly.inset_m - assembly.glazing_thickness_m * 0.5,
                         clear_width - 2.0 * sash_bar, assembly.glazing_thickness_m,
                         clear_height - 2.0 * sash_bar,

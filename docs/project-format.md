@@ -1,5 +1,13 @@
 # Vertex project formats v1 through v8
 
+## Circular column selection orientation
+
+Circular columns retain an optional finite `rotation_rad` property in radians.
+It records the orientation of the selection frame; the cylinder's physical
+geometry is rotationally symmetric. Older columns without this property read
+as zero. Transform commands update it, while dimensional and property edits
+preserve it. Undo/redo and project history retain the value alongside geometry.
+
 ## Symbol instance transforms
 
 Annotation state version 3 adds `width_scale`, `depth_scale`, `flip_horizontal`

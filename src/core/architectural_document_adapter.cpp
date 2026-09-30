@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <numbers>
 #include <set>
 #include <stdexcept>
 #include <type_traits>
@@ -139,6 +140,9 @@ BuildingObject transform_building_object(BuildingObject object,
                 value.base_center = transform_point(value.base_center, transform);
                 value.radius *= transform.scale;
                 value.height *= transform.scale;
+                value.rotation_radians = std::remainder(
+                    value.rotation_radians + transform.rotation_z_radians,
+                    2.0 * std::numbers::pi);
             } else if constexpr (std::is_same_v<Object, Beam>) {
                 value.start = transform_point(value.start, transform);
                 value.end = transform_point(value.end, transform);

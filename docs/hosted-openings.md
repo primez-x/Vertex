@@ -49,14 +49,22 @@ stores frame width/depth, panel thickness, glazing thickness, and signed inset
 in metres. The host wall cut remains authoritative; the native 3D view adds a
 derived frame, leaf or sash, and glazing compound inside that cut. A door leaf
 and its optional glazing follow the persisted handed swing. Window profiles
-produce a four-bar sash and a real glazing pane. Legacy openings without the
+produce a four-bar sash and a real glazing pane. Curved windows use concentric
+annular frame, sash and pane solids with signed wall-normal inset. Curved doors
+use radial frame parts and a fitted planar chord leaf. Its finite thickness and
+chord sagitta must fit the frame head; insufficient depth rejects with a fit
+error rather than changing the specified frame dimensions. The pivot uses the
+fitted leaf endpoint. Door glazing replaces an aperture in the leaf, avoiding
+overlapping solid material. Handing rotates the leaf and pane together;
+collision-free clearance at arbitrary swing angles is not certified.
+Legacy openings without the
 profile remain valid and continue to render as wall cuts, which keeps import
 lossless while a user upgrades selected instances.
 
 Schedules expose the profile kind and dimensions as read-only source-backed
 properties. The profile is strict schema version 1: unknown versions, missing
 fields, kind mismatches, impossible panel/depth relationships, and assemblies
-that do not fit the host wall are rejected before a Document mutation. The
+that do not fit the host wall are rejected before a Document mutation.
 The opening inspector's **Opening assembly…** command edits all five profile
 dimensions (frame width/depth, panel or sash depth, glazing depth, and signed
 wall-centreline inset) in the active unit system. The command previews the
@@ -70,8 +78,11 @@ native DXF/IFC and full ARCH-MOD-002 export acceptance remain production-gate
 work.
 
 In an uncropped conventional plan, selecting a door, window or bare opening on
-a straight wall shows two width handles at its jambs and a **W × H** readout.
-Drag either handle to resize along the wall while pinning the opposite jamb.
+a straight or circular wall shows two width handles at its jambs and a **W × H**
+readout (**Arc W × H** on circular hosts). Drag either handle to resize along
+the wall while pinning the opposite jamb. Curved width is measured along the
+host arc, rather than between the jambs in a straight line. Window rails follow
+concentric arcs; door swing geometry uses the straight jamb chord.
 Height, sill, wall thickness, handing and manufactured frame dimensions remain
 unchanged. The preview regenerates the circular swing and wall cut together.
 Overlaps, an out-of-host span or insufficient clear frame width appear as an
@@ -80,6 +91,6 @@ regenerates the host, all sibling assemblies and affected wall joins.
 
 The drag commits one undoable revision-fenced command. Escape, focus loss or a
 refreshed document cancels it. Save/reopen retains width and offset. Print and
-export use committed geometry and exclude handles and drag proposals. Curved
-hosts, cropped plans and alternate projection frames retain dimension editing
-through properties; their plan-width handles are not available.
+export use committed geometry and exclude handles and drag proposals. Cropped
+plans and alternate projection frames retain dimension editing through
+properties; their plan-width handles are not available.
