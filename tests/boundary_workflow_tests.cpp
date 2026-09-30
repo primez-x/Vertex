@@ -4,6 +4,7 @@
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/document_digest.hpp"
+#include "sketch/project_store.hpp"
 #include "sketch/desktop/boundary_input_dialog.hpp"
 #include "support/noninteractive_errors.hpp"
 #include "../src/desktop/plan_canvas.hpp"
@@ -12,6 +13,7 @@
 #include <QAbstractButton>
 #include <QCoreApplication>
 #include <QComboBox>
+#include <QCloseEvent>
 #include <QDialog>
 #include <QDir>
 #include <QEventLoop>
@@ -760,6 +762,142 @@ void test_precision_and_draw_first_classification_modals() {
     require(receipt.record->edges.front().receipt.kind == sketch::BoundaryConstructionKind::line_heading,
             "precision form must retain its exact input receipt through desktop commit");
     require_both_canvas_labels(window, 4);
+}
+
+void test_saved_boundary_draft_resumes_without_unsaved_warning() {
+    MainWindow window;
+    prepare_window(window);
+    window.setMetricUnits(true);
+    auto* drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+    require(window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first,
+                                        QStringLiteral("living")),
+            "saved draft fixture must start drawing");
+    send_click(*drawing, {0, 0});
+    drive_boundary_modal(window, *drawing, Qt::Key_D, [&](QDialog* modal) {
+        auto* input = dynamic_cast<sketch::desktop::BoundaryInputDialog*>(modal);
+        require(input != nullptr, "saved draft must accept exact input through the native dialog");
+        input->findChild<QLineEdit*>("boundaryInputLength")->setText("2 m");
+        input->findChild<QLineEdit*>("boundaryInputHeading")->setText("0 deg");
+        require(input->submit(), "saved draft precision line must submit");
+    });
+    send_click(*drawing, {2, 2});
+    send_key(*drawing, Qt::Key_Z, Qt::ControlModifier);
+    const auto original = preview(*drawing);
+    require(original.segments.size() == 1 && window.windowTitle().endsWith(" *"),
+            "unsaved draft input must mark the project dirty");
+
+    // Observe real native prompts and cancel them so a regression cannot hang.
+    bool prompted = false;
+    bool save_changes_prompt = false;
+    bool choose_save = false;
+    int prompt_count = 0;
+    QTimer modal_responder;
+    modal_responder.setInterval(1);
+    QObject::connect(&modal_responder, &QTimer::timeout, &window, [&] {
+        if (auto* modal = qobject_cast<QDialog*>(QApplication::activeModalWidget())) {
+            prompted = true;
+            ++prompt_count;
+            if (auto* message = qobject_cast<QMessageBox*>(modal)) {
+                save_changes_prompt = message->button(QMessageBox::Save) &&
+                    message->button(QMessageBox::Discard) && message->button(QMessageBox::Cancel);
+                const auto choice = choose_save && save_changes_prompt
+                    ? QMessageBox::Save : QMessageBox::Cancel;
+                if (auto* button = message->button(choice)) button->click();
+                else message->reject();
+            } else modal->reject();
+        }
+    });
+    modal_responder.start();
+    require(!window.saveProject() && prompted && window.windowTitle().endsWith(" *") &&
+                same_boundary(preview(*drawing).segments, original.segments),
+            "cancelling Save As must retain dirty draft input");
+    modal_responder.stop();
+
+    QTemporaryDir directory;
+    require(directory.isValid(), "saved draft directory must exist");
+    const auto path = directory.filePath(QStringLiteral("unfinished.bldproj"));
+    require(window.saveProjectAs(path), "ordinary Save As must persist the unfinished draft");
+    require(!window.windowTitle().endsWith(" *"),
+            "a saved unfinished draft must not retain the unsaved title marker");
+    require(!window.statusBar()->currentMessage().contains(QStringLiteral("unsaved")),
+            "successful draft save must not claim the draft is unsaved");
+    const auto saved = sketch::ProjectStore::load_archive(
+        std::filesystem::path(path.toStdWString()), sketch::ArchiveRole::ordinary);
+    require(saved.supported() && saved.recovery.decoded->active.has_value(),
+            "ordinary project save must contain the active exact-input checkpoint");
+    const auto checkpoint = *saved.recovery.decoded->active;
+
+    send_move_at_screen(*drawing, model_to_canvas(*drawing, {1, 1}));
+    require(window.saveProject() && !window.windowTitle().endsWith(" *") &&
+                !window.statusBar()->currentMessage().contains(QStringLiteral("unsaved")),
+            "cursor motion after Save must not dirty the saved semantic draft");
+    prompted = false;
+    modal_responder.start();
+    const bool reopened = window.openProject(path);
+    modal_responder.stop();
+    require(reopened && !prompted, "saved draft must allow Open without a discard prompt");
+    prompted = false;
+    modal_responder.start();
+    const bool created = window.createNewProject();
+    modal_responder.stop();
+    require(created && !prompted, "saved draft must allow New without a discard prompt");
+    require(window.openProject(path), "ordinary saved draft must reopen writable after New");
+    require(!window.windowTitle().endsWith(" *") &&
+                same_boundary(preview(*drawing).segments, original.segments) &&
+                same_optional_point(preview(*drawing).anchor, original.anchor),
+            "reopened draft must retain its exact geometry and clean saved state");
+    require(window.saveProject(), "resumed draft checkpoint must remain saveable");
+    const auto restored = sketch::ProjectStore::load_archive(
+        std::filesystem::path(path.toStdWString()), sketch::ArchiveRole::ordinary);
+    require(restored.supported() && restored.recovery.decoded->active == checkpoint,
+            "ordinary reopen must retain exact input receipts, identities, context and redo position");
+    send_key(*drawing, Qt::Key_Y, Qt::ControlModifier);
+    require(preview(*drawing).segments.size() == 2 &&
+                same_point(preview(*drawing).segments.back().end, {2, 2}) &&
+                window.windowTitle().endsWith(" *"),
+            "continuing restored draft redo must restore the exact input and mark it dirty");
+    const auto invalid_path = directory.filePath(QStringLiteral("directory.bldproj"));
+    require(QDir().mkdir(invalid_path), "failed draft save destination must be a directory");
+    require(!window.saveProjectAs(invalid_path) && window.windowTitle().endsWith(" *") &&
+                preview(*drawing).segments.size() == 2,
+            "failed Save As must retain the changed dirty draft");
+
+    prompted = false;
+    modal_responder.start();
+    QCloseEvent dirty_close;
+    QApplication::sendEvent(&window, &dirty_close);
+    modal_responder.stop();
+    require(prompted && save_changes_prompt && !dirty_close.isAccepted() && drawing->boundaryDraftPreview(),
+            "changed draft must offer Save, Discard and Cancel, and Cancel must retain it");
+    choose_save = true;
+    prompted = false;
+    prompt_count = 0;
+    modal_responder.start();
+    QCloseEvent save_close;
+    QApplication::sendEvent(&window, &save_close);
+    modal_responder.stop();
+    choose_save = false;
+    require(save_close.isAccepted() && prompted && save_changes_prompt && prompt_count == 1 &&
+                !window.windowTitle().endsWith(" *") && drawing->boundaryDraftPreview(),
+            "Save during close must persist the changed draft without an extra discard prompt");
+    prompted = false;
+    modal_responder.start();
+    QCloseEvent saved_close;
+    QApplication::sendEvent(&window, &saved_close);
+    modal_responder.stop();
+    require(saved_close.isAccepted() && !prompted && !window.windowTitle().endsWith(" *"),
+            "saved draft must close without demanding discard");
+    require(window.openProject(path), "saved draft remains resumable after close approval");
+    send_click(*drawing, {0, 2});
+    send_key(*drawing, Qt::Key_Return);
+    require(!drawing->boundaryDraftPreview(), "resumed exact-input draft must finish normally");
+    const auto finished = committed_boundary(window.document().snapshot());
+    require_rectangle(sketch::decode_identified_boundary_entity(finished));
+    const auto receipts = sketch::decode_boundary_receipt_envelope(
+        finished.properties.at("boundary_authoring"));
+    require(receipts.supported() && receipts.record->edges.front().receipt.kind ==
+                sketch::BoundaryConstructionKind::line_heading,
+            "finishing the resumed draft must retain its original precision input receipt");
 }
 
 void inspect_off_grid_point_commit(const DocumentSnapshot& before,
@@ -1545,6 +1683,10 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
         install_test_font();
+        if (application.arguments().contains(QStringLiteral("--saved-draft-only"))) {
+            test_saved_boundary_draft_resumes_without_unsaved_warning();
+            return 0;
+        }
         if (application.arguments().contains(QStringLiteral("--room-labels-only"))) {
             test_concave_room_label_stays_inside_room();
             test_long_room_label_footprint_avoids_narrow_notch();
@@ -1558,6 +1700,7 @@ int main(int argc, char** argv) {
         test_escape_cancels_without_document_mutation();
         test_context_change_discards_draft_without_mutating_document();
         test_precision_and_draw_first_classification_modals();
+        test_saved_boundary_draft_resumes_without_unsaved_warning();
         test_off_grid_snap_cursor_rubberband_and_point_receipt_in_both_canvases();
         test_off_grid_define_first_pending_dimension_preview_and_placement();
         test_off_grid_snapped_commit_in_each_workspace();

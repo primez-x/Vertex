@@ -312,7 +312,8 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U054 — Save an unfinished sketch and resume it**
-  - Expected: Existing draft segments are available after reopening.
+  - Steps: Start a boundary, enter a precise edge length, and add another edge without closing the area. Save the project, choose New, then reopen the saved project and continue drawing. Undo an edge, save, reopen, and Redo it.
+  - Expected: Draft geometry, exact inputs and Undo/Redo position survive. A successful save removes the unsaved marker and allows closing or New without a discard warning. Moving the pointer alone leaves the saved state clean; adding or changing an edge marks it unsaved. Cancelled or failed saves retain the draft and its unsaved warning.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

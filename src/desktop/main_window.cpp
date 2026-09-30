@@ -19448,9 +19448,11 @@ private:
             rebaseAutosaveDestination();
             clearError();
             refresh();
-            auto status = hasBoundaryDraftChanges()
+            auto status = hasUnsavedBoundaryDraftChanges()
                 ? QStringLiteral("Saved committed geometry. The unfinished boundary is still unsaved.")
-                : QStringLiteral("Saved revision %1.").arg(receipt.revision);
+                : hasBoundaryDraftChanges()
+                    ? QStringLiteral("Saved revision %1, including the unfinished boundary.").arg(receipt.revision)
+                    : QStringLiteral("Saved revision %1.").arg(receipt.revision);
             if (!cleanup_ok) {
                 status += QStringLiteral(" Recovery copy retained; cleanup pending.");
             }
@@ -19465,16 +19467,15 @@ private:
 
     bool confirmDirtyTransition(const QString& title, const QString& message) {
         waitForSaveBarrier();
-        if (!confirmDiscardBoundaryDraft()) return false;
+        if ((!projectDirty() && !hasUnsavedBoundaryDraftChanges()) || !m_document->is_editable()) {
+            return true;
+        }
         // A new window contains only the generated scaffold. It has no user
         // edits, even though Document quite correctly reports an absent saved
         // marker as dirty. Let startup recovery replace that pristine shell
         // without presenting a misleading Save/Discard prompt.
         if (m_file_path.empty() && m_recovery_ledger.empty() && m_document->revision() == 1 &&
             !hasBoundaryDraftChanges()) {
-            return true;
-        }
-        if (!projectDirty() || !m_document->is_editable()) {
             return true;
         }
         const auto context = captureModalContext();
@@ -19498,6 +19499,10 @@ private:
         if (!unchanged()) return false;
         if (answer == QMessageBox::Save && !saveProject()) return false;
         if (!unchanged()) return false;
+        if (answer == QMessageBox::Save && hasUnsavedBoundaryDraftChanges()) {
+            setError(QStringLiteral("The unfinished boundary was not saved. Keep this project open and resolve the recovery checkpoint error before leaving."));
+            return false;
+        }
         // The modal prompt runs an event loop and can submit another autosave.
         // Finish that publication before a successful close/project transition.
         waitForSaveBarrier();
@@ -24663,7 +24668,8 @@ private:
         m_redo_action->setEnabled(m_restored_boundary_navigation && m_project_workspace->can_redo() ? true :
             m_boundary_session ? m_boundary_session->can_redo() :
             m_recovery_ledger.empty() ? m_document->can_redo() : m_project_workspace->can_redo());
-        m_save_action->setEnabled(m_document->is_editable() && projectDirty());
+        m_save_action->setEnabled(m_document->is_editable() &&
+                                 (projectDirty() || hasUnsavedBoundaryDraftChanges()));
         m_save_as_action->setEnabled(m_document->is_editable());
         m_object_button->setEnabled(m_document->is_editable());
     }
@@ -24843,7 +24849,7 @@ private:
         auto title = m_file_path.empty()
             ? QStringLiteral("Untitled project")
             : QString::fromStdWString(m_file_path.filename().wstring());
-        if (projectDirty() || hasBoundaryDraftChanges()) {
+        if (projectDirty() || hasUnsavedBoundaryDraftChanges()) {
             title += QStringLiteral(" *");
         }
         owner->setWindowTitle(QStringLiteral("Vertex — ") + title);
@@ -24890,6 +24896,18 @@ private:
         if (!m_boundary_session) return false;
         const auto state = m_boundary_session->view();
         return state.active_chain.has_value() || !state.accepted_chains.empty();
+    }
+
+    bool hasUnsavedBoundaryDraftChanges() const {
+        if (!hasBoundaryDraftChanges()) return false;
+        if (projectDirty() || m_boundary_document != m_document || !m_boundary_context) return true;
+        const auto active = m_project_workspace->active_boundary();
+        if (!active || active->source.context != *m_boundary_context) return true;
+        auto checkpoint = m_boundary_session->recovery_checkpoint();
+        // Cursor motion is transient; semantic actions, exact construction
+        // inputs and undo/redo position must match the acknowledged checkpoint.
+        checkpoint.pointer = active->checkpoint.pointer;
+        return checkpoint != active->checkpoint;
     }
 
     bool confirmDiscardBoundaryDraft() {
