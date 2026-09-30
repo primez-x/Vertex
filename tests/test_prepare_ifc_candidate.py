@@ -2,6 +2,7 @@
 import hashlib
 import importlib.util
 import json
+import marshal
 import pathlib
 import struct
 import tempfile
@@ -116,6 +117,132 @@ class SyntheticCandidateTests(unittest.TestCase):
 
     def stage(self, root, output, evidence_path, **kwargs):
         return candidate.prepare(root, evidence_path, output, **kwargs)
+
+    def derived_fixture(self, directory):
+        root, build, output, evidence_path, evidence, prep_path = self.fixture(directory)
+        source = root / ".deps/ifc-src"
+        lock = json.loads((root / "third_party/ifc-source-lock.json").read_bytes())
+        for name, data in {".gitmodules": b"synthetic gitlinks\n",
+                           "cmake/CMakeLists.txt": b"synthetic CMake source\n",
+                           "src/ifcwrap/utils/typemaps_out.i": b"// original typemaps\n",
+                           **{item["path"] + "/fixture.txt": b"selected child\n"
+                              for item in lock["submodules"]}}.items():
+            path = source / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        prep = json.loads(prep_path.read_bytes())
+        prep["source"]["files"] = [{**record(path), "path": path.relative_to(source).as_posix()}
+                                   for path in sorted(source.rglob("*")) if path.is_file()]
+        prep["source"]["files"].sort(key=lambda item: item["path"])
+        prep["swig"]["path"] = ".deps/ifc-tools/swigwin-4.3.1"
+        prep_path.write_text(json.dumps(prep))
+        helper = root / "scripts/prepare_ifc_derived_source.py"
+        helper.write_bytes((ROOT / "scripts/prepare_ifc_derived_source.py").read_bytes())
+        patch_path = root / "third_party/ifc-source/patches/opaque-coordinate-output.i"
+        patch_path.parent.mkdir(parents=True)
+        patch_path.write_bytes((ROOT / "third_party/ifc-source/patches/opaque-coordinate-output.i").read_bytes())
+        derivation_spec = importlib.util.spec_from_file_location("fixture_derivation",
+            ROOT / "scripts/prepare_ifc_derived_source.py")
+        derivation = importlib.util.module_from_spec(derivation_spec)
+        derivation_spec.loader.exec_module(derivation)
+        derived_source = build / "source"
+        manifest = build / "source-derivation.json"
+        derivation.derive(root, derived_source, manifest)
+        evidence["source_derivation"] = str(manifest)
+        for item in evidence["inputs"]:
+            if pathlib.Path(item["path"]) == prep_path:
+                item.update(record(prep_path))
+        evidence["inputs"].extend(record(path) for path in (helper, patch_path, manifest))
+        evidence["commands"].append({"name": "source-derive", "exit_code": 0,
+            "executable": str(root / ".deps/cad-runtime/3.13.15/python.exe"),
+            "arguments": ["-I", "-B", str(helper), "--workspace", str(root),
+                          "--output", str(derived_source), "--manifest", str(manifest)]})
+        evidence["configure_arguments"][1] = str(derived_source / "cmake")
+        cache = build / "build/CMakeCache.txt"
+        cache.write_text(cache.read_text().replace(str(source / "cmake"), str(derived_source / "cmake")))
+        for item in evidence["inputs"]:
+            if pathlib.Path(item["path"]) == cache:
+                item.update(record(cache))
+        evidence_path.write_text(json.dumps(evidence))
+        return root, build, output, evidence_path, evidence
+
+    def test_derived_source_stage_preserves_reviewed_delta_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, build, output, evidence_path, _ = self.derived_fixture(directory)
+            result = self.stage(root, output, evidence_path)
+            manifest = build / "source-derivation.json"
+            self.assertEqual(result["source_derivation_sha256"], record(manifest)["sha256"])
+            self.assertEqual((output / "provenance/source-derivation.json").read_bytes(), manifest.read_bytes())
+            self.assertEqual((output / "provenance/source-derivation-verifier.py").read_bytes(),
+                             (ROOT / "scripts/prepare_ifc_derived_source.py").read_bytes())
+            self.assertFalse(result["build_qualified"])
+            self.assertFalse(result["source_closure_qualified"])
+
+    def test_derived_verifier_ignores_timestamp_valid_foreign_bytecode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, build, output, evidence_path, evidence = self.derived_fixture(directory)
+            helper = root / "scripts/prepare_ifc_derived_source.py"
+            manifest = build / "source-derivation.json"
+            value = json.loads(manifest.read_bytes())
+            # The fixture acts as the shipped verifier root for this check.
+            value["inputs"]["script"]["path"] = str(helper)
+            manifest.write_text(json.dumps(value))
+            next(item for item in evidence["inputs"] if pathlib.Path(item["path"]) == manifest).update(record(manifest))
+            evidence_path.write_text(json.dumps(evidence))
+            code = compile("raise RuntimeError('unbound cached bytecode executed')", str(helper), "exec")
+            cache = pathlib.Path(importlib.util.cache_from_source(str(helper)))
+            cache.parent.mkdir()
+            info = helper.stat()
+            cache.write_bytes(importlib.util.MAGIC_NUMBER +
+                struct.pack("<III", 0, int(info.st_mtime), info.st_size) + marshal.dumps(code))
+            # Prove that ordinary loader execution would accept this cache.
+            spec = importlib.util.spec_from_file_location("foreign_cache_probe", helper)
+            with self.assertRaisesRegex(RuntimeError, "unbound cached bytecode executed"):
+                spec.loader.exec_module(importlib.util.module_from_spec(spec))
+            with patch.object(candidate, "ROOT", root):
+                result = self.stage(root, output, evidence_path)
+            self.assertFalse(result["build_qualified"])
+            self.assertEqual((output / "provenance/source-derivation-verifier.py").read_bytes(), helper.read_bytes())
+
+    def test_derived_source_tamper_and_wrong_config_rejected_before_output(self):
+        for fault in ("source", "pristine", "manifest", "helper", "patch", "wrong_config", "missing_command"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                root, build, output, evidence_path, evidence = self.derived_fixture(directory)
+                if fault == "source":
+                    (build / "source/cmake/CMakeLists.txt").write_bytes(b"foreign source")
+                elif fault == "pristine":
+                    (root / ".deps/ifc-src/src/ifcwrap/utils/typemaps_out.i").write_bytes(b"foreign original")
+                elif fault == "manifest":
+                    manifest = build / "source-derivation.json"
+                    value = json.loads(manifest.read_bytes())
+                    value["product_runtime_replaced"] = 0
+                    manifest.write_text(json.dumps(value))
+                    next(item for item in evidence["inputs"] if pathlib.Path(item["path"]) == manifest).update(record(manifest))
+                elif fault == "helper":
+                    (root / "scripts/prepare_ifc_derived_source.py").write_bytes(b"raise RuntimeError('must not execute')")
+                elif fault == "patch":
+                    (root / "third_party/ifc-source/patches/opaque-coordinate-output.i").write_bytes(b"unreviewed")
+                elif fault == "wrong_config":
+                    evidence["configure_arguments"][1] = str(root / ".deps/ifc-src/cmake")
+                else:
+                    evidence["commands"] = [item for item in evidence["commands"] if item["name"] != "source-derive"]
+                evidence_path.write_text(json.dumps(evidence))
+                with self.assertRaises(ValueError):
+                    self.stage(root, output, evidence_path)
+                self.assertFalse(output.exists())
+
+    def test_derivation_requires_manifest_and_bound_helper_patch(self):
+        for incomplete in ("command-only", "manifest-only"):
+            with self.subTest(case=incomplete), tempfile.TemporaryDirectory() as directory:
+                root, build, output, evidence_path, evidence, _ = self.fixture(directory)
+                if incomplete == "command-only":
+                    evidence["commands"].append({"name": "source-derive", "exit_code": 0})
+                else:
+                    evidence["source_derivation"] = str(build / "source-derivation.json")
+                evidence_path.write_text(json.dumps(evidence))
+                with self.assertRaises(ValueError):
+                    self.stage(root, output, evidence_path)
+                self.assertFalse(output.exists())
 
     def test_synthetic_cmake_commands_require_bound_cache_executable(self):
         for command_name in ("configure", "build-release"):

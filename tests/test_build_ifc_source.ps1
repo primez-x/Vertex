@@ -41,6 +41,12 @@ try {
     }
     if ($environment['SystemRoot'] -ne 'windows' -or $sourceEnvironment['CL'] -ne '/EHs-') { throw 'Environment isolation mutated the caller.' }
 
+    $deriveArguments = @(Get-IfcDerivedSourceArguments $workspace (Join-Path $scratch 'candidate'))
+    $deriveExpected = @('-I', '-B', (Join-Path $workspace 'scripts/prepare_ifc_derived_source.py'),
+        '--workspace', $workspace, '--output', (Join-Path $scratch 'candidate/source'),
+        '--manifest', (Join-Path $scratch 'candidate/source-derivation.json'))
+    if (($deriveArguments -join "`0") -ne ($deriveExpected -join "`0")) { throw 'Derived source command escaped its exact controlled paths.' }
+
     $config = @(Get-IfcConfigureArguments 'src' 'build' 'kernel' 'support' 'python' 'swig' 'vs')
     if ($config -notcontains '-DSCHEMA_VERSIONS=2x3;4;4x1;4x2;4x3;4x3_tc1;4x3_add1;4x3_add2') { throw 'Full schema compatibility was lost.' }
     foreach ($entry in @('-DBUILD_IFCPYTHON=ON', '-DBUILD_IFCGEOM=ON', '-DWITH_OPENCASCADE=ON', '-DMINIMAL_BUILD=OFF', '-DBUILD_SHARED_LIBS=OFF', '-DBoost_NO_SYSTEM_PATHS=ON', '-DOCCT_STATIC=OFF')) {

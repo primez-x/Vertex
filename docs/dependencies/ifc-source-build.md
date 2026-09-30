@@ -186,9 +186,26 @@ this typemap and compiled with it. Separate executable probes passed deep-copy
 and destruction checks for both dimensions, with and without
 `/Zc:__cplusplus`. Local probe sources/logs are under
 `artifacts/ifc-wrapper-probe`. This is causal compiler evidence, not a full
-IFC build, link, import, or geometry qualification. The correction still needs
-to enter a hash-bound derived source input before the next full candidate;
-the pristine locked checkout and both failed builds remain unchanged.
+IFC build, link, import, or geometry qualification. The correction is now a
+pinned input at `third_party/ifc-source/patches/opaque-coordinate-output.i`.
+The recipe first checks the pristine source, then runs
+`scripts/prepare_ifc_derived_source.py` to create fresh external `<BuildRoot>/source`
+and `<BuildRoot>/source-derivation.json`. The helper permits exactly the reviewed
+append to `src/ifcwrap/utils/typemaps_out.i`; every other source and selected
+submodule byte must match the original full preparation inventory. Its manifest
+binds the lock, preparation, helper, patch, original revision and complete derived
+inventory. Source files are bounded at 64 MiB, 1 GiB aggregate and 10,000 files;
+the manifest is bounded at 8 MiB. Both trees and all inputs are checked again
+before publication. Existing outputs and partial failures are preserved.
+
+Candidate 786 stopped during derivation because Python 3.13 on Windows reports
+different executable permission bits for `lstat` and `fstat` on `.bat` files.
+The reader now compares stable file kind, identity, size and modification time
+on Windows, retaining link checks and exact SHA-256 inventory verification.
+The actual pristine inventory of 3,329 files passed the corrected reader.
+Fresh candidate 787 passed source checking, exact derivation and configuration
+and entered the Release build. Build, link and runtime results remain unproven.
+All failed candidates and the pristine source remain preserved.
 
 After both SDK installs finish, run the actual candidate recipe from the
 repository root with PowerShell 7:
@@ -279,8 +296,12 @@ bytes saved as `<BuildRoot>/build-recipe.ps1`.
 This stage does not import or install the package, replace the product runtime,
 create a wheel, or deliver the C++ corresponding source and dependency license
 closure. The generated wrapper is hashed at staging rather than bound in the
-original build evidence. All qualification flags remain false. Fourteen
-synthetic tests pass on Python 3.12 and the locked 3.13.15 interpreter. The actual
+original build evidence. All qualification flags remain false. The derived
+path requires the bound manifest/helper/patch and exact derivation invocation,
+replays both inventories, and verifies that configuration uses the derived
+source. Its verifier executes the hash-checked source bytes directly rather
+than accepting unbound cached bytecode. The staged provenance includes the
+derivation manifest, reviewed patch and verifier. The actual
 failed candidate 784 is rejected without creating an output, and its bound
 cache/CMake/Python coherence checks pass independently; neither result proves a
 successful native package. No actual successful candidate has been staged yet.

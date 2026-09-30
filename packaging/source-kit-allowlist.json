@@ -2819,6 +2819,10 @@
     },
     {
       "category": "source",
+      "path": "scripts/prepare_ifc_derived_source.py"
+    },
+    {
+      "category": "source",
       "path": "scripts/prepare_ifc_source.py"
     },
     {
@@ -4087,6 +4091,10 @@
     },
     {
       "category": "source",
+      "path": "tests/test_prepare_ifc_derived_source.py"
+    },
+    {
+      "category": "source",
       "path": "tests/test_prepare_ifc_source.py"
     },
     {
@@ -4248,6 +4256,10 @@
     {
       "category": "source",
       "path": "third_party/ifc-source-lock.json"
+    },
+    {
+      "category": "source",
+      "path": "third_party/ifc-source/patches/opaque-coordinate-output.i"
     },
     {
       "category": "source",

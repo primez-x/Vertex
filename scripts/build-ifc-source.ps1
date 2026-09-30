@@ -120,6 +120,12 @@ function Assert-IfcSdkStatus([string]$Path, [string]$Package, [string]$Version, 
     if ($found[0]['Version'] -ne $Version -or ($PortVersion -ge 0 -and $found[0]['Port-Version'] -ne "$PortVersion")) { throw "SDK package version mismatch: $Package" }
 }
 
+function Get-IfcDerivedSourceArguments([string]$Workspace, [string]$Candidate) {
+    return @('-I', '-B', (Join-Path $Workspace 'scripts/prepare_ifc_derived_source.py'),
+        '--workspace', $Workspace, '--output', (Join-Path $Candidate 'source'),
+        '--manifest', (Join-Path $Candidate 'source-derivation.json'))
+}
+
 function Invoke-IfcCommand([string]$Name, [string]$Executable, [string[]]$Arguments) {
     $record = [ordered]@{ name = $Name; executable = $Executable; arguments = $Arguments; started_utc = [DateTime]::UtcNow.ToString('o'); exit_code = $null }
     $stdout = Join-Path $script:candidatePath "$Name.stdout.log"
@@ -166,14 +172,15 @@ function Assert-IfcCleanGitStatus([string]$Path) {
 $script:projectRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 Assert-IfcCandidateRoot $BuildRoot $script:projectRoot
 $script:candidatePath = [IO.Path]::GetFullPath($BuildRoot)
-$source = Join-Path $script:projectRoot '.deps/ifc-src'
+$pristineSource = Join-Path $script:projectRoot '.deps/ifc-src'
+$source = Join-Path $script:candidatePath 'source'
 $kernel = Join-Path $script:projectRoot '.deps/ifc-kernel/x64-windows-ifc-static'
 $support = Join-Path $script:projectRoot '.deps/ifc-support/x64-windows-ifc-static'
 $python = Join-Path $script:projectRoot '.deps/cad-runtime/3.13.15'
 $swig = Join-Path $script:projectRoot '.deps/ifc-tools/swigwin-4.3.1'
 $vcpkg = Join-Path $script:projectRoot '.deps/vcpkg'
 $lockPath = Join-Path $script:projectRoot 'third_party/ifc-source-lock.json'
-$optionNames = @([regex]::Matches((Get-Content "$source/cmake/CMakeLists.txt" -Raw), '(?im)^option\(\s*(\w+)') | ForEach-Object { $_.Groups[1].Value })
+$optionNames = @([regex]::Matches((Get-Content "$pristineSource/cmake/CMakeLists.txt" -Raw), '(?im)^option\(\s*(\w+)') | ForEach-Object { $_.Groups[1].Value })
 $script:childEnvironment = Get-IfcBuildEnvironment ([Environment]::GetEnvironmentVariables()) $optionNames
 $script:evidence = [ordered]@{ schema_version = 1; build_qualified = $false; source_closure_qualified = $false; product_runtime_replaced = $false; state = 'preflight'; started_utc = [DateTime]::UtcNow.ToString('o'); workspace = $script:projectRoot; build_root = $script:candidatePath; configuration = 'Release'; inputs = [Collections.Generic.List[object]]::new(); commands = [Collections.Generic.List[object]]::new(); outputs = @() }
 # No directory/cache is reused, deleted or reset. Reserve this run exclusively.
@@ -188,6 +195,10 @@ try {
         $lock = Get-Content $lockPath -Raw | ConvertFrom-Json
         if ($lock.build_qualified -ne $false -or $lock.source_closure_qualified -ne $false) { throw 'Source lock must remain unqualified.' }
         Invoke-IfcCommand 'source-check' "$python/python.exe" @('-I', '-B', "$script:projectRoot/scripts/prepare_ifc_source.py", '--offline', '--check')
+        foreach ($path in @("$script:projectRoot/scripts/prepare_ifc_derived_source.py", "$script:projectRoot/third_party/ifc-source/patches/opaque-coordinate-output.i")) { Add-IfcFileEvidence $path }
+        Invoke-IfcCommand 'source-derive' "$python/python.exe" (Get-IfcDerivedSourceArguments $script:projectRoot $script:candidatePath)
+        $script:evidence['source_derivation'] = Join-Path $script:candidatePath 'source-derivation.json'
+        Add-IfcFileEvidence $script:evidence.source_derivation
         Invoke-IfcCommand 'python-version' "$python/python.exe" @('-I', '-B', '-c', 'import sys,struct; assert sys.version_info[:3] == (3,13,15) and struct.calcsize("P") == 8; print(sys.version)')
         if ((Get-Content "$python/include/patchlevel.h" -Raw) -notmatch '#define\s+PY_VERSION\s+"3\.13\.15"') { throw 'CPython development header version differs from 3.13.15.' }
         Invoke-IfcCommand 'swig-version' "$swig/swig.exe" @('-version')

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import types
 import json
 import os
 import pathlib
@@ -225,7 +226,8 @@ def bounded_text(path: pathlib.Path) -> str:
 
 
 def validate_configuration(root: pathlib.Path, build: pathlib.Path, evidence: dict,
-                           inputs: dict, by_name: dict, configure: list, options: dict) -> None:
+                           inputs: dict, by_name: dict, configure: list, options: dict,
+                           source: pathlib.Path | None = None) -> None:
     cache_path = build / "build/CMakeCache.txt"
     cache = {}
     for line in bounded_text(cache_path).splitlines():
@@ -244,7 +246,7 @@ def validate_configuration(root: pathlib.Path, build: pathlib.Path, evidence: di
             raise ValueError("Expected Visual Studio 17 x64 configure command")
     if cache.get("CMAKE_GENERATOR") != "Visual Studio 17 2022" or cache.get("CMAKE_GENERATOR_PLATFORM") != "x64":
         raise ValueError("Bound CMake cache generator/platform differs")
-    for key, path in (("CMAKE_HOME_DIRECTORY", root / SOURCE / "cmake"), ("CMAKE_CACHEFILE_DIR", build / "build")):
+    for key, path in (("CMAKE_HOME_DIRECTORY", (source or root / SOURCE) / "cmake"), ("CMAKE_CACHEFILE_DIR", build / "build")):
         if key not in cache or not same_path(cache[key], path):
             raise ValueError("Bound CMake cache source/build root differs")
     if "CMAKE_COMMAND" not in cache:
@@ -295,6 +297,51 @@ def validate_configuration(root: pathlib.Path, build: pathlib.Path, evidence: di
     text = bounded_text(version_log)
     if log_records.get(version_log) != digest(version_log)["sha256"] or not re.match(r"3\.13\.15(?:\s|$)", text):
         raise ValueError("Bound Python version log differs or reports another version")
+
+
+def validate_build_source(root: pathlib.Path, build: pathlib.Path, evidence: dict,
+                          inputs: dict, by_name: dict) -> tuple[pathlib.Path, list[pathlib.Path]]:
+    """Accept only the bound, independently replayable single-file source delta."""
+    if "source_derivation" not in evidence:
+        if "source-derive" in by_name:
+            raise ValueError("Derived source command has no bound derivation manifest")
+        return root / SOURCE, []
+    manifest = absolute_path(evidence["source_derivation"])
+    helper = root / "scripts/prepare_ifc_derived_source.py"
+    patch = root / "third_party/ifc-source/patches/opaque-coordinate-output.i"
+    source = build / "source"
+    required = {manifest, helper, patch}
+    if manifest != build / "source-derivation.json" or not required.issubset(inputs):
+        raise ValueError("Derived source manifest, helper and patch must be controlled bound inputs")
+    for path in required:
+        verify_file(path, inputs[path], input_file=True)
+    # Execute only this stager's shipped verifier, never an evidence-selected
+    # Python file. Its exact bytes must also match the build's bound helper.
+    verifier_path = ROOT / "scripts/prepare_ifc_derived_source.py"
+    verify_file(verifier_path, inputs[helper], input_file=True)
+    command = by_name.get("source-derive", {})
+    expected = ["-I", "-B", str(helper), "--workspace", str(root),
+                "--output", str(source), "--manifest", str(manifest)]
+    arguments = command.get("arguments")
+    if (not isinstance(arguments, list) or len(arguments) != len(expected) or
+            any(not same_path(arguments[index], pathlib.Path(expected[index])) for index in (2, 4, 6, 8)) or
+            any(arguments[index] != expected[index] for index in (0, 1, 3, 5, 7)) or
+            not same_path(command.get("executable", ""), root / ".deps/cad-runtime/3.13.15/python.exe")):
+        raise ValueError("Derived source command differs from its bound isolated invocation")
+    # SourceFileLoader may execute timestamp-valid unbound cached bytecode,
+    # even with -B. Compile the actual bounded, hash-checked source instead.
+    with verifier_path.open("rb") as stream:
+        verifier_bytes = stream.read(inputs[helper]["bytes"] + 1)
+    if (len(verifier_bytes) != inputs[helper]["bytes"] or
+            hashlib.sha256(verifier_bytes).hexdigest() != inputs[helper]["sha256"]):
+        raise ValueError("Shipped source derivation verifier bytes changed before execution")
+    verifier = types.ModuleType("vertex_ifc_derivation_verifier")
+    verifier.__file__ = str(verifier_path)
+    exec(compile(verifier_bytes, str(verifier_path), "exec"), verifier.__dict__)
+    verifier.verify_derivation(root, source, manifest)
+    for path in required:
+        verify_file(path, inputs[path], input_file=True)
+    return source, [manifest, helper, patch]
 
 
 def validate_inventory(output: pathlib.Path, records: list[dict]) -> None:
@@ -427,10 +474,11 @@ def prepare(root: pathlib.Path, evidence_path: pathlib.Path, output: pathlib.Pat
     for key, expected in {"SCHEMA_VERSIONS": SCHEMAS, "CMAKE_CONFIGURATION_TYPES": "Release", "BUILD_IFCPYTHON": "ON", "BUILD_IFCGEOM": "ON"}.items():
         if options.get(key) != expected:
             raise ValueError(f"Required configure option differs: {key}")
-    for flag, expected in (("-S", root / SOURCE / "cmake"), ("-B", build / "build")):
+    build_source, derivation_inputs = validate_build_source(root, build, evidence, inputs, by_name)
+    for flag, expected in (("-S", build_source / "cmake"), ("-B", build / "build")):
         if configure.count(flag) != 1 or configure.index(flag) + 1 >= len(configure) or not same_path(configure[configure.index(flag) + 1], expected):
             raise ValueError("Configure source or build root differs")
-    validate_configuration(root, build, evidence, inputs, by_name, configure, options)
+    validate_configuration(root, build, evidence, inputs, by_name, configure, options, build_source)
     build_args = by_name["build-release"].get("arguments", [])
     if (not isinstance(build_args, list) or len(build_args) != 8 or build_args[0] != "--build" or
             not same_path(build_args[1], build / "build") or
@@ -495,6 +543,9 @@ def prepare(root: pathlib.Path, evidence_path: pathlib.Path, output: pathlib.Pat
                              ("build-recipe.ps1", effective_recipe, inputs[recipe_path]),
                              ("build-evidence.json", evidence_path, evidence_record)):
         add("provenance/" + name, path, item, {"kind": "local-evidence", "path": str(path)})
+    for name, path in zip(("source-derivation.json", "source-derivation-verifier.py",
+                           "opaque-coordinate-output.i"), derivation_inputs):
+        add("provenance/" + name, path, inputs[path], {"kind": "local-evidence", "path": str(path)})
     notice = ("Unqualified local IFC Python candidate; no wheel or PyPI archive provenance is claimed.\n"
               "Contains locked upstream Python package source, its selected mvd/simple_spf submodules,\n"
               "the generated wrapper and the bound Release extension. Original licenses are preserved.\n"
@@ -508,6 +559,8 @@ def prepare(root: pathlib.Path, evidence_path: pathlib.Path, output: pathlib.Pat
               "platform": "win_amd64", "python_abi": "cp313", "configuration": "Release",
               "schemas": SCHEMAS.split(";"), "source": lock["source"], "submodules": submodules,
               "build_evidence_sha256": evidence_record["sha256"], "files": []}
+    if derivation_inputs:
+        result["source_derivation_sha256"] = inputs[derivation_inputs[0]]["sha256"]
     if len(plan) + 1 > MAX_FILES or sum(item[2]["bytes"] for item in plan) + len(notice_bytes) > MAX_TOTAL_BYTES:
         raise ValueError("Candidate exceeds file/size bounds")
     # Validate all input bytes and names before reserving a destination. Rehash
@@ -541,6 +594,8 @@ def prepare(root: pathlib.Path, evidence_path: pathlib.Path, output: pathlib.Pat
                             "sha256": hashlib.sha256(notice_bytes).hexdigest(),
                             "origin": {"kind": "generated-stage-notice"}})
     result["files"].sort(key=lambda item: item["path"])
+    if derivation_inputs:
+        validate_build_source(root, build, evidence, inputs, by_name)
     validate_inventory(output, result["files"])
     with (output / "candidate-manifest.json").open("x", encoding="utf-8", newline="\n") as stream:
         stream.write(json.dumps(result, indent=2) + "\n")
