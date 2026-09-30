@@ -52,6 +52,8 @@ class CadRuntimeTests(unittest.TestCase):
             first = cad.bootstrap(root, lock, destination, offline=True)
             self.assertEqual(first, cad.bootstrap(root, lock, destination, offline=True, check=True))
             self.assertNotIn("import site", (destination/"python313._pth").read_text())
+            self.assertEqual((destination/"python313._pth").read_bytes(),
+                             b"python313.zip\n.\nLib/site-packages\n")
             self.assertFalse(first["production_worker_integrated"])
             (destination/"Lib/site-packages/ezdxf/__init__.py").write_text("malicious")
             # Re-signing the file table cannot substitute for locked archive proof.

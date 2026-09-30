@@ -23,6 +23,21 @@ def digest(value: bytes) -> str:
 
 
 class DistributionSbomTests(unittest.TestCase):
+    def test_publisher_prose_is_retained_without_invalid_spdx_expression(self):
+        for declaration in ("See package notices", "BSD 3-Clause", "Dual License",
+                            "Copyright (c) contributors. Redistribution and use permitted.",
+                            "Proprietary", "Public-Domain", "UnknownLicense", "LicenseRef-Unresolved"):
+            with self.subTest(declaration=declaration):
+                source = self.inventory()
+                source["components"][1]["package"]["license"] = declaration
+                document = sbom.build_sbom(source)
+                package = next(row for row in document["packages"] if row["name"] == "Dependency")
+                self.assertEqual(package["licenseDeclared"], "NOASSERTION")
+                self.assertIn(declaration, package["packageComment"])
+        self.assertEqual(sbom._declared_license("MIT"), "MIT")
+        self.assertEqual(sbom._declared_license("BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0"),
+                         "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0")
+
     def inventory(self) -> dict:
         app = b"application"
         dependency = b"dependency"

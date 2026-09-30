@@ -83,6 +83,25 @@ def _source_location(package: Mapping[str, Any]) -> str:
     return "NOASSERTION"
 
 
+def _declared_license(value: str) -> str:
+    # Inventory fields may contain publisher prose, not SPDX expressions.
+    # Recognize only identifiers used by the reviewed manifests; unfamiliar
+    # declarations remain in packageComment without inventing a license.
+    identifiers = {
+        "0BSD", "BSD-3-Clause", "BSL-1.0", "CC0-1.0", "FTL", "GPL-2.0-only",
+        "GPL-2.0-or-later", "GPL-3.0-only", "GPL-3.0-or-later", "LGPL-2.1-only",
+        "LGPL-2.1-or-later", "LGPL-3.0-only", "LGPL-3.0-or-later", "MIT",
+        "MPL-2.0", "OFL-1.1", "PSF-2.0", "Zlib", "blessing", "bzip2-1.0.6", "libpng-2.0",
+    }
+    expressions = identifiers | {
+        "(FTL OR GPL-2.0-or-later)",
+        "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
+    }
+    # LicenseRef declarations require extracted licensing information, which
+    # this incomplete inventory does not yet establish.
+    return value if value in expressions else "NOASSERTION"
+
+
 def _inventory_components(inventory: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     components = inventory.get("components")
     _require(isinstance(components, list) and bool(components),
@@ -243,12 +262,13 @@ def build_sbom(inventory: Mapping[str, Any], inventory_sha256: str | None = None
             "versionInfo": str(package["version"]).strip(),
             "downloadLocation": _source_location(package),
             "licenseConcluded": "NOASSERTION",
-            "licenseDeclared": str(package["license"]).strip(),
+            "licenseDeclared": _declared_license(str(package["license"]).strip()),
             "copyrightText": "NOASSERTION",
             "filesAnalyzed": bool(package_files),
             "packageComment": (
                 f"Inventory component {component_id}; audit_status remains incomplete. "
                 "Source, notice, and redistribution review is maintained separately."
+                f" Publisher license metadata: {str(package['license']).strip()}"
             ),
         }
         if package_files:

@@ -39,7 +39,17 @@ int main() {
         wchar_t executable[32768];
         const auto length = GetModuleFileNameW(nullptr, executable, 32768);
         require(length > 0 && length < 32768, "Cannot locate test runtime");
-        const auto root = std::filesystem::path(std::wstring(executable, length)).parent_path();
+        auto root = std::filesystem::path(std::wstring(executable, length)).parent_path();
+        wchar_t installed_root[32768];
+        const auto installed_length = GetEnvironmentVariableW(
+            L"VERTEX_TEST_RUNTIME_ROOT", installed_root, 32768);
+        if (installed_length) {
+            require(installed_length < 32768, "Installed runtime path exceeds test limit");
+            root = std::filesystem::canonical(std::filesystem::path(
+                std::wstring(installed_root, installed_length)));
+            require(std::filesystem::is_regular_file(root / "vertex-import-worker.exe"),
+                "Installed runtime does not contain the import worker");
+        }
         const auto* capture = std::getenv("VERTEX_TEST_CAPTURE_DIR");
         require(capture != nullptr, "Use independent worker runner for immutable fixtures");
         const auto fixtures = std::filesystem::path(capture) / "cad-fixtures";
@@ -53,6 +63,7 @@ int main() {
             probe.input.assign(reinterpret_cast<const std::byte*>(malformed.data()),
                 reinterpret_cast<const std::byte*>(malformed.data() + malformed.size()));
             const auto report = sketch::run_windows_import_worker(probe);
+            if (!report.launched || report.exit_code != 4) std::cerr << report.to_json().dump() << '\n';
             require(report.launched && report.exit_code == 4, "Worker startup/native-only rejection failed");
         }
         const auto dxf = run(root, fixtures / "nested-binary.dxf", sketch::ProjectImportKind::dxf);

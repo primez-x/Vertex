@@ -104,9 +104,74 @@ The SDK preparation manifest remains a standalone dependency manifest; its
 bridge. Application evidence is the independent worker report.
 
 Still required: full format compatibility qualification, production immutable
-ACL provisioning, all static/dynamic DLL dependencies, exact notice and
+ACL qualification, complete dynamic-load coverage, exact notice and
 corresponding-source closure (including IfcOpenShell and bundled native code),
-SBOM/installer integration and clean Windows offline execution. The lock and
+clean Windows offline execution. The lock and
 runtime manifests explicitly retain incomplete qualification. LGPL/GPL license
 texts and package-provided notices are present; that alone does not certify
 redistribution or fulfill every source obligation.
+
+## Offline distribution payload
+
+`prepare_cad_distribution.py` derives explicit component, file and portable
+allowlists from the pinned interpreter ZIP and wheels. It verifies the build's
+staged bytes, including the fixed LF-only `_pth` configuration, against immutable
+archive snapshots. The distribution inventory repeats archive/member checks
+and records the digest of the same lock bytes it parsed. Its payload includes
+2,527 library files, with Python code, data, metadata and notices kept in their
+original package layout beside the embedded interpreter. It does not install
+pip, launchers, development headers or inert wheel scripts/manpages.
+
+The duplicate interpreter copies of MSVC runtime and SQLite DLLs are excluded;
+the package uses the application's separately inventoried copies in `bin/`.
+NumPy and Shapely's uniquely named native DLLs remain in their wheel directories.
+Static inspection includes all declared `.pyd` and DLL entrypoints and accepts
+only verified CAD payload files from those directories. This is an import table
+check; actual worker execution remains necessary.
+
+The generated component manifest includes GNU license text hashes from the
+lock. IfcOpenShell's wheel does not supply its own license file, so the package
+also preserves its embedded copyright text. The SBOM preserves publisher
+license prose while using `NOASSERTION` for declarations that are not a reviewed
+SPDX expression; it does not promote that prose into a license conclusion.
+IfcOpenShell wheel-to-source provenance and bundled native corresponding source
+remain unqualified.
+
+The official build catalog's Windows CPython 3.13 candidate
+`ifcopenshell-python-313-v0.8.4-ff3c5b8-win64.zip` was inspected without executing
+or installing it. Its native extension SHA-256 is
+`040b46112ddb72b615c4fb4d3a689a4983804e47e66427d12d2b494d1b0714c0`;
+the locked PyPI wheel's native extension is
+`24849f9f6dbf73b9cac41aba98ea68a66f4f6cd458fb99ea9d565168bae962c7`.
+They differ, so that catalog commit cannot establish provenance for the shipped
+wheel. The PyPI integrity provenance endpoint for that exact wheel returned
+HTTP 404. Neither observation proves that source is unavailable; exact
+publisher-to-binary binding or a controlled source build remains required.
+Local inspection evidence is under `artifacts/source-provenance/`.
+
+For a controlled replacement build, the official short ref resolves to
+[`ff3c5b849eee2ef6343b537c885b971ae6bba452`](https://github.com/IfcOpenShell/IfcOpenShell/commit/ff3c5b849eee2ef6343b537c885b971ae6bba452).
+Its CMake entrypoint is `cmake/CMakeLists.txt`; the required wrapper/geometry
+options are `BUILD_IFCPYTHON=ON`, `BUILD_IFCGEOM=ON`, and
+`WITH_OPENCASCADE=ON`. `MINIMAL_BUILD` disables the Python wrapper and is
+unsuitable. Ancillary converter/server/viewer and optional format engines can
+be disabled, but the actual transitive source and build dependency closure
+still needs verification. The upstream Windows scripts at that commit use
+OCCT 7.8.1, Boost 1.86.0, Eigen 3.3.9 and SWIG 3.0.12; the application's current
+vcpkg prefix uses newer versions and is not yet qualified for that build.
+The locked CPython 3.13.15 headers/import library can supply the Python build
+inputs. Do not run upstream download/update scripts as a substitute for pinned,
+hash-verified source preparation and recorded build inputs.
+
+Use the workflow in [offline-installer.md](offline-installer.md). After installing
+an internal bundle, run the actual installed worker without replacing its files:
+
+```powershell
+& scripts/test-import-worker-independent.ps1 -Configuration Release `
+  -PackagedRuntimeRoot <installation>/bin
+```
+
+This mode runs the CAD fixtures against that installed immutable root in the
+independent AppContainer host. Developer SDK code generates only the input test
+files; the worker loads its own installed runtime. It remains development-host
+evidence, not clean-machine or complete compatibility certification.

@@ -281,7 +281,7 @@ def bootstrap(root: pathlib.Path, lock_path: pathlib.Path, destination: pathlib.
                 target.write_bytes(data)
         # _pth makes paths relative to this interpreter and disables user/site
         # discovery. No import-site line, pip, registry or PYTHONPATH dependency.
-        (stage / "python313._pth").write_text("python313.zip\n.\nLib/site-packages\n", encoding="utf-8")
+        (stage / "python313._pth").write_bytes(b"python313.zip\n.\nLib/site-packages\n")
         result = inventory(stage, lock, lock_digest)
         (stage / "runtime-manifest.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         if destination.exists():

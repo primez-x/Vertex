@@ -4,11 +4,20 @@ param(
     [ValidateSet('Debug', 'Release')][string]$Configuration = 'Release',
     [switch]$Child,
     [switch]$CaptureSelfTest,
-    [string]$CaptureDirectory
+    [string]$CaptureDirectory,
+    [string]$PackagedRuntimeRoot = ''
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if (!$IsWindows) { throw 'This runner requires Windows.' }
+if ($PackagedRuntimeRoot) {
+    if ($CaptureSelfTest -or $Configuration -ne 'Release') { throw 'Packaged CAD checking requires Release and no capture self-test.' }
+    if ($PackagedRuntimeRoot -match '["\x00-\x1f]') { throw 'Invalid packaged runtime path.' }
+    $PackagedRuntimeRoot = (Resolve-Path -LiteralPath $PackagedRuntimeRoot).Path
+    if (!(Test-Path -LiteralPath (Join-Path $PackagedRuntimeRoot 'vertex-import-worker.exe') -PathType Leaf)) {
+        throw 'Packaged runtime must identify its bin directory.'
+    }
+}
 $root = Split-Path -Parent $PSScriptRoot
 $build = Join-Path $root ('build/windows-' + $Configuration.ToLowerInvariant())
 $names = @('windows_import_worker_tests.exe', 'windows_import_worker_probe.exe',
@@ -114,7 +123,8 @@ if ($Child) {
         host_pid = $PID; user = [Security.Principal.WindowsIdentity]::GetCurrent().Name;
         host_in_job = $null; binaries_before = @(); tests = @(); error = $null;
         capture_self_test = [bool]$CaptureSelfTest; capture_limit_bytes_per_stream = $captureLimitBytes;
-        qualification_boundary = 'Development-host fixture evidence only; assistance permits synthetic fallback; no production or installed-runtime qualification.' }
+        packaged_runtime_root = $PackagedRuntimeRoot;
+        qualification_boundary = 'Development-host fixture evidence only; packaged CAD mode uses the supplied immutable installed bin directory; no clean-machine, complete compatibility or production qualification.' }
     try {
         Add-Type @'
 using System;
@@ -158,10 +168,11 @@ public static class BoundedWorkerCapture {
                 Join-Path $CaptureDirectory 'cad-fixtures')
             if ($LASTEXITCODE -ne 0) { throw 'CAD library fixture generation failed.' }
         }
-        $desktopFixtureRoot = if ($CaptureSelfTest) { $null } else {
+        $desktopFixtureRoot = if ($PackagedRuntimeRoot) { $build } elseif ($CaptureSelfTest) { $null } else {
             New-ImmutableDesktopFixtureRoot $CaptureDirectory
         }
-        $cases = if ($CaptureSelfTest) { @('capture-stdout-overflow', 'capture-stderr-overflow', 'capture-at-limit',
+        $cases = if ($PackagedRuntimeRoot) { @('cad_library_worker_tests.exe') }
+                 elseif ($CaptureSelfTest) { @('capture-stdout-overflow', 'capture-stderr-overflow', 'capture-at-limit',
                 'capture-empty', 'capture-open-failure') }
                  else { @('windows_import_worker_tests.exe', 'assistance_workflow_tests.exe',
                           'dxf_desktop_workflow_tests.exe', 'ifc_desktop_workflow_tests.exe', 'cad_library_worker_tests.exe') }
@@ -179,6 +190,8 @@ public static class BoundedWorkerCapture {
             $info.RedirectStandardError = $true
             $info.Environment['QT_QPA_PLATFORM'] = 'offscreen'
             $info.Environment['VERTEX_TEST_CAPTURE_DIR'] = $CaptureDirectory
+            $info.Environment.Remove('VERTEX_TEST_RUNTIME_ROOT') | Out-Null
+            if ($PackagedRuntimeRoot) { $info.Environment['VERTEX_TEST_RUNTIME_ROOT'] = $PackagedRuntimeRoot }
             $info.Environment['QT_PLUGIN_PATH'] = Join-Path $root '.deps/qt/6.8.3/msvc2022_64/plugins'
             $native = if ($Configuration -eq 'Debug') { 'debug/bin' } else { 'bin' }
             $info.Environment['PATH'] = (Join-Path $root '.deps/qt/6.8.3/msvc2022_64/bin') + ';' +
@@ -291,6 +304,7 @@ try {
     $command = '"' + $pwsh + '" -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -File "' + $PSCommandPath +
         '" -Configuration ' + $Configuration + ' -Child -CaptureDirectory "' + $CaptureDirectory + '"'
     if ($CaptureSelfTest) { $command += ' -CaptureSelfTest' }
+    if ($PackagedRuntimeRoot) { $command += ' -PackagedRuntimeRoot "' + $PackagedRuntimeRoot + '"' }
     $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
         CommandLine = $command; CurrentDirectory = $root; ProcessStartupInformation = $startup }
     $capture.launch_return = $created.ReturnValue
@@ -325,7 +339,7 @@ finally {
 }
 Write-Output $CaptureDirectory
 if ($capture.error) { throw $capture.error }
-$expectedCount = 5
+$expectedCount = if ($PackagedRuntimeRoot) { 1 } else { 5 }
 if (!$capture.termination_confirmed -or $capture.host_exit_code -ne 0 -or $result.host_in_job -ne $false -or
     $result.error -or @($result.tests).Count -ne $expectedCount -or (!$CaptureSelfTest -and @($result.tests | Where-Object {
         $_.exit_code -ne 0 -or $_.timed_out -or $_.capture_failure }).Count)) {

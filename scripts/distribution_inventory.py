@@ -11,12 +11,16 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import os
 import pathlib
 import re
+import stat
 import subprocess
 import sys
+import zipfile
+import zlib
 from datetime import datetime, timezone
 from typing import Any
 
@@ -37,6 +41,7 @@ SOURCE_KINDS = {
     "qt-spdx",
     "planegcs-provenance",
     "bootstrap-dependency",
+    "locked-archive",
 }
 COMPONENT_KINDS = {
     "application",
@@ -210,6 +215,54 @@ def _validate_source_files(value: Any, field: str) -> list[dict[str, str]]:
     return result
 
 
+def _validate_locked_archive_source(source: dict[str, Any], component: dict[str, Any],
+                                    field: str) -> dict[str, str]:
+    _require(set(source) == {"kind", "lock_path", "archive_filename", "archive_path", "paths", "archive_members"},
+             f"{field} has unsupported fields")
+    for key in ("lock_path", "archive_path"):
+        _canonical_relative(source.get(key), f"{field}.{key}")
+    filename = _canonical_name(source.get("archive_filename"), f"{field}.archive_filename")
+    _require(pathlib.PurePosixPath(source["archive_path"]).name == filename,
+             f"{field}.archive_path filename does not match archive_filename")
+    paths = _validate_path_list(source.get("paths"), f"{field}.paths") if source.get("paths") != [] else []
+    _require(paths == source["paths"], f"{field}.paths must be canonical")
+    files = _validate_source_files(component.get("source_files"), f"{field}.source_files")
+    _require(bool(files), f"{field} requires nonempty source_files")
+    for item in component["source_files"]:
+        _require(set(item) == {"path", "sha256"}, f"{field}.source_files has unsupported fields")
+        _require(item["path"] == _canonical_relative(item["path"], f"{field}.source_files.path"),
+                 f"{field}.source_files.path must be canonical")
+    mapping = source.get("archive_members")
+    _require(isinstance(mapping, dict), f"{field}.archive_members must be an object")
+    canonical_mapping: dict[str, str] = {}
+    for path, member in mapping.items():
+        canonical_path = _canonical_relative(path, f"{field}.archive_members path")
+        canonical_member = _canonical_relative(member, f"{field}.archive_members[{path}]")
+        _require(path == canonical_path and member == canonical_member,
+                 f"{field}.archive_members paths must be canonical")
+        canonical_mapping[canonical_path] = canonical_member
+    file_paths = {item["path"] for item in files}
+    _require(set(canonical_mapping) == file_paths,
+             f"{field}.archive_members must exactly cover source_files")
+    _require(len({path.casefold() for path in file_paths}) == len(file_paths),
+             f"{field}.source_files contains ambiguous paths")
+    _require(len(set(canonical_mapping.values())) == len(canonical_mapping),
+             f"{field}.archive_members repeats an archive member")
+    runtime_paths: set[str] = set()
+    names = component.get("runtime_names", [])
+    _require(isinstance(names, list), f"{field}.runtime_names must be a list")
+    for value in names:
+        name = _canonical_name(value, f"{field}.runtime_names")
+        matches = [path for path in file_paths if pathlib.PurePosixPath(path).name.casefold() == name.casefold()]
+        _require(len(matches) == 1, f"{field} needs one exact source_file for runtime {name}")
+        runtime_paths.add(matches[0])
+    _require(set(paths) == file_paths - runtime_paths,
+             f"{field}.paths must exactly cover non-runtime source_files")
+    _require(not any(pathlib.PurePosixPath(path).suffix.casefold() in {".exe", ".dll", ".pyd"} for path in paths),
+             f"{field}.paths cannot contain PE runtime files")
+    return canonical_mapping
+
+
 def _validate_spdx_hash_overrides(value: Any, field: str) -> dict[str, dict[str, str]]:
     """Validate explicit provenance for a known-bad SPDX file checksum.
 
@@ -346,7 +399,9 @@ def validate_manifest(manifest: Any) -> None:
                      f"{field}.source needs dependency_name or asset_name")
             _require(not (source.get("dependency_name") and source.get("asset_name")),
                      f"{field}.source cannot set both dependency_name and asset_name")
-        if "paths" in source:
+        elif source_kind == "locked-archive":
+            _validate_locked_archive_source(source, component, f"{field}.source")
+        if "paths" in source and not (source_kind == "locked-archive" and source["paths"] == []):
             _validate_path_list(source.get("paths"), f"{field}.source.paths")
 
         notice_paths = component.get("notice_paths")
@@ -839,6 +894,106 @@ def _workspace_context(root: pathlib.Path, component: dict[str, Any]) -> dict[st
     return {"kind": "workspace", "source_paths": _describe_paths(root, source, component)}
 
 
+def _locked_archive_file(root: pathlib.Path, value: str, field: str) -> tuple[str, pathlib.Path]:
+    """Reject links/reparse points before the existing repository-boundary check."""
+    relative = _canonical_relative(value, field)
+    current = root
+    try:
+        for part in pathlib.PurePosixPath(relative).parts:
+            current = current / part
+            metadata = current.lstat()
+            _require(not stat.S_ISLNK(metadata.st_mode)
+                     and not (getattr(metadata, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT),
+                     f"{field} cannot contain a symlink or reparse point: {relative}")
+    except OSError as exc:
+        _error(f"could not inspect {field} {relative}: {exc}")
+    canonical, resolved = _relative_existing_path(root, relative, field, file_only=True)
+    _require(canonical == relative, f"{field} does not identify the exact declared path: {relative}")
+    return canonical, resolved
+
+
+def _locked_archive_context(root: pathlib.Path, component: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    source = component["source"]
+    field = f"component {component['id']} locked archive"
+    members = _validate_locked_archive_source(source, component, field)
+    lock_relative, lock_path = _locked_archive_file(root, source["lock_path"], f"{field} lock_path")
+    try:
+        lock_bytes = lock_path.read_bytes()
+        lock = json.loads(lock_bytes.decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        _error(f"Malformed {field} lock JSON: {exc}")
+    _require(isinstance(lock, dict), f"{field} lock must be an object")
+    assets = lock.get("assets")
+    _require(isinstance(assets, list), f"{field} lock.assets must be a list")
+    matches = [item for item in assets if isinstance(item, dict)
+               and item.get("filename") == source["archive_filename"]]
+    _require(len(matches) == 1, f"{field} lock must identify exactly one archive_filename")
+    asset = matches[0]
+    kind = asset.get("kind")
+    _require(kind in {"interpreter", "wheel"}, f"{field} asset kind must be interpreter or wheel")
+    suffix = ".zip" if kind == "interpreter" else ".whl"
+    _require(source["archive_filename"].endswith(suffix), f"{field} filename does not match asset kind")
+    for key in ("name", "version", "license"):
+        _require(asset.get(key) == component["package"][key], f"{field} {key} mismatch with lock")
+    expected_archive_hash = _validate_sha256(asset.get("sha256"), f"{field} lock.sha256")
+    url = _require_string(asset.get("url"), f"{field} lock.url")
+    archive_relative, archive_path = _locked_archive_file(root, source["archive_path"], f"{field} archive_path")
+    try:
+        # Parse exactly the bytes that were hashed, even if the cache changes
+        # after this read. Never extract an archive into the repository.
+        archive_bytes = archive_path.read_bytes()
+    except OSError as exc:
+        _error(f"could not read {field} archive {archive_relative}: {exc}")
+    archive_hash = hashlib.sha256(archive_bytes).hexdigest()
+    _require(archive_hash == expected_archive_hash,
+             f"stale locked archive hash for {archive_relative}: expected {expected_archive_hash}, received {archive_hash}")
+    file_hashes = {item["path"]: item["sha256"] for item in _validate_source_files(
+        component["source_files"], f"{field} source_files")}
+    descriptions: list[dict[str, Any]] = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
+            archive_names: dict[str, zipfile.ZipInfo] = {}
+            for info in archive.infolist():
+                _require(info.filename not in archive_names, f"{field} archive repeats member {info.filename}")
+                archive_names[info.filename] = info
+            for relative, expected in sorted(file_hashes.items()):
+                member = members[relative]
+                info = archive_names.get(member)
+                _require(info is not None and not info.is_dir(), f"{field} archive member is missing or not a file: {member}")
+                file_type = stat.S_IFMT(info.external_attr >> 16)
+                _require(file_type in {0, stat.S_IFREG}, f"{field} archive member is not a regular file: {member}")
+                _require(info.file_size <= 512 * 1024 * 1024, f"{field} archive member is unexpectedly large: {member}")
+                member_bytes = archive.read(info)
+                canonical, path = _locked_archive_file(root, relative, f"{field} staged source_file")
+                staged_bytes = path.read_bytes()
+                actual = hashlib.sha256(staged_bytes).hexdigest()
+                _require(actual == expected, f"stale source hash for {canonical}: expected {expected}, received {actual}")
+                transformed = (kind == "interpreter" and member == "python313._pth"
+                               and pathlib.PurePosixPath(relative).name == "python313._pth"
+                               and staged_bytes == b"python313.zip\n.\nLib/site-packages\n")
+                _require(staged_bytes == member_bytes or transformed,
+                         f"{field} archive member bytes do not match staged source_file {relative}: {member}")
+                _require(relative not in source["paths"] or not staged_bytes.startswith(b"MZ"),
+                         f"{field} source.paths cannot contain PE runtime bytes: {relative}")
+                row = {"path": canonical, "kind": "file", "sha256": actual}
+                if transformed and staged_bytes != member_bytes:
+                    row["generated_transform"] = "python313-pth-site-packages"
+                    row["archive_member_sha256"] = hashlib.sha256(member_bytes).hexdigest()
+                descriptions.append(row)
+    except (OSError, ValueError, RuntimeError, EOFError, zipfile.BadZipFile, NotImplementedError, zlib.error) as exc:
+        if isinstance(exc, InventoryError):
+            raise
+        _error(f"could not verify {field} archive members: {exc}")
+    public = {
+        "kind": "locked-archive", "url": url, "lock_path": lock_relative,
+        "lock_sha256": hashlib.sha256(lock_bytes).hexdigest(), "archive_filename": source["archive_filename"],
+        "archive_path": archive_relative, "archive_sha256": archive_hash,
+        "archive_members": members, "source_paths": descriptions,
+        "licensing_clearance": False, "source_closure_qualified": False,
+    }
+    return public, {"file_hashes": file_hashes}
+
+
 def _package_manager_evidence(root: pathlib.Path, manifest: dict[str, Any]) -> list[dict[str, str]]:
     result: list[dict[str, str]] = []
     for index, manager in enumerate(manifest.get("package_managers", [])):
@@ -874,6 +1029,8 @@ def _prepare_component(root: pathlib.Path, component: dict[str, Any]) -> dict[st
     elif source_kind == "planegcs-provenance":
         source_payload = _planegcs_context(root, component)
         private_source = None
+    elif source_kind == "locked-archive":
+        source_payload, private_source = _locked_archive_context(root, component)
     elif source_kind == "redistributable":
         pins = component["source"].get("sha256")
         _require(isinstance(pins, dict) and bool(pins), "redistributable requires reviewed binary hashes")
@@ -909,6 +1066,9 @@ def _prepare_component(root: pathlib.Path, component: dict[str, Any]) -> dict[st
         "notices": notices,
         "artifacts": artifacts,
     }
+    if source_kind == "locked-archive":
+        component_payload["source_inputs"] = [
+            row for row in source_payload["source_paths"] if row["path"] in component["source"]["paths"]]
     return {
         "manifest": component,
         "payload": component_payload,
@@ -958,6 +1118,18 @@ def _runtime_inventory(root: pathlib.Path, evidence: dict[str, Any], prepared: d
         if owner["manifest"]["source"]["kind"] == "redistributable":
             pinned = owner["payload"]["package"]["source"]["sha256"][module_path.name.casefold()]
             _require(actual_hash == pinned, f"redistributable binary differs from reviewed hash: {module_relative}")
+        elif owner["manifest"]["source"]["kind"] == "locked-archive":
+            pins = owner["private_source"]["file_hashes"]
+            _require(module_relative in pins,
+                     f"locked archive runtime path is not a declared source_file: {module_relative}")
+            configured = pathlib.Path(module["path"])
+            try:
+                lexical = configured.relative_to(root).as_posix() if configured.is_absolute() else str(configured)
+            except ValueError:
+                _error(f"locked archive runtime path must be inside the repository: {module['path']}")
+            _locked_archive_file(root, lexical, f"{field} locked archive runtime path")
+            _require(actual_hash == pins[module_relative],
+                     f"locked archive runtime hash differs from pinned source_file: {module_relative}")
         record = {
             "path": module_relative,
             "name": module_path.name,
@@ -998,7 +1170,7 @@ def _runtime_inventory(root: pathlib.Path, evidence: dict[str, Any], prepared: d
             "notices": component_row["notices"],
             "evidence": {"runtime_module": module["path"], "runtime_sha256": module["sha256"]},
         }
-        if owner["private_source"] is not None:
+        if manifest_component["source"]["kind"] in {"vcpkg-spdx", "qt-spdx"}:
             binary["evidence"]["spdx_path"] = component_row["package"]["source"]["spdx_path"]
             binary["evidence"]["spdx_file"] = _spdx_file_for_binary(
                 root, owner["private_source"], module["path"], manifest_component["id"])
@@ -1075,7 +1247,8 @@ def build_inventory(root: pathlib.Path | str, manifest: dict[str, Any],
             continue
         payload = item["payload"]
         source = component["source"]
-        source_paths = _describe_paths(root, source, component) if source.get("paths") else []
+        source_paths = (payload["source_inputs"] if source["kind"] == "locked-archive"
+                        else _describe_paths(root, source, component) if source.get("paths") else [])
         if source_paths:
             payload = dict(payload)
             payload["source_inputs"] = source_paths

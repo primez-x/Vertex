@@ -2,9 +2,12 @@ import hashlib
 import importlib.util
 import json
 import pathlib
+import stat
 import subprocess
 import tempfile
 import unittest
+import zipfile
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -330,6 +333,220 @@ class DistributionInventoryTests(unittest.TestCase):
 
         row = next(item for item in result["binaries"] if item["name"] == "dependency.dll")
         self.assertEqual(row["evidence"]["spdx_file"]["file_name"], "./dependency.dll")
+
+    def locked_archive_fixture(self, *, interpreter=False):
+        directory, root, manifest, runtime, app, dependency = self.fixture()
+        self.addCleanup(directory.cleanup)
+        binary = root / "stage" / "cad-runtime" / "dependency.dll"
+        payload = root / "stage" / "cad-runtime" / ("python313._pth" if interpreter else "Lib/example.py")
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        payload.parent.mkdir(parents=True, exist_ok=True)
+        binary.write_bytes(dependency.read_bytes())
+        payload.write_bytes(b"python313.zip\n.\nLib/site-packages\n" if interpreter else b"example = 1\n")
+        filename = "python-3.13.15-embed-amd64.zip" if interpreter else "example-1.0-py3-none-any.whl"
+        archive = root / "cache" / filename
+        archive.parent.mkdir()
+        member = "python313._pth" if interpreter else "example/__init__.py"
+        with zipfile.ZipFile(archive, "w") as source:
+            source.writestr("dependency.dll", binary.read_bytes())
+            source.writestr(member, b"python313.zip\n.\n# import site\n" if interpreter else payload.read_bytes())
+        lock = root / "third_party" / "cad-runtime-lock.json"
+        entry = {"filename": filename, "name": "Dependency", "version": "1.0", "license": "MIT",
+                 "kind": "interpreter" if interpreter else "wheel", "sha256": digest(archive),
+                 "url": "https://example.invalid/" + filename}
+        write_json(lock, {"assets": [entry]})
+        component = manifest["components"][1]
+        binary_relative, payload_relative = binary.relative_to(root).as_posix(), payload.relative_to(root).as_posix()
+        component["source"] = {
+            "kind": "locked-archive", "lock_path": "third_party/cad-runtime-lock.json",
+            "archive_filename": filename, "archive_path": archive.relative_to(root).as_posix(),
+            "paths": [payload_relative],
+            "archive_members": {binary_relative: "dependency.dll", payload_relative: member},
+        }
+        component["source_files"] = [{"path": binary_relative, "sha256": digest(binary)},
+                                     {"path": payload_relative, "sha256": digest(payload)}]
+        evidence = json.loads(runtime.read_text(encoding="utf-8"))
+        evidence["modules"][1]["path"] = str(binary)
+        evidence["modules"][0]["imports"][0].update(resolved=str(binary), candidates=[str(binary)])
+        write_json(runtime, evidence)
+        return root, manifest, runtime, archive, lock, binary, payload, entry
+
+    def test_locked_archive_binds_members_and_exposes_runtime_assets(self):
+        root, manifest, runtime, archive, lock, binary, payload, entry = self.locked_archive_fixture()
+        result = inventory.build_inventory(root, manifest)
+        row = next(item for item in result["components"] if item["id"] == "dependency")
+        source = row["package"]["source"]
+        self.assertEqual(source["kind"], "locked-archive")
+        self.assertEqual(source["archive_sha256"], entry["sha256"])
+        self.assertEqual(source["url"], entry["url"])
+        self.assertFalse(source["licensing_clearance"])
+        self.assertFalse(source["source_closure_qualified"])
+        self.assertEqual(row["source_inputs"], [{"path": payload.relative_to(root).as_posix(),
+                                               "kind": "file", "sha256": digest(payload)}])
+        self.assertEqual(len(source["source_paths"]), 2)
+        self.assertNotIn(str(root), json.dumps(result))
+
+    def test_locked_archive_rejects_staged_tamper_even_with_updated_manifest_hash(self):
+        root, manifest, runtime, archive, lock, binary, payload, entry = self.locked_archive_fixture()
+        payload.write_bytes(b"substituted")
+        manifest["components"][1]["source_files"][1]["sha256"] = digest(payload)
+        with self.assertRaisesRegex(inventory.InventoryError, "archive member"):
+            inventory.build_inventory(root, manifest)
+
+    def test_locked_archive_rejects_archive_substitution(self):
+        root, manifest, runtime, archive, lock, binary, payload, entry = self.locked_archive_fixture()
+        with zipfile.ZipFile(archive, "a") as source:
+            source.writestr("substitute", b"unlocked")
+        with self.assertRaisesRegex(inventory.InventoryError, "archive hash"):
+            inventory.build_inventory(root, manifest)
+
+    def test_locked_archive_uses_same_immutable_bytes_for_hash_and_members(self):
+        root, manifest, runtime, archive, lock, binary, payload, entry = self.locked_archive_fixture()
+        original = inventory.zipfile.ZipFile
+        def replace_cache_then_open(*args, **kwargs):
+            archive.write_bytes(b"changed after read")
+            return original(*args, **kwargs)
+        with mock.patch.object(inventory.zipfile, "ZipFile", side_effect=replace_cache_then_open):
+            result = inventory.build_inventory(root, manifest)
+        self.assertEqual(len(result["binaries"]), 2)
+
+    def test_locked_archive_uses_same_lock_bytes_for_parsing_and_digest(self):
+        root, manifest, runtime, archive, lock, binary, payload, entry = self.locked_archive_fixture()
+        original = lock.read_bytes()
+        open_zip = inventory.zipfile.ZipFile
+        def replace_lock_then_open(value):
+            lock.write_bytes(b'{"assets": []}')
+            return open_zip(value)
+        with mock.patch.object(inventory.zipfile, "ZipFile", side_effect=replace_lock_then_open):
+            result = inventory.build_inventory(root, manifest)
+        component = next(row for row in result["components"] if row["id"] == "dependency")
+        self.assertEqual(component["package"]["source"]["lock_sha256"], hashlib.sha256(original).hexdigest())
+        self.assertNotEqual(component["package"]["source"]["lock_sha256"], digest(lock))
+
+    def test_locked_archive_rejects_version_license_name_and_kind_mismatch(self):
+        for field, value in (("version", "2.0"), ("license", "BSD-3-Clause"),
+                             ("name", "Another package"), ("kind", "development")):
+            with self.subTest(field=field):
+                root, manifest, runtime, archive, lock, binary, payload, entry = self.locked_archive_fixture()
+                entry[field] = value
+                write_json(lock, {"assets": [entry]})
+                with self.assertRaises(inventory.InventoryError):
+                    inventory.build_inventory(root, manifest)
+
+    def test_locked_archive_rejects_extra_fields_and_mapping_gaps(self):
+        for mutation in ("source", "source_file", "extra_mapping", "missing_mapping", "extra_path", "alias_member"):
+            with self.subTest(mutation=mutation):
+                root, manifest, runtime, archive, lock, binary, payload, entry = self.locked_archive_fixture()
+                component = manifest["components"][1]
+                source = component["source"]
+                if mutation == "source":
+                    source["trust_override"] = True
+                elif mutation == "source_file":
+                    component["source_files"][0]["trust_override"] = True
+                elif mutation == "extra_mapping":
+                    source["archive_members"]["stage/extra.py"] = "extra.py"
+                elif mutation == "missing_mapping":
+                    source["archive_members"].pop(payload.relative_to(root).as_posix())
+                elif mutation == "extra_path":
+                    source["paths"].append("stage/extra.py")
+                else:
+                    source["archive_members"][payload.relative_to(root).as_posix()] = "example/./__init__.py"
+                with self.assertRaises(inventory.InventoryError):
+                    inventory.build_inventory(root, manifest)
+
+    def test_locked_archive_rejects_runtime_basename_substitution(self):
+        root, manifest, runtime, archive, lock, binary, payload, entry = self.locked_archive_fixture()
+        substitute = root / "other-stage" / binary.name
+        substitute.parent.mkdir()
+        substitute.write_bytes(binary.read_bytes())
+        evidence = json.loads(runtime.read_text(encoding="utf-8"))
+        evidence["modules"][1]["path"] = str(substitute)
+        evidence["modules"][0]["imports"][0].update(resolved=str(substitute), candidates=[str(substitute)])
+        write_json(runtime, evidence)
+        with self.assertRaisesRegex(inventory.InventoryError, "locked.*(path|source)"):
+            inventory.build_inventory(root, manifest)
+
+    def test_locked_interpreter_allows_only_fixed_pth_transform(self):
+        root, manifest, runtime, archive, lock, binary, payload, entry = self.locked_archive_fixture(interpreter=True)
+        result = inventory.build_inventory(root, manifest)
+        self.assertEqual(len(result["binaries"]), 2)
+        payload.write_bytes(b"python313.zip\n.\nimport site\n")
+        manifest["components"][1]["source_files"][1]["sha256"] = digest(payload)
+        with self.assertRaisesRegex(inventory.InventoryError, "archive member"):
+            inventory.build_inventory(root, manifest)
+
+    def test_locked_wheel_does_not_allow_pth_transform(self):
+        root, manifest, runtime, archive, lock, binary, payload, entry = self.locked_archive_fixture(interpreter=True)
+        entry["kind"] = "wheel"
+        write_json(lock, {"assets": [entry]})
+        with self.assertRaises(inventory.InventoryError):
+            inventory.build_inventory(root, manifest)
+
+    def test_locked_archive_rejects_corrupt_duplicate_and_link_members(self):
+        for mutation in ("corrupt", "duplicate", "link", "missing"):
+            with self.subTest(mutation=mutation):
+                root, manifest, runtime, archive, lock, binary, payload, entry = self.locked_archive_fixture()
+                if mutation == "corrupt":
+                    archive.write_bytes(b"not a ZIP")
+                else:
+                    with zipfile.ZipFile(archive, "w") as source:
+                        source.writestr("dependency.dll", binary.read_bytes())
+                        if mutation != "missing":
+                            info = zipfile.ZipInfo("example/__init__.py")
+                            if mutation == "link":
+                                info.create_system = 3
+                                info.external_attr = (stat.S_IFLNK | 0o777) << 16
+                            source.writestr(info, payload.read_bytes())
+                        if mutation == "duplicate":
+                            with self.assertWarns(UserWarning):
+                                source.writestr("dependency.dll", binary.read_bytes())
+                entry["sha256"] = digest(archive)
+                write_json(lock, {"assets": [entry]})
+                with self.assertRaisesRegex(inventory.InventoryError, "(archive|member)"):
+                    inventory.build_inventory(root, manifest)
+
+    def test_locked_archive_rejects_reparse_cache_or_staged_path(self):
+        for target_kind in ("archive", "cache_directory", "payload"):
+            with self.subTest(target=target_kind):
+                root, manifest, runtime, archive, lock, binary, payload, entry = self.locked_archive_fixture()
+                target = {"archive": archive, "cache_directory": archive.parent, "payload": payload}[target_kind]
+                original = pathlib.Path.lstat
+                def reparse_metadata(path, *args, **kwargs):
+                    metadata = original(path, *args, **kwargs)
+                    if path == target:
+                        return SimpleNamespace(st_mode=metadata.st_mode, st_file_attributes=0x400)
+                    return metadata
+                with mock.patch.object(pathlib.Path, "lstat", reparse_metadata):
+                    with self.assertRaisesRegex(inventory.InventoryError, "reparse"):
+                        inventory.build_inventory(root, manifest)
+
+    def test_locked_archive_rejects_pe_payload_and_allows_empty_asset_list(self):
+        root, manifest, runtime, archive, lock, binary, payload, entry = self.locked_archive_fixture()
+        component = manifest["components"][1]
+        component["source"]["paths"].append(binary.relative_to(root).as_posix())
+        with self.assertRaises(inventory.InventoryError):
+            inventory.build_inventory(root, manifest)
+        component["source"]["paths"] = []
+        component["source_files"].pop()
+        component["source"]["archive_members"].pop(payload.relative_to(root).as_posix())
+        result = inventory.build_inventory(root, manifest)
+        row = next(item for item in result["components"] if item["id"] == "dependency")
+        self.assertEqual(row["source_inputs"], [])
+
+    def test_locked_archive_asset_only_component_preserves_verified_inputs(self):
+        root, manifest, runtime, archive, lock, binary, payload, entry = self.locked_archive_fixture()
+        component = manifest["components"][1]
+        component.update(kind="asset", runtime_names=[], destinations={})
+        component["source_files"].pop(0)
+        component["source"]["archive_members"].pop(binary.relative_to(root).as_posix())
+        evidence = json.loads(runtime.read_text(encoding="utf-8"))
+        evidence["modules"].pop()
+        evidence["modules"][0]["imports"] = []
+        write_json(runtime, evidence)
+        result = inventory.build_inventory(root, manifest)
+        row = result["static_inputs"][0]
+        self.assertEqual(row["source_inputs"], [{"path": payload.relative_to(root).as_posix(),
+                                               "kind": "file", "sha256": digest(payload)}])
 
 
 if __name__ == "__main__":

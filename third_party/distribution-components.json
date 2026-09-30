@@ -89,6 +89,10 @@
           "src/desktop/reference_import_worker.cpp",
           "src/desktop/reference_import.hpp",
           "src/desktop/reference_import.cpp",
+          "src/desktop/cad_library_bridge.cpp",
+          "src/desktop/cad_library_bridge.hpp",
+          "src/desktop/cad_library_adapter.py",
+          "resources/windows/vertex-import-worker.manifest",
           "include/sketch/windows_import_worker.hpp",
           "src/core/windows_import_worker.cpp",
           "CMakeLists.txt"
