@@ -257,6 +257,7 @@ public:
     // participates in printable/exported scene output.
     [[nodiscard]] QRectF overviewMapRect() const noexcept;
     [[nodiscard]] Vec2 viewCenter() const noexcept { return m_view_center; }
+    [[nodiscard]] double viewScale() const noexcept { return m_scale; }
     void renderScene(QPainter& painter, const QRectF& viewport) const;
     void renderScene(QPainter& painter, const QRectF& viewport, bool fit_to_content,
                      QColor background) const;
@@ -311,8 +312,23 @@ public:
         std::optional<std::vector<CanvasEntity>> result);
     void setOpeningWidthResizeRequested(
         std::function<bool(QString, double, bool, std::uint64_t)> callback);
+    // Exact document projection for a selected stable boundary vertex. The
+    // returned entities override screen geometry only, including related owners.
+    // nullopt rejects unless the callback marks its current serial pending.
+    void setBoundaryVertexPreviewRequested(std::function<std::optional<std::vector<CanvasEntity>>(
+        QString, QString, Vec2, std::uint64_t)> callback);
+    [[nodiscard]] std::uint64_t boundaryVertexPreviewSerial() const noexcept {
+        return m_boundary_vertex_preview_serial;
+    }
+    bool markBoundaryVertexPreviewPending(std::uint64_t serial);
+    bool completeBoundaryVertexPreview(std::uint64_t serial,
+        std::optional<std::vector<CanvasEntity>> result);
+    // Read-only exact interactive overrides; committed/exported entities stay separate.
+    [[nodiscard]] const std::vector<CanvasEntity>& boundaryVertexPreviewEntities() const noexcept {
+        return m_boundary_vertex_entities_preview;
+    }
     // Commits one selected boundary vertex at an absolute model-space point.
-    // The canvas previews locally and restores document geometry if rejected.
+    // Final document admission recomputes pending previews from this point.
     void setBoundaryVertexMoveRequested(
         std::function<bool(QString, QString, Vec2, std::uint64_t)> callback);
     void setSymbolDropped(std::function<void(QString, double, Vec2)> callback);
@@ -376,6 +392,9 @@ private:
     };
     [[nodiscard]] std::optional<VertexHandleHit> vertexHandleAt(
         QPointF point, const QRectF& viewport) const;
+    void updateBoundaryVertexPreview(QPointF point);
+    bool applyBoundaryVertexPreview(std::uint64_t serial,
+        std::optional<std::vector<CanvasEntity>> result);
     void drawVertexHandles(QPainter& painter, const QRectF& viewport) const;
     struct OpeningWidthHandleHit {
         QString entity_id;
@@ -477,6 +496,12 @@ private:
     double m_transform_initial_rotation{};
     std::optional<VertexHandleHit> m_vertex_move_handle;
     std::optional<Vec2> m_vertex_move_preview;
+    std::vector<CanvasEntity> m_boundary_vertex_entities_preview;
+    bool m_boundary_vertex_preview_valid{};
+    bool m_boundary_vertex_preview_pending{};
+    bool m_boundary_vertex_preview_request_in_progress{};
+    std::uint64_t m_boundary_vertex_preview_serial{};
+    std::optional<QPointF> m_boundary_vertex_preview_pointer;
     std::optional<OpeningWidthHandleHit> m_opening_width_handle;
     std::optional<double> m_opening_width_press_station;
     std::optional<double> m_opening_width_pointer_station;
@@ -514,6 +539,8 @@ private:
     std::function<std::optional<std::vector<CanvasEntity>>(
         QString, double, bool, std::uint64_t)> m_opening_width_preview_requested;
     std::function<bool(QString, double, bool, std::uint64_t)> m_opening_width_resize_requested;
+    std::function<std::optional<std::vector<CanvasEntity>>(
+        QString, QString, Vec2, std::uint64_t)> m_boundary_vertex_preview_requested;
     std::function<bool(QString, QString, Vec2, std::uint64_t)>
         m_boundary_vertex_move_requested;
     std::function<void(QString, double, Vec2)> m_symbol_dropped;

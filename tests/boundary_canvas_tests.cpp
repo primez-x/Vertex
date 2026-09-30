@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QDialog>
 #include <QEventLoop>
+#include <QFocusEvent>
 #include <QFontDatabase>
 #include <QFontMetrics>
 #include <QFontMetricsF>
@@ -1673,6 +1674,265 @@ void test_boundary_vertex_handles_preview_and_commit_once() {
             "vertex handles must never appear in print or export output");
 }
 
+struct VertexPreviewFixture {
+    PlanCanvas canvas;
+    CanvasEntity boundary;
+    CanvasEntity neighbor;
+    int requests{}, commits{};
+    std::uint64_t serial{};
+    Vec2 requested{}, committed{};
+    VertexPreviewFixture() {
+        canvas.resize(640, 480);
+        canvas.setGridEnabled(false);
+        canvas.setSnapEnabled(false);
+        canvas.setOverviewMapEnabled(false);
+        canvas.setMetricUnits(true);
+        boundary = CanvasEntity{QStringLiteral("boundary"), QStringLiteral("measurement_boundary"),
+            {{{-1,-1},{1,-1},0},{{1,-1},{1,1},0},{{1,1},{-1,1},0},{{-1,1},{-1,-1},0}}, .08, true};
+        boundary.vertex_handles = {{QStringLiteral("v2"), {1,1}, 41}};
+        neighbor = CanvasEntity{QStringLiteral("neighbor"), QStringLiteral("wall"),
+            {{{2,-1},{2,1},0}}, .08};
+        canvas.setEntities({boundary, neighbor});
+        canvas.setBoundaryVertexMoveRequested([&](QString owner, QString vertex, Vec2 target,
+                                                  std::uint64_t revision) {
+            require(owner == boundary.id && vertex == QStringLiteral("v2") && revision == 41,
+                    "vertex commit must preserve captured identity and source revision");
+            ++commits;
+            committed = target;
+            return false; // Final document admission can reject without canvas persistence.
+        });
+        canvas.setBoundaryVertexPreviewRequested([&](QString owner, QString vertex, Vec2 target,
+                                                     std::uint64_t revision)
+            -> std::optional<std::vector<CanvasEntity>> {
+            require(owner == boundary.id && vertex == QStringLiteral("v2") && revision == 41,
+                    "vertex preview must preserve captured identity and source revision");
+            ++requests;
+            requested = target;
+            serial = canvas.boundaryVertexPreviewSerial();
+            require(canvas.markBoundaryVertexPreviewPending(serial),
+                    "current vertex callback must be able to mark pending");
+            return std::nullopt;
+        });
+    }
+    static QPointF screen(Vec2 point) { return {320 + point.x*80, 240-point.y*80}; }
+    void mouse(QEvent::Type type, Vec2 point) {
+        const auto position = screen(point);
+        QMouseEvent event(type, position, canvas.mapToGlobal(position.toPoint()),
+            type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+            type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &event);
+    }
+    void begin(Vec2 target = {1.5,.8}) {
+        mouse(QEvent::MouseButtonPress, {1,1});
+        mouse(QEvent::MouseMove, target);
+    }
+    void release(Vec2 target = {1.5,.8}) { mouse(QEvent::MouseButtonRelease, target); }
+    void cancel() {
+        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &escape);
+    }
+    QImage output() {
+        QImage image(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+        QPainter painter(&image);
+        canvas.renderSceneAt(painter,image.rect(),80,{},background);
+        return image;
+    }
+    std::vector<CanvasEntity> exact(Vec2 target = {1.5,.8}) const {
+        auto owner = boundary;
+        owner.segments[1].end = target;
+        owner.segments[2].start = target;
+        owner.vertex_handles[0].position = target;
+        // Distinct related-object geometry proves the canvas uses the exact
+        // projection instead of locally nudging only the selected owner.
+        auto related = neighbor;
+        related.segments = {{{2.5,-1},{2.5,1},0}};
+        related.selected = true; // Projection cannot change retained selection.
+        return {owner, related};
+    }
+};
+
+int vertex_preview_red_pixels(const QImage& image) {
+    int count = 0;
+    for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x) {
+        const auto color = image.pixelColor(x,y);
+        if (color.red() > 175 && color.green() < 90 && color.blue() < 90) ++count;
+    }
+    return count;
+}
+
+void test_boundary_vertex_exact_preview_protocol() {
+    VertexPreviewFixture f;
+    const auto initial = render(f.canvas, false);
+    const auto output = render(f.canvas, true);
+    const auto fixed_output = f.output();
+    const auto before = f.canvas.boundaryVertexPreviewSerial();
+    f.mouse(QEvent::MouseButtonPress,{1,1});
+    f.mouse(QEvent::MouseMove,{1.025,1}); f.release({1.025,1});
+    require(f.requests == 0 && f.commits == 0,
+            "movement below the platform threshold must not project or commit a vertex edit");
+    f.begin();
+    require(f.requests == 1 && f.serial > before && f.commits == 0 &&
+            std::abs(f.requested.x-1.5) < 1e-9 && std::abs(f.requested.y-.8) < 1e-9,
+            "vertex drag must request an exact projection after the drag threshold");
+    const auto pending = render(f.canvas, false);
+    // The lower edges are far from pointer/handle/readout overlays.
+    require(differing_pixels(initial, pending, QRect(394,260,22,45)) == 0 &&
+            differing_pixels(initial, pending, QRect(474,260,12,45)) == 0,
+            "pending vertex proposal must not fabricate owner or neighbor movement");
+    require(vertex_preview_red_pixels(pending) == 0 && !images_equal(initial,pending),
+            "pending vertex proposal must show feedback without false invalidity");
+    require(f.canvas.completeBoundaryVertexPreview(f.serial, f.exact()),
+            "current exact vertex projection must be consumed");
+    const auto exact = render(f.canvas, false);
+    require(differing_pixels(pending,exact,QRect(474,260,12,45)) > 0 &&
+            differing_pixels(pending,exact,QRect(514,260,12,45)) > 0,
+            "exact preview must replace related-owner geometry at its analytical position");
+    require(vertex_preview_red_pixels(exact) == 0 && images_equal(output,render(f.canvas,true)) &&
+            images_equal(fixed_output,f.output()) &&
+            f.canvas.entities()[0].segments[1].end.x == 1 &&
+            f.canvas.entities()[1].segments[0].start.x == 2 &&
+            !f.canvas.entities()[1].selected,
+            "exact vertex preview must preserve source entities, selection, and output");
+    require(!f.canvas.completeBoundaryVertexPreview(f.serial, std::nullopt),
+            "duplicate vertex completion must be rejected");
+    VertexPreviewFixture expected;
+    auto expected_entities = f.exact();
+    expected_entities[1].selected = false;
+    expected.canvas.setEntities(std::move(expected_entities));
+    require(differing_pixels(exact,render(expected.canvas,false),QRect(470,250,60,55)) == 0,
+            "related preview geometry must match the exact projected scene");
+    f.release(); f.release();
+    require(f.requests == 1 && f.commits == 1 && std::abs(f.committed.x-1.5) < 1e-9 &&
+            !f.canvas.completeBoundaryVertexPreview(f.serial, f.exact()) &&
+            images_equal(output,render(f.canvas,true)),
+            "valid release must commit once and invalidate exact transient geometry");
+
+    VertexPreviewFixture sync;
+    sync.canvas.setBoundaryVertexPreviewRequested([&](QString,QString,Vec2 target,std::uint64_t)
+        -> std::optional<std::vector<CanvasEntity>> {
+        ++sync.requests; return sync.exact(target);
+    });
+    sync.begin(); sync.release();
+    require(sync.requests == 1 && sync.commits == 1,
+            "synchronous exact vertex preview must share the deferred release contract");
+}
+
+void test_boundary_vertex_invalid_and_final_pointer() {
+    VertexPreviewFixture invalid;
+    invalid.begin();
+    require(invalid.canvas.completeBoundaryVertexPreview(invalid.serial, std::nullopt) &&
+            vertex_preview_red_pixels(render(invalid.canvas,false)) > 0,
+            "known invalid vertex proposal must paint clear invalid feedback");
+    invalid.release();
+    require(invalid.requests == 1 && invalid.commits == 0,
+            "known invalid final vertex proposal must not restart preview or commit");
+
+    VertexPreviewFixture missing;
+    missing.begin();
+    require(missing.canvas.completeBoundaryVertexPreview(missing.serial,
+                std::vector<CanvasEntity>{missing.neighbor}),
+            "projection missing the owner must be consumed as an invalid proposal");
+    missing.release();
+    require(missing.commits == 0, "projection missing the owner must not commit");
+
+    VertexPreviewFixture pending;
+    pending.begin(); const auto serial = pending.serial;
+    pending.release(); pending.release();
+    require(pending.commits == 1 && !pending.canvas.completeBoundaryVertexPreview(serial,pending.exact()),
+            "pending release must delegate final native admission once and reject late completion");
+
+    VertexPreviewFixture final;
+    final.begin();
+    require(final.canvas.completeBoundaryVertexPreview(final.serial,final.exact()),
+            "initial final-pointer candidate must be valid");
+    const auto earlier = final.serial;
+    final.release({1.75,.5});
+    require(final.requests == 2 && final.commits == 1 && final.serial > earlier &&
+            std::abs(final.requested.x-1.75) < 1e-9 && std::abs(final.committed.x-1.75) < 1e-9 &&
+            std::abs(final.committed.y-.5) < 1e-9,
+            "release must request and commit the actual final point even while its preview is pending");
+
+    VertexPreviewFixture release_only;
+    release_only.mouse(QEvent::MouseButtonPress,{1,1}); release_only.release({1.75,.5});
+    require(release_only.requests == 1 && release_only.commits == 1 &&
+            std::abs(release_only.committed.x-1.75) < 1e-9,
+            "release-only movement must request exact preview at the final point");
+
+    VertexPreviewFixture final_invalid;
+    final_invalid.canvas.setBoundaryVertexPreviewRequested(
+        [&](QString,QString,Vec2 target,std::uint64_t) -> std::optional<std::vector<CanvasEntity>> {
+            ++final_invalid.requests;
+            return target.x > 1 ? std::optional{final_invalid.exact(target)} : std::nullopt;
+        });
+    final_invalid.begin(); final_invalid.release({.5,.8});
+    require(final_invalid.requests == 2 && final_invalid.commits == 0,
+            "known invalid final release point must refuse a previously valid vertex candidate");
+}
+
+void test_boundary_vertex_stale_and_canceled_previews() {
+    VertexPreviewFixture f;
+    f.begin(); const auto old = f.serial;
+    f.mouse(QEvent::MouseMove,{1.75,.5}); f.mouse(QEvent::MouseMove,{1.5,.8});
+    require(f.serial > old && !f.canvas.completeBoundaryVertexPreview(old,f.exact()) &&
+            !f.canvas.markBoundaryVertexPreviewPending(old),
+            "same-parameter later vertex proposal must reject an earlier serial");
+    const auto canceled = f.serial; f.cancel(); f.release();
+    require(f.commits == 0 && f.canvas.boundaryVertexPreviewSerial() > canceled &&
+            !f.canvas.completeBoundaryVertexPreview(canceled,f.exact()),
+            "Escape must cancel vertex admission and deferred completion");
+    f.begin();
+    require(!f.canvas.completeBoundaryVertexPreview(canceled,f.exact()) &&
+            f.canvas.completeBoundaryVertexPreview(f.serial,f.exact()),
+            "new same-parameter gesture must accept only its own exact completion");
+    f.cancel();
+
+    for (bool selection : {false,true}) {
+        VertexPreviewFixture replaced; replaced.begin(); const auto serial = replaced.serial;
+        if (selection) replaced.canvas.setSelectedId(replaced.neighbor.id);
+        else replaced.canvas.setEntities({replaced.boundary,replaced.neighbor});
+        replaced.release();
+        require(replaced.commits == 0 &&
+                !replaced.canvas.completeBoundaryVertexPreview(serial,replaced.exact()),
+                "scene replacement or selection change must cancel captured vertex context");
+    }
+
+    VertexPreviewFixture focus;
+    focus.begin(); const auto focus_serial = focus.serial;
+    QFocusEvent focus_out(QEvent::FocusOut,Qt::OtherFocusReason);
+    QApplication::sendEvent(&focus.canvas,&focus_out);
+    focus.release();
+    require(focus.commits == 0 &&
+            !focus.canvas.completeBoundaryVertexPreview(focus_serial,focus.exact()),
+            "focus loss must cancel vertex context and pending completion");
+
+    VertexPreviewFixture reentrant;
+    reentrant.canvas.setBoundaryVertexPreviewRequested([&](QString,QString,Vec2,std::uint64_t)
+        -> std::optional<std::vector<CanvasEntity>> {
+        reentrant.serial = reentrant.canvas.boundaryVertexPreviewSerial();
+        require(reentrant.canvas.markBoundaryVertexPreviewPending(reentrant.serial),
+                "scene-replacing callback must first mark its own proposal pending");
+        reentrant.canvas.setEntities({reentrant.boundary,reentrant.neighbor});
+        return reentrant.exact();
+    });
+    reentrant.begin(); reentrant.release();
+    require(reentrant.commits == 0 &&
+            !reentrant.canvas.completeBoundaryVertexPreview(reentrant.serial,reentrant.exact()),
+            "synchronous scene replacement must not revive canceled vertex geometry");
+
+    VertexPreviewFixture failure;
+    failure.canvas.setBoundaryVertexPreviewRequested([&](QString,QString,Vec2,std::uint64_t)
+        -> std::optional<std::vector<CanvasEntity>> {
+        failure.serial = failure.canvas.boundaryVertexPreviewSerial();
+        require(failure.canvas.markBoundaryVertexPreviewPending(failure.serial),
+                "throwing callback must first mark its own proposal pending");
+        throw std::runtime_error("projection failure");
+    });
+    failure.begin(); failure.release();
+    require(failure.commits == 0 &&
+            !failure.canvas.completeBoundaryVertexPreview(failure.serial,failure.exact()),
+            "projection exception must revoke pending admission");
+}
+
 void test_boundary_tool_uses_unified_selection_until_a_draft_starts() {
     PlanCanvas canvas;
     canvas.resize(640, 480);
@@ -1939,6 +2199,9 @@ int main(int argc, char** argv) {
         test_selected_boundary_is_the_move_hit_target();
         test_single_selection_transform_handles();
         test_boundary_vertex_handles_preview_and_commit_once();
+        test_boundary_vertex_exact_preview_protocol();
+        test_boundary_vertex_invalid_and_final_pointer();
+        test_boundary_vertex_stale_and_canceled_previews();
         test_mouse_gesture_contract();
         test_boundary_draft_rendering_and_history();
         test_request_to_paint_telemetry();

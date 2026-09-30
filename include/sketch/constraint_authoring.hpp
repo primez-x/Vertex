@@ -61,6 +61,13 @@ struct BoundaryResizeIntent {
     bool move_related_objects{true};
 };
 
+// Move the requested stable vertex while preserving every other selected
+// boundary vertex; explicit relations may move other endpoint owners.
+struct BoundaryVertexMoveIntent {
+    BoundaryGeometryEdit edit;
+    bool move_related_objects{true};
+};
+
 enum class ConstraintRelationMutationKind { upsert, remove };
 
 struct ConstraintRelationMutation {
@@ -84,6 +91,7 @@ struct ConstraintAuthoringIntent {
     bool relation_move_connected_walls{true};
     std::string message;
     std::optional<BoundaryResizeIntent> boundary_resize;
+    std::optional<BoundaryVertexMoveIntent> boundary_vertex_move;
 };
 
 struct ConstraintWallChange {

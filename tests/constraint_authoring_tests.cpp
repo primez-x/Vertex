@@ -1052,6 +1052,33 @@ void test_boundary_receipt_and_dimension_preview() {
     resized_reopened.document.redo(resized_reopened.document.revision());
     require(resized_reopened.document.snapshot().entities() == resized_state.entities(),
         "boundary resize redo changed exact derivation evidence");
+    ConstraintAuthoringIntent receipt_vertex_move;
+    const BoundaryGeometryEdit receipt_move{boundary.id,BoundaryGeometryEditKind::move_vertex,"vertex-1",{5,1}};
+    receipt_vertex_move.boundary_vertex_move = BoundaryVertexMoveIntent{receipt_move,true};
+    const auto moved_receipt = preview_constraint_authoring(document.snapshot(),receipt_vertex_move);
+    require_accepted(moved_receipt,"receipt-backed canonical vertex move rejected");
+    require(moved_receipt.boundary_edits().size() == 1 && moved_receipt.boundary_edits().front() == receipt_move,
+        "receipt-backed vertex move proof differs from requested semantic edit");
+    require(moved_receipt.candidate_entities().at(boundary.id).extensions.at("boundary_geometry_derivation")
+        .at("source_boundary_authoring") == receipt,
+        "vertex move changed archived exact construction input");
+    require(moved_receipt.candidate_entities().at("dimension") == dimension_entity,
+        "vertex move changed attached dimension identity or presentation");
+    auto moved_document = Document::fork(document.snapshot());
+    (void)apply_constraint_authoring(moved_document,moved_receipt);
+    const auto moved_state = moved_document.snapshot();
+    const auto moved_path = std::filesystem::temp_directory_path() / ("boundary-vertex-receipt-"+make_stable_id()+".bldproj");
+    (void)ProjectStore::save(moved_path,moved_state);
+    auto moved_reopened = ProjectStore::load(moved_path);
+    std::filesystem::remove(moved_path);
+    require(moved_reopened.document.snapshot().entities() == moved_state.entities(),
+        "vertex move reopen changed exact receipt or typed evidence");
+    moved_reopened.document.undo(moved_reopened.document.revision());
+    require(moved_reopened.document.snapshot().entities() == document.snapshot().entities(),
+        "vertex move undo changed exact construction source");
+    moved_reopened.document.redo(moved_reopened.document.revision());
+    require(moved_reopened.document.snapshot().entities() == moved_state.entities(),
+        "vertex move redo changed exact derived source");
     ConstraintAuthoringIntent intent;
     intent.relation_anchor = WallEndpointBinding{boundary.id, WallEndpointRole::start, "edge-0", "vertex-0"};
     intent.relation_mutations.push_back(ConstraintRelationMutation::upsert(relation(
@@ -1516,9 +1543,110 @@ void test_boundary_resize_canonical_shape_and_related_owners() {
         "boundary resize must refuse unresolved explicit drawing context");
 }
 
+void test_boundary_vertex_move_propagates_explicit_relations() {
+    const IdentifiedBoundary shape{"area","measurement_boundary",{
+        {"ab","a","b",{{0,0},{3,0},0}}, {"bc","b","c",{{3,0},{3,3},0}},
+        {"cd","c","d",{{3,3},{0,3},0}}, {"da","d","a",{{0,3},{0,0},0}}}};
+    const auto owner = encode_identified_boundary_entity(shape);
+    auto neighbor = shape;
+    neighbor.id = "neighbor";
+    for (auto& edge : neighbor.segments) {
+        edge.segment.start.x += 3; edge.segment.end.x += 3;
+        edge.segment.start.y -= 3; edge.segment.end.y -= 3;
+    }
+    const WallEndpointBinding corner{"area",WallEndpointRole::end,"ab","b"};
+    const auto join = encode_constraint_entity(relation("join",ConstraintRelationKind::coincident,
+        {corner,endpoint("wall",WallEndpointRole::start)}));
+    const auto neighbor_join = encode_constraint_entity(relation("neighbor-join",ConstraintRelationKind::coincident,
+        {corner,{"neighbor",WallEndpointRole::start,"da","d"}}));
+    auto document = Document::create({owner,wall("wall",{3,0},{6,0}),
+        encode_identified_boundary_entity(neighbor),join,neighbor_join});
+    const auto before = document.snapshot();
+    const BoundaryGeometryEdit edit{"area",BoundaryGeometryEditKind::move_vertex,"b",{4,-0.5}};
+    ConstraintAuthoringIntent intent;
+    intent.boundary_vertex_move = BoundaryVertexMoveIntent{edit,true};
+    const auto preview = preview_constraint_authoring(before,intent);
+    require_accepted(preview,"boundary vertex move must propagate saved mixed relations");
+    require(preview.candidate_entities().at("area") == edited_boundary_entities(before.entities(),edit).at("area"),
+        "vertex move solver changed canonical selected geometry");
+    const auto moved_wall = baseline(preview.candidate_entities().at("wall"));
+    require_near(moved_wall.start.x,4,1e-7,"vertex move did not propagate to wall x");
+    require_near(moved_wall.start.y,-0.5,1e-7,"vertex move did not propagate to wall y");
+    const auto moved_neighbor = decode_identified_boundary_entity(preview.candidate_entities().at("neighbor"));
+    require_near(moved_neighbor.segments[3].segment.start.x,4,1e-7,"vertex move did not propagate to neighbor x");
+    require_near(moved_neighbor.segments[3].segment.start.y,-0.5,1e-7,"vertex move did not propagate to neighbor y");
+    require(preview.boundary_edits().front() == edit && std::count_if(
+        preview.boundary_edits().begin(),preview.boundary_edits().end(),
+        [](const auto& proof) { return proof.boundary_id == "area"; }) == 1,
+        "canonical vertex move must appear exactly once at the start of typed proof");
+    intent.boundary_vertex_move->move_related_objects = false;
+    const auto frozen = preview_constraint_authoring(before,intent);
+    require(!frozen.accepted(),"frozen mixed neighbors must reject vertex move conflict");
+    require_rejected_unchanged(document,frozen,"frozen vertex move applied");
+    (void)apply_constraint_authoring(document,preview);
+    const auto committed = document.snapshot();
+    require(committed.entities() == preview.candidate_entities() && committed.revision() == before.revision()+1,
+        "vertex move did not atomically commit the shown result");
+    require(committed.history().back().boundary_constraint_changes.has_value(),"vertex move omitted typed transaction");
+    const auto command = command_to_json(*committed.history().back().boundary_constraint_changes);
+    require(command_to_json(command_from_json(command)) == command,"vertex move proof codec changed evidence");
+    auto tampered = preview;
+    auto& candidate = const_cast<std::map<std::string,Entity,std::less<>>&>(tampered.candidate_entities());
+    candidate.at("area").properties["name"] = "forged";
+    auto untouched = Document::fork(before);
+    require_rejected_unchanged(untouched,tampered,"tampered vertex move preview applied");
+    require_rejected_unchanged(document,preview,"stale vertex move preview applied");
+    const auto path = std::filesystem::temp_directory_path() / ("boundary-vertex-move-"+make_stable_id()+".bldproj");
+    (void)ProjectStore::save(path,committed);
+    auto reopened = ProjectStore::load(path);
+    std::filesystem::remove(path);
+    require(reopened.document.snapshot().entities() == committed.entities(),"vertex move reopen differs");
+    reopened.document.undo(reopened.document.revision());
+    require(reopened.document.snapshot().entities() == before.entities(),"vertex move undo split transaction");
+    reopened.document.redo(reopened.document.revision());
+    require(reopened.document.snapshot().entities() == committed.entities(),"vertex move redo differs");
+
+    intent.boundary_vertex_move->move_related_objects = true;
+    auto lock = relation("pin",ConstraintRelationKind::fixed_anchor,{corner});
+    lock.anchor = Vec2{3,0};
+    auto locked = Document::create({owner,encode_constraint_entity(lock)});
+    const auto conflict = preview_constraint_authoring(locked.snapshot(),intent);
+    require(!conflict.accepted(),"vertex move must refuse persisted endpoint lock");
+    require_rejected_unchanged(locked,conflict,"locked vertex move applied");
+    auto detached = Document::create({owner,wall("wall",{3,0},{6,0})});
+    const auto detached_before = detached.snapshot();
+    const auto independent = preview_constraint_authoring(detached_before,intent);
+    require_accepted(independent,"unrelated wall must not block vertex move");
+    require(independent.changed_walls().empty() && independent.candidate_entities().at("wall") == detached_before.entities().at("wall"),
+        "coordinate coincidence must not propagate vertex move");
+    intent.boundary_vertex_move->edit.target_position = {3,0};
+    const auto noop = preview_constraint_authoring(detached_before,intent);
+    require(!noop.accepted() && has_diagnostic(noop,"no document change"),"same vertex position must reject as no-op");
+    require_rejected_unchanged(detached,noop,"no-op vertex move applied");
+    intent.boundary_vertex_move->edit = edit;
+    auto curved_shape = shape;
+    curved_shape.segments[2].segment.sweep_radians = 0.1;
+    auto curved = Document::create({encode_identified_boundary_entity(curved_shape)});
+    require(!preview_constraint_authoring(curved.snapshot(),intent).accepted(),"vertex solve must refuse curved selected owner");
+    intent.boundary_vertex_move->edit.target_id = "missing";
+    require(!preview_constraint_authoring(detached_before,intent).accepted(),"vertex move must reject missing stable target");
+    intent.boundary_vertex_move->edit = edit;
+    intent.boundary_vertex_move->edit.target_position.x = std::numeric_limits<double>::infinity();
+    require(!preview_constraint_authoring(detached_before,intent).accepted(),"vertex move must reject nonfinite position");
+    intent.boundary_vertex_move->edit = {"area",BoundaryGeometryEditKind::resize_segment,"ab",{},4};
+    require(!preview_constraint_authoring(detached_before,intent).accepted(),"vertex move intent must reject other edit kinds");
+    intent.boundary_vertex_move->edit = edit;
+    intent.boundary_resize = BoundaryResizeIntent{{"area",BoundaryGeometryEditKind::resize_segment,"ab",{},4},true};
+    require(!preview_constraint_authoring(detached_before,intent).accepted(),"two boundary coordinate intents must reject");
+    intent.boundary_resize.reset();
+    intent.wall_resize = WallResizeIntent{"wall",parse_quantity("4 m")};
+    require(!preview_constraint_authoring(detached_before,intent).accepted(),"wall resize plus boundary vertex move must reject");
+}
+
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_boundary_vertex_move_propagates_explicit_relations();
         test_boundary_resize_canonical_shape_and_related_owners();
         test_mixed_boundary_wall_authoring_and_resize();
         test_persisted_component_analysis_excludes_edit_pins();

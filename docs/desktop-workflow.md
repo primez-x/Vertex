@@ -577,10 +577,18 @@ room through normal document history.
 
 Selecting a supported closed boundary displays blue vertex handles sized in
 screen pixels, so they remain usable at different zoom levels and do not appear
-in print or export output. Dragging a handle previews both incident edges on the
-canvas and commits one revision on release. Escape cancels the preview. The
+in print or export output. Dragging a handle previews both incident edges and,
+for straight boundaries, walls and other areas joined by saved endpoint
+relationships. Exact related geometry is calculated off the UI thread; a pending
+or invalid position is marked on the canvas. Preview strokes respect the active
+view's crop and visible objects. Release recomputes the final pointer position
+and commits one revision, including related geometry. Escape cancels the preview. The
 press captures the document revision, boundary ID, and vertex ID; a stale
 release cannot modify a newer document state.
+Preview geometry does not change saved or exported content. Dimension annotations
+and area readouts refresh after the committed edit. Curved boundary handles retain
+their analytical local editing behavior; joined-object solving for curves remains
+unavailable.
 
 Double-clicking the boundary, choosing **Edit boundary geometry** from its
 context menu, or using the inspector action opens the edge-length editor. It

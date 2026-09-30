@@ -337,8 +337,11 @@ PlanCanvas::PlanCanvas(QWidget* parent) : QWidget(parent) {
 void PlanCanvas::setEntities(std::vector<CanvasEntity> entities) {
     // Replacing the document projection invalidates the captured revision and
     // its transient host-wall geometry, even when the selected ID survives.
-    if (m_opening_width_handle) resetGesture();
-    else ++m_opening_width_preview_serial;
+    if (m_opening_width_handle || m_vertex_move_handle) resetGesture();
+    else {
+        ++m_opening_width_preview_serial;
+        ++m_boundary_vertex_preview_serial;
+    }
     m_entities = std::move(entities);
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     update();
@@ -427,7 +430,8 @@ void PlanCanvas::setSelectedId(const QString& entity_id) {
 }
 
 void PlanCanvas::setSelectedIds(const QStringList& entity_ids) {
-    if (m_opening_width_handle && selectedIds() != entity_ids) resetGesture();
+    if ((m_opening_width_handle || m_vertex_move_handle) && selectedIds() != entity_ids)
+        resetGesture();
     for (auto& entity : m_entities) {
         entity.selected = entity_ids.contains(entity.id);
     }
@@ -715,7 +719,8 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     for (const auto& entity : m_entities) {
         if (!output && &interactiveEntity(entity) != &entity) {
             drawEntity(painter, interactiveEntity(entity), false, background, paper_pixels_per_mm);
-        } else if (!output && m_vertex_move_handle && m_vertex_move_preview &&
+        } else if (!output && !m_boundary_vertex_preview_requested &&
+            m_vertex_move_handle && m_vertex_move_preview &&
             m_vertex_move_handle->entity_id == entity.id) {
             auto preview = entity;
             const auto source = m_vertex_move_handle->source_position;
@@ -1110,7 +1115,7 @@ bool PlanCanvas::eventFilter(QObject* watched, QEvent* event) {
 bool PlanCanvas::event(QEvent* event) {
     switch (event->type()) {
     case QEvent::FocusOut:
-        if (m_opening_width_handle) resetGesture();
+        if (m_opening_width_handle || m_vertex_move_handle) resetGesture();
         break;
     case QEvent::Hide:
     case QEvent::WindowBlocked:
@@ -1434,7 +1439,7 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
             m_left_dragging = true;
         }
         if (m_left_dragging && m_vertex_move_handle) {
-            m_vertex_move_preview = inputPoint(position);
+            updateBoundaryVertexPreview(position);
             setCursor(Qt::SizeAllCursor);
             update();
         }
@@ -1471,7 +1476,9 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
             m_left_gesture == LeftGesture::selection_resize ||
             m_left_gesture == LeftGesture::selection_rotate ||
             (m_left_gesture == LeftGesture::opening_width_resize &&
-             (!m_opening_width_preview_pointer || *m_opening_width_preview_pointer != position)))
+             (!m_opening_width_preview_pointer || *m_opening_width_preview_pointer != position)) ||
+            (m_left_gesture == LeftGesture::vertex_move &&
+             (!m_boundary_vertex_preview_pointer || *m_boundary_vertex_preview_pointer != position)))
             pointerMove(position, modifiers);
         const auto gesture = m_left_gesture;
         const auto start = m_left_start;
@@ -1501,6 +1508,11 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
         // while a stationary press remains a no-op.
         const auto vertex_target = gesture == LeftGesture::vertex_move && dragging
             ? std::optional<Vec2>(inputPoint(position)) : m_vertex_move_preview;
+        // Pending exact geometry is not trusted for admission. The document
+        // command recomputes the final target; a known invalid result rejects.
+        const bool vertex_valid = vertex_target && std::isfinite(vertex_target->x) &&
+            std::isfinite(vertex_target->y) && (!m_boundary_vertex_preview_requested ||
+                m_boundary_vertex_preview_valid || m_boundary_vertex_preview_pending);
         const auto closing = closingAnchor(position);
         resetGesture();
         if (gesture == LeftGesture::marquee && selection_start) {
@@ -1561,7 +1573,7 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
             (void)m_entity_transform_requested(move_ids.front(), transform_scale,
                                                transform_rotation);
         } else if (gesture == LeftGesture::vertex_move && dragging &&
-                   vertex_handle && vertex_target && m_boundary_vertex_move_requested &&
+                   vertex_handle && vertex_target && vertex_valid && m_boundary_vertex_move_requested &&
                    (vertex_target->x != vertex_handle->source_position.x ||
                     vertex_target->y != vertex_handle->source_position.y)) {
             (void)m_boundary_vertex_move_requested(
@@ -1575,6 +1587,7 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
 
 void PlanCanvas::resetGesture() {
     ++m_opening_width_preview_serial;
+    ++m_boundary_vertex_preview_serial;
     m_gesture_button = Qt::NoButton;
     m_panning = false;
     m_overview_dragging = false;
@@ -1594,6 +1607,11 @@ void PlanCanvas::resetGesture() {
     m_axis_scale_y_preview = 1.0;
     m_vertex_move_handle.reset();
     m_vertex_move_preview.reset();
+    m_boundary_vertex_entities_preview.clear();
+    m_boundary_vertex_preview_valid = false;
+    m_boundary_vertex_preview_pending = false;
+    m_boundary_vertex_preview_request_in_progress = false;
+    m_boundary_vertex_preview_pointer.reset();
     m_opening_width_handle.reset();
     m_opening_width_press_station.reset();
     m_opening_width_pointer_station.reset();
@@ -1908,6 +1926,10 @@ const CanvasEntity* PlanCanvas::selectedOpening() const {
 }
 
 const CanvasEntity& PlanCanvas::interactiveEntity(const CanvasEntity& entity) const {
+    if (m_vertex_move_handle && m_boundary_vertex_preview_valid) {
+        for (const auto& preview : m_boundary_vertex_entities_preview)
+            if (preview.id == entity.id) return preview;
+    }
     if (m_opening_width_handle && m_opening_width_preview_valid) {
         for (const auto& preview : m_opening_width_entities_preview)
             if (preview.id == entity.id) return preview;
@@ -2075,6 +2097,85 @@ void PlanCanvas::drawOpeningWidthHandles(QPainter& painter, const QRectF& viewpo
     painter.restore();
 }
 
+void PlanCanvas::updateBoundaryVertexPreview(QPointF point) {
+    if (!m_vertex_move_handle) return;
+    const auto serial = ++m_boundary_vertex_preview_serial;
+    const auto handle = *m_vertex_move_handle;
+    m_boundary_vertex_preview_pointer = point;
+    m_vertex_move_preview = inputPoint(point);
+    m_boundary_vertex_preview_valid = false;
+    m_boundary_vertex_preview_pending = false;
+    m_boundary_vertex_preview_request_in_progress = false;
+    m_boundary_vertex_entities_preview.clear();
+    const auto target = *m_vertex_move_preview;
+    if (!std::isfinite(target.x) || !std::isfinite(target.y) ||
+        !m_boundary_vertex_preview_requested) return;
+    std::optional<std::vector<CanvasEntity>> preview;
+    m_boundary_vertex_preview_request_in_progress = true;
+    try {
+        preview = m_boundary_vertex_preview_requested(handle.entity_id, handle.vertex_id,
+                                                      target, handle.source_revision);
+    } catch (const std::exception&) {
+        if (m_boundary_vertex_preview_serial == serial) {
+            m_boundary_vertex_preview_request_in_progress = false;
+            m_boundary_vertex_preview_pending = false;
+            m_boundary_vertex_preview_valid = false;
+            m_boundary_vertex_entities_preview.clear();
+        }
+        return;
+    }
+    // A callback can synchronously replace the scene, selection, or callback,
+    // or even complete its pending request. Never revive canceled geometry.
+    if (m_boundary_vertex_preview_serial != serial ||
+        !m_boundary_vertex_preview_request_in_progress) return;
+    m_boundary_vertex_preview_request_in_progress = false;
+    if (!preview && m_boundary_vertex_preview_pending) return;
+    (void)applyBoundaryVertexPreview(serial, std::move(preview));
+}
+
+bool PlanCanvas::markBoundaryVertexPreviewPending(std::uint64_t serial) {
+    if (serial != m_boundary_vertex_preview_serial ||
+        !m_boundary_vertex_preview_request_in_progress || !m_vertex_move_handle ||
+        m_left_gesture != LeftGesture::vertex_move || !m_vertex_move_preview ||
+        !std::isfinite(m_vertex_move_preview->x) || !std::isfinite(m_vertex_move_preview->y))
+        return false;
+    m_boundary_vertex_preview_pending = true;
+    update();
+    return true;
+}
+
+bool PlanCanvas::completeBoundaryVertexPreview(std::uint64_t serial,
+    std::optional<std::vector<CanvasEntity>> result) {
+    if (!m_boundary_vertex_preview_pending) return false;
+    return applyBoundaryVertexPreview(serial, std::move(result));
+}
+
+bool PlanCanvas::applyBoundaryVertexPreview(std::uint64_t serial,
+    std::optional<std::vector<CanvasEntity>> result) {
+    if (serial != m_boundary_vertex_preview_serial || !m_vertex_move_handle ||
+        m_left_gesture != LeftGesture::vertex_move) return false;
+    m_boundary_vertex_preview_request_in_progress = false;
+    m_boundary_vertex_preview_pending = false;
+    m_boundary_vertex_preview_valid = false;
+    m_boundary_vertex_entities_preview.clear();
+    // Native projection owns geometric validation. An absent captured owner
+    // cannot be a preview of this edit and is treated as a known invalid result.
+    if (!result || std::none_of(result->begin(), result->end(),
+        [&](const CanvasEntity& entity) { return entity.id == m_vertex_move_handle->entity_id; })) {
+        update();
+        return true;
+    }
+    for (auto& entity : *result) {
+        const auto original = std::find_if(m_entities.begin(), m_entities.end(),
+            [&](const CanvasEntity& item) { return item.id == entity.id; });
+        if (original != m_entities.end()) entity.selected = original->selected;
+    }
+    m_boundary_vertex_entities_preview = std::move(*result);
+    m_boundary_vertex_preview_valid = true;
+    update();
+    return true;
+}
+
 std::optional<PlanCanvas::VertexHandleHit> PlanCanvas::vertexHandleAt(
     QPointF point, const QRectF& viewport) const {
     if (selectedOpening()) return std::nullopt;
@@ -2099,20 +2200,60 @@ void PlanCanvas::drawVertexHandles(QPainter& painter, const QRectF& viewport) co
     painter.save();
     painter.setClipRect(viewport, Qt::IntersectClip);
     painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setPen(QPen(QColor(37, 99, 235), 1.5));
+    const bool editing = m_vertex_move_handle && m_left_dragging &&
+                         m_boundary_vertex_preview_requested;
+    const bool pending = editing && m_boundary_vertex_preview_pending;
+    const bool invalid = editing && !m_boundary_vertex_preview_valid && !pending;
+    const auto feedback_color = invalid ? QColor(220,38,38)
+        : pending ? QColor(180,110,10) : QColor(37,99,235);
     painter.setBrush(QColor(255, 255, 255, 245));
-    for (const auto& entity : m_entities) {
-        if (!entity.selected) continue;
+    for (const auto& retained : m_entities) {
+        if (!retained.selected) continue;
+        const auto& entity = interactiveEntity(retained);
         for (const auto& handle : entity.vertex_handles) {
             auto position = handle.position;
-            if (m_vertex_move_handle && m_vertex_move_preview &&
+            const bool moving = m_vertex_move_handle && m_vertex_move_preview &&
                 m_vertex_move_handle->entity_id == entity.id &&
-                m_vertex_move_handle->vertex_id == handle.id) {
+                m_vertex_move_handle->vertex_id == handle.id;
+            if (moving && !m_boundary_vertex_preview_valid) {
                 position = *m_vertex_move_preview;
             }
+            if (!std::isfinite(position.x) || !std::isfinite(position.y)) continue;
+            painter.setPen(QPen(moving ? feedback_color : QColor(37,99,235), 1.5));
             const auto screen = toScreen(position, viewport);
             painter.drawEllipse(screen, 5.5, 5.5);
+            if (moving && (pending || invalid)) {
+                painter.setPen(QPen(feedback_color, 1.5, Qt::DashLine));
+                painter.setBrush(Qt::NoBrush);
+                painter.drawEllipse(screen, 9.0, 9.0);
+                painter.setBrush(QColor(255,255,255,245));
+            }
         }
+    }
+    if (editing && m_vertex_move_preview && std::isfinite(m_vertex_move_preview->x) &&
+        std::isfinite(m_vertex_move_preview->y)) {
+        auto readout_font = font();
+        readout_font.setPixelSize(11);
+        readout_font.setWeight(QFont::Medium);
+        painter.setFont(readout_font);
+        auto text = QStringLiteral("X %1  ·  Y %2")
+            .arg(display_cursor_length(m_vertex_move_preview->x,m_metric_units),
+                 display_cursor_length(m_vertex_move_preview->y,m_metric_units));
+        if (pending) text += QStringLiteral("  ·  Checking");
+        else if (invalid) text += QStringLiteral("  ·  Invalid");
+        const QFontMetricsF metrics(readout_font,painter.device());
+        auto panel = metrics.boundingRect(text).adjusted(-7,-4,7,4);
+        panel.moveCenter(toScreen(*m_vertex_move_preview,viewport) + QPointF(0,25));
+        panel.moveLeft(std::clamp(panel.left(),viewport.left()+4,
+            std::max(viewport.left()+4,viewport.right()-panel.width()-4)));
+        panel.moveTop(std::clamp(panel.top(),viewport.top()+4,
+            std::max(viewport.top()+4,viewport.bottom()-panel.height()-4)));
+        painter.setPen(QPen(feedback_color,1));
+        painter.setBrush(invalid ? QColor(254,226,226,244)
+                         : pending ? QColor(255,247,221,244) : QColor(239,246,255,244));
+        painter.drawRoundedRect(panel,4,4);
+        painter.setPen(feedback_color);
+        painter.drawText(panel,Qt::AlignCenter,text);
     }
     painter.restore();
 }
@@ -2737,8 +2878,17 @@ void PlanCanvas::setOpeningWidthResizeRequested(
     update();
 }
 
+void PlanCanvas::setBoundaryVertexPreviewRequested(
+    std::function<std::optional<std::vector<CanvasEntity>>(
+        QString, QString, Vec2, std::uint64_t)> callback) {
+    if (m_vertex_move_handle) resetGesture();
+    m_boundary_vertex_preview_requested = std::move(callback);
+    update();
+}
+
 void PlanCanvas::setBoundaryVertexMoveRequested(
     std::function<bool(QString, QString, Vec2, std::uint64_t)> callback) {
+    if (m_vertex_move_handle) resetGesture();
     m_boundary_vertex_move_requested = std::move(callback);
 }
 

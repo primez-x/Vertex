@@ -2638,6 +2638,18 @@ class MainWindow::Impl {
         std::vector<CanvasEntity> retained;
         std::shared_ptr<std::optional<std::vector<CanvasEntity>>> result;
     };
+    struct PendingVertexPreview {
+        QPointer<PlanCanvas> canvas;
+        std::uint64_t serial{};
+        std::shared_ptr<Document> document;
+        std::shared_ptr<const DocumentSnapshot> source;
+        std::shared_ptr<const std::vector<CanvasEntity>> retained;
+        QString entity_id;
+        QString vertex_id;
+        Vec2 position;
+        std::optional<Bounds2> crop;
+        std::shared_ptr<std::optional<std::vector<CanvasEntity>>> result;
+    };
 
 public:
     Impl(MainWindow* window, std::shared_ptr<Document> document)
@@ -2672,12 +2684,18 @@ public:
         m_opening_preview_timer = new QTimer(owner);
         m_opening_preview_timer->setInterval(16);
         QObject::connect(m_opening_preview_timer, &QTimer::timeout, owner, [this] { pollOpeningPreview(); });
+        m_vertex_preview_timer = new QTimer(owner);
+        m_vertex_preview_timer->setObjectName(QStringLiteral("boundaryVertexPreviewPoll"));
+        m_vertex_preview_timer->setInterval(16);
+        QObject::connect(m_vertex_preview_timer, &QTimer::timeout, owner, [this] { pollVertexPreview(); });
     }
 
     ~Impl() {
         m_save_timer->stop();
         m_opening_preview_timer->stop();
         m_opening_preview_queue.shutdown(false);
+        m_vertex_preview_timer->stop();
+        m_vertex_preview_queue.shutdown(false);
         // Jobs own detached values only. Join before destroying any owner state.
         m_save_queue.shutdown(true);
         drainSaveCompletions();
@@ -11654,6 +11672,178 @@ public:
         }
     }
 
+    static std::optional<std::vector<CanvasEntity>> computeBoundaryVertexPreview(
+        const DocumentSnapshot& source,const std::vector<CanvasEntity>& retained,
+        const QString& entity_id,const QString& vertex_id,Vec2 position,std::optional<Bounds2> crop) {
+        try {
+            const BoundaryGeometryEdit edit{entity_id.toStdString(),BoundaryGeometryEditKind::move_vertex,
+                vertex_id.toStdString(),position};
+            const auto boundary=decode_identified_boundary_entity(source.entities().at(edit.boundary_id));
+            std::map<std::string,Entity,std::less<>> candidate;
+            if (std::any_of(boundary.segments.begin(),boundary.segments.end(),
+                    [](const auto& edge) { return edge.segment.sweep_radians!=0.0; }))
+                candidate=Document::preview_command(source,EditBoundaryGeometry{source.revision(),edit}).entities();
+            else {
+                ConstraintAuthoringIntent intent;
+                intent.boundary_vertex_move=BoundaryVertexMoveIntent{edit,true};
+                const auto preview=preview_constraint_authoring(source,intent);
+                if (!preview.accepted()) return std::nullopt;
+                candidate=preview.candidate_entities();
+            }
+            std::map<std::string,Wall,std::less<>> changed_walls;
+            for (const auto& [id,entity] : candidate) {
+                if (entity.type!="wall" || entity==source.entities().at(id)) continue;
+                std::vector<const Entity*> openings;
+                for (const auto& [child_id,child] : candidate) {
+                    (void)child_id;
+                    if (child.type=="opening" && read_string(child.properties,"wall_id").value_or("")==id)
+                        openings.push_back(&child);
+                }
+                Wall wall;
+                std::string error;
+                if (!read_document_wall(resolve_vertical_placement(source,entity),openings,wall,error))
+                    return std::nullopt;
+                changed_walls.emplace(id,std::move(wall));
+            }
+            std::vector<CanvasEntity> result;
+            for (const auto& item : retained) {
+                const auto found=candidate.find(item.id.toStdString());
+                if (found==candidate.end()) continue;
+                const auto& entity=found->second;
+                auto proposed=item;
+                if (can_recognize_boundary_entity_type(entity.type) && entity!=source.entities().at(entity.id)) {
+                    const auto after=decode_identified_boundary_entity(entity);
+                    proposed.segments=boundary_geometry(after);
+                    proposed.resize_frame.reset();
+                    for (auto& handle : proposed.vertex_handles)
+                        for (const auto& edge : after.segments)
+                            if (handle.id.toStdString()==edge.start_vertex_id) handle.position=edge.segment.start;
+                } else if (const auto wall=changed_walls.find(entity.id);wall!=changed_walls.end()) {
+                    proposed.segments=wall_plan_footprint(wall->second.baseline,wall->second.openings,wall->second.thickness);
+                    proposed.resize_frame.reset();
+                } else if (entity.type=="opening") {
+                    const auto host_wall=changed_walls.find(entity.properties.at("wall_id").get<std::string>());
+                    if (host_wall==changed_walls.end()) continue;
+                    const auto& host=host_wall->second;
+                    const auto opening=std::find_if(host.openings.begin(),host.openings.end(),
+                        [&](const auto& value) { return value.id==entity.id; });
+                    if (opening==host.openings.end()) return std::nullopt;
+                    const auto kind=entity.properties.value("opening_kind",std::string{});
+                    if (entity.properties.contains("opening_assembly")) {
+                        std::optional<DoorOperation> operation;
+                        if (kind=="door" && entity.properties.contains("door_operation"))
+                            operation=decode_door_operation(entity.properties.at("door_operation"));
+                        proposed.segments=project_hosted_opening_plan(host,*opening,
+                            parse_opening_assembly(entity.properties.at("opening_assembly")),operation);
+                    } else if (kind=="door" && entity.properties.contains("door_operation"))
+                        proposed.segments=door_plan_symbol(host.baseline,opening->offset,opening->width,
+                            decode_door_operation(entity.properties.at("door_operation")));
+                    else if (kind=="window")
+                        proposed.segments=window_plan_symbol(host.baseline,opening->offset,opening->width,host.thickness);
+                    else {
+                        const auto span=hosted_opening_span(host.baseline,opening->offset,opening->width);
+                        const auto outline=wall_plan_footprint(span,{},host.thickness);
+                        proposed.segments={outline.at(1),outline.at(3),span};
+                    }
+                } else continue;
+                if (crop) {
+                    const auto clip_path=[&](const Boundary& path) {
+                        if (path.empty()) return path;
+                        const auto extent=boundary_bounds(path);
+                        if (extent.minimum.x>=crop->minimum.x && extent.maximum.x<=crop->maximum.x &&
+                            extent.minimum.y>=crop->minimum.y && extent.maximum.y<=crop->maximum.y)
+                            return path;
+                        proposed.filled=false;
+                        return clip_boundary_to_bounds(path,*crop);
+                    };
+                    proposed.segments=clip_path(proposed.segments);
+                    for (auto& hole : proposed.holes) hole=clip_path(hole);
+                    std::erase_if(proposed.holes,[](const auto& hole) { return hole.empty(); });
+                }
+                result.push_back(std::move(proposed));
+            }
+            return result;
+        } catch (const std::exception&) { return std::nullopt; }
+    }
+
+    void startVertexPreviewJob(PendingVertexPreview request) {
+        const auto source=request.source;
+        const auto retained=request.retained;
+        const auto result=request.result;
+        const auto id=request.entity_id;
+        const auto vertex=request.vertex_id;
+        const auto position=request.position;
+        const auto crop=request.crop;
+        m_vertex_preview_sequence=m_vertex_preview_queue.enqueue(
+            [source,retained,result,id,vertex,position,crop](const RegenerationCancellationToken& cancellation) {
+                if (!cancellation.is_cancelled())
+                    *result=computeBoundaryVertexPreview(*source,*retained,id,vertex,position,crop);
+                return RegenerationReceipt{source->revision(),{}};
+            });
+        m_running_vertex_preview=std::move(request);
+        m_vertex_preview_timer->start();
+    }
+
+    std::optional<std::vector<CanvasEntity>> previewBoundaryVertexFromCanvas(
+        PlanCanvas* canvas,const QString& id,const QString& vertex,Vec2 position,std::uint64_t revision) {
+        if (!canvas || !m_document->is_editable() || m_selected_ids.size()!=1 ||
+            m_selected_ids.front()!=id || m_boundary_session || m_pending_wall_start ||
+            !m_pending_symbol_id.isEmpty() || m_document->revision()!=revision ||
+            !std::isfinite(position.x) || !std::isfinite(position.y)) return std::nullopt;
+        if (!m_vertex_preview_source || m_vertex_preview_document!=m_document || m_vertex_preview_canvas!=canvas ||
+            m_vertex_preview_source->revision()!=revision) {
+            m_vertex_preview_source=std::make_shared<DocumentSnapshot>(authoringSnapshot());
+            m_vertex_preview_document=m_document;
+            m_vertex_preview_canvas=canvas;
+            m_vertex_preview_scene=std::make_shared<std::vector<CanvasEntity>>(canvas->entities());
+        }
+        const auto serial=canvas->boundaryVertexPreviewSerial();
+        if (!canvas->markBoundaryVertexPreviewPending(serial)) return std::nullopt;
+        std::optional<Bounds2> crop;
+        if (canvas==m_architecturalCanvas) {
+            for (const auto& [record_id,entity] : m_vertex_preview_source->entities()) {
+                (void)record_id;
+                if (entity.type!=kSheetViewEntityType) continue;
+                const auto model=decode_sheet_view_entity(entity);
+                const auto view=std::find_if(model.views().begin(),model.views().end(),[&](const auto& value) {
+                    return m_active_named_view.isEmpty() ? value.kind==CoordinatedViewKind::plan
+                        : value.id==m_active_named_view.toStdString();
+                });
+                if (view==model.views().end()) continue;
+                if (view->presentation.crop)
+                    crop=Bounds2{{view->presentation.crop->min_horizontal_m,view->presentation.crop->min_vertical_m},
+                        {view->presentation.crop->max_horizontal_m,view->presentation.crop->max_vertical_m}};
+                break;
+            }
+        }
+        PendingVertexPreview request{canvas,serial,m_document,m_vertex_preview_source,m_vertex_preview_scene,
+            id,vertex,position,crop,std::make_shared<std::optional<std::vector<CanvasEntity>>>()};
+        if (m_running_vertex_preview) {
+            (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
+            m_pending_vertex_preview=std::move(request);
+        } else startVertexPreviewJob(std::move(request));
+        return std::nullopt;
+    }
+
+    void pollVertexPreview() {
+        for (auto& completion : m_vertex_preview_queue.take_completed()) {
+            if (!m_running_vertex_preview || completion.sequence!=m_vertex_preview_sequence) continue;
+            auto request=std::move(*m_running_vertex_preview);
+            m_running_vertex_preview.reset();
+            if (request.canvas && request.document==m_document && request.source->revision()==m_document->revision())
+                (void)request.canvas->completeBoundaryVertexPreview(request.serial,
+                    completion.succeeded() ? std::move(*request.result) : std::nullopt);
+        }
+        if (!m_running_vertex_preview && m_pending_vertex_preview) {
+            auto request=std::move(*m_pending_vertex_preview);
+            m_pending_vertex_preview.reset();
+            if (request.canvas && request.document==m_document && request.source->revision()==m_document->revision() &&
+                request.canvas->boundaryVertexPreviewSerial()==request.serial)
+                startVertexPreviewJob(std::move(request));
+        }
+        if (!m_running_vertex_preview && !m_pending_vertex_preview) m_vertex_preview_timer->stop();
+    }
+
     void startOpeningPreviewJob(PendingOpeningPreview request) {
         auto result = request.result;
         const auto source = request.source;
@@ -13459,15 +13649,18 @@ public:
         }
     }
 
-    Command boundaryLengthCommand(const DocumentSnapshot& source,
+    static Command boundaryGeometryCommand(const DocumentSnapshot& source,
         const BoundaryGeometryEdit& edit, bool move_related_objects) {
         const auto boundary=decode_identified_boundary_entity(source.entities().at(edit.boundary_id));
         if (std::any_of(boundary.segments.begin(),boundary.segments.end(),
                 [](const auto& edge) { return edge.segment.sweep_radians != 0.0; }))
             return EditBoundaryGeometry{source.revision(),edit};
         ConstraintAuthoringIntent intent;
-        intent.boundary_resize=BoundaryResizeIntent{edit,move_related_objects};
-        intent.message="resize boundary edge and related objects";
+        if (edit.kind==BoundaryGeometryEditKind::move_vertex)
+            intent.boundary_vertex_move=BoundaryVertexMoveIntent{edit,move_related_objects};
+        else intent.boundary_resize=BoundaryResizeIntent{edit,move_related_objects};
+        intent.message=edit.kind==BoundaryGeometryEditKind::move_vertex
+            ? "move boundary vertex and related objects" : "resize boundary edge and related objects";
         const auto preview=preview_constraint_authoring(source,intent);
         if (!preview.accepted()) {
             QStringList diagnostics;
@@ -13502,8 +13695,9 @@ public:
             const auto revision = expected_revision.value_or(source.revision());
             if (revision != source.revision())
                 throw std::invalid_argument("The boundary changed before the edit was committed.");
-            const Command command=edit.kind==BoundaryGeometryEditKind::resize_segment
-                ? boundaryLengthCommand(source,edit,true)
+            const Command command=(edit.kind==BoundaryGeometryEditKind::resize_segment ||
+                                   edit.kind==BoundaryGeometryEditKind::move_vertex)
+                ? boundaryGeometryCommand(source,edit,true)
                 : Command{EditBoundaryGeometry{revision,std::move(edit)}};
             (void)Document::preview_command(source, command);
             applyDocumentCommand(command);
@@ -21765,6 +21959,10 @@ private:
                 return moveSelectedBoundaryVertex(
                     vertex_id, position, static_cast<Revision>(source_revision));
             });
+        canvas->setBoundaryVertexPreviewRequested(
+            [this,canvas](QString id,QString vertex_id,Vec2 position,std::uint64_t revision) {
+                return previewBoundaryVertexFromCanvas(canvas,id,vertex_id,position,revision);
+            });
         canvas->setCursorMoved([this, canvas](Vec2 point) {
             // Snap toggles update both canvases; only the active workspace
             // owns the shared authoring pointer and cursor status.
@@ -21937,6 +22135,13 @@ private:
         m_pending_opening_preview.reset();
         if (m_running_opening_preview)
             (void)m_opening_preview_queue.cancel(m_opening_preview_sequence);
+        m_vertex_preview_source.reset();
+        m_vertex_preview_scene.reset();
+        m_vertex_preview_canvas.clear();
+        m_vertex_preview_document.reset();
+        m_pending_vertex_preview.reset();
+        if (m_running_vertex_preview)
+            (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
         const auto snapshot = m_document->snapshot();
         const auto organization = organize_project(snapshot);
         m_plan_geometry_error.clear();
@@ -26389,7 +26594,7 @@ public:
                             ? BoundaryFixedEndpoint::end : BoundaryFixedEndpoint::start,
                         connected->isChecked()};
                     const auto anchor_endpoint=edit.fixed_endpoint;
-                    Command command=boundaryLengthCommand(source,edit,related->isChecked());
+                    Command command=boundaryGeometryCommand(source,edit,related->isChecked());
                     const auto proposed = Document::preview_command(source, command);
                     const auto& proposed_entity = proposed.entities().at(selected->id);
                     const auto after = decode_identified_boundary_entity(proposed_entity);
@@ -27259,6 +27464,15 @@ private:
     std::optional<PendingOpeningPreview> m_pending_opening_preview;
     std::shared_ptr<const DocumentSnapshot> m_opening_preview_source;
     std::shared_ptr<Document> m_opening_preview_document;
+    WorkspaceRegenerationQueue m_vertex_preview_queue;
+    QTimer* m_vertex_preview_timer{};
+    std::uint64_t m_vertex_preview_sequence{};
+    std::optional<PendingVertexPreview> m_running_vertex_preview;
+    std::optional<PendingVertexPreview> m_pending_vertex_preview;
+    std::shared_ptr<const DocumentSnapshot> m_vertex_preview_source;
+    std::shared_ptr<const std::vector<CanvasEntity>> m_vertex_preview_scene;
+    std::shared_ptr<Document> m_vertex_preview_document;
+    QPointer<PlanCanvas> m_vertex_preview_canvas;
     PerformanceTelemetry m_performance_telemetry;
     WorkspaceAutosaveScheduler m_autosave_scheduler;
     struct PendingAutosave {

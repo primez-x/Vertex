@@ -108,6 +108,13 @@ receipts remain archived; the new target length uses the existing analytical
 metre value in the resize proof. Pure vertex groups may replay atomically when
 sequential intermediate geometry would be invalid, while nonvertex edit groups
 retain their ordered semantic replay.
+Straight boundary vertex movement uses the same solver with the canonical selected
+shape pinned, retaining a selected `move_vertex` proof and all affected related
+owner edits in one transaction. The canvas projects exact proposal geometry from
+detached snapshots asynchronously. Serial, source revision, and requesting-canvas
+checks discard canceled or obsolete results; active plan crop clipping also applies
+to proposed strokes. The final command recomputes admission rather than trusting
+screen overrides. Local analytical curve edits keep their existing command path.
 Stale revisions, invalid topology, degenerate edges, and
 self-intersections reject atomically. Handles are interaction overlays and are
 excluded from print/export rendering.

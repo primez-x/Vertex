@@ -37,6 +37,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QEventLoop>
 #include <QFile>
 #include <QFileDialog>
 #include <QFont>
@@ -61,6 +62,7 @@
 #include <QToolButton>
 #include <QTemporaryDir>
 #include <QTableWidget>
+#include <QTabWidget>
 #include <QStandardPaths>
 #include <QSplitter>
 #include <QSpinBox>
@@ -1817,6 +1819,197 @@ void test_mixed_constraint_workspace_workflow() {
     require(window.saveProjectAs(path) && reopened_boundary.openProject(path) &&
         reopened_boundary.document().snapshot().entities()==boundary_resized.entities(),
         "boundary-driven typed transaction must replay through saved workspace history");
+    const auto vertex_start_revision=window.document().revision();
+    require(window.selectEntity(boundary_id) && window.moveSelectedBoundaryVertex(
+        QString::fromStdString(resized_area.segments[0].end_vertex_id),{4.5,0}),
+        "moving a joined boundary corner must propagate to its wall endpoint");
+    const auto vertex_moved=window.document().snapshot();
+    require(vertex_moved.revision()==vertex_start_revision+1 &&
+        std::abs(vertex_moved.entities().at(wall_id.toStdString()).properties.at("baseline").at("start")[0].get<double>()-4.5)<1e-7,
+        "joined vertex move must preserve the saved coincidence in one command");
+    require(window.undoCommand() && window.document().snapshot().entities()==boundary_resized.entities() &&
+        window.redoCommand() && window.document().snapshot().entities()==vertex_moved.entities(),
+        "joined vertex movement must undo/redo exactly");
+    desktop::MainWindow reopened_vertex;
+    require(window.saveProjectAs(path) && reopened_vertex.openProject(path) &&
+        reopened_vertex.document().snapshot().entities()==vertex_moved.entities(),
+        "joined vertex move and its typed proof must survive workspace save/reopen");
+    require(window.selectEntity(boundary_id),"live vertex gesture must select its source");
+    canvas->setSnapEnabled(false);
+    const auto to_screen=[&](Vec2 point) {
+        const auto center=QRectF(canvas->rect()).center();
+        const auto view=canvas->viewCenter();
+        return QPointF(center.x()+(point.x-view.x)*canvas->viewScale(),
+            center.y()-(point.y-view.y)*canvas->viewScale());
+    };
+    const auto mouse=[&](QEvent::Type type,Vec2 point) {
+        const auto position=to_screen(point);
+        QMouseEvent event(type,position,canvas->mapToGlobal(position.toPoint()),
+            type==QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+            type==QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,Qt::NoModifier);
+        QApplication::sendEvent(canvas,&event);
+    };
+    const auto drag_start_revision=window.document().revision();
+    mouse(QEvent::MouseButtonPress,{4.5,0});
+    mouse(QEvent::MouseMove,{5,0});
+    auto* poll=window.findChild<QTimer*>("boundaryVertexPreviewPoll");
+    require(poll && poll->isActive(),"live vertex preview must run through the deferred native queue");
+    const auto wait_for_preview=[&] {
+        QEventLoop preview_loop;
+        QTimer observe;
+        observe.setInterval(5);
+        QObject::connect(&observe,&QTimer::timeout,&preview_loop,[&] { if (!poll->isActive()) preview_loop.quit(); });
+        QTimer::singleShot(3000,&preview_loop,&QEventLoop::quit);
+        observe.start();
+        preview_loop.exec();
+        require(!poll->isActive(),"deferred joined vertex preview must finish before inspection");
+    };
+    wait_for_preview();
+    require(!poll->isActive() && window.document().snapshot().entities()==vertex_moved.entities(),
+        "live related preview must complete without mutating the document");
+    const auto capture_directory=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if (!capture_directory.isEmpty()) require(QDir().mkpath(capture_directory) &&
+        canvas->grab().save(QDir(capture_directory).filePath("joined-vertex-live-preview.png")),
+        "live related vertex screenshot must save");
+    mouse(QEvent::MouseButtonRelease,{5,0});
+    const auto dragged=window.document().snapshot();
+    require(dragged.revision()==drag_start_revision+1 &&
+        std::abs(dragged.entities().at(wall_id.toStdString()).properties.at("baseline").at("start")[0].get<double>()-5)<1e-7,
+        "canvas release must commit its final joined corner and wall movement once");
+    require(window.undoCommand() && window.document().snapshot().entities()==vertex_moved.entities(),
+        "live joined drag must undo exactly");
+
+    auto* workspace_tabs=window.findChild<QTabWidget*>("workspaceTabs");
+    auto* architectural_canvas=dynamic_cast<desktop::PlanCanvas*>(
+        window.findChild<QWidget*>("architecturalPlanCanvas"));
+    auto* architectural_views=window.findChild<QComboBox*>("architecturalView");
+    require(workspace_tabs && architectural_canvas && architectural_views,
+        "joined vertex regressions must use the real workspace tabs and architectural canvas");
+    workspace_tabs->setCurrentIndex(1);
+    const auto plan_index=architectural_views->findData(QStringLiteral("view-plan"),Qt::UserRole+1);
+    require(plan_index>=0,"joined vertex regressions must select the conventional coordinated plan");
+    architectural_views->setCurrentIndex(plan_index);
+    QApplication::processEvents();
+    canvas=architectural_canvas;
+    canvas->setSnapEnabled(false);
+    const auto edit_plan_presentation=[&](std::optional<QString> objects,
+        std::optional<QString> crop,std::optional<bool> restricted) {
+        const auto model=decode_sheet_view_entity(window.document().snapshot().entities().at("sheet-view-1"));
+        const auto view=std::find_if(model.views().begin(),model.views().end(),
+            [](const auto& candidate) { return candidate.id=="view-plan"; });
+        require(view!=model.views().end(),"joined vertex fixture must retain its typed plan view");
+        const auto& presentation=view->presentation;
+        QStringList source_ids;
+        for (const auto& id : view->object_ids) source_ids.push_back(QString::fromStdString(id));
+        const auto detail=presentation.detail==ViewDetail::coarse ? QStringLiteral("coarse") :
+            presentation.detail==ViewDetail::fine ? QStringLiteral("fine") : QStringLiteral("medium");
+        const auto number=[](double value) { return QString::number(value,'g',17); };
+        const auto edited=window.editArchitecturalViewPresentation(QStringLiteral("view-plan"),
+            number(presentation.cut_depth_m),number(presentation.far_depth_m),
+            number(presentation.cut_line_mm),number(presentation.projection_line_mm),
+            presentation.hatch_enabled,QString::fromStdString(presentation.hatch_pattern),
+            number(presentation.hatch_scale),detail,objects.value_or(source_ids.join(u',')),crop,
+            restricted.value_or(view->restrict_to_objects));
+        if (!edited) throw std::runtime_error("joined vertex view edit failed: "+window.lastError().toStdString());
+        QApplication::processEvents();
+    };
+    const auto find_preview=[&](const QString& id) -> const desktop::CanvasEntity* {
+        const auto& entities=canvas->boundaryVertexPreviewEntities();
+        const auto found=std::find_if(entities.begin(),entities.end(),
+            [&](const auto& entity) { return entity.id==id; });
+        return found==entities.end() ? nullptr : &*found;
+    };
+    const auto cancel_preview=[&](const auto& source) {
+        QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);
+        QApplication::sendEvent(canvas,&escape);
+        require(canvas->boundaryVertexPreviewEntities().empty() &&
+            window.document().revision()==source.revision() &&
+            window.document().snapshot().entities()==source.entities(),
+            "Escape must clear joined vertex overrides and preserve the exact source revision and entities");
+    };
+    // Build an independent two-model project, then open it through normal
+    // recovery. Never edit the window's document outside workspace admission.
+    CoordinatedView earlier_view{"earlier-section","Earlier section"};
+    earlier_view.kind=CoordinatedViewKind::section;
+    DrawingSheet earlier_sheet;
+    earlier_sheet.id="earlier-sheet";
+    earlier_sheet.number="X001";
+    auto multi_model_document=Document::fork(window.document().snapshot());
+    multi_model_document.apply(ApplyEntityChanges{multi_model_document.revision(),
+        {EntityChange::upsert(make_sheet_view_entity("aaa-earlier-views",
+            SheetViewModel::create({earlier_view},{earlier_sheet})))}, {}, "Additional view model"});
+    const auto multi_model_path=directory.filePath("multiple-view-models.bldproj");
+    (void)ProjectStore::save(multi_model_path.toStdString(),multi_model_document.snapshot());
+    require(window.saveProjectAs(path) && window.openProject(multi_model_path),
+        "two-model project fixture must open normally after saving the current edit history");
+    workspace_tabs->setCurrentIndex(1);
+    architectural_views->setCurrentIndex(architectural_views->findData(QStringLiteral("view-plan"),Qt::UserRole+1));
+    QApplication::processEvents();
+    canvas=architectural_canvas;
+    canvas->setSnapEnabled(false);
+    edit_plan_presentation(std::nullopt,QStringLiteral("-1,4.8,-1,4"),std::nullopt);
+    require(window.selectEntity(boundary_id),"cropped plan drag must select its retained boundary");
+    const auto cropped_source=window.document().snapshot();
+    const auto retained_cropped_boundary=std::find_if(canvas->entities().begin(),canvas->entities().end(),
+        [&](const auto& entity) { return entity.id==boundary_id; });
+    require(retained_cropped_boundary!=canvas->entities().end() &&
+        !retained_cropped_boundary->vertex_handles.empty(),
+        "a source boundary wholly inside the crop must retain editable vertex handles");
+    mouse(QEvent::MouseButtonPress,{4.5,0});
+    mouse(QEvent::MouseMove,{5,0});
+    require(poll->isActive(),"cropped plan drag must use the deferred native preview queue");
+    wait_for_preview();
+    const auto* cropped_boundary=find_preview(boundary_id);
+    const auto* cropped_wall=find_preview(wall_id);
+    require(cropped_boundary && cropped_wall && cropped_wall->segments.empty() && cropped_wall->holes.empty(),
+        "a related wall moved wholly outside the crop must retain an empty override to suppress its source strokes");
+    const Boundary expected_crop{{{0,0},{4.8,0},0},{{4.8,0.3},{3,3},0},
+        {{3,3},{0,3},0},{{0,3},{0,0},0}};
+    require(cropped_boundary->segments.size()==expected_crop.size() && !cropped_boundary->filled &&
+        cropped_boundary->holes.empty(),"cropped preview must retain exactly the four clipped boundary strokes");
+    for (std::size_t index=0;index<expected_crop.size();++index) {
+        const auto& actual=cropped_boundary->segments[index];
+        const auto& expected=expected_crop[index];
+        require(std::abs(actual.start.x-expected.start.x)<1e-7 &&
+            std::abs(actual.start.y-expected.start.y)<1e-7 &&
+            std::abs(actual.end.x-expected.end.x)<1e-7 &&
+            std::abs(actual.end.y-expected.end.y)<1e-7 && actual.sweep_radians==0,
+            "architectural vertex preview must clip exact paths at x=4.8 instead of drawing the proposed corner at x=5");
+    }
+    require(window.document().revision()==cropped_source.revision() &&
+        window.document().snapshot().entities()==cropped_source.entities(),
+        "cropped related preview must leave all source geometry and presentation unchanged");
+    cancel_preview(cropped_source);
+
+    edit_plan_presentation(boundary_id,QStringLiteral(""),true);
+    require(window.selectEntity(boundary_id),"restricted plan drag must select its only source object");
+    const auto restricted_source=window.document().snapshot();
+    mouse(QEvent::MouseButtonPress,{4.5,0});
+    mouse(QEvent::MouseMove,{5,0});
+    require(poll->isActive(),"restricted architectural drag must start a deferred preview");
+    wait_for_preview();
+    require(find_preview(boundary_id) && !find_preview(wall_id),
+        "restricted architectural preview must contain its boundary and exclude the joined wall");
+    cancel_preview(restricted_source);
+    workspace_tabs->setCurrentIndex(0);
+    QApplication::processEvents();
+    canvas=dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
+    require(canvas && window.workspace()==desktop::Workspace::measurement &&
+        window.document().revision()==restricted_source.revision() && window.selectEntity(boundary_id),
+        "switching the actual tab to Measurement must preserve the cached preview source revision");
+    canvas->setSnapEnabled(false);
+    mouse(QEvent::MouseButtonPress,{4.5,0});
+    mouse(QEvent::MouseMove,{5,0});
+    require(poll->isActive(),"measurement drag at the same revision must start its own deferred preview");
+    wait_for_preview();
+    const auto* measurement_boundary=find_preview(boundary_id);
+    const auto* measurement_wall=find_preview(wall_id);
+    require(measurement_boundary && !measurement_boundary->segments.empty() &&
+        measurement_wall && !measurement_wall->segments.empty() &&
+        std::abs(measurement_boundary->segments.front().end.x-5)<1e-7 &&
+        std::abs(boundary_bounds(measurement_wall->segments).minimum.x-5)<1e-7,
+        "Measurement must preview both joined objects at the proposed corner without reusing the restricted architectural scene cache");
+    cancel_preview(restricted_source);
 }
 
 void test_boundary_insertion_preview_freedom_workflow() {
@@ -2212,8 +2405,32 @@ void test_direct_boundary_geometry_edit_workflow() {
     const auto persisted_resizes = std::count_if(
         reopened_snapshot.history().begin(), reopened_snapshot.history().end(),
         [](const RevisionRecord& record) { return record.boundary_constraint_changes.has_value(); });
-    require(persisted_edits == 3 && persisted_resizes == 1 && persisted_transforms == 1,
-            "typed edit and transform proofs must survive save and reopen");
+    const auto persisted_vertex_moves = std::count_if(
+        reopened_snapshot.history().begin(), reopened_snapshot.history().end(),
+        [&](const RevisionRecord& record) {
+            return record.boundary_constraint_changes &&
+                record.boundary_constraint_changes->boundary_edits.size() == 1 &&
+                record.boundary_constraint_changes->boundary_edits.front().boundary_id == accepted.boundary.id &&
+                record.boundary_constraint_changes->boundary_edits.front().kind == BoundaryGeometryEditKind::move_vertex;
+        });
+    const auto persisted_edge_resizes = std::count_if(
+        reopened_snapshot.history().begin(), reopened_snapshot.history().end(),
+        [&](const RevisionRecord& record) {
+            return record.boundary_constraint_changes &&
+                record.boundary_constraint_changes->boundary_edits.size() == 1 &&
+                record.boundary_constraint_changes->boundary_edits.front().boundary_id == accepted.boundary.id &&
+                record.boundary_constraint_changes->boundary_edits.front().kind == BoundaryGeometryEditKind::resize_segment;
+        });
+    const auto persisted_insertions = std::count_if(
+        reopened_snapshot.history().begin(), reopened_snapshot.history().end(),
+        [&](const RevisionRecord& record) {
+            return record.boundary_geometry_edit &&
+                record.boundary_geometry_edit->boundary_id == accepted.boundary.id &&
+                record.boundary_geometry_edit->kind == BoundaryGeometryEditKind::insert_vertex;
+        });
+    require(persisted_edits == 1 && persisted_resizes == 3 && persisted_transforms == 1 &&
+                persisted_insertions == 1 && persisted_vertex_moves == 2 && persisted_edge_resizes == 1,
+            "insertion, two constraint-backed vertex moves, edge resize and transform proofs must survive save and reopen");
 }
 
 void test_normal_receipt_boundary_redefinition_workflow() {

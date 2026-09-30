@@ -183,9 +183,12 @@ void validate_binding(const WallEndpointBinding& binding) {
 
 ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& input) {
     ConstraintAuthoringIntent result = input;
+    const auto coordinate_intents = static_cast<unsigned>(result.wall_resize.has_value()) +
+        static_cast<unsigned>(result.boundary_resize.has_value()) +
+        static_cast<unsigned>(result.boundary_vertex_move.has_value());
+    if (coordinate_intents > 1)
+        invalid("Only one wall or boundary coordinate intent may be authored at a time");
     if (result.boundary_resize.has_value()) {
-        if (result.wall_resize.has_value())
-            invalid("Wall and boundary resize intents cannot be combined");
         const auto& edit = result.boundary_resize->edit;
         if (edit.kind != BoundaryGeometryEditKind::resize_segment)
             invalid("Boundary resize intent requires a segment resize edit");
@@ -193,6 +196,12 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
         if (edit.fixed_endpoint != BoundaryFixedEndpoint::start &&
             edit.fixed_endpoint != BoundaryFixedEndpoint::end)
             invalid("Boundary resize anchor is invalid");
+    }
+    if (result.boundary_vertex_move.has_value()) {
+        const auto& edit = result.boundary_vertex_move->edit;
+        if (edit.kind != BoundaryGeometryEditKind::move_vertex)
+            invalid("Boundary vertex move intent requires a vertex move edit");
+        validate_boundary_geometry_edit(edit);
     }
     if (result.wall_resize.has_value()) {
         if (result.wall_resize->wall_id.empty()) {
@@ -228,6 +237,7 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
         }
     }
     if (!result.wall_resize.has_value() && !result.boundary_resize.has_value() &&
+        !result.boundary_vertex_move.has_value() &&
         result.relation_mutations.empty()) {
         invalid("Constraint authoring intent has no changes");
     }
@@ -804,6 +814,12 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
         }
         result.normalized_intent_ = normalize_intent(raw_intent);
         const auto& intent = result.normalized_intent_;
+        const BoundaryGeometryEdit* boundary_edit = intent.boundary_resize
+            ? &intent.boundary_resize->edit
+            : intent.boundary_vertex_move ? &intent.boundary_vertex_move->edit : nullptr;
+        const bool move_related_objects = intent.boundary_resize
+            ? intent.boundary_resize->move_related_objects
+            : intent.boundary_vertex_move && intent.boundary_vertex_move->move_related_objects;
         const auto organization = organize_project(snapshot);
         const auto before_constraints = decode_supported_constraints(snapshot.entities());
         auto candidate = snapshot.entities();
@@ -851,8 +867,8 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
         if (intent.wall_resize.has_value()) {
             seeds.insert(intent.wall_resize->wall_id);
         }
-        if (intent.boundary_resize.has_value()) {
-            seeds.insert(intent.boundary_resize->edit.boundary_id);
+        if (boundary_edit) {
+            seeds.insert(boundary_edit->boundary_id);
         }
         const auto constraints = decode_supported_constraints(candidate);
         std::map<std::string, std::set<std::string, std::less<>>, std::less<>> adjacency;
@@ -1045,27 +1061,26 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                     add_fixed(binding, position);
                 }
             }
-        } else if (intent.boundary_resize.has_value()) {
-            const auto& resize = *intent.boundary_resize;
-            const auto& owner_id = resize.edit.boundary_id;
+        } else if (boundary_edit) {
+            const auto& owner_id = boundary_edit->boundary_id;
             if (!boundaries.contains(owner_id))
-                invalid("Boundary resize owner must be an identified straight boundary");
+                invalid("Boundary coordinate edit owner must be an identified straight boundary");
             // This geometry-only replay preserves receipts and deliberately
             // precedes final constraint validation: neighbors have not moved yet.
-            const auto resized_entities = edited_boundary_entities(candidate, resize.edit);
-            const auto target = decode_identified_boundary_entity(resized_entities.at(owner_id));
+            const auto edited_entities = edited_boundary_entities(candidate, *boundary_edit);
+            const auto target = decode_identified_boundary_entity(edited_entities.at(owner_id));
             for (const auto& edge : target.segments) {
                 add_fixed({owner_id, WallEndpointRole::start,
                     edge.segment_id, edge.start_vertex_id}, edge.segment.start);
             }
-            const auto resize_component = connected_from(owner_id);
+            const auto coordinate_component = connected_from(owner_id);
             if (has_upsert && intent.relation_anchor.has_value() &&
-                !resize_component.contains(intent.relation_anchor->owner_id))
-                invalid("Relation anchor is outside the resized boundary component");
+                !coordinate_component.contains(intent.relation_anchor->owner_id))
+                invalid("Relation anchor is outside the edited boundary component");
             for (const auto& [id, position] : positions) {
                 const auto& binding = point_bindings.at(id);
                 if (binding.owner_id == owner_id) continue;
-                if (!resize.move_related_objects || !resize_component.contains(binding.owner_id))
+                if (!move_related_objects || !coordinate_component.contains(binding.owner_id))
                     add_fixed(binding, position);
             }
         } else if (!has_upsert || !intent.relation_anchor.has_value()) {
@@ -1086,7 +1101,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             }
         }
         if (has_upsert && intent.relation_anchor.has_value() &&
-            (intent.wall_resize.has_value() || intent.boundary_resize.has_value())) {
+            (intent.wall_resize.has_value() || boundary_edit)) {
             const auto& anchor = *intent.relation_anchor;
             add_fixed(anchor, positions.at(resolve(anchor)));
         }
@@ -1147,13 +1162,11 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             changed_ids.insert(wall_id);
         }
 
-        if (intent.boundary_resize.has_value())
-            result.boundary_edits_.push_back(intent.boundary_resize->edit);
+        if (boundary_edit) result.boundary_edits_.push_back(*boundary_edit);
         for (const auto& [id, binding] : point_bindings) {
             if (!boundaries.contains(binding.owner_id) || points_near(solved_points.at(id), positions.at(id)))
                 continue;
-            if (intent.boundary_resize.has_value() &&
-                binding.owner_id == intent.boundary_resize->edit.boundary_id)
+            if (boundary_edit && binding.owner_id == boundary_edit->boundary_id)
                 continue;
             BoundaryGeometryEdit edit;
             edit.boundary_id = binding.owner_id;
