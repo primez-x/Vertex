@@ -349,7 +349,8 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U060 — Move several selected objects together**
-  - Expected: Their relative arrangement is preserved.
+  - Steps: Ctrl-click two joined walls, a sofa, a text label, and a reference image. Drag inside their selected bounds and release. Undo, redo, save, and reopen. Next select only one of two walls with a saved coincident endpoint constraint plus the sofa and image; try moving them away from the other wall.
+  - Expected: The complete group moves together in one undo step. Wall lengths, door/window positions along their hosts, symbol sizes, image calibration, and relative placement remain correct after reopening. Moving only part of a constrained wall group reports the conflict and leaves every selected object unchanged.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -401,7 +402,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U069 — Rotate a selected object around a chosen pivot**
-  - Steps: Rotate an area and a column to 90 degrees, release, then rotate again to 180 degrees and back to the original angle. Hold Shift for an angle between snapping points. Repeat with a circular column.
+  - Steps: Rotate an area and a column to 90 degrees, release, then rotate again to 180 degrees and back to the original angle. Hold Shift for an angle between snapping points. Repeat with a circular column and in a saved horizontal architectural plan view.
   - Expected: The handle stays attached to the rotated selection box after release. Common angles snap, Shift permits fine adjustment, and degrees appear while dragging. Undo/redo and save/reopen retain the orientation.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________

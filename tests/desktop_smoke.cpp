@@ -1576,6 +1576,200 @@ void test_delete_selection_workflow() {
             "deleted boundary must not remain in the document");
 }
 
+void test_wall_group_canvas_move_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
+    using namespace sketch;
+    desktop::MainWindow window;
+    window.setAttribute(Qt::WA_DontShowOnScreen);
+    window.resize(1200,800);
+    window.setMetricUnits(true);
+    window.show();
+    const auto resize = [&](const QString& id,const QString& length) {
+        require(window.selectEntity(id),"wall receipt fixture must select");
+        QTimer::singleShot(0,&window,[&] {
+            auto* dialog = window.findChild<QDialog*>("constraintDialog");
+            require(dialog,"wall receipt fixture must open ordinary length editor");
+            dialog->findChild<QLineEdit*>("constraintLength")->setText(length);
+            dialog->findChild<QPushButton*>("constraintPreviewButton")->click();
+            auto* apply = dialog->findChild<QPushButton*>("constraintApplyButton");
+            require(apply->isEnabled(),"exact wall length entry must preview");
+            apply->click();
+        });
+        window.showConstraintEditor();
+    };
+    const auto first = window.createStraightWall({0,0},{4,0});
+    require(!first.isEmpty(),"group fixture first wall must create");
+    resize(first,"12 ft");
+    require(window.selectEntity(first),"opening host must select");
+    const auto door = window.createHostedOpening("door","1 m","0.9 m","0 m","2 m");
+    require(!door.isEmpty(),"group fixture hosted door must create");
+    const auto second = window.createStraightWall({3.6576,0},{3.6576,4});
+    require(!second.isEmpty(),"group fixture second wall must create");
+    resize(second,"10 ft");
+    const auto unrelated = window.createStraightWall({0,6},{4,6});
+    PersistentConstraint connection{"wall-group-coincidence",ConstraintRelationKind::coincident,
+        {{first.toStdString(),WallEndpointRole::end},{second.toStdString(),WallEndpointRole::start}}};
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(encode_constraint_entity(connection))},{},"group fixture relation"});
+    require(window.selectEntity(first) && window.selectEntity(second,true),
+            "both receipt-backed walls must select as a group");
+    auto* canvas = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
+    require(canvas,"group fixture must use the ordinary plan canvas");
+    canvas->setSnapEnabled(false);
+    canvas->setOverviewMapEnabled(false);
+    canvas->fitView();
+    QApplication::processEvents();
+    const auto mouse = [&](QEvent::Type type,Vec2 position) {
+        const auto center = QRectF(canvas->rect()).center();
+        const auto view = canvas->viewCenter();
+        const QPointF pixel{center.x()+(position.x-view.x)*canvas->viewScale(),
+                            center.y()-(position.y-view.y)*canvas->viewScale()};
+        QMouseEvent event(type,pixel,canvas->mapToGlobal(pixel.toPoint()),
+            type==QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+            type==QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,Qt::NoModifier);
+        QApplication::sendEvent(canvas,&event);
+    };
+    const auto source = window.document().snapshot();
+    mouse(QEvent::MouseButtonPress,{0.4,0});
+    mouse(QEvent::MouseMove,{2.4,1});
+    QKeyEvent cancel(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);
+    QApplication::sendEvent(canvas,&cancel);
+    mouse(QEvent::MouseButtonRelease,{2.4,1});
+    require(window.document().revision()==source.revision() &&
+                window.document().snapshot().entities()==source.entities(),
+            "Escape must cancel grouped wall preview without source changes");
+    mouse(QEvent::MouseButtonPress,{0.4,0});
+    mouse(QEvent::MouseMove,{2.4,1});
+    mouse(QEvent::MouseButtonRelease,{2.4,1});
+    const auto moved = window.document().snapshot();
+    require(window.lastError().isEmpty() && moved.revision()==source.revision()+1 &&
+                moved.history().size()==source.history().size()+1,
+            "normal grouped drag must commit one receipt-preserving transaction");
+    for (const auto& id : {first,second}) {
+        const auto& before = source.entities().at(id.toStdString());
+        const auto& after = moved.entities().at(id.toStdString());
+        const auto& geometry = after.properties.at("baseline");
+        require(std::abs(geometry.at("start")[0].get<double>()-
+                    before.properties.at("baseline").at("start")[0].get<double>()-2)<1e-8 &&
+                std::abs(geometry.at("start")[1].get<double>()-
+                    before.properties.at("baseline").at("start")[1].get<double>()-1)<1e-8,
+                "all selected wall geometry must receive the same translation");
+        auto expected_receipt = before.extensions.at("constraint_authoring").at("last_length_entry");
+        expected_receipt["baseline"] = geometry;
+        require(after.extensions.at("constraint_authoring").at("last_length_entry")==expected_receipt,
+                "grouped drag must retain exact entry text and rebase only its receipt baseline");
+    }
+    require(moved.entities().at(door.toStdString())==source.entities().at(door.toStdString()) &&
+                moved.entities().at(unrelated.toStdString())==source.entities().at(unrelated.toStdString()) &&
+                moved.entities().at(connection.id)==source.entities().at(connection.id),
+            "grouped wall drag must retain hosted stations, unrelated objects and explicit relations");
+    const auto captures = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if (!captures.isEmpty()) require(QDir().mkpath(captures) &&
+        canvas->grab().save(QDir(captures).filePath("wall-group-move.png")),
+        "grouped wall move capture must save");
+    require(window.undoCommand() && window.document().snapshot().entities()==source.entities() &&
+                window.redoCommand() && window.document().snapshot().entities()==moved.entities(),
+            "grouped wall movement must undo and redo exactly");
+    QTemporaryDir directory;
+    desktop::MainWindow reopened;
+    require(directory.isValid() && window.saveProjectAs(directory.filePath("wall-group.bldproj")) &&
+                reopened.openProject(directory.filePath("wall-group.bldproj")) &&
+                reopened.document().snapshot().entities()==moved.entities(),
+            "grouped move receipts and constraints must replay on reopen");
+    require(window.undoCommand() && window.selectEntity(first),
+            "partial-connection refusal fixture must restore and select the original wall");
+    mouse(QEvent::MouseButtonPress,{0.4,0});
+    mouse(QEvent::MouseMove,{2.4,1});
+    mouse(QEvent::MouseButtonRelease,{2.4,1});
+    require(!window.lastError().isEmpty() && window.document().snapshot().entities()==source.entities(),
+            "moving one endpoint owner away from an unmoved joined wall must reject atomically");
+
+    const auto sofa = window.createAnnotationSymbol("svg-v2-04_living-sectional-left",{1.5,1.2});
+    const auto label = window.createAnnotationLabel("bedroom","Office",{2,2});
+    const auto reference_path = directory.filePath("group-reference.png");
+    QImage reference_image(32,24,QImage::Format_ARGB32);
+    reference_image.fill(Qt::white);
+    require(reference_image.save(reference_path),"mixed group reference fixture must save");
+    const auto reference = testing::importOrSeedTrustedReferenceFixture(window,reference_path,reference_image);
+    if (sofa.isEmpty() || label.isEmpty() || reference.isEmpty())
+        throw std::runtime_error(QStringLiteral("Mixed group fixtures: symbol=%1 label=%2 reference=%3: %4")
+            .arg(!sofa.isEmpty()).arg(!label.isEmpty()).arg(!reference.isEmpty())
+            .arg(window.lastError()).toStdString());
+    // Retain the annotation owner's metadata as well as each placed instance.
+    const auto annotation_source = window.document().snapshot();
+    const auto annotation_owner = std::find_if(annotation_source.entities().begin(),annotation_source.entities().end(),
+        [](const auto& item) { return item.second.type==kAnnotationEntityType; });
+    require(annotation_owner!=annotation_source.entities().end(),"mixed group annotation owner must exist");
+    auto metadata = annotation_owner->second;
+    metadata.required = true;
+    metadata.extensions["vendor"] = {{"retain","group metadata"}};
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(metadata)},{},"mixed group metadata fixture"});
+    const auto select_group = [&] {
+        require(window.selectEntity(first) && window.selectEntity(second,true) &&
+                    window.selectEntity(sofa,true) && window.selectEntity(label,true) &&
+                    window.selectEntity(reference,true),"mixed group must retain all five selected roots");
+    };
+    select_group();
+    const auto mixed_source = window.document().snapshot();
+    mouse(QEvent::MouseButtonPress,{0.4,0});
+    mouse(QEvent::MouseMove,{2.4,1});
+    mouse(QEvent::MouseButtonRelease,{2.4,1});
+    const auto mixed_moved = window.document().snapshot();
+    require(window.lastError().isEmpty() && mixed_moved.revision()==mixed_source.revision()+1 &&
+                mixed_moved.history().size()==mixed_source.history().size()+1,
+            "walls, symbols, labels and reference must move in one atomic history operation");
+    const auto moved_annotations = decode_annotation_entity(mixed_moved.entities().at(metadata.id));
+    const auto original_annotations = decode_annotation_entity(mixed_source.entities().at(metadata.id));
+    require(moved_annotations.symbols.size()==original_annotations.symbols.size() &&
+                moved_annotations.labels.size()==original_annotations.labels.size() &&
+                std::abs(moved_annotations.symbols.front().placement.position.x-
+                    original_annotations.symbols.front().placement.position.x-2)<1e-8 &&
+                std::abs(moved_annotations.symbols.front().placement.position.y-
+                    original_annotations.symbols.front().placement.position.y-1)<1e-8 &&
+                std::abs(moved_annotations.labels.front().placement.position.x-
+                    original_annotations.labels.front().placement.position.x-2)<1e-8 &&
+                std::abs(moved_annotations.labels.front().placement.position.y-
+                    original_annotations.labels.front().placement.position.y-1)<1e-8 &&
+                mixed_moved.entities().at(metadata.id).required &&
+                mixed_moved.entities().at(metadata.id).extensions==metadata.extensions,
+            "mixed move must translate placed annotations and retain the owner envelope");
+    require(mixed_moved.entities().at(reference.toStdString()).properties.at("position_m")==nlohmann::json::array({2.,1.}) &&
+                mixed_moved.entities().at(door.toStdString())==mixed_source.entities().at(door.toStdString()) &&
+                mixed_moved.assets()==mixed_source.assets(),
+            "mixed move must translate reference placement without changing hosted stations or image assets");
+    canvas->fitView();
+    if (!captures.isEmpty()) require(canvas->grab().save(QDir(captures).filePath("mixed-object-group-move.png")),
+                                    "mixed selection move capture must save");
+    require(window.undoCommand() && window.document().snapshot().entities()==mixed_source.entities() &&
+                window.redoCommand() && window.document().snapshot().entities()==mixed_moved.entities() &&
+                window.saveProjectAs(directory.filePath("mixed-group.bldproj")) &&
+                reopened.openProject(directory.filePath("mixed-group.bldproj")) &&
+                reopened.document().snapshot().entities()==mixed_moved.entities(),
+            "mixed group movement must undo, redo, save and reopen exactly");
+    require(window.undoCommand() && window.selectEntity(first) && window.selectEntity(sofa,true) &&
+                window.selectEntity(reference,true),"mixed conflict fixture must omit the other joined wall");
+    mouse(QEvent::MouseButtonPress,{0.4,0});
+    mouse(QEvent::MouseMove,{2.4,1});
+    mouse(QEvent::MouseButtonRelease,{2.4,1});
+    require(!window.lastError().isEmpty() && window.document().snapshot().entities()==mixed_source.entities(),
+            "rejected mixed group must not publish the symbol or image part of its move");
+
+    select_group();
+    mouse(QEvent::MouseButtonPress,{0.4,0});
+    mouse(QEvent::MouseMove,{2.4,1});
+    auto changed = window.document().snapshot().entities().at(unrelated.toStdString());
+    changed.properties["name"]="Intervening edit";
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(changed)},{},"intervening source edit"});
+    select_group(); // Publishing the replacement scene invalidates the captured drag.
+    const auto replaced = window.document().snapshot();
+    mouse(QEvent::MouseButtonRelease,{2.4,1});
+    require(window.document().revision()==replaced.revision() &&
+                window.document().snapshot().entities()==replaced.entities(),
+            "source replacement during group drag must ignore the stale release");
+}
+
 void test_boundary_identity_upgrade_workflow() {
     const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
@@ -6906,6 +7100,10 @@ int main(int argc, char** argv) {
         test_boundary_insertion_preview_freedom_workflow();
         return 0;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--wall-group-move-only") {
+        test_wall_group_canvas_move_workflow();
+        return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--boundary-identity-upgrade-only") {
         test_boundary_identity_upgrade_workflow();
         std::cout << "Boundary identity upgrade workflow tests passed\n";
@@ -7012,6 +7210,7 @@ int main(int argc, char** argv) {
     test_multiple_selection_clipboard_workflow();
     test_selection_clipboard_workflow();
     test_wall_transform_workflow(field_ui_capture_directory);
+    test_wall_group_canvas_move_workflow();
     test_sloped_wall_workflow();
     test_material_clipboard_transfer();
     test_delete_selection_workflow();

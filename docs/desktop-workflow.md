@@ -279,6 +279,16 @@ annotation groups rather than their individual labels/symbols; ordinary single
 annotation-child deletion retains its existing behavior. Selection filtering and
 broader linked-object ownership policies remain open qualification work.
 
+Ctrl-select compatible architectural objects, placed symbols, labels, and reference
+images, then drag inside the selected bounds to move them together. Release
+commits one undoable edit; Escape cancels. Hosted door/window stations remain
+relative to their walls, and entered wall lengths and curve construction values
+retain their original expressions. Existing hard constraints still apply: moving
+only part of a constrained group rejects the entire move, including its symbols
+and references. A document or selection change during the drag cancels it.
+Mixed groups containing measurement boundaries or dependent dimensions still
+require their separate supported editing commands.
+
 In the Architectural workspace, Ctrl-click the source walls or roofs and choose
 **Join selected walls** or **Join selected roofs** from the canvas context menu,
 Architectural menu, or command search. Vertex resolves building levels and hosted
@@ -476,6 +486,20 @@ production constraint workflow are still required.
 
 ## Selection transforms
 
+Drag the outward circular handle to rotate a selected object. Its selection
+frame and handle retain the committed angle after release, so the next drag
+starts from that orientation. Rotation snaps every 45 degrees by default;
+hold **Shift** while dragging for fine adjustment between those angles.
+The live dimension readout includes the current angle. Drag back to **0 degrees**
+to restore an initially unrotated object; an object with a nonzero original
+angle can return to that angle with Shift. Undo/redo and save/reopen retain the
+orientation.
+
+Saved horizontal architectural plan views also retain those frames when their
+origin or axes change. Their readout and snapping angles are relative to the
+view axes; the committed pivot is converted back to model coordinates. Oblique
+plan rotation/resize interactions still require a separate implementation.
+
 The **Transform selection** command is available from **More** and the command
 palette when a supported identified closed boundary or wall is selected. It applies an
 analytic rotation around the complete boundary-bounds center, independent
@@ -506,8 +530,11 @@ or constraint conflicts clear the preview and disable Apply. Apply commits the
 exact cached command, including copy identities; Cancel creates no history.
 Intervening document or selection changes invalidate the candidate. Boundary
 previews use the same identity, geometry, and receipt checks as committed edits;
-unchanged transforms do not create history. Room-boundary propagation and
-connected-wall group transforms remain open production work.
+unchanged transforms do not create history. Rigid architectural group transforms
+retain exact wall-length receipts and supported curve-input provenance. Scaling
+a wall with retained measurement input is rejected; use its length editor for
+an intentional measurement change. Room-boundary propagation and mixed groups
+requiring boundary transform proofs remain open production work.
 
 When a column, beam, stair, railing, or roof is selected, **Transform selection** uses
 the architectural transaction adapter instead of the boundary editor. Its

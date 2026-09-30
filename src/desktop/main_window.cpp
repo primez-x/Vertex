@@ -2331,6 +2331,45 @@ struct ArchitecturalViewContext {
 
 ArchitecturalViewContext architectural_view_context(const CoordinatedView& view);
 
+bool horizontal_plan_frame(const BuildingViewFrame& frame) {
+    return std::abs(frame.direction.x) <= 1e-12 && std::abs(frame.direction.y) <= 1e-12 &&
+        std::abs(std::abs(frame.direction.z) - 1.0) <= 1e-12 &&
+        std::abs(frame.up.z) <= 1e-12;
+}
+
+Vec2 plan_view_right(const BuildingViewFrame& frame) {
+    // Match building_view_projection's up cross (-direction) basis.
+    const auto length = std::hypot(frame.up.x, frame.up.y);
+    const auto sign = frame.direction.z < 0.0 ? 1.0 : -1.0;
+    return {sign * frame.up.y / length, -sign * frame.up.x / length};
+}
+
+Vec2 plan_view_up(const BuildingViewFrame& frame) {
+    const auto length = std::hypot(frame.up.x, frame.up.y);
+    return {frame.up.x / length, frame.up.y / length};
+}
+
+Vec2 project_plan_point(Vec2 point, const BuildingViewFrame& frame) {
+    const auto right = plan_view_right(frame);
+    const auto up = plan_view_up(frame);
+    const auto x = point.x - frame.origin.x, y = point.y - frame.origin.y;
+    return {x * right.x + y * right.y, x * up.x + y * up.y};
+}
+
+Vec2 unproject_plan_point(Vec2 point, const BuildingViewFrame& frame) {
+    const auto right = plan_view_right(frame);
+    const auto up = plan_view_up(frame);
+    return {frame.origin.x + point.x * right.x + point.y * up.x,
+            frame.origin.y + point.x * right.y + point.y * up.y};
+}
+
+double project_plan_angle(double angle, const BuildingViewFrame& frame) {
+    const auto right = plan_view_right(frame);
+    const auto up = plan_view_up(frame);
+    const auto x = std::cos(angle), y = std::sin(angle);
+    return std::atan2(x * up.x + y * up.y, x * right.x + y * right.y);
+}
+
 CoordinatedView dimension_view(const CoordinatedView& view) {
     auto resolved = view;
     const auto context = architectural_view_context(view);
@@ -11705,6 +11744,8 @@ public:
                 if (!id.isEmpty() && !ids.contains(id)) ids.push_back(id);
             if (ids.isEmpty()) throw std::invalid_argument("Select an object to move.");
             const auto source = authoringSnapshot();
+            auto model_ids = ids;
+            std::vector<EntityChange> presentation_changes;
 
             auto annotation = std::find_if(source.entities().begin(), source.entities().end(),
                 [](const auto& entry) { return entry.second.type == kAnnotationEntityType; });
@@ -11715,37 +11756,60 @@ public:
                     if (!ids.contains(id_from(label.id))) continue;
                     label.placement.position.x += delta.x;
                     label.placement.position.y += delta.y;
+                    if (source.entities().contains(label.id))
+                        throw std::invalid_argument("Selection identity is ambiguous between an annotation and a model object.");
+                    model_ids.removeAll(id_from(label.id));
                     ++moved;
                 }
                 for (auto& symbol : state.symbols) {
                     if (!ids.contains(id_from(symbol.id))) continue;
                     symbol.placement.position.x += delta.x;
                     symbol.placement.position.y += delta.y;
+                    if (source.entities().contains(symbol.id))
+                        throw std::invalid_argument("Selection identity is ambiguous between an annotation and a model object.");
+                    model_ids.removeAll(id_from(symbol.id));
                     ++moved;
                 }
-                if (moved == static_cast<std::size_t>(ids.size())) {
-                    const auto command = ApplyEntityChanges{
-                        source.revision(),
-                        {EntityChange::upsert(make_annotation_entity(annotation->second.id, state))},
-                        {}, ids.size() == 1 ? "Move annotation" : "Move annotations"};
-                    (void)Document::preview_command(source, command);
-                    applyDocumentCommand(command);
-                    clearError();
-                    refresh();
-                    return true;
-                }
                 if (moved != 0) {
-                    throw std::invalid_argument(
-                        "Move annotations separately from model objects so the edit remains atomic.");
+                    auto candidate = annotation->second;
+                    candidate.properties["state"] =
+                        make_annotation_entity(annotation->second.id, state).properties.at("state");
+                    presentation_changes.push_back(EntityChange::upsert(std::move(candidate)));
                 }
+            }
+
+            // Reference images and presentation instances share the same final
+            // command with model owners; no part of a mixed selection commits
+            // until the complete candidate passes document admission.
+            for (const auto& id : model_ids) {
+                const auto found = source.entities().find(id.toStdString());
+                if (found == source.entities().end() || found->second.type != "reference_asset") continue;
+                auto candidate = found->second;
+                const auto position = read_point(candidate.properties.value("position_m",json::array()));
+                if (!position) throw std::invalid_argument("The selected reference has no valid position.");
+                candidate.properties["position_m"] = json::array({position->x+delta.x,position->y+delta.y});
+                presentation_changes.push_back(EntityChange::upsert(std::move(candidate)));
+            }
+            model_ids.erase(std::remove_if(model_ids.begin(),model_ids.end(),[&](const auto& id) {
+                const auto found = source.entities().find(id.toStdString());
+                return found != source.entities().end() && found->second.type == "reference_asset";
+            }),model_ids.end());
+            if (model_ids.isEmpty()) {
+                const Command command = ApplyEntityChanges{source.revision(),std::move(presentation_changes),{},
+                    ids.size()==1 ? "Move presentation object" : "Move presentation objects"};
+                (void)Document::preview_command(source,command);
+                applyDocumentCommand(command);
+                clearError();
+                refresh();
+                return true;
             }
 
             bool all_architectural = true;
             std::vector<std::string> roots;
             std::vector<ArchitecturalOperation> operations;
-            roots.reserve(ids.size());
-            operations.reserve(ids.size());
-            for (const auto& id : ids) {
+            roots.reserve(model_ids.size());
+            operations.reserve(model_ids.size());
+            for (const auto& id : model_ids) {
                 const auto found = source.entities().find(id.toStdString());
                 if (found == source.entities().end() ||
                     !can_transform_architectural_entity_type(found->second.type)) {
@@ -11762,8 +11826,12 @@ public:
                     new_id("architectural-tx"), std::to_string(source.revision()),
                     std::move(roots), std::move(operations),
                     ids.size() == 1 ? "Move architectural object" : "Move architectural objects");
-                const auto command = architectural_transaction_command(
+                auto command = architectural_transaction_command(
                     source, transaction, source.revision());
+                command.entity_changes.insert(command.entity_changes.end(),
+                    std::make_move_iterator(presentation_changes.begin()),
+                    std::make_move_iterator(presentation_changes.end()));
+                if (!presentation_changes.empty()) command.message = "Move selected objects";
                 (void)Document::preview_command(source, Command{command});
                 applyDocumentCommand(Command{command});
                 clearError();
@@ -11771,8 +11839,8 @@ public:
                 return true;
             }
 
-            if (ids.size() == 1) {
-                const auto found = source.entities().find(ids.front().toStdString());
+            if (model_ids.size() == 1 && presentation_changes.empty()) {
+                const auto found = source.entities().find(model_ids.front().toStdString());
                 if (found != source.entities().end() &&
                     is_closed_boundary_entity(found->second.type)) {
                     const auto metres = [](double value) {
@@ -11784,23 +11852,6 @@ public:
                     (void)Document::preview_command(source, command);
                     applyDocumentCommand(command);
                     m_selected_id = id_from(root);
-                    clearError();
-                    refresh();
-                    return true;
-                }
-                if (found != source.entities().end() && found->second.type == "reference_asset") {
-                    auto candidate = found->second;
-                    const auto position = read_point(candidate.properties.value(
-                        "position_m", json::array()));
-                    if (!position) throw std::invalid_argument(
-                        "The selected reference has no valid position.");
-                    candidate.properties["position_m"] =
-                        json::array({position->x + delta.x, position->y + delta.y});
-                    const auto command = ApplyEntityChanges{
-                        source.revision(), {EntityChange::upsert(std::move(candidate))}, {},
-                        "Move reference"};
-                    (void)Document::preview_command(source, command);
-                    applyDocumentCommand(command);
                     clearError();
                     refresh();
                     return true;
@@ -12234,6 +12285,28 @@ public:
         }
     }
 
+    std::optional<BuildingViewFrame> canvasTransformPlanFrame(const DocumentSnapshot& source) const {
+        if (m_workspace != Workspace::architectural) return std::nullopt;
+        auto frame = architectural_view_context(source, m_architectural_view_kind).frame;
+        auto kind = m_architectural_view_kind;
+        if (!m_active_named_view.isEmpty()) {
+            for (const auto& [id, entity] : source.entities()) {
+                (void)id;
+                if (entity.type != kSheetViewEntityType) continue;
+                const auto model = decode_sheet_view_entity(entity);
+                for (const auto& view : model.views()) {
+                    if (view.id != m_active_named_view.toStdString()) continue;
+                    frame = architectural_view_context(view).frame;
+                    kind = architectural_view_kind(view.kind);
+                }
+            }
+        }
+        if (kind != BuildingViewKind::plan || !horizontal_plan_frame(frame))
+            throw std::invalid_argument(
+                "Canvas rotation and resizing require a horizontal plan view; oblique view interaction is not supported.");
+        return frame;
+    }
+
     bool resizeSelectionAxesFromCanvas(const QString& requested_id, double scale_x,
                                        double scale_y, Vec2 anchor) {
         try {
@@ -12263,8 +12336,10 @@ public:
                                                  anchor.y + s * x + c * y};
                     symbol.width_scale *= scale_x;
                     symbol.depth_scale *= scale_y;
+                    auto candidate = entity;
+                    candidate.properties["state"] = make_annotation_entity(id, state).properties.at("state");
                     const auto command = ApplyEntityChanges{source.revision(),
-                        {EntityChange::upsert(make_annotation_entity(id, state))}, {},
+                        {EntityChange::upsert(std::move(candidate))}, {},
                         "Resize symbol dimensions"};
                     (void)Document::preview_command(source, command);
                     applyDocumentCommand(command);
@@ -12274,6 +12349,8 @@ public:
                 }
             }
             const auto& entity = source.entities().at(wanted);
+            if (const auto frame = canvasTransformPlanFrame(source))
+                anchor = unproject_plan_point(anchor, *frame);
             const auto command = plan_axis_resize_command(source, wanted, scale_x, scale_y,
                                                           anchor, plan_axis_resize_frame(entity));
             applyDocumentCommand(command);
@@ -12324,9 +12401,12 @@ public:
                 for (auto& label : state.labels) if (label.id == wanted) apply(label.placement);
                 for (auto& symbol : state.symbols) if (symbol.id == wanted) apply(symbol.placement);
                 if (transformed) {
+                    auto candidate = annotation->second;
+                    candidate.properties["state"] =
+                        make_annotation_entity(annotation->second.id, state).properties.at("state");
                     const auto command = ApplyEntityChanges{
                         source.revision(),
-                        {EntityChange::upsert(make_annotation_entity(annotation->second.id, state))},
+                        {EntityChange::upsert(std::move(candidate))},
                         {}, "Transform annotation"};
                     (void)Document::preview_command(source, command);
                     applyDocumentCommand(command);
@@ -12361,6 +12441,9 @@ public:
                 refresh();
                 return true;
             }
+            const auto projected_plan_frame = canvasTransformPlanFrame(source);
+            // Upward plans reverse handedness; downward plans retain it.
+            if (projected_plan_frame) rotation_radians *= -projected_plan_frame->direction.z;
             const auto degrees = QString::number(
                 rotation_radians * 180.0 / std::numbers::pi, 'g', 15);
             const auto* active_canvas = m_workspace == Workspace::measurement
@@ -12372,6 +12455,8 @@ public:
                     break;
                 }
             }
+            if (canvas_pivot && projected_plan_frame)
+                canvas_pivot = unproject_plan_point(*canvas_pivot, *projected_plan_frame);
             const auto compensation = [&](Vec2 pivot, double scale) {
                 const auto c = std::cos(rotation_radians), s = std::sin(rotation_radians);
                 return Vec2{pivot.x-scale*(c*pivot.x-s*pivot.y),
@@ -23702,7 +23787,15 @@ private:
                                  return plan_layer(left) < plan_layer(right);
                              });
         }
-        const auto attach_frames = [&](std::vector<CanvasEntity>& entities) {
+        const auto attach_frames = [&](std::vector<CanvasEntity>& entities,
+                                       const BuildingViewFrame* projection = nullptr) {
+            if (projection && !horizontal_plan_frame(*projection)) return;
+            const auto project_frame = [&](CanvasEntity& entity) {
+                if (!projection || !entity.resize_frame) return;
+                entity.resize_frame->center = project_plan_point(entity.resize_frame->center, *projection);
+                entity.resize_frame->rotation_radians =
+                    project_plan_angle(entity.resize_frame->rotation_radians, *projection);
+            };
             for (auto& canvas_entity : entities) {
                 if (canvas_entity.svg_symbol || canvas_entity.segments.empty()) continue;
                 const auto found = snapshot.entities().find(canvas_entity.id.toStdString());
@@ -23711,7 +23804,7 @@ private:
                     double angle{};
                     if (can_transform_architectural_entity_type(found->second.type)) {
                         angle = plan_axis_resize_frame(found->second);
-                        if (canvas_entity.selected) {
+                        if (canvas_entity.selected || projection) {
                             const auto key = found->second.properties.dump();
                             auto cached = m_plan_transform_frame_cache.find(found->first);
                             if (cached == m_plan_transform_frame_cache.end() || cached->second.first != key) {
@@ -23725,15 +23818,20 @@ private:
                                         bounds.maximum.y-bounds.minimum.y})).first;
                             }
                             canvas_entity.resize_frame = cached->second.second;
+                            project_frame(canvas_entity);
                             continue;
                         }
                     } else if (is_closed_boundary_entity(found->second.type)) {
-                        const auto& edge = canvas_entity.segments.front();
+                        const auto boundary = projection ? boundary_geometry(
+                            decode_identified_boundary_entity(found->second)) : canvas_entity.segments;
+                        const auto& edge = boundary.front();
                         angle = std::atan2(edge.end.y - edge.start.y, edge.end.x - edge.start.x);
                     } else continue;
                     const auto c = std::cos(angle), s = std::sin(angle);
                     const auto local = [&](Vec2 p) { return Vec2{c*p.x+s*p.y, -s*p.x+c*p.y}; };
-                    auto segments = canvas_entity.segments;
+                    auto segments = projection && is_closed_boundary_entity(found->second.type)
+                        ? boundary_geometry(decode_identified_boundary_entity(found->second))
+                        : canvas_entity.segments;
                     for (auto& segment : segments) {
                         segment.start = local(segment.start);
                         segment.end = local(segment.end);
@@ -23745,13 +23843,27 @@ private:
                         {c*x-s*y, s*x+c*y}, angle,
                         bounds.maximum.x-bounds.minimum.x,
                         bounds.maximum.y-bounds.minimum.y};
+                    project_frame(canvas_entity);
                 } catch (const std::exception&) {
                     // Geometry construction errors are reported by the projection path.
                 }
             }
         };
         attach_frames(geometry);
-        attach_frames(visible_view_geometry[architectural_view_index(BuildingViewKind::plan)]);
+        const auto ordinary_plan_frame = architectural_view_context(snapshot, BuildingViewKind::plan).frame;
+        attach_frames(visible_view_geometry[architectural_view_index(BuildingViewKind::plan)],
+                      &ordinary_plan_frame);
+        for (const auto& [model_id, entity] : snapshot.entities()) {
+            if (entity.type != kSheetViewEntityType) continue;
+            const auto model = decode_sheet_view_entity(entity);
+            for (const auto& view : model.views()) {
+                if (view.kind != CoordinatedViewKind::plan) continue;
+                const auto projected = m_coordinated_view_entities.find(std::make_pair(model_id, view.id));
+                if (projected == m_coordinated_view_entities.end()) continue;
+                const auto frame = architectural_view_context(view).frame;
+                attach_frames(projected->second, &frame);
+            }
+        }
         m_measurementCanvas->setEntities(geometry);
         m_architectural_view_entities = std::move(visible_view_geometry);
         m_architecturalCanvas->setEntities(

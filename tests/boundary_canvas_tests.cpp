@@ -2308,6 +2308,34 @@ void test_dark_canvas_semantic_strokes_and_overrides() {
             "selection color must take precedence over both stroke overrides");
 }
 
+void test_source_replacement_cancels_object_moves() {
+    PlanCanvas canvas;
+    canvas.resize(640,480);
+    canvas.setOverviewMapEnabled(false);
+    canvas.setSnapEnabled(false);
+    CanvasEntity entity{"move-owner","symbol",{{{-1,0},{1,0},0}},0,true};
+    canvas.setEntities({entity});
+    int moves = 0;
+    canvas.setEntitiesMoveRequested([&](QStringList,Vec2) { ++moves; return true; });
+    const auto mouse = [&](QEvent::Type type,QPointF point) {
+        QMouseEvent event(type,point,canvas.mapToGlobal(point.toPoint()),
+            type==QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+            type==QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,Qt::NoModifier);
+        QApplication::sendEvent(&canvas,&event);
+    };
+    for (int replacement = 0; replacement < 4; ++replacement) {
+        canvas.setEntities({entity});
+        mouse(QEvent::MouseButtonPress,{320,240});
+        mouse(QEvent::MouseMove,{350,260});
+        if (replacement==0) canvas.setEntities({entity});
+        else if (replacement==1) canvas.setLabels({});
+        else if (replacement==2) canvas.setReferences({});
+        else canvas.setSelectedIds({});
+        mouse(QEvent::MouseButtonRelease,{350,260});
+        require(moves==0,"replacement scene or selection must discard captured movement before release");
+    }
+}
+
 void test_two_finger_canvas_navigation() {
     PlanCanvas canvas;
     canvas.resize(640, 480);
@@ -2449,6 +2477,7 @@ int main(int argc, char** argv) {
         test_boundary_vertex_invalid_and_final_pointer();
         test_boundary_vertex_stale_and_canceled_previews();
         test_mouse_gesture_contract();
+        test_source_replacement_cancels_object_moves();
         test_two_finger_canvas_navigation();
         test_boundary_draft_rendering_and_history();
         test_request_to_paint_telemetry();

@@ -1,8 +1,10 @@
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/architecture.hpp"
 #include "sketch/building_entity.hpp"
+#include "sketch/boundary_receipt.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/document_solid.hpp"
+#include "sketch/constraint_entity.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/model_phases.hpp"
@@ -14,6 +16,7 @@
 #include <limits>
 #include <numbers>
 #include <stdexcept>
+#include <string>
 
 namespace {
 void require(bool condition, const char* message) { if (!condition) throw std::runtime_error(message); }
@@ -366,6 +369,169 @@ void test_railing_transform_updates_canonical_geometry() {
             "architectural railing transform must update canonical geometry");
     require(document.snapshot().entities().at(railing.id) == railing,
             "architectural railing transform preview must not mutate the source");
+}
+
+void test_wall_group_transforms_preserve_exact_length_receipts() {
+    using namespace sketch;
+    const auto measured_wall = [](std::string id, nlohmann::json baseline,
+                                  std::string expression, std::string unit, int exact_length) {
+        auto entity = Entity::create("wall", {{"baseline",baseline},
+            {"thickness_m",.2},{"height_m",3},{"elevation_m",0},{"vendor_property",{{"keep",true}}}});
+        entity.id = std::move(id);
+        entity.extensions["constraint_authoring"] = {{"version",1},{"future_section",{1,2}},
+            {"last_length_entry",{{"version",1},{"original_expression",expression},{"entered_unit",unit},
+                {"exact_metres",{{"numerator",exact_length},{"denominator",1},{"vendor_exact",true}}},
+                {"baseline",baseline},{"vendor_receipt","preserve"}}}};
+        entity.extensions["constraint_authoring"]["last_length_entry"]["baseline"]["vendor_baseline"] = 7;
+        entity.extensions["vendor_extension"] = {"unchanged"};
+        return entity;
+    };
+    const auto first = measured_wall("measured-a",segment_json(0,0,3,4),"500 cm","cm",5);
+    const auto second = measured_wall("measured-b",segment_json(3,4,5,4),"2000 mm","mm",2);
+    auto opening = Entity::create("opening",{{"wall_id",first.id},{"opening_kind","door"},
+        {"offset_m",1},{"width_m",.8},{"sill_m",0},{"height_m",2},{"vendor_property","retain"}});
+    opening.id = "measured-opening";
+    opening.extensions["vendor_extension"] = true;
+    const auto join = encode_constraint_entity(PersistentConstraint{"measured-join",ConstraintRelationKind::coincident,
+        {{first.id,WallEndpointRole::end},{second.id,WallEndpointRole::start}}});
+    auto unrelated = Entity::create("wall",{{"baseline",segment_json(20,20,25,20)},
+        {"thickness_m",.2},{"height_m",3},{"elevation_m",0}});
+    unrelated.id = "unrelated-wall";
+    auto document = Document::create({first,second,opening,join,unrelated});
+    const auto original = document.snapshot();
+    const auto group = [&](ArchitecturalTransform transform, bool both = true) {
+        ArchitecturalOperation a{ArchitecturalAction::transform,first.id}; a.transform = transform;
+        ArchitecturalOperation b{ArchitecturalAction::transform,second.id}; b.transform = transform;
+        return ArchitecturalTransaction::create("measured-group","source",{first.id,second.id},
+            both ? std::vector<ArchitecturalOperation>{a,b} : std::vector<ArchitecturalOperation>{a},
+            "Move measured wall group");
+    };
+    const auto transaction = group({10,-2,.5,std::numbers::pi/2,1});
+    const auto preview = preview_architectural_transaction(original,transaction);
+    for (const auto* source : {&first,&second}) {
+        const auto& moved = preview.entities().at(source->id);
+        auto expected_extensions = source->extensions;
+        auto& expected_baseline = expected_extensions["constraint_authoring"]["last_length_entry"]["baseline"];
+        for (const auto* field : {"start","end","sweep_radians"})
+            expected_baseline[field] = moved.properties.at("baseline").at(field);
+        require(moved.extensions == expected_extensions &&
+                moved.properties.at("vendor_property") == source->properties.at("vendor_property"),
+                "rigid group transform must rebase exact receipt coordinates without rewriting input or opaque fields");
+    }
+    const auto& moved_first = preview.entities().at(first.id).properties.at("baseline");
+    require(std::abs(moved_first.at("start")[0].get<double>()-10) < 1e-9 &&
+            std::abs(moved_first.at("start")[1].get<double>()+2) < 1e-9 &&
+            std::abs(moved_first.at("end")[0].get<double>()-6) < 1e-9 &&
+            std::abs(moved_first.at("end")[1].get<double>()-1) < 1e-9 &&
+            moved_first.at("end") == preview.entities().at(second.id).properties.at("baseline").at("start"),
+            "rigid group transform must rotate both owners while preserving their explicit shared endpoint");
+    require(preview.entities().at(opening.id) == opening && preview.entities().at(join.id) == join &&
+            preview.entities().at(unrelated.id) == unrelated && document.snapshot().entities() == original.entities(),
+            "rigid preview must preserve opening stations, relationships, unrelated walls, and the source document");
+    require(apply_architectural_transaction(document,transaction,original.revision()) == original.revision()+1,
+            "measured group move must commit one revision");
+    const auto moved = document.snapshot();
+    require(moved.entities() == preview.entities(), "measured group command must commit its exact shown candidate");
+    document.undo(document.revision());
+    require(document.snapshot().entities() == original.entities(), "measured group move must undo all owners and receipts");
+    document.redo(document.revision());
+    require(document.snapshot().entities() == moved.entities(), "measured group move must redo exact retained receipt coordinates");
+    const auto path = std::filesystem::temp_directory_path()/
+        ("vertex-measured-wall-group-" + make_stable_id() + ".bldproj");
+    (void)ProjectStore::save(path,document.snapshot());
+    auto reopened = ProjectStore::load(path).document;
+    require(reopened.snapshot().entities() == moved.entities(), "measured group state must survive save/reopen");
+    reopened.undo(reopened.revision());
+    require(reopened.snapshot().entities() == original.entities(), "reopened group history must restore original receipt inputs");
+    reopened.redo(reopened.revision());
+    require(reopened.snapshot().entities() == moved.entities(), "reopened group redo must restore exact transformed receipts");
+    std::filesystem::remove(path);
+
+    rejects([&] { (void)preview_architectural_transaction(original,group({1,0,0,0,1},false)); });
+    rejects([&] { (void)apply_architectural_transaction(document,transaction,original.revision()); });
+    for (double scale : {2.0,1.000000001}) {
+        bool rejected = false;
+        try { (void)architectural_transaction_command(original,group({0,0,0,0,scale}),original.revision()); }
+        catch (const std::exception& error) {
+            rejected = std::string(error.what()).find("length-preserving") != std::string::npos;
+        }
+        require(rejected,"scaling a measured wall must explicitly reject unsupported receipt rewriting");
+    }
+    const auto anchor = encode_constraint_entity(PersistentConstraint{"measured-anchor",ConstraintRelationKind::fixed_anchor,
+        {{first.id,WallEndpointRole::start}},std::nullopt,Vec2{0,0}});
+    auto anchored = Document::create({first,second,opening,join,anchor});
+    const auto anchored_before = anchored.snapshot();
+    rejects([&] { (void)apply_architectural_transaction(anchored,transaction,anchored.revision()); });
+    require(anchored.snapshot().entities() == anchored_before.entities() &&
+            anchored.revision() == anchored_before.revision(),
+            "fixed-anchor conflict must reject the complete measured group atomically");
+
+    for (bool unsupported : {false,true}) {
+        auto malformed = first;
+        if (unsupported) malformed.extensions["constraint_authoring"]["version"] = 99;
+        else malformed.extensions["constraint_authoring"]["last_length_entry"]["baseline"]["end"] = {4,4};
+        auto invalid = Document::create({malformed,second,opening,join});
+        const auto before = invalid.snapshot();
+        rejects([&] { (void)architectural_transaction_command(before,transaction,before.revision()); });
+        require(invalid.snapshot().entities() == before.entities(),
+                "malformed or unsupported measured receipts must never be silently repaired or removed");
+    }
+}
+
+void test_rigid_curved_wall_transform_preserves_input_provenance() {
+    using namespace sketch;
+    for (int construction : {0,1,2}) {
+        const auto baseline = construction == 1 ? arc_from_chord_arc_length({0,0},{4,0},5,false)
+            : construction == 2 ? arc_from_chord_height({0,0},{4,0},.5) : Segment{{0,0},{4,0},.75};
+        const int version = construction == 0 ? 1 : 2;
+        const auto derived_sweep = angle_from_radians(baseline.sweep_radians);
+        auto curved = Entity::create("wall",{{"baseline",segment_json(0,0,4,0,baseline.sweep_radians)},
+            {"thickness_m",.2},{"height_m",3},{"elevation_m",0}});
+        curved.id = "curve-provenance";
+        curved.extensions["curve_input"] = {{"version",version},{"start",{0,0}},{"end",{4,0}},
+            {"radians",baseline.sweep_radians},{"sweep",construction == 0 ? "0.75 rad" : derived_sweep.original_expression},
+            {"normalized_sweep",derived_sweep.normalized_expression},{"vendor_field",{1,"keep"}}};
+        if (version == 2) {
+            auto& input = curved.extensions["curve_input"];
+            input["construction"] = construction == 1 ? "arc_length" : "arc_height";
+            input["measure"] = construction == 1 ? "5 m" : "1/2 m";
+            input["normalized_measure"] = construction == 1 ? "5 m" : "0.5 m";
+            input["measure_value"] = construction == 1 ? 5.0 : .5; input["clockwise"] = false;
+        }
+        auto document = Document::create({curved});
+        const auto before = document.snapshot();
+        ArchitecturalOperation operation{ArchitecturalAction::transform,curved.id};
+        operation.transform = ArchitecturalTransform{2,3,.5,std::numbers::pi/2,1};
+        const auto make_transaction = [&](ArchitecturalOperation op) {
+            return ArchitecturalTransaction::create("curve-provenance-move","source",{curved.id},{op},"Move measured curve");
+        };
+        const auto transaction = make_transaction(operation);
+        const auto preview = preview_architectural_transaction(before,transaction);
+        const auto& moved = preview.entities().at(curved.id);
+        auto expected = curved.extensions;
+        expected["curve_input"]["start"] = moved.properties.at("baseline").at("start");
+        expected["curve_input"]["end"] = moved.properties.at("baseline").at("end");
+        require(moved.extensions == expected && moved.properties.at("baseline").at("sweep_radians") == baseline.sweep_radians,
+                "rigid curved-wall transform must move retained input coordinates and preserve every defining expression and value");
+        apply_architectural_transaction(document,transaction,document.revision());
+        document.undo(document.revision());
+        require(document.snapshot().entities() == before.entities(),"curved provenance transform must undo exactly");
+        document.redo(document.revision());
+        require(document.snapshot().entities() == preview.entities(),"curved provenance transform must redo exactly");
+        operation.transform->scale = 2;
+        rejects([&] { (void)architectural_transaction_command(before,make_transaction(operation),before.revision()); });
+        for (int failure = 0; failure < 3; ++failure) {
+            auto invalid = curved;
+            if (failure == 0) invalid.extensions["curve_input"]["version"] = 99;
+            else if (failure == 1) invalid.extensions["curve_input"]["start"] = {1,0};
+            else invalid.extensions["curve_input"] = "unknown provenance";
+            auto invalid_document = Document::create({invalid});
+            const auto source = invalid_document.snapshot();
+            rejects([&] { (void)architectural_transaction_command(source,transaction,source.revision()); });
+            require(invalid_document.snapshot().entities() == source.entities(),
+                    "unsupported or stale curve input provenance must reject without lossy repair");
+        }
+    }
 }
 
 void test_shared_solid_transforms_update_canonical_geometry() {
@@ -753,6 +919,8 @@ int main() {
         test_building_transform_updates_canonical_geometry();
         test_circular_column_transform_persists_orientation_and_zero_reset();
         test_railing_transform_updates_canonical_geometry();
+        test_wall_group_transforms_preserve_exact_length_receipts();
+        test_rigid_curved_wall_transform_preserves_input_provenance();
         test_shared_solid_transforms_update_canonical_geometry();
         test_hosted_assembly_scales_with_wall();
         test_connected_stair_transform_preserves_links_and_rejects_scale();

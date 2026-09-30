@@ -337,7 +337,8 @@ PlanCanvas::PlanCanvas(QWidget* parent) : QWidget(parent) {
 void PlanCanvas::setEntities(std::vector<CanvasEntity> entities) {
     // Replacing the document projection invalidates the captured revision and
     // its transient host-wall geometry, even when the selected ID survives.
-    if (m_touch_active || m_opening_width_handle || m_vertex_move_handle) resetGesture();
+    if (m_touch_active || m_gesture_button != Qt::NoButton ||
+        m_opening_width_handle || m_vertex_move_handle) resetGesture();
     else {
         ++m_opening_width_preview_serial;
         ++m_boundary_vertex_preview_serial;
@@ -432,7 +433,8 @@ void PlanCanvas::setSelectedId(const QString& entity_id) {
 }
 
 void PlanCanvas::setSelectedIds(const QStringList& entity_ids) {
-    if ((m_opening_width_handle || m_vertex_move_handle) && selectedIds() != entity_ids)
+    if ((m_gesture_button != Qt::NoButton || m_opening_width_handle || m_vertex_move_handle) &&
+        selectedIds() != entity_ids)
         resetGesture();
     for (auto& entity : m_entities) {
         entity.selected = entity_ids.contains(entity.id);
@@ -469,7 +471,7 @@ void PlanCanvas::setSelectionAxisResizeEnabled(bool enabled) {
 void PlanCanvas::setLabels(std::vector<CanvasLabel> labels) {
     // A captured projection depends on the source annotations as well as the
     // geometry, even when a replacement retains every annotation identity.
-    if (m_touch_active || m_vertex_move_handle) resetGesture();
+    if (m_touch_active || m_gesture_button != Qt::NoButton || m_vertex_move_handle) resetGesture();
     resetTouchInput();
     m_labels = std::move(labels);
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
@@ -483,7 +485,7 @@ void PlanCanvas::setReference(std::optional<CanvasReference> reference) {
 }
 
 void PlanCanvas::setReferences(std::vector<CanvasReference> references) {
-    if (m_touch_active) resetGesture();
+    if (m_touch_active || m_gesture_button != Qt::NoButton) resetGesture();
     resetTouchInput();
     m_references = std::move(references);
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);

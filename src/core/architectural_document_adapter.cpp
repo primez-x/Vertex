@@ -1,5 +1,6 @@
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/building_entity.hpp"
+#include "sketch/constraint_wall_edit.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/project_organization.hpp"
@@ -313,6 +314,36 @@ Entity transform_wall_entity(EntityState& entities, const Entity& source,
     validate_wall_semantics(wall);
 
     Entity result = source;
+    const auto receipt_section = result.extensions.find("constraint_authoring");
+    if (transform.scale != 1.0 && receipt_section != result.extensions.end() &&
+        receipt_section->is_object() && receipt_section->contains("last_length_entry")) {
+        throw std::invalid_argument(
+            "Wall length receipt requires a length-preserving transform; scaling measured walls is unsupported: " + source.id);
+    }
+    // Validate and rebase while result still has the original baseline. The
+    // exact quantity and all unknown receipt fields remain measurement input.
+    rebase_wall_length_receipt(result, wall.baseline);
+    if (auto input = result.extensions.find("curve_input"); input != result.extensions.end()) {
+        if (!input->is_object() || !input->contains("version") ||
+            !input->at("version").is_number_integer() ||
+            (input->at("version") != 1 && input->at("version") != 2)) {
+            throw std::invalid_argument("Wall has unsupported curve input provenance: " + source.id);
+        }
+        if (transform.scale != 1.0) {
+            throw std::invalid_argument(
+                "Curve input provenance requires a length-preserving transform; scaling measured curves is unsupported: " + source.id);
+        }
+        const auto& original = source.properties.at("baseline");
+        if (!input->contains("start") || !input->contains("end") || !input->contains("radians") ||
+            input->at("start") != original.at("start") || input->at("end") != original.at("end") ||
+            input->at("radians") != original.at("sweep_radians")) {
+            throw std::invalid_argument("Wall curve input provenance does not match its stored baseline: " + source.id);
+        }
+        // Proper rotation and translation preserve signed sweep and every
+        // angle/arc-length/arc-height construction value and exact expression.
+        (*input)["start"] = point_json(wall.baseline.start);
+        (*input)["end"] = point_json(wall.baseline.end);
+    }
     update_segment_geometry(result.properties["baseline"], wall.baseline);
     result.properties["thickness_m"] = wall.thickness;
     if (result.properties.contains("thickness")) result.properties["thickness"] = wall.thickness;

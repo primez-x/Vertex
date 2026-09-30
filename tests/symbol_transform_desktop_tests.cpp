@@ -2,6 +2,7 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/sheet_view_entity_codec.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
 
@@ -11,6 +12,7 @@
 #include <QMessageBox>
 #include <QTimer>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDir>
 #include <QImage>
 #include <QKeyEvent>
@@ -286,6 +288,157 @@ bool reopenDiscardingChanges(sketch::desktop::MainWindow& window, const QString&
     return window.openProject(path);
 }
 
+void requireNamedPlanRotationGestures(const QTemporaryDir& directory) {
+    using namespace sketch;
+    using namespace sketch::desktop;
+    constexpr double half_pi = 1.57079632679489661923;
+    MainWindow window;
+    window.setMetricUnits(true);
+    window.setWorkspace(Workspace::architectural);
+    window.resize(1500, 1000);
+    window.show();
+    QApplication::processEvents();
+    const auto id = window.commitBuildingObject(encode_building_entity(
+        RectangularColumn{"", {3, 2, 0}, .4, .6, 3, 0}), window.document().revision());
+    require(!id.isEmpty() && window.selectEntity(id), "named plan column setup failed");
+    auto* views = window.findChild<QComboBox*>("architecturalView");
+    auto* canvas = dynamic_cast<PlanCanvas*>(window.findChild<QWidget*>("architecturalPlanCanvas"));
+    require(views && canvas, "named plan controls are missing");
+    const auto select_plan = [&] {
+        const auto index = views->findData(QStringLiteral("view-plan"), Qt::UserRole + 1);
+        require(index >= 3, "persisted named plan is missing");
+        views->setCurrentIndex(index);
+        require(window.selectEntity(id), "named plan column cannot be selected");
+        QApplication::processEvents();
+    };
+    const auto check = [&](double angle) {
+        const auto snapshot = window.document().snapshot();
+        const auto column = std::get<RectangularColumn>(decode_building_entity(
+            snapshot.entities().at(id.toStdString())));
+        const auto found = std::find_if(canvas->entities().begin(), canvas->entities().end(),
+            [&](const auto& entity) { return entity.id == id; });
+        if (!close_enough(column.base_center.x, 3) || !close_enough(column.base_center.y, 2) ||
+            !close_enough(std::remainder(column.rotation_radians-angle, 4*half_pi), 0))
+            throw std::runtime_error((QStringLiteral("named plan column center %1,%2 angle %3 expected %4; %5")
+                .arg(column.base_center.x,0,'g',15).arg(column.base_center.y,0,'g',15)
+                .arg(column.rotation_radians,0,'g',15).arg(angle,0,'g',15)
+                .arg(window.lastError())).toStdString());
+        require(found != canvas->entities().end() && found->selected && found->resize_frame &&
+                    close_enough(found->resize_frame->center.x, 3) &&
+                    close_enough(found->resize_frame->center.y, 2) &&
+                    close_enough(std::remainder(found->resize_frame->rotation_radians-angle, 4*half_pi), 0),
+                "named plan refresh lost the selected oriented frame or rotation pin");
+        require(views->currentData(Qt::UserRole + 1) == QStringLiteral("view-plan"),
+                "rotation or history navigation left the named plan");
+    };
+    select_plan();
+    check(0);
+    const auto before = window.document().revision();
+    rotateGesture(*canvas, 0, half_pi);
+    check(half_pi);
+    require(window.document().revision() == before + 1, "named plan rotation must commit one command");
+    rotateGesture(*canvas, half_pi, 2*half_pi);
+    check(2*half_pi);
+    rotateGesture(*canvas, 2*half_pi, 0);
+    check(0);
+    require(window.document().revision() == before + 3, "named plan repeated rotations must each commit once");
+    require(window.undoCommand(), "named plan rotation reset cannot undo");
+    check(2*half_pi);
+    require(window.redoCommand(), "named plan rotation reset cannot redo");
+    check(0);
+    const auto path = directory.filePath("named-plan-rotation.bldproj");
+    require(window.saveProjectAs(path) && window.openProject(path), "named plan rotation cannot save/reopen");
+    select_plan();
+    check(0);
+    rotateGesture(*canvas, 0, half_pi);
+    check(half_pi);
+}
+
+void requireProjectedNamedPlanRotationGestures(const QTemporaryDir& directory) {
+    using namespace sketch;
+    using namespace sketch::desktop;
+    constexpr double half_pi = 1.57079632679489661923;
+    constexpr double axis_angle = half_pi / 3;
+    const auto c = std::cos(axis_angle), s = std::sin(axis_angle);
+    for (const auto direction_z : {-1.0, 1.0}) {
+        MainWindow window;
+        window.setMetricUnits(true);
+        window.setWorkspace(Workspace::architectural);
+        window.resize(1500, 1000);
+        window.show();
+        QApplication::processEvents();
+        const auto id = window.commitBuildingObject(encode_building_entity(
+            RectangularColumn{"", {3, 2, 0}, .4, .6, 3, 0}), window.document().revision());
+        require(!id.isEmpty(), "projected named plan column setup failed");
+        auto sheet = window.document().snapshot().entities().at("sheet-view-1");
+        const auto model = decode_sheet_view_entity(sheet);
+        auto authored_views = model.views();
+        auto view = std::find_if(authored_views.begin(), authored_views.end(),
+            [](const auto& entry) { return entry.id == "view-plan"; });
+        require(view != authored_views.end(), "projected named plan fixture is missing");
+        view->origin_m = {10, -4, direction_z < 0 ? 10.0 : -10.0};
+        view->direction = {0, 0, direction_z};
+        view->up = {-s, c, 0};
+        sheet.properties["model"] = SheetViewModel::create(std::move(authored_views), model.sheets(),
+            model.schedule_ids(), model.sheet_order()).to_json();
+        window.document().apply(ApplyEntityChanges{window.document().revision(),
+            {EntityChange::upsert(sheet)}, {}, "translated rotated named plan fixture"});
+        require(window.selectEntity(id), "projected named plan cannot refresh");
+        auto* views = window.findChild<QComboBox*>("architecturalView");
+        auto* canvas = dynamic_cast<PlanCanvas*>(window.findChild<QWidget*>("architecturalPlanCanvas"));
+        require(views && canvas, "projected named plan controls are missing");
+        const auto select_plan = [&] {
+            const auto index = views->findData(QStringLiteral("view-plan"), Qt::UserRole + 1);
+            require(index >= 3, "projected persisted plan is missing");
+            views->setCurrentIndex(index);
+            require(window.selectEntity(id), "projected named plan column cannot be selected");
+            QApplication::processEvents();
+        };
+        const auto handedness = -direction_z;
+        const auto angle_in_view = [&](double angle) {
+            return std::atan2(std::sin(angle-axis_angle), handedness*std::cos(angle-axis_angle));
+        };
+        const auto check = [&](double angle) {
+            const auto snapshot = window.document().snapshot();
+            const auto column = std::get<RectangularColumn>(decode_building_entity(snapshot.entities().at(id.toStdString())));
+            require(close_enough(column.base_center.x, 3) && close_enough(column.base_center.y, 2) &&
+                        close_enough(std::remainder(column.rotation_radians-angle, 4*half_pi), 0),
+                    "projected plan commit used view coordinates or the wrong rotation handedness");
+            const auto found = std::find_if(canvas->entities().begin(), canvas->entities().end(),
+                [&](const auto& entity) { return entity.id == id; });
+            require(found != canvas->entities().end() && found->selected && found->resize_frame &&
+                        close_enough(found->resize_frame->center.x, handedness*(-7*c+6*s)) &&
+                        close_enough(found->resize_frame->center.y, 7*s+6*c) &&
+                        close_enough(std::remainder(found->resize_frame->rotation_radians-angle_in_view(angle),
+                            4*half_pi), 0),
+                    "translated or rotated named plan lost its projected frame and pin");
+        };
+        select_plan();
+        check(0);
+        const auto before = window.document().revision();
+        rotateGesture(*canvas, angle_in_view(0), angle_in_view(half_pi), Qt::ShiftModifier);
+        check(half_pi);
+        rotateGesture(*canvas, angle_in_view(half_pi), angle_in_view(2*half_pi), Qt::ShiftModifier);
+        check(2*half_pi);
+        rotateGesture(*canvas, angle_in_view(2*half_pi), angle_in_view(0), Qt::ShiftModifier);
+        check(0);
+        require(window.document().revision() == before+3, "projected repeated rotation must commit once per gesture");
+        const auto fine_angle = 23.5*half_pi/90;
+        rotateGesture(*canvas, angle_in_view(0), angle_in_view(fine_angle), Qt::ShiftModifier);
+        check(fine_angle);
+        require(window.undoCommand(), "projected fine rotation cannot undo");
+        check(0);
+        require(window.redoCommand(), "projected fine rotation cannot redo");
+        check(fine_angle);
+        const auto path = directory.filePath(direction_z < 0 ? "rotated-down-plan.bldproj" : "rotated-up-plan.bldproj");
+        require(window.saveProjectAs(path) && window.openProject(path), "projected named plan cannot save/reopen");
+        select_plan();
+        check(fine_angle);
+        rotateGesture(*canvas, angle_in_view(fine_angle), angle_in_view(0), Qt::ShiftModifier);
+        check(0);
+    }
+}
+
 void requireCommittedGestures(const QTemporaryDir& directory) {
     using namespace sketch;
     using namespace sketch::desktop;
@@ -298,11 +451,27 @@ void requireCommittedGestures(const QTemporaryDir& directory) {
     const auto id = window.createAnnotationSymbol("svg-v2-04_living-sectional-left", {3, 2});
     require(!id.isEmpty() && window.selectEntity(id) &&
                 edit(window, id, {}, {}, {}, {}, "1", "30"), "gesture symbol setup failed");
+    const auto source = window.document().snapshot();
+    const auto owner = std::find_if(source.entities().begin(), source.entities().end(),
+        [](const auto& entry) { return entry.second.type == kAnnotationEntityType; });
+    require(owner != source.entities().end(), "gesture annotation owner is missing");
+    auto annotated_owner = owner->second;
+    annotated_owner.required = true;
+    annotated_owner.extensions["vendor"] = {{"retained", "rotation-metadata"}};
+    const auto owner_id = annotated_owner.id;
+    window.document().apply(ApplyEntityChanges{source.revision(),
+        {EntityChange::upsert(annotated_owner)}, {}, "retain annotation owner metadata fixture"});
+    require(window.selectEntity(id), "gesture symbol metadata cannot refresh");
     auto* canvas = dynamic_cast<PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
     require(canvas != nullptr, "gesture measurement canvas is missing");
     const auto before = window.document().revision();
     rotateGesture(*canvas, half_pi/3, half_pi);
     const auto check_symbol = [&](double angle) {
+        const auto snapshot = window.document().snapshot();
+        const auto& retained_owner = snapshot.entities().at(owner_id);
+        require(retained_owner.required == annotated_owner.required &&
+                    retained_owner.extensions == annotated_owner.extensions,
+                "canvas rotation lost annotation owner required flag or unknown metadata");
         const auto symbol = retained(window, id).svg_symbol.value();
         require(close_enough(symbol.position.x, 3) && close_enough(symbol.position.y, 2) &&
                     close_enough(symbol.rotation_radians, angle),
@@ -350,10 +519,15 @@ void requireCommittedGestures(const QTemporaryDir& directory) {
                 "column gesture rotated placement about the world origin instead of its centre");
         const auto found = std::find_if(plan->entities().begin(), plan->entities().end(),
             [&](const auto& entity) { return entity.id == column_id; });
-        require(found != plan->entities().end() && found->resize_frame &&
-                    close_enough(found->resize_frame->center.x, 3) && close_enough(found->resize_frame->center.y, 2) &&
-                    close_enough(found->resize_frame->rotation_radians, angle),
-                "column frame lost semantic placement or orientation after refresh");
+        if (found == plan->entities().end() || !found->resize_frame)
+            throw std::runtime_error("column frame missing after refresh");
+        if (!close_enough(found->resize_frame->center.x, 3) ||
+            !close_enough(found->resize_frame->center.y, 2) ||
+            !close_enough(found->resize_frame->rotation_radians, angle))
+            throw std::runtime_error((QStringLiteral("column frame center %1,%2 angle %3 expected %4")
+                .arg(found->resize_frame->center.x,0,'g',15)
+                .arg(found->resize_frame->center.y,0,'g',15)
+                .arg(found->resize_frame->rotation_radians,0,'g',15).arg(angle,0,'g',15)).toStdString());
     };
     require(window.document().revision() == column_before + 1, "column gesture must commit one command");
     check_column(half_pi);
@@ -549,6 +723,8 @@ int main(int argc, char** argv) {
                 "save/reopen changed rasterized production PDF/SVG/PNG output");
         requireArtworkGesturePreview(original);
         requireCommittedGestures(directory);
+        requireNamedPlanRotationGestures(directory);
+        requireProjectedNamedPlanRotationGestures(directory);
         const auto capture = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
         if (!capture.isEmpty()) {
             require(QDir().mkpath(capture) && saved_render.save(QDir(capture).filePath(
