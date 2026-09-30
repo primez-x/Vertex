@@ -50,7 +50,7 @@ still requires the normal native command admission.
 Focused Release checks passed for architecture, opening assemblies, DXF/IFC
 projects, straight/curved jamb resizing, deferred preview cancellation/output
 isolation, wall/opening placement, and repeated rotation. Rotation covers saved
-frames, 15-degree snapping, Shift fine adjustment, undo/redo and reopen. Captures
+frames, 45-degree snapping, Shift fine adjustment, undo/redo and reopen. Captures
 include `rotation-live-90.png`, showing readable physical dimensions and angle.
 The first test capture lacked application font initialization; the harness now
 loads the same bundled Inter font as the application before visual verification.
