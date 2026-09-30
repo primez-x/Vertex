@@ -38,3 +38,16 @@ Named-view snapping and degrees are relative to the view axes. Oblique-plane
 rotation/resize remains unsupported; it is explicitly diagnosed rather than
 committing projected coordinates as model coordinates. These are native desktop
 development-build checks, not physical-input or full production qualification.
+
+## Nearby-angle regression follow-up
+
+The native gesture helper now locates a diagonal pin from its retained local
+frame instead of inverting a screen bounding box, which is singular at 45
+degrees. Actual pointer angles 43.5, 88.5 and 178.5 degrees commit 45, 90 and
+180 degrees. The next drag begins at the committed 45-degree pin, including
+after save/reopen. Rendered-widget checks find the actual live degree tokens
+for those angles and for a Shift-modified 23.5-degree gesture.
+
+Release `symbol_transform_desktop` passed in 15.05 seconds. The final combined
+run with `measurement_group_move` and `coordinated_view_output` passed 3/3 in
+37.26 seconds. Root visually inspected the captured 90-degree callout and pin.

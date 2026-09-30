@@ -13,6 +13,7 @@
 #include "sketch/constraint_integrity.hpp"
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/boundary_integrity.hpp"
+#include "sketch/boundary_dimension.hpp"
 #include "sketch/wall_semantics.hpp"
 #include "sketch/roof_join_semantics.hpp"
 #include "sketch/slab_semantics.hpp"
@@ -1377,6 +1378,63 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
 
 namespace {
 
+std::map<std::string, Entity, std::less<>> boundary_translation_entities(
+    const BoundaryIdentityHistory& history,
+    const std::map<std::string, Entity, std::less<>>& source,
+    const TranslateBoundaries& command) {
+    if (command.translations.empty())
+        document_error(DocumentErrorCode::invalid_entity, "Boundary translation group is empty");
+    std::unordered_set<std::string> protected_ids;
+    for (const auto& translation : command.translations) {
+        if (!is_valid_identifier(translation.boundary_id) ||
+            !std::isfinite(translation.offset.x) || !std::isfinite(translation.offset.y))
+            document_error(DocumentErrorCode::invalid_entity, "Boundary translation is invalid");
+        if (!protected_ids.insert(translation.boundary_id).second)
+            document_error(DocumentErrorCode::duplicate_change, "Boundary is translated more than once");
+    }
+    for (const auto& [id, entity] : source) {
+        if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+        const auto decoded = decode_boundary_dimension_entity(entity);
+        if (decoded.dimension && protected_ids.contains(decoded.dimension->boundary_id))
+            protected_ids.insert(id);
+    }
+    auto intermediate = source;
+    try {
+        for (const auto& translation : command.translations)
+            // Keep original analytical starts in their local construction
+            // frame. Adding a world offset to each old start independently can
+            // change floating-point joins for exact imperial rise/run entries.
+            // Historical single-translation proofs keep their old replay path.
+            intermediate = transformed_boundary_entities(intermediate,
+                BoundaryTransformation{translation.boundary_id,
+                    PlanarTransform{{},0,false,false,translation.offset}});
+    } catch (const std::exception& error) {
+        document_error(DocumentErrorCode::invalid_entity, error.what());
+    }
+    auto result = intermediate;
+    std::unordered_set<std::string> touched;
+    for (const auto& change : command.entity_changes) {
+        if (change.kind != EntityChangeKind::upsert && change.kind != EntityChangeKind::erase)
+            document_error(DocumentErrorCode::invalid_entity, "Invalid supplemental entity change kind");
+        const auto& id = change.kind == EntityChangeKind::upsert ? change.entity.id : change.entity_id;
+        if (protected_ids.contains(id) || !touched.insert(id).second)
+            document_error(DocumentErrorCode::duplicate_change,
+                           "Supplemental change overlaps a translated owner or dimension: " + id);
+        if (!is_valid_identifier(id))
+            document_error(DocumentErrorCode::invalid_entity, "Supplemental entity ID is invalid");
+        if (change.kind == EntityChangeKind::upsert) {
+            validate_entity(change.entity);
+            result.insert_or_assign(id, change.entity);
+        } else result.erase(id);
+    }
+    // Supplemental edits get ordinary admission against the translated state;
+    // they cannot use the typed proof to launder an unrelated receipt edit.
+    validate_boundary_change(history, intermediate, result);
+    try { validate_boundary_identity_transition(history, source, result); }
+    catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
+    return result;
+}
+
 void command_exact_fields(const nlohmann::json& value,
                           std::initializer_list<const char*> fields,
                           DocumentErrorCode code, std::string_view context) {
@@ -1568,6 +1626,22 @@ nlohmann::json command_to_json(const Command& command) {
             return nlohmann::json{{"version", 1}, {"kind", "apply_entity_changes"},
                                   {"expected_revision", typed.expected_revision}, {"message", typed.message},
                                   {"entity_changes", std::move(entities)}, {"asset_changes", std::move(assets)}};
+        } else if constexpr (std::is_same_v<T, TranslateBoundaries>) {
+            auto encoded = command_to_json(ApplyEntityChanges{
+                typed.expected_revision, typed.entity_changes, {}, typed.message});
+            encoded["kind"] = "translate_boundaries";
+            encoded.erase("asset_changes");
+            encoded["translations"] = nlohmann::json::array();
+            if (typed.translations.empty())
+                document_error(DocumentErrorCode::invalid_entity, "Boundary translation group is empty");
+            std::unordered_set<std::string> owners;
+            for (const auto& translation : typed.translations) {
+                if (!owners.insert(translation.boundary_id).second)
+                    document_error(DocumentErrorCode::duplicate_change, "Boundary is translated more than once");
+                const auto single = command_to_json(TranslateBoundary{typed.expected_revision, translation});
+                encoded["translations"].push_back(single.at("translation"));
+            }
+            return encoded;
         } else if constexpr (std::is_same_v<T, ApplyBoundaryConstraintChanges>) {
             auto encoded = command_to_json(ApplyEntityChanges{
                 typed.expected_revision, typed.entity_changes, {}, typed.message});
@@ -1631,6 +1705,29 @@ Command command_from_json(const nlohmann::json& value) {
         const auto kind = value.at("kind").get<std::string>();
         if (value.at("version") == 2 && kind != "apply_boundary_constraint_changes")
             document_error(DocumentErrorCode::invalid_entity,"Unsupported command envelope version");
+        if (kind == "translate_boundaries") {
+            command_exact_fields(value, {"version", "kind", "expected_revision", "message",
+                                         "entity_changes", "translations"},
+                                 DocumentErrorCode::invalid_entity, "serialized translation group");
+            if (!value.at("translations").is_array() || value.at("translations").empty())
+                document_error(DocumentErrorCode::invalid_entity, "Translations must be a nonempty array");
+            auto ordinary = value;
+            ordinary["kind"] = "apply_entity_changes";
+            ordinary.erase("translations");
+            ordinary["asset_changes"] = nlohmann::json::array();
+            const auto changes = std::get<ApplyEntityChanges>(command_from_json(ordinary));
+            TranslateBoundaries result{changes.expected_revision, {}, changes.entity_changes, changes.message};
+            std::unordered_set<std::string> owners;
+            for (const auto& translation : value.at("translations")) {
+                const auto single = std::get<TranslateBoundary>(command_from_json(nlohmann::json{
+                    {"version", 1}, {"kind", "translate_boundary"},
+                    {"expected_revision", result.expected_revision}, {"translation", translation}}));
+                if (!owners.insert(single.translation.boundary_id).second)
+                    document_error(DocumentErrorCode::duplicate_change, "Boundary is translated more than once");
+                result.translations.push_back(single.translation);
+            }
+            return result;
+        }
         if (kind == "apply_boundary_constraint_changes") {
             const bool mixed = value.at("version") == 2;
             if (mixed) command_exact_fields(value, {"version","kind","expected_revision","message",
@@ -1962,6 +2059,15 @@ Revision Document::apply(const Command& command) {
                 validate_boundary_change(boundary_identity_history_, current.entities, next.entities,
                                          next.action == "Propagate room relationships");
                 record_boundary_identity_transition(next_identity_history, current.entities, next.entities);
+            } else if constexpr (std::is_same_v<CommandType, TranslateBoundaries>) {
+                next.action = typed_command.message.empty() ? "Translate boundaries" : typed_command.message;
+                validate_action(next.action);
+                next.boundary_translations = typed_command;
+                next.entities = boundary_translation_entities(boundary_identity_history_, current.entities, typed_command);
+                next_unsupported_constraints = validate_state(next.entities, next.assets);
+                validate_constraint_change(current.entities, next.entities);
+                if (same_state(next, current)) return head_revision_;
+                record_boundary_identity_transition(next_identity_history, current.entities, next.entities);
             } else if constexpr (std::is_same_v<CommandType, ApplyBoundaryConstraintChanges>) {
                 next.action = typed_command.message.empty()
                     ? "Apply boundary constraints" : typed_command.message;
@@ -2167,7 +2273,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
         if (index == 0) {
             if (record.parent_revision.has_value() || record.source_revision.has_value() || record.boundary_translation.has_value() ||
                 record.boundary_transform.has_value() || record.boundary_geometry_edit.has_value() ||
-                record.boundary_constraint_changes.has_value() ||
+                record.boundary_constraint_changes.has_value() || record.boundary_translations.has_value() ||
                 record.name.has_value() || record.action != "create" ||
                 !record.undo_stack.empty() || !record.redo_stack.empty()) {
                 document_error(DocumentErrorCode::invalid_history,
@@ -2182,7 +2288,8 @@ Document Document::restore(DocumentSnapshot snapshot) {
             static_cast<unsigned>(record.boundary_translation.has_value()) +
             static_cast<unsigned>(record.boundary_transform.has_value()) +
             static_cast<unsigned>(record.boundary_geometry_edit.has_value()) +
-            static_cast<unsigned>(record.boundary_constraint_changes.has_value());
+            static_cast<unsigned>(record.boundary_constraint_changes.has_value()) +
+            static_cast<unsigned>(record.boundary_translations.has_value());
         if (boundary_proof_count > 1)
             document_error(DocumentErrorCode::invalid_history, "Boundary derivation proofs are mutually exclusive");
         if (record.boundary_transform && (record.name || record.source_revision))
@@ -2197,6 +2304,9 @@ Document Document::restore(DocumentSnapshot snapshot) {
         if (record.boundary_constraint_changes && (record.name || record.source_revision))
             document_error(DocumentErrorCode::invalid_history,
                            "Boundary constraint proof is not valid on history navigation or named revisions");
+        if (record.boundary_translations && (record.name || record.source_revision))
+            document_error(DocumentErrorCode::invalid_history,
+                           "Boundary group translation proof is not valid on history navigation or named revisions");
         // Unknown locks retain the read-only latch, but must not suppress
         // stable-endpoint checks for known relations in the same history.
         validate_constraint_change(previous.entities, record.entities);
@@ -2270,7 +2380,18 @@ Document Document::restore(DocumentSnapshot snapshot) {
         // An exact, validated history navigation may undo an identity upgrade.
         // Ordinary Apply records must never masquerade as that downgrade.
         if (!record.source_revision.has_value()) {
-            if (record.boundary_translation) {
+            if (record.boundary_translations) {
+                const auto& proof = *record.boundary_translations;
+                const auto action = proof.message.empty() ? "Translate boundaries" : proof.message;
+                if (proof.expected_revision != previous.revision || record.action != action)
+                    document_error(DocumentErrorCode::invalid_history, "Boundary translation group proof does not match revision");
+                auto expected = previous;
+                try { expected.entities = boundary_translation_entities(identity_history, previous.entities, proof); }
+                catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_history, error.what()); }
+                if (!same_state(expected, record) || same_state(expected, previous))
+                    document_error(DocumentErrorCode::invalid_history,
+                                   "Boundary translation group differs from deterministic reconstruction");
+            } else if (record.boundary_translation) {
                 if (record.action != "Translate boundary")
                     document_error(DocumentErrorCode::invalid_history, "Boundary translation action does not match proof");
                 auto expected = previous;

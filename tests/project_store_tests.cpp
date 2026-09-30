@@ -2,6 +2,7 @@
 #include "sketch/document_digest.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_receipt.hpp"
+#include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_translation.hpp"
 #include "sketch/boundary_transform.hpp"
 #include "sketch/constraint_entity.hpp"
@@ -251,7 +252,10 @@ void rewrite_logical_digest(const std::filesystem::path& path) {
     sqlite3_stmt* statement = nullptr;
     require(sqlite3_prepare_v2(
                 database,
-                format >= 8
+                format >= 9
+                    ? "SELECT revision,parent_revision,source_revision,action,name,undo_stack_json,"
+                      "redo_stack_json,boundary_translation_json,boundary_transform_json,boundary_edit_json,boundary_constraint_changes_json,boundary_translations_json FROM revisions ORDER BY revision"
+                    : format >= 8
                     ? "SELECT revision,parent_revision,source_revision,action,name,undo_stack_json,"
                       "redo_stack_json,boundary_translation_json,boundary_transform_json,boundary_edit_json,boundary_constraint_changes_json FROM revisions ORDER BY revision"
                     : format >= 7
@@ -293,6 +297,9 @@ void rewrite_logical_digest(const std::filesystem::path& path) {
         if (format >= 8 && sqlite3_column_type(statement, 10) != SQLITE_NULL)
             manifest["history"].back()["boundary_constraint_changes"] =
                 nlohmann::json::parse(sqlite_text(statement, 10));
+        if (format >= 9 && sqlite3_column_type(statement, 11) != SQLITE_NULL)
+            manifest["history"].back()["boundary_translations"] =
+                nlohmann::json::parse(sqlite_text(statement, 11));
     }
     sqlite3_finalize(statement);
 
@@ -737,6 +744,68 @@ Entity translation_fixture() {
     auto result = sketch::encode_identified_boundary_entity(boundary);
     result.properties["boundary_authoring"] = sketch::encode_boundary_receipt_envelope(record);
     return result;
+}
+
+void test_translation_group_storage_and_forgery_rejection() {
+    TempDirectory temp;
+    const auto file = temp.path / "translation-group-v9.psketch";
+    auto first = translation_fixture();
+    first.extensions["vendor"] = {{"retain", "first"}};
+    auto second = first;
+    auto geometry = sketch::decode_identified_boundary_entity(second);
+    geometry.id = "second-boundary";
+    second.id = geometry.id;
+    second = sketch::encode_identified_boundary_entity(geometry, &second);
+    auto receipt = sketch::decode_boundary_receipt_envelope(first.properties.at("boundary_authoring"));
+    receipt.record->boundary_id = "second-boundary";
+    second.properties["boundary_authoring"] = sketch::encode_boundary_receipt_envelope(*receipt.record);
+    const auto dimension = sketch::encode_boundary_dimension_entity(
+        sketch::BoundaryDimension{"dimension", first.id, "edge-0", {1, -0.5}});
+    auto label = entity("group-label", "label", {{"text", "before"}}, false, {{"vendor", "retain"}});
+    auto document = Document::create({first, second, dimension, label});
+    const auto original = document.snapshot().entities();
+    require(ProjectStore::required_format_version(document.snapshot()) == 3,
+            "receipt history without batch must retain existing format");
+    label.properties["text"] = "after";
+    sketch::TranslateBoundaries command{0, {{first.id, {8, -4}}, {second.id, {8, -4}}},
+        {sketch::EntityChange::upsert(label)}, "Move measured selection"};
+    document.apply(command);
+    const auto moved = document.snapshot().entities();
+    document.undo(document.revision());
+    require(ProjectStore::required_format_version(document.snapshot()) == 9,
+            "undone group proof must require v9");
+    (void)ProjectStore::save(file, document.snapshot());
+    auto loaded = ProjectStore::load(file);
+    const auto reopened = loaded.document.snapshot();
+    require(reopened.entities() == original && loaded.document.can_redo() &&
+            sketch::command_to_json(*reopened.history().at(1).boundary_translations) == sketch::command_to_json(command),
+            "v9 storage must retain exact supplemental changes, proof and navigation");
+    require(Document::fork_at_revision(reopened, 1).snapshot().entities() == moved,
+            "v9 historical fork must replay exact measured selection");
+    loaded.document.redo(loaded.document.revision());
+    require(loaded.document.snapshot().entities() == moved, "v9 redo must restore exact entities");
+    loaded.document.undo(loaded.document.revision());
+    command.expected_revision = loaded.document.revision();
+    loaded.document.apply(command);
+    const auto branch_file = temp.path / "batch-after-undo.psketch";
+    (void)ProjectStore::save(branch_file, loaded.document.snapshot());
+    require(ProjectStore::load(branch_file).document.snapshot().entities() == moved,
+            "batch after undo must survive save and exact replay");
+    const auto wire = sketch::command_to_json(*reopened.history().at(1).boundary_translations);
+    for (int mutation = 0; mutation < 5; ++mutation) {
+        const auto tampered = temp.path / ("batch-forged-" + std::to_string(mutation) + ".psketch");
+        std::filesystem::copy_file(file, tampered);
+        auto proof = wire;
+        if (mutation == 1) proof["translations"][1]["offset"]["x"] = 9;
+        if (mutation == 2) proof["entity_changes"] = nlohmann::json::array();
+        if (mutation == 3) proof["expected_revision"] = 1;
+        if (mutation == 4) proof["unexpected"] = true;
+        execute_sql(tampered, "UPDATE revisions SET boundary_translations_json=" +
+            (mutation == 0 ? std::string("NULL") : "'" + proof.dump() + "'") + " WHERE revision=1");
+        rewrite_logical_digest(tampered);
+        require_error([&] { (void)ProjectStore::load(tampered); }, StorageErrorCode::integrity_failure,
+                      "recomputed digest must not admit missing, forged or malformed group proof");
+    }
 }
 
 void test_translation_proof_storage_and_forgery_rejection() {
@@ -1738,6 +1807,7 @@ int main() {
         test_reopen_preserves_redo_navigation_and_named_abandoned_branch();
         test_impossible_history_is_rejected_after_digest_recomputation();
         test_translation_proof_storage_and_forgery_rejection();
+        test_translation_group_storage_and_forgery_rejection();
         test_transform_proof_storage_and_forgery_rejection();
         test_boundary_geometry_edit_proof_storage_and_forgery_rejection();
         test_boundary_constraint_proof_storage();

@@ -1102,6 +1102,9 @@ void test_typed_command_codec_round_trips_and_rejects_tampering() {
         sketch::Command{NameRevision{.expected_revision = 8, .name = "checkpoint"}},
         sketch::Command{sketch::TranslateBoundary{.expected_revision = 9,
             .translation = {"boundary-1", {1.25, -2.5}}}},
+        sketch::Command{sketch::TranslateBoundaries{9,
+            {{"boundary-1", {1.25, -2.5}}, {"boundary-2", {1.25, -2.5}}},
+            {EntityChange::upsert(entity("label-2", "label", {{"text", "moved"}}))}, "Move group"}},
         sketch::Command{sketch::TransformBoundary{.expected_revision = 10,
             .transformation = {"boundary-1", {{2.0, 3.0}, 0.75, true, false, {-1.0, 4.0}}}}},
         sketch::Command{sketch::EditBoundaryGeometry{.expected_revision = 11,
@@ -1131,6 +1134,136 @@ void test_typed_command_codec_round_trips_and_rejects_tampering() {
         DocumentErrorCode::invalid_asset, "invalid serialized asset bytes must be rejected");
     require(sketch::document_snapshot_digest(source.snapshot()) == source_digest,
         "command decode rejection must not mutate a source snapshot");
+}
+
+void test_measured_translation_group_is_atomic_and_replayable() {
+    using namespace sketch;
+    const auto rectangle = [](const std::string& id, double x) {
+        BoundaryConstructionRecord receipt;
+        receipt.boundary_id = id;
+        receipt.anchor = {x, 0};
+        IdentifiedBoundary boundary{id, "measurement_boundary", {}};
+        const Vec2 points[]{{x, 0}, {x + 2, 0}, {x + 2, 1}, {x, 1}};
+        const char* rises[]{"0 m", "1 m", "0 m", "-1 m"};
+        const char* runs[]{"2 m", "0 m", "-2 m", "0 m"};
+        for (std::size_t i = 0; i < 4; ++i) {
+            const auto edge = id + "-edge-" + std::to_string(i);
+            const auto start = id + "-vertex-" + std::to_string(i);
+            const auto end = id + "-vertex-" + std::to_string((i + 1) % 4);
+            ConstructionReceipt step;
+            step.segment_id = edge; step.kind = BoundaryConstructionKind::line_rise_run;
+            step.start = points[i]; step.rise = parse_quantity(rises[i]); step.run = parse_quantity(runs[i]);
+            receipt.edges.push_back({edge, start, end, step});
+            boundary.segments.push_back({edge, start, end, {points[i], points[(i + 1) % 4], 0}});
+        }
+        auto result = encode_identified_boundary_entity(boundary);
+        result.properties["boundary_authoring"] = encode_boundary_receipt_envelope(receipt);
+        result.extensions["vendor"] = {{"opaque", id}};
+        return result;
+    };
+    auto first = rectangle("first", 0);
+    auto second = rectangle("second", 2);
+    const auto dimension = encode_boundary_dimension_entity(
+        BoundaryDimension{"dimension", "first", "first-edge-0", {1, -0.5}});
+    auto label = entity("label", "label", {{"text", "before"}}, true, {{"vendor", "retain"}});
+    PersistentConstraint relation;
+    relation.id = "join"; relation.relation = ConstraintRelationKind::coincident;
+    relation.bindings = {{"first", WallEndpointRole::end, "first-edge-0", "first-vertex-1"},
+                         {"second", WallEndpointRole::start, "second-edge-0", "second-vertex-0"}};
+    auto document = Document::create({first, second, dimension, label, encode_constraint_entity(relation)});
+    const auto before = document.snapshot();
+    label.properties["text"] = "after";
+    TranslateBoundaries command{0, {{"first", {5, -3}}, {"second", {5, -3}}},
+                               {EntityChange::upsert(label)}, "Move measured group"};
+    const auto unchanged = [&] {
+        require(document_snapshot_digest(document.snapshot()) == document_snapshot_digest(before),
+                "rejected measured translation group must leave state and history unchanged");
+    };
+    auto invalid = command;
+    invalid.expected_revision = 1;
+    require_error([&] { document.apply(invalid); }, DocumentErrorCode::stale_revision, "stale group must reject"); unchanged();
+    invalid = command; invalid.translations.clear();
+    require_error([&] { document.apply(invalid); }, DocumentErrorCode::invalid_entity, "empty group must reject"); unchanged();
+    invalid = command; invalid.translations.push_back(invalid.translations.front());
+    require_error([&] { document.apply(invalid); }, DocumentErrorCode::duplicate_change, "duplicate owners must reject"); unchanged();
+    invalid = command; invalid.translations.back().boundary_id = "missing";
+    require_error([&] { document.apply(invalid); }, DocumentErrorCode::invalid_entity, "bad second owner must roll back first"); unchanged();
+    invalid = command; invalid.translations.back().offset.x = std::numeric_limits<double>::infinity();
+    require_error([&] { document.apply(invalid); }, DocumentErrorCode::invalid_entity, "nonfinite group must reject"); unchanged();
+    invalid = command; invalid.translations.pop_back();
+    require_error([&] { document.apply(invalid); }, DocumentErrorCode::constraint_violation, "partial connected move must reject atomically"); unchanged();
+    invalid = command; invalid.entity_changes.push_back(EntityChange::upsert(first));
+    require_error([&] { document.apply(invalid); }, DocumentErrorCode::duplicate_change, "owner overlap must reject"); unchanged();
+    invalid = command; invalid.translations.front().offset = {};
+    invalid.entity_changes.push_back(EntityChange::erase("dimension"));
+    require_error([&] { document.apply(invalid); }, DocumentErrorCode::duplicate_change, "zero-offset owner still reserves dependent dimension"); unchanged();
+    invalid = command; invalid.entity_changes.push_back(invalid.entity_changes.front());
+    require_error([&] { document.apply(invalid); }, DocumentErrorCode::duplicate_change, "duplicate supplement must reject"); unchanged();
+    auto wire = command_to_json(command);
+    require(command_to_json(command_from_json(wire)) == wire, "group codec must retain exact proof");
+    auto bad_wire = wire; bad_wire["translations"][1]["extra"] = true;
+    require_error([&] { (void)command_from_json(bad_wire); }, DocumentErrorCode::invalid_entity, "unknown translation fields must reject");
+    const auto preview = Document::preview_command(before, command);
+    require(document.apply(command) == 1, "group must create exactly one command revision");
+    const auto after = document.snapshot();
+    require(after.entities() == preview.entities() && command_to_json(*after.history().back().boundary_translations) == wire,
+            "group preview, state and retained proof must agree");
+    for (const auto* id : {"first", "second"}) {
+        const auto original = decode_boundary_receipt_envelope(before.entities().at(id).properties.at("boundary_authoring"));
+        const auto moved = decode_boundary_receipt_envelope(after.entities().at(id).properties.at("boundary_authoring"));
+        require(original.record->edges[0].receipt.run->original_expression == moved.record->edges[0].receipt.run->original_expression &&
+                original.record->edges[1].receipt.rise->original_expression == moved.record->edges[1].receipt.rise->original_expression &&
+                after.entities().at(id).extensions == before.entities().at(id).extensions,
+                "group translation must preserve exact entries and opaque metadata");
+    }
+    const auto moved_dimension = decode_boundary_dimension_entity(after.entities().at("dimension"));
+    require(moved_dimension.dimension->text_position.x == 6 && moved_dimension.dimension->text_position.y == -3.5 &&
+            moved_dimension.dimension->segment_id == "first-edge-0" && after.entities().at("label") == label,
+            "dependent dimensions and ordinary supplements must move once");
+    for (int mutation = 0; mutation < 4; ++mutation) {
+        auto forged = after;
+        auto& record = const_cast<std::vector<RevisionRecord>&>(forged.history()).back();
+        if (mutation == 0) record.boundary_translations.reset();
+        if (mutation == 1) record.boundary_translations->translations.back().offset.x += 1;
+        if (mutation == 2) record.boundary_translations->expected_revision = 1;
+        if (mutation == 3) record.boundary_translations->entity_changes.clear();
+        require_error([&] { (void)Document::fork(forged); },
+                      mutation == 0 ? DocumentErrorCode::invalid_entity : DocumentErrorCode::invalid_history,
+                      "missing or forged group proof must reject restore");
+    }
+    auto restored = Document::fork(after);
+    restored.undo(restored.revision()); require(restored.snapshot().entities() == before.entities(), "group undo must be exact");
+    restored.redo(restored.revision()); require(restored.snapshot().entities() == after.entities(), "group redo must be exact");
+    restored.undo(restored.revision());
+    command.expected_revision = restored.revision();
+    const auto expected_branch_revision = restored.revision() + 1;
+    require(restored.apply(command) == expected_branch_revision &&
+            restored.snapshot().entities() == after.entities() &&
+            Document::fork(restored.snapshot()).snapshot().entities() == after.entities(),
+            "new batch after undo must replay from current state rather than abandoned branch");
+    require(Document::fork_at_revision(restored.snapshot(), 1).snapshot().entities() == after.entities(),
+            "historical fork must replay retained batch proof");
+    auto locked = Document::fork(before); locked.mark_read_only("test lock"); command.expected_revision = 0;
+    require_error([&] { locked.apply(command); }, DocumentErrorCode::read_only, "read-only group must reject");
+    auto derived_document = Document::create({first, second});
+    derived_document.apply(EditBoundaryGeometry{0,
+        {"first", BoundaryGeometryEditKind::move_vertex, "first-vertex-3", {-0.25, 1}}});
+    const auto derived_before = derived_document.snapshot();
+    const auto evidence = derived_before.entities().at("first").extensions.at("boundary_geometry_derivation");
+    TranslateBoundaries derived_command{derived_document.revision(), {{"first", {1, 2}}, {"second", {1, 2}}}, {}, "Move derived group"};
+    derived_document.apply(derived_command);
+    const auto derived_after = derived_document.snapshot();
+    const auto& moved_evidence = derived_after.entities().at("first").extensions.at("boundary_geometry_derivation");
+    require(moved_evidence.at("source_boundary_authoring") == evidence.at("source_boundary_authoring") &&
+            moved_evidence.at("operations").size() == evidence.at("operations").size() + 1 &&
+            Document::fork(derived_document.snapshot()).snapshot().entities() == derived_document.snapshot().entities(),
+            "derived batch must append transform evidence and remain exactly replayable");
+    auto laundering = Document::create({first, second});
+    TranslateBoundaries forged_supplement{0, {{"second", {1, 2}}},
+        {EntityChange::upsert(derived_before.entities().at("first"))}, "Propagate room relationships"};
+    require_error([&] { laundering.apply(forged_supplement); }, DocumentErrorCode::invalid_entity,
+                  "batch message must not authorize unrelated receipt or derivation mutation");
+    require(laundering.revision() == 0, "invalid supplemental derivation must leave no partial move");
 }
 
 void test_boundary_constraint_transaction_preserves_proof_and_is_atomic() {
@@ -1295,6 +1428,7 @@ void test_boundary_constraint_transaction_preserves_proof_and_is_atomic() {
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_measured_translation_group_is_atomic_and_replayable();
         test_boundary_constraint_transaction_preserves_proof_and_is_atomic();
         test_room_volume_validation_is_atomic();
         test_connected_stair_level_edit();

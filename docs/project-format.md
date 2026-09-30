@@ -165,7 +165,8 @@ unsupported versions, invalid identifiers, non-finite coordinates, malformed
 asset hex, and asset digest mismatches before a command can be applied.
 
 The supported `kind` values are `apply_entity_changes`, `name_revision`,
-`translate_boundary`, `transform_boundary`, and `edit_boundary_geometry`. An apply envelope contains
+`translate_boundary`, `translate_boundaries`, `transform_boundary`,
+`edit_boundary_geometry`, and `apply_boundary_constraint_changes`. An apply envelope contains
 typed `entity_changes` and `asset_changes`; an upsert carries the complete
 entity or asset payload and an erase carries its stable ID. Assets use a
 lowercase `bytes_hex` representation and retain their SHA-256. Translation
@@ -433,8 +434,9 @@ unknown project `format_version` is rejected rather than opened unsafely.
 ## SQLite schema
 
 The SQLite `application_id` is `0x50535444` (`PSTD`). `user_version` and metadata
-`format_version` are both `1`, `2`, or `3`, according to the retained semantics.
-All three versions use the following application tables:
+`format_version` are equal and range from `1` through `9`, according to the
+retained semantics. The baseline application tables below are shared; later
+versions add the proof columns and recovery data documented in this file.
 
 | Table | Purpose |
 | --- | --- |
@@ -731,3 +733,33 @@ are replayed together with the walls before the final relationship checks.
 Version 1 remains unchanged for transactions without wall edits. These nested
 command versions continue using the v8 storage column and all its digest and
 history admission checks.
+
+## Measured group translation history (v9)
+
+Version 9 adds nullable `revisions.boundary_translations_json`. A present value
+is the strict version-1 `translate_boundaries` command envelope. It contains
+`expected_revision`, a nonempty ordered `translations` array of `{boundary_id,
+offset}`, ordinary `entity_changes`, and `message`. It is retained only on the
+originating command revision. Any retained batch requires v9, including a batch
+that was later undone. Earlier histories keep their existing minimum version.
+
+The document reconstructs every measured translation from its construction or
+geometry-derivation evidence before applying ordinary changes. Stable owners,
+vertices, segments, exact measurement entries, and dependent dimension targets
+survive; dimension text anchors receive the same offset. Duplicate owners and
+ordinary changes overlapping translated owners or their dependent dimensions
+are rejected. Ordinary boundary changes pass the usual transition admission;
+the message cannot grant an exception. Persistent constraints are checked on
+the complete final state, allowing joined owners to move together while a
+conflicting partial move refuses without publishing any part of the group.
+
+The proof participates in aggregate storage/recovery budgets and logical and
+snapshot digests. Loading replays it against its parent and requires the exact
+resulting entities and unchanged assets. Forged or misplaced proof, or missing
+proof needed to explain a measured geometry change, rejects the history.
+An all-zero translation with ordinary supplemental edits is equivalent to an
+ordinary edit; removing that redundant proof does not change its admission.
+Undo/redo navigation records do not copy the proof. Exchange
+version 6 emits `boundary_translations`; mixed older/newer proof histories retain
+the highest required exchange version. Absent batch fields remain omitted from
+older digest representations.

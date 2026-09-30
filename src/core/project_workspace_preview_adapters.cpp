@@ -44,6 +44,8 @@ PreparedWorkspaceEdit ProjectWorkspace::prepare_constraint_authoring(
     const auto validated = candidate.snapshot();
     if (const auto& proof = validated.history().back().boundary_constraint_changes; proof)
         return prepare(Command{*proof});
+    if (const auto& proof = validated.history().back().boundary_translations; proof)
+        return prepare(Command{*proof});
     return prepare(entity_diff(source, validated));
 }
 

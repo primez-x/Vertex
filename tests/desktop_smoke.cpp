@@ -14,6 +14,7 @@
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_construction.hpp"
+#include "sketch/boundary_receipt.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/building_entity.hpp"
@@ -54,6 +55,7 @@
 #include <QPageSize>
 #include <QPdfWriter>
 #include <QPdfDocument>
+#include <QPdfSelection>
 #include <QXmlStreamReader>
 #include <QPlainTextEdit>
 #include <QPointingDevice>
@@ -1768,6 +1770,262 @@ void test_wall_group_canvas_move_workflow() {
     require(window.document().revision()==replaced.revision() &&
                 window.document().snapshot().entities()==replaced.entities(),
             "source replacement during group drag must ignore the stale release");
+}
+
+void test_measurement_group_canvas_move_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
+    using namespace sketch;
+    desktop::MainWindow window;
+    window.setAttribute(Qt::WA_DontShowOnScreen);
+    window.resize(1200,800);
+    window.setMetricUnits(true);
+    window.show();
+    const auto measured_rectangle = [](Vec2 anchor, const std::string& name) {
+        BoundaryAuthoringOptions options;
+        BoundaryAuthoringSession session(BoundaryAuthoringMode::draw_first,options);
+        (void)session.anchor(anchor);
+        (void)session.add_line_rise_run(parse_quantity("0 ft"),parse_quantity("12 ft"));
+        (void)session.add_line_rise_run(parse_quantity("8 ft"),parse_quantity("0 ft"));
+        (void)session.add_line_rise_run(parse_quantity("0 ft"),parse_quantity("-12 ft"));
+        (void)session.add_line_rise_run(parse_quantity("-8 ft"),parse_quantity("0 ft"));
+        session.classify_current_chain("living");
+        const auto accepted = session.close_chain();
+        auto entity = encode_identified_boundary_entity(accepted.boundary);
+        entity.properties["classification"] = "living";
+        entity.properties["name"] = name;
+        entity.properties["boundary_authoring"] = boundary_construction_envelope(accepted,options);
+        entity.required = true;
+        entity.extensions["vendor"] = {{"retain",name}};
+        return entity;
+    };
+    const auto first = measured_rectangle({0,0},"Living area");
+    const auto second = measured_rectangle({3.6576,0},"Kitchen area");
+    const auto first_geometry = decode_identified_boundary_entity(first);
+    const auto second_geometry = decode_identified_boundary_entity(second);
+    const auto dimension_for = [](const Entity& entity, const IdentifiedBoundary& geometry) {
+        return encode_boundary_dimension_entity(BoundaryDimension{
+            entity.id+"-dimension",entity.id,geometry.segments.front().segment_id,
+            {geometry.segments.front().segment.start.x+1.8,-0.5}});
+    };
+    const auto first_dimension = dimension_for(first,first_geometry);
+    const auto second_dimension = dimension_for(second,second_geometry);
+    PersistentConstraint connection{"area-group-coincidence",ConstraintRelationKind::coincident,
+        {{first.id,WallEndpointRole::end,first_geometry.segments[0].segment_id,
+            first_geometry.segments[0].end_vertex_id},
+         {second.id,WallEndpointRole::start,second_geometry.segments[0].segment_id,
+            second_geometry.segments[0].start_vertex_id}}};
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(first),EntityChange::upsert(second),
+         EntityChange::upsert(first_dimension),EntityChange::upsert(second_dimension),
+         EntityChange::upsert(encode_constraint_entity(connection))},{},"Measured group fixture"});
+    const auto sofa = window.createAnnotationSymbol("svg-v2-04_living-sectional-left",{9,3});
+    const auto wall = window.createStraightWall({0,5},{4,5});
+    const auto ordinary = window.createBoundary(
+        {{{9,-2},{11,-2},0},{{11,-2},{11,-1},0},{{11,-1},{9,-1},0},{{9,-1},{9,-2},0}},"porch");
+    require(!sofa.isEmpty() && !wall.isEmpty() && !ordinary.isEmpty(),
+            "mixed measured group components must create");
+    const auto select_group = [&] {
+        require(window.selectEntity(QString::fromStdString(first.id)) &&
+                    window.selectEntity(QString::fromStdString(second.id),true) &&
+                    window.selectEntity(sofa,true) && window.selectEntity(wall,true) &&
+                    window.selectEntity(ordinary,true),
+                "areas, sofa and wall must select together");
+    };
+    select_group();
+    auto* canvas = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
+    require(canvas,"measurement group uses normal canvas");
+    canvas->setSnapEnabled(false);
+    canvas->setOverviewMapEnabled(false);
+    canvas->fitView();
+    QApplication::processEvents();
+    const auto mouse = [&](QEvent::Type type,Vec2 position) {
+        const auto center = QRectF(canvas->rect()).center();
+        const auto view = canvas->viewCenter();
+        const QPointF pixel{center.x()+(position.x-view.x)*canvas->viewScale(),
+                            center.y()-(position.y-view.y)*canvas->viewScale()};
+        QMouseEvent event(type,pixel,canvas->mapToGlobal(pixel.toPoint()),
+            type==QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+            type==QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,Qt::NoModifier);
+        QApplication::sendEvent(canvas,&event);
+    };
+    const auto source = window.document().snapshot();
+    mouse(QEvent::MouseButtonPress,{1.5,1});
+    mouse(QEvent::MouseMove,{3.5,2});
+    QKeyEvent cancel(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);
+    QApplication::sendEvent(canvas,&cancel);
+    mouse(QEvent::MouseButtonRelease,{3.5,2});
+    require(window.document().revision()==source.revision() &&
+                window.document().snapshot().entities()==source.entities(),
+            "Escape must cancel the entire measured group preview");
+    mouse(QEvent::MouseButtonPress,{1.5,1});
+    mouse(QEvent::MouseMove,{3.5,2});
+    mouse(QEvent::MouseButtonRelease,{3.5,2});
+    const auto moved = window.document().snapshot();
+    if (!window.lastError().isEmpty())
+        throw std::runtime_error("Measured group drag failed: "+window.lastError().toStdString());
+    require(moved.revision()==source.revision()+1 && moved.history().size()==source.history().size()+1,
+            "measured mixed group must commit exactly one history entry");
+    for (const auto& original : {first,second}) {
+        const auto before = decode_identified_boundary_entity(original);
+        const auto& moved_entity = moved.entities().at(original.id);
+        const auto after = decode_identified_boundary_entity(moved_entity);
+        require(after.segments.size()==before.segments.size() && moved_entity.required &&
+                    moved_entity.extensions==original.extensions &&
+                    moved_entity.properties.at("classification")==original.properties.at("classification") &&
+                    std::abs(signed_area(boundary_geometry(after))-signed_area(boundary_geometry(before)))<1e-8,
+                "area metadata, topology and classification must survive group movement");
+        for (std::size_t i=0;i<before.segments.size();++i) {
+            const auto& a = before.segments[i];
+            const auto& b = after.segments[i];
+            require(a.segment_id==b.segment_id && a.start_vertex_id==b.start_vertex_id &&
+                        a.end_vertex_id==b.end_vertex_id &&
+                        std::abs(b.segment.start.x-a.segment.start.x-2)<1e-8 &&
+                        std::abs(b.segment.start.y-a.segment.start.y-1)<1e-8,
+                    "all area vertices must move equally with stable IDs");
+        }
+        const auto old_receipt = decode_boundary_receipt_envelope(original.properties.at("boundary_authoring"));
+        const auto new_receipt = decode_boundary_receipt_envelope(moved_entity.properties.at("boundary_authoring"));
+        require(old_receipt.supported() && new_receipt.supported(),"moved construction evidence must replay");
+        for (std::size_t i=0;i<old_receipt.record->edges.size();++i) {
+            const auto& a = old_receipt.record->edges[i].receipt;
+            const auto& b = new_receipt.record->edges[i].receipt;
+            require(a.rise->original_expression==b.rise->original_expression &&
+                        a.run->original_expression==b.run->original_expression &&
+                        a.rise->exact_metres==b.rise->exact_metres && a.run->exact_metres==b.run->exact_metres,
+                    "group movement must retain entered measurements exactly");
+        }
+        const auto old_dimension = *decode_boundary_dimension_entity(
+            source.entities().at(original.id+"-dimension")).dimension;
+        const auto new_dimension = *decode_boundary_dimension_entity(
+            moved.entities().at(original.id+"-dimension")).dimension;
+        require(new_dimension.boundary_id==old_dimension.boundary_id &&
+                    new_dimension.segment_id==old_dimension.segment_id &&
+                    std::abs(new_dimension.text_position.x-old_dimension.text_position.x-2)<1e-8 &&
+                    std::abs(new_dimension.text_position.y-old_dimension.text_position.y-1)<1e-8,
+                "dependent dimensions must follow their area in the same commit");
+    }
+    const auto annotations = std::find_if(moved.entities().begin(),moved.entities().end(),
+        [](const auto& item) { return item.second.type==kAnnotationEntityType; });
+    require(annotations!=moved.entities().end(),"group symbol owner must remain");
+    const auto placed = decode_annotation_entity(annotations->second).symbols.front();
+    const auto ordinary_before = decode_identified_boundary_entity(source.entities().at(ordinary.toStdString()));
+    const auto ordinary_after = decode_identified_boundary_entity(moved.entities().at(ordinary.toStdString()));
+    require(std::abs(placed.placement.position.x-11)<1e-8 &&
+                std::abs(placed.placement.position.y-4)<1e-8 &&
+                std::abs(moved.entities().at(wall.toStdString()).properties.at("baseline").at("start")[0].get<double>()-2)<1e-8 &&
+                ordinary_before.segments[0].segment_id==ordinary_after.segments[0].segment_id &&
+                std::abs(ordinary_after.segments[0].segment.start.x-11)<1e-8 &&
+                std::abs(ordinary_after.segments[0].segment.start.y+1)<1e-8 &&
+                moved.entities().at(connection.id)==source.entities().at(connection.id) && moved.assets()==source.assets(),
+            "symbol and wall must move with areas while explicit relation and assets remain unchanged");
+    const auto captures = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if (!captures.isEmpty()) require(QDir().mkpath(captures) &&
+        canvas->grab().save(QDir(captures).filePath("measurement-group-move.png")),
+        "measured group capture must save");
+    require(window.undoCommand() && window.document().snapshot().entities()==source.entities() &&
+                window.redoCommand() && window.document().snapshot().entities()==moved.entities(),
+            "measured group undo/redo must restore exact full states");
+    QTemporaryDir directory;
+    desktop::MainWindow reopened;
+    require(directory.isValid() && window.saveProjectAs(directory.filePath("measurement-group.bldproj")) &&
+                reopened.openProject(directory.filePath("measurement-group.bldproj")) &&
+                reopened.document().snapshot().entities()==moved.entities(),
+            "measured group proof and connected constraints must replay on reopen");
+    require(window.undoCommand() && window.selectEntity(QString::fromStdString(first.id)) &&
+                window.selectEntity(sofa,true),"partial group refusal fixture must select");
+    mouse(QEvent::MouseButtonPress,{1.5,1});
+    mouse(QEvent::MouseMove,{3.5,2});
+    mouse(QEvent::MouseButtonRelease,{3.5,2});
+    require(!window.lastError().isEmpty() && window.document().snapshot().entities()==source.entities(),
+            "a conflicting partial move must leave both area and symbol unchanged");
+
+    select_group();
+    canvas->setSnapEnabled(false);
+    canvas->zoomBy(0.02,QRectF(canvas->rect()).center());
+    constexpr Vec2 large_delta{100.1234512345679,-50.1234512345679};
+    const auto large_source = window.document().snapshot();
+    mouse(QEvent::MouseButtonPress,{1.5,1});
+    mouse(QEvent::MouseMove,{1.5+large_delta.x,1+large_delta.y});
+    mouse(QEvent::MouseButtonRelease,{1.5+large_delta.x,1+large_delta.y});
+    const auto large_move = window.document().snapshot();
+    require(window.lastError().isEmpty() && large_move.revision()==large_source.revision()+1 &&
+                large_move.entities()!=source.entities(),"large fractional mixed movement must commit");
+    const auto large_porch = decode_identified_boundary_entity(large_move.entities().at(ordinary.toStdString()));
+    require(std::abs(large_porch.segments[0].segment.start.x-9-large_delta.x)<1e-8 &&
+                std::abs(large_porch.segments[0].segment.start.y+2-large_delta.y)<1e-8,
+            "ordinary boundary move must preserve the numeric offset without rational-string overflow");
+    require(window.undoCommand() && window.document().snapshot().entities()==source.entities(),
+            "large fractional movement must undo exactly");
+
+    for (const auto direction_z : {-1.0,1.0}) {
+        const auto angle = direction_z<0 ? std::numbers::pi/6 : std::numbers::pi/2;
+        const auto c = std::cos(angle), s = std::sin(angle), handedness = -direction_z;
+        auto sheet = window.document().snapshot().entities().at("sheet-view-1");
+        const auto model = decode_sheet_view_entity(sheet);
+        auto views = model.views();
+        auto named_plan = std::find_if(views.begin(),views.end(),
+            [](const auto& entry) { return entry.id=="view-plan"; });
+        require(named_plan!=views.end(),"named plan movement fixture must exist");
+        named_plan->origin_m = {10,-4,direction_z<0 ? 10.0 : -10.0};
+        named_plan->direction = {0,0,direction_z};
+        named_plan->up = {-s,c,0};
+        sheet.properties["model"] = SheetViewModel::create(std::move(views),model.sheets(),
+            model.schedule_ids(),model.sheet_order()).to_json();
+        window.document().apply(ApplyEntityChanges{window.document().revision(),
+            {EntityChange::upsert(sheet)},{},"rotated named plan movement fixture"});
+        window.setWorkspace(desktop::Workspace::architectural);
+        select_group();
+        auto* choices = window.findChild<QComboBox*>("architecturalView");
+        require(choices,"named plan choice must exist");
+        const auto index = choices->findData(QStringLiteral("view-plan"),Qt::UserRole+1);
+        require(index>=3,"persisted named plan must be available");
+        choices->setCurrentIndex(index);
+        select_group();
+        canvas = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("architecturalPlanCanvas"));
+        require(canvas,"named movement requires architecture canvas");
+        canvas->setSnapEnabled(false);
+        canvas->setOverviewMapEnabled(false);
+        canvas->fitView();
+        QApplication::processEvents();
+        for (const auto& id : {first.id,second.id,ordinary.toStdString(),sofa.toStdString(),wall.toStdString()})
+            require(std::any_of(canvas->entities().begin(),canvas->entities().end(),
+                [&](const auto& entity) { return entity.id.toStdString()==id && entity.selected; }),
+                "named horizontal plan must visibly retain every selected area and component");
+        const Vec2 start{handedness*(-8*c+9*s),8*s+9*c}; // World wall midpoint {2,5}.
+        const Vec2 view_delta{2,direction_z<0 ? 1.0 : 0.0};
+        const Vec2 world_delta{view_delta.x*handedness*c-view_delta.y*s,
+                              view_delta.x*handedness*s+view_delta.y*c};
+        const auto named_source = window.document().snapshot();
+        mouse(QEvent::MouseButtonPress,start);
+        mouse(QEvent::MouseMove,{start.x+view_delta.x,start.y+view_delta.y});
+        mouse(QEvent::MouseButtonRelease,{start.x+view_delta.x,start.y+view_delta.y});
+        const auto named_moved = window.document().snapshot();
+        if (!window.lastError().isEmpty())
+            throw std::runtime_error("Named plan group move failed: "+window.lastError().toStdString());
+        require(named_moved.revision()==named_source.revision()+1,
+                "named plan mixed move must commit once");
+        for (const auto& id : {first.id,second.id,ordinary.toStdString()}) {
+            const auto a = decode_identified_boundary_entity(named_source.entities().at(id));
+            const auto b = decode_identified_boundary_entity(named_moved.entities().at(id));
+            require(std::abs(b.segments[0].segment.start.x-a.segments[0].segment.start.x-world_delta.x)<1e-8 &&
+                        std::abs(b.segments[0].segment.start.y-a.segments[0].segment.start.y-world_delta.y)<1e-8,
+                    "named plan area move must convert view delta into model axes");
+        }
+        const auto& wall_after = named_moved.entities().at(wall.toStdString()).properties.at("baseline").at("start");
+        require(std::abs(wall_after[0].get<double>()-world_delta.x)<1e-8 &&
+                    std::abs(wall_after[1].get<double>()-5-world_delta.y)<1e-8,
+                "named plan architectural object must use the same model vector");
+        const auto overlay_after = decode_annotation_entity(named_moved.entities().at(annotations->first)).symbols.front();
+        require(std::abs(overlay_after.placement.position.x-9-view_delta.x)<1e-8 &&
+                    std::abs(overlay_after.placement.position.y-3-view_delta.y)<1e-8,
+                "unprojected symbol overlay must keep the view-coordinate gesture");
+        const auto path = directory.filePath(direction_z<0 ? "named-down-group.bldproj" : "named-up-group.bldproj");
+        require(window.undoCommand() && window.document().snapshot().entities()==named_source.entities() &&
+                    window.redoCommand() && window.document().snapshot().entities()==named_moved.entities() &&
+                    window.saveProjectAs(path) && reopened.openProject(path) &&
+                    reopened.document().snapshot().entities()==named_moved.entities() && window.undoCommand(),
+                "named plan group must preserve exact states through navigation and reopening");
+    }
 }
 
 void test_boundary_identity_upgrade_workflow() {
@@ -6564,6 +6822,79 @@ void test_coordinated_view_output_identity() {
                 "each same-kind viewport must render its own persisted frame");
     }
 
+    // A change in the horizontal view origin must translate geometry and its
+    // generated labels together. Auto-centred sheet output stays identical.
+    sketch::desktop::MainWindow label_window;
+    label_window.setMetricUnits(true);
+    const auto labelled_area = label_window.createBoundary(
+        {{{20,10},{26,10},0},{{26,10},{26,14},0},
+         {{26,14},{20,14},0},{{20,14},{20,10},0}}, "living");
+    require(!labelled_area.isEmpty(), "saved-plan output label area fixture");
+    auto named_area = label_window.document().snapshot().entities().at(labelled_area.toStdString());
+    named_area.properties["name"] = "Dining";
+    label_window.document().apply(sketch::ApplyEntityChanges{label_window.document().revision(),
+        {sketch::EntityChange::upsert(named_area)}, {}, "name saved-plan label fixture"});
+    const auto labelled_geometry = sketch::decode_identified_boundary_entity(
+        label_window.document().snapshot().entities().at(labelled_area.toStdString()));
+    const auto labelled_dimension = label_window.createLengthDimension(labelled_area,
+        QString::fromStdString(labelled_geometry.segments.front().segment_id), {23,9});
+    require(!labelled_dimension.isEmpty(),
+        "saved-plan output dimension fixture");
+    const auto label_sheet_entity = label_window.document().snapshot().entities().at("sheet-view-1");
+    auto label_sheet = sketch::decode_sheet_view_entity(label_sheet_entity).sheets().front();
+    label_sheet.schedules.clear();
+    label_sheet.viewports = {{"label-plan", "label-plan-view", {10,10,390,250}, 100}};
+    const auto label_output = [&](double direction_z, bool shifted) {
+        sketch::CoordinatedView view;
+        view.id = "label-plan-view";
+        view.name = "Label plan";
+        view.kind = sketch::CoordinatedViewKind::plan;
+        view.direction = {0,0,direction_z};
+        const auto angle = std::numbers::pi / 6;
+        view.up = {-std::sin(angle),std::cos(angle),0};
+        view.origin_m = shifted ? std::array<double,3>{40,-30,0}
+                                : std::array<double,3>{0,0,0};
+        auto entity = label_sheet_entity;
+        entity.properties["model"] = sketch::SheetViewModel::create({view},{label_sheet}).to_json();
+        label_window.document().apply(sketch::ApplyEntityChanges{
+            label_window.document().revision(), {sketch::EntityChange::upsert(entity)}, {},
+            "saved-plan label output origin fixture"});
+        require(label_window.selectEntity(labelled_area), "refresh saved-plan label output");
+        const auto* label_canvas = dynamic_cast<sketch::desktop::PlanCanvas*>(
+            label_window.findChild<QWidget*>("measurementPlanCanvas"));
+        require(label_canvas, "saved-plan output label source canvas");
+        const auto text_for = [&](const QString& id) {
+            const auto found = std::find_if(label_canvas->labels().begin(),label_canvas->labels().end(),
+                [&](const auto& label) { return label.id == id; });
+            require(found != label_canvas->labels().end() && !found->text.trimmed().isEmpty(),
+                    "saved-plan output must retain nonempty area and dimension labels");
+            return found->text.simplified();
+        };
+        const auto area_text = text_for(labelled_area);
+        const auto dimension_text = text_for(labelled_dimension);
+        const auto path = directory.filePath(QStringLiteral("labels-%1-%2.pdf")
+            .arg(direction_z).arg(shifted));
+        require(label_window.exportDraftPdf(path), "saved-plan labels must export");
+        QPdfDocument pdf;
+        require(pdf.load(path) == QPdfDocument::Error::None, "saved-plan label PDF must load");
+        const auto exported_text = pdf.getAllText(0).text().simplified();
+        require(exported_text.contains(area_text) && exported_text.contains(dimension_text),
+                "saved-plan output must contain actual area and dimension text");
+        auto image = pdf.render(0,QSize(1680,1188));
+        require(!image.isNull(), "saved-plan label PDF must render");
+        return image;
+    };
+    for (const auto direction_z : {-1.0,1.0}) {
+        const auto original = label_output(direction_z,false);
+        const auto shifted = label_output(direction_z,true);
+        std::size_t different_pixels = 0;
+        for (int y=0;y<original.height();++y)
+            for (int x=0;x<original.width();++x)
+                if (original.pixel(x,y)!=shifted.pixel(x,y)) ++different_pixels;
+        require(different_pixels < static_cast<std::size_t>(original.width()*original.height())/1000,
+                "shifted rotated plans must keep area and dimension labels aligned in sheet output");
+    }
+
     sketch::desktop::MainWindow crop_window;
     const auto crop_wall = crop_window.createStraightWall({0, 0}, {8, 0});
     require(!crop_wall.isEmpty() && crop_window.selectEntity(crop_wall),
@@ -7104,6 +7435,10 @@ int main(int argc, char** argv) {
         test_wall_group_canvas_move_workflow();
         return 0;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--measurement-group-move-only") {
+        test_measurement_group_canvas_move_workflow();
+        return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--boundary-identity-upgrade-only") {
         test_boundary_identity_upgrade_workflow();
         std::cout << "Boundary identity upgrade workflow tests passed\n";
@@ -7211,6 +7546,7 @@ int main(int argc, char** argv) {
     test_selection_clipboard_workflow();
     test_wall_transform_workflow(field_ui_capture_directory);
     test_wall_group_canvas_move_workflow();
+    test_measurement_group_canvas_move_workflow();
     test_sloped_wall_workflow();
     test_material_clipboard_transfer();
     test_delete_selection_workflow();

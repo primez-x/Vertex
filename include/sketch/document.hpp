@@ -101,6 +101,15 @@ struct TranslateBoundary {
     BoundaryTranslation translation;
 };
 
+// Qualified translations and their supplemental entity changes are admitted
+// together after every measured owner has been reconstructed.
+struct TranslateBoundaries {
+    Revision expected_revision = 0;
+    std::vector<BoundaryTranslation> translations;
+    std::vector<EntityChange> entity_changes;
+    std::string message;
+};
+
 struct BoundaryTransformation {
     std::string boundary_id;
     PlanarTransform transform;
@@ -136,7 +145,8 @@ struct ApplyBoundaryConstraintChanges {
 };
 
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,
-                             TransformBoundary, EditBoundaryGeometry, ApplyBoundaryConstraintChanges>;
+                             TransformBoundary, EditBoundaryGeometry, ApplyBoundaryConstraintChanges,
+                             TranslateBoundaries>;
 
 // Commands cross worker, workspace, and persistence boundaries as a strict,
 // versioned JSON envelope.  The codec preserves typed command identity and
@@ -183,6 +193,7 @@ struct RevisionRecord {
     std::optional<BoundaryTransformation> boundary_transform;
     std::optional<BoundaryGeometryEdit> boundary_geometry_edit;
     std::optional<ApplyBoundaryConstraintChanges> boundary_constraint_changes;
+    std::optional<TranslateBoundaries> boundary_translations;
 };
 
 class DocumentSnapshot {

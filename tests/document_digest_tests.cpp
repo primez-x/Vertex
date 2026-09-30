@@ -43,6 +43,9 @@ void test_full_snapshot_binding() {
         [](auto& record) { record.boundary_constraint_changes = ApplyBoundaryConstraintChanges{0,
             {{"boundary-1", BoundaryGeometryEditKind::move_vertex, "vertex-1", {3, 1}}}, {}, "proof"}; },
         [](auto& record) { record.boundary_translation = BoundaryTranslation{"boundary-1", {8, -4}}; },
+        [](auto& record) { record.boundary_translations = TranslateBoundaries{0,
+            {{"boundary-1", {8, -4}}, {"boundary-2", {8, -4}}},
+            {EntityChange::erase("old-label")}, "group proof"}; },
     };
     for (const auto& mutate : mutations) {
         auto changed = source;

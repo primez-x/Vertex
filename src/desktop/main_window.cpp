@@ -2356,6 +2356,19 @@ Vec2 project_plan_point(Vec2 point, const BuildingViewFrame& frame) {
     return {x * right.x + y * right.y, x * up.x + y * up.y};
 }
 
+void project_plan_model_labels(std::vector<CanvasLabel>& labels,
+                               const DocumentSnapshot& snapshot,
+                               const BuildingViewFrame& frame) {
+    if (!horizontal_plan_frame(frame)) return;
+    for (auto& label : labels) {
+        const auto found = snapshot.entities().find(label.id.toStdString());
+        // Generated model labels follow their projected geometry. Explicit
+        // annotations retain the existing view-overlay coordinate convention.
+        if (label.plan_only || (found != snapshot.entities().end() && found->second.type == "dimension"))
+            label.position = project_plan_point(label.position, frame);
+    }
+}
+
 Vec2 unproject_plan_point(Vec2 point, const BuildingViewFrame& frame) {
     const auto right = plan_view_right(frame);
     const auto up = plan_view_up(frame);
@@ -3318,7 +3331,7 @@ public:
     std::pair<Command, std::string> makeBoundaryTransformCommand(
         const DocumentSnapshot& source, Entity original, const QString& rotation_degrees,
         bool flip_horizontal, bool flip_vertical, const QString& offset_x,
-        const QString& offset_y, bool clone) {
+        const QString& offset_y, bool clone, std::optional<Vec2> canvas_offset = std::nullopt) {
         const auto version = inspect_boundary_entity_version(original);
         if (version.format == BoundaryEntityFormat::unsupported_version) {
             throw std::invalid_argument(
@@ -3359,7 +3372,8 @@ public:
         const auto bounds = boundary_bounds(boundary_geometry(transformed));
         const Vec2 pivot{std::midpoint(bounds.minimum.x, bounds.maximum.x),
                          std::midpoint(bounds.minimum.y, bounds.maximum.y)};
-        const Vec2 offset{parse_offset(offset_x), parse_offset(offset_y)};
+        const Vec2 offset = canvas_offset ? *canvas_offset
+            : Vec2{parse_offset(offset_x), parse_offset(offset_y)};
         if (!std::isfinite(offset.x) || !std::isfinite(offset.y))
             throw std::invalid_argument("Boundary offsets must be finite.");
         const PlanarTransform requested_transform{
@@ -11804,61 +11818,74 @@ public:
                 return true;
             }
 
-            bool all_architectural = true;
+            // Architectural named plans project model geometry, while placed
+            // annotations and reference overlays above retain canvas coordinates.
+            // Convert a vector directly so a distant view origin cannot reduce
+            // translation precision through subtracting two large positions.
+            auto model_delta = delta;
+            if (const auto frame = canvasTransformPlanFrame(source)) {
+                const auto right = plan_view_right(*frame);
+                const auto up = plan_view_up(*frame);
+                model_delta = {delta.x*right.x+delta.y*up.x,
+                               delta.x*right.y+delta.y*up.y};
+            }
+            std::vector<BoundaryTranslation> translations;
             std::vector<std::string> roots;
             std::vector<ArchitecturalOperation> operations;
             roots.reserve(model_ids.size());
             operations.reserve(model_ids.size());
             for (const auto& id : model_ids) {
                 const auto found = source.entities().find(id.toStdString());
-                if (found == source.entities().end() ||
-                    !can_transform_architectural_entity_type(found->second.type)) {
-                    all_architectural = false;
-                    break;
+                if (found == source.entities().end())
+                    throw std::invalid_argument("A selected object no longer exists.");
+                if (is_closed_boundary_entity(found->second.type)) {
+                    if (found->second.properties.contains("boundary_authoring") ||
+                        found->second.extensions.contains("boundary_geometry_derivation")) {
+                        // Measured translations retain the full model vector;
+                        // no quantity-string round trip alters a pointer delta.
+                        translations.push_back({found->first,model_delta});
+                        continue;
+                    }
+                    const auto [command, root] = makeBoundaryTransformCommand(
+                        source, found->second, {}, false, false, {}, {}, false, model_delta);
+                    (void)root;
+                    if (const auto* ordinary = std::get_if<ApplyEntityChanges>(&command)) {
+                        presentation_changes.insert(presentation_changes.end(),
+                            ordinary->entity_changes.begin(), ordinary->entity_changes.end());
+                    } else {
+                        throw std::invalid_argument("The selected boundary cannot be translated in a group.");
+                    }
+                    continue;
                 }
+                if (!can_transform_architectural_entity_type(found->second.type))
+                    throw std::invalid_argument("This selected object does not support movement.");
                 roots.push_back(found->first);
                 ArchitecturalOperation operation{ArchitecturalAction::transform, found->first};
-                operation.transform = ArchitecturalTransform{delta.x, delta.y, 0.0, 0.0, 1.0};
+                operation.transform = ArchitecturalTransform{model_delta.x, model_delta.y, 0.0, 0.0, 1.0};
                 operations.push_back(std::move(operation));
             }
-            if (all_architectural) {
+            if (!operations.empty()) {
                 const auto transaction = ArchitecturalTransaction::create(
                     new_id("architectural-tx"), std::to_string(source.revision()),
                     std::move(roots), std::move(operations),
                     ids.size() == 1 ? "Move architectural object" : "Move architectural objects");
                 auto command = architectural_transaction_command(
                     source, transaction, source.revision());
-                command.entity_changes.insert(command.entity_changes.end(),
-                    std::make_move_iterator(presentation_changes.begin()),
-                    std::make_move_iterator(presentation_changes.end()));
-                if (!presentation_changes.empty()) command.message = "Move selected objects";
-                (void)Document::preview_command(source, Command{command});
-                applyDocumentCommand(Command{command});
-                clearError();
-                refresh();
-                return true;
+                presentation_changes.insert(presentation_changes.end(),
+                    std::make_move_iterator(command.entity_changes.begin()),
+                    std::make_move_iterator(command.entity_changes.end()));
             }
 
-            if (model_ids.size() == 1 && presentation_changes.empty()) {
-                const auto found = source.entities().find(model_ids.front().toStdString());
-                if (found != source.entities().end() &&
-                    is_closed_boundary_entity(found->second.type)) {
-                    const auto metres = [](double value) {
-                        return QString::number(value, 'g', 17) + QStringLiteral(" m");
-                    };
-                    const auto [command, root] = makeBoundaryTransformCommand(
-                        source, found->second, {}, false, false,
-                        metres(delta.x), metres(delta.y), false);
-                    (void)Document::preview_command(source, command);
-                    applyDocumentCommand(command);
-                    m_selected_id = id_from(root);
-                    clearError();
-                    refresh();
-                    return true;
-                }
-            }
-            throw std::invalid_argument(
-                "This selection cannot be moved as one group yet. Select compatible drawing objects.");
+            const Command command = translations.empty()
+                ? Command{ApplyEntityChanges{source.revision(), std::move(presentation_changes), {},
+                    ids.size() == 1 ? "Move selected object" : "Move selected objects"}}
+                : Command{TranslateBoundaries{source.revision(), std::move(translations),
+                    std::move(presentation_changes), "Move selected objects"}};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            clearError();
+            refresh();
+            return true;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Move: %1").arg(QString::fromUtf8(error.what())));
             refresh();
@@ -12303,7 +12330,7 @@ public:
         }
         if (kind != BuildingViewKind::plan || !horizontal_plan_frame(frame))
             throw std::invalid_argument(
-                "Canvas rotation and resizing require a horizontal plan view; oblique view interaction is not supported.");
+                "Switch to a horizontal plan view to move, rotate, or resize model objects on the canvas.");
         return frame;
     }
 
@@ -15560,6 +15587,8 @@ public:
                 std::vector<CanvasLabel> labels;
                 for (const auto& label : m_measurementCanvas->labels())
                     if (includes(label.id)) labels.push_back(label);
+                if (view_kind == BuildingViewKind::plan)
+                    project_plan_model_labels(labels, snapshot, architectural_view_context(*view).frame);
                 for (auto& label : section_overlay_labels(snapshot, *view, m_metric_units)) labels.push_back(std::move(label));
                 temporary_canvas->setLabels(std::move(labels));
                 std::vector<CanvasReference> references;
@@ -23604,6 +23633,49 @@ private:
                     }
                 }
             }
+            if (kind == BuildingViewKind::plan && horizontal_plan_frame(frame)) {
+                // Analytical areas remain first-class plan objects alongside
+                // architectural solids. Their curves use the same view basis;
+                // upward plans reflect the signed arc sweep.
+                for (const auto& entity : all_geometry) {
+                    const auto model = snapshot.entities().find(entity.id.toStdString());
+                    const bool boundary = model != snapshot.entities().end() &&
+                        is_closed_boundary_entity(model->second.type);
+                    const bool dimension = entity.type==QStringLiteral("dimension_line");
+                    const bool symbol = entity.type==QStringLiteral("symbol");
+                    if ((!boundary && !dimension && !symbol) ||
+                        presentation_hidden_ids.contains(entity.id.toStdString()) ||
+                        (restricted && !referenced.contains(entity.id.toStdString()))) continue;
+                    auto retained = entity;
+                    if (!symbol) {
+                        const auto project_path = [&](Boundary& path) {
+                            for (auto& edge : path) {
+                                edge.start = project_plan_point(edge.start,frame);
+                                edge.end = project_plan_point(edge.end,frame);
+                                if (frame.direction.z>0) edge.sweep_radians=-edge.sweep_radians;
+                            }
+                        };
+                        project_path(retained.segments);
+                        for (auto& hole : retained.holes) project_path(hole);
+                    }
+                    // Projected vertex editing needs its own model-space
+                    // inverse. Movement/rotation/resizing use the shared frame.
+                    retained.vertex_handles.clear();
+                    if (boundary && view_context.crop) {
+                        const Bounds2 bounds{{view_context.crop->min_horizontal_m,view_context.crop->min_vertical_m},
+                                             {view_context.crop->max_horizontal_m,view_context.crop->max_vertical_m}};
+                        const auto extent = boundary_bounds(retained.segments);
+                        if (extent.minimum.x<bounds.minimum.x || extent.minimum.y<bounds.minimum.y ||
+                            extent.maximum.x>bounds.maximum.x || extent.maximum.y>bounds.maximum.y) {
+                            retained.segments=clip_boundary_to_bounds(retained.segments,bounds);
+                            for (auto& hole : retained.holes) hole=clip_boundary_to_bounds(hole,bounds);
+                            retained.filled=false;
+                        }
+                    }
+                    if (retained.segments.empty()) continue;
+                    result.push_back(decorate_projection(std::move(retained)));
+                }
+            }
             for (const auto& assembly : assembly_previews) {
                 if (presentation_hidden_ids.contains(assembly.host_entity_id) ||
                     presentation_hidden_ids.contains(assembly.child_id) ||
@@ -23950,6 +24022,19 @@ private:
             }
         }
         m_measurementCanvas->setLabels(labels);
+        if (m_architectural_view_kind==BuildingViewKind::plan) {
+            auto frame=architectural_view_context(snapshot,BuildingViewKind::plan).frame;
+            if (!m_active_named_view.isEmpty()) {
+                for (const auto& [id,entity] : snapshot.entities()) {
+                    (void)id;
+                    if (entity.type!=kSheetViewEntityType) continue;
+                    const auto model=decode_sheet_view_entity(entity);
+                    for (const auto& view : model.views())
+                        if (view.id==m_active_named_view.toStdString()) frame=architectural_view_context(view).frame;
+                }
+            }
+            project_plan_model_labels(labels, snapshot, frame);
+        }
         if (m_architectural_view_kind != BuildingViewKind::plan) {
             std::erase_if(labels, [](const auto& label) { return label.plan_only; });
         }

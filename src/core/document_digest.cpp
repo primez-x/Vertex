@@ -89,6 +89,8 @@ ordered_json snapshot_json(const DocumentSnapshot& snapshot,
             item["boundary_transform"] = encode_boundary_transform(*record.boundary_transform);
         if (record.boundary_constraint_changes)
             item["boundary_constraint_changes"] = command_to_json(*record.boundary_constraint_changes);
+        if (record.boundary_translations)
+            item["boundary_translations"] = command_to_json(*record.boundary_translations);
         history.push_back(std::move(item));
     }
     auto names = ordered_json::array();

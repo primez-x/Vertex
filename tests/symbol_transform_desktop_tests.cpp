@@ -8,6 +8,7 @@
 
 #include <QApplication>
 #include <QFontDatabase>
+#include <QFontMetricsF>
 #include <QAbstractButton>
 #include <QMessageBox>
 #include <QTimer>
@@ -33,6 +34,7 @@
 #include <iostream>
 #include <optional>
 #include <stdexcept>
+#include <vector>
 
 namespace {
 void require(bool condition, const char* message) {
@@ -233,8 +235,75 @@ void requireArtworkGesturePreview(sketch::desktop::CanvasEntity entity) {
             "cancelled rotation retained a visual or document transform");
 }
 
+void requireRenderedDegrees(sketch::desktop::PlanCanvas& canvas, double degrees) {
+    // Read the painted widget, not a production preview field. Match the
+    // complete angle token so a width, dimension tick or circular handle
+    // cannot substitute for the live degree readout.
+    QImage screenshot(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+    screenshot.fill(Qt::transparent);
+    {
+        QPainter painter(&screenshot);
+        canvas.render(&painter);
+    }
+    const auto blue_ink = [](QColor color) {
+        return color.blue()-color.red() > 70 && color.blue()-color.green() > 50;
+    };
+    std::vector<QPoint> ink_positions;
+    std::vector<unsigned char> screenshot_mask(screenshot.width()*screenshot.height());
+    for (int y=0; y<screenshot.height(); ++y)
+        for (int x=0; x<screenshot.width(); ++x)
+            if (blue_ink(screenshot.pixelColor(x,y))) {
+                screenshot_mask[y*screenshot.width()+x] = 1;
+                ink_positions.emplace_back(x,y);
+            }
+    auto font = canvas.font();
+    font.setPixelSize(11);
+    font.setWeight(QFont::Medium);
+    const QFontMetricsF metrics(font, &screenshot);
+    const auto token = QStringLiteral("·  %1°").arg(degrees, 0, 'f', 1);
+    const auto width = static_cast<int>(std::ceil(metrics.horizontalAdvance(token)))+6;
+    const auto height = static_cast<int>(std::ceil(metrics.height()))+6;
+    // The callout may place its baseline at a fractional pixel. Exercise
+    // both raster phases rather than depending on one screen/font alignment.
+    for (const auto dx : {0.0, .5}) for (const auto dy : {0.0, .5}) {
+        QImage expected(width, height, QImage::Format_ARGB32_Premultiplied);
+        expected.fill(Qt::white);
+        {
+            QPainter painter(&expected);
+            painter.setRenderHint(QPainter::TextAntialiasing, true);
+            painter.setFont(font);
+            painter.setPen(QColor(29,78,216));
+            painter.drawText(QPointF(3+dx, 3+metrics.ascent()+dy), token);
+        }
+        std::vector<unsigned char> expected_mask(width*height);
+        QPoint first_ink;
+        int ink_count=0;
+        for (int y=0; y<height; ++y) for (int x=0; x<width; ++x)
+            if (blue_ink(expected.pixelColor(x,y))) {
+                if (ink_count++ == 0) first_ink = {x,y};
+                expected_mask[y*width+x] = 1;
+            }
+        require(ink_count > 20, "degree screenshot oracle has no usable rendered text");
+        const auto permitted_difference = static_cast<int>(std::ceil(ink_count*.35));
+        for (const auto pixel : ink_positions) {
+            const auto origin = pixel-first_ink;
+            if (origin.x()<0 || origin.y()<0 || origin.x()+width>screenshot.width() ||
+                origin.y()+height>screenshot.height()) continue;
+            int difference=0;
+            for (int y=0; y<height && difference<=permitted_difference; ++y)
+                for (int x=0; x<width && difference<=permitted_difference; ++x)
+                    difference += expected_mask[y*width+x] !=
+                        screenshot_mask[(origin.y()+y)*screenshot.width()+origin.x()+x];
+            if (difference<=permitted_difference) return;
+        }
+    }
+    throw std::runtime_error((QStringLiteral("Live rotation screenshot is missing %1").arg(token)).toStdString());
+}
+
 void rotateGesture(sketch::desktop::PlanCanvas& canvas, double from, double to,
-                   Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+                   Qt::KeyboardModifiers modifiers = Qt::NoModifier,
+                   std::optional<double> expected_live_degrees = std::nullopt) {
+    if (expected_live_degrees) canvas.setCanvasBackground(Qt::white);
     canvas.setSnapEnabled(false);
     canvas.setOverviewMapEnabled(false);
     canvas.fitView();
@@ -246,13 +315,36 @@ void rotateGesture(sketch::desktop::PlanCanvas& canvas, double from, double to,
         .arg(canvas.objectName()).arg(canvas.width()).arg(canvas.height())
         .arg(std::count_if(canvas.entities().begin(), canvas.entities().end(),
             [](const auto& entity) { return entity.selected; })).arg(from).arg(to)).toStdString());
-    // Undo the screen AABB rotation to recover the padded local frame depth.
-    const auto c = std::abs(std::cos(from)), s = std::abs(std::sin(from));
-    const auto depth = (bounds->height()*c - bounds->width()*s)/(c*c-s*s);
+    // Read the local footprint rather than invert its screen AABB. The AABB
+    // loses the width/depth distinction at 45 degrees, so that inverse is
+    // singular precisely at one of the rotation handle's snap angles.
+    const auto selected = std::find_if(canvas.entities().begin(), canvas.entities().end(),
+        [](const auto& entity) { return entity.selected; });
+    require(selected != canvas.entities().end(), "rotation fixture has no selected retained entity");
+    std::optional<sketch::desktop::CanvasSelectionFrame> axes = selected->resize_frame;
+    if (selected->svg_symbol) {
+        const auto& symbol = *selected->svg_symbol;
+        axes = sketch::desktop::CanvasSelectionFrame{symbol.position, symbol.rotation_radians,
+            symbol.width_metres, symbol.depth_metres};
+    }
+    require(axes && std::isfinite(axes->depth_metres) && axes->depth_metres > 0 &&
+                close_enough(std::remainder(axes->rotation_radians-from, 2*std::acos(-1.0)), 0),
+            "rotation fixture must start at its retained oriented pin");
+    const auto stroke = selected->type == QStringLiteral("wall") && selected->segments.size() == 1
+        ? std::max(selected->thickness_metres, .04) : selected->stroke_width_metres;
+    const auto padding = std::isfinite(stroke) && stroke > 0
+        ? 6.0 + stroke*canvas.viewScale()*.5 : 7.5;
+    const auto depth = std::max(44.0, axes->depth_metres*canvas.viewScale() + 2*padding);
     const auto radius = depth*.5 + 24.0;
+    const auto view_center = canvas.viewCenter();
+    const auto center = QRectF(canvas.rect()).center() + QPointF(
+        (axes->center.x-view_center.x)*canvas.viewScale(),
+        -(axes->center.y-view_center.y)*canvas.viewScale());
     const auto pin = [&](double angle) {
-        return bounds->center() + QPointF(-std::sin(angle)*radius, -std::cos(angle)*radius);
+        return center + QPointF(-std::sin(angle)*radius, -std::cos(angle)*radius);
     };
+    require(QRectF(canvas.rect()).adjusted(12,12,-12,-12).contains(pin(from)),
+            "rotation fixture's outward pin is clipped by the viewport");
     const auto mouse = [&](QEvent::Type type, QPointF point) {
         QMouseEvent event(type, point, canvas.mapToGlobal(point.toPoint()),
             type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
@@ -261,6 +353,7 @@ void rotateGesture(sketch::desktop::PlanCanvas& canvas, double from, double to,
     };
     mouse(QEvent::MouseButtonPress, pin(from));
     mouse(QEvent::MouseMove, pin(to));
+    if (expected_live_degrees) requireRenderedDegrees(canvas, *expected_live_degrees);
     const auto capture=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
     if (!capture.isEmpty() && close_enough(to,1.5707963267948966) &&
         close_enough(from,0.5235987755982988)) {
@@ -487,12 +580,42 @@ void requireCommittedGestures(const QTemporaryDir& directory) {
     check_symbol(half_pi);
     require(window.selectEntity(id), "symbol cannot be reselected after history navigation");
     require(canvas->selectionBounds().has_value(), "reselected symbol has no frame");
+    // Use actual nearby pointer angles, rather than hitting the exact target,
+    // to distinguish angular snap from an unrestricted rotation gesture.
+    const auto near_snap_before = window.document().revision();
+    rotateGesture(*canvas, half_pi, 43.5*half_pi/90, Qt::NoModifier, 45.0);
+    check_symbol(half_pi/2);
+    require(window.document().revision() == near_snap_before+1,
+            "near-45 symbol gesture must commit exactly one snapped command");
+    // The next drag begins on the diagonal committed pin. This also exercises
+    // the formerly singular 45-degree helper geometry.
+    rotateGesture(*canvas, half_pi/2, 88.5*half_pi/90, Qt::NoModifier, 90.0);
+    check_symbol(half_pi);
+    rotateGesture(*canvas, half_pi, 178.5*half_pi/90, Qt::NoModifier, 180.0);
+    check_symbol(2*half_pi);
+    require(window.document().revision() == near_snap_before+3,
+            "nearby common-angle gestures must each commit exactly once");
+    require(window.undoCommand(), "near-180 gesture cannot undo");
+    check_symbol(half_pi);
+    require(window.undoCommand(), "second drag from 45 degrees cannot undo");
+    check_symbol(half_pi/2);
+    require(window.redoCommand(), "second drag from 45 degrees cannot redo");
+    check_symbol(half_pi);
+    const auto snapped_path = directory.filePath("snapped-diagonal-rotation.bldproj");
+    require(window.undoCommand(), "snapped diagonal gesture cannot restore its saved angle");
+    check_symbol(half_pi/2);
+    require(window.saveProjectAs(snapped_path) && window.openProject(snapped_path),
+            "snapped diagonal selection cannot save/reopen");
+    check_symbol(half_pi/2);
+    require(window.selectEntity(id), "snapped diagonal symbol cannot be reselected after reopen");
+    rotateGesture(*canvas, half_pi/2, 88.5*half_pi/90);
+    check_symbol(half_pi);
     // A second drag starts at the newly projected pin, proving refresh orientation.
     rotateGesture(*canvas, half_pi, 2*half_pi);
     check_symbol(2*half_pi);
     rotateGesture(*canvas, 2*half_pi, 0);
     check_symbol(0);
-    rotateGesture(*canvas, 0, 23.5*half_pi/90, Qt::ShiftModifier);
+    rotateGesture(*canvas, 0, 23.5*half_pi/90, Qt::ShiftModifier, 23.5);
     check_symbol(23.5*half_pi/90);
     require(window.undoCommand(), "fine symbol gesture cannot undo");
     check_symbol(0);

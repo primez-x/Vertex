@@ -100,6 +100,33 @@ void test_translation_export(const std::filesystem::path& root) {
             sketch::command_to_json(transaction) &&
         !constraint_json.at("revisions")[10].contains("boundary_constraint_changes"),
         "exchange must preserve exact typed constraint proof only on its command row");
+
+  sketch::Entity label{"group-label", "label", {{"text", "moved with boundary"}},
+                       false, {{"vendor", "retain"}}};
+  sketch::TranslateBoundaries batch{document.revision(), {{"boundary", {4, -2}}},
+      {sketch::EntityChange::upsert(label)}, "Move measured group"};
+  const auto batch_revision = document.apply(batch);
+  const auto moved_boundary = sketch::decode_identified_boundary_entity(
+      document.snapshot().entities().at("boundary"));
+  sketch::BoundaryGeometryEdit later_edit;
+  later_edit.boundary_id = "boundary";
+  later_edit.kind = sketch::BoundaryGeometryEditKind::move_vertex;
+  later_edit.target_id = "vertex-3";
+  later_edit.target_position = moved_boundary.segments[3].segment.start;
+  later_edit.target_position.x -= 0.1;
+  sketch::ApplyBoundaryConstraintChanges later_constraint{
+      document.revision(), {later_edit}, {}, "Later constrained edit"};
+  const auto constraint_revision = document.apply(later_constraint);
+  document.undo(document.revision());
+  sketch::extract_project(document.snapshot(), root / "translation-group");
+  std::ifstream batch_input(root / "translation-group" / "project.json");
+  const auto batch_json = nlohmann::json::parse(batch_input);
+  check(batch_json.at("exchange_version") == 6,
+        "later constraint row must not downgrade translation group exchange version");
+  check(batch_json.at("revisions")[batch_revision].at("boundary_translations") == sketch::command_to_json(batch) &&
+        batch_json.at("revisions")[constraint_revision].at("boundary_constraint_changes") == sketch::command_to_json(later_constraint) &&
+        !batch_json.at("revisions").back().contains("boundary_translations"),
+        "exchange must retain exact mixed proofs only on their command rows");
 }
 } // namespace
 int main() {
