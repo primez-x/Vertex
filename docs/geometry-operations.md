@@ -61,6 +61,22 @@ the same command when the original edge has one. Replay validates the complete
 split, references, and new identities; a raw entity edit cannot authorize the
 otherwise forbidden change to the retained edge's end-vertex identity.
 
+The insertion dialog previews the canonical split, labels original edges by
+number and marks the new vertex in green. Apply uses the exact captured command
+and identities; invalid input or a changed document, selection, workspace, layer
+or units discards the candidate. Cancel preserves the source.
+
+Persistent coordinate freedom is diagnosed by PlaneGCS without solving or
+moving geometry. Straight identified boundaries and walls contribute their
+independent X/Y endpoint variables; explicit saved relationships expand the
+connected component. Temporary editing anchors, wall thickness, height, fused
+wall joins and curve parameters do not participate. Before/after comparisons
+retain the union of both components, so removing a bridge does not silently
+drop neighboring objects. A copy reports its source and copied components
+separately. Curved owners, unsupported relationships and ambiguous bindings
+report unavailable rather than zero. This local rank report is not a count of
+all architectural parameters or a production qualification.
+
 Direct vertex movement updates both incident endpoint occurrences of the stable
 vertex ID and retains every boundary, segment, and vertex identity. Direct
 segment resizing accepts an analytical target length and an explicit fixed

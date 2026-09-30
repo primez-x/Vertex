@@ -20,6 +20,7 @@
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <set>
 #include <stdexcept>
 #include <utility>
 
@@ -67,6 +68,23 @@ QString editable_dimension(double metres, bool metric) {
     return exact_number(metres) + QStringLiteral(" m");
 }
 
+PersistentConstraintComponentAnalysis stored_component_analysis(
+    const std::map<std::string, Entity, std::less<>>& entities,
+    const std::vector<std::string>& owners, std::optional<Revision> revision = std::nullopt) {
+    try {
+        return analyze_persistent_constraint_component(entities, owners, revision);
+    } catch (const std::exception& exception) {
+        PersistentConstraintComponentAnalysis unavailable;
+        unavailable.diagnostics.push_back(exception.what());
+        return unavailable;
+    }
+}
+
+QString stored_freedom_value(const PersistentConstraintComponentAnalysis& analysis) {
+    return analysis.supported && analysis.degrees_of_freedom >= 0
+        ? QString::number(analysis.degrees_of_freedom) : QStringLiteral("unavailable");
+}
+
 // The service validates pure semantics; the desktop additionally checks actual
 // architectural solids before presenting an applicable candidate.
 void validate_solids(const ConstraintAuthoringPreview& preview) {
@@ -111,6 +129,11 @@ public:
         auto* heading = new QLabel(QStringLiteral("Preview the change, then Apply to update the project."), owner);
         heading->setWordWrap(true);
         layout->addWidget(heading);
+        persistent_freedom = new QLabel(owner);
+        persistent_freedom->setObjectName(QStringLiteral("constraintPersistentFreedom"));
+        persistent_freedom->setAccessibleName(QStringLiteral("Stored component coordinate freedom"));
+        persistent_freedom->setWordWrap(true);
+        layout->addWidget(persistent_freedom);
         auto* scroll = new QScrollArea(owner);
         scroll->setWidgetResizable(true);
         auto* body = new QWidget(scroll);
@@ -247,12 +270,84 @@ public:
             QObject::connect(field, &QComboBox::currentIndexChanged, owner, [this] { invalidate(); });
         QObject::connect(anchor, &QComboBox::currentIndexChanged, owner, [this] { invalidate(); });
         QObject::connect(connected, &QCheckBox::toggled, owner, [this] { invalidate(); });
+        source_freedom = stored_component_analysis(snapshot.entities(), {selected_id}, snapshot.revision());
         configure(true);
+    }
+
+    QString stored_constraint_names(const std::vector<std::string>& ids,
+        const std::map<std::string, Entity, std::less<>>& entities) const {
+        QStringList names;
+        for (const auto& id : ids) {
+            const auto found = entities.find(id);
+            if (found == entities.end()) continue;
+            const auto name = found->second.properties.find("name");
+            if (name != found->second.properties.end() && name->is_string() && !name->get_ref<const std::string&>().empty()) {
+                names.push_back(text(name->get_ref<const std::string&>()));
+                continue;
+            }
+            try {
+                const auto decoded = decode_constraint_entity(found->second);
+                if (decoded.constraint)
+                    names.push_back(text(constraint_relation_name(decoded.constraint->relation)).replace('_', ' ') + QStringLiteral(" constraint"));
+            } catch (const std::exception&) { /* Unsupported semantics have their own diagnostic. */ }
+        }
+        return names.join(QStringLiteral(", "));
+    }
+
+    void showPersistentFreedom(const ConstraintAuthoringPreview* candidate = nullptr) {
+        auto before = source_freedom;
+        std::optional<PersistentConstraintComponentAnalysis> after;
+        std::set<std::string> owners{selected_id};
+        owners.insert(before.owner_ids.begin(), before.owner_ids.end());
+        if (candidate) {
+            // A removed or redirected relation can disconnect a component.
+            // Expand through both states until they share one owner universe.
+            for (;;) {
+                const std::vector<std::string> seeds(owners.begin(), owners.end());
+                before = stored_component_analysis(snapshot.entities(), seeds, snapshot.revision());
+                after = stored_component_analysis(candidate->candidate_entities(), seeds);
+                auto expanded = owners;
+                expanded.insert(before.owner_ids.begin(), before.owner_ids.end());
+                expanded.insert(after->owner_ids.begin(), after->owner_ids.end());
+                if (expanded == owners) break;
+                owners = std::move(expanded);
+            }
+        }
+        QString value = QStringLiteral("Stored coordinate freedom: %1").arg(stored_freedom_value(before));
+        if (after) {
+            value += QStringLiteral(" → %1").arg(stored_freedom_value(*after));
+            if (before.supported && after->supported && before.degrees_of_freedom >= 0 && after->degrees_of_freedom >= 0) {
+                const auto delta = after->degrees_of_freedom - before.degrees_of_freedom;
+                value += QStringLiteral(" (%1%2)").arg(delta >= 0 ? QStringLiteral("+") : QString{}).arg(delta);
+            }
+        }
+        if (before.supported && (!after || after->supported))
+            value += owners.size() == 1 ? QStringLiteral(" · 1 object")
+                : QStringLiteral(" · %1 objects").arg(static_cast<qulonglong>(owners.size()));
+        if (!before.redundant_constraint_ids.empty() || (after && !after->redundant_constraint_ids.empty())) {
+            value += QStringLiteral(" · redundant constraints: %1").arg(static_cast<qulonglong>(before.redundant_constraint_ids.size()));
+            if (after) value += QStringLiteral(" → %1").arg(static_cast<qulonglong>(after->redundant_constraint_ids.size()));
+        }
+        QStringList details{QStringLiteral("Independent X/Y endpoint-coordinate freedoms under stored constraints. Includes translation and rotation when stored relations permit them. Does not count wall thickness, height, or other architectural parameters, and excludes temporary edit anchors and pins. Before and after use the same owner set.")};
+        const auto append_details = [&](const PersistentConstraintComponentAnalysis& analysis,
+            const std::map<std::string, Entity, std::less<>>& entities, const QString& phase) {
+            if (!analysis.redundant_constraint_ids.empty())
+                details.push_back(phase + QStringLiteral(" redundant stored relations: ") + stored_constraint_names(analysis.redundant_constraint_ids, entities));
+            if (!analysis.conflicting_constraint_ids.empty())
+                details.push_back(phase + QStringLiteral(" conflicting stored relations: ") + stored_constraint_names(analysis.conflicting_constraint_ids, entities));
+            for (const auto& diagnostic : analysis.diagnostics)
+                details.push_back(phase + QStringLiteral(" stored component: ") + text(diagnostic));
+        };
+        append_details(before, snapshot.entities(), QStringLiteral("Current"));
+        if (after) append_details(*after, candidate->candidate_entities(), QStringLiteral("Proposed"));
+        persistent_freedom->setText(value);
+        persistent_freedom->setToolTip(details.join('\n'));
     }
 
     void invalidate() {
         if (loading) return;
         preview.reset(); accepted.reset(); apply_button->setEnabled(false);
+        showPersistentFreedom();
         std::vector<WallPreviewDrawing> current;
         if (boundary_mode)
             for (const auto& edge : decode_identified_boundary_entity(snapshot.entities().at(selected_id)).segments)
@@ -418,11 +513,13 @@ public:
             }
             canvas->setWalls(std::move(drawing));
             preview = std::move(candidate);
+            showPersistentFreedom(&*preview);
             apply_button->setEnabled(true);
             if (summary.isEmpty()) summary.push_back(QStringLiteral("Constraint change only; geometry stays in place."));
             if (preview->changed_walls().size() > 3)
                 summary.push_back(QStringLiteral("%1 more walls are listed in the preview details.").arg(preview->changed_walls().size() - 3));
-            for (const auto& diagnostic : preview->diagnostics()) summary.push_back(text(diagnostic));
+            for (const auto& diagnostic : preview->diagnostics())
+                summary.push_back(QStringLiteral("Edit preview: ") + text(diagnostic));
             summary.push_back(QStringLiteral("Apply records one undoable command."));
             status->setPlainText(summary.join('\n'));
             return true;
@@ -430,7 +527,8 @@ public:
             error = QString::fromUtf8(exception.what());
             status->setStyleSheet(status->palette().color(QPalette::Window).lightness() < 128
                 ? QStringLiteral("color:#ffb4a2;") : QStringLiteral("color:#9f1b11;"));
-            status->setPlainText(error.isEmpty() ? QStringLiteral("The requested constraints could not be satisfied.") : error);
+            status->setPlainText(QStringLiteral("Edit preview: ") +
+                (error.isEmpty() ? QStringLiteral("The requested constraints could not be satisfied.") : error));
             return false;
         }
     }
@@ -457,6 +555,7 @@ public:
     QStringList endpoint_labels;
     std::optional<PersistentConstraint> selected_constraint;
     std::optional<ConstraintAuthoringPreview> preview, accepted;
+    PersistentConstraintComponentAnalysis source_freedom;
     QString error;
     QFormLayout* form{};
     QComboBox *mode{}, *existing{}, *relation{}, *anchor{};
@@ -466,6 +565,7 @@ public:
     ConstraintPreviewCanvas* canvas{};
     QTableWidget* changes{};
     QPlainTextEdit* status{};
+    QLabel* persistent_freedom{};
     QPushButton *apply_button{}, *preview_button{};
 };
 

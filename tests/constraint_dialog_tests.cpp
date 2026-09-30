@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QFontDatabase>
 #include <QLineEdit>
+#include <QLabel>
 #include <QKeyEvent>
 #include <QPushButton>
 #include <QTimer>
@@ -215,6 +216,83 @@ void boundary_relationship_workflows() {
     curved.segments[0].segment.sweep_radians = 0.2;
     require(!ConstraintDialog::supportsEntity(encode_identified_boundary_entity(curved)), "curved boundary offered unsupported constraints");
 }
+QLabel& persistent_freedom(ConstraintDialog& dialog) {
+    auto* label = dialog.findChild<QLabel*>("constraintPersistentFreedom");
+    require(label, "missing persisted component coordinate freedom label");
+    return *label;
+}
+PersistentConstraint horizontal_boundary_relation(std::string id, std::string owner) {
+    return {std::move(id), ConstraintRelationKind::horizontal,
+        {{owner, WallEndpointRole::start, "ab", "a"}, {owner, WallEndpointRole::end, "ab", "b"}}};
+}
+void persisted_coordinate_freedom_before_after() {
+    const auto level = horizontal_boundary_relation("stored-level", "first");
+    auto document = Document::create({boundary("first", 0, 0), encode_constraint_entity(level)});
+    const auto original = document.snapshot();
+    ConstraintDialog dialog(original, "first", true);
+    auto& label = persistent_freedom(dialog);
+    require(label.text().contains("7") && !label.text().contains(QStringLiteral("→")),
+        "source must show seven stored coordinate freedoms without preview counts");
+    require(label.toolTip().contains("X/Y") && label.toolTip().contains("translation") &&
+        label.toolTip().contains("rotation") && label.toolTip().contains("architectural"),
+        "coordinate freedom tooltip must define its scope and rigid movement freedoms");
+    // Temporary dialog edit anchors remove two further coordinates. They must
+    // never replace the separate persisted component value in the label.
+    ConstraintAuthoringIntent anchored;
+    auto duplicate = level; duplicate.id = "duplicate-level";
+    anchored.relation_mutations = {ConstraintRelationMutation::upsert(duplicate)};
+    anchored.relation_anchor = level.bindings.front();
+    const auto anchored_preview = preview_constraint_authoring(original, anchored);
+    require(anchored_preview.accepted() && anchored_preview.degrees_of_freedom() == 5,
+        "fixture must distinguish five edit freedoms from seven stored freedoms");
+    select_relation(dialog, ConstraintRelationKind::fixed_length);
+    dialog.setLengthExpression("4 m");
+    require(dialog.previewEdit(), "fixed length freedom preview must remain accepted");
+    require(label.text().contains(QStringLiteral("7 → 6")) && label.text().contains("-1") &&
+        label.text().contains("1 object"),
+        "stored fixed length must show a one-freedom reduction for the same owner component");
+    require(document.snapshot().entities() == original.entities(), "freedom analysis must not mutate the source");
+    capture(dialog, "persistent-freedom-fixed-length");
+    dialog.setLengthExpression("5 m");
+    require(label.text().contains("7") && !label.text().contains(QStringLiteral("→")) &&
+        !dialog.findChild<QPushButton*>("constraintApplyButton")->isEnabled(),
+        "input invalidation must restore source-only freedom and invalidate Apply");
+    dialog.setLengthExpression("not a length");
+    require(!dialog.previewEdit() && !label.text().contains(QStringLiteral("→")) && label.text().contains("7"),
+        "rejected preview must not retain an after freedom count");
+}
+void removal_preserves_comparison_owner_universe() {
+    const PersistentConstraint join{"stored-bridge", ConstraintRelationKind::coincident,
+        {{"first", WallEndpointRole::end, "ab", "b"}, {"second", WallEndpointRole::start, "ab", "a"}}};
+    auto document = Document::create({boundary("first", 0, 0), boundary("second", 4, 0), encode_constraint_entity(join)});
+    ConstraintDialog dialog(document.snapshot(), "first", true);
+    auto& label = persistent_freedom(dialog);
+    require(label.text().contains("14") && label.text().contains("2 objects"),
+        "connected source must report both owners and fourteen freedoms");
+    combo(dialog, "constraintOperation").setCurrentIndex(2);
+    require(dialog.previewEdit(), "bridge removal preview must stay accepted");
+    require(label.text().contains(QStringLiteral("14 → 16")) && label.text().contains("+2") &&
+        label.text().contains("2 objects"),
+        "removal must compare both owners even when the proposed graph disconnects");
+    capture(dialog, "persistent-freedom-bridge-removal");
+    combo(dialog, "constraintOperation").setCurrentIndex(0);
+    require(label.text().contains("14") && label.text().contains("2 objects") &&
+        !label.text().contains(QStringLiteral("→")),
+        "changing operation must restore the original connected source value");
+}
+void unavailable_persistent_freedom_is_explicit() {
+    auto unknown = encode_constraint_entity(horizontal_boundary_relation("future-level", "first"));
+    unknown.properties["version"] = 99;
+    auto document = Document::create({boundary("first", 0, 0), unknown});
+    ConstraintDialog dialog(document.snapshot(), "first", true);
+    auto& label = persistent_freedom(dialog);
+    require(label.text().contains("unavailable", Qt::CaseInsensitive) && !label.text().contains("0 freedoms") &&
+        !label.text().contains(QStringLiteral("→")),
+        "unsupported persistent relations must show unavailable, never an invented zero");
+    const auto before = document.snapshot();
+    require(!dialog.submit(), "freedom analysis must not independently authorize Apply");
+    require(document.snapshot().entities() == before.entities(), "unavailable diagnostic must preserve unknown source entities");
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -226,6 +304,9 @@ int main(int argc, char** argv) {
         resize_preview_anchor_and_invalidation();
         relationship_create_edit_conflict_remove();
         boundary_relationship_workflows();
+        persisted_coordinate_freedom_before_after();
+        removal_preserves_comparison_owner_universe();
+        unavailable_persistent_freedom_is_explicit();
         both_workspace_entrypoints();
         std::cout << "Constraint dialog workflows passed\n";
         return 0;

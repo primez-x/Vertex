@@ -8,6 +8,7 @@
 #include "sketch/quantity.hpp"
 
 #include <map>
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <vector>
@@ -15,6 +16,28 @@
 namespace sketch {
 
 class ConstraintAuthoringBuilder;
+
+struct PersistentConstraintComponentAnalysis {
+    bool supported{};
+    int degrees_of_freedom{-1};
+    std::size_t point_count{};
+    std::vector<std::string> owner_ids;
+    std::vector<std::string> constraint_ids;
+    std::vector<std::string> redundant_constraint_ids;
+    std::vector<std::string> conflicting_constraint_ids;
+    std::vector<std::string> diagnostics;
+};
+
+// Local freedom of straight owner endpoint coordinates under persisted
+// relations only. No edit anchors, frozen neighbors, implicit coincidence,
+// wall-join union, thickness or height variables participate. Multiple seeds
+// allow before/after reports to use the same owner universe after removal.
+[[nodiscard]] PersistentConstraintComponentAnalysis analyze_persistent_constraint_component(
+    const DocumentSnapshot& snapshot, const std::vector<std::string>& seed_owner_ids);
+[[nodiscard]] PersistentConstraintComponentAnalysis analyze_persistent_constraint_component(
+    const std::map<std::string, Entity, std::less<>>& entities,
+    const std::vector<std::string>& seed_owner_ids,
+    std::optional<Revision> revision = std::nullopt);
 
 enum class WallResizeAnchor { start, end };
 

@@ -135,4 +135,9 @@ struct ConstraintPreview {
 // original points, so callers cannot accidentally publish a partial solve.
 [[nodiscard]] ConstraintPreview solve_planar_constraints(const ConstraintSolveRequest& request);
 
+// Rank diagnostics at the supplied coordinates. Never solves or publishes
+// geometry: points remain exactly the original request points, including on
+// success. accepted() here means the diagnosis is available, not an edit.
+[[nodiscard]] ConstraintPreview diagnose_planar_constraints(const ConstraintSolveRequest& request);
+
 }  // namespace sketch

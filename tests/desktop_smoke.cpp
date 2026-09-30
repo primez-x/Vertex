@@ -1675,6 +1675,85 @@ void test_boundary_vertex_insertion_workflow() {
         "insertion must reject an unhandled edge receipt without discarding it or changing the document");
 }
 
+void test_boundary_insertion_preview_freedom_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
+    using namespace sketch;
+    desktop::MainWindow window;
+    const auto id = window.createBoundary({{{0,0},{4,0},0}, {{4,0},{4,3},0},
+        {{4,3},{0,3},0}, {{0,3},{0,0},0}}, "living_area");
+    require(!id.isEmpty() && window.selectEntity(id), "insertion preview must select its source");
+    const auto geometry = decode_identified_boundary_entity(window.document().snapshot().entities().at(id.toStdString()));
+    const auto& edge = geometry.segments[0];
+    const auto relation = encode_constraint_entity(PersistentConstraint{"insertion-horizontal", ConstraintRelationKind::horizontal,
+        {{id.toStdString(), WallEndpointRole::start, edge.segment_id, edge.start_vertex_id},
+         {id.toStdString(), WallEndpointRole::end, edge.segment_id, edge.end_vertex_id}}});
+    window.document().apply(ApplyEntityChanges{window.document().revision(), {EntityChange::upsert(relation)}, {}, "insertion horizontal"});
+    const auto before = window.document().snapshot();
+    auto* action = window.findChild<QAction*>("insertBoundaryVertex");
+    require(action, "insertion command must be available");
+    bool inspected = false;
+    const auto inspect = [&](bool apply) {
+        QTimer::singleShot(0, &window, [&, apply] {
+            auto* dialog = window.findChild<QDialog*>("boundaryVertexInsertionDialog");
+            if (!dialog) return;
+            auto* canvas = dynamic_cast<desktop::PlanCanvas*>(dialog->findChild<QWidget*>("boundaryVertexInsertionPreview"));
+            auto* freedom = dialog->findChild<QLabel*>("boundaryVertexInsertionFreedom");
+            auto* fraction = dialog->findChild<QLineEdit*>("boundaryVertexFraction");
+            auto* buttons = dialog->findChild<QDialogButtonBox*>("boundaryVertexInsertionButtons");
+            if (!canvas || !freedom || !fraction || !buttons) { dialog->reject(); return; }
+            inspected = true;
+            require(freedom->text().contains("7") && freedom->text().contains("9") &&
+                freedom->text().contains("+2") && buttons->button(QDialogButtonBox::Apply)->isEnabled(),
+                "insertion preview must report stored-constraint freedom 7 to 9 without freezing anchors");
+            require(window.document().snapshot().entities() == before.entities(), "insertion preview must not mutate source");
+            fraction->setText("1");
+            require(!buttons->button(QDialogButtonBox::Apply)->isEnabled() && !freedom->text().contains("+2"),
+                "invalid insertion must discard its applicable preview and freedom delta");
+            fraction->setText("0.25");
+            require(buttons->button(QDialogButtonBox::Apply)->isEnabled() && freedom->text().contains("+2"),
+                "corrected fraction must rebuild canonical preview");
+            const auto capture_directory = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+            if (apply && !capture_directory.isEmpty()) require(QDir().mkpath(capture_directory) && dialog->grab().save(
+                QDir(capture_directory).filePath("boundary-insertion-freedom.png")), "insertion preview screenshot must save");
+            buttons->button(apply ? QDialogButtonBox::Apply : QDialogButtonBox::Cancel)->click();
+        });
+        action->trigger();
+    };
+    inspect(false);
+    require(inspected && window.document().snapshot().entities() == before.entities(),
+        "insertion dialog must expose movement and freedom preview while cancellation preserves source");
+    inspect(true);
+    const auto after = window.document().snapshot();
+    const auto inserted = decode_identified_boundary_entity(after.entities().at(id.toStdString()));
+    require(after.revision() == before.revision()+1 && inserted.segments.size() == 5 &&
+        std::abs(inserted.segments[0].segment.end.x-1.0) < 1e-9,
+        "Apply must publish exactly the previewed quarter-edge insertion as one command");
+    require(window.undoCommand() && window.document().snapshot().entities() == before.entities() &&
+        window.redoCommand() && window.document().snapshot().entities() == after.entities(), "previewed insertion must undo/redo exactly");
+    QTemporaryDir directory;
+    const auto path = directory.filePath("insertion-freedom.bldproj");
+    desktop::MainWindow reopened;
+    require(window.saveProjectAs(path) && reopened.openProject(path) && reopened.document().snapshot().entities() == after.entities(),
+        "insertion preview result must save/reopen with exact persisted relationships");
+    require(window.selectEntity(id), "stale insertion must select its source");
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>("boundaryVertexInsertionDialog");
+        require(dialog, "stale insertion dialog must open");
+        auto* buttons = dialog->findChild<QDialogButtonBox*>("boundaryVertexInsertionButtons");
+        window.setMetricUnits(!window.metricUnits());
+        QTimer::singleShot(150, dialog, [&, dialog, buttons] {
+            require(!buttons->button(QDialogButtonBox::Apply)->isEnabled() &&
+                dialog->findChild<QLabel*>("boundaryVertexInsertionFreedom")->text().isEmpty(),
+                "changed units must proactively discard insertion candidate and delta");
+            buttons->button(QDialogButtonBox::Apply)->click();
+            require(window.document().snapshot().entities() == after.entities(),
+                "stale insertion must not mutate geometry");
+            dialog->reject();
+        });
+    });
+    action->trigger();
+}
+
 void test_interactive_receipt_boundary_insertion_workflow() {
     const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
@@ -2686,8 +2765,12 @@ void test_boundary_transform_workflow(const QString& capture_directory) {
         auto* rotation=dialog->findChild<QLineEdit*>("boundaryRotationDegrees");
         auto* apply=dialog->findChild<QDialogButtonBox*>("boundaryTransformButtons")->button(QDialogButtonBox::Apply);
         require(preview && preview->entities().size()==2,"boundary editor must preview original and proposed geometry");
+        auto* freedom=dialog->findChild<QLabel*>("boundaryTransformFreedom");
+        require(freedom && freedom->text().contains("8 → 8 (0)"),
+            "rigid transform must retain all eight persisted endpoint freedoms");
         rotation->setText("invalid");
-        require(preview->entities().empty() && !apply->isEnabled(),"invalid boundary angle must invalidate the candidate");
+        require(preview->entities().empty() && !apply->isEnabled() && freedom->text().isEmpty(),
+            "invalid boundary angle must invalidate the candidate and freedom result");
         rotation->setText("35");
         dialog->findChild<QLineEdit*>("boundaryOffsetX")->setText("2 m");
         if (!apply->isEnabled()) std::cerr << "boundary preview error: " <<
@@ -2708,6 +2791,9 @@ void test_boundary_transform_workflow(const QString& capture_directory) {
         auto* dialog=window.findChild<QDialog*>("boundaryTransformDialog");
         dialog->findChild<QCheckBox*>("boundaryClone")->setChecked(true);
         dialog->findChild<QLineEdit*>("boundaryRotationDegrees")->setText("35");
+        require(dialog->findChild<QLabel*>("boundaryTransformFreedom")->text() ==
+            QStringLiteral("Source coordinate freedom: 8 · Copy coordinate freedom: 8"),
+            "copy preview must report its own persisted component without counting unrelated source objects");
         auto* preview=dynamic_cast<desktop::PlanCanvas*>(dialog->findChild<QWidget*>("wallTransformPreview"));
         for(const auto& entity:preview->entities()) if(entity.selected) {
             preview_id=entity.id;
@@ -6139,6 +6225,14 @@ int main(int argc, char** argv) {
         std::cout << "Drawing-set ordering and PDF tests passed\n";
         return 0;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--boundary-insertion-preview-only") {
+        test_boundary_insertion_preview_freedom_workflow();
+        return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--boundary-transform-preview-only") {
+        test_boundary_transform_workflow(qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR"));
+        return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--boundary-insertion-only") {
         test_interactive_receipt_boundary_insertion_workflow();
         test_direct_boundary_geometry_edit_workflow();
@@ -6236,6 +6330,7 @@ int main(int argc, char** argv) {
     test_delete_selection_workflow();
     test_boundary_vertex_insertion_workflow();
     test_direct_boundary_geometry_edit_workflow();
+    test_boundary_insertion_preview_freedom_workflow();
     test_interactive_receipt_boundary_insertion_workflow();
     test_boundary_reference_review_workflow();
     test_normal_receipt_boundary_redefinition_workflow();

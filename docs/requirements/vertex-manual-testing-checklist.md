@@ -374,7 +374,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - [ ] **U064 — Insert a vertex into an edge**
   - Expected: A new editable corner appears without corrupting the area.
   - Result: Not tested
-  - Steps: Draw and close a rectangle, select it, choose **Insert boundary vertex**, select an edge, enter `0.5`, and apply. Confirm a new corner appears halfway along that edge without changing the area total. Drag the new corner to reshape the area and confirm the dimensions and total update. Undo the move and insertion, redo both, then save and reopen to check that the edited shape and dimensions remain.
+  - Steps: Draw and close a rectangle, select it, choose **Insert boundary vertex**, and identify the edge by its number on the preview. Enter `0.5`; the green mark should appear halfway along that edge. Cancel once and confirm the drawing is unchanged, then reopen and Apply. Confirm the area total is unchanged. Drag the new corner to reshape the area and confirm the dimensions and total update. Undo the move and insertion, redo both, then save and reopen to check that the edited shape and dimensions remain. For a straight rectangle with no saved relationships, the coordinate freedom preview should show `8 → 10 (+2)`; with one saved horizontal relationship it should show `7 → 9 (+2)`.
   - Notes / issues / screenshots: ____________________
 
 - [ ] **U065 — Move a vertex**

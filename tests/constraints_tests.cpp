@@ -299,7 +299,31 @@ void test_invalid_input_is_rejected_without_solver_entry() {
 
 }  // namespace
 
+void test_diagnostic_only_rank_preserves_coordinates() {
+    ConstraintSolveRequest request;
+    request.expected_revision = 42;
+    request.points = {{"a",0,0},{"b",4,1},{"c",4,3},{"d",0,3}};
+    const auto free = diagnose_planar_constraints(request);
+    require(free.accepted() && free.degrees_of_freedom == 8 && free.points == request.points && free.expected_revision == 42,
+        "diagnostic-only unconstrained rectangle must report all eight endpoint variables without solving");
+    request.constraints = {HorizontalConstraint{"horizontal", "a", "b"}};
+    const auto horizontal = diagnose_planar_constraints(request);
+    require(horizontal.accepted() && horizontal.degrees_of_freedom == 7 && horizontal.points == request.points,
+        "rank diagnosis must not solve an initially tilted horizontal relation");
+    request.constraints.push_back(HorizontalConstraint{"horizontal-copy", "a", "b"});
+    const auto redundant = diagnose_planar_constraints(request);
+    require(redundant.accepted() && redundant.degrees_of_freedom == 7 && !redundant.redundant_constraints.empty() &&
+        redundant.points == request.points, "redundant persisted labels must not remove extra freedom");
+    ConstraintSolveRequest conflicting;
+    conflicting.points = {{"a",0,0}};
+    conflicting.constraints = {FixedAnchorConstraint{"anchor-one","a",0,0}, FixedAnchorConstraint{"anchor-two","a",1,0}};
+    const auto conflict = diagnose_planar_constraints(conflicting);
+    require(!conflict.accepted() && !conflict.conflicting_constraints.empty() && conflict.points == conflicting.points,
+        "conflicting diagnosis must preserve points and expose stable application IDs");
+}
+
 int main() {
+    test_diagnostic_only_rank_preserves_coordinates();
     test_anchored_rectangle_previews_twelve_to_fourteen_feet();
     test_impossible_locked_measurements_reject_atomically();
     test_underconstrained_system_is_explicit();

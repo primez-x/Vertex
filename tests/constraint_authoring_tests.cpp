@@ -1023,9 +1023,131 @@ void test_boundary_receipt_and_dimension_preview() {
     require(reopened.document.snapshot().entities() == moved.entities(), "batch reopened redo differs");
 }
 
+void test_persisted_component_analysis_excludes_edit_pins() {
+    const auto rectangle = [](std::string id) {
+        return IdentifiedBoundary{std::move(id), "measurement_boundary", {
+            {"ab","a","b",{{0,0},{4,0},0}}, {"bc","b","c",{{4,0},{4,3},0}},
+            {"cd","c","d",{{4,3},{0,3},0}}, {"da","d","a",{{0,3},{0,0},0}}}};
+    };
+    const auto boundary = rectangle("measure");
+    const auto owner = encode_identified_boundary_entity(boundary);
+    auto document = Document::create({owner});
+    document.mark_saved(document.revision());
+    const auto before = document.snapshot();
+    const auto free = analyze_persistent_constraint_component(before, {"measure"});
+    require(free.supported && free.degrees_of_freedom == 8 && free.point_count == 4 &&
+        free.owner_ids == std::vector<std::string>{"measure"} && free.constraint_ids.empty(),
+        "unconstrained boundary analysis must report eight persisted endpoint freedoms");
+    BoundaryGeometryEdit split;
+    split.kind = BoundaryGeometryEditKind::insert_vertex;
+    split.boundary_id = "measure"; split.target_id = "ab"; split.fraction = 0.5;
+    split.new_vertex_id = "inserted"; split.new_segment_id = "inserted-edge";
+    const auto inserted = Document::preview_command(before, EditBoundaryGeometry{before.revision(), split});
+    const auto inserted_analysis = analyze_persistent_constraint_component(inserted, {"measure"});
+    require(inserted_analysis.supported && inserted_analysis.degrees_of_freedom == 10 && inserted_analysis.point_count == 5,
+        "an unconstrained inserted vertex must add two actual persistent freedoms");
+    const auto bindings = std::vector<WallEndpointBinding>{{"measure",WallEndpointRole::start,"ab","a"},
+        {"measure",WallEndpointRole::end,"ab","b"}};
+    const auto level = encode_constraint_entity(relation("level", ConstraintRelationKind::horizontal, bindings));
+    auto candidate = before.entities(); candidate.emplace(level.id, level);
+    const auto level_analysis = analyze_persistent_constraint_component(candidate, {"measure"}, before.revision());
+    require(level_analysis.supported && level_analysis.degrees_of_freedom == 7 && level_analysis.constraint_ids == std::vector<std::string>{"level"},
+        "one stored horizontal relation removes one actual endpoint freedom");
+    ConstraintAuthoringIntent intent;
+    intent.relation_mutations = {ConstraintRelationMutation::upsert(*decode_constraint_entity(level).constraint)};
+    intent.relation_anchor = bindings.front();
+    const auto edit_preview = preview_constraint_authoring(before, intent);
+    require_accepted(edit_preview, "persistent rank comparison fixture must create a valid anchored edit preview");
+    require(edit_preview.degrees_of_freedom() == 5 &&
+        analyze_persistent_constraint_component(edit_preview.candidate_entities(), {"measure"}).degrees_of_freedom == 7,
+        "temporary edit anchor freedom must remain separate from stored component freedom");
+    auto fixed = relation("fixed-a", ConstraintRelationKind::fixed_anchor, {bindings.front()}); fixed.anchor = Vec2{0,0};
+    candidate.emplace(fixed.id, encode_constraint_entity(fixed));
+    require(analyze_persistent_constraint_component(candidate, {"measure"}).degrees_of_freedom == 5,
+        "a persistent fixed anchor must remove two freedoms in addition to the horizontal relation");
+    auto fully_locked = before.entities();
+    for (const auto& edge : boundary.segments) {
+        auto pin = relation("fixed-"+edge.start_vertex_id, ConstraintRelationKind::fixed_anchor,
+            {{boundary.id,WallEndpointRole::start,edge.segment_id,edge.start_vertex_id}});
+        pin.anchor = edge.segment.start; fully_locked.emplace(pin.id, encode_constraint_entity(pin));
+    }
+    const auto locked = analyze_persistent_constraint_component(fully_locked, {"measure"});
+    require(locked.supported && locked.degrees_of_freedom == 0, "four real persisted anchors must report a fully constrained rectangle");
+    auto conflict_entities = fully_locked;
+    auto contradictory_pin = fixed; contradictory_pin.id = "conflicting-a"; contradictory_pin.anchor = Vec2{1,0};
+    conflict_entities.emplace(contradictory_pin.id,encode_constraint_entity(contradictory_pin));
+    const auto conflict = analyze_persistent_constraint_component(conflict_entities,{"measure"});
+    require(!conflict.supported && conflict.degrees_of_freedom == -1 && !conflict.conflicting_constraint_ids.empty(),
+        "conflicting persisted locks must expose their IDs without presenting a valid freedom number");
+    auto duplicate = *decode_constraint_entity(level).constraint; duplicate.id = "level-copy";
+    candidate = before.entities(); candidate.emplace(level.id,level); candidate.emplace(duplicate.id,encode_constraint_entity(duplicate));
+    const auto redundant = analyze_persistent_constraint_component(candidate, {"measure"});
+    require(redundant.supported && redundant.degrees_of_freedom == 7 && !redundant.redundant_constraint_ids.empty() &&
+        std::all_of(redundant.redundant_constraint_ids.begin(), redundant.redundant_constraint_ids.end(),
+            [&](const auto& id) { return id == level.id || id == duplicate.id; }), "redundancy must preserve rank and expose persisted relation IDs");
+
+    candidate = before.entities();
+    candidate.emplace("other",encode_identified_boundary_entity(rectangle("other")));
+    candidate.emplace("isolated",encode_identified_boundary_entity(rectangle("isolated")));
+    candidate.emplace("wall",wall("wall",{0,0},{1,0}));
+    require(analyze_persistent_constraint_component(candidate,{"measure"}).degrees_of_freedom == 8,
+        "coordinate-coincident owners and duplicate vertex names must not imply persistent relationships");
+    auto join = relation("join",ConstraintRelationKind::coincident,
+        {{"measure",WallEndpointRole::start,"ab","a"},{"other",WallEndpointRole::start,"ab","a"}});
+    candidate.emplace(join.id,encode_constraint_entity(join));
+    const auto joined = analyze_persistent_constraint_component(candidate,{"measure"});
+    require(joined.supported && joined.degrees_of_freedom == 14 && joined.point_count == 8 && joined.owner_ids.size() == 2,
+        "explicit shared-point relation must expand only its two owner components");
+    auto wall_join = relation("wall-join",ConstraintRelationKind::coincident,
+        {{"measure",WallEndpointRole::start,"ab","a"},endpoint("wall",WallEndpointRole::start)});
+    candidate.emplace(wall_join.id,encode_constraint_entity(wall_join));
+    const auto mixed = analyze_persistent_constraint_component(candidate,{"measure"});
+    require(mixed.supported && mixed.degrees_of_freedom == 16 && mixed.point_count == 10 && mixed.owner_ids.size() == 3,
+        "mixed wall and boundary component must include all independently scoped endpoints and only explicit locks");
+    const auto universe = mixed.owner_ids;
+    candidate.erase(join.id); candidate.erase(wall_join.id);
+    require(analyze_persistent_constraint_component(candidate,universe).degrees_of_freedom == 20,
+        "before/after lock removal must retain the same owner universe rather than hide disconnected freedom");
+    candidate = before.entities(); candidate.emplace(level.id,level);
+    candidate.emplace("copy",encode_identified_boundary_entity(rectangle("copy")));
+    require(analyze_persistent_constraint_component(candidate,{"measure"}).degrees_of_freedom == 7 &&
+        analyze_persistent_constraint_component(candidate,{"copy"}).degrees_of_freedom == 8,
+        "a free copy must not inherit its source component's locks or point identities");
+    auto unknown = level; unknown.id = "unknown"; unknown.properties["version"] = 99;
+    candidate.emplace(unknown.id,unknown);
+    const auto unavailable = analyze_persistent_constraint_component(candidate,{"measure"});
+    require(!unavailable.supported && unavailable.degrees_of_freedom == -1 && !unavailable.diagnostics.empty(),
+        "connected unknown relations must refuse a partial freedom number");
+    candidate.erase(unknown.id);
+    unknown.properties["entity_ids"] = {"copy"};
+    for (auto& binding : unknown.properties["bindings"]) binding["owner_id"] = "copy";
+    candidate.emplace(unknown.id,unknown);
+    require(analyze_persistent_constraint_component(candidate,{"measure"}).degrees_of_freedom == 7,
+        "known-scope disconnected unsupported relations must not suppress a supported component");
+    unknown.properties["bindings"][0].erase("owner_id"); candidate[unknown.id] = unknown;
+    require(!analyze_persistent_constraint_component(candidate,{"measure"}).supported,
+        "indeterminate constraint owner scope must fail closed");
+    candidate = before.entities(); auto malformed = level;
+    malformed.properties["bindings"][1]["vertex_id"] = "a"; candidate.emplace(malformed.id,malformed);
+    require(!analyze_persistent_constraint_component(candidate,{"measure"}).supported,
+        "ambiguous endpoint roles must not produce a partial number");
+    candidate = before.entities(); candidate.at("measure").properties["segments"][0]["sweep_radians"] = 0.2;
+    require(!analyze_persistent_constraint_component(candidate,{"measure"}).supported &&
+        !analyze_persistent_constraint_component(before,{"missing"}).supported &&
+        !analyze_persistent_constraint_component(before,{}).supported,
+        "curved owners and missing seeds must be explicitly unavailable");
+    candidate = before.entities(); candidate.emplace("curve",wall("curve",{0,0},{1,0},0.2));
+    require(!analyze_persistent_constraint_component(candidate,{"curve"}).supported,
+        "curved wall endpoints must remain unavailable until a correct curve formulation exists");
+    require(document.snapshot().entities() == before.entities() && document.revision() == before.revision() &&
+        document.snapshot().history().size() == before.history().size() && document.snapshot().saved_revision_optional() == before.saved_revision_optional(),
+        "all persistent analysis paths must leave revision, history, entities and saved state unchanged");
+}
+
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_persisted_component_analysis_excludes_edit_pins();
         test_boundary_horizontal_authoring();
         test_boundary_cross_relations_and_fixed_length();
         test_boundary_receipt_and_dimension_preview();

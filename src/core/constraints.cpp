@@ -313,7 +313,8 @@ DirectionResidual parallel_residual(const MutablePoint& a, const MutablePoint& b
 
 }  // namespace
 
-ConstraintPreview solve_planar_constraints(const ConstraintSolveRequest& request) {
+static ConstraintPreview planar_constraint_preview(const ConstraintSolveRequest& request,
+                                                   bool diagnostic_only) {
     std::map<ConstraintPointId, std::size_t> point_indices;
     std::string validation_message;
     std::optional<ConstraintId> bad_constraint;
@@ -425,6 +426,19 @@ ConstraintPreview solve_planar_constraints(const ConstraintSolveRequest& request
                 add_diagnostic(preview, ConstraintDiagnosticKind::conflicting,
                                "solver diagnosed a conflicting constraint", id);
             }
+            return preview;
+        }
+
+        if (diagnostic_only) {
+            if (preview.degrees_of_freedom < 0) {
+                add_diagnostic(preview, ConstraintDiagnosticKind::solver_failure,
+                               "PlaneGCS rank diagnosis is unavailable");
+                return preview;
+            }
+            preview.status = ConstraintSolveStatus::accepted;
+            if (preview.degrees_of_freedom > 0)
+                add_diagnostic(preview, ConstraintDiagnosticKind::underconstrained,
+                               "endpoint coordinates retain freedom under the supplied constraints");
             return preview;
         }
 
@@ -572,6 +586,14 @@ ConstraintPreview solve_planar_constraints(const ConstraintSolveRequest& request
                        "PlaneGCS raised an unknown exception");
         return preview;
     }
+}
+
+ConstraintPreview solve_planar_constraints(const ConstraintSolveRequest& request) {
+    return planar_constraint_preview(request, false);
+}
+
+ConstraintPreview diagnose_planar_constraints(const ConstraintSolveRequest& request) {
+    return planar_constraint_preview(request, true);
 }
 
 }  // namespace sketch

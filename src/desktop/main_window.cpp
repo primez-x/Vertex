@@ -5350,6 +5350,12 @@ public:
             layout->addWidget(new QLabel("Gray: original    Blue: proposed", &dialog));
             dialog.resize(520, 520);
         }
+        auto* freedom = new QLabel(&dialog);
+        freedom->setObjectName(QStringLiteral("boundaryTransformFreedom"));
+        freedom->setWordWrap(true);
+        freedom->setTextFormat(Qt::PlainText);
+        freedom->setToolTip(persistentFreedomHelp());
+        layout->addWidget(freedom);
         auto* status = new QLabel(&dialog);
         status->setObjectName(QStringLiteral("boundaryTransformStatus"));
         status->setWordWrap(true);
@@ -5360,6 +5366,7 @@ public:
         const auto update_preview = [&] {
             if (!supported_selection) return;
             candidate_command.reset();
+            freedom->clear();
             try {
                 if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
                 if (m_boundary_session) throw std::invalid_argument("Finish or cancel the active boundary before transforming the selection.");
@@ -5406,6 +5413,7 @@ public:
                 add_graph(proposed, candidate.second, true);
                 preview->setEntities(std::move(geometry));
                 preview->fitView();
+                freedom->setText(persistentFreedomSummary(source, proposed, original->id, candidate.second));
                 candidate_command = std::move(candidate);
                 status->clear();
                 buttons->button(QDialogButtonBox::Apply)->setEnabled(true);
@@ -5428,6 +5436,7 @@ public:
                 status->setText(lastError());
                 if (supported_selection) {
                     candidate_command.reset();
+                    freedom->clear();
                     preview->setEntities({});
                     buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
                 }
@@ -5458,12 +5467,57 @@ public:
         dialog.exec();
     }
 
+    QString persistentFreedomSummary(const DocumentSnapshot& before,
+        const DocumentSnapshot& after, const std::string& owner_id,
+        const std::string& proposed_owner_id) const {
+        auto source = analyze_persistent_constraint_component(before, {owner_id});
+        auto proposed = analyze_persistent_constraint_component(after, {proposed_owner_id});
+        const auto value = [](const PersistentConstraintComponentAnalysis& analysis) {
+            return analysis.supported && analysis.degrees_of_freedom >= 0
+                ? QString::number(analysis.degrees_of_freedom) : QStringLiteral("unavailable");
+        };
+        if (owner_id != proposed_owner_id) {
+            return QStringLiteral("Source coordinate freedom: %1 · Copy coordinate freedom: %2")
+                .arg(value(source), value(proposed));
+        }
+        std::set<std::string> universe{owner_id};
+        for (;;) {
+            const auto size = universe.size();
+            universe.insert(source.owner_ids.begin(), source.owner_ids.end());
+            universe.insert(proposed.owner_ids.begin(), proposed.owner_ids.end());
+            const std::vector<std::string> seeds(universe.begin(), universe.end());
+            source = analyze_persistent_constraint_component(before, seeds);
+            proposed = analyze_persistent_constraint_component(after, seeds);
+            if (universe.size() == size) break;
+        }
+        if (!source.supported || !proposed.supported ||
+            source.degrees_of_freedom < 0 || proposed.degrees_of_freedom < 0)
+            return QStringLiteral("Stored coordinate freedom: %1 → %2").arg(value(source), value(proposed));
+        const auto delta = proposed.degrees_of_freedom - source.degrees_of_freedom;
+        return QStringLiteral("Stored coordinate freedom: %1 → %2 (%3%4) · %5 %6")
+            .arg(source.degrees_of_freedom).arg(proposed.degrees_of_freedom)
+            .arg(delta > 0 ? QStringLiteral("+") : QString{}).arg(delta).arg(universe.size())
+            .arg(universe.size() == 1 ? QStringLiteral("object") : QStringLiteral("objects"));
+    }
+
+    static QString persistentFreedomHelp() {
+        return QStringLiteral("Independent X/Y endpoint coordinates across the connected objects under saved relationships. "
+            "Includes translation and rotation; excludes temporary editing anchors, wall thickness, height and curve parameters. "
+            "Before and after use the same connected object scope. Unavailable means the model cannot be diagnosed safely.");
+    }
+
     void showBoundaryVertexInsertion() {
+        const auto context = captureModalContext();
+        const auto workspace = m_workspace;
+        const auto source = authoringSnapshot();
+        const auto selected = selectedEntity();
+        std::optional<EditBoundaryGeometry> candidate;
+        std::optional<DocumentSnapshot> candidate_snapshot;
         QDialog dialog(owner);
         styleDialog(dialog);
         dialog.setObjectName(QStringLiteral("boundaryVertexInsertionDialog"));
         dialog.setWindowTitle(QStringLiteral("Insert boundary vertex"));
-        dialog.resize(440, 220);
+        dialog.resize(600, 560);
         auto* layout = new QVBoxLayout(&dialog);
         auto* form = new QFormLayout;
         auto* segment = new QComboBox(&dialog);
@@ -5475,6 +5529,22 @@ public:
         form->addRow(QStringLiteral("Edge"), segment);
         form->addRow(QStringLiteral("Fraction (0..1)"), fraction);
         layout->addLayout(form);
+        auto* preview = new PlanCanvas(&dialog);
+        preview->setObjectName(QStringLiteral("boundaryVertexInsertionPreview"));
+        preview->setAccessibleName(QStringLiteral("Boundary insertion preview"));
+        preview->setMinimumHeight(240);
+        preview->setGridEnabled(false);
+        preview->setOverviewMapEnabled(false);
+        preview->setSelectionTransformEnabled(false, false);
+        preview->setSelectionAxisResizeEnabled(false);
+        layout->addWidget(preview, 1);
+        layout->addWidget(new QLabel(QStringLiteral("Gray: original    Blue: proposed    Green: inserted vertex"), &dialog));
+        auto* freedom = new QLabel(&dialog);
+        freedom->setObjectName(QStringLiteral("boundaryVertexInsertionFreedom"));
+        freedom->setTextFormat(Qt::PlainText);
+        freedom->setWordWrap(true);
+        freedom->setToolTip(persistentFreedomHelp());
+        layout->addWidget(freedom);
         auto* status = new QLabel(&dialog);
         status->setObjectName(QStringLiteral("boundaryVertexInsertionStatus"));
         status->setWordWrap(true);
@@ -5483,15 +5553,16 @@ public:
                                              &dialog);
         buttons->setObjectName(QStringLiteral("boundaryVertexInsertionButtons"));
         layout->addWidget(buttons);
-        const auto selected = selectedEntity();
         if (!selected.has_value() || !is_closed_boundary_entity(selected->type)) {
             status->setText(QStringLiteral("Select an identified closed boundary first."));
             buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
         } else {
             try {
                 const auto identified = decode_identified_boundary_entity(*selected);
-                for (const auto& edge : identified.segments) {
-                    segment->addItem(QString::fromStdString(edge.segment_id),
+                for (std::size_t i = 0; i < identified.segments.size(); ++i) {
+                    const auto& edge = identified.segments[i];
+                    segment->addItem(QStringLiteral("Edge %1 · %2").arg(i + 1)
+                                         .arg(format_length(segment_length(edge.segment), context.metric_units)),
                                      QString::fromStdString(edge.segment_id));
                 }
                 if (segment->count() == 0) {
@@ -5504,13 +5575,85 @@ public:
                 buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
             }
         }
+        const auto context_valid = [&] {
+            return modalContextUnchanged(context) && m_workspace == workspace &&
+                m_document->is_editable() && !m_boundary_session;
+        };
+        const auto update_preview = [&] {
+            candidate.reset();
+            candidate_snapshot.reset();
+            freedom->clear();
+            buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+            std::vector<CanvasEntity> geometry;
+            try {
+                if (!selected || !is_closed_boundary_entity(selected->type))
+                    throw std::invalid_argument("Select an identified closed boundary first.");
+                geometry.push_back({QStringLiteral("source"), QStringLiteral("source"),
+                    read_boundary(selected->properties), 0, false});
+                if (!context_valid()) throw std::invalid_argument(
+                    "The editing context changed or a drawing is active. Reopen this tool after finishing the drawing.");
+                auto command = boundaryVertexInsertionCommand(source, selected->id,
+                    segment->currentData().toString(), fraction->text());
+                auto proposed = Document::preview_command(source, command);
+                const auto boundary = decode_identified_boundary_entity(proposed.entities().at(selected->id));
+                const auto edge = std::find_if(boundary.segments.begin(), boundary.segments.end(),
+                    [&](const auto& item) { return item.segment_id == segment->currentData().toString().toStdString(); });
+                if (edge == boundary.segments.end()) throw std::invalid_argument("Inserted edge is unavailable.");
+                CanvasEntity proposed_geometry{QStringLiteral("proposed"), QStringLiteral("boundary"),
+                    boundary_geometry(boundary), 0, false};
+                proposed_geometry.stroke_color = QColor(36, 107, 206);
+                geometry.push_back(std::move(proposed_geometry));
+                const auto p = edge->segment.end;
+                const auto r = std::max(0.035, perimeter(boundary_geometry(boundary)) * 0.008);
+                CanvasEntity marker{QStringLiteral("inserted"), QStringLiteral("marker"),
+                    {{{p.x-r,p.y},{p.x+r,p.y},0},{{p.x,p.y-r},{p.x,p.y+r},0}}, 0, false};
+                marker.stroke_color = QColor(22, 150, 85);
+                geometry.push_back(std::move(marker));
+                freedom->setText(persistentFreedomSummary(source, proposed, selected->id, selected->id));
+                candidate = std::move(command);
+                candidate_snapshot = std::move(proposed);
+                status->clear();
+                buttons->button(QDialogButtonBox::Apply)->setEnabled(true);
+            } catch (const std::exception& error) {
+                status->setText(QString::fromUtf8(error.what()));
+            }
+            preview->setEntities(std::move(geometry));
+            std::vector<CanvasLabel> labels;
+            if (selected && is_closed_boundary_entity(selected->type)) {
+                const auto original = read_boundary(selected->properties);
+                for (std::size_t i = 0; i < original.size(); ++i) {
+                    const auto& edge = original[i];
+                    labels.push_back({{}, {(edge.start.x + edge.end.x)/2, (edge.start.y + edge.end.y)/2},
+                        QStringLiteral("E%1").arg(i + 1)});
+                }
+            }
+            preview->setLabels(std::move(labels));
+            preview->fitView();
+        };
+        QObject::connect(segment, &QComboBox::currentIndexChanged, &dialog, update_preview);
+        QObject::connect(fraction, &QLineEdit::textChanged, &dialog, update_preview);
+        QTimer stale_timer(&dialog);
+        stale_timer.setInterval(100);
+        QObject::connect(&stale_timer, &QTimer::timeout, &dialog, [&] {
+            if (candidate && !context_valid()) update_preview();
+        });
+        stale_timer.start();
+        update_preview();
         QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
         QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked,
                          &dialog, [&] {
-            if (insertSelectedBoundaryVertex(segment->currentData().toString(), fraction->text())) {
+            if (!candidate || !candidate_snapshot) return;
+            try {
+                if (!context_valid()) { update_preview(); return; }
+                const auto exact = Document::preview_command(source, *candidate);
+                if (exact.entities() != candidate_snapshot->entities())
+                    throw std::invalid_argument("Insertion preview changed. Reopen the tool.");
+                applyDocumentCommand(*candidate);
+                clearError();
+                refresh();
                 dialog.accept();
-            } else {
-                status->setText(lastError());
+            } catch (const std::exception& error) {
+                status->setText(QString::fromUtf8(error.what()));
             }
         });
         dialog.exec();
@@ -13256,6 +13399,47 @@ public:
         }
     }
 
+    EditBoundaryGeometry boundaryVertexInsertionCommand(const DocumentSnapshot& source,
+        const std::string& owner_id, const QString& segment_id, const QString& fraction_text) {
+        const auto found = source.entities().find(owner_id);
+        if (found == source.entities().end() || !is_closed_boundary_entity(found->second.type))
+            throw std::invalid_argument("Select an identified closed boundary first.");
+        const auto version = inspect_boundary_entity_version(found->second);
+        if (version.format == BoundaryEntityFormat::unsupported_version)
+            throw std::invalid_argument("This boundary uses an unsupported model version.");
+        if (version.format == BoundaryEntityFormat::anonymous_legacy)
+            throw std::invalid_argument("This legacy boundary needs an explicit identity upgrade before vertex insertion.");
+        bool ok = false;
+        const auto fraction = fraction_text.trimmed().toDouble(&ok);
+        if (!ok || !std::isfinite(fraction) || fraction <= 0.0 || fraction >= 1.0)
+            throw std::invalid_argument("Insertion fraction must be a finite value strictly between 0 and 1.");
+        const auto identified = decode_identified_boundary_entity(found->second);
+        const auto target_segment = segment_id.trimmed().toStdString();
+        if (std::none_of(identified.segments.begin(), identified.segments.end(),
+            [&](const auto& edge) { return edge.segment_id == target_segment; }))
+            throw std::invalid_argument("The selected boundary edge was not found.");
+        BoundaryGeometryEdit edit;
+        edit.boundary_id = identified.id;
+        edit.kind = BoundaryGeometryEditKind::insert_vertex;
+        edit.target_id = target_segment;
+        edit.fraction = fraction;
+        edit.new_vertex_id = new_id("vertex");
+        edit.new_segment_id = new_id("segment");
+        for (const auto& [id, entity] : source.entities()) {
+            (void)id;
+            if (entity.type != "dimension") continue;
+            const auto decoded = decode_boundary_dimension_entity(entity);
+            if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+            const auto& dimension = *decoded.dimension;
+            if (dimension.boundary_id == edit.boundary_id && dimension.kind == BoundaryDimensionKind::segment_length &&
+                dimension.segment_id == edit.target_id && dimension.placement == BoundaryDimensionPlacement::automatic) {
+                edit.new_dimension_id = new_id("dimension");
+                break;
+            }
+        }
+        return {source.revision(), std::move(edit)};
+    }
+
     bool insertSelectedBoundaryVertex(const QString& segment_id, const QString& fraction_text) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
@@ -13263,53 +13447,7 @@ public:
         }
         try {
             const auto source = authoringSnapshot();
-            const auto found = source.entities().find(m_selected_id.toStdString());
-            if (found == source.entities().end() || !is_closed_boundary_entity(found->second.type)) {
-                throw std::invalid_argument("Select an identified closed boundary first.");
-            }
-            const auto version = inspect_boundary_entity_version(found->second);
-            if (version.format == BoundaryEntityFormat::unsupported_version) {
-                throw std::invalid_argument("This boundary uses an unsupported model version.");
-            }
-            if (version.format == BoundaryEntityFormat::anonymous_legacy) {
-                throw std::invalid_argument(
-                    "This legacy boundary needs an explicit identity upgrade before vertex insertion.");
-            }
-            bool ok = false;
-            const auto fraction = fraction_text.trimmed().toDouble(&ok);
-            if (!ok || !std::isfinite(fraction) || fraction <= 0.0 || fraction >= 1.0) {
-                throw std::invalid_argument("Insertion fraction must be a finite value strictly between 0 and 1.");
-            }
-            const auto identified = decode_identified_boundary_entity(found->second);
-            const auto target_segment = segment_id.trimmed().toStdString();
-            const auto target_index = std::find_if(
-                identified.segments.begin(), identified.segments.end(),
-                [&](const auto& edge) { return edge.segment_id == target_segment; });
-            if (target_index == identified.segments.end()) {
-                throw std::invalid_argument("The selected boundary edge was not found.");
-            }
-            BoundaryGeometryEdit edit;
-            edit.boundary_id = identified.id;
-            edit.kind = BoundaryGeometryEditKind::insert_vertex;
-            edit.target_id = target_segment;
-            edit.fraction = fraction;
-            edit.new_vertex_id = new_id("vertex");
-            edit.new_segment_id = new_id("segment");
-            for (const auto& [id, entity] : source.entities()) {
-                (void)id;
-                if (entity.type != "dimension") continue;
-                const auto decoded = decode_boundary_dimension_entity(entity);
-                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
-                const auto& dimension = *decoded.dimension;
-                if (dimension.boundary_id == edit.boundary_id &&
-                    dimension.kind == BoundaryDimensionKind::segment_length &&
-                    dimension.segment_id == edit.target_id &&
-                    dimension.placement == BoundaryDimensionPlacement::automatic) {
-                    edit.new_dimension_id = new_id("dimension");
-                    break;
-                }
-            }
-            const EditBoundaryGeometry command{source.revision(), std::move(edit)};
+            const auto command = boundaryVertexInsertionCommand(source, m_selected_id.toStdString(), segment_id, fraction_text);
             (void)Document::preview_command(source, command);
             applyDocumentCommand(command);
             clearError();

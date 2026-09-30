@@ -1463,6 +1463,162 @@ ConstraintAuthoringPreview preview_constraint_authoring(
     return ConstraintAuthoringBuilder::build(snapshot, intent);
 }
 
+PersistentConstraintComponentAnalysis analyze_persistent_constraint_component(
+    const Entities& entities, const std::vector<std::string>& seed_owner_ids,
+    std::optional<Revision> revision) {
+    PersistentConstraintComponentAnalysis result;
+    try {
+        if (seed_owner_ids.empty()) invalid("Select at least one endpoint owner for persistent analysis");
+        std::set<std::string, std::less<>> affected;
+        for (const auto& id : seed_owner_ids) {
+            if (id.empty() || !entities.contains(id)) invalid("Persistent analysis seed owner does not exist: " + id);
+            affected.insert(id);
+        }
+        struct ScopedRelation {
+            std::string id;
+            std::set<std::string, std::less<>> owners;
+            std::optional<PersistentConstraint> relation;
+            std::string error;
+        };
+        std::vector<ScopedRelation> relations;
+        for (const auto& [id, entity] : entities) {
+            if (entity.type != "constraint") continue;
+            ScopedRelation item{id, {}, {}, {}};
+            // A malformed relation can be excluded only when every possible
+            // owner is known. Do not infer scope from partial bindings.
+            try {
+                if (!entity.properties.is_object()) invalid("constraint properties are not an object");
+                const auto& bindings = entity.properties.at("bindings");
+                if (!bindings.is_array() || bindings.empty()) invalid("constraint bindings have no owner scope");
+                const auto add_owner = [&](const json& value) {
+                    if (!value.is_string() || value.get_ref<const std::string&>().empty())
+                        invalid("constraint owner scope is ambiguous");
+                    item.owners.insert(value.get<std::string>());
+                };
+                for (const auto& binding : bindings) {
+                    if (!binding.is_object() || !binding.contains("owner_id"))
+                        invalid("constraint binding has no owner scope");
+                    add_owner(binding.at("owner_id"));
+                }
+                for (const auto* key : {"entity_ids", "wall_ids"}) {
+                    const auto declared = entity.properties.find(key);
+                    if (declared == entity.properties.end()) continue;
+                    if (!declared->is_array() || declared->empty()) invalid("declared constraint owner scope is ambiguous");
+                    for (const auto& owner : *declared) add_owner(owner);
+                }
+            } catch (const std::exception& error) {
+                invalid("Constraint " + id + " has indeterminate owner scope: " + error.what());
+            }
+            try {
+                if (entity.id != id) invalid("constraint map identity differs from its entity identity");
+                const auto decoded = decode_constraint_entity(entity);
+                item.relation = decoded.constraint;
+                if (!decoded.supported()) item.error = decoded.unsupported_reason;
+            } catch (const std::exception& error) {
+                item.error = error.what();
+            }
+            relations.push_back(std::move(item));
+        }
+        bool expanded = true;
+        while (expanded) {
+            expanded = false;
+            for (const auto& item : relations) {
+                if (!item.relation || !std::any_of(item.owners.begin(), item.owners.end(),
+                        [&](const auto& id) { return affected.contains(id); })) continue;
+                for (const auto& binding : item.relation->bindings)
+                    expanded = affected.insert(binding.owner_id).second || expanded;
+            }
+        }
+        result.owner_ids.assign(affected.begin(), affected.end());
+        for (const auto& item : relations) {
+            if (!std::any_of(item.owners.begin(), item.owners.end(),
+                    [&](const auto& id) { return affected.contains(id); })) continue;
+            result.constraint_ids.push_back(item.id);
+            if (!item.relation) invalid("Constraint " + item.id + " cannot be analyzed: " + item.error);
+        }
+        std::map<std::string, IdentifiedBoundary, std::less<>> boundaries;
+        std::map<std::string, Segment, std::less<>> walls;
+        std::map<std::string, Vec2, std::less<>> positions;
+        const auto add_point = [&](const WallEndpointBinding& binding, Vec2 coordinate) {
+            const auto [found, inserted] = positions.emplace(point_id(binding), coordinate);
+            if (!inserted && (found->second.x != coordinate.x || found->second.y != coordinate.y))
+                invalid("Shared endpoint identity has ambiguous coordinates");
+        };
+        for (const auto& id : affected) {
+            const auto found = entities.find(id);
+            if (found == entities.end()) invalid("Persistent component owner does not exist: " + id);
+            const auto& entity = found->second;
+            if (entity.id != id) invalid("Persistent owner map identity differs from its entity identity: " + id);
+            if (entity.type == "wall") {
+                validate_wall_host(id, entities);
+                const auto baseline = read_baseline(entity);
+                walls.emplace(id, baseline);
+                for (const auto role : {WallEndpointRole::start, WallEndpointRole::end})
+                    add_point({id,role}, endpoint_position(baseline,role));
+            } else if (can_recognize_boundary_entity_type(entity.type)) {
+                auto boundary = decode_identified_boundary_entity(entity);
+                for (const auto& edge : boundary.segments) {
+                    if (edge.segment.sweep_radians != 0.0)
+                        invalid("Persistent endpoint analysis does not support curved boundary: " + id);
+                    add_point({id,WallEndpointRole::start,edge.segment_id,edge.start_vertex_id}, edge.segment.start);
+                }
+                boundaries.emplace(id, std::move(boundary));
+            } else {
+                invalid("Persistent endpoint analysis requires a straight wall or identified closed boundary: " + id);
+            }
+        }
+        const auto resolve = [&](const WallEndpointBinding& binding) {
+            validate_binding(binding);
+            if (walls.contains(binding.owner_id)) {
+                if (!binding.segment_id.empty() || !binding.vertex_id.empty())
+                    invalid("Wall endpoint binding contains boundary child identities");
+            } else {
+                const auto owner = boundaries.find(binding.owner_id);
+                if (owner == boundaries.end()) invalid("Constraint endpoint owner is outside its component");
+                const auto edge = std::find_if(owner->second.segments.begin(), owner->second.segments.end(),
+                    [&](const auto& value) { return value.segment_id == binding.segment_id; });
+                if (edge == owner->second.segments.end() ||
+                    (binding.role == WallEndpointRole::start ? edge->start_vertex_id : edge->end_vertex_id) != binding.vertex_id)
+                    invalid("Constraint binding does not resolve its stable boundary endpoint");
+            }
+            if (!positions.contains(point_id(binding))) invalid("Constraint binding has no unique endpoint variable");
+        };
+        ConstraintSolveRequest request;
+        request.expected_revision = revision.value_or(0);
+        for (const auto& [id, position] : positions) request.points.push_back({id,position.x,position.y});
+        result.point_count = request.points.size();
+        SolverConstraintDescriptions descriptions;
+        for (const auto& item : relations) {
+            if (!item.relation || !affected.contains(item.relation->bindings.front().owner_id)) continue;
+            for (const auto& binding : item.relation->bindings) resolve(binding);
+            append_relation(request, *item.relation);
+            descriptions.emplace(item.id, std::string(constraint_relation_name(item.relation->relation)) +
+                " persisted relation " + item.id);
+        }
+        const auto diagnosed = diagnose_planar_constraints(request);
+        result.redundant_constraint_ids = diagnosed.redundant_constraints;
+        result.conflicting_constraint_ids = diagnosed.conflicting_constraints;
+        result.diagnostics = solver_diagnostics(diagnosed, descriptions);
+        if (diagnosed.accepted() && diagnosed.degrees_of_freedom >= 0 &&
+            static_cast<std::size_t>(diagnosed.degrees_of_freedom) <= request.points.size()*2) {
+            result.supported = true;
+            result.degrees_of_freedom = diagnosed.degrees_of_freedom;
+        } else if (result.diagnostics.empty()) {
+            result.diagnostics.push_back("Persistent endpoint rank diagnosis is unavailable");
+        }
+    } catch (const std::exception& error) {
+        result.supported = false;
+        result.degrees_of_freedom = -1;
+        result.diagnostics.push_back(error.what());
+    }
+    return result;
+}
+
+PersistentConstraintComponentAnalysis analyze_persistent_constraint_component(
+    const DocumentSnapshot& snapshot, const std::vector<std::string>& seed_owner_ids) {
+    return analyze_persistent_constraint_component(snapshot.entities(), seed_owner_ids, snapshot.revision());
+}
+
 Revision apply_constraint_authoring(Document& document,
                                      const ConstraintAuthoringPreview& preview) {
     if (!preview.accepted_) {

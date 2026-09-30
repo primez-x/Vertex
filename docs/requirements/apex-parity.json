@@ -799,6 +799,9 @@
         "src/core/constraint_integrity.cpp",
         "tests/constraint_entity_tests.cpp",
         "tests/constraint_integrity_tests.cpp",
+        "include/sketch/constraints.hpp",
+        "src/core/constraints.cpp",
+        "tests/constraints_tests.cpp",
         "include/sketch/constraint_authoring.hpp",
         "src/core/constraint_authoring.cpp",
         "src/desktop/constraint_dialog.cpp",
@@ -807,7 +810,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Source review correction (2026-09-20): The constraint editor is limited to straight architectural wall endpoints; measurement-boundary vertices and applicable curves are not supported. Seven persistent straight-wall endpoint relations now have add/edit/remove controls, source-bound solver previews and atomic Apply in both workspaces. V14 integrated tests pass Debug/Release; final hardening and independent service/UI review remain. Boundary vertex and curve relations remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "The constraint editor supports seven persisted endpoint relationships for straight architectural walls and identified measurement boundaries, with source-bound previews and atomic Apply. A separate immutable PlaneGCS diagnosis reports saved coordinate freedom without temporary editing anchors; before/after scope includes both component closures. Unsupported semantics report unavailable. Release regressions cover coordinate rank, redundancy, conflicts, mixed-component diagnosis, source immutability and dialog invalidation. Curved-owner relations, mixed wall/boundary authoring, level dependency propagation and production qualification remain open. Historical acceptance artifacts do not certify these changes."
     },
     {
       "id": "GEO-CON-002",
@@ -1197,6 +1200,11 @@
         "src/core/boundary_integrity.cpp",
         "src/core/document.cpp",
         "tests/boundary_integrity_tests.cpp",
+        "include/sketch/constraints.hpp",
+        "src/core/constraints.cpp",
+        "include/sketch/constraint_authoring.hpp",
+        "src/core/constraint_authoring.cpp",
+        "tests/constraint_authoring_tests.cpp",
         "include/sketch/geometry_operations.hpp",
         "src/core/geometry_operations.cpp",
         "tests/geometry_operations_tests.cpp",
@@ -1208,7 +1216,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Typed vertex insertion now preserves the boundary and existing topology identities, archives original construction inputs, migrates endpoint dimensions and constraints, and creates a second-piece automatic dimension where applicable. The normal Draw First path, subsequent edits, cloning, undo/redo and save/reopen passed focused Release native regressions, including direct inserted-corner dragging and repeated split/clone replay. Six related Release checks passed: desktop workflow, workspace recovery, boundary workflow, boundary integrity, geometry operations, and project storage. Legacy anonymous geometry still requires an identity upgrade. Wall/object insertion, constraint degrees-of-freedom reporting, broader compatibility acceptance, and production qualification remain open. Historical acceptance artifacts do not certify these new changes."
+      "implementation_note": "Typed vertex insertion preserves topology identities, archives construction inputs, migrates endpoint dimensions and constraints, and creates a second-piece automatic dimension where applicable. The insertion dialog now shows numbered edges, the canonical split and inserted vertex, plus persistent-only before/after coordinate freedom for supported straight components. It retains the exact candidate command, rejects invalid or stale contexts and commits one undoable edit. Transform/copy previews report source and proposed/copy component freedom. Release regressions cover cancellation, invalidation, exact Apply, undo/redo and save/reopen. Legacy anonymous geometry requires an identity upgrade. Wall/object insertion, curved-owner freedom, broader compatibility acceptance and production qualification remain open. Historical acceptance artifacts do not certify these changes."
     },
     {
       "id": "APX-EDIT-004",

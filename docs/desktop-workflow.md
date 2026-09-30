@@ -454,9 +454,17 @@ Opening, slab, building-object and organization dialogs retain document identity
 revision, selection, active layer and units across their prompts. A changed
 context rejects the old intent rather than directing it to a different source.
 
-The wall constraint integration remains under qualification. Curved-wall
-constraints, persistent boundary vertex bindings, level dependency propagation
-and the complete production constraint workflow are still required.
+The editor also supports straight identified measurement-boundary vertices.
+Its stored coordinate freedom label describes the saved endpoint relationships
+across the connected objects; the separate edit-preview diagnostics include
+temporary anchors used for the proposed movement. Accepted previews show the
+before/after change over the same object scope. Removing a connection therefore
+retains both objects in the comparison. Invalidating the preview restores the
+source value. Unsupported analysis explicitly reports unavailable.
+
+The constraint integration remains under qualification. Curved-owner relations,
+mixed wall/boundary authoring, level dependency propagation and the complete
+production constraint workflow are still required.
 
 ## Selection transforms
 
