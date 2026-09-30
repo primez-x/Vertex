@@ -13,7 +13,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $build = Join-Path $root ('build/windows-' + $Configuration.ToLowerInvariant())
 $names = @('windows_import_worker_tests.exe', 'windows_import_worker_probe.exe',
            'assistance_workflow_tests.exe', 'dxf_desktop_workflow_tests.exe',
-           'ifc_desktop_workflow_tests.exe', 'vertex-import-worker.exe')
+           'ifc_desktop_workflow_tests.exe', 'cad_library_worker_tests.exe', 'vertex-import-worker.exe')
 $captureLimitBytes = 1MB
 function Get-BinaryEvidence {
     @($names | ForEach-Object {
@@ -42,10 +42,13 @@ function Get-CaptureFailure($Stdout, $Stderr) {
 function New-ImmutableDesktopFixtureRoot([string]$CaptureRoot) {
     $runtime = Join-Path $CaptureRoot 'immutable-desktop-runtime'
     $null = New-Item -ItemType Directory -Path $runtime
-    foreach ($name in @('dxf_desktop_workflow_tests.exe', 'ifc_desktop_workflow_tests.exe',
+    foreach ($name in @('dxf_desktop_workflow_tests.exe', 'ifc_desktop_workflow_tests.exe', 'cad_library_worker_tests.exe',
                          'vertex-import-worker.exe', 'vertex-planegcs.dll')) {
         Copy-Item -LiteralPath (Join-Path $build $name) -Destination $runtime
     }
+    # The CAD bridge loads its pinned interpreter lazily from this exact sibling
+    # directory. Include native extensions before assigning immutable ACLs.
+    Copy-Item -LiteralPath (Join-Path $build 'cad-runtime') -Destination $runtime -Recurse
     $qtBin = Join-Path $root '.deps/qt/6.8.3/msvc2022_64/bin'
     $qtSuffix = if ($Configuration -eq 'Debug') { 'd' } else { '' }
     foreach ($name in @("Qt6Core$qtSuffix.dll", "Qt6Gui$qtSuffix.dll",
@@ -149,16 +152,22 @@ public static class BoundedWorkerCapture {
         }
         $report.host_in_job = $inJob
         $report.binaries_before = Get-BinaryEvidence
+        if (!$CaptureSelfTest) {
+            & (Join-Path $root '.deps/cad-runtime/3.13.15/python.exe') -I -B (
+                Join-Path $root 'tests/generate_cad_library_worker_fixtures.py') (
+                Join-Path $CaptureDirectory 'cad-fixtures')
+            if ($LASTEXITCODE -ne 0) { throw 'CAD library fixture generation failed.' }
+        }
         $desktopFixtureRoot = if ($CaptureSelfTest) { $null } else {
             New-ImmutableDesktopFixtureRoot $CaptureDirectory
         }
         $cases = if ($CaptureSelfTest) { @('capture-stdout-overflow', 'capture-stderr-overflow', 'capture-at-limit',
                 'capture-empty', 'capture-open-failure') }
                  else { @('windows_import_worker_tests.exe', 'assistance_workflow_tests.exe',
-                          'dxf_desktop_workflow_tests.exe', 'ifc_desktop_workflow_tests.exe') }
+                          'dxf_desktop_workflow_tests.exe', 'ifc_desktop_workflow_tests.exe', 'cad_library_worker_tests.exe') }
         foreach ($name in $cases) {
             $executable = if ($CaptureSelfTest) { (Get-Process -Id $PID).Path }
-                elseif ($name -in @('dxf_desktop_workflow_tests.exe', 'ifc_desktop_workflow_tests.exe')) {
+                elseif ($name -in @('dxf_desktop_workflow_tests.exe', 'ifc_desktop_workflow_tests.exe', 'cad_library_worker_tests.exe')) {
                     Join-Path $desktopFixtureRoot $name
                 } else { Join-Path $build $name }
             $info = [Diagnostics.ProcessStartInfo]::new($executable)
@@ -316,7 +325,7 @@ finally {
 }
 Write-Output $CaptureDirectory
 if ($capture.error) { throw $capture.error }
-$expectedCount = if ($CaptureSelfTest) { 5 } else { 4 }
+$expectedCount = 5
 if (!$capture.termination_confirmed -or $capture.host_exit_code -ne 0 -or $result.host_in_job -ne $false -or
     $result.error -or @($result.tests).Count -ne $expectedCount -or (!$CaptureSelfTest -and @($result.tests | Where-Object {
         $_.exit_code -ne 0 -or $_.timed_out -or $_.capture_failure }).Count)) {

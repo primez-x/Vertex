@@ -542,6 +542,7 @@ if(SKETCH_BUILD_DESKTOP)
   target_include_directories(sketch_reference_import PUBLIC src/desktop)
   target_link_libraries(sketch_reference_import PUBLIC sketch_windows_import_worker Qt6::Gui)
   add_executable(vertex-import-worker src/desktop/reference_import_worker.cpp
+    src/desktop/cad_library_bridge.cpp
     resources/windows/vertex-import-worker.rc)
   target_include_directories(vertex-import-worker PRIVATE include)
   target_link_libraries(vertex-import-worker PRIVATE
@@ -549,6 +550,29 @@ if(SKETCH_BUILD_DESKTOP)
     Qt6::Gui Qt6::Pdf)
   if(WIN32)
     target_link_libraries(vertex-import-worker PRIVATE windowscodecs ole32)
+    set(VERTEX_CAD_RUNTIME_ROOT "${CMAKE_SOURCE_DIR}/.deps/cad-runtime/3.13.15" CACHE PATH
+      "Verified offline CPython and CAD library SDK")
+    if(NOT EXISTS "${VERTEX_CAD_RUNTIME_ROOT}/libs/python313.lib")
+      message(FATAL_ERROR "Prepare the pinned CAD SDK using scripts/bootstrap_cad_runtime.py; see docs/dependencies/cad-runtime.md. Builds never download it implicitly.")
+    endif()
+    target_include_directories(vertex-import-worker PRIVATE "${VERTEX_CAD_RUNTIME_ROOT}/include")
+    target_link_libraries(vertex-import-worker PRIVATE "${VERTEX_CAD_RUNTIME_ROOT}/libs/python313.lib")
+    if(MSVC)
+      target_link_libraries(vertex-import-worker PRIVATE delayimp)
+      target_link_options(vertex-import-worker PRIVATE /DELAYLOAD:python313.dll)
+      target_link_options(vertex-import-worker PRIVATE
+        "/MANIFESTINPUT:${CMAKE_SOURCE_DIR}/resources/windows/vertex-import-worker.manifest")
+      set_property(TARGET vertex-import-worker APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_SOURCE_DIR}/resources/windows/vertex-import-worker.manifest")
+    endif()
+    add_custom_target(vertex-cad-runtime
+      COMMAND "${CMAKE_COMMAND}" -E copy_directory "${VERTEX_CAD_RUNTIME_ROOT}"
+        "$<TARGET_FILE_DIR:vertex-import-worker>/cad-runtime"
+      COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/src/desktop/cad_library_adapter.py"
+        "$<TARGET_FILE_DIR:vertex-import-worker>/cad-runtime/cad_library_adapter.py"
+      VERBATIM)
+    add_dependencies(vertex-import-worker vertex-cad-runtime)
   endif()
   if(MSVC)
     target_compile_options(sketch_reference_import PRIVATE /W4 /permissive- /utf-8)
@@ -714,6 +738,14 @@ if(SKETCH_BUILD_DESKTOP)
     target_link_libraries(dxf_desktop_workflow_tests PRIVATE sketch_desktop)
     add_executable(ifc_desktop_workflow_tests tests/ifc_desktop_workflow_tests.cpp)
     target_link_libraries(ifc_desktop_workflow_tests PRIVATE sketch_desktop)
+    if(WIN32)
+      add_executable(cad_library_worker_tests tests/cad_library_worker_tests.cpp)
+      target_link_libraries(cad_library_worker_tests PRIVATE sketch_windows_import_worker
+        sketch_document sketch_wall_semantics sketch_building_entities)
+      target_include_directories(cad_library_worker_tests PRIVATE tests)
+      add_dependencies(cad_library_worker_tests vertex-import-worker)
+      # Run in the independent worker runner using immutable AppContainer fixtures.
+    endif()
     qt_add_resources(boundary_workflow_tests boundary_workflow_test_fonts PREFIX "/fonts" BASE assets/fonts
       FILES assets/fonts/Inter.ttf)
     qt_add_resources(boundary_canvas_tests boundary_canvas_test_fonts PREFIX "/fonts" BASE assets/fonts

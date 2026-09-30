@@ -2703,6 +2703,10 @@
     },
     {
       "category": "source",
+      "path": "resources/windows/vertex-import-worker.manifest"
+    },
+    {
+      "category": "source",
       "path": "resources/windows/vertex-import-worker.rc"
     },
     {
@@ -3347,6 +3351,18 @@
     },
     {
       "category": "source",
+      "path": "src/desktop/cad_library_adapter.py"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/cad_library_bridge.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/cad_library_bridge.hpp"
+    },
+    {
+      "category": "source",
       "path": "src/desktop/constraint_dialog.cpp"
     },
     {
@@ -3571,6 +3587,10 @@
     },
     {
       "category": "source",
+      "path": "tests/cad_library_worker_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/calculation_tests.cpp"
     },
     {
@@ -3668,6 +3688,10 @@
     {
       "category": "fixtures",
       "path": "tests/fixtures/README.md"
+    },
+    {
+      "category": "source",
+      "path": "tests/generate_cad_library_worker_fixtures.py"
     },
     {
       "category": "source",
@@ -3976,6 +4000,10 @@
     {
       "category": "source",
       "path": "tests/test_bootstrap_cad_runtime.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_cad_library_adapter.py"
     },
     {
       "category": "source",

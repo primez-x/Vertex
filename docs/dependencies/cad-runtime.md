@@ -62,17 +62,49 @@ Seven bootstrap regressions passed, including an actual Windows junction,
 interrupted-download retry, cache replacement and a forged installed manifest.
 Evidence is under `artifacts/tooling/cad-bootstrap`.
 
-The next integration embeds the interpreter inside `vertex-import-worker`; the
-existing AppContainer policy permits one process and prohibits a Python child.
-It must retain bounded IPC, native geometry agreement, source preservation and
-atomic document admission. Native library stdout/stderr must not contaminate
-the candidate pipe. ezdxf also reads its own configuration independently of
-Python's isolated mode, so its configuration/home paths must point to the
-worker's private directory, with no inherited `EZDXF_CONFIG_FILE`.
+The worker now embeds the interpreter lazily; the AppContainer policy continues
+to permit one process and prohibits a Python child. The bridge uses isolated
+paths, an absolute delay-loaded interpreter DLL and fixed library versions.
+Native and Python stdout/stderr are suppressed through interpreter shutdown.
+Configuration/home paths point to the worker's private directory. OpenBLAS and
+OpenMP use one thread within the existing memory budget.
 
-Still required: the actual adapter bridge, bounded nested-block traversal,
-foreign IFC contour mapping preserving holes/components, runtime staging and
-immutable ACL admission, all static/dynamic DLL dependencies, exact notice and
+Foreign DXF normalization supports binary input, legacy polylines and bounded
+nested INSERT/MINSERT expansion. Original native DXF metadata goes through the
+native parser before any library normalization. IFC products without native
+metadata use world-coordinate midheight sections with explicit approximation
+diagnostics. Outer contours, holes and disconnected components retain their
+source identity; unresolved length units retain source without inventing metre
+coordinates. They do not acquire invented architectural semantics or living
+area classifications. Verified native architectural entities remain intact.
+The exact source is still retained and candidate validation precedes output.
+
+The build stages the SDK and trusted adapter beside the worker. Adapter changes
+restage independently of worker relinking. Run the focused library checks with:
+
+```powershell
+& .deps/cad-runtime/3.13.15/python.exe -I -B tests/test_cad_library_adapter.py
+& scripts/test-import-worker-independent.ps1 -Configuration Release
+```
+
+Application integration qualification requires the actual independent sandbox
+run; developer SDK probes alone do not prove it. On the development host, all
+five independent fixtures passed: broker, assistance, native DXF desktop,
+native IFC desktop and the new CAD library worker. The latter verifies binary
+nested INSERT coordinates, rotated hollow sections, disconnected meshes and a
+FLOOR slab void and unresolved-unit source retention. Twenty-five real-library regressions and both core exchange
+suites also passed. These are development-host integration results, not clean
+machine installation or complete file compatibility certification.
+
+The worker uses explicit extended Windows paths for Python imports, since a
+restricted token may be unable to query the machine's long-path policy.
+Runtime paths beyond 260 characters are exercised by the independent fixture.
+The SDK preparation manifest remains a standalone dependency manifest; its
+`production_worker_integrated: false` does not describe the compiled application
+bridge. Application evidence is the independent worker report.
+
+Still required: full format compatibility qualification, production immutable
+ACL provisioning, all static/dynamic DLL dependencies, exact notice and
 corresponding-source closure (including IfcOpenShell and bundled native code),
 SBOM/installer integration and clean Windows offline execution. The lock and
 runtime manifests explicitly retain incomplete qualification. LGPL/GPL license

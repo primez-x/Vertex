@@ -347,6 +347,13 @@ bool environment_block(const WindowsImportWorkerOptions& options,
         L"TEMP=" + job_root.wstring(),
         L"TMP=" + job_root.wstring(),
         L"LOCALAPPDATA=" + job_root.wstring(),
+        L"APPDATA=" + job_root.wstring(),
+        L"USERPROFILE=" + job_root.wstring(),
+        L"XDG_CONFIG_HOME=" + job_root.wstring(),
+        // NumPy/OpenBLAS otherwise allocates a buffer for every host CPU.
+        // Keep numerical workers deterministic within the fixed job budget.
+        L"OPENBLAS_NUM_THREADS=1",
+        L"OMP_NUM_THREADS=1",
         L"PROJ_NETWORK=OFF",
         L"PROJ_DEBUG=0",
     };

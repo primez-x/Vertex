@@ -1874,9 +1874,16 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
         const auto host = reference(fields[4]);
         const auto opening = reference(fields[5]);
         require(host && opening && find_record(parsed, *host) && find_record(parsed, *opening));
-        require((find_record(parsed, *host)->type == "IFCWALL" ||
-                 find_record(parsed, *host)->type == "IFCWALLSTANDARDCASE") &&
-                find_record(parsed, *opening)->type == "IFCOPENINGELEMENT");
+        require(find_record(parsed, *opening)->type == "IFCOPENINGELEMENT");
+        const auto host_type = find_record(parsed, *host)->type;
+        if (host_type != "IFCWALL" && host_type != "IFCWALLSTANDARDCASE") {
+            // IFC voids may legally cut slabs and other elements. Retain that
+            // relation for the foreign geometry path without inventing a
+            // hosted-wall opening or rejecting the entire valid document.
+            add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
+                           "non_wall_void_relation_retained");
+            continue;
+        }
         hosts["ifc-" + std::to_string(*opening)].push_back({"ifc-" + std::to_string(*host), record.id});
     }
     std::set<int> reconstructed_relations;

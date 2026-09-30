@@ -1,4 +1,5 @@
 #include "reference_import.hpp"
+#include "cad_library_bridge.hpp"
 #include "sketch/project_import_worker.hpp"
 #include "sketch/dxf_project_exchange.hpp"
 #include "sketch/ifc_project_exchange.hpp"
@@ -22,6 +23,96 @@
 #endif
 
 namespace {
+
+void append_library_diagnostics(sketch::ProjectImportCandidate& candidate,
+                                const nlohmann::json& result) {
+    const auto& diagnostics = result.at("diagnostics");
+    if (!diagnostics.is_array() || diagnostics.size() > sketch::project_import_diagnostic_limit)
+        throw std::invalid_argument("Invalid CAD adapter diagnostics");
+    for (const auto& item : diagnostics) {
+        sketch::project_import_detail::fields(item, {"source_id", "source_kind", "code"});
+        if (candidate.kind == sketch::ProjectImportKind::ifc && item.at("code") == "ifc_geometry_unavailable") {
+            auto source = sketch::project_import_detail::text(item.at("source_id"));
+            if (!source.empty() && source.front() == '#') source.erase(0, 1);
+            const bool unreliable = std::any_of(candidate.diagnostics.begin(), candidate.diagnostics.end(),
+                [&](const auto& diagnostic) {
+                    return diagnostic.source_id == "#" + source &&
+                        (diagnostic.code == "geometry_semantics_not_reconstructed" ||
+                         diagnostic.code == "placement_rotation_unsupported" ||
+                         diagnostic.code == "product_geometry_missing");
+                });
+            if (!unreliable && std::any_of(candidate.entities.begin(), candidate.entities.end(), [&](const auto& entity) {
+                return entity.id == "ifc-" + source && entity.type == "boundary";
+            })) continue; // A native 2D outline does not require a tessellated body.
+        }
+        candidate.diagnostics.push_back({sketch::project_import_detail::text(item.at("source_id")),
+            sketch::project_import_detail::text(item.at("source_kind")),
+            sketch::project_import_detail::text(item.at("code"), false)});
+    }
+}
+
+void merge_ifc_sections(sketch::ProjectImportCandidate& candidate, const nlohmann::json& result) {
+    if (std::any_of(result.at("diagnostics").begin(), result.at("diagnostics").end(),
+        [](const auto& diagnostic) { return diagnostic.at("code") == "ifc_length_units_unresolved"; })) {
+        // Neither parser may turn unitless source coordinates into metre-based
+        // document geometry. Keep only inert references and the original asset.
+        std::erase_if(candidate.entities, [](const auto& entity) { return entity.type != "ifc_reference"; });
+        append_library_diagnostics(candidate, result);
+        candidate.source_retention_required = true;
+        return;
+    }
+    const auto& products = result.at("boundaries");
+    if (!products.is_array() || products.size() > sketch::project_import_entity_limit)
+        throw std::invalid_argument("Invalid IFC sections");
+    std::set<std::string> seen;
+    for (const auto& product : products) {
+        const auto source = sketch::project_import_detail::text(product.at("source_id"), false, 64);
+        const auto kind = sketch::project_import_detail::text(product.at("source_kind"), false, 128);
+        auto record = source;
+        if (record.front() == '#') record.erase(0, 1);
+        if (record.empty() || record.find_first_not_of("0123456789") != std::string::npos ||
+            !seen.insert(record).second) throw std::invalid_argument("Invalid IFC section identity");
+        const auto id = "ifc-" + record;
+        auto existing = std::find_if(candidate.entities.begin(), candidate.entities.end(),
+            [&](const auto& entity) { return entity.id == id; });
+        // Keep native architectural entities intact. Foreign typed products
+        // may also need measurement outlines (including holes), so publish
+        // those under separate identities rather than silently discarding them.
+        const bool preserve_existing = existing != candidate.entities.end() && existing->type != "boundary";
+        const auto& loops = product.at("loops");
+        const auto& roles = product.at("roles");
+        if (!loops.is_array() || loops.empty() || !roles.is_array() || roles.size() != loops.size())
+            throw std::invalid_argument("Invalid IFC contour topology");
+        nlohmann::json source_extensions = existing == candidate.entities.end()
+            ? nlohmann::json::object() : existing->extensions;
+        if (existing != candidate.entities.end() && !preserve_existing) candidate.entities.erase(existing);
+        for (std::size_t index = 0; index < loops.size(); ++index) {
+            const auto& loop = loops[index];
+            const auto role = sketch::project_import_detail::text(roles[index], false, 16);
+            if (!loop.is_array() || loop.size() < 3 ||
+                loop.size() > sketch::project_import_boundary_segment_limit ||
+                (role != "outer" && role != "hole"))
+                throw std::invalid_argument("Invalid IFC contour");
+            auto segments = nlohmann::json::array();
+            for (std::size_t point = 0; point < loop.size(); ++point) {
+                (void)sketch::project_import_detail::point(loop[point]);
+                segments.push_back({{"start", loop[point]}, {"end", loop[(point + 1) % loop.size()]},
+                                    {"sweep_radians", 0.0}});
+            }
+            sketch::Entity entity;
+            entity.id = index == 0 && !preserve_existing ? id : id + "-section-" + std::to_string(index);
+            entity.type = "boundary";
+            entity.properties = {{"boundary", std::move(segments)}, {"closed", true},
+                {"classification", "ifc_section_" + role}, {"ifc_type", kind}};
+            entity.extensions = source_extensions;
+            entity.extensions["ifc_library_section"] = {{"source_id", source}, {"source_kind", kind},
+                {"group", id}, {"role", role}, {"approximation", product.at("approximation")}};
+            candidate.entities.push_back(std::move(entity));
+        }
+    }
+    append_library_diagnostics(candidate, result);
+    candidate.source_retention_required = true;
+}
 
 #ifdef _WIN32
 struct ComScope {
@@ -123,10 +214,27 @@ int main(int argc, char** argv) {
             };
             if (args[1] == "dxf") {
                 candidate.kind = sketch::ProjectImportKind::dxf;
-                copy_result(sketch::import_project_dxf(bytes));
+                // Verify native metadata against the original representation.
+                // A library's repair/normalization must never rehabilitate it.
+                if (bytes.find("VERTEX_ENTITY_V1") != std::string_view::npos) {
+                    copy_result(sketch::import_project_dxf(bytes));
+                } else {
+                    const auto runtime = std::filesystem::path(
+                        QCoreApplication::applicationDirPath().toStdWString()) / "cad-runtime";
+                    const auto normalized = sketch::desktop::call_cad_library(runtime, "normalize_dxf", bytes);
+                    const auto text = sketch::project_import_detail::text(
+                        normalized.at("normalized_text"), false, 16 * 1024 * 1024);
+                    copy_result(sketch::import_project_dxf(text));
+                    append_library_diagnostics(candidate, normalized);
+                    candidate.source_retention_required = true;
+                }
             } else {
                 candidate.kind = sketch::ProjectImportKind::ifc;
                 copy_result(sketch::import_project_ifc(bytes));
+                const auto runtime = std::filesystem::path(
+                    QCoreApplication::applicationDirPath().toStdWString()) / "cad-runtime";
+                merge_ifc_sections(candidate,
+                    sketch::desktop::call_cad_library(runtime, "project_ifc", bytes));
             }
             // Serialize fully before writing: malformed input and candidate
             // validation failures never publish a partial result.

@@ -54,9 +54,10 @@ Technology for solid geometry and visualization, PlaneGCS/Eigen behind an
 application-owned planar constraint adapter, SQLite for project storage,
 bounded native IFC/DXF adapters in isolated local workers, Qt PDF/Print Support for
 document output, PROJ with bundled resources, and CMake/Ninja/MSVC for Windows
-builds. IfcOpenShell and ezdxf currently provide independent test validation;
-their selected production-worker integration, pinned offline dependency closure,
-licensing inventory and broader format qualification remain required work.
+builds. IfcOpenShell and ezdxf now have a pinned offline SDK and an embedded
+sandbox-worker bridge for foreign geometry. Full application/runtime qualification,
+distribution dependency closure, licensing inventory and broader format
+qualification remain required work.
 This implementation statement does not remove those adapters from the plan.
 These are dependencies to qualify, not assumed approvals. Exact
 revisions, transitive packages, build options, and distribution obligations

@@ -252,6 +252,9 @@ int main(int argc, char** argv) {
         require(report.at("inserted_entity_count") == mapped.entities.size() &&
                 report.at("rejected_entity_count") == 0,
                 "fidelity report must count objects actually inserted");
+        if (report.at("diagnostics").size() != mapped.diagnostics.size())
+            std::cerr << "Worker diagnostics: " << report.at("diagnostics").dump()
+                      << " native count=" << mapped.diagnostics.size() << '\n';
         require(report.at("diagnostics").size() == mapped.diagnostics.size(),
                 "fidelity report must preserve mapper diagnostics");
         require(report.at("source_retention_required") == true &&

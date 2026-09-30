@@ -21,6 +21,7 @@ if ($EntryPoints.Count -eq 0) {
                     (Join-Path $qtPrefix 'plugins\imageformats\qjpeg.dll'))
 }
 $searchDirectories = @($releaseDirectory,
+                       (Join-Path $releaseDirectory 'cad-runtime'),
                        (Join-Path $projectRoot '.deps\msvc-runtime\14.44.35211.0\bin'),
                        [Environment]::SystemDirectory,
                        (Join-Path $qtPrefix 'bin'),
