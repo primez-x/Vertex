@@ -146,8 +146,12 @@ Actual source preparation and offline verification have passed on the
 development host. The separate OCCT 7.8.1 static Release SDK build completed
 successfully, as did the Boost 1.86/Eigen 3.3.9 support SDK install. The
 replacement IFC wrapper configured successfully with all eight schemas and
-entered Release compilation in `C:/Build/Vertex/ifc-candidate-784`. These
-manifests and commands describe candidate inputs, not a completed source-build
+entered Release compilation in `C:/Build/Vertex/ifc-candidate-784`, then failed
+because `SvgSerializer.cpp` requires `boost/format.hpp`. The support manifest
+now explicitly includes `boost-format`; the support SDK must be updated and a
+new candidate build must pass before packaging. The failed candidate's logs
+and `build-evidence.json` are preserved. These manifests and commands describe
+candidate inputs, not a completed source-build
 qualification. Earlier failed preflight/configure attempts are retained in
 their separate candidate directories; they are not successful build evidence.
 

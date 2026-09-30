@@ -10,6 +10,7 @@
     "boost-date-time",
     "boost-dynamic-bitset",
     "boost-foreach",
+    "boost-format",
     "boost-function",
     "boost-functional",
     "boost-graph",
