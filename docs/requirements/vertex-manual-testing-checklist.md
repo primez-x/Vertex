@@ -384,6 +384,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Expected: Adjacent edges update and the area remains valid or a clear error explains the problem.
   - Result: Not tested
   - Steps: Select a closed boundary, drag one visible corner handle, and release. Confirm both adjacent edges meet at the new point, attached length/angle dimensions still resolve, and one Undo restores the exact original geometry. Press Escape during a second drag and confirm no change is committed. Attempt to cross another edge and confirm Vertex rejects the invalid shape without changing the document.
+  - Also try: In the Architectural workspace, choose a saved horizontal plan with a shifted origin and rotated view axes. Drag a corner joined to a wall containing a door. Check that the corner, wall, door, dimensions and area label match the live preview after release. Repeat with a crop: a door moved into the visible region should appear while dragging. Undo, redo, save and reopen. A boundary clipped by the crop should not show misleading corner handles; expand the crop to edit its full outline.
   - Notes / issues / screenshots: ____________________
 
 - [ ] **U066 — Copy and paste a room or object**

@@ -2131,6 +2131,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/superpowers/plans/2026-09-30-named-plan-vertex-editing.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/survey-georeferencing-contracts.md"
     },
     {
@@ -2164,6 +2168,10 @@
     {
       "category": "docs",
       "path": "docs/verification/measured-group-movement-2026-09-30.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/named-plan-vertex-editing-2026-09-30.md"
     },
     {
       "category": "docs",
@@ -3824,6 +3832,10 @@
     {
       "category": "source",
       "path": "tests/multipage_user_workflow_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/named_plan_vertex_desktop_tests.cpp"
     },
     {
       "category": "source",

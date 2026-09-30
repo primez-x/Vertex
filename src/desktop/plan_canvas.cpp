@@ -728,7 +728,33 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
         drawGrid(painter, viewport, scale, view_center);
     }
     drawReferenceGrids(painter);
-    for (const auto& entity : m_entities) {
+    std::vector<const CanvasEntity*> painted_entities;
+    painted_entities.reserve(m_entities.size());
+    for (const auto& entity : m_entities) painted_entities.push_back(&entity);
+    if (!output && m_vertex_move_handle && m_boundary_vertex_preview_valid) {
+        // Candidate model owners can enter a crop/depth slice while another
+        // owner's corner is dragged. They are interactive projections only;
+        // neither committed entities nor output bounds gain these entries.
+        const auto layer = [](const CanvasEntity& entity) {
+            if (entity.type==QStringLiteral("terrain_surface") || entity.type==QStringLiteral("measurement_boundary") ||
+                entity.type==QStringLiteral("room_boundary") || entity.type==QStringLiteral("boundary") ||
+                entity.type==QStringLiteral("slab") || entity.type==QStringLiteral("room")) return 0;
+            if (entity.type==QStringLiteral("wall")) return 10;
+            if (entity.type==QStringLiteral("opening") || entity.type==QStringLiteral("window")) return 20;
+            if (entity.type==QStringLiteral("symbol") || entity.type==QStringLiteral("assembly_instance")) return 30;
+            if (entity.type==QStringLiteral("dimension_line")) return 40;
+            return 15;
+        };
+        for (const auto& preview : m_boundary_vertex_entities_preview) {
+            if (std::any_of(m_entities.begin(),m_entities.end(),
+                [&](const auto& entity) { return entity.id==preview.id; })) continue;
+            const auto next=std::find_if(painted_entities.begin(),painted_entities.end(),
+                [&](const auto* entity) { return layer(*entity)>layer(preview); });
+            painted_entities.insert(next,&preview);
+        }
+    }
+    for (const auto* painted_entity : painted_entities) {
+        const auto& entity=*painted_entity;
         if (!output && &interactiveEntity(entity) != &entity) {
             drawEntity(painter, interactiveEntity(entity), false, background, paper_pixels_per_mm);
         } else if (!output && !m_boundary_vertex_preview_requested &&

@@ -343,8 +343,9 @@ public:
     boundaryVertexPreviewMetrics() const noexcept {
         return m_boundary_vertex_metrics_preview;
     }
-    // Commits one selected boundary vertex at an absolute model-space point.
-    // Final document admission recomputes pending previews from this point.
+    // Publishes one selected vertex's absolute canvas-view target. The
+    // controller maps it through the captured view before model admission;
+    // final admission recomputes the edit rather than trusting preview geometry.
     void setBoundaryVertexMoveRequested(
         std::function<bool(QString, QString, Vec2, std::uint64_t)> callback);
     void setSymbolDropped(std::function<void(QString, double, Vec2)> callback);

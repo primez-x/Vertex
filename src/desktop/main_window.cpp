@@ -2376,6 +2376,110 @@ Vec2 unproject_plan_point(Vec2 point, const BuildingViewFrame& frame) {
             frame.origin.y + point.x * right.y + point.y * up.y};
 }
 
+Boundary project_plan_path(Boundary path, const BuildingViewFrame& frame) {
+    for (auto& edge : path) {
+        edge.start = project_plan_point(edge.start, frame);
+        edge.end = project_plan_point(edge.end, frame);
+        if (frame.direction.z > 0.0) edge.sweep_radians = -edge.sweep_radians;
+    }
+    return path;
+}
+
+bool clip_plan_entity(CanvasEntity& entity, const Bounds2& crop) {
+    bool clipped = false;
+    const auto clip = [&](const Boundary& path) {
+        if (path.empty()) return path;
+        const auto extent = boundary_bounds(path);
+        if (extent.minimum.x >= crop.minimum.x && extent.minimum.y >= crop.minimum.y &&
+            extent.maximum.x <= crop.maximum.x && extent.maximum.y <= crop.maximum.y) return path;
+        clipped = true;
+        return clip_boundary_to_bounds(path, crop);
+    };
+    entity.segments = clip(entity.segments);
+    for (auto& hole : entity.holes) hole = clip(hole);
+    std::erase_if(entity.holes, [](const auto& hole) { return hole.empty(); });
+    if (clipped) {
+        entity.vertex_handles.clear();
+        entity.filled = false;
+    }
+    return clipped;
+}
+
+bool analytical_plan_context(BuildingViewKind kind, const ArchitecturalViewContext& context) {
+    const auto& frame = context.frame;
+    return kind == BuildingViewKind::plan &&
+        frame.origin.x == 0.0 && frame.origin.y == 0.0 && frame.origin.z == 0.0 &&
+        frame.direction.x == 0.0 && frame.direction.y == 0.0 && frame.direction.z == -1.0 &&
+        frame.up.x == 0.0 && frame.up.y == 1.0 && frame.up.z == 0.0 &&
+        (context.depth.far_depth_m == ViewPresentation{}.far_depth_m ||
+         std::isinf(context.depth.far_depth_m));
+}
+
+std::set<std::string, std::less<>> architectural_view_references(
+    const ArchitecturalViewContext& context,
+    const std::map<std::string, Entity, std::less<>>& entities,
+    const std::set<std::string, std::less<>>& unavailable) {
+    std::set<std::string, std::less<>> referenced(context.object_ids.begin(), context.object_ids.end());
+    std::erase_if(referenced, [&](const auto& id) { return unavailable.contains(id); });
+    if (!context.restrict_to_objects && context.object_ids.empty()) return referenced;
+    // Match production host/child visibility closure without admitting a
+    // hidden owner or treating a view crop as an explicit visibility rule.
+    for (const auto& [id, entity] : entities) {
+        if (entity.type != "opening" || !referenced.contains(id)) continue;
+        const auto host = read_string(entity.properties, "wall_id");
+        if (host && !unavailable.contains(*host)) referenced.insert(*host);
+    }
+    for (const auto& [id, entity] : entities) {
+        if (entity.type == "opening" && !unavailable.contains(id) &&
+            referenced.contains(read_string(entity.properties, "wall_id").value_or("")))
+            referenced.insert(id);
+    }
+    return referenced;
+}
+
+// Detached previews and refreshed views must derive the same linework from
+// semantic solids, including hosted assemblies, depth slices and view crops.
+TopoDS_Shape clip_architectural_view_shape(const TopoDS_Shape& shape,
+                                          const ArchitecturalViewContext& context) {
+    if (!shape_intersects_view_depth(shape, context.depth) ||
+        (context.crop && !shape_intersects_view_crop(shape, *context.crop))) return {};
+    auto clipped = clip_shape_to_view_depth(shape, context.depth);
+    if (!clipped.IsNull() && context.crop)
+        clipped = clip_shape_to_view_crop(clipped, *context.crop);
+    return clipped;
+}
+
+std::optional<Boundary> project_architectural_view_shape(const TopoDS_Shape& shape,
+    BuildingViewKind kind, const ArchitecturalViewContext& context) {
+    const auto clipped = clip_architectural_view_shape(shape, context);
+    if (clipped.IsNull()) return std::nullopt;
+    return project_shape_view(clipped, kind, context.frame);
+}
+
+TopoDS_Shape make_opening_view_shape(const Entity& entity, const Wall& wall) {
+    const auto opening = read_hosted_opening(entity);
+    const auto kind = read_string(entity.properties, "opening_kind").value_or("");
+    if (!opening) throw std::invalid_argument("opening geometry is incomplete");
+    if (kind == "opening") {
+        const auto length = segment_length(wall.baseline);
+        const Segment span{
+            point_at_segment(wall.baseline, opening->offset / length).value(),
+            point_at_segment(wall.baseline, (opening->offset + opening->width) / length).value(),
+            wall.baseline.sweep_radians * opening->width / length};
+        return make_wall(Wall{entity.id, span, wall.thickness, opening->height,
+                              wall.elevation + opening->sill, {}});
+    }
+    const auto parsed_kind = parse_opening_assembly_kind(kind);
+    if (!parsed_kind) throw std::invalid_argument("opening kind is incomplete");
+    const auto assembly = entity.properties.contains("opening_assembly")
+        ? parse_opening_assembly(entity.properties.at("opening_assembly"))
+        : default_opening_assembly(*parsed_kind);
+    std::optional<DoorOperation> operation;
+    if (assembly.kind == OpeningAssemblyKind::door && entity.properties.contains("door_operation"))
+        operation = decode_door_operation(entity.properties.at("door_operation"));
+    return make_opening_assembly(wall, *opening, assembly, operation);
+}
+
 double project_plan_angle(double angle, const BuildingViewFrame& frame) {
     const auto right = plan_view_right(frame);
     const auto up = plan_view_up(frame);
@@ -2835,6 +2939,7 @@ class MainWindow::Impl {
         std::shared_ptr<Document> document;
         std::shared_ptr<const DocumentSnapshot> source;
         std::shared_ptr<const std::vector<CanvasEntity>> retained;
+        std::shared_ptr<const std::vector<CanvasEntity>> eligible;
         std::shared_ptr<const std::vector<CanvasLabel>> labels;
         std::shared_ptr<const std::map<QString,QSizeF>> label_footprints;
         std::shared_ptr<const std::vector<Bounds2>> component_bounds;
@@ -2842,7 +2947,7 @@ class MainWindow::Impl {
         QString entity_id;
         QString vertex_id;
         Vec2 position;
-        std::optional<Bounds2> crop;
+        std::optional<ArchitecturalViewContext> view_context;
         std::shared_ptr<std::optional<VertexPreviewProjection>> result;
     };
 
@@ -11895,10 +12000,14 @@ public:
 
     static std::optional<VertexPreviewProjection> computeBoundaryVertexPreview(
         const DocumentSnapshot& source,const std::vector<CanvasEntity>& retained,
+        const std::vector<CanvasEntity>& eligible,
         const std::vector<CanvasLabel>& labels,bool metric_units,
         const std::map<QString,QSizeF>& label_footprints,const std::vector<Bounds2>& component_bounds,
-        const QString& entity_id,const QString& vertex_id,Vec2 position,std::optional<Bounds2> crop) {
+        const QString& entity_id,const QString& vertex_id,Vec2 position,
+        const std::optional<ArchitecturalViewContext>& view_context) {
         try {
+            const bool shape_projection = view_context &&
+                !analytical_plan_context(BuildingViewKind::plan, *view_context);
             const BoundaryGeometryEdit edit{entity_id.toStdString(),BoundaryGeometryEditKind::move_vertex,
                 vertex_id.toStdString(),position};
             const auto boundary=decode_identified_boundary_entity(source.entities().at(edit.boundary_id));
@@ -11929,11 +12038,20 @@ public:
                 changed_walls.emplace(id,std::move(wall));
             }
             VertexPreviewProjection result;
+            std::map<QString, CanvasEntity> projection_sources;
+            std::set<QString> captured_ids;
+            for (const auto& item : eligible) projection_sources.emplace(item.id, item);
             for (const auto& item : retained) {
+                projection_sources.insert_or_assign(item.id, item);
+                captured_ids.insert(item.id);
+            }
+            for (const auto& [item_id, item] : projection_sources) {
+                (void)item_id;
                 const auto found=candidate.find(item.id.toStdString());
                 if (found==candidate.end()) continue;
                 const auto& entity=found->second;
                 auto proposed=item;
+                bool world_paths = true;
                 if (can_recognize_boundary_dimension_entity_type(entity.type)) {
                     const auto decoded=decode_boundary_dimension_entity(entity);
                     if (!decoded.supported()) return std::nullopt;
@@ -11943,16 +12061,25 @@ public:
                         candidate.at(dimension.boundary_id),metric_units,item.selected);
                     if (!projection.line) continue;
                     proposed.segments=projection.line->segments;
+                    proposed.holes.clear();
                     proposed.dimension_end_ticks=projection.line->dimension_end_ticks;
                 } else if (can_recognize_boundary_entity_type(entity.type) && entity!=source.entities().at(entity.id)) {
                     const auto after=decode_identified_boundary_entity(entity);
                     proposed.segments=boundary_geometry(after);
+                    // Identified measured boundaries own segments only. A
+                    // preserved vendor `holes` property is not model geometry.
+                    proposed.holes.clear();
                     proposed.resize_frame.reset();
                     for (auto& handle : proposed.vertex_handles)
                         for (const auto& edge : after.segments)
                             if (handle.id.toStdString()==edge.start_vertex_id) handle.position=edge.segment.start;
                 } else if (const auto wall=changed_walls.find(entity.id);wall!=changed_walls.end()) {
-                    proposed.segments=wall_plan_footprint(wall->second.baseline,wall->second.openings,wall->second.thickness);
+                    if (shape_projection) {
+                        proposed.segments = project_architectural_view_shape(make_wall(wall->second),
+                            BuildingViewKind::plan, *view_context).value_or(Boundary{});
+                        world_paths = false;
+                    } else proposed.segments=wall_plan_footprint(wall->second.baseline,wall->second.openings,wall->second.thickness);
+                    proposed.holes.clear();
                     proposed.resize_frame.reset();
                 } else if (entity.type=="opening") {
                     const auto host_wall=changed_walls.find(entity.properties.at("wall_id").get<std::string>());
@@ -11962,7 +12089,11 @@ public:
                         [&](const auto& value) { return value.id==entity.id; });
                     if (opening==host.openings.end()) return std::nullopt;
                     const auto kind=entity.properties.value("opening_kind",std::string{});
-                    if (entity.properties.contains("opening_assembly")) {
+                    if (shape_projection) {
+                        proposed.segments = project_architectural_view_shape(make_opening_view_shape(entity, host),
+                            BuildingViewKind::plan, *view_context).value_or(Boundary{});
+                        world_paths = false;
+                    } else if (entity.properties.contains("opening_assembly")) {
                         std::optional<DoorOperation> operation;
                         if (kind=="door" && entity.properties.contains("door_operation"))
                             operation=decode_door_operation(entity.properties.at("door_operation"));
@@ -11978,21 +12109,24 @@ public:
                         const auto outline=wall_plan_footprint(span,{},host.thickness);
                         proposed.segments={outline.at(1),outline.at(3),span};
                     }
+                    proposed.holes.clear();
                 } else continue;
-                if (crop && proposed.type!=QStringLiteral("dimension_line")) {
-                    const auto clip_path=[&](const Boundary& path) {
-                        if (path.empty()) return path;
-                        const auto extent=boundary_bounds(path);
-                        if (extent.minimum.x>=crop->minimum.x && extent.maximum.x<=crop->maximum.x &&
-                            extent.minimum.y>=crop->minimum.y && extent.maximum.y<=crop->maximum.y)
-                            return path;
-                        proposed.filled=false;
-                        return clip_boundary_to_bounds(path,*crop);
-                    };
-                    proposed.segments=clip_path(proposed.segments);
-                    for (auto& hole : proposed.holes) hole=clip_path(hole);
-                    std::erase_if(proposed.holes,[](const auto& hole) { return hole.empty(); });
+                if (view_context && world_paths) {
+                    proposed.segments = project_plan_path(std::move(proposed.segments), view_context->frame);
+                    for (auto& hole : proposed.holes)
+                        hole = project_plan_path(std::move(hole), view_context->frame);
+                    for (auto& handle : proposed.vertex_handles)
+                        handle.position = project_plan_point(handle.position, view_context->frame);
+                    if (view_context->crop && proposed.type != QStringLiteral("dimension_line")) {
+                        const auto& crop = *view_context->crop;
+                        clip_plan_entity(proposed, {{crop.min_horizontal_m, crop.min_vertical_m},
+                                                    {crop.max_horizontal_m, crop.max_vertical_m}});
+                    }
                 }
+                // A previously captured owner needs an empty override when it
+                // leaves the view. Newly eligible owners contribute only once
+                // their candidate actually intersects the captured depth/crop.
+                if (!captured_ids.contains(item.id) && proposed.segments.empty() && proposed.holes.empty()) continue;
                 result.entities.push_back(std::move(proposed));
             }
             for (const auto& label : labels) {
@@ -12008,7 +12142,8 @@ public:
                         candidate.at(dimension.boundary_id),metric_units,label.selected).label;
                     // Keep visibility and view-specific typography from the retained scene.
                     auto proposed=label;
-                    proposed.position=projected.position;
+                    proposed.position=view_context
+                        ? project_plan_point(projected.position,view_context->frame) : projected.position;
                     proposed.text=std::move(projected.text);
                     result.labels.push_back(std::move(proposed));
                 } else if (can_recognize_boundary_entity_type(entity.type) && entity!=source.entities().at(entity.id)) {
@@ -12016,8 +12151,13 @@ public:
                     if (label.avoid_components) {
                         const auto footprint=label_footprints.find(label.id);
                         if (footprint==label_footprints.end()) return std::nullopt;
-                        proposed=place_plan_area_label(label,boundary_geometry(decode_identified_boundary_entity(entity)),
+                        auto world_label = label;
+                        if (view_context)
+                            world_label.position = unproject_plan_point(world_label.position,view_context->frame);
+                        proposed=place_plan_area_label(world_label,boundary_geometry(decode_identified_boundary_entity(entity)),
                             component_bounds,footprint->second);
+                        if (view_context)
+                            proposed.position = project_plan_point(proposed.position,view_context->frame);
                     }
                     result.labels.push_back(std::move(proposed));
                 }
@@ -12031,6 +12171,7 @@ public:
     void startVertexPreviewJob(PendingVertexPreview request) {
         const auto source=request.source;
         const auto retained=request.retained;
+        const auto eligible=request.eligible;
         const auto labels=request.labels;
         const auto metric_units=request.metric_units;
         const auto label_footprints=request.label_footprints;
@@ -12039,17 +12180,66 @@ public:
         const auto id=request.entity_id;
         const auto vertex=request.vertex_id;
         const auto position=request.position;
-        const auto crop=request.crop;
+        const auto view_context=request.view_context;
         m_vertex_preview_sequence=m_vertex_preview_queue.enqueue(
-            [source,retained,labels,metric_units,label_footprints,component_bounds,result,id,vertex,position,crop]
+            [source,retained,eligible,labels,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context]
             (const RegenerationCancellationToken& cancellation) {
                 if (!cancellation.is_cancelled())
-                    *result=computeBoundaryVertexPreview(*source,*retained,*labels,metric_units,
-                        *label_footprints,*component_bounds,id,vertex,position,crop);
+                    *result=computeBoundaryVertexPreview(*source,*retained,*eligible,*labels,metric_units,
+                        *label_footprints,*component_bounds,id,vertex,position,view_context);
                 return RegenerationReceipt{source->revision(),{}};
             });
         m_running_vertex_preview=std::move(request);
         m_vertex_preview_timer->start();
+    }
+
+    std::optional<ArchitecturalViewContext> boundaryVertexViewContext(
+        PlanCanvas* canvas, const DocumentSnapshot& source) const {
+        if (canvas == m_measurementCanvas) return std::nullopt;
+        if (canvas != m_architecturalCanvas)
+            throw std::invalid_argument("The boundary editing canvas is unavailable.");
+        auto context = architectural_view_context(source, m_architectural_view_kind);
+        auto kind = m_architectural_view_kind;
+        if (!m_active_named_view.isEmpty()) {
+            bool found = false;
+            for (const auto& [id, entity] : source.entities()) {
+                (void)id;
+                if (entity.type != kSheetViewEntityType) continue;
+                const auto model = decode_sheet_view_entity(entity);
+                for (const auto& view : model.views()) {
+                    if (view.id != m_active_named_view.toStdString()) continue;
+                    context = architectural_view_context(view);
+                    kind = architectural_view_kind(view.kind);
+                    found = true;
+                }
+            }
+            if (!found) throw std::invalid_argument("The selected saved plan is unavailable.");
+        }
+        if (kind != BuildingViewKind::plan || !horizontal_plan_frame(context.frame))
+            throw std::invalid_argument("Switch to a horizontal plan view to edit model corners.");
+        return context;
+    }
+
+    bool moveBoundaryVertexFromCanvas(PlanCanvas* canvas, const QString& id,
+        const QString& vertex, Vec2 position, std::uint64_t revision) {
+        try {
+            // pointerRelease resets the canvas gesture before publishing. The
+            // immutable preview capture, rather than the current view selector,
+            // therefore owns the inverse used for this final target.
+            if (!m_vertex_preview_source || m_vertex_preview_canvas != canvas ||
+                m_vertex_preview_document != m_document ||
+                m_vertex_preview_source->revision() != revision || m_document->revision() != revision)
+                throw std::invalid_argument("The boundary view changed before the corner edit was committed.");
+            if (canvas == m_architecturalCanvas && !m_vertex_preview_view_context)
+                throw std::invalid_argument("The captured plan frame is unavailable.");
+            if (m_vertex_preview_view_context)
+                position = unproject_plan_point(position, m_vertex_preview_view_context->frame);
+            if (id != m_selected_id && !selectEntity(id, false)) return false;
+            return moveSelectedBoundaryVertex(vertex, position, static_cast<Revision>(revision));
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Boundary geometry: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
     }
 
     std::optional<std::vector<CanvasEntity>> previewBoundaryVertexFromCanvas(
@@ -12060,10 +12250,62 @@ public:
             !std::isfinite(position.x) || !std::isfinite(position.y)) return std::nullopt;
         if (!m_vertex_preview_source || m_vertex_preview_document!=m_document || m_vertex_preview_canvas!=canvas ||
             m_vertex_preview_source->revision()!=revision) {
-            m_vertex_preview_source=std::make_shared<DocumentSnapshot>(authoringSnapshot());
+            auto captured_source=std::make_shared<DocumentSnapshot>(authoringSnapshot());
+            auto captured_view=boundaryVertexViewContext(canvas,*captured_source);
+            m_vertex_preview_source=std::move(captured_source);
             m_vertex_preview_document=m_document;
             m_vertex_preview_canvas=canvas;
+            m_vertex_preview_view_context=std::move(captured_view);
             m_vertex_preview_scene=std::make_shared<std::vector<CanvasEntity>>(canvas->entities());
+            auto eligible=std::make_shared<std::vector<CanvasEntity>>();
+            if (m_vertex_preview_view_context) {
+                // Capture the model visibility mask independently of crop
+                // and success of an analytical projection.
+                const auto& available=m_plan_visible_model_ids;
+                std::set<std::string, std::less<>> unavailable;
+                for (const auto& [owner_id, entity] : m_vertex_preview_source->entities()) {
+                    (void)entity;
+                    if (!available.contains(owner_id)) unavailable.insert(owner_id);
+                }
+                const auto& context=*m_vertex_preview_view_context;
+                const auto referenced=architectural_view_references(context,m_vertex_preview_source->entities(),unavailable);
+                const bool restricted=context.restrict_to_objects || !context.object_ids.empty();
+                const bool solid_view=!analytical_plan_context(BuildingViewKind::plan,context);
+                for (const auto& item : m_measurementCanvas->entities()) {
+                    const auto found=m_vertex_preview_source->entities().find(item.id.toStdString());
+                    if (found==m_vertex_preview_source->entities().end() || !available.contains(found->first) ||
+                        (restricted && !referenced.contains(found->first))) continue;
+                    const auto& entity=found->second;
+                    if (entity.type=="opening" &&
+                        !available.contains(read_string(entity.properties,"wall_id").value_or(""))) continue;
+                    auto canonical=item;
+                    if (solid_view && (entity.type=="wall" || entity.type=="opening")) {
+                        canonical=CanvasEntity{item.id,QString::fromStdString(entity.type),{},
+                            entity.type=="wall" ? item.thickness_metres : 0.0,item.selected};
+                    }
+                    if (solid_view) canonical.output_stroke_width_mm=context.presentation.projection_line_mm;
+                    eligible->push_back(std::move(canonical));
+                }
+                if (solid_view) {
+                    // A valid architectural solid need not have a retained
+                    // analytical 2D symbol. Visibility, rather than success of
+                    // that other projection, determines candidate eligibility.
+                    for (const auto& [owner_id, entity] : m_vertex_preview_source->entities()) {
+                        if ((entity.type!="wall" && entity.type!="opening") || !available.contains(owner_id) ||
+                            (restricted && !referenced.contains(owner_id)) ||
+                            std::any_of(eligible->begin(),eligible->end(),[&](const auto& item) {
+                                return item.id.toStdString()==owner_id;
+                            })) continue;
+                        if (entity.type=="opening" &&
+                            !available.contains(read_string(entity.properties,"wall_id").value_or(""))) continue;
+                        CanvasEntity canonical{id_from(owner_id),QString::fromStdString(entity.type),{},
+                            entity.type=="wall" ? read_number(entity.properties,"thickness_m",0.08) : 0.0,false};
+                        canonical.output_stroke_width_mm=context.presentation.projection_line_mm;
+                        eligible->push_back(std::move(canonical));
+                    }
+                }
+            }
+            m_vertex_preview_eligible=std::move(eligible);
             m_vertex_preview_labels=std::make_shared<std::vector<CanvasLabel>>(canvas->labels());
             auto footprints=std::make_shared<std::map<QString,QSizeF>>();
             for (const auto& label : canvas->labels()) if (label.avoid_components)
@@ -12078,26 +12320,11 @@ public:
         }
         const auto serial=canvas->boundaryVertexPreviewSerial();
         if (!canvas->markBoundaryVertexPreviewPending(serial)) return std::nullopt;
-        std::optional<Bounds2> crop;
-        if (canvas==m_architecturalCanvas) {
-            for (const auto& [record_id,entity] : m_vertex_preview_source->entities()) {
-                (void)record_id;
-                if (entity.type!=kSheetViewEntityType) continue;
-                const auto model=decode_sheet_view_entity(entity);
-                const auto view=std::find_if(model.views().begin(),model.views().end(),[&](const auto& value) {
-                    return m_active_named_view.isEmpty() ? value.kind==CoordinatedViewKind::plan
-                        : value.id==m_active_named_view.toStdString();
-                });
-                if (view==model.views().end()) continue;
-                if (view->presentation.crop)
-                    crop=Bounds2{{view->presentation.crop->min_horizontal_m,view->presentation.crop->min_vertical_m},
-                        {view->presentation.crop->max_horizontal_m,view->presentation.crop->max_vertical_m}};
-                break;
-            }
-        }
-        PendingVertexPreview request{canvas,serial,m_document,m_vertex_preview_source,m_vertex_preview_scene,
+        if (m_vertex_preview_view_context)
+            position=unproject_plan_point(position,m_vertex_preview_view_context->frame);
+        PendingVertexPreview request{canvas,serial,m_document,m_vertex_preview_source,m_vertex_preview_scene,m_vertex_preview_eligible,
             m_vertex_preview_labels,m_vertex_preview_label_footprints,m_vertex_preview_component_bounds,
-            m_metric_units,id,vertex,position,crop,
+            m_metric_units,id,vertex,position,m_vertex_preview_view_context,
             std::make_shared<std::optional<VertexPreviewProjection>>()};
         if (m_running_vertex_preview) {
             (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
@@ -22322,11 +22549,9 @@ private:
                 return resizeOpeningWidthFromCanvas(id, scale, keep_start, revision);
             });
         canvas->setBoundaryVertexMoveRequested(
-            [this](QString id, QString vertex_id, Vec2 position,
+            [this,canvas](QString id, QString vertex_id, Vec2 position,
                    std::uint64_t source_revision) {
-                if (id != m_selected_id && !selectEntity(id, false)) return false;
-                return moveSelectedBoundaryVertex(
-                    vertex_id, position, static_cast<Revision>(source_revision));
+                return moveBoundaryVertexFromCanvas(canvas,id,vertex_id,position,source_revision);
             });
         canvas->setBoundaryVertexPreviewRequested(
             [this,canvas](QString id,QString vertex_id,Vec2 position,std::uint64_t revision) {
@@ -22509,9 +22734,11 @@ private:
             (void)m_opening_preview_queue.cancel(m_opening_preview_sequence);
         m_vertex_preview_source.reset();
         m_vertex_preview_scene.reset();
+        m_vertex_preview_eligible.reset();
         m_vertex_preview_labels.reset();
         m_vertex_preview_label_footprints.reset();
         m_vertex_preview_component_bounds.reset();
+        m_vertex_preview_view_context.reset();
         m_vertex_preview_canvas.clear();
         m_vertex_preview_document.reset();
         m_pending_vertex_preview.reset();
@@ -23292,30 +23519,9 @@ private:
         }
         const auto build_architectural_geometry = [&](BuildingViewKind kind,
                                                        const ArchitecturalViewContext& view_context) {
-            std::set<std::string, std::less<>> referenced(
-                view_context.object_ids.begin(), view_context.object_ids.end());
+            auto referenced=architectural_view_references(view_context,snapshot.entities(),presentation_hidden_ids);
             const bool restricted = view_context.restrict_to_objects || !view_context.object_ids.empty();
-            std::erase_if(referenced, [&](const auto& id) {
-                return presentation_hidden_ids.contains(id);
-            });
             if (restricted) {
-                // Referencing an opening admits its host as a derived
-                // dependency; referencing a host also retains its independently
-                // selectable opening assemblies. Neither creates model copies.
-                for (const auto& [id, entity] : snapshot.entities()) {
-                    if (entity.type != "opening" || !referenced.contains(id)) continue;
-                    const auto host = entity.properties.find("wall_id");
-                    if (host != entity.properties.end() && host->is_string() &&
-                        !presentation_hidden_ids.contains(host->get<std::string>())) {
-                        referenced.insert(host->get<std::string>());
-                    }
-                }
-                for (const auto& [id, entity] : snapshot.entities()) {
-                    if (entity.type == "opening" && !presentation_hidden_ids.contains(id) &&
-                        referenced.contains(read_string(entity.properties, "wall_id").value_or(""))) {
-                        referenced.insert(id);
-                    }
-                }
                 // A placed assembly is a transformed copy of its host. Keep
                 // that dependent preview when the view selects the host.
                 for (const auto& assembly : assembly_previews) {
@@ -23327,16 +23533,7 @@ private:
             }
             // Conventional plans retain analytical boundaries and annotations;
             // other frames/depth limits use the shape projection below.
-            const auto& plan_frame = view_context.frame;
-            const bool conventional_plan_frame = kind == BuildingViewKind::plan &&
-                plan_frame.origin.x == 0.0 && plan_frame.origin.y == 0.0 &&
-                plan_frame.origin.z == 0.0 && plan_frame.direction.x == 0.0 &&
-                plan_frame.direction.y == 0.0 && plan_frame.direction.z == -1.0 &&
-                plan_frame.up.x == 0.0 && plan_frame.up.y == 1.0 && plan_frame.up.z == 0.0;
-            const bool default_plan_depth =
-                view_context.depth.far_depth_m == ViewPresentation{}.far_depth_m ||
-                std::isinf(view_context.depth.far_depth_m);
-            if (conventional_plan_frame && default_plan_depth) {
+            if (analytical_plan_context(kind, view_context)) {
                 std::vector<CanvasEntity> filtered;
                 filtered.reserve(all_geometry.size());
                 for (const auto& entity : all_geometry) {
@@ -23353,37 +23550,8 @@ private:
                                  view_context.crop->min_vertical_m},
                                 {view_context.crop->max_horizontal_m,
                                  view_context.crop->max_vertical_m}};
-                            bool clipped = false;
-                            const auto clip_path = [&](const Boundary& path) {
-                                if (path.empty()) return Boundary{};
-                                const auto extent = boundary_bounds(path);
-                                const bool contained =
-                                    extent.minimum.x >= crop_bounds.minimum.x &&
-                                    extent.maximum.x <= crop_bounds.maximum.x &&
-                                    extent.minimum.y >= crop_bounds.minimum.y &&
-                                    extent.maximum.y <= crop_bounds.maximum.y;
-                                if (contained) return path;
-                                clipped = true;
-                                return clip_boundary_to_bounds(path, crop_bounds);
-                            };
-                            retained.segments = clip_path(retained.segments);
-                            std::vector<Boundary> retained_holes;
-                            retained_holes.reserve(retained.holes.size());
-                            for (const auto& hole : retained.holes) {
-                                auto clipped_hole = clip_path(hole);
-                                if (!clipped_hole.empty()) {
-                                    retained_holes.push_back(std::move(clipped_hole));
-                                }
-                            }
-                            retained.holes = std::move(retained_holes);
+                            clip_plan_entity(retained, crop_bounds);
                             if (retained.segments.empty() && retained.holes.empty()) continue;
-                            if (clipped) {
-                                // A clipped outline is derived presentation
-                                // linework, never a replacement closed area or
-                                // an editable copy of its source vertices.
-                                retained.vertex_handles.clear();
-                                retained.filled = false;
-                            }
                         }
                         retained.output_stroke_width_mm =
                             view_context.presentation.projection_line_mm;
@@ -23397,16 +23565,7 @@ private:
             const auto& frame = view_context.frame;
             const auto& depth = view_context.depth;
             const auto clip_to_view = [&](const TopoDS_Shape& shape) {
-                if (!shape_intersects_view_depth(shape, depth) ||
-                    (view_context.crop &&
-                     !shape_intersects_view_crop(shape, *view_context.crop))) {
-                    return TopoDS_Shape{};
-                }
-                auto clipped = clip_shape_to_view_depth(shape, depth);
-                if (!clipped.IsNull() && view_context.crop) {
-                    clipped = clip_shape_to_view_crop(clipped, *view_context.crop);
-                }
-                return clipped;
+                return clip_architectural_view_shape(shape, view_context);
             };
             const auto decorate_projection = [&](CanvasEntity entity) {
                 const auto& presentation = view_context.presentation;
@@ -23456,9 +23615,7 @@ private:
                     std::to_string(static_cast<int>(kind)) + '\n' + frame_cache_key);
                 if (const auto found = m_view_projection_cache.find(key);
                     found != m_view_projection_cache.end()) return found->second;
-                const auto clipped = clip_to_view(make_shape());
-                auto projection = clipped.IsNull() ? std::optional<Boundary>{}
-                    : std::optional<Boundary>{project_shape_view(clipped, kind, frame)};
+                auto projection = project_architectural_view_shape(make_shape(), kind, view_context);
                 // Failed construction/projection throws before insertion, so an
                 // invalid model remains an error on every refresh.
                 m_view_projection_cache.emplace(key, projection);
@@ -23491,19 +23648,10 @@ private:
                                                 siblings, wall, error)) {
                             throw std::invalid_argument(error);
                         }
-                        const auto opening = read_hosted_opening(entity);
-                        if (opening && read_string(entity.properties, "opening_kind") ==
-                                           std::optional<std::string>{"opening"}) {
+                        if (read_string(entity.properties, "opening_kind") ==
+                            std::optional<std::string>{"opening"}) {
                             const auto projection = cached_projection(id, [&] {
-                                const auto length = segment_length(wall.baseline);
-                                const Segment span{
-                                    point_at_segment(wall.baseline, opening->offset / length).value(),
-                                    point_at_segment(wall.baseline, (opening->offset + opening->width) / length).value(),
-                                    wall.baseline.sweep_radians * opening->width / length};
-                                // Only the projected void envelope is retained;
-                                // this never adds material to the native model.
-                                return make_wall(Wall{id, span, wall.thickness,
-                                    opening->height, wall.elevation + opening->sill, {}});
+                                return make_opening_view_shape(entity, wall);
                             });
                             if (projection && !projection->empty()) {
                                 auto doorway = decorate_projection(CanvasEntity{
@@ -23515,21 +23663,8 @@ private:
                             }
                             continue;
                         }
-                        const auto opening_kind = parse_opening_assembly_kind(
-                            read_string(entity.properties, "opening_kind").value_or(""));
-                        if (!opening || !opening_kind) {
-                            throw std::invalid_argument("opening geometry or kind is incomplete");
-                        }
-                        const auto assembly = entity.properties.contains("opening_assembly")
-                            ? parse_opening_assembly(entity.properties.at("opening_assembly"))
-                            : default_opening_assembly(*opening_kind);
-                        std::optional<DoorOperation> operation;
-                        if (assembly.kind == OpeningAssemblyKind::door &&
-                            entity.properties.contains("door_operation")) {
-                            operation = decode_door_operation(entity.properties.at("door_operation"));
-                        }
                         auto projection = cached_projection(id, [&] {
-                            return make_opening_assembly(wall, *opening, assembly, operation);
+                            return make_opening_view_shape(entity, wall);
                         });
                         if (!projection || projection->empty()) continue;
                         // Keep the semantic opening ID so ordinary selection,
@@ -23648,29 +23783,16 @@ private:
                         (restricted && !referenced.contains(entity.id.toStdString()))) continue;
                     auto retained = entity;
                     if (!symbol) {
-                        const auto project_path = [&](Boundary& path) {
-                            for (auto& edge : path) {
-                                edge.start = project_plan_point(edge.start,frame);
-                                edge.end = project_plan_point(edge.end,frame);
-                                if (frame.direction.z>0) edge.sweep_radians=-edge.sweep_radians;
-                            }
-                        };
-                        project_path(retained.segments);
-                        for (auto& hole : retained.holes) project_path(hole);
+                        retained.segments = project_plan_path(std::move(retained.segments), frame);
+                        for (auto& hole : retained.holes)
+                            hole = project_plan_path(std::move(hole), frame);
+                        for (auto& handle : retained.vertex_handles)
+                            handle.position = project_plan_point(handle.position, frame);
                     }
-                    // Projected vertex editing needs its own model-space
-                    // inverse. Movement/rotation/resizing use the shared frame.
-                    retained.vertex_handles.clear();
                     if (boundary && view_context.crop) {
                         const Bounds2 bounds{{view_context.crop->min_horizontal_m,view_context.crop->min_vertical_m},
                                              {view_context.crop->max_horizontal_m,view_context.crop->max_vertical_m}};
-                        const auto extent = boundary_bounds(retained.segments);
-                        if (extent.minimum.x<bounds.minimum.x || extent.minimum.y<bounds.minimum.y ||
-                            extent.maximum.x>bounds.maximum.x || extent.maximum.y>bounds.maximum.y) {
-                            retained.segments=clip_boundary_to_bounds(retained.segments,bounds);
-                            for (auto& hole : retained.holes) hole=clip_boundary_to_bounds(hole,bounds);
-                            retained.filled=false;
-                        }
+                        clip_plan_entity(retained, bounds);
                     }
                     if (retained.segments.empty()) continue;
                     result.push_back(decorate_projection(std::move(retained)));
@@ -23807,6 +23929,8 @@ private:
         // previously derived view mask is applied. Hidden invalid geometry
         // therefore remains reported and cannot bypass validation.
         std::vector<CanvasEntity> geometry;
+        m_plan_visible_model_ids=visible_ids;
+        std::erase_if(m_plan_visible_model_ids,[&](const auto& id) { return presentation_hidden_ids.contains(id); });
         std::array<std::vector<CanvasEntity>, 3> visible_view_geometry;
         geometry.reserve(all_geometry.size());
         for (auto& entity : all_geometry) {
@@ -27813,9 +27937,12 @@ private:
     std::optional<PendingVertexPreview> m_pending_vertex_preview;
     std::shared_ptr<const DocumentSnapshot> m_vertex_preview_source;
     std::shared_ptr<const std::vector<CanvasEntity>> m_vertex_preview_scene;
+    std::shared_ptr<const std::vector<CanvasEntity>> m_vertex_preview_eligible;
+    std::set<std::string, std::less<>> m_plan_visible_model_ids;
     std::shared_ptr<const std::vector<CanvasLabel>> m_vertex_preview_labels;
     std::shared_ptr<const std::map<QString,QSizeF>> m_vertex_preview_label_footprints;
     std::shared_ptr<const std::vector<Bounds2>> m_vertex_preview_component_bounds;
+    std::optional<ArchitecturalViewContext> m_vertex_preview_view_context;
     std::shared_ptr<Document> m_vertex_preview_document;
     QPointer<PlanCanvas> m_vertex_preview_canvas;
     PerformanceTelemetry m_performance_telemetry;

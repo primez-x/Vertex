@@ -5,6 +5,7 @@
 #include "sketch/assembly_model.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/geometry.hpp"
 #include "sketch/project_store.hpp"
 #include "support/noninteractive_errors.hpp"
 #include "../src/desktop/plan_canvas.hpp"
@@ -29,6 +30,7 @@
 #include <QTreeWidgetItemIterator>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -48,6 +50,15 @@ void require(bool condition, std::string_view message) {
     if (!condition) {
         throw std::runtime_error(std::string(message));
     }
+}
+
+bool horizontal_wall_matches(const sketch::desktop::CanvasEntity& entity,
+                             double x0, double x1, double y, double thickness) {
+    if (entity.segments.empty()) return false;
+    const auto bounds=sketch::boundary_bounds(entity.segments);
+    const auto close=[](double a,double b) { return std::abs(a-b)<1e-8; };
+    return close(bounds.minimum.x,x0) && close(bounds.maximum.x,x1) &&
+           close(bounds.minimum.y,y-thickness*.5) && close(bounds.maximum.y,y+thickness*.5);
 }
 
 void process_events() {
@@ -222,11 +233,9 @@ void test_output_refreshes_current_document_head() {
     const auto direct_rendered = std::find_if(
         direct_canvas->entities().begin(), direct_canvas->entities().end(),
         [&](const auto& entity) { return entity.id == direct_wall; });
-    require(direct_rendered != direct_canvas->entities().end() && direct_rendered->segments.size() == 1 &&
-                direct_rendered->segments.front().start.x == 5.0 &&
-                direct_rendered->segments.front().start.y == 5.0 &&
-                direct_rendered->segments.front().end.x == 13.0 &&
-                direct_rendered->segments.front().end.y == 5.0,
+    require(direct_rendered != direct_canvas->entities().end() &&
+                horizontal_wall_matches(*direct_rendered,5.0,13.0,5.0,
+                    direct_moved.properties.at("thickness_m").get<double>()),
             "PDF output must render the current direct document head");
 
     // Mutable Document access also permits replacing a head by an alternate
@@ -247,7 +256,8 @@ void test_output_refreshes_current_document_head() {
         direct_canvas->entities().begin(), direct_canvas->entities().end(),
         [&](const auto& entity) { return entity.id == direct_wall; });
     require(alternate_rendered != direct_canvas->entities().end() &&
-                alternate_rendered->segments.front().start.x == 20.0,
+                horizontal_wall_matches(*alternate_rendered,20.0,28.0,5.0,
+                    direct_moved.properties.at("thickness_m").get<double>()),
             "output cache accepted different geometry with identical document identity and revision");
 
     require(!direct.createDrawingSheet(QStringLiteral("P-201"), QStringLiteral("215.5"),
@@ -332,11 +342,9 @@ void test_output_refreshes_current_document_head() {
     const auto shared_rendered = std::find_if(
         shared_canvas->entities().begin(), shared_canvas->entities().end(),
         [&](const auto& entity) { return entity.id == shared_wall; });
-    require(shared_rendered != shared_canvas->entities().end() && shared_rendered->segments.size() == 1 &&
-                shared_rendered->segments.front().start.x == -4.0 &&
-                shared_rendered->segments.front().start.y == 2.0 &&
-                shared_rendered->segments.front().end.x == 2.0 &&
-                shared_rendered->segments.front().end.y == 2.0,
+    require(shared_rendered != shared_canvas->entities().end() &&
+                horizontal_wall_matches(*shared_rendered,-4.0,2.0,2.0,
+                    shared_moved.properties.at("thickness_m").get<double>()),
             "PDF output must render the current externally shared document head");
 
     auto shared_invalid = shared_document->snapshot().entities().at(shared_wall.toStdString());
@@ -461,7 +469,15 @@ void test_visibility_workflow() {
     const auto upper_wall_entry = std::find_if(
         measurement->entities().begin(), measurement->entities().end(),
         [&](const auto& entity) { return entity.id == upper_wall; });
-    require(upper_wall_entry != measurement->entities().end() && upper_wall_entry->segments.size() == 2,
+    require(upper_wall_entry != measurement->entities().end() &&
+                horizontal_wall_matches(*upper_wall_entry,0.0,8.0,8.0,
+                    window.document().snapshot().entities().at(upper_wall.toStdString())
+                        .properties.at("thickness_m").get<double>()) &&
+                std::none_of(upper_wall_entry->segments.begin(),upper_wall_entry->segments.end(),
+                    [](const auto& edge) {
+                        return std::min(edge.start.x,edge.end.x)<2.0 &&
+                               std::max(edge.start.x,edge.end.x)>2.0;
+                    }),
             "hosted opening must split the upper wall in both plans");
 
     auto* tree = navigator(window);
@@ -592,9 +608,7 @@ void test_visibility_workflow() {
         measurement->entities().begin(), measurement->entities().end(),
         [](const auto& entity) { return entity.id == QStringLiteral("canonical-baseline-wall"); });
     require(canonical_entry != measurement->entities().end() &&
-                canonical_entry->segments.size() == 1 &&
-                canonical_entry->segments.front().start.x == 12.0 &&
-                canonical_entry->segments.front().start.y == 12.0,
+                horizontal_wall_matches(*canonical_entry,12.0,16.0,12.0,0.14),
             "plan output must read a wall from its canonical baseline");
 
     // A malformed canonical slab member remains an output error even when
