@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -30,6 +31,130 @@ def write_json(path: pathlib.Path, value: object) -> None:
 
 
 class StageOfflineBundleTests(unittest.TestCase):
+    NATIVE_ACL_SNAPSHOT = r"""
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+public static class FixtureNativeAcl {
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    static extern IntPtr CreateFileW(string path, uint access, uint share, IntPtr attributes,
+        uint disposition, uint flags, IntPtr template);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+    [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr pointer);
+    [DllImport("advapi32.dll")]
+    static extern uint GetSecurityInfo(IntPtr handle, uint type, uint information,
+        out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr descriptor);
+    [DllImport("advapi32.dll", SetLastError=true)]
+    static extern bool GetSecurityDescriptorControl(IntPtr descriptor, out ushort control, out uint revision);
+    [DllImport("advapi32.dll")]
+    static extern uint GetSecurityDescriptorLength(IntPtr descriptor);
+    public static string Read(string path) {
+        IntPtr handle=CreateFileW(path,0x20000,7,IntPtr.Zero,3,0x02200000,IntPtr.Zero);
+        if(handle==new IntPtr(-1)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        IntPtr descriptor=IntPtr.Zero;
+        try {
+            IntPtr owner, group, dacl, sacl;
+            uint result=GetSecurityInfo(handle,1,7,out owner,out group,out dacl,out sacl,out descriptor);
+            if(result!=0) throw new Win32Exception((int)result);
+            ushort control; uint revision;
+            if(!GetSecurityDescriptorControl(descriptor,out control,out revision))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            byte[] raw=new byte[GetSecurityDescriptorLength(descriptor)];
+            Marshal.Copy(descriptor,raw,0,raw.Length);
+            var parsed=new RawSecurityDescriptor(raw,0);
+            var entries=new List<string>();
+            if(parsed.DiscretionaryAcl!=null) foreach(GenericAce ace in parsed.DiscretionaryAcl) {
+                byte[] binary=new byte[ace.BinaryLength];
+                ace.GetBinaryForm(binary,0);
+                entries.Add(Convert.ToBase64String(binary));
+            }
+            // Binary ACEs retain SID/type/mask/flags and their original order.
+            return parsed.Owner.Value+"|"+parsed.Group.Value+"|"+control+"|"+revision+"|"+
+                (parsed.DiscretionaryAcl==null ? "NULL" : String.Join(",",entries));
+        } finally { if(descriptor!=IntPtr.Zero) LocalFree(descriptor); CloseHandle(handle); }
+    }
+}
+'@
+"""
+
+    def run_powershell(self, script: str):
+        return subprocess.run(
+            [shutil.which("pwsh"), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+
+    @staticmethod
+    def ps_path(path):
+        return "'" + str(path).replace("'", "''") + "'"
+
+    def make_fixture_path_writable(self, path):
+        if os.name != "nt":
+            return
+        checked = self.run_powershell(
+            "$ErrorActionPreference='Stop'; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User; "
+            f"$path={self.ps_path(path)}; $old=Get-Acl -LiteralPath $path; "
+            "$acl=if((Get-Item -LiteralPath $path).PSIsContainer){[Security.AccessControl.DirectorySecurity]::new()}"
+            "else{[Security.AccessControl.FileSecurity]::new()}; "
+            "$acl.SetSecurityDescriptorSddlForm($old.Sddl,[Security.AccessControl.AccessControlSections]::Access); "
+            "$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new("
+            "$sid,'FullControl','Allow')); $item=Get-Item -LiteralPath $path; "
+            "[IO.FileSystemAclExtensions]::SetAccessControl($item,$acl)")
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+
+    def runtime_acls(self, target):
+        if os.name != "nt":
+            return None
+        checked = self.run_powershell(
+            "$ErrorActionPreference='Stop'; $result=@{}; "
+            f"Get-ChildItem -LiteralPath {self.ps_path(target)} -Recurse -Force | "
+            "ForEach-Object { $result[$_.FullName]=(Get-Acl -LiteralPath $_.FullName).Sddl }; "
+            "$result | ConvertTo-Json -Compress")
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        return json.loads(checked.stdout)
+
+    def cleanup_fixture(self, directory):
+        # Tests own this temporary tree. Unlock only manifest-listed module
+        # paths, including a preserved transaction backup, before deleting it.
+        root = pathlib.Path(directory.name)
+        if os.name == "nt" and shutil.which("pwsh"):
+            paths = set()
+            markers = list(root.rglob("runtime-manifest.json"))
+            # A rejection test may deliberately damage the installed marker.
+            # The original source bundle still supplies all owned paths.
+            module_relatives = set()
+            for marker in markers:
+                manifest = json.loads(marker.read_text(encoding="utf-8"))
+                for entry in manifest["files"]:
+                    relative = pathlib.PurePosixPath(entry["path"])
+                    if relative.parts[0] not in ("bin", "plugins"):
+                        continue
+                    module_relatives.add(relative)
+            for marker in markers:
+                for relative in module_relatives:
+                    path = marker.parent.joinpath(*relative.parts)
+                    paths.add(path)
+                    while path.parent != marker.parent:
+                        path = path.parent
+                        paths.add(path)
+            existing = [p for p in paths if p.exists()]
+            if existing:
+                literals = ",".join(self.ps_path(p) for p in existing)
+                checked = self.run_powershell(
+                    "$ErrorActionPreference='Stop'; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User; "
+                    f"foreach ($path in @({literals})) {{ $old=Get-Acl -LiteralPath $path; "
+                    "$acl=if((Get-Item -LiteralPath $path).PSIsContainer){[Security.AccessControl.DirectorySecurity]::new()}"
+                    "else{[Security.AccessControl.FileSecurity]::new()}; "
+                    "$acl.SetSecurityDescriptorSddlForm($old.Sddl,[Security.AccessControl.AccessControlSections]::Access); "
+                    "$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new("
+                    "$sid,'FullControl','Allow')); $item=Get-Item -LiteralPath $path; "
+                    "[IO.FileSystemAclExtensions]::SetAccessControl($item,$acl) }")
+                self.assertEqual(checked.returncode, 0, checked.stderr)
+        directory.cleanup()
+
     def fixture(self):
         directory = tempfile.TemporaryDirectory()
         root = pathlib.Path(directory.name)
@@ -192,7 +317,7 @@ class StageOfflineBundleTests(unittest.TestCase):
 
     def test_stages_self_contained_bundle_and_runtime_manifest(self):
         fixture = self.fixture()
-        self.addCleanup(fixture[0].cleanup)
+        self.addCleanup(self.cleanup_fixture, fixture[0])
         _, root, inventory, source_kit, allowlist, app, dependency, source, source_notice = fixture
         output_root = root / "out"
 
@@ -275,7 +400,7 @@ class StageOfflineBundleTests(unittest.TestCase):
 
     def test_staging_is_byte_deterministic_for_same_inputs(self):
         fixture = self.fixture()
-        self.addCleanup(fixture[0].cleanup)
+        self.addCleanup(self.cleanup_fixture, fixture[0])
         _, root, inventory, source_kit, allowlist, *_ = fixture
 
         first = stage.stage_bundle(inventory, allowlist, source_kit, root, root / "out", "first")
@@ -298,7 +423,7 @@ class StageOfflineBundleTests(unittest.TestCase):
 
     def test_installed_msvc_runtime_cannot_replace_bundled_dependency(self):
         fixture = self.fixture()
-        self.addCleanup(fixture[0].cleanup)
+        self.addCleanup(self.cleanup_fixture, fixture[0])
         _, root, inventory_path, source_kit, allowlist, *_ = fixture
         inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
         inventory["system_runtime_imports"] = ["KERNEL32.dll", "VCRUNTIME140.dll"]
@@ -309,7 +434,7 @@ class StageOfflineBundleTests(unittest.TestCase):
 
     def test_missing_source_kit_file_fails_before_publishing_bundle(self):
         fixture = self.fixture()
-        self.addCleanup(fixture[0].cleanup)
+        self.addCleanup(self.cleanup_fixture, fixture[0])
         _, root, inventory, source_kit, allowlist, _, _, source, _ = fixture
         source.unlink()
 
@@ -324,7 +449,7 @@ class StageOfflineBundleTests(unittest.TestCase):
         if pwsh is None:
             self.skipTest("PowerShell is unavailable")
         fixture = self.fixture()
-        self.addCleanup(fixture[0].cleanup)
+        self.addCleanup(self.cleanup_fixture, fixture[0])
         _, root, inventory, source_kit, allowlist, *_ = fixture
         stage.stage_bundle(inventory, allowlist, source_kit, root, root / "out", "verify")
         bundle = root / "out" / "verify"
@@ -352,7 +477,7 @@ class StageOfflineBundleTests(unittest.TestCase):
         if pwsh is None:
             self.skipTest("PowerShell is unavailable")
         fixture = self.fixture()
-        self.addCleanup(fixture[0].cleanup)
+        self.addCleanup(self.cleanup_fixture, fixture[0])
         _, root, inventory, source_kit, allowlist, *_ = fixture
         stage.stage_bundle(inventory, allowlist, source_kit, root, root / "out", "install")
         bundle = root / "out" / "install"
@@ -376,7 +501,7 @@ class StageOfflineBundleTests(unittest.TestCase):
         if pwsh is None:
             self.skipTest("PowerShell is unavailable")
         fixture = self.fixture()
-        self.addCleanup(fixture[0].cleanup)
+        self.addCleanup(self.cleanup_fixture, fixture[0])
         _, root, inventory, source_kit, allowlist, *_ = fixture
         stage.stage_bundle(inventory, allowlist, source_kit, root, root / "out", "replace-empty")
         bundle = root / "out" / "replace-empty"
@@ -399,7 +524,7 @@ class StageOfflineBundleTests(unittest.TestCase):
         if pwsh is None:
             self.skipTest("PowerShell is unavailable")
         fixture = self.fixture()
-        self.addCleanup(fixture[0].cleanup)
+        self.addCleanup(self.cleanup_fixture, fixture[0])
         _, root, inventory, source_kit, allowlist, *_ = fixture
         stage.stage_bundle(inventory, allowlist, source_kit, root, root / "out", "repair")
         bundle = root / "out" / "repair"
@@ -410,6 +535,7 @@ class StageOfflineBundleTests(unittest.TestCase):
             capture_output=True, text=True, check=False,
         )
         self.assertEqual(install.returncode, 0, install.stderr)
+        self.make_fixture_path_writable(target / "bin" / "vertex.exe")
         (target / "bin" / "vertex.exe").write_bytes(b"tampered")
         repaired = subprocess.run(
             [pwsh, "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
@@ -426,7 +552,7 @@ class StageOfflineBundleTests(unittest.TestCase):
         if pwsh is None:
             self.skipTest("PowerShell is unavailable")
         fixture = self.fixture()
-        self.addCleanup(fixture[0].cleanup)
+        self.addCleanup(self.cleanup_fixture, fixture[0])
         _, root, inventory, source_kit, allowlist, *_ = fixture
         stage.stage_bundle(inventory, allowlist, source_kit, root, root / "out", "uninstall")
         bundle = root / "out" / "uninstall"
@@ -451,7 +577,7 @@ class StageOfflineBundleTests(unittest.TestCase):
         if pwsh is None:
             self.skipTest("PowerShell is unavailable")
         fixture = self.fixture()
-        self.addCleanup(fixture[0].cleanup)
+        self.addCleanup(self.cleanup_fixture, fixture[0])
         _, root, inventory, source_kit, allowlist, *_ = fixture
         stage.stage_bundle(inventory, allowlist, source_kit, root, root / "out", "uninstall-reject")
         bundle = root / "out" / "uninstall-reject"
@@ -469,7 +595,7 @@ class StageOfflineBundleTests(unittest.TestCase):
 
     def test_powershell_installer_uses_transactional_publish(self):
         fixture = self.fixture()
-        self.addCleanup(fixture[0].cleanup)
+        self.addCleanup(self.cleanup_fixture, fixture[0])
         _, root, inventory, source_kit, allowlist, *_ = fixture
         stage.stage_bundle(inventory, allowlist, source_kit, root, root / "out", "transaction")
         installer = (root / "out" / "transaction" / "install-offline-bundle.ps1").read_text(encoding="utf-8")
@@ -479,14 +605,15 @@ class StageOfflineBundleTests(unittest.TestCase):
         self.assertIn("Move-Item -LiteralPath $stagingRoot", installer)
         self.assertIn("$backupRoot", installer)
 
-    def lifecycle_fixture(self):
+    def lifecycle_fixture(self, installer_template=None):
         pwsh = shutil.which("pwsh")
         if pwsh is None:
             self.skipTest("PowerShell is unavailable")
         fixture = self.fixture()
-        self.addCleanup(fixture[0].cleanup)
+        self.addCleanup(self.cleanup_fixture, fixture[0])
         _, root, inventory, source_kit, allowlist, *_ = fixture
-        stage.stage_bundle(inventory, allowlist, source_kit, root, root / "out", "lifecycle")
+        stage.stage_bundle(inventory, allowlist, source_kit, root, root / "out", "lifecycle",
+                           installer_template=installer_template)
         bundle = root / "out" / "lifecycle"
         target = root / "installed"
 
@@ -509,14 +636,17 @@ class StageOfflineBundleTests(unittest.TestCase):
                 _, target, run = self.lifecycle_fixture()
                 project = target / relative
                 project.parent.mkdir(exist_ok=True)
+                self.make_fixture_path_writable(project.parent)
                 project.write_bytes(b"user project")
                 before = {p.relative_to(target): p.read_bytes()
                           for p in target.rglob("*") if p.is_file()}
+                before_acls = self.runtime_acls(target)
                 rejected = run(action)
                 self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
                 self.assertIn("unowned", rejected.stderr)
                 self.assertEqual(before, {p.relative_to(target): p.read_bytes()
                                          for p in target.rglob("*") if p.is_file()})
+                self.assertEqual(before_acls, self.runtime_acls(target))
 
     def test_lifecycle_rejects_a_modified_ownership_manifest(self):
         for action in ("Repair", "Uninstall"):
@@ -538,6 +668,7 @@ class StageOfflineBundleTests(unittest.TestCase):
         (target / "verify-offline-bundle.ps1").write_text(
             "[IO.File]::WriteAllText((Join-Path (Split-Path $PSScriptRoot -Parent) "
             "'executed.txt'), 'executed')\nexit 0\n", encoding="utf-8")
+        self.make_fixture_path_writable(target / "bin" / "vertex.exe")
         (target / "bin" / "vertex.exe").write_bytes(b"damaged")
         rejected = run("Uninstall")
         self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
@@ -561,9 +692,341 @@ class StageOfflineBundleTests(unittest.TestCase):
                 self.assertIn("unowned", rejected.stderr)
                 self.assertTrue(empty.is_dir())
 
+    @unittest.skipUnless(os.name == "nt", "Windows runtime ACL contract")
+    def test_installed_module_tree_is_readonly_and_lifecycle_remains_usable(self):
+        # This catches inherited user write access, omitted nested module ACLs,
+        # an overly broad AppContainer grant, and cleanup of a frozen runtime.
+        import ctypes
+        from ctypes import wintypes
+
+        fixture = self.fixture()
+        self.addCleanup(self.cleanup_fixture, fixture[0])
+        _, root, inventory_path, source_kit, allowlist, *_ = fixture
+        inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+        for relative in ("bin/helpers/deep.dll", "plugins/platforms/qwindows.dll"):
+            source = root / "build" / pathlib.PurePosixPath(relative)
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_bytes(b"module")
+            inventory["binaries"].append({
+                "name": source.name, "path": source.relative_to(root).as_posix(),
+                "destination": relative, "sha256": digest(source), "component_id": "vertex",
+            })
+        write_json(inventory_path, inventory)
+        stage.stage_bundle(inventory_path, allowlist, source_kit, root, root / "out", "acl")
+        bundle = root / "out" / "acl"
+        target = root / "installed"
+
+        def run(action):
+            return subprocess.run(
+                [shutil.which("pwsh"), "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+                 str(bundle / "install-offline-bundle.ps1"), "-InstallRoot", str(target), "-Action", action],
+                capture_output=True, text=True, check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+        installed = run("Install")
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                      wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        kernel.CreateFileW.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        userenv = ctypes.WinDLL("userenv")
+        sid = wintypes.LPVOID()
+        derive = userenv.DeriveAppContainerSidFromAppContainerName
+        derive.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(wintypes.LPVOID)]
+        self.assertEqual(derive("Vertex.ImportWorker", ctypes.byref(sid)), 0)
+        advapi = ctypes.WinDLL("advapi32")
+        advapi.ConvertSidToStringSidW.argtypes = [wintypes.LPVOID, ctypes.POINTER(wintypes.LPWSTR)]
+        advapi.FreeSid.argtypes = [wintypes.LPVOID]
+        kernel.LocalFree.argtypes = [wintypes.LPVOID]
+        sid_string = wintypes.LPWSTR()
+        try:
+            self.assertTrue(advapi.ConvertSidToStringSidW(sid, ctypes.byref(sid_string)))
+            worker_sid = sid_string.value
+        finally:
+            if sid_string:
+                kernel.LocalFree(sid_string)
+            advapi.FreeSid(sid)
+
+        def assert_readonly():
+            for path in (target / "bin", target / "bin/helpers", target / "plugins",
+                         target / "plugins/platforms", target / "bin/vertex.exe",
+                         target / "bin/helpers/deep.dll", target / "plugins/platforms/qwindows.dll"):
+                access = 0x10006 if path.is_dir() else 0x40000000
+                handle = kernel.CreateFileW(str(path), access, 7, None, 3, 0x02200000, None)
+                error = ctypes.get_last_error()
+                if handle != ctypes.c_void_p(-1).value:
+                    kernel.CloseHandle(handle)
+                self.assertEqual(handle, ctypes.c_void_p(-1).value, f"runtime is writable: {path}")
+                self.assertEqual(error, 5, str(path))
+            checked = self.run_powershell(
+                "$ErrorActionPreference='Stop'; "
+                f"$paths=@({self.ps_path(target / 'bin')},{self.ps_path(target / 'plugins/platforms/qwindows.dll')}); "
+                "@($paths | ForEach-Object { $acl=Get-Acl -LiteralPath $_; "
+                "@{protected=$acl.AreAccessRulesProtected; rules=@($acl.Access | ForEach-Object { "
+                "@{sid=$_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value; "
+                "rights=[int]$_.FileSystemRights; type=$_.AccessControlType.ToString(); inherited=$_.IsInherited} })} }) | ConvertTo-Json -Depth 5")
+            self.assertEqual(checked.returncode, 0, checked.stderr)
+            for acl in json.loads(checked.stdout):
+                self.assertTrue(acl["protected"])
+                self.assertFalse(any(rule["inherited"] for rule in acl["rules"]))
+                containers = [rule for rule in acl["rules"] if rule["sid"].startswith("S-1-15-")]
+                self.assertEqual(len(containers), 1)
+                self.assertEqual(containers[0]["sid"], worker_sid)
+                # Specific AppContainer SID, never ALL APPLICATION PACKAGES.
+                self.assertTrue(containers[0]["sid"].startswith("S-1-15-2-"))
+                self.assertNotEqual(containers[0]["sid"], "S-1-15-2-1")
+                self.assertEqual(containers[0]["rights"], 0x1200a9)
+
+        assert_readonly()
+        damaged = target / "bin/helpers/deep.dll"
+        self.make_fixture_path_writable(damaged)
+        damaged.write_bytes(b"damaged")
+        repaired = run("Repair")
+        self.assertEqual(repaired.returncode, 0, repaired.stderr)
+        self.assertEqual(damaged.read_bytes(), b"module")
+        assert_readonly()
+        removed = run("Uninstall")
+        self.assertEqual(removed.returncode, 0, removed.stderr)
+        self.assertFalse(target.exists())
+        self.assertFalse(any(p.name.startswith(".installed.") for p in root.iterdir()))
+
+    @unittest.skipUnless(os.name == "nt", "Windows runtime ACL rollback")
+    def test_module_acl_failure_rolls_back_repair(self):
+        # Inject a failure after ACL finalization to exercise the real rollback
+        # with an already frozen publication and frozen original backup.
+        with tempfile.TemporaryDirectory() as scratch:
+            template = pathlib.Path(scratch) / "installer.ps1"
+            source = (SCRIPTS / "install-offline-bundle.ps1").read_text(encoding="utf-8")
+            anchor = "Protect-OwnedModuleTree $targetRoot $publishedInstall.Manifest"
+            self.assertEqual(source.count(anchor), 1)
+            template.write_text(source.replace(
+                anchor, anchor + "\n        if ($Action -eq 'Repair') { throw 'injected ACL finalization failure' }"),
+                encoding="utf-8")
+            _, target, run = self.lifecycle_fixture(template)
+            before = {p.relative_to(target): p.read_bytes() for p in target.rglob("*") if p.is_file()}
+            before_acls = self.runtime_acls(target)
+            rejected = run("Repair")
+            self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+            self.assertIn("injected ACL finalization failure", rejected.stderr)
+            self.assertEqual(before, {p.relative_to(target): p.read_bytes()
+                                      for p in target.rglob("*") if p.is_file()})
+            self.assertEqual(before_acls, self.runtime_acls(target))
+            self.assertFalse(any(p.name.startswith(".installed.") for p in target.parent.iterdir()))
+            removed = run("Uninstall")
+            self.assertEqual(removed.returncode, 0, removed.stderr)
+
+    @unittest.skipUnless(os.name == "nt", "Windows runtime ACL rollback")
+    def test_module_acl_failure_restores_existing_empty_destination(self):
+        fixture = self.fixture()
+        self.addCleanup(self.cleanup_fixture, fixture[0])
+        _, root, inventory, source_kit, allowlist, *_ = fixture
+        template = root / "installer.ps1"
+        source = (SCRIPTS / "install-offline-bundle.ps1").read_text(encoding="utf-8")
+        anchor = "Protect-OwnedModuleTree $targetRoot $publishedInstall.Manifest"
+        self.assertEqual(source.count(anchor), 1)
+        template.write_text(source.replace(anchor, anchor + "\n        throw 'injected ACL finalization failure'"),
+                            encoding="utf-8")
+        stage.stage_bundle(inventory, allowlist, source_kit, root, root / "out", "rollback",
+                           installer_template=template)
+        target = root / "installed"
+        target.mkdir()
+        checked = subprocess.run(
+            [shutil.which("pwsh"), "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+             str(root / "out/rollback/install-offline-bundle.ps1"), "-InstallRoot", str(target)],
+            capture_output=True, text=True, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        self.assertNotEqual(checked.returncode, 0, checked.stdout)
+        self.assertIn("injected ACL finalization failure", checked.stderr)
+        self.assertTrue(target.is_dir())
+        self.assertEqual(list(target.iterdir()), [])
+        self.assertFalse(any(p.name.startswith(".installed.") for p in root.iterdir()))
+
+    @unittest.skipUnless(os.name == "nt", "Windows runtime ACL publication race")
+    def test_module_freeze_preserves_a_late_unowned_file_and_its_acl(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            template = pathlib.Path(scratch) / "installer.ps1"
+            source = (SCRIPTS / "install-offline-bundle.ps1").read_text(encoding="utf-8")
+            anchor = "Protect-OwnedModuleTree $targetRoot $publishedInstall.Manifest"
+            injected = """if ($Action -eq 'Repair') {
+            $latePath = Join-Path $targetRoot 'bin/late-user.txt'
+            [IO.File]::WriteAllText($latePath, 'user content')
+            Write-Output ('LATE_ACL:' + (Get-Acl -LiteralPath $latePath).Sddl)
+        }
+        """
+            self.assertEqual(source.count(anchor), 1)
+            template.write_text(source.replace(anchor, injected + anchor), encoding="utf-8")
+            _, target, run = self.lifecycle_fixture(template)
+            original = {p.relative_to(target): p.read_bytes()
+                        for p in target.rglob("*") if p.is_file()}
+            rejected = run("Repair")
+            self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+            self.assertIn("unowned", rejected.stderr)
+            self.assertIn("rollback preserved both", rejected.stderr)
+            late = target / "bin/late-user.txt"
+            self.assertEqual(late.read_text(encoding="utf-8"), "user content")
+            before_acl = next(line.removeprefix("LATE_ACL:") for line in rejected.stdout.splitlines()
+                              if line.startswith("LATE_ACL:"))
+            self.assertEqual(self.runtime_acls(target)[str(late)], before_acl)
+            backups = list(target.parent.glob(".installed.backup-*"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(original, {p.relative_to(backups[0]): p.read_bytes()
+                                        for p in backups[0].rglob("*") if p.is_file()})
+
+    @unittest.skipUnless(os.name == "nt", "Windows hard-link ownership")
+    def test_lifecycle_rejects_module_hard_links_before_changing_acls(self):
+        for action in ("Repair", "Uninstall"):
+            with self.subTest(action=action):
+                _, target, run = self.lifecycle_fixture()
+                module = target / "bin/dependency.dll"
+                outside = target.parent / "outside.dll"
+                self.make_fixture_path_writable(module)
+                os.link(module, outside)
+                before = self.runtime_acls(target)
+                rejected = run(action)
+                self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+                self.assertIn("hard link", rejected.stderr)
+                self.assertEqual(before, self.runtime_acls(target))
+                self.assertEqual(outside.read_bytes(), b"dependency")
+                self.assertEqual(module.stat().st_nlink, 2)
+
+    @unittest.skipUnless(os.name == "nt", "Windows partial-cleanup rollback")
+    def test_partial_backup_cleanup_restores_readonly_modules_and_preserves_user_file(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            template = pathlib.Path(scratch) / "installer.ps1"
+            source = (SCRIPTS / "install-offline-bundle.ps1").read_text(encoding="utf-8")
+            anchor = "Enable-OwnedModuleRemoval $RootPath $Manifest"
+            injected = """
+    if ($RootPath -eq $backupRoot) {
+        [IO.File]::WriteAllText((Join-Path $RootPath 'bin/late-user.txt'), 'user content')
+    }
+"""
+            self.assertEqual(source.count(anchor), 1)
+            template.write_text(source.replace(anchor, anchor + injected), encoding="utf-8")
+            _, target, run = self.lifecycle_fixture(template)
+            rejected = run("Repair")
+            self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+            self.assertIn("repair preserved content", rejected.stderr)
+            self.assertEqual((target / "bin/late-user.txt").read_text(encoding="utf-8"), "user content")
+            self.assertEqual((target / "bin/vertex.exe").read_bytes(), b"application")
+            self.assertEqual((target / "bin/dependency.dll").read_bytes(), b"dependency")
+            with self.assertRaises(PermissionError):
+                (target / "bin/vertex.exe").write_bytes(b"forbidden")
+            with self.assertRaises(PermissionError):
+                (target / "bin/forbidden.dll").write_bytes(b"forbidden")
+            self.assertFalse(any(p.name.startswith(".installed.") for p in target.parent.iterdir()))
+
+    @unittest.skipUnless(os.name == "nt", "Windows native ACL propagation")
+    def test_native_module_acl_update_preserves_late_child_security_descriptor(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            template = pathlib.Path(scratch) / "installer.ps1"
+            source = (SCRIPTS / "install-offline-bundle.ps1").read_text(encoding="utf-8")
+            # Insert after the rescan and link preflight, immediately before
+            # module ACL writes. This models the remaining publication window.
+            anchor = "    $systemSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')"
+            injected = """    if ($Action -eq 'Repair') {
+        $latePath = Join-Path $RootPath 'bin/late-user.txt'
+        [IO.File]::WriteAllText($latePath, 'user content')
+""" + self.NATIVE_ACL_SNAPSHOT + """
+        Write-Output ('NATIVE_ACL:' + [FixtureNativeAcl]::Read($latePath))
+    }
+"""
+            self.assertEqual(source.count(anchor), 1)
+            template.write_text(source.replace(anchor, injected + anchor), encoding="utf-8")
+            _, target, run = self.lifecycle_fixture(template)
+            rejected = run("Repair")
+            self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+            self.assertIn("unowned", rejected.stderr)
+            late = target / "bin/late-user.txt"
+            self.assertEqual(late.read_text(encoding="utf-8"), "user content")
+            before = next(line.removeprefix("NATIVE_ACL:") for line in rejected.stdout.splitlines()
+                          if line.startswith("NATIVE_ACL:"))
+            after = self.run_powershell(self.NATIVE_ACL_SNAPSHOT +
+                                       f"\n[FixtureNativeAcl]::Read({self.ps_path(late)})")
+            self.assertEqual(after.returncode, 0, after.stderr)
+            self.assertEqual(before, after.stdout.strip())
+            # Preservation includes usable access, not merely descriptor text.
+            late.write_bytes(b"user content still writable")
+            self.assertEqual(late.read_bytes(), b"user content still writable")
+            self.assertEqual(len(list(target.parent.glob(".installed.backup-*"))), 1)
+
+    @unittest.skipUnless(os.name == "nt", "Windows thrown-cleanup rollback")
+    def test_thrown_backup_cleanup_restores_complete_readonly_runtime(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            template = pathlib.Path(scratch) / "installer.ps1"
+            source = (SCRIPTS / "install-offline-bundle.ps1").read_text(encoding="utf-8")
+            anchor = "Enable-OwnedModuleRemoval $RootPath $Manifest"
+            self.assertEqual(source.count(anchor), 1)
+            template.write_text(source.replace(anchor, anchor + """
+    if ($RootPath -eq $backupRoot) {
+        [IO.File]::Delete((Join-Path $RootPath 'bin/dependency.dll'))
+        throw 'injected backup cleanup exception'
+    }
+"""), encoding="utf-8")
+            _, target, run = self.lifecycle_fixture(template)
+            before = {p.relative_to(target): p.read_bytes() for p in target.rglob("*") if p.is_file()}
+            before_acls = self.runtime_acls(target)
+            rejected = run("Repair")
+            self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+            self.assertIn("injected backup", rejected.stderr)
+            self.assertIn("cleanup exception", rejected.stderr)
+            self.assertEqual(before, {p.relative_to(target): p.read_bytes()
+                                      for p in target.rglob("*") if p.is_file()})
+            self.assertEqual(before_acls, self.runtime_acls(target))
+            self.assertFalse(any(p.name.startswith(".installed.") for p in target.parent.iterdir()))
+
+    @unittest.skipUnless(os.name == "nt", "Windows preserved inherited ACL recovery")
+    def test_unsafe_backup_refreeze_retains_protected_publication_and_unknown_native_acl(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            template = pathlib.Path(scratch) / "installer.ps1"
+            source = (SCRIPTS / "install-offline-bundle.ps1").read_text(encoding="utf-8")
+            anchor = "Enable-OwnedModuleRemoval $RootPath $Manifest"
+            injected = """
+    if ($RootPath -eq $backupRoot) {
+        # Model a legacy or concurrently recreated parent with inheritable
+        # grants. The new user file must retain those inherited ACE flags.
+        $moduleRoot = Join-Path $RootPath 'bin'
+        $acl = [Security.AccessControl.DirectorySecurity]::new()
+        $acl.SetSecurityDescriptorSddlForm((Get-Acl -LiteralPath $moduleRoot).Sddl,
+            [Security.AccessControl.AccessControlSections]::Access)
+        $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+            $sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
+        Set-ModuleAccessAcl $moduleRoot $acl $true
+        $latePath = Join-Path $moduleRoot 'late-user.txt'
+        [IO.File]::WriteAllText($latePath, 'user content')
+        if (-not [VertexOfflineRuntimeSecurity]::HasInheritedDaclAce($latePath)) {
+            throw 'fixture did not produce inherited ACEs'
+        }
+""" + self.NATIVE_ACL_SNAPSHOT + """
+        Write-Host ('NATIVE_ACL:' + [FixtureNativeAcl]::Read($latePath))
+    }
+"""
+            self.assertEqual(source.count(anchor), 1)
+            template.write_text(source.replace(anchor, anchor + injected), encoding="utf-8")
+            _, target, run = self.lifecycle_fixture(template)
+            rejected = run("Repair")
+            self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+            self.assertIn("cannot safely change module permissions", rejected.stderr)
+            self.assertIn("verified protected publication retained", rejected.stderr)
+            backups = list(target.parent.glob(".installed.backup-*"))
+            self.assertEqual(len(backups), 1)
+            late = backups[0] / "bin/late-user.txt"
+            self.assertEqual(late.read_text(encoding="utf-8"), "user content")
+            before = next(line.removeprefix("NATIVE_ACL:") for line in rejected.stdout.splitlines()
+                          if line.startswith("NATIVE_ACL:"))
+            after = self.run_powershell(self.NATIVE_ACL_SNAPSHOT +
+                                       f"\n[FixtureNativeAcl]::Read({self.ps_path(late)})")
+            self.assertEqual(after.returncode, 0, after.stderr)
+            self.assertEqual(before, after.stdout.strip())
+            late.write_bytes(b"still writable")
+            self.assertEqual((target / "bin/vertex.exe").read_bytes(), b"application")
+            with self.assertRaises(PermissionError):
+                (target / "bin/vertex.exe").write_bytes(b"forbidden")
+
     def test_strict_bundle_verifier_rejects_unlisted_files(self):
         fixture = self.fixture()
-        self.addCleanup(fixture[0].cleanup)
+        self.addCleanup(self.cleanup_fixture, fixture[0])
         _, root, inventory, source_kit, allowlist, *_ = fixture
         stage.stage_bundle(inventory, allowlist, source_kit, root, root / "out", "strict")
         bundle = root / "out" / "strict"
@@ -586,7 +1049,7 @@ class StageOfflineBundleTests(unittest.TestCase):
 
     def test_bundle_verifier_rejects_install_list_drift(self):
         fixture = self.fixture()
-        self.addCleanup(fixture[0].cleanup)
+        self.addCleanup(self.cleanup_fixture, fixture[0])
         _, root, inventory, source_kit, allowlist, *_ = fixture
         stage.stage_bundle(inventory, allowlist, source_kit, root, root / "out", "drift")
         bundle = root / "out" / "drift"
@@ -611,7 +1074,7 @@ class StageOfflineBundleTests(unittest.TestCase):
 
     def test_bundle_verifier_rejects_a_structurally_invalid_sbom_even_if_hashes_are_rewritten(self):
         fixture = self.fixture()
-        self.addCleanup(fixture[0].cleanup)
+        self.addCleanup(self.cleanup_fixture, fixture[0])
         _, root, inventory, source_kit, allowlist, *_ = fixture
         stage.stage_bundle(inventory, allowlist, source_kit, root, root / "out", "invalid-sbom")
         bundle = root / "out" / "invalid-sbom"

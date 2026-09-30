@@ -127,7 +127,238 @@ function Assert-RuntimeInstall([string]$RootPath, [string]$ManifestName, [string
             Fail "installed runtime contains unowned content; move it outside the install root before $Action`: $($candidate.FullName)"
         }
     }
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+        Initialize-ModuleSecurity
+        $modulePaths = Get-OwnedModulePaths $RootPath $manifest
+        foreach ($path in $modulePaths.Keys) {
+            if (-not $modulePaths[$path]) { [VertexOfflineRuntimeSecurity]::AssertSingleLink($path) }
+        }
+    }
     return @{ ManifestPath = $manifestPath; VerifierPath = $verifierPath; Manifest = $manifest }
+}
+
+function Get-OwnedModulePaths([string]$RootPath, $Manifest) {
+    $paths = @{}
+    foreach ($entry in @($Manifest.files)) {
+        $relative = ([string]$entry.path -replace '\\', '/')
+        # The broker loads modules from bin and the sibling Qt plugin tree.
+        if ($relative -notmatch '^(bin|plugins)/') { continue }
+        $path = Resolve-SafeChildPath $RootPath $relative 'owned module path'
+        if (Test-Path -LiteralPath $path -PathType Leaf) { $paths[$path] = $false }
+        $parent = Split-Path -Path $path -Parent
+        while (-not $parent.Equals($RootPath, [StringComparison]::OrdinalIgnoreCase)) {
+            Assert-NoReparseChain $RootPath $parent 'owned module directory'
+            if (Test-Path -LiteralPath $parent -PathType Container) { $paths[$parent] = $true }
+            $parent = Split-Path -Path $parent -Parent
+        }
+    }
+    return $paths
+}
+
+function Initialize-ModuleSecurity {
+    if ($null -eq ('VertexOfflineRuntimeSecurity' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+public static class VertexOfflineRuntimeSecurity {
+    [StructLayout(LayoutKind.Sequential)]
+    struct FileInformation {
+        public uint attributes, creationLow, creationHigh, accessLow, accessHigh, writeLow, writeHigh,
+            volumeSerial, sizeHigh, sizeLow, links, indexHigh, indexLow;
+    }
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern IntPtr CreateFileW(string path, uint access, uint share, IntPtr attributes,
+        uint disposition, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GetFileInformationByHandle(IntPtr handle, out FileInformation information);
+    [DllImport("kernel32.dll")]
+    static extern bool CloseHandle(IntPtr handle);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool GetSecurityDescriptorDacl(IntPtr descriptor, out bool present,
+        out IntPtr dacl, out bool defaulted);
+    [DllImport("advapi32.dll")]
+    static extern uint SetSecurityInfo(IntPtr handle, uint objectType, uint information,
+        IntPtr owner, IntPtr group, IntPtr dacl, IntPtr sacl);
+    [DllImport("advapi32.dll")]
+    static extern uint GetSecurityInfo(IntPtr handle, uint objectType, uint information,
+        out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr descriptor);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool GetAce(IntPtr acl, uint index, out IntPtr ace);
+    [DllImport("kernel32.dll")]
+    static extern IntPtr LocalFree(IntPtr pointer);
+    [DllImport("userenv.dll", CharSet = CharSet.Unicode)]
+    static extern int CreateAppContainerProfile(string name, string displayName, string description,
+        IntPtr capabilities, uint count, out IntPtr sid);
+    [DllImport("userenv.dll", CharSet = CharSet.Unicode)]
+    static extern int DeriveAppContainerSidFromAppContainerName(string name, out IntPtr sid);
+    [DllImport("advapi32.dll")]
+    static extern IntPtr FreeSid(IntPtr sid);
+    static IntPtr OpenOwned(string path, uint access) {
+        IntPtr handle = CreateFileW(path, access, 7, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
+        if (handle == new IntPtr(-1)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        return handle;
+    }
+    static void ValidateObject(IntPtr handle, bool directory) {
+        FileInformation info;
+        if (!GetFileInformationByHandle(handle, out info)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        if ((info.attributes & 0x400) != 0 || ((info.attributes & 0x10) != 0) != directory)
+            throw new InvalidOperationException("module path is not an ordinary owned object");
+        if (!directory && info.links != 1)
+            throw new InvalidOperationException("module hard link is not exclusively owned by this runtime");
+    }
+    public static void AssertSingleLink(string path) {
+        IntPtr handle = OpenOwned(path, 0x80);
+        try { ValidateObject(handle, false); } finally { CloseHandle(handle); }
+    }
+    public static bool HasInheritedDaclAce(string path) {
+        IntPtr handle = OpenOwned(path, 0x20000), descriptor = IntPtr.Zero;
+        try {
+            IntPtr owner, group, dacl, sacl;
+            uint result = GetSecurityInfo(handle, 1, 4, out owner, out group, out dacl, out sacl, out descriptor);
+            if (result != 0) throw new Win32Exception((int)result);
+            if (dacl == IntPtr.Zero) return false;
+            int count = (ushort)Marshal.ReadInt16(dacl, 4);
+            for (uint i = 0; i < count; ++i) {
+                IntPtr ace;
+                if (!GetAce(dacl, i, out ace)) throw new Win32Exception(Marshal.GetLastWin32Error());
+                if ((Marshal.ReadByte(ace, 1) & 0x10) != 0) return true;
+            }
+            return false;
+        } finally { if (descriptor != IntPtr.Zero) LocalFree(descriptor); CloseHandle(handle); }
+    }
+    public static void ApplyDacl(string path, byte[] descriptor, bool protect, bool directory) {
+        // MAXIMUM_ALLOWED suppresses inherited access-mask propagation. The
+        // caller guards unknown children because inherited ACE flags can
+        // still change when the parent DACL changes.
+        IntPtr handle = OpenOwned(path, 0x02000000);
+        GCHandle pinned = GCHandle.Alloc(descriptor, GCHandleType.Pinned);
+        try {
+            ValidateObject(handle, directory);
+            bool present, defaulted;
+            IntPtr dacl;
+            if (!GetSecurityDescriptorDacl(pinned.AddrOfPinnedObject(), out present, out dacl, out defaulted))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            if (!present || dacl == IntPtr.Zero) throw new InvalidOperationException("module DACL must not be null");
+            uint result = SetSecurityInfo(handle, 1, 4 | (protect ? 0x80000000u : 0x20000000u),
+                IntPtr.Zero, IntPtr.Zero, dacl, IntPtr.Zero);
+            if (result != 0) throw new Win32Exception((int)result);
+        } finally { pinned.Free(); CloseHandle(handle); }
+    }
+    public static string WorkerSid() {
+        IntPtr sid = IntPtr.Zero;
+        try {
+            int result = CreateAppContainerProfile("Vertex.ImportWorker", "Vertex import worker",
+                "Local worker for bounded drawing-file interchange", IntPtr.Zero, 0, out sid);
+            if (result == unchecked((int)0x800700B7)) {
+                if (sid != IntPtr.Zero) { FreeSid(sid); sid = IntPtr.Zero; }
+                result = DeriveAppContainerSidFromAppContainerName("Vertex.ImportWorker", out sid);
+            }
+            if (result < 0 || sid == IntPtr.Zero)
+                throw new InvalidOperationException("worker AppContainer profile unavailable: 0x" + result.ToString("X8"));
+            return new SecurityIdentifier(sid).Value;
+        } finally { if (sid != IntPtr.Zero) FreeSid(sid); }
+    }
+}
+'@
+    }
+}
+
+function Get-WorkerAppContainerSid {
+    Initialize-ModuleSecurity
+    return [Security.Principal.SecurityIdentifier]::new([VertexOfflineRuntimeSecurity]::WorkerSid())
+}
+
+function Set-ModuleAccessAcl([string]$Path, $Acl, [bool]$IsDirectory) {
+    Initialize-ModuleSecurity
+    [VertexOfflineRuntimeSecurity]::ApplyDacl($Path, $Acl.GetSecurityDescriptorBinaryForm(), $Acl.AreAccessRulesProtected, $IsDirectory)
+}
+
+function Assert-PreservedModuleAcls([string]$RootPath, $Paths) {
+    Initialize-ModuleSecurity
+    foreach ($module in @('bin', 'plugins')) {
+        $moduleRoot = Resolve-SafeChildPath $RootPath $module 'preserved module root'
+        if (-not (Test-Path -LiteralPath $moduleRoot)) { continue }
+        foreach ($candidate in @(Get-ChildItem -LiteralPath $moduleRoot -Recurse -Force -ErrorAction Stop)) {
+            if ($Paths.ContainsKey($candidate.FullName)) { continue }
+            if (($candidate.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                [VertexOfflineRuntimeSecurity]::HasInheritedDaclAce($candidate.FullName)) {
+                Fail "cannot safely change module permissions around unowned inherited or reparse content; preserved at $($candidate.FullName)"
+            }
+        }
+    }
+}
+
+function Protect-OwnedModuleTree([string]$RootPath, $Manifest, [bool]$PreserveUnowned = $false) {
+    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { return }
+    $paths = Get-OwnedModulePaths $RootPath $Manifest
+    if ($PreserveUnowned) {
+        Assert-PreservedModuleAcls $RootPath $paths
+    } else {
+        foreach ($module in @('bin', 'plugins')) {
+            $moduleRoot = Resolve-SafeChildPath $RootPath $module 'module root'
+            if (-not (Test-Path -LiteralPath $moduleRoot)) { continue }
+            foreach ($candidate in @(Get-ChildItem -LiteralPath $moduleRoot -Recurse -Force -ErrorAction Stop)) {
+                if (-not $paths.ContainsKey($candidate.FullName) -or
+                    ($candidate.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                    Fail "module tree contains unowned content before permission changes: $($candidate.FullName)"
+                }
+            }
+        }
+    }
+    $userSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $workerSid = Get-WorkerAppContainerSid
+    foreach ($path in $paths.Keys) {
+        if (-not $paths[$path]) { [VertexOfflineRuntimeSecurity]::AssertSingleLink($path) }
+    }
+    $systemSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+    $adminSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+    # Explicit ACLs on every declared object avoid relying on inherited grants
+    # or propagating changes to content not owned by this bundle.
+    foreach ($path in @($paths.Keys | Sort-Object { $_.Length } -Descending)) {
+        $acl = if ($paths[$path]) { [Security.AccessControl.DirectorySecurity]::new() } `
+               else { [Security.AccessControl.FileSecurity]::new() }
+        $acl.SetAccessRuleProtection($true, $false)
+        foreach ($sid in @($systemSid, $adminSid)) {
+            $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'Allow'))
+        }
+        foreach ($sid in @($userSid, $workerSid)) {
+            $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, 'ReadAndExecute', 'Allow'))
+        }
+        if ($paths[$path] -and -not $PreserveUnowned) {
+            # Recheck immediately before each directory update. Windows may
+            # rewrite inherited ACE flags on unexpected children even when
+            # the native API does not propagate access masks to them.
+            foreach ($child in @(Get-ChildItem -LiteralPath $path -Force -ErrorAction Stop)) {
+                if (-not $paths.ContainsKey($child.FullName) -or
+                    ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                    Fail "module directory received unowned content before permission changes: $($child.FullName)"
+                }
+            }
+        }
+        Set-ModuleAccessAcl $path $acl $paths[$path]
+    }
+}
+
+function Enable-OwnedModuleRemoval([string]$RootPath, $Manifest) {
+    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { return }
+    $paths = Get-OwnedModulePaths $RootPath $Manifest
+    Initialize-ModuleSecurity
+    Assert-PreservedModuleAcls $RootPath $paths
+    foreach ($path in $paths.Keys) {
+        if (-not $paths[$path]) { [VertexOfflineRuntimeSecurity]::AssertSingleLink($path) }
+    }
+    $userSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    foreach ($path in @($paths.Keys | Sort-Object { $_.Length } -Descending)) {
+        $existing = Get-Acl -LiteralPath $path
+        $acl = if ($paths[$path]) { [Security.AccessControl.DirectorySecurity]::new() } `
+               else { [Security.AccessControl.FileSecurity]::new() }
+        $acl.SetSecurityDescriptorSddlForm($existing.Sddl, [Security.AccessControl.AccessControlSections]::Access)
+        # No inheritance: grant deletion only on exact manifest-owned objects.
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($userSid, 'Modify', 'Allow'))
+        Set-ModuleAccessAcl $path $acl $paths[$path]
+    }
 }
 
 function Remove-OwnedRuntime([string]$RootPath, [string]$ManifestName, $Manifest) {
@@ -148,6 +379,7 @@ function Remove-OwnedRuntime([string]$RootPath, [string]$ManifestName, $Manifest
             $parent = Split-Path -Path $parent -Parent
         }
     }
+    Enable-OwnedModuleRemoval $RootPath $Manifest
     $complete = $true
     foreach ($file in $files) {
         if (Test-Path -LiteralPath $file -PathType Leaf) {
@@ -260,6 +492,7 @@ try {
         Fail 'temporary install paths already exist'
     }
     $targetMovedToBackup = $false
+    $backupRecoveryFailed = $false
     $publishedRootCreated = $false
     $published = $false
     try {
@@ -306,14 +539,41 @@ try {
         if ($LASTEXITCODE -ne 0) {
             Fail 'installed runtime verification failed'
         }
+        # Verify ownership after publication before changing permissions. A
+        # failed ACL update follows the same owned-file rollback as any other
+        # publication failure, including a partially frozen tree.
+        $publishedInstall = Assert-RuntimeInstall $targetRoot $runtimeManifestName $runtimeManifestPath
+        Protect-OwnedModuleTree $targetRoot $publishedInstall.Manifest
+        # Close the ACL-update interval before accepting the publication. A
+        # late unknown object must not become a trusted worker module merely
+        # because the parent directory has now been made read-only.
+        [void](Assert-RuntimeInstall $targetRoot $runtimeManifestName $runtimeManifestPath)
+        & $sourceVerifier -Root $targetRoot -ManifestName $runtimeManifestName
+        if ($LASTEXITCODE -ne 0) {
+            Fail 'protected runtime verification failed'
+        }
         if (Test-Path -LiteralPath $backupRoot) {
             if ($Action -eq 'Repair') {
                 $backup = Assert-RuntimeInstall $backupRoot $runtimeManifestName $runtimeManifestPath
-                if (-not (Remove-OwnedRuntime $backupRoot $runtimeManifestName $backup.Manifest)) {
+                $cleanupError = $null
+                try {
+                    $backupRemoved = Remove-OwnedRuntime $backupRoot $runtimeManifestName $backup.Manifest
+                } catch {
+                    $cleanupError = $_.Exception.Message
+                    $backupRemoved = $false
+                }
+                if (-not $backupRemoved) {
                     # Reconstitute the old runtime around the preserved late content
                     # so rollback can return a usable installation at the same path.
+                    $backupRecoveryFailed = $true
+                    Enable-OwnedModuleRemoval $backupRoot $runtimeManifest
                     Restore-OwnedRuntime $sourceRoot $backupRoot $runtimeManifestName `
-                        $runtimeManifestPath $sourceVerifier $runtimeManifest
+                            $runtimeManifestPath $sourceVerifier $runtimeManifest
+                    Protect-OwnedModuleTree $backupRoot $runtimeManifest $true
+                    $backupRecoveryFailed = $false
+                    if ($null -ne $cleanupError) {
+                        Fail "repair cleanup failed; the original runtime will be restored: $cleanupError"
+                    }
                     Fail "repair preserved content that appeared during publication; the original runtime will be restored"
                 }
             } else {
@@ -328,7 +588,7 @@ try {
             Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
         }
         if (-not $published) {
-            if ($publishedRootCreated -and (Test-Path -LiteralPath $targetRoot)) {
+            if ($publishedRootCreated -and (Test-Path -LiteralPath $targetRoot) -and -not $backupRecoveryFailed) {
                 $publishedInstall = $null
                 try {
                     $publishedInstall = Assert-RuntimeInstall $targetRoot $runtimeManifestName $runtimeManifestPath
@@ -341,8 +601,10 @@ try {
                 }
             }
             if ($targetMovedToBackup -and (Test-Path -LiteralPath $backupRoot) -and
-                -not (Test-Path -LiteralPath $targetRoot)) {
+                -not (Test-Path -LiteralPath $targetRoot) -and -not $backupRecoveryFailed) {
                 Move-Item -LiteralPath $backupRoot -Destination $targetRoot -Force
+            } elseif ($backupRecoveryFailed -and (Test-Path -LiteralPath $backupRoot)) {
+                $rollbackMessage = "rollback could not recover the original runtime; verified protected publication retained at $targetRoot; backup content retained at $backupRoot"
             } elseif ($targetMovedToBackup -and (Test-Path -LiteralPath $backupRoot) -and
                       (Test-Path -LiteralPath $targetRoot)) {
                 $rollbackMessage = ("rollback preserved both changed trees; published content: {0}; original runtime: {1}" -f `

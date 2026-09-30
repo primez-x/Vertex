@@ -20,7 +20,12 @@ and [redistribution list](https://learn.microsoft.com/en-us/visualstudio/release
 Local notice files are evidence inputs, not a licensing-clearance certificate;
 the current Redist.txt is a link stub and licensing qualification remains open.
 
-Run `scripts/inspect-runtime.ps1` after the build and runtime preparation.
+Run `scripts/prepare_cad_distribution.py` after the Release build and CAD runtime
+preparation, then `scripts/inspect-runtime.ps1 -CadPayloadManifest
+artifacts/runtime/cad-payload.json`. The payload generator reconstructs the SDK
+from the locked offline archive cache and verifies every selected staged file.
+Its generated component and portable allowlists augment the reviewed baseline;
+use both generated inputs below to include the actual CAD runtime.
 The offline bundler rejects an inventory that leaves a Visual C++ runtime DLL
 classified as an installed Windows dependency. `bin/qt.conf` is also shipped
 so Qt plugins resolve inside the installation without developer environment
@@ -30,6 +35,9 @@ Generate the three inputs from one checkout and one Release build. Every path
 is explicit so the staging run cannot fall back to a developer SDK or `PATH`:
 
 ```powershell
+python -B scripts/prepare_cad_distribution.py
+& scripts/inspect-runtime.ps1 -CadPayloadManifest artifacts/runtime/cad-payload.json
+
 python scripts/source_kit_manifest.py `
   --source-root . `
   --allowlist packaging/source-kit-allowlist.json `
@@ -37,13 +45,14 @@ python scripts/source_kit_manifest.py `
 
 python scripts/distribution_inventory.py `
   --root . `
+  --manifest artifacts/runtime/cad-components.json `
   --runtime-evidence artifacts/runtime/release-imports.json `
   --output artifacts/runtime/distribution-inventory.json
 
 python scripts/stage_offline_bundle.py `
   --source-root . `
   --inventory artifacts/runtime/distribution-inventory.json `
-  --allowlist packaging/portable-allowlist.json `
+  --allowlist artifacts/runtime/cad-allowlist.json `
   --source-kit artifacts/source-kit-manifest.json `
   --output-root artifacts/packages `
   --destination vertex-offline
@@ -94,6 +103,29 @@ pwsh -NoProfile -NonInteractive `
   -Root 'C:\Program Files\Vertex' `
   -ManifestName runtime-manifest.json
 ```
+
+After publication verification, the installer protects every manifest-owned
+file and directory under `bin/` and `plugins/` with explicit, noninheriting
+permissions. The installing user and the specific `Vertex.ImportWorker`
+AppContainer profile receive read/execute access; SYSTEM and Administrators
+retain full control. This includes the embedded CAD runtime. The broker still
+checks that its module roots cannot be written by the current unelevated user;
+the installer does not relax that check. Run Vertex normally rather than with
+an elevated administrator token when exercising the sandboxed import worker.
+
+Repair and uninstall restore deletion access only to declared objects, after
+ownership checks. Module hard links and reparse points are rejected before ACL
+changes; each native ACL write also validates its opened object. Failed repair
+that restores a partially removed backup protects its restored module paths
+again. If an unknown backup object has inherited permissions that cannot be
+preserved safely during refreezing, repair reports failure and retains both the
+verified protected publication and the backup, with their paths in the error.
+It does not replace the active installation with a writable partial backup.
+Ownership checks immediately before directory ACL changes reject
+observed late content; native writes validate the opened objects. These guards
+address installer lifecycle and late-content preservation; they do not
+establish immunity to an adversarial same-user
+namespace race or prevent the file owner from changing permissions later.
 
 Repair and uninstall require the installed runtime manifest to match the
 carried bundle byte-for-byte. Retain the original bundle: these actions are
