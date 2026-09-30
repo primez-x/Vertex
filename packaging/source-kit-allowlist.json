@@ -2815,6 +2815,10 @@
     },
     {
       "category": "source",
+      "path": "scripts/prepare_ifc_candidate.py"
+    },
+    {
+      "category": "source",
       "path": "scripts/prepare_ifc_source.py"
     },
     {
@@ -4076,6 +4080,10 @@
     {
       "category": "source",
       "path": "tests/test_prepare_cad_distribution.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_prepare_ifc_candidate.py"
     },
     {
       "category": "source",

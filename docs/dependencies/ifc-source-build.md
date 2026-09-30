@@ -214,6 +214,43 @@ does not inventory every transitive dependency source or assert license
 closure. `build_qualified` and `source_closure_qualified` remain `false`, even
 after compilation succeeds.
 
+## Isolated Python candidate staging
+
+After a successful `built-unqualified` build, `scripts/prepare_ifc_candidate.py`
+can stage an import candidate outside the workspace and build directory:
+
+```powershell
+.deps/cad-runtime/3.13.15/python.exe -I -B scripts/prepare_ifc_candidate.py `
+  --build-evidence C:/Build/Vertex/ifc-success/build-evidence.json `
+  --output C:/Build/Vertex/ifc-success-package
+.deps/cad-runtime/3.13.15/python.exe -I -B tests/test_prepare_ifc_candidate.py
+```
+
+Use the actual successful build path. The output must be fresh with an existing
+parent. Failed, configured-only, or unfinished builds are rejected before output
+creation. The helper checks the bound source snapshot, build inputs, configured
+cache, CMake and Python commands, all eight schemas, Release/x64 settings, and
+the extension's hash and structural platform fields. It copies the selected
+Python package and submodules, generated wrapper, extension, original notices,
+and local provenance; a final exact file/directory/hash check precedes manifest
+publication. Git metadata, cache files, unreviewed source files, and reparse
+paths are rejected. Partial output is preserved after a copy failure.
+
+Static SDK inputs have separate bounds (2 GB per file, 16 GB aggregate); they
+are verified but not copied into the Python package. Source and staged payloads
+remain bounded at 512 MB per file and 2 GB aggregate. If the tracked build recipe
+changed after invocation, `--recipe-snapshot` accepts only the original matching
+bytes saved as `<BuildRoot>/build-recipe.ps1`.
+
+This stage does not import or install the package, replace the product runtime,
+create a wheel, or deliver the C++ corresponding source and dependency license
+closure. The generated wrapper is hashed at staging rather than bound in the
+original build evidence. All qualification flags remain false. Fourteen
+synthetic tests pass on Python 3.12 and the locked 3.13.15 interpreter. The actual
+failed candidate 784 is rejected without creating an output, and its bound
+cache/CMake/Python coherence checks pass independently; neither result proves a
+successful native package. No actual successful candidate has been staged yet.
+
 Remaining evidence is a recorded successful Release wrapper/geometry build,
 reviewed package contents and notices, source/dependency/license closure,
 binary-to-source binding for the replacement, and existing IFC behavior checks
