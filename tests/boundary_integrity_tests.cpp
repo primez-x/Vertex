@@ -920,11 +920,289 @@ void test_boundary_redefinition_proofs_and_reference_policy() {
     require(reopen(changed, 7).snapshot().entities() == changed.entities(), "count-changing explicit geometry proof must reopen");
 }
 
+void test_changed_topology_explicit_reference_resolution() {
+    BoundaryAuthoringOptions options;
+    options.automatic_dimension_placement = true;
+    BoundaryAuthoringSession original_session(BoundaryAuthoringMode::draw_first, options);
+    (void)original_session.anchor({0,0});
+    (void)original_session.add_line_rise_run(parse_quantity("0 m"), parse_quantity("4 m"));
+    (void)original_session.add_line_rise_run(parse_quantity("3 m"), parse_quantity("0 m"));
+    (void)original_session.add_line_rise_run(parse_quantity("0 m"), parse_quantity("-4 m"));
+    (void)original_session.add_line_rise_run(parse_quantity("-3 m"), parse_quantity("0 m"));
+    original_session.classify_current_chain("living");
+    const auto accepted = original_session.close_chain();
+    auto owner = encode_identified_boundary_entity(accepted.boundary);
+    owner.properties["boundary_authoring"] = boundary_construction_envelope(accepted, options);
+    owner.extensions["opaque_owner"] = {{"number", 1.0}};
+    const auto& e0 = accepted.boundary.segments[0];
+    const auto& e1 = accepted.boundary.segments[1];
+    BoundaryDimension manual{"retarget-length", owner.id, e0.segment_id, {1,-1}};
+    manual.presentation = BoundaryDimensionPresentation{3.0, "#614822", true, false, true, 0.25};
+    auto manual_entity = encode_boundary_dimension_entity(manual);
+    manual_entity.properties["presentation"]["text_height_mm"] = 3;
+    manual_entity.properties["opaque_style"] = {{"number", 1.0}};
+    manual_entity.properties["target"]["opaque_target"] = {1.0, 2};
+    manual_entity.extensions["opaque_dimension"] = {{"number", 1.0}};
+    BoundaryDimension angle{"retarget-angle", owner.id, e0.segment_id, {4.5,0.5}};
+    angle.kind = BoundaryDimensionKind::angle;
+    angle.vertex_id = e0.end_vertex_id;
+    angle.secondary_segment_id = e1.segment_id;
+    auto angle_entity = encode_boundary_dimension_entity(angle);
+    angle_entity.properties["target"]["opaque_target"] = {{"number", 1.0}};
+    auto lock = encode_constraint_entity(PersistentConstraint{"retarget-lock", ConstraintRelationKind::fixed_length,
+        {{owner.id, WallEndpointRole::start, e0.segment_id, e0.start_vertex_id},
+         {owner.id, WallEndpointRole::end, e0.segment_id, e0.end_vertex_id}}, parse_quantity("4 m")});
+    lock.properties["bindings"][0]["opaque_binding"] = {{"number", 1.0}};
+    lock.extensions["opaque_constraint"] = {{"number", 1.0}};
+    auto unrelated = Entity::create("label", {{"text", "untouched"}});
+    unrelated.id = "unrelated-reference";
+    auto wall = Entity::create("wall", {{"baseline", {{"start", {0,0}}, {"end", {1,0}}, {"sweep_radians", 0}}},
+        {"thickness_m", 0.1}, {"height_m", 2.5}, {"elevation_m", 0}});
+    wall.id = "unaffected-wall";
+    auto joined = encode_constraint_entity(PersistentConstraint{"retarget-joined", ConstraintRelationKind::coincident,
+        {{owner.id, WallEndpointRole::start, e0.segment_id, e0.start_vertex_id}, {wall.id, WallEndpointRole::start}}});
+    joined.properties["bindings"][1]["opaque_binding"] = {{"number", 1.0}};
+    std::vector<Entity> entities{owner, manual_entity, angle_entity, lock, unrelated, wall, joined};
+    for (const auto& dimension : accepted.dimensions) entities.push_back(encode_boundary_dimension_entity(dimension));
+    auto document = Document::create(entities);
+    const auto before = document.snapshot();
+
+    BoundaryAuthoringSession triangle_session(BoundaryAuthoringMode::draw_first, options);
+    (void)triangle_session.anchor({4,0});
+    (void)triangle_session.add_line_rise_run(parse_quantity("0 m"), parse_quantity("-4 m"));
+    (void)triangle_session.add_line_rise_run(parse_quantity("3 m"), parse_quantity("2 m"));
+    (void)triangle_session.add_line_rise_run(parse_quantity("-3 m"), parse_quantity("2 m"));
+    triangle_session.classify_current_chain("living");
+    const auto new_chain = triangle_session.close_chain();
+    IdentifiedBoundary triangle{owner.id, owner.type, {{"mapped-e0","mapped-v0","mapped-v1",{{4,0},{0,0},0}},
+        {"mapped-e1","mapped-v1","mapped-v2",{{0,0},{2,3},0}}, {"mapped-e2","mapped-v2","mapped-v0",{{2,3},{4,0},0}}}};
+    BoundaryGeometryEdit base;
+    base.kind = BoundaryGeometryEditKind::redefine_boundary;
+    base.boundary_id = base.target_id = owner.id;
+    base.replacement_segments = encode_identified_boundary_entity(triangle).properties.at("segments");
+    base.replacement_authoring = boundary_construction_envelope(new_chain, options);
+    base.replacement_dimension_ids = {"mapped-d0", "mapped-d1", "mapped-d2"};
+    const auto old_encoding = encode_boundary_geometry_edit(base);
+    require(old_encoding.at("version") == 1 && !old_encoding.contains("replacement_child_mapping") &&
+        encode_boundary_geometry_edit(decode_boundary_geometry_edit(old_encoding)).dump() == old_encoding.dump(),
+        "empty reference plans must preserve exact version one encoding");
+    const Json mapping{{"segments", {{e0.segment_id, "mapped-e0"}, {e1.segment_id, "mapped-e2"}}},
+        {"vertices", {{e0.start_vertex_id, "mapped-v1"}, {e0.end_vertex_id, "mapped-v0"}}}};
+    const auto plan = [&](Json map, std::vector<std::string> removed = {}) {
+        auto value = old_encoding;
+        value["version"] = 2;
+        value["replacement_child_mapping"] = std::move(map);
+        value["replacement_removed_reference_ids"] = std::move(removed);
+        return decode_boundary_geometry_edit(value);
+    };
+    const auto edit = plan(mapping);
+    require(encode_boundary_geometry_edit(edit).at("version") == 2 &&
+        decode_boundary_geometry_edit(encode_boundary_geometry_edit(edit)) == edit,
+        "explicit reference plan must round trip as a strict version two intent");
+    const auto preview = Document::preview_command(before, EditBoundaryGeometry{before.revision(), edit});
+    document.apply(EditBoundaryGeometry{document.revision(), edit});
+    const auto after = document.snapshot();
+    require(after.entities() == preview.entities(), "reference resolution must publish the exact isolated candidate");
+    auto expected_manual = manual_entity;
+    expected_manual.properties["target"]["segment_id"] = "mapped-e0";
+    auto expected_angle = angle_entity;
+    expected_angle.properties["target"]["segment_id"] = "mapped-e0";
+    expected_angle.properties["target"]["second_segment_id"] = "mapped-e2";
+    expected_angle.properties["target"]["vertex_id"] = "mapped-v0";
+    auto expected_lock = lock;
+    expected_lock.properties["bindings"][0]["segment_id"] = "mapped-e0";
+    expected_lock.properties["bindings"][0]["vertex_id"] = "mapped-v1";
+    expected_lock.properties["bindings"][0]["role"] = "end";
+    expected_lock.properties["bindings"][1]["segment_id"] = "mapped-e0";
+    expected_lock.properties["bindings"][1]["vertex_id"] = "mapped-v0";
+    expected_lock.properties["bindings"][1]["role"] = "start";
+    auto expected_joined = joined;
+    expected_joined.properties["bindings"][0]["segment_id"] = "mapped-e0";
+    expected_joined.properties["bindings"][0]["vertex_id"] = "mapped-v1";
+    expected_joined.properties["bindings"][0]["role"] = "end";
+    const auto exact = [](const Entity& a, const Entity& b) {
+        return a == b && a.properties.dump() == b.properties.dump() && a.extensions.dump() == b.extensions.dump();
+    };
+    require(exact(after.entities().at(manual.id), expected_manual) && exact(after.entities().at(angle.id), expected_angle) &&
+        exact(after.entities().at(lock.id), expected_lock) && exact(after.entities().at(joined.id), expected_joined) &&
+        after.entities().at(unrelated.id) == unrelated && exact(after.entities().at(wall.id), wall),
+        "retargeting must preserve IDs, numeric JSON, presentation and opaque metadata; constraint roles follow target incidence");
+    require(std::isfinite(decode_boundary_dimension_entity(after.entities().at(angle.id)).dimension->resolve(after.entities().at(owner.id)).angle()),
+        "retargeted angle must resolve at its explicitly mapped common vertex");
+    require(after.entities().at(owner.id).extensions.at("boundary_geometry_derivation").at("source_boundary_authoring").dump() ==
+        owner.properties.at("boundary_authoring").dump(), "reference plans must preserve the exact original construction receipt");
+    require(reopen(after, 7).snapshot().entities() == after.entities(), "version two reference plans must replay and reopen exactly");
+    document.undo(document.revision());
+    require(document.snapshot().entities() == before.entities(), "retarget undo must restore all old references and receipts exactly");
+    document.redo(document.revision());
+    require(document.snapshot().entities() == after.entities(), "retarget redo must restore the canonical reference plan exactly");
+
+    const auto rejected = [&](BoundaryGeometryEdit invalid, std::string_view message) {
+        auto candidate = Document::fork(before);
+        bool failed = false;
+        try { candidate.apply(EditBoundaryGeometry{candidate.revision(), std::move(invalid)}); }
+        catch (const DocumentError&) { failed = true; }
+        require(failed && candidate.snapshot().entities() == before.entities() && candidate.revision() == before.revision(), message);
+    };
+    rejected(base, "missing decisions must retain the previous atomic rejection policy");
+    rejected(plan(mapping, {unrelated.id}), "an unrelated entity cannot be removed by a reference plan");
+    rejected(plan(mapping, {accepted.dimensions.front().id}), "automatic dimensions cannot be explicitly removed by a reference plan");
+    auto invalid_map = mapping;
+    invalid_map["segments"][accepted.boundary.segments[2].segment_id] = "mapped-e1";
+    rejected(plan(invalid_map), "unused mapping entries must be rejected");
+    invalid_map = mapping; invalid_map["segments"][e0.segment_id] = "mapped-v0";
+    rejected(plan(invalid_map), "segment mappings cannot target the vertex namespace");
+    invalid_map = mapping; invalid_map["vertices"][e0.end_vertex_id] = "missing-child";
+    rejected(plan(invalid_map), "mapped target children must exist");
+    invalid_map = mapping; invalid_map["vertices"].erase(e0.end_vertex_id);
+    rejected(plan(invalid_map), "every retained reference child must have an explicit mapping");
+    invalid_map = mapping; invalid_map["vertices"][e0.end_vertex_id] = "mapped-v1";
+    rejected(plan(invalid_map), "distinct old children cannot ambiguously collapse onto one new child");
+    invalid_map = mapping; invalid_map["segments"]["stale-old-child"] = "mapped-e1";
+    rejected(plan(invalid_map), "mapping source children must belong to the replaced boundary");
+    auto same_count = edit;
+    same_count.replacement_segments = owner.properties.at("segments");
+    same_count.replacement_authoring = nullptr;
+    same_count.replacement_dimension_ids.clear();
+    rejected(same_count, "reference decisions cannot be smuggled into unchanged topology edits");
+    auto conflict = edit;
+    conflict.replacement_authoring = nullptr;
+    conflict.replacement_segments[0]["start"] = {5,0};
+    conflict.replacement_segments[2]["end"] = {5,0};
+    rejected(conflict, "retargeted fixed length conflicts must reject without silent relaxation");
+    auto mixed = Document::fork(before);
+    const auto mixed_edit = plan(mapping, {manual.id});
+    mixed.apply(EditBoundaryGeometry{mixed.revision(), mixed_edit});
+    const auto mixed_after = mixed.snapshot();
+    require(!mixed_after.entities().contains(manual.id) && exact(mixed_after.entities().at(angle.id), expected_angle) &&
+        exact(mixed_after.entities().at(lock.id), expected_lock), "one explicit transaction must atomically remove and retain different references");
+    require(reopen(mixed_after, 7).snapshot().entities() == mixed_after.entities(), "mixed reference decisions must survive reopen");
+    mixed.undo(mixed.revision());
+    require(mixed.snapshot().entities() == before.entities(), "mixed decision undo must restore the removed entity exactly");
+    auto removals = Document::fork(before);
+    auto removal_mapping = mapping;
+    removal_mapping["vertices"].erase(e0.start_vertex_id);
+    removals.apply(EditBoundaryGeometry{removals.revision(), plan(removal_mapping, {manual.id, lock.id, joined.id})});
+    const auto removed_after = removals.snapshot();
+    require(!removed_after.entities().contains(lock.id) && !removed_after.entities().contains(joined.id) &&
+        !removed_after.entities().contains(manual.id) && exact(removed_after.entities().at(angle.id), expected_angle) &&
+        exact(removed_after.entities().at(wall.id), wall), "explicit constraint removal must retain unrelated owners and kept manual references");
+    require(reopen(removed_after, 7).snapshot().entities() == removed_after.entities(), "constraint removal decisions must replay through storage");
+    removals.undo(removals.revision());
+    require(removals.snapshot().entities() == before.entities(), "explicit removed constraints must be restored exactly by Undo");
+    auto removal_only = Document::fork(before);
+    const auto removal_only_edit = plan(Json::object(), {manual.id, angle.id, lock.id, joined.id});
+    require(encode_boundary_geometry_edit(removal_only_edit).at("replacement_child_mapping") == Json::object(),
+        "removal-only plans must use the canonical empty mapping object");
+    removal_only.apply(EditBoundaryGeometry{removal_only.revision(), removal_only_edit});
+    require(!removal_only.snapshot().entities().contains(angle.id) && !removal_only.snapshot().entities().contains(lock.id) &&
+        reopen(removal_only.snapshot(), 7).snapshot().entities() == removal_only.snapshot().entities(),
+        "canonical empty mappings must support explicit removal of all affected references");
+    const auto invalid_codec = [&](Json value) {
+        bool failed = false;
+        try { (void)decode_boundary_geometry_edit(value); } catch (const std::exception&) { failed = true; }
+        require(failed, "malformed or unversioned reference plan must be rejected by the strict codec");
+    };
+    auto malformed = encode_boundary_geometry_edit(edit);
+    malformed["version"] = 1; invalid_codec(malformed);
+    malformed = encode_boundary_geometry_edit(edit);
+    malformed["replacement_child_mapping"] = Json::array(); invalid_codec(malformed);
+    malformed = encode_boundary_geometry_edit(edit);
+    malformed["replacement_removed_reference_ids"] = {manual.id, manual.id}; invalid_codec(malformed);
+    malformed = encode_boundary_geometry_edit(edit);
+    malformed["replacement_child_mapping"] = Json::object(); invalid_codec(malformed);
+    malformed = encode_boundary_geometry_edit(edit);
+    malformed["replacement_child_mapping"] = {{"segments", Json::object()}, {"vertices", Json::object()}};
+    invalid_codec(malformed);
+    malformed = encode_boundary_geometry_edit(edit);
+    malformed["replacement_child_mapping"].erase("vertices"); invalid_codec(malformed);
+    malformed = encode_boundary_geometry_edit(edit);
+    malformed["replacement_child_mapping"]["vertices"] = Json::array(); invalid_codec(malformed);
+    malformed = encode_boundary_geometry_edit(edit);
+    malformed["replacement_child_mapping"]["extra"] = Json::object(); invalid_codec(malformed);
+    auto forged = after;
+    const_cast<std::vector<RevisionRecord>&>(forged.history()).back().boundary_geometry_edit = plan(mapping, {manual.id});
+    require_invalid_snapshot_not_published(forged);
+}
+
+void test_redraw_reference_mapping_separates_child_namespaces() {
+    auto owner = rectangle();
+    for (auto& edge : owner.properties.at("segments")) {
+        for (const auto* field : {"start_vertex_id", "end_vertex_id"})
+            if (edge.at(field) == "vertex-0") edge.at(field) = "edge-0";
+    }
+    const auto boundary = decode_identified_boundary_entity(owner);
+    require(boundary.segments[0].segment_id == boundary.segments[0].start_vertex_id,
+        "namespace fixture must use a valid identical segment and vertex ID");
+    BoundaryDimension length{"namespace-length", owner.id, "edge-0", {1,-1}};
+    BoundaryDimension angle{"namespace-angle", owner.id, "edge-3", {-1,-1}};
+    angle.kind = BoundaryDimensionKind::angle;
+    angle.secondary_segment_id = "edge-0";
+    angle.vertex_id = "edge-0";
+    const auto constraint = encode_constraint_entity(PersistentConstraint{"namespace-lock", ConstraintRelationKind::fixed_length,
+        {{owner.id, WallEndpointRole::start, "edge-0", "edge-0"},
+         {owner.id, WallEndpointRole::end, "edge-0", "vertex-1"}}, parse_quantity("4 m")});
+    auto document = Document::create({owner, encode_boundary_dimension_entity(length),
+        encode_boundary_dimension_entity(angle), constraint});
+    const auto before = document.snapshot();
+    IdentifiedBoundary triangle{owner.id, owner.type, {{"new-shared","new-shared","new-v1",{{4,0},{0,0},0}},
+        {"new-e1","new-v1","new-v2",{{0,0},{2,3},0}}, {"new-e2","new-v2","new-shared",{{2,3},{4,0},0}}}};
+    BoundaryGeometryEdit edit;
+    edit.kind = BoundaryGeometryEditKind::redefine_boundary;
+    edit.boundary_id = edit.target_id = owner.id;
+    edit.replacement_segments = encode_identified_boundary_entity(triangle).properties.at("segments");
+    edit.replacement_child_mapping = {{"segments", {{"edge-0", "new-shared"}, {"edge-3", "new-e1"}}},
+        {"vertices", {{"edge-0", "new-v1"}, {"vertex-1", "new-shared"}}}};
+    require(decode_boundary_geometry_edit(encode_boundary_geometry_edit(edit)) == edit,
+        "grouped namespace decisions must round trip through the strict codec");
+    document.apply(EditBoundaryGeometry{document.revision(), edit});
+    const auto after = document.snapshot();
+    const auto mapped_length = *decode_boundary_dimension_entity(after.entities().at(length.id)).dimension;
+    const auto mapped_angle = *decode_boundary_dimension_entity(after.entities().at(angle.id)).dimension;
+    const auto mapped_lock = *decode_constraint_entity(after.entities().at(constraint.id)).constraint;
+    require(mapped_length.segment_id == "new-shared" && mapped_angle.segment_id == "new-e1" &&
+        mapped_angle.secondary_segment_id == "new-shared" && mapped_angle.vertex_id == "new-v1" &&
+        mapped_lock.bindings[0].segment_id == "new-shared" && mapped_lock.bindings[0].vertex_id == "new-v1" &&
+        mapped_lock.bindings[0].role == WallEndpointRole::end && mapped_lock.bindings[1].vertex_id == "new-shared" &&
+        std::isfinite(mapped_angle.resolve(after.entities().at(owner.id)).angle()),
+        "equal source and target ID strings must be resolved independently by namespace for dimensions and constraints");
+    require(reopen(after, 7).snapshot().entities() == after.entities(), "namespace mapping must persist and replay exactly");
+    document.undo(document.revision());
+    require(document.snapshot().entities() == before.entities(), "namespace mapping Undo must restore exact source references");
+    document.redo(document.revision());
+    require(document.snapshot().entities() == after.entities(), "namespace mapping Redo must restore independent targets");
+    const auto rejected = [&](BoundaryGeometryEdit invalid) {
+        auto candidate = Document::fork(before);
+        bool failed = false;
+        try { candidate.apply(EditBoundaryGeometry{candidate.revision(), std::move(invalid)}); }
+        catch (const DocumentError&) { failed = true; }
+        require(failed && candidate.snapshot().entities() == before.entities() && candidate.revision() == before.revision(),
+            "wrong-kind, missing, or unused grouped decisions must reject atomically");
+    };
+    auto invalid = edit;
+    invalid.replacement_child_mapping["segments"]["edge-0"] = "new-v1";
+    rejected(invalid);
+    invalid = edit;
+    invalid.replacement_child_mapping["vertices"].erase("edge-0");
+    rejected(invalid);
+    invalid = edit;
+    invalid.replacement_child_mapping["vertices"]["edge-0"] = "new-e1";
+    rejected(invalid);
+    invalid = edit;
+    invalid.replacement_child_mapping["segments"]["edge-1"] = "new-e2";
+    rejected(invalid);
+    invalid = edit;
+    invalid.replacement_child_mapping["vertices"]["vertex-2"] = "new-v2";
+    rejected(invalid);
+}
+
 int main() {
     try {
         test_raw_commands_cannot_bypass_identity_validation();
         test_typed_vertex_split_preserves_identity_and_rejects_forgery();
         test_boundary_redefinition_proofs_and_reference_policy();
+        test_changed_topology_explicit_reference_resolution();
+        test_redraw_reference_mapping_separates_child_namespaces();
         test_downgrade_is_rejected_but_upgrade_undo_is_valid();
         test_future_boundary_version_is_preserved_read_only();
         test_dimension_references_are_atomic_and_survive_history();

@@ -36,6 +36,12 @@ struct BoundaryGeometryEdit {
     nlohmann::json replacement_authoring = nullptr;
     nlohmann::json replacement_properties = nlohmann::json::object();
     std::vector<std::string> replacement_dimension_ids;
+    // Explicit changed-topology reference decisions. A nonempty mapping has
+    // exactly segments/vertices objects of old -> new child IDs. Equal IDs
+    // in different namespaces remain independent; omitted decisions do not
+    // authorize silently dropping or reinterpreting references.
+    nlohmann::json replacement_child_mapping = nlohmann::json::object();
+    std::vector<std::string> replacement_removed_reference_ids;
 
     bool operator==(const BoundaryGeometryEdit& other) const {
         return boundary_id == other.boundary_id && kind == other.kind &&
@@ -47,7 +53,9 @@ struct BoundaryGeometryEdit {
             fraction == other.fraction && new_vertex_id == other.new_vertex_id &&
             new_segment_id == other.new_segment_id && new_dimension_id == other.new_dimension_id &&
             replacement_segments == other.replacement_segments && replacement_authoring == other.replacement_authoring &&
-            replacement_properties == other.replacement_properties && replacement_dimension_ids == other.replacement_dimension_ids;
+            replacement_properties == other.replacement_properties && replacement_dimension_ids == other.replacement_dimension_ids &&
+            replacement_child_mapping == other.replacement_child_mapping &&
+            replacement_removed_reference_ids == other.replacement_removed_reference_ids;
     }
 };
 
@@ -63,9 +71,12 @@ inline void validate_boundary_geometry_edit(const BoundaryGeometryEdit& edit) {
     };
     if (!valid_id(edit.boundary_id) || !valid_id(edit.target_id))
         throw std::invalid_argument("Boundary geometry edit identifiers are invalid");
+    if (!edit.replacement_child_mapping.is_object())
+        throw std::invalid_argument("Boundary reference mapping must be an object");
     if (edit.kind != BoundaryGeometryEditKind::redefine_boundary &&
         (!edit.replacement_segments.is_null() || !edit.replacement_authoring.is_null() ||
-         !edit.replacement_properties.empty() || !edit.replacement_dimension_ids.empty()))
+         !edit.replacement_properties.empty() || !edit.replacement_dimension_ids.empty() ||
+         !edit.replacement_child_mapping.empty() || !edit.replacement_removed_reference_ids.empty()))
         throw std::invalid_argument("Boundary coordinate edit contains redefinition fields");
     if (edit.kind != BoundaryGeometryEditKind::insert_vertex &&
         (edit.fraction != 0.0 || !edit.new_vertex_id.empty() || !edit.new_segment_id.empty() ||
@@ -110,8 +121,28 @@ inline void validate_boundary_geometry_edit(const BoundaryGeometryEdit& edit) {
         for (const auto& id : edit.replacement_dimension_ids)
             if (!valid_id(id) || !dimensions.insert(id).second)
                 throw std::invalid_argument("Boundary redefinition dimension IDs are invalid");
+        if (!edit.replacement_child_mapping.empty()) {
+            const auto& mapping = edit.replacement_child_mapping;
+            if (mapping.size() != 2 || !mapping.contains("segments") || !mapping.contains("vertices") ||
+                !mapping.at("segments").is_object() || !mapping.at("vertices").is_object() ||
+                (mapping.at("segments").empty() && mapping.at("vertices").empty()))
+                throw std::invalid_argument("Boundary child mapping requires nonempty segments/vertices decisions");
+            for (const auto* group : {"segments", "vertices"})
+                for (const auto& [old_id, new_id] : mapping.at(group).items())
+                    if (!valid_id(old_id) || !new_id.is_string() || !valid_id(new_id.get_ref<const std::string&>()))
+                        throw std::invalid_argument("Boundary redefinition child mapping identifiers are invalid");
+        }
+        std::set<std::string> removed;
+        for (const auto& id : edit.replacement_removed_reference_ids)
+            if (!valid_id(id) || !removed.insert(id).second)
+                throw std::invalid_argument("Boundary redefinition removed reference IDs are invalid");
+        const auto reference_plan_bytes = edit.replacement_child_mapping.empty() &&
+                edit.replacement_removed_reference_ids.empty()
+            ? std::size_t{0}
+            : edit.replacement_child_mapping.dump().size() + nlohmann::json(edit.replacement_removed_reference_ids).dump().size();
         if (edit.replacement_segments.dump().size() + edit.replacement_authoring.dump().size() +
-            edit.replacement_properties.dump().size() + nlohmann::json(edit.replacement_dimension_ids).dump().size() >
+            edit.replacement_properties.dump().size() + nlohmann::json(edit.replacement_dimension_ids).dump().size() +
+            reference_plan_bytes >
             1024 * 1024 - 4096)
             throw std::invalid_argument("Boundary redefinition exceeds the persisted proof budget");
     } else {
@@ -133,9 +164,15 @@ inline nlohmann::json encode_boundary_geometry_edit(const BoundaryGeometryEdit& 
                 {"new_dimension_id", edit.new_dimension_id}};
     }
     if (edit.kind == BoundaryGeometryEditKind::redefine_boundary) {
-        return {{"version", 1}, {"kind", "redefine_boundary"}, {"boundary_id", edit.boundary_id},
+        nlohmann::json result{{"version", 1}, {"kind", "redefine_boundary"}, {"boundary_id", edit.boundary_id},
             {"replacement_segments", edit.replacement_segments}, {"replacement_authoring", edit.replacement_authoring},
             {"replacement_properties", edit.replacement_properties}, {"replacement_dimension_ids", edit.replacement_dimension_ids}};
+        if (!edit.replacement_child_mapping.empty() || !edit.replacement_removed_reference_ids.empty()) {
+            result["version"] = 2;
+            result["replacement_child_mapping"] = edit.replacement_child_mapping;
+            result["replacement_removed_reference_ids"] = edit.replacement_removed_reference_ids;
+        }
+        return result;
     }
     return {{"version", 1}, {"kind", "resize_segment"},
             {"boundary_id", edit.boundary_id}, {"segment_id", edit.target_id},
@@ -147,12 +184,15 @@ inline nlohmann::json encode_boundary_geometry_edit(const BoundaryGeometryEdit& 
 
 inline BoundaryGeometryEdit decode_boundary_geometry_edit(const nlohmann::json& value) {
     if (!value.is_object() || !value.contains("version") ||
-        !value.at("version").is_number_integer() || value.at("version") != 1 ||
+        !value.at("version").is_number_integer() || (value.at("version") != 1 && value.at("version") != 2) ||
         !value.contains("kind") || !value.at("kind").is_string() ||
         !value.contains("boundary_id") || !value.at("boundary_id").is_string()) {
         throw std::invalid_argument("Boundary geometry edit envelope is invalid");
     }
     const auto kind = value.at("kind").get<std::string>();
+    const bool reference_plan = value.at("version") == 2;
+    if (reference_plan && kind != "redefine_boundary")
+        throw std::invalid_argument("Version two boundary edits require redefinition reference decisions");
     BoundaryGeometryEdit result;
     result.boundary_id = value.at("boundary_id").get<std::string>();
     if (kind == "move_vertex") {
@@ -202,8 +242,12 @@ inline BoundaryGeometryEdit decode_boundary_geometry_edit(const nlohmann::json& 
         result.new_segment_id = value.at("new_segment_id").get<std::string>();
         result.new_dimension_id = value.at("new_dimension_id").get<std::string>();
     } else if (kind == "redefine_boundary") {
-        const std::set<std::string> expected{"version", "kind", "boundary_id", "replacement_segments",
+        std::set<std::string> expected{"version", "kind", "boundary_id", "replacement_segments",
             "replacement_authoring", "replacement_properties", "replacement_dimension_ids"};
+        if (reference_plan) {
+            expected.insert("replacement_child_mapping");
+            expected.insert("replacement_removed_reference_ids");
+        }
         std::set<std::string> actual;
         for (const auto& [key, ignored] : value.items()) { (void)ignored; actual.insert(key); }
         if (actual != expected || !value.at("replacement_dimension_ids").is_array())
@@ -214,6 +258,14 @@ inline BoundaryGeometryEdit decode_boundary_geometry_edit(const nlohmann::json& 
         result.replacement_authoring = value.at("replacement_authoring");
         result.replacement_properties = value.at("replacement_properties");
         result.replacement_dimension_ids = value.at("replacement_dimension_ids").get<std::vector<std::string>>();
+        if (reference_plan) {
+            result.replacement_child_mapping = value.at("replacement_child_mapping");
+            if (!value.at("replacement_removed_reference_ids").is_array())
+                throw std::invalid_argument("Boundary redefinition removed references must be an array");
+            result.replacement_removed_reference_ids = value.at("replacement_removed_reference_ids").get<std::vector<std::string>>();
+            if (result.replacement_child_mapping.empty() && result.replacement_removed_reference_ids.empty())
+                throw std::invalid_argument("Version two redefinition requires explicit reference decisions");
+        }
     } else {
         throw std::invalid_argument("Boundary geometry edit kind is unsupported");
     }

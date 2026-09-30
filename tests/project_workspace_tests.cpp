@@ -1,6 +1,13 @@
 #include "sketch/project_workspace.hpp"
 #include "sketch/document_digest.hpp"
+#include "sketch/boundary_construction.hpp"
+#include "sketch/boundary_entity.hpp"
+#include "sketch/boundary_dimension.hpp"
+#include "sketch/project_store.hpp"
+#include "sketch/workspace_lifecycle_validation.hpp"
 #include "support/noninteractive_errors.hpp"
+#include <algorithm>
+#include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <type_traits>
@@ -130,10 +137,205 @@ void check_checkpoint_policy() {
                 workspace.edited_generation() == 0 && workspace.checkpoint_generation() == 0,
             "workspace must enforce its caller-supplied checkpoint policy before publication");
 }
+
+struct RedrawPlanFixture {
+    DocumentSnapshot source;
+    BoundaryActiveRecovery active;
+    EditBoundaryGeometry command;
+    std::string manual_id;
+};
+RedrawPlanFixture redraw_plan_fixture(bool remove_reference = false, bool with_reference = true) {
+    auto document = Document::create({
+        {"p", "property", {{"name", "Property"}}}, {"b", "building", {{"property_id", "p"}}},
+        {"f", "floor", {{"building_id", "b"}}}, {"l", "layer", {{"floor_id", "f"}}},
+        {"unrelated", "label", {{"text", "Preserve"}}}});
+    ProjectWorkspace original(document.snapshot());
+    BoundaryAuthoringOptions options; options.automatic_dimension_placement = true;
+    BoundaryAuthoringSession rectangle(BoundaryAuthoringMode::draw_first, options);
+    rectangle.set_classification("living_area");
+    (void)rectangle.anchor({0, 0}); (void)rectangle.add_line_to({4, 0});
+    (void)rectangle.add_line_to({4, 3}); (void)rectangle.add_line_to({0, 3});
+    (void)rectangle.add_closing_segment(); (void)rectangle.close_chain();
+    BoundaryActiveRecovery original_input{
+        capture_boundary_recovery_source(original.snapshot(), {"p", "b", "f", "l"}),
+        rectangle.recovery_checkpoint()};
+    auto activate = original.prepare_boundary_checkpoint(original_input); (void)original.commit(activate);
+    auto finish = original.prepare_finish_boundary(); (void)original.commit(finish);
+    auto source = original.snapshot();
+    const auto found = std::find_if(source.entities().begin(), source.entities().end(),
+        [](const auto& item) { return can_recognize_boundary_entity_type(item.second.type); });
+    require(found != source.entities().end(), "reference plan fixture needs a completed boundary");
+    const auto owner = found->second;
+    const auto identified = decode_identified_boundary_entity(owner);
+    const std::string manual_id = with_reference ? "workspace-manual-dimension" : "";
+    if (with_reference) {
+        BoundaryDimension manual{manual_id, owner.id, identified.segments.front().segment_id, {2, -1}};
+        auto entity = encode_boundary_dimension_entity(manual);
+        entity.extensions["opaque_manual"] = {{"number", 1.0}};
+        auto addition = original.prepare(ApplyEntityChanges{.expected_revision = source.revision(),
+            .entity_changes = {EntityChange::upsert(entity)}, .message = "Reference plan fixture"});
+        (void)original.commit(addition); source = original.snapshot();
+    }
+    BoundaryAuthoringSession triangle(BoundaryAuthoringMode::draw_first, options);
+    triangle.set_classification("living_area");
+    (void)triangle.anchor({0, 0}); (void)triangle.add_line_to({4, 0});
+    (void)triangle.add_line_to({0, 3}); (void)triangle.add_closing_segment(); (void)triangle.close_chain();
+    const auto chain = triangle.accepted_chains().front();
+    IdentifiedBoundary replacement{owner.id, owner.type, {
+        {"workspace-plan-e0", "workspace-plan-v0", "workspace-plan-v1", {{0, 0}, {4, 0}, 0}},
+        {"workspace-plan-e1", "workspace-plan-v1", "workspace-plan-v2", {{4, 0}, {0, 3}, 0}},
+        {"workspace-plan-e2", "workspace-plan-v2", "workspace-plan-v0", {{0, 3}, {0, 0}, 0}}}};
+    BoundaryGeometryEdit edit;
+    edit.kind = BoundaryGeometryEditKind::redefine_boundary;
+    edit.boundary_id = edit.target_id = owner.id;
+    edit.replacement_segments = encode_identified_boundary_entity(replacement).properties.at("segments");
+    edit.replacement_authoring = boundary_construction_envelope(chain, options);
+    edit.replacement_properties = boundary_redefinition_classification_properties(source, owner, "living_area");
+    edit.replacement_dimension_ids = {"workspace-plan-d0", "workspace-plan-d1", "workspace-plan-d2"};
+    if (with_reference) {
+        if (remove_reference) edit.replacement_removed_reference_ids = {manual_id};
+        else edit.replacement_child_mapping = {{"segments", {{identified.segments.front().segment_id, "workspace-plan-e0"}}},
+            {"vertices", nlohmann::json::object()}};
+    }
+    nlohmann::json operation{{"version", with_reference ? 2 : 1}, {"kind", "redefine"}, {"target_id", owner.id}};
+    if (with_reference) {
+        operation["replacement_child_mapping"] = edit.replacement_child_mapping;
+        operation["replacement_removed_reference_ids"] = edit.replacement_removed_reference_ids;
+        const auto geometry_json = edit.replacement_segments.dump();
+        operation["replacement_segments_sha256"] = sha256_hex(std::as_bytes(std::span(geometry_json.data(), geometry_json.size())));
+    }
+    BoundaryActiveRecovery active{capture_boundary_recovery_source(source, {"p", "b", "f", "l"}),
+        triangle.recovery_checkpoint(), {{"desktop_operation", operation}, {"opaque_input", {{"number", 1.0}}}}};
+    return {source, active, EditBoundaryGeometry{source.revision(), edit}, manual_id};
+}
+template<class F> void unchanged_finish_rejection(ProjectWorkspace& workspace, F operation) {
+    const auto before = workspace.capture();
+    bool failed = false;
+    try { operation(); } catch (const std::exception&) { failed = true; }
+    require(failed, "invalid archived reference plan must reject");
+    const auto after = workspace.capture();
+    require(document_snapshot_digest(after.document()) == document_snapshot_digest(before.document()) &&
+        after.active_boundary() == before.active_boundary() && after.navigation() == before.navigation() &&
+        after.document_history() == before.document_history() && after.epoch() == before.epoch() &&
+        after.edited_generation() == before.edited_generation() &&
+        after.checkpoint_generation() == before.checkpoint_generation() &&
+        after.lifecycle_history().size() == before.lifecycle_history().size() &&
+        after.retired_boundaries().size() == before.retired_boundaries().size(),
+        "rejected reference plan must preserve the whole authoritative workspace");
+}
+void activate_redraw(ProjectWorkspace& workspace, const BoundaryActiveRecovery& active) {
+    auto ticket = workspace.prepare_boundary_checkpoint(active); (void)workspace.commit(ticket);
+}
+void check_archived_redraw_reference_plan() {
+    for (const bool remove_reference : {false, true}) {
+        const auto fixture = redraw_plan_fixture(remove_reference);
+        ProjectWorkspace workspace(fixture.source);
+        activate_redraw(workspace, fixture.active);
+        const auto before = workspace.capture();
+        const auto canonical = Document::preview_command(fixture.source, fixture.command);
+        auto finish = workspace.prepare_finish_boundary(fixture.command);
+        require(workspace.epoch() == before.epoch() && workspace.active_boundary() == std::optional{fixture.active},
+            "accepted plan preparation must remain isolated");
+        (void)workspace.commit(finish);
+        const auto finished = workspace.capture();
+        require(finished.document().entities() == canonical.entities() && !finished.active_boundary(),
+            "accepted reference plan must publish the canonical replacement exactly");
+        require(finished.lifecycle_history().back().input->value->extensions.at("desktop_operation").dump() ==
+            fixture.active.extensions.at("desktop_operation").dump(),
+            "finish must archive the exact accepted mapping/removal envelope");
+        if (remove_reference) require(!finished.document().entities().contains(fixture.manual_id),
+            "accepted removal must retire the eligible manual dimension");
+        else {
+            auto expected = fixture.source.entities().at(fixture.manual_id);
+            expected.properties["target"]["segment_id"] = "workspace-plan-e0";
+            require(finished.document().entities().at(fixture.manual_id).properties.dump() == expected.properties.dump() &&
+                finished.document().entities().at(fixture.manual_id).extensions.dump() == expected.extensions.dump(),
+                "accepted mapping must preserve manual dimension identity and opaque metadata");
+        }
+        validate_workspace_finish_deltas(finished.document(), finished.lifecycle_history());
+        auto forged = finished.lifecycle_history();
+        auto forged_input = fixture.active;
+        auto& forged_operation = forged_input.extensions["desktop_operation"];
+        forged_operation["replacement_removed_reference_ids"] = nlohmann::json::array({"unrelated"});
+        forged.back().input->value = std::make_shared<const BoundaryActiveRecovery>(forged_input);
+        rejected([&] { validate_workspace_finish_deltas(finished.document(), forged); });
+        forged = finished.lifecycle_history();
+        forged_input = fixture.active;
+        forged_input.extensions["desktop_operation"]["replacement_segments_sha256"] = std::string(64, '0');
+        forged.back().input->value = std::make_shared<const BoundaryActiveRecovery>(forged_input);
+        rejected([&] { validate_workspace_finish_deltas(finished.document(), forged); });
+        require(document_snapshot_digest(workspace.snapshot()) == document_snapshot_digest(finished.document()),
+            "forged persisted finish validation must not mutate the workspace");
+        const auto path = std::filesystem::temp_directory_path() / ("workspace-reference-plan-" + make_stable_id() + ".sketch");
+        struct Cleanup { std::filesystem::path path; ~Cleanup() { std::error_code error; std::filesystem::remove(path, error); } } cleanup{path};
+        RecoveryLedger ledger{{"history", "workspace_history", encode_workspace_history_record(
+            finished.document(), capture_workspace_history_record(finished), finished.active_boundary())}};
+        (void)ProjectStore::save_archive(path, ProjectArchiveSnapshot(finished.document(), ledger, ArchiveRole::ordinary));
+        const auto loaded = ProjectStore::load_archive(path, ArchiveRole::ordinary);
+        require(loaded.supported(), "accepted reference plan archive must reopen supported");
+        auto restored = ProjectWorkspace::restore_archive(*loaded.archive, *loaded.recovery.decoded);
+        require(restored->snapshot().entities() == finished.document().entities(), "reopen must retain accepted plan result");
+        auto undo = restored->prepare_undo(); (void)restored->commit(undo);
+        require(restored->snapshot().entities() == fixture.source.entities() &&
+            restored->retired_boundary(fixture.active.checkpoint.identity_namespace) == std::optional{fixture.active},
+            "undo after reopen must restore references and the exact accepted input plan");
+        auto redo = restored->prepare_redo(); (void)restored->commit(redo);
+        require(restored->snapshot().entities() == finished.document().entities(),
+            "redo after reopen must restore exact mapped/removed references");
+    }
+}
+void check_reviewed_geometry_identity_binding() {
+    auto fixture = redraw_plan_fixture(false);
+    auto substituted = fixture.command;
+    std::swap(substituted.edit.replacement_segments[0]["segment_id"], substituted.edit.replacement_segments[1]["segment_id"]);
+    (void)Document::preview_command(fixture.source, substituted);
+    ProjectWorkspace workspace(fixture.source);
+    auto activation = workspace.prepare_boundary_checkpoint(fixture.active); (void)workspace.commit(activation);
+    unchanged_finish_rejection(workspace, [&] { (void)workspace.prepare_finish_boundary(substituted); });
+}
+
+void check_rejected_archived_redraw_plans() {
+    for (const std::string fault : {"omission", "mapping", "removal", "extra", "malformed_mapping", "malformed_removal", "numeric_version", "empty_v2"}) {
+        auto fixture = redraw_plan_fixture(false, fault != "empty_v2");
+        auto& operation = fixture.active.extensions["desktop_operation"];
+        if (fault == "omission") operation = {{"version", 1}, {"kind", "redefine"}, {"target_id", fixture.command.edit.boundary_id}};
+        else if (fault == "mapping") operation["replacement_child_mapping"].begin().value() = "workspace-plan-e1";
+        else if (fault == "removal") operation["replacement_removed_reference_ids"] = nlohmann::json::array({fixture.manual_id});
+        else if (fault == "extra") operation["unreviewed_plan"] = true;
+        else if (fault == "malformed_mapping") operation["replacement_child_mapping"] = nlohmann::json::array();
+        else if (fault == "malformed_removal") operation["replacement_removed_reference_ids"] = fixture.manual_id;
+        else if (fault == "numeric_version") operation["version"] = 2.0;
+        else {
+            operation["version"] = 2;
+            operation["replacement_child_mapping"] = nlohmann::json::object();
+            operation["replacement_removed_reference_ids"] = nlohmann::json::array();
+        }
+        ProjectWorkspace workspace(fixture.source); activate_redraw(workspace, fixture.active);
+        unchanged_finish_rejection(workspace, [&] { (void)workspace.prepare_finish_boundary(fixture.command); });
+    }
+    auto fixture = redraw_plan_fixture();
+    ProjectWorkspace workspace(fixture.source); activate_redraw(workspace, fixture.active);
+    auto forged_command = fixture.command;
+    forged_command.edit.replacement_removed_reference_ids = {fixture.manual_id};
+    unchanged_finish_rejection(workspace, [&] { (void)workspace.prepare_finish_boundary(forged_command); });
+    // A matching envelope cannot authorize deletion of an ineligible entity.
+    auto ineligible = fixture;
+    ineligible.command.edit.replacement_removed_reference_ids = {"unrelated"};
+    ineligible.active.extensions["desktop_operation"]["replacement_removed_reference_ids"] = nlohmann::json::array({"unrelated"});
+    ProjectWorkspace invalid(ineligible.source); activate_redraw(invalid, ineligible.active);
+    unchanged_finish_rejection(invalid, [&] { (void)invalid.prepare_finish_boundary(ineligible.command); });
+    const auto legacy = redraw_plan_fixture(false, false);
+    ProjectWorkspace old(legacy.source); activate_redraw(old, legacy.active);
+    auto finish = old.prepare_finish_boundary(legacy.command); (void)old.commit(finish);
+    require(old.capture().lifecycle_history().back().input->value->extensions.at("desktop_operation").at("version") == 1,
+        "empty reference plans must retain the legacy version one archive contract");
+    validate_workspace_finish_deltas(old.snapshot(), old.capture().lifecycle_history());
+}
 }
 int main() {
     sketch::testing::noninteractive_errors();
-    try { check_publication(); check_rejections(); check_checkpoint_policy(); }
+    try { check_publication(); check_rejections(); check_checkpoint_policy();
+          check_archived_redraw_reference_plan(); check_reviewed_geometry_identity_binding(); check_rejected_archived_redraw_plans(); }
     catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
     return 0;
 }

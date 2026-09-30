@@ -10,6 +10,7 @@
 #include <numeric>
 #include <numbers>
 #include <set>
+#include <string_view>
 
 namespace sketch {
 namespace {
@@ -125,6 +126,8 @@ IdentifiedBoundary apply_geometry_edit(const IdentifiedBoundary& source,
         const auto replacement = decode_identified_boundary_entity(Entity{source.id, source.type,
             {{"boundary_model_version", 1}, {"segments", edit.replacement_segments}}, false, nlohmann::json::object()});
         if (replacement.segments.size() == source.segments.size()) {
+            if (!edit.replacement_child_mapping.empty() || !edit.replacement_removed_reference_ids.empty())
+                throw std::invalid_argument("Reference decisions require changed boundary topology");
             for (std::size_t i = 0; i < source.segments.size(); ++i)
                 if (replacement.segments[i].segment_id != source.segments[i].segment_id ||
                     replacement.segments[i].start_vertex_id != source.segments[i].start_vertex_id ||
@@ -138,6 +141,30 @@ IdentifiedBoundary apply_geometry_edit(const IdentifiedBoundary& source,
             for (const auto& edge : replacement.segments)
                 if (retired.contains(edge.segment_id) || retired.contains(edge.start_vertex_id) || retired.contains(edge.end_vertex_id))
                     throw std::invalid_argument("Changed-count redefinition requires fresh child identities");
+            std::set<std::string> old_segments, old_vertices, new_segments, new_vertices;
+            for (const auto& edge : source.segments) {
+                old_segments.insert(edge.segment_id);
+                old_vertices.insert(edge.start_vertex_id); old_vertices.insert(edge.end_vertex_id);
+            }
+            for (const auto& edge : replacement.segments) {
+                new_segments.insert(edge.segment_id);
+                new_vertices.insert(edge.start_vertex_id); new_vertices.insert(edge.end_vertex_id);
+            }
+            if (!edit.replacement_child_mapping.empty()) {
+                for (const auto* group : {"segments", "vertices"}) {
+                    const bool segment = std::string_view(group) == "segments";
+                    const auto& old_children = segment ? old_segments : old_vertices;
+                    const auto& new_children = segment ? new_segments : new_vertices;
+                    std::set<std::string> destinations;
+                    for (const auto& [old_id, target] : edit.replacement_child_mapping.at(group).items()) {
+                        const auto& new_id = target.get_ref<const std::string&>();
+                        if (!old_children.contains(old_id) || !new_children.contains(new_id))
+                            throw std::invalid_argument("Reference mapping must connect existing old and new children of the same kind");
+                        if (!destinations.insert(new_id).second)
+                            throw std::invalid_argument("Reference mapping cannot merge distinct old children in one namespace");
+                    }
+                }
+            }
         }
         if (!edit.replacement_authoring.is_null()) {
             const auto decoded = decode_boundary_receipt_envelope(edit.replacement_authoring);
@@ -595,13 +622,47 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
         const auto topology_changed = edited.segments.size() != decode_identified_boundary_entity(original).segments.size();
         const Entity* automatic_template = nullptr;
         std::vector<std::string> retired_dimensions;
+        const std::set<std::string> removed_references(edit.replacement_removed_reference_ids.begin(),
+            edit.replacement_removed_reference_ids.end());
+        std::set<std::string> accepted_removals;
+        std::set<std::pair<std::string, std::string>> used_mapping;
+        const auto mapped_child = [&](const std::string& old_id, const char* group) {
+            if (edit.replacement_child_mapping.empty())
+                throw std::invalid_argument("Retained redraw reference requires an explicit child mapping: " + old_id);
+            const auto& mapping = edit.replacement_child_mapping.at(group);
+            const auto mapped = mapping.find(old_id);
+            if (mapped == mapping.end())
+                throw std::invalid_argument("Retained redraw reference requires an explicit child mapping: " + old_id);
+            used_mapping.emplace(group, old_id);
+            return mapped->get<std::string>();
+        };
         for (auto& [id, entity] : result) {
             if (topology_changed && entity.type == "constraint") {
                 const auto decoded = decode_constraint_entity(entity);
                 if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
-                for (const auto& binding : decoded.constraint->bindings)
-                    if (binding.owner_id == edit.boundary_id)
-                        throw std::invalid_argument("Redraw with a different edge count cannot retarget endpoint constraints");
+                const auto& bindings = decoded.constraint->bindings;
+                const bool affected = std::any_of(bindings.begin(), bindings.end(),
+                    [&](const auto& binding) { return binding.owner_id == edit.boundary_id; });
+                if (affected && removed_references.contains(id)) {
+                    accepted_removals.insert(id);
+                    continue;
+                }
+                for (std::size_t i = 0; i < bindings.size(); ++i) {
+                    const auto& binding = bindings[i];
+                    if (binding.owner_id != edit.boundary_id) continue;
+                    const auto segment_id = mapped_child(binding.segment_id, "segments");
+                    const auto vertex_id = mapped_child(binding.vertex_id, "vertices");
+                    const auto target = std::find_if(edited.segments.begin(), edited.segments.end(),
+                        [&](const auto& edge) { return edge.segment_id == segment_id; });
+                    if (target == edited.segments.end() ||
+                        (target->start_vertex_id != vertex_id && target->end_vertex_id != vertex_id))
+                        throw std::invalid_argument("Mapped constraint vertex is not an endpoint of its mapped segment");
+                    auto& persisted = entity.properties.at("bindings").at(i);
+                    persisted.at("segment_id") = segment_id;
+                    persisted.at("vertex_id") = vertex_id;
+                    persisted.at("role") = target->start_vertex_id == vertex_id ? "start" : "end";
+                }
+                (void)decode_constraint_entity(entity);
             }
             if (entity.type != "dimension") continue;
             const auto decoded = decode_boundary_dimension_entity(entity);
@@ -610,11 +671,26 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
             if (dimension.boundary_id != edit.boundary_id) continue;
             if (dimension.kind == BoundaryDimensionKind::area) continue;
             if (topology_changed) {
-                if (dimension.kind != BoundaryDimensionKind::segment_length ||
-                    dimension.placement != BoundaryDimensionPlacement::automatic)
-                    throw std::invalid_argument("Redraw with a different edge count cannot retarget manual edge or angle dimensions");
-                if (!automatic_template) automatic_template = &source.at(id);
-                retired_dimensions.push_back(id);
+                if (dimension.kind == BoundaryDimensionKind::segment_length &&
+                    dimension.placement == BoundaryDimensionPlacement::automatic) {
+                    if (!automatic_template) automatic_template = &source.at(id);
+                    retired_dimensions.push_back(id);
+                } else if (removed_references.contains(id)) {
+                    if (dimension.placement != BoundaryDimensionPlacement::manual)
+                        throw std::invalid_argument("Only affected manual dimensions can be explicitly removed by redraw");
+                    accepted_removals.insert(id);
+                } else {
+                    // Replace only analytical targets. Re-encoding would
+                    // normalize presentation numbers and unrelated metadata.
+                    auto& target = entity.properties.at("target");
+                    target.at("segment_id") = mapped_child(dimension.segment_id, "segments");
+                    if (dimension.kind == BoundaryDimensionKind::angle) {
+                        target.at("second_segment_id") = mapped_child(dimension.secondary_segment_id, "segments");
+                        target.at("vertex_id") = mapped_child(dimension.vertex_id, "vertices");
+                    }
+                    const auto remapped = decode_boundary_dimension_entity(entity);
+                    (void)remapped.dimension->resolve(result.at(edit.boundary_id));
+                }
             } else {
                 (void)dimension.resolve(result.at(edit.boundary_id));
                 if (dimension.kind == BoundaryDimensionKind::segment_length &&
@@ -631,6 +707,13 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
         const auto expected_count = automatic_template ? edited.segments.size() : 0;
         if (edit.replacement_dimension_ids.size() != expected_count)
             throw std::invalid_argument("Redefinition dimension IDs do not match its automatic placement policy");
+        if (accepted_removals != removed_references)
+            throw std::invalid_argument("Removed redraw references must be supported affected manual dimensions or endpoint constraints");
+        const auto mapping_count = edit.replacement_child_mapping.empty() ? std::size_t{0} :
+            edit.replacement_child_mapping.at("segments").size() + edit.replacement_child_mapping.at("vertices").size();
+        if (used_mapping.size() != mapping_count)
+            throw std::invalid_argument("Redraw child mapping contains unused reference decisions");
+        for (const auto& id : accepted_removals) result.erase(id);
         for (const auto& id : retired_dimensions) result.erase(id);
         for (std::size_t i = 0; i < expected_count; ++i) {
             auto dimension = *decode_boundary_dimension_entity(*automatic_template).dimension;

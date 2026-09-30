@@ -3309,6 +3309,13 @@ public:
                             }
                             if (!edit.replacement_authoring.is_null()) add_record_identities(edit.replacement_authoring);
                             for (const auto& id : edit.replacement_dimension_ids) identities.try_emplace(id, new_id("dimension"));
+                            for (const auto& [group, mapping] : edit.replacement_child_mapping.items())
+                                for (const auto& [old_child, new_child] : mapping.items()) {
+                                    identities.try_emplace(old_child, new_id(group == "segments" ? "segment" : "vertex"));
+                                    identities.try_emplace(new_child.get<std::string>(), new_id(group == "segments" ? "segment" : "vertex"));
+                                }
+                            for (const auto& id : edit.replacement_removed_reference_ids)
+                                identities.try_emplace(id, new_id("reference"));
                         }
                     } else if (operation.at("kind") == "vertex_batch") {
                         for (const auto& item : operation.at("value")) {
@@ -3361,6 +3368,14 @@ public:
                                     transformed_boundary_construction(*record.record, {}, identities));
                             }
                             for (auto& id : edit.replacement_dimension_ids) id = identities.at(id);
+                            auto remapped_children = json::object();
+                            for (const auto& [group, mapping] : edit.replacement_child_mapping.items()) {
+                                remapped_children[group] = json::object();
+                                for (const auto& [old_child, new_child] : mapping.items())
+                                    remapped_children[group][identities.at(old_child)] = identities.at(new_child.get<std::string>());
+                            }
+                            edit.replacement_child_mapping = std::move(remapped_children);
+                            for (auto& id : edit.replacement_removed_reference_ids) id = identities.at(id);
                         }
                         operations.push_back({{"kind", "geometry_edit"},
                             {"value", encode_boundary_geometry_edit(edit)}});
@@ -13529,6 +13544,254 @@ public:
         return {source.revision(), std::move(edit)};
     }
 
+    std::optional<EditBoundaryGeometry> reviewBoundaryRedefinition(
+        const DocumentSnapshot& source, EditBoundaryGeometry command) {
+        const auto& target_entity = source.entities().at(command.edit.boundary_id);
+        const auto original = decode_identified_boundary_entity(target_entity);
+        if (original.segments.size() == command.edit.replacement_segments.size()) return command;
+        auto replacement_entity = target_entity;
+        replacement_entity.properties["segments"] = command.edit.replacement_segments;
+        const auto replacement = decode_identified_boundary_entity(replacement_entity);
+        using ReferenceChild = std::pair<bool, std::string>; // true = vertex, false = segment
+        struct Reference {
+            std::string id;
+            QString name;
+            std::set<ReferenceChild> children;
+            bool removable{true};
+        };
+        std::vector<Reference> references;
+        const auto child_name = [&](const std::string& id, bool vertex = false) {
+            for (std::size_t i = 0; i < original.segments.size(); ++i) {
+                if (!vertex && original.segments[i].segment_id == id) return QStringLiteral("E%1").arg(i+1);
+                if (vertex && original.segments[i].start_vertex_id == id) return QStringLiteral("V%1").arg(i+1);
+            }
+            return QStringLiteral("Unavailable child");
+        };
+        for (const auto& [id, entity] : source.entities()) {
+            if (entity.type == "dimension") {
+                const auto decoded = decode_boundary_dimension_entity(entity);
+                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                const auto& dimension = *decoded.dimension;
+                if (dimension.boundary_id != target_entity.id || dimension.kind == BoundaryDimensionKind::area ||
+                    (dimension.kind == BoundaryDimensionKind::segment_length &&
+                     dimension.placement == BoundaryDimensionPlacement::automatic)) continue;
+                Reference reference{id, dimension.kind == BoundaryDimensionKind::angle
+                    ? QStringLiteral("Angle dimension") : QStringLiteral("Length dimension"),
+                    {{false, dimension.segment_id}}, dimension.placement == BoundaryDimensionPlacement::manual};
+                if (dimension.kind == BoundaryDimensionKind::angle) {
+                    reference.children.insert({false, dimension.secondary_segment_id});
+                    reference.children.insert({true, dimension.vertex_id});
+                    reference.name += QStringLiteral(" · %1 / %2 at %3").arg(child_name(dimension.segment_id),
+                        child_name(dimension.secondary_segment_id), child_name(dimension.vertex_id, true));
+                } else {
+                    reference.name += QStringLiteral(" · %1").arg(child_name(dimension.segment_id));
+                }
+                references.push_back(std::move(reference));
+            } else if (entity.type == "constraint") {
+                const auto decoded = decode_constraint_entity(entity);
+                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                Reference reference{id, QString::fromStdString(std::string(constraint_relation_name(decoded.constraint->relation))), {}};
+                reference.name.replace(QChar('_'), QChar(' '));
+                for (const auto& binding : decoded.constraint->bindings) if (binding.owner_id == target_entity.id) {
+                    reference.children.insert({false, binding.segment_id});
+                    reference.children.insert({true, binding.vertex_id});
+                    reference.name += QStringLiteral(" · %1 %2").arg(child_name(binding.segment_id), child_name(binding.vertex_id, true));
+                }
+                if (!reference.children.empty()) references.push_back(std::move(reference));
+            }
+        }
+        if (references.empty()) return command;
+        const auto context = captureModalContext();
+        const auto workspace = m_workspace;
+        const auto draft = m_boundary_session ? std::optional{m_boundary_session->recovery_checkpoint()} : std::nullopt;
+        QDialog dialog(owner);
+        dialog.setObjectName(QStringLiteral("boundaryReferenceReview"));
+        dialog.setWindowTitle(QStringLiteral("Review redraw references"));
+        dialog.resize(880, 760);
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* help = new QLabel(QStringLiteral(
+            "Choose what happens to each attached dimension and locked relationship. "
+            "For kept references, choose the numbered replacement edges and corners below."), &dialog);
+        help->setWordWrap(true);
+        layout->addWidget(help);
+        auto* scenes = new QHBoxLayout;
+        const auto add_scene = [&](const IdentifiedBoundary& model, const QString& title, QColor color) {
+            auto* column = new QVBoxLayout;
+            column->addWidget(new QLabel(title, &dialog));
+            auto* canvas = new PlanCanvas(&dialog);
+            canvas->setMinimumHeight(220);
+            canvas->setCanvasBackground(QColor(248,250,253));
+            canvas->setGridEnabled(false);
+            canvas->setSnapEnabled(false);
+            canvas->setOverviewMapEnabled(false);
+            canvas->setSelectionTransformEnabled(false, false);
+            CanvasEntity geometry{QString::fromStdString(model.id), QStringLiteral("boundary"),
+                boundary_geometry(model), 0.0, false};
+            geometry.stroke_color = color;
+            canvas->setEntities({geometry});
+            std::vector<CanvasLabel> labels;
+            for (std::size_t i = 0; i < model.segments.size(); ++i) {
+                const auto& edge = model.segments[i].segment;
+                labels.push_back({{}, edge.start, QStringLiteral("V%1").arg(i+1)});
+                labels.push_back({{}, {(edge.start.x+edge.end.x)/2, (edge.start.y+edge.end.y)/2},
+                    QStringLiteral("E%1 · %2").arg(i+1).arg(format_length(segment_length(edge), context.metric_units))});
+            }
+            canvas->setLabels(std::move(labels));
+            canvas->fitView();
+            column->addWidget(canvas, 1);
+            scenes->addLayout(column, 1);
+            return canvas;
+        };
+        auto* before_canvas = add_scene(original, QStringLiteral("Original"), QColor(130,143,158));
+        before_canvas->setObjectName(QStringLiteral("boundaryReferenceOriginal"));
+        auto* after_canvas = add_scene(replacement, QStringLiteral("Replacement"), QColor(36,107,206));
+        after_canvas->setObjectName(QStringLiteral("boundaryReferenceProposed"));
+        layout->addLayout(scenes, 1);
+        const auto make_table = [&](const QString& name, const QStringList& headers) {
+            auto* table = new QTableWidget(0, headers.size(), &dialog);
+            table->setObjectName(name);
+            table->setHorizontalHeaderLabels(headers);
+            table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+            table->verticalHeader()->hide();
+            table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+            table->setSelectionMode(QAbstractItemView::NoSelection);
+            table->setMaximumHeight(170);
+            layout->addWidget(table);
+            return table;
+        };
+        auto* choices = make_table(QStringLiteral("boundaryReferenceChoices"),
+            {QStringLiteral("Attached reference"), QStringLiteral("Decision"), QStringLiteral("Preview")});
+        std::vector<QComboBox*> decisions;
+        std::set<ReferenceChild> all_children;
+        for (const auto& reference : references) {
+            const auto row = choices->rowCount();
+            choices->insertRow(row);
+            choices->setItem(row, 0, new QTableWidgetItem(reference.name));
+            choices->item(row, 0)->setToolTip(QString::fromStdString(reference.id));
+            choices->item(row, 0)->setData(Qt::UserRole, QString::fromStdString(reference.id));
+            auto* choice = new QComboBox(choices);
+            choice->addItem(QStringLiteral("Choose…"));
+            choice->addItem(QStringLiteral("Keep and map"));
+            if (reference.removable) choice->addItem(QStringLiteral("Remove"));
+            choices->setCellWidget(row, 1, choice);
+            choices->setItem(row, 2, new QTableWidgetItem);
+            decisions.push_back(choice);
+            all_children.insert(reference.children.begin(), reference.children.end());
+        }
+        auto* mappings = make_table(QStringLiteral("boundaryReferenceMappings"),
+            {QStringLiteral("Original child"), QStringLiteral("Replacement child")});
+        std::map<ReferenceChild, QComboBox*> targets;
+        std::map<ReferenceChild, int> child_rows;
+        for (const auto& child : all_children) {
+            const auto edge = std::find_if(original.segments.begin(), original.segments.end(),
+                [&](const auto& value) { return value.segment_id == child.second; });
+            const bool segment = !child.first;
+            const auto vertex = std::find_if(original.segments.begin(), original.segments.end(),
+                [&](const auto& value) { return value.start_vertex_id == child.second; });
+            if ((segment && edge == original.segments.end()) || (!segment && vertex == original.segments.end()))
+                throw std::invalid_argument("The source reference has an unavailable child.");
+            const auto number = std::distance(original.segments.begin(), segment ? edge : vertex)+1;
+            const auto row = mappings->rowCount();
+            mappings->insertRow(row);
+            mappings->setItem(row, 0, new QTableWidgetItem(QStringLiteral("%1%2").arg(segment ? "E" : "V").arg(number)));
+            mappings->item(row, 0)->setData(Qt::UserRole, QString::fromStdString(child.second));
+            mappings->item(row, 0)->setData(Qt::UserRole+1, child.first);
+            auto* target = new QComboBox(mappings);
+            target->addItem(QStringLiteral("Choose…"));
+            for (std::size_t i = 0; i < replacement.segments.size(); ++i)
+                target->addItem(QStringLiteral("%1%2").arg(segment ? "E" : "V").arg(i+1),
+                    QString::fromStdString(segment ? replacement.segments[i].segment_id : replacement.segments[i].start_vertex_id));
+            mappings->setCellWidget(row, 1, target);
+            targets.emplace(child, target);
+            child_rows.emplace(child, row);
+        }
+        auto* status = new QLabel(&dialog);
+        status->setObjectName(QStringLiteral("boundaryReferenceStatus"));
+        status->setWordWrap(true);
+        status->setTextFormat(Qt::PlainText);
+        layout->addWidget(status);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel, &dialog);
+        buttons->setObjectName(QStringLiteral("boundaryReferenceButtons"));
+        layout->addWidget(buttons);
+        std::optional<EditBoundaryGeometry> candidate;
+        std::optional<DocumentSnapshot> candidate_snapshot;
+        const auto unchanged = [&] {
+            return modalContextUnchanged(context) && m_workspace == workspace &&
+                m_document->is_editable() && m_document->revision() == source.revision() &&
+                (m_boundary_session ? std::optional{m_boundary_session->recovery_checkpoint()} : std::nullopt) == draft;
+        };
+        const auto update = [&] {
+            candidate.reset();
+            candidate_snapshot.reset();
+            buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+            for (int row = 0; row < choices->rowCount(); ++row) choices->item(row, 2)->setText({});
+            try {
+                if (!unchanged()) throw std::invalid_argument("The drawing context changed. Cancel and review the current redraw.");
+                auto proposed = command;
+                std::set<ReferenceChild> needed;
+                bool incomplete = false;
+                for (std::size_t i = 0; i < references.size(); ++i) {
+                    const auto decision = decisions[i]->currentIndex();
+                    if (!decision) incomplete = true;
+                    if (decision == 2) proposed.edit.replacement_removed_reference_ids.push_back(references[i].id);
+                    else needed.insert(references[i].children.begin(), references[i].children.end());
+                }
+                if (!needed.empty()) proposed.edit.replacement_child_mapping = {{"segments", json::object()}, {"vertices", json::object()}};
+                for (const auto& [child, target] : targets) {
+                    mappings->setRowHidden(child_rows.at(child), !needed.contains(child));
+                    if (!needed.contains(child)) continue;
+                    if (!target->currentIndex()) incomplete = true;
+                    else proposed.edit.replacement_child_mapping[child.first ? "vertices" : "segments"][child.second] =
+                        target->currentData().toString().toStdString();
+                }
+                if (incomplete) throw std::invalid_argument("Choose Keep or Remove for each reference, then map every required edge and corner.");
+                const auto snapshot = Document::preview_command(source, proposed);
+                for (std::size_t i = 0; i < references.size(); ++i) {
+                    QString text = QStringLiteral("Removed on Apply");
+                    const auto found = snapshot.entities().find(references[i].id);
+                    if (found != snapshot.entities().end()) {
+                        text = QStringLiteral("Relationship satisfied");
+                        if (found->second.type == "dimension") {
+                            const auto dimension = *decode_boundary_dimension_entity(found->second).dimension;
+                            const auto resolved = dimension.resolve(snapshot.entities().at(target_entity.id));
+                            text = dimension.kind == BoundaryDimensionKind::angle
+                                ? QStringLiteral("%1°").arg(resolved.angle()*180/std::numbers::pi, 0, 'f', 1)
+                                : format_length(resolved.segment_length(), context.metric_units);
+                        }
+                    }
+                    choices->item(static_cast<int>(i), 2)->setText(text);
+                }
+                candidate = std::move(proposed);
+                candidate_snapshot = snapshot;
+                status->setText(QStringLiteral("All retained references resolve against the replacement. Apply commits these choices together."));
+                buttons->button(QDialogButtonBox::Apply)->setEnabled(true);
+            } catch (const std::exception& error) {
+                status->setText(QString::fromUtf8(error.what()));
+            }
+        };
+        for (auto* decision : decisions) QObject::connect(decision, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, update);
+        for (const auto& [child, target] : targets) {
+            (void)child;
+            QObject::connect(target, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, update);
+        }
+        QTimer timer(&dialog);
+        timer.setInterval(100);
+        QObject::connect(&timer, &QTimer::timeout, &dialog, [&] { if (!unchanged()) update(); });
+        timer.start();
+        QObject::connect(buttons->button(QDialogButtonBox::Cancel), &QPushButton::clicked, &dialog, &QDialog::reject);
+        QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, [&] {
+            if (!candidate || !candidate_snapshot || !unchanged()) { update(); return; }
+            try {
+                if (Document::preview_command(source, *candidate).entities() != candidate_snapshot->entities())
+                    throw std::invalid_argument("The reference preview changed. Review it again.");
+                dialog.accept();
+            } catch (const std::exception& error) { candidate.reset(); status->setText(QString::fromUtf8(error.what())); }
+        });
+        update();
+        if (dialog.exec() != QDialog::Accepted || !candidate || !unchanged()) return std::nullopt;
+        return candidate;
+    }
+
     bool redefineSelectedBoundary(const Boundary& boundary, const QString& classification) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
@@ -13536,9 +13799,10 @@ public:
         }
         try {
             const auto source = authoringSnapshot();
-            const auto command = boundaryRedefinitionCommand(source, boundary, classification);
-            (void)Document::preview_command(source, command);
-            applyDocumentCommand(command);
+            const auto command = reviewBoundaryRedefinition(source, boundaryRedefinitionCommand(source, boundary, classification));
+            if (!command) return false;
+            (void)Document::preview_command(source, *command);
+            applyDocumentCommand(*command);
             clearError();
             refresh();
             return true;
@@ -25026,11 +25290,20 @@ private:
         const auto found = active.extensions.find("desktop_operation");
         if (found == active.extensions.end()) return std::nullopt; // Legacy create drafts.
         const auto& operation = *found;
-        if (!operation.is_object() || operation.size() != 3 ||
-            !operation.contains("version") || operation.at("version") != 1 ||
+        const bool version_two = operation.is_object() && operation.contains("version") && operation.at("version") == 2;
+        if (!operation.is_object() || operation.size() != (version_two ? 6 : 3) ||
+            !operation.contains("version") || !operation.at("version").is_number_integer() ||
+            (!version_two && operation.at("version") != 1) ||
             !operation.contains("kind") || operation.at("kind") != "redefine" ||
             !operation.contains("target_id") || !operation.at("target_id").is_string())
             throw std::invalid_argument("Unsupported boundary recovery operation.");
+        if (version_two && (!operation.contains("replacement_child_mapping") ||
+            !operation.at("replacement_child_mapping").is_object() ||
+            !operation.contains("replacement_removed_reference_ids") ||
+            !operation.at("replacement_removed_reference_ids").is_array() ||
+            !operation.contains("replacement_segments_sha256") || !operation.at("replacement_segments_sha256").is_string() ||
+            (operation.at("replacement_child_mapping").empty() && operation.at("replacement_removed_reference_ids").empty())))
+            throw std::invalid_argument("Unsupported boundary recovery reference plan.");
         const auto id = operation.at("target_id").get<std::string>();
         const auto target = snapshot.entities().find(id);
         if (id.empty() || id.size() > 128 || target == snapshot.entities().end() ||
@@ -25059,7 +25332,7 @@ private:
         syncToolControls();
     }
 
-    void checkpointBoundaryDraft() {
+    void checkpointBoundaryDraft(const BoundaryGeometryEdit* reviewed = nullptr) {
         if (!m_boundary_session || !m_boundary_source || !m_boundary_context ||
             m_boundary_document != m_document || !m_document->is_editable()) return;
         const bool promote = m_recovery_ledger.empty();
@@ -25081,6 +25354,14 @@ private:
         if (m_redefine_boundary_id) {
             active.extensions["desktop_operation"] = {{"version", 1}, {"kind", "redefine"},
                 {"target_id", m_redefine_boundary_id->toStdString()}};
+            if (reviewed && (!reviewed->replacement_child_mapping.empty() || !reviewed->replacement_removed_reference_ids.empty())) {
+                auto& operation = active.extensions["desktop_operation"];
+                operation["version"] = 2;
+                operation["replacement_child_mapping"] = reviewed->replacement_child_mapping;
+                operation["replacement_removed_reference_ids"] = reviewed->replacement_removed_reference_ids;
+                const auto geometry_json = reviewed->replacement_segments.dump();
+                operation["replacement_segments_sha256"] = sha256_hex(std::as_bytes(std::span(geometry_json.data(), geometry_json.size())));
+            }
             (void)boundaryRecoveryTarget(active, *m_boundary_source);
         }
         if (previous && *previous == active) return;
@@ -25378,15 +25659,17 @@ private:
                 m_selected_id = source_id;
                 const auto classification = QString::fromStdString(
                     read_string(created->second.properties, "classification").value_or(""));
-                const auto command = boundaryRedefinitionCommand(authoringSnapshot(),
+                const auto reviewed = reviewBoundaryRedefinition(authoringSnapshot(), boundaryRedefinitionCommand(authoringSnapshot(),
                     boundary_geometry(replacement), classification,
                     boundary_construction_envelope(m_boundary_session->accepted_chains().front(),
-                                                   m_boundary_session->options()));
+                                                   m_boundary_session->options())));
+                if (!reviewed) return;
+                const auto& command = *reviewed;
                 (void)Document::preview_command(authoringSnapshot(), command);
                 if (m_recovery_ledger.empty()) applyDocumentCommand(command);
                 else {
                     requireWorkspaceDocument();
-                    checkpointBoundaryDraft();
+                    checkpointBoundaryDraft(&command.edit);
                     auto edit = m_project_workspace->prepare_finish_boundary(command);
                     commitWorkspaceEdit(edit);
                 }

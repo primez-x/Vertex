@@ -308,7 +308,9 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 
 - [ ] **U053 — Reopen an existing area for editing**
   - Steps: Draw and close a rectangular room. Select it and run Redefine boundary from Commands. Draw a larger replacement and finish it. Repeat with a triangle. Start another redraw, try starting a new drawing, choose Cancel, then finish the retained redraw. Undo, Redo, save and reopen.
-  - Expected: The selected area changes in place. Its measurements and area total follow the new shape. Cancelling keeps the current redraw. One Undo restores the prior shape; Redo restores the replacement. Save/reopen retains the result and history. If an attached manual dimension or locked relationship cannot follow a different number of edges, the app explains the conflict and keeps the editable redraw.
+  - Expected: The selected area changes in place. Its measurements and area total follow the new shape. Cancelling keeps the current redraw. One Undo restores the prior shape; Redo restores the replacement. Save/reopen retains the result and history.
+  - Also try: Add a length dimension and an angle dimension, then redraw the area with a different number of corners. In Review redraw references, keep the angle and map its original edges/corner to the numbered replacement edges/corner. Remove the length dimension. Cancel once, then finish and Apply the same choices. Undo, Redo, clone the result, save and reopen.
+  - Expected: Nothing changes before Apply. Cancel keeps the editable redraw. The kept angle follows the chosen edges; the removed length returns on Undo. Automatic measurements follow the new shape. Incomplete choices or conflicting locked measurements disable Apply with an explanation. Clone and save/reopen retain the accepted result.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

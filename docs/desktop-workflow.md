@@ -755,9 +755,16 @@ outside this checkpoint.
 Select a closed area and run **Redefine boundary** from Commands to redraw it
 in place. Normal Draw First areas and areas edited afterward retain their exact
 original inputs and new construction evidence. A different number of edges
-creates fresh edge identities and automatic dimensions. Manual edge references
-and endpoint constraints that cannot be mapped safely produce a diagnostic and
-retain the redraw for correction. Finishing updates the shape and retires the
+creates fresh edge identities and automatic dimensions. Attached manual dimensions
+and endpoint constraints open **Review redraw references** before finishing.
+The two canvases number original and replacement edges (`E1`, `E2`, …) and corners
+(`V1`, `V2`, …). Choose **Keep and map** or **Remove** for each reference; then
+choose replacement children for kept references. The preview reports the resulting
+lengths, angles and relationship validity. Missing choices, incompatible angle
+targets and conflicting locks disable Apply. Cancelling keeps the completed redraw
+editable and leaves the source unchanged. Accepted choices are stored with the
+archived input, bound to the exact reviewed replacement geometry and identities,
+and cannot be substituted during replay. Finishing updates the shape and retires the
 draft in one history operation; Undo restores the previous shape and retains
 the redraw input for recovery. The selected layer is activated before redraw,
 and appraisal categories remain separate from measurement classifications.

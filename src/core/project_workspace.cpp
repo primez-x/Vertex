@@ -348,12 +348,24 @@ void validate_workspace_boundary_redefinition_input(const DocumentSnapshot& sour
         command.edit.kind != BoundaryGeometryEditKind::redefine_boundary)
         throw std::invalid_argument("Redraw finish must use its current source revision and typed replacement");
     const auto operation = input.extensions.find("desktop_operation");
-    if (operation == input.extensions.end() || !operation->is_object() || operation->size() != 3 ||
+    const bool has_reference_plan = !command.edit.replacement_child_mapping.empty() ||
+        !command.edit.replacement_removed_reference_ids.empty();
+    nlohmann::json expected_operation{{"version", has_reference_plan ? 2 : 1},
+        {"kind", "redefine"}, {"target_id", command.edit.boundary_id}};
+    if (has_reference_plan) {
+        expected_operation["replacement_child_mapping"] = command.edit.replacement_child_mapping;
+        expected_operation["replacement_removed_reference_ids"] = command.edit.replacement_removed_reference_ids;
+        const auto geometry_json = command.edit.replacement_segments.dump();
+        expected_operation["replacement_segments_sha256"] = sha256_hex(std::as_bytes(std::span(geometry_json.data(), geometry_json.size())));
+    }
+    // The archived decision is part of the accepted input, not an authority
+    // granted to a later finish command. Exact encoding binds types, ordered
+    // removals, reviewed geometry identities and the complete three/six-field envelope without extension keys.
+    if (operation == input.extensions.end() || !operation->is_object() ||
         !operation->contains("version") || !operation->at("version").is_number_integer() ||
-        operation->at("version") != 1 || !operation->contains("kind") ||
-        !operation->at("kind").is_string() || operation->at("kind") != "redefine" ||
-        !operation->contains("target_id") || !operation->at("target_id").is_string() ||
-        operation->at("target_id") != command.edit.boundary_id ||
+        operation->dump() != expected_operation.dump() ||
+        (has_reference_plan && (!operation->at("replacement_child_mapping").is_object() ||
+            !operation->at("replacement_removed_reference_ids").is_array())) ||
         command.edit.target_id != command.edit.boundary_id)
         throw std::invalid_argument("Redraw finish does not match its archived target");
     const auto target = source.entities().find(command.edit.boundary_id);

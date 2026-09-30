@@ -523,7 +523,7 @@ and emits `boundary_transform` on its command revision. Translation-only and
 proof-free histories retain exchange versions 2 and 1, respectively.
 
 Version 7 adds nullable `revisions.boundary_edit_json`. A present value is a
-strict version-1 `move_vertex`, `resize_segment`, `insert_vertex`, or `redefine_boundary` intent. Vertex moves store the
+strict version-1 `move_vertex`, `resize_segment`, `insert_vertex`, or `redefine_boundary` intent, or a version-2 redraw reference intent described below. Vertex moves store the
 boundary ID, stable vertex ID, and absolute finite position. Segment resize
 intents store the boundary ID, stable segment ID, positive analytical length in
 metres, fixed endpoint (`start` or `end`), and the explicit connected-chain
@@ -543,8 +543,25 @@ Redefinition stores ordered identified `replacement_segments`, optional exact
 raw `replacement_authoring`, restricted `replacement_properties`, and explicit
 `replacement_dimension_ids`. Equal edge counts retain every ordered child ID;
 changed counts allocate fresh children and regenerate automatic edge dimensions.
-Owner-only area references remain attached. Ambiguous manual child dimensions
-or endpoint constraints reject changed-count redraws without changing the source.
+Owner-only area references remain attached. Changed-count redraws with child
+references require explicit decisions; missing or incompatible decisions reject
+without changing the source. A nonempty reference plan uses strict intent version
+2 and adds both `replacement_child_mapping` (an object with `segments` and
+`vertices` objects, each mapping old child IDs to new IDs) and
+`replacement_removed_reference_ids` (an ordered array of reference
+entity IDs). Empty plans retain the exact version-1 encoding and size policy.
+Maps connect existing segments to replacement segments and vertices to vertices,
+with distinct destinations within each namespace. Equal ID strings in the segment
+and vertex namespaces remain separate. A mapping with no entries is encoded as
+`{}`; nonempty mappings include both typed groups. Every map entry must be used by a retained reference.
+Every retained child reference must be fully mapped, including angle dimensions'
+second edge and common vertex. Constraint endpoint roles follow the new vertex's
+incidence on the mapped segment; relation, length, anchor, other owners and opaque
+binding metadata remain unchanged. Only affected supported manual child
+dimensions or endpoint constraints may be explicitly removed. Automatic edge
+dimensions regenerate; automatic angle dimensions may be mapped but not removed.
+Area dimensions, unrelated entities and unsupported references cannot be removed
+through this plan. Canonical constraint checks still reject conflicting locks.
 Non-null construction inputs must replay to the exact replacement geometry before
 their temporary child IDs are mapped by order. Raw API geometry uses null
 construction evidence. Receipt-free drawn replacements acquire verified new
@@ -554,7 +571,13 @@ replacement payload validation reserves encoding overhead within that limit.
 
 A workspace redraw is one `boundary_finish` operation: the typed replacement,
 input archival and draft retirement publish together. The archived strict
-`desktop_operation` identifies the target. Restoration checks source revision,
+`desktop_operation` identifies the target. Version 1 contains exactly `version`,
+`kind` (`redefine`) and `target_id`; nonempty accepted plans use version 2 and add
+the two reference-plan fields above and `replacement_segments_sha256`, the SHA-256
+of the exact ordered replacement-segment JSON encoding. This binds fresh IDs to
+their reviewed geometry without duplicating the geometry payload. Atomic finish and history restoration require
+the entire envelope to match the typed command exactly, including ordered removal
+IDs. Editing the draft invalidates previous review choices. Restoration checks source revision,
 resolved drawing context, exactly one accepted classified chain, exact new
 construction input, canonical classification/category updates and the complete
 replayed entity map. One Undo restores prior geometry and retains the redraw

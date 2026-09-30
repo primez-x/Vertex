@@ -139,8 +139,13 @@ segment and shared vertex used by angle dimensions. Topology-changing insertion
 still requires explicit reference migration for receipt-backed geometry and
 angle targets; that broader insertion path remains open.
 
-APX-EDIT-004 reopen/redefine/delete/cancel/restore lifecycle support is outside
-these helpers and remains open. Other areas, architectural objects, annotations,
+APX-EDIT-004 lifecycle support is outside these geometry helpers. The typed document
+and workspace adapters support redraw, cancellation, guarded deletion and exact
+history restoration. Changed-count redraw includes a native review of explicit
+edge/vertex mappings and eligible reference removals, with canonical dimension and
+constraint preview before atomic finish. The archived input binds those choices
+to the exact replacement geometry and identities. Broader object lifecycle and
+production compatibility qualification remain open. Other areas, architectural objects, annotations,
 and references are also outside the supported transform types. A future command
 adapter must retain exact original snapshots for undo; inverse floating-point
 transforms are not an exact restoration mechanism. The desktop's automatic area

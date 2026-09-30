@@ -2065,15 +2065,50 @@ void test_normal_receipt_boundary_redefinition_workflow() {
             window.redoCommand() && window.document().snapshot().entities() == after.entities(), "redraw must navigate exactly");
         if (!derived) {
             require(window.selectEntity(id), "count-changing redraw must retain the source selection");
+            const auto manual_id = window.createLengthDimension(id, QString::fromStdString(redefined.segments[0].segment_id), {0,3});
+            const auto angle_id = window.createAngleDimension(id, QString::fromStdString(redefined.segments[0].segment_id),
+                QString::fromStdString(redefined.segments[1].segment_id), QString::fromStdString(redefined.segments[0].end_vertex_id), {3,3});
+            require(!manual_id.isEmpty() && !angle_id.isEmpty() && window.selectEntity(id), "normal redraw must attach manual references");
+            const auto referenced = window.document().snapshot();
             window.showBoundaryRedefinition();
             for (const auto point : {QPoint{-100,-100}, QPoint{100,-100}, QPoint{0,100}}) click(point);
+            bool cancelled = false;
+            QTimer::singleShot(0, &window, [&] {
+                auto* dialog = window.findChild<QDialog*>("boundaryReferenceReview");
+                if (dialog) { cancelled = true; dialog->reject(); }
+            });
+            key(Qt::Key_Return);
+            require(cancelled && canvas->boundaryDraftPreview() && window.document().snapshot().entities() == referenced.entities(),
+                "cancelled redraw reference review must retain the editable completed draft and source");
+            QTimer::singleShot(0, &window, [&] {
+                auto* dialog = window.findChild<QDialog*>("boundaryReferenceReview");
+                require(dialog, "normal workspace redraw must review manual references");
+                auto* choices = dialog->findChild<QTableWidget*>("boundaryReferenceChoices");
+                auto* mappings = dialog->findChild<QTableWidget*>("boundaryReferenceMappings");
+                for (int row = 0; row < choices->rowCount(); ++row) {
+                    auto* choice = qobject_cast<QComboBox*>(choices->cellWidget(row, 1));
+                    choice->setCurrentIndex(choices->item(row, 0)->data(Qt::UserRole).toString() == manual_id ? 2 : 1);
+                }
+                for (int row = 0; row < mappings->rowCount(); ++row) {
+                    const auto old = mappings->item(row, 0)->data(Qt::UserRole).toString().toStdString();
+                    auto* target = qobject_cast<QComboBox*>(mappings->cellWidget(row, 1));
+                    target->setCurrentIndex(old == redefined.segments[0].segment_id ? 1 : 2);
+                }
+                auto* buttons = dialog->findChild<QDialogButtonBox*>("boundaryReferenceButtons");
+                require(buttons->button(QDialogButtonBox::Apply)->isEnabled(), "mixed workspace reference plan must be valid");
+                buttons->button(QDialogButtonBox::Apply)->click();
+            });
             key(Qt::Key_Return);
             const auto changed = window.document().snapshot();
             const auto triangle = decode_identified_boundary_entity(changed.entities().at(id.toStdString()));
             require(!canvas->boundaryDraftPreview() && triangle.segments.size() == 3 &&
                 triangle.segments[0].segment_id != redefined.segments[0].segment_id &&
-                changed.entities().size() + 1 == after.entities().size(),
-                "normal redraw may change edge count by retiring topology and regenerating automatic dimensions");
+                changed.entities().size() == after.entities().size() && !changed.entities().contains(manual_id.toStdString()) &&
+                changed.entities().contains(angle_id.toStdString()),
+                "normal redraw must apply mixed reference choices and regenerate automatic dimensions atomically");
+            require(window.undoCommand() && window.document().snapshot().entities() == referenced.entities() &&
+                window.redoCommand() && window.document().snapshot().entities() == changed.entities(),
+                "workspace undo/redo must retain the exact accepted reference plan and all entities");
         }
         const auto final_source = window.document().snapshot().entities().at(id.toStdString());
         const auto capture_directory = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
@@ -2092,6 +2127,99 @@ void test_normal_receipt_boundary_redefinition_workflow() {
             reopened.document().snapshot().entities().at(cloned.id) == cloned, "normal and derived redraws must reopen exactly");
         window.hide();
     }
+}
+
+void test_boundary_reference_review_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
+    using namespace sketch;
+    desktop::MainWindow window;
+    const auto id = window.createBoundary({{{0,0},{4,0},0}, {{4,0},{4,3},0},
+        {{4,3},{0,3},0}, {{0,3},{0,0},0}}, "living_area");
+    require(!id.isEmpty() && window.selectEntity(id), "reference review must select its source area");
+    const auto geometry = decode_identified_boundary_entity(window.document().snapshot().entities().at(id.toStdString()));
+    const auto& first = geometry.segments[0];
+    const auto& second = geometry.segments[1];
+    BoundaryDimension length{"review-length", id.toStdString(), first.segment_id, {2,-0.5}};
+    BoundaryDimension angle{"review-angle", id.toStdString(), first.segment_id, {4.5,0.5}};
+    angle.kind = BoundaryDimensionKind::angle;
+    angle.secondary_segment_id = second.segment_id;
+    angle.vertex_id = first.end_vertex_id;
+    auto lock = encode_constraint_entity(PersistentConstraint{"review-lock", ConstraintRelationKind::fixed_length,
+        {{id.toStdString(), WallEndpointRole::start, first.segment_id, first.start_vertex_id},
+         {id.toStdString(), WallEndpointRole::end, first.segment_id, first.end_vertex_id}}, parse_quantity("4 m")});
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(encode_boundary_dimension_entity(length)),
+         EntityChange::upsert(encode_boundary_dimension_entity(angle)), EntityChange::upsert(lock)}, {}, "review references"});
+    const auto before = window.document().snapshot();
+    const Boundary triangle{{{0,0},{4,0},0}, {{4,0},{4,3},0}, {{4,3},{0,0},0}};
+    bool reviewed = false;
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>("boundaryReferenceReview");
+        if (!dialog) return;
+        reviewed = true;
+        auto* choices = dialog->findChild<QTableWidget*>("boundaryReferenceChoices");
+        auto* mappings = dialog->findChild<QTableWidget*>("boundaryReferenceMappings");
+        auto* buttons = dialog->findChild<QDialogButtonBox*>("boundaryReferenceButtons");
+        require(choices && mappings && buttons && choices->rowCount() == 3 && mappings->rowCount() == 4,
+            "redraw review must expose affected references and their numbered old/new children");
+        require(!buttons->button(QDialogButtonBox::Apply)->isEnabled(), "unreviewed targets must not apply");
+        buttons->button(QDialogButtonBox::Cancel)->click();
+    });
+    require(!window.redefineSelectedBoundary(triangle) && reviewed && window.document().snapshot().entities() == before.entities(),
+        "cancelling reference review must preserve the source and all references exactly");
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>("boundaryReferenceReview");
+        if (!dialog) return;
+        auto* choices = dialog->findChild<QTableWidget*>("boundaryReferenceChoices");
+        auto* mappings = dialog->findChild<QTableWidget*>("boundaryReferenceMappings");
+        auto* buttons = dialog->findChild<QDialogButtonBox*>("boundaryReferenceButtons");
+        for (int row = 0; row < choices->rowCount(); ++row)
+            qobject_cast<QComboBox*>(choices->cellWidget(row, 1))->setCurrentIndex(1);
+        for (int row = 0; row < mappings->rowCount(); ++row) {
+            const auto old = mappings->item(row, 0)->data(Qt::UserRole).toString().toStdString();
+            qobject_cast<QComboBox*>(mappings->cellWidget(row, 1))->setCurrentIndex(
+                old == second.segment_id || old == first.end_vertex_id ? 2 : 1);
+        }
+        require(!buttons->button(QDialogButtonBox::Apply)->isEnabled() &&
+            !dialog->findChild<QLabel*>("boundaryReferenceStatus")->text().isEmpty(),
+            "a mapped fixed length conflict must block Apply with an explanation");
+        buttons->button(QDialogButtonBox::Cancel)->click();
+    });
+    require(!window.redefineSelectedBoundary({{{0,0},{5,0},0}, {{5,0},{5,3},0}, {{5,3},{0,0},0}}) &&
+        window.document().snapshot().entities() == before.entities(), "locked redraw conflict must leave source intact");
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>("boundaryReferenceReview");
+        if (!dialog) return;
+        auto* choices = dialog->findChild<QTableWidget*>("boundaryReferenceChoices");
+        auto* mappings = dialog->findChild<QTableWidget*>("boundaryReferenceMappings");
+        auto* buttons = dialog->findChild<QDialogButtonBox*>("boundaryReferenceButtons");
+        for (int row = 0; row < choices->rowCount(); ++row)
+            qobject_cast<QComboBox*>(choices->cellWidget(row, 1))->setCurrentIndex(1);
+        for (int row = 0; row < mappings->rowCount(); ++row) {
+            const auto old = mappings->item(row, 0)->data(Qt::UserRole).toString().toStdString();
+            auto* target = qobject_cast<QComboBox*>(mappings->cellWidget(row, 1));
+            const auto index = old == second.segment_id || old == first.end_vertex_id ? 2 : 1;
+            target->setCurrentIndex(index);
+        }
+        require(buttons->button(QDialogButtonBox::Apply)->isEnabled(), "valid reference mapping must enable exact preview Apply");
+        const auto capture_directory = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+        if (!capture_directory.isEmpty()) require(QDir().mkpath(capture_directory) && dialog->grab().save(
+            QDir(capture_directory).filePath("boundary-reference-review.png")), "reference review screenshot must save");
+        buttons->button(QDialogButtonBox::Apply)->click();
+    });
+    require(window.redefineSelectedBoundary(triangle), "reviewed rectangle to triangle must commit");
+    const auto after = window.document().snapshot();
+    const auto replacement = decode_identified_boundary_entity(after.entities().at(id.toStdString()));
+    require(replacement.segments.size() == 3 && after.entities().contains(length.id) && after.entities().contains(angle.id) &&
+        after.entities().contains(lock.id) && decode_boundary_dimension_entity(after.entities().at(length.id)).dimension->segment_id ==
+        replacement.segments[0].segment_id, "review must preserve references on their explicitly chosen children");
+    require(window.undoCommand() && window.document().snapshot().entities() == before.entities() &&
+        window.redoCommand() && window.document().snapshot().entities() == after.entities(), "reference decisions must undo/redo exactly");
+    QTemporaryDir directory;
+    const auto path = directory.filePath("reference-review.bldproj");
+    desktop::MainWindow reopened;
+    require(window.saveProjectAs(path) && reopened.openProject(path) && reopened.document().snapshot().entities() == after.entities(),
+        "reviewed redraw and reference history must save/reopen exactly");
 }
 
 void test_boundary_geometry_preview_workflow() {
@@ -6018,6 +6146,10 @@ int main(int argc, char** argv) {
         std::cout << "Boundary insertion workflow tests passed\n";
         return 0;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--boundary-reference-review-only") {
+        test_boundary_reference_review_workflow();
+        return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--boundary-redefinition-only") {
         test_normal_receipt_boundary_redefinition_workflow();
         test_boundary_redefinition_workflow();
@@ -6105,6 +6237,7 @@ int main(int argc, char** argv) {
     test_boundary_vertex_insertion_workflow();
     test_direct_boundary_geometry_edit_workflow();
     test_interactive_receipt_boundary_insertion_workflow();
+    test_boundary_reference_review_workflow();
     test_normal_receipt_boundary_redefinition_workflow();
     test_boundary_geometry_preview_workflow();
     test_boundary_redefinition_workflow();
