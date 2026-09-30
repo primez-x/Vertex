@@ -4,7 +4,11 @@
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/boundary_transform.hpp"
 #include "sketch/geometry_operations.hpp"
+#include "sketch/constraint_entity.hpp"
+#include <algorithm>
 #include <cmath>
+#include <numeric>
+#include <numbers>
 #include <set>
 
 namespace sketch {
@@ -107,6 +111,9 @@ IdentifiedBoundary apply_geometry_edit(const IdentifiedBoundary& source,
         throw std::invalid_argument("Boundary geometry edit owner does not match");
     if (edit.kind == BoundaryGeometryEditKind::move_vertex)
         return move_boundary_vertex(source, edit.target_id, edit.target_position);
+    if (edit.kind == BoundaryGeometryEditKind::insert_vertex)
+        return insert_boundary_vertex(source, edit.target_id, edit.fraction,
+                                      edit.new_vertex_id, edit.new_segment_id);
     return set_boundary_segment_length(source, edit.target_id, edit.target_length_metres,
                                        edit.fixed_endpoint, edit.move_connected);
 }
@@ -126,6 +133,28 @@ IdentifiedBoundary apply_geometry_transform(const IdentifiedBoundary& source,
 
 nlohmann::json geometry_edit_operation(const BoundaryGeometryEdit& edit) {
     return {{"kind", "geometry_edit"}, {"value", encode_boundary_geometry_edit(edit)}};
+}
+
+Vec2 split_dimension_position(const Segment& segment, double side) {
+    const auto dx = segment.end.x - segment.start.x;
+    const auto dy = segment.end.y - segment.start.y;
+    Vec2 midpoint{std::midpoint(segment.start.x, segment.end.x),
+                  std::midpoint(segment.start.y, segment.end.y)};
+    auto tangent = std::atan2(dy, dx);
+    if (segment.sweep_radians != 0.0) {
+        const auto k = 0.5 / std::tan(segment.sweep_radians / 2.0);
+        const Vec2 center{midpoint.x - dy * k, midpoint.y + dx * k};
+        const auto half = segment.sweep_radians * 0.5;
+        const auto x = segment.start.x - center.x;
+        const auto y = segment.start.y - center.y;
+        midpoint = {center.x + x * std::cos(half) - y * std::sin(half),
+                    center.y + x * std::sin(half) + y * std::cos(half)};
+        tangent = std::atan2(midpoint.y - center.y, midpoint.x - center.x) +
+            (segment.sweep_radians > 0 ? std::numbers::pi / 2 : -std::numbers::pi / 2);
+    }
+    const auto offset = std::max(0.25, segment_length(segment) * 0.1);
+    return {midpoint.x - std::sin(tangent) * offset * side,
+            midpoint.y + std::cos(tangent) * offset * side};
 }
 
 IdentifiedBoundary apply_vertex_batch(const IdentifiedBoundary& source,
@@ -250,7 +279,27 @@ void record_boundary_identity_transition(BoundaryIdentityHistory& history,
 
 void validate_boundary_identity_transition(const BoundaryIdentityHistory& history,
     const std::map<std::string, Entity, std::less<>>& before,
-    const std::map<std::string, Entity, std::less<>>& after) {
+    const std::map<std::string, Entity, std::less<>>& after,
+    const BoundaryGeometryEdit* typed_edit) {
+    // A split exception is scoped to a typed intent and its entire canonical
+    // entity state, including dimension and constraint migrations. Raw edits
+    // cannot authorize endpoint rebinding by presenting equivalent geometry.
+    bool verified_split = false;
+    if (typed_edit && typed_edit->kind == BoundaryGeometryEditKind::insert_vertex) {
+        const auto expected = edited_boundary_entities(before, *typed_edit);
+        verified_split = expected.size() == after.size();
+        if (verified_split) {
+            for (const auto& [id, entity] : expected) {
+                const auto actual = after.find(id);
+                if (actual == after.end() || !exact_entity(entity, actual->second)) {
+                    verified_split = false;
+                    break;
+                }
+            }
+        }
+        if (!verified_split)
+            throw std::invalid_argument("Boundary split state differs from typed reconstruction");
+    }
     for (const auto& [id, entity] : after) {
         const auto reserved = history.find(id);
         if (reserved == history.end()) continue;
@@ -304,6 +353,10 @@ void validate_boundary_identity_transition(const BoundaryIdentityHistory& histor
                     invalid("retired vertex ID requires exact undo/redo");
             if (active == active_edges.end() ||
                 active->second == std::pair{edge.start_vertex_id, edge.end_vertex_id}) continue;
+            if (verified_split && id == typed_edit->boundary_id &&
+                edge.segment_id == typed_edit->target_id &&
+                edge.start_vertex_id == active->second.first &&
+                edge.end_vertex_id == typed_edit->new_vertex_id) continue;
             // Ordered pairs also protect two-edge lenses, whose edges share
             // the same unordered endpoint pair. Only a full typed reversal is
             // allowed to reverse surviving edge identities.
@@ -483,6 +536,73 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
     }
     auto result = source;
     result.at(edit.boundary_id) = std::move(encoded);
+    if (!batch && edit.kind == BoundaryGeometryEditKind::insert_vertex) {
+        const auto old_boundary = decode_identified_boundary_entity(original);
+        const auto old_edge = std::find_if(old_boundary.segments.begin(), old_boundary.segments.end(),
+            [&](const auto& edge) { return edge.segment_id == edit.target_id; });
+        const auto first_piece = std::find_if(edited.segments.begin(), edited.segments.end(),
+            [&](const auto& edge) { return edge.segment_id == edit.target_id; });
+        const auto second_piece = std::next(first_piece);
+        const Entity* automatic_template = nullptr;
+        for (auto& [id, entity] : result) {
+            (void)id;
+            if (entity.type == "constraint") {
+                const auto decoded = decode_constraint_entity(entity);
+                if (!decoded.supported())
+                    throw std::invalid_argument(decoded.unsupported_reason);
+                // Known constraints are point relations. Preserve their exact
+                // endpoint points and opaque binding metadata, including spans
+                // that now traverse both pieces rather than one shorter edge.
+                for (std::size_t i = 0; i < decoded.constraint->bindings.size(); ++i) {
+                    const auto& binding = decoded.constraint->bindings[i];
+                    if (binding.owner_id == edit.boundary_id && binding.segment_id == edit.target_id &&
+                        binding.role == WallEndpointRole::end && binding.vertex_id == old_edge->end_vertex_id)
+                        entity.properties.at("bindings").at(i).at("segment_id") = edit.new_segment_id;
+                }
+                (void)decode_constraint_entity(entity);
+            }
+            if (entity.type != "dimension") continue;
+            const auto decoded = decode_boundary_dimension_entity(entity);
+            if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+            auto dimension = *decoded.dimension;
+            if (dimension.boundary_id != edit.boundary_id) continue;
+            if (dimension.kind == BoundaryDimensionKind::angle &&
+                dimension.vertex_id == old_edge->end_vertex_id) {
+                if (dimension.segment_id == edit.target_id) dimension.segment_id = edit.new_segment_id;
+                if (dimension.secondary_segment_id == edit.target_id)
+                    dimension.secondary_segment_id = edit.new_segment_id;
+                entity = encode_boundary_dimension_entity(dimension, &entity);
+            }
+            if (dimension.kind == BoundaryDimensionKind::angle)
+                (void)dimension.resolve(result.at(edit.boundary_id));
+            if (dimension.kind == BoundaryDimensionKind::segment_length &&
+                dimension.segment_id == edit.target_id &&
+                dimension.placement == BoundaryDimensionPlacement::automatic) {
+                if (!automatic_template) automatic_template = &source.at(id);
+                const auto side = dimension.automatic_placement_version.value_or(1) == 1 ? 1.0 :
+                    (signed_area(boundary_geometry(edited)) > 0.0 ? -1.0 : 1.0);
+                dimension.text_position = split_dimension_position(first_piece->segment, side);
+                entity = encode_boundary_dimension_entity(dimension, &entity);
+            }
+        }
+        if (automatic_template) {
+            if (edit.new_dimension_id.empty() || source.contains(edit.new_dimension_id))
+                throw std::invalid_argument("Automatic split dimension requires a fresh explicit ID");
+            auto dimension = *decode_boundary_dimension_entity(*automatic_template).dimension;
+            dimension.id = edit.new_dimension_id;
+            dimension.segment_id = edit.new_segment_id;
+            const auto side = dimension.automatic_placement_version.value_or(1) == 1 ? 1.0 :
+                (signed_area(boundary_geometry(edited)) > 0.0 ? -1.0 : 1.0);
+            dimension.text_position = split_dimension_position(second_piece->segment, side);
+            auto new_dimension = encode_boundary_dimension_entity(dimension);
+            for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"})
+                if (automatic_template->properties.contains(key))
+                    new_dimension.properties[key] = automatic_template->properties.at(key);
+            result.emplace(new_dimension.id, std::move(new_dimension));
+        } else if (!edit.new_dimension_id.empty()) {
+            throw std::invalid_argument("Split dimension ID has no automatic source dimension");
+        }
+    }
     return result;
 }
 

@@ -3191,7 +3191,7 @@ public:
                 if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
                 auto dimension = *decoded.dimension;
                 if (clone) {
-                    dimension.id = new_id("dimension");
+                    dimension.id = identities.at(id);
                     dimension.boundary_id = identities.at(original.id);
                     dimension.segment_id = identities.at(dimension.segment_id);
                     if (!dimension.secondary_segment_id.empty())
@@ -3252,6 +3252,11 @@ public:
                 identities.emplace(transformed.segments[index].segment_id, ids.segment_ids[index]);
                 identities.emplace(transformed.segments[index].start_vertex_id, ids.vertex_ids[index]);
             }
+            for (const auto& [id, entity] : source.entities()) {
+                if (entity.type == "dimension" && entity.properties.contains("target") &&
+                    entity.properties.at("target").value("entity_id", std::string{}) == original.id)
+                    identities.emplace(id, new_id("dimension"));
+            }
             std::optional<json> envelope;
             std::optional<json> derivation;
             if (construction) {
@@ -3296,6 +3301,19 @@ public:
                                 "Boundary geometry derivation target does not exist");
                         edit.boundary_id = clone_id;
                         edit.target_id = target->second;
+                        if (edit.kind == BoundaryGeometryEditKind::insert_vertex) {
+                            edit.new_vertex_id = identities.at(edit.new_vertex_id);
+                            edit.new_segment_id = identities.at(edit.new_segment_id);
+                            if (!edit.new_dimension_id.empty()) {
+                                // A dimension may have been deleted since its
+                                // insertion. Its historical proof still needs
+                                // a fresh ID even when no live label is cloned.
+                                const auto [dimension, inserted] = identities.try_emplace(
+                                    edit.new_dimension_id, new_id("dimension"));
+                                (void)inserted;
+                                edit.new_dimension_id = dimension->second;
+                            }
+                        }
                         operations.push_back({{"kind", "geometry_edit"},
                             {"value", encode_boundary_geometry_edit(edit)}});
                     } else if (kind == "vertex_batch") {
@@ -13195,10 +13213,6 @@ public:
                 throw std::invalid_argument(
                     "This legacy boundary needs an explicit identity upgrade before vertex insertion.");
             }
-            if (found->second.properties.contains("boundary_authoring")) {
-                throw std::invalid_argument(
-                    "Receipt-bound boundaries require an explicit derivation policy before vertex insertion.");
-            }
             bool ok = false;
             const auto fraction = fraction_text.trimmed().toDouble(&ok);
             if (!ok || !std::isfinite(fraction) || fraction <= 0.0 || fraction >= 1.0) {
@@ -13212,63 +13226,30 @@ public:
             if (target_index == identified.segments.end()) {
                 throw std::invalid_argument("The selected boundary edge was not found.");
             }
-            std::vector<std::string> replacement_segment_ids;
-            std::vector<std::string> replacement_vertex_ids;
-            replacement_segment_ids.reserve(identified.segments.size());
-            replacement_vertex_ids.reserve(identified.segments.size());
-            std::map<std::string, std::string, std::less<>> identity_remap;
-            for (const auto& edge : identified.segments) {
-                const auto next_segment = new_id("segment");
-                replacement_segment_ids.push_back(next_segment);
-                identity_remap.emplace(edge.segment_id, next_segment);
-                replacement_vertex_ids.push_back(new_id("vertex"));
-                identity_remap.emplace(edge.start_vertex_id, replacement_vertex_ids.back());
-            }
-            // clone_boundary supplies each edge's end vertex from the next
-            // slot, so every old vertex identity is covered by its start edge.
-            const auto inserted_boundary_id = new_id(
-                identified.type == "room_boundary" ? "room-boundary" : "boundary");
-            identity_remap.emplace(found->second.id, inserted_boundary_id);
-            auto replacement = clone_boundary(
-                identified, inserted_boundary_id,
-                LegacyBoundaryIdentityOptions{replacement_segment_ids, replacement_vertex_ids},
-                {0.0, 0.0});
-            const auto inserted = insert_boundary_vertex(
-                replacement, replacement_segment_ids[static_cast<std::size_t>(target_index - identified.segments.begin())],
-                fraction, new_id("vertex"), new_id("segment"));
-            // The old edge and vertex IDs are no longer present after a
-            // replacement. Preserve every external semantic link by mapping
-            // the old identities to the corresponding fresh first-piece IDs.
-            const auto inserted_edge = inserted.segments[static_cast<std::size_t>(target_index - identified.segments.begin())];
-            identity_remap[identified.segments[static_cast<std::size_t>(target_index - identified.segments.begin())].segment_id] =
-                inserted_edge.segment_id;
-            identity_remap[identified.segments[static_cast<std::size_t>(target_index - identified.segments.begin())].start_vertex_id] =
-                inserted_edge.start_vertex_id;
-            auto updated = found->second;
-            updated.id = inserted.id;
-            remap_entity_references(updated, identity_remap);
-            // Merge by the remapped stable edge IDs. The first split piece
-            // continues the original metadata; the new second piece starts
-            // without copied ownership. The codec also refuses unhandled
-            // directional receipts on geometry that would change.
-            updated = encode_identified_boundary_entity(inserted, &updated);
-            if (updated.properties.contains("boundary")) {
-                updated.properties["boundary"] = boundary_json(boundary_geometry(inserted));
-            }
-            std::vector<EntityChange> changes;
-            changes.push_back(EntityChange::erase(found->second.id));
+            BoundaryGeometryEdit edit;
+            edit.boundary_id = identified.id;
+            edit.kind = BoundaryGeometryEditKind::insert_vertex;
+            edit.target_id = target_segment;
+            edit.fraction = fraction;
+            edit.new_vertex_id = new_id("vertex");
+            edit.new_segment_id = new_id("segment");
             for (const auto& [id, entity] : source.entities()) {
-                if (id == found->second.id) continue;
-                auto migrated = entity;
-                remap_entity_references(migrated, identity_remap);
-                if (migrated != entity) changes.push_back(EntityChange::upsert(std::move(migrated)));
+                (void)id;
+                if (entity.type != "dimension") continue;
+                const auto decoded = decode_boundary_dimension_entity(entity);
+                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                const auto& dimension = *decoded.dimension;
+                if (dimension.boundary_id == edit.boundary_id &&
+                    dimension.kind == BoundaryDimensionKind::segment_length &&
+                    dimension.segment_id == edit.target_id &&
+                    dimension.placement == BoundaryDimensionPlacement::automatic) {
+                    edit.new_dimension_id = new_id("dimension");
+                    break;
+                }
             }
-            changes.push_back(EntityChange::upsert(std::move(updated)));
-            const ApplyEntityChanges command{
-                source.revision(), std::move(changes), {}, "Insert boundary vertex"};
+            const EditBoundaryGeometry command{source.revision(), std::move(edit)};
             (void)Document::preview_command(source, command);
             applyDocumentCommand(command);
-            m_selected_id = id_from(inserted.id);
             clearError();
             refresh();
             return true;

@@ -19,6 +19,42 @@ void validate_finite(Vec2 point) {
 
 } // namespace
 
+IdentifiedBoundary insert_boundary_vertex(const IdentifiedBoundary& source, std::string_view id,
+                                          double fraction, std::string vertex_id,
+                                          std::string second_id) {
+    validate_editable_boundary(source);
+    if (!std::isfinite(fraction) || fraction <= 0 || fraction >= 1)
+        throw std::invalid_argument("Insertion fraction must be inside (0,1)");
+    auto result = source;
+    auto found = std::find_if(result.segments.begin(), result.segments.end(),
+        [&](const auto& edge) { return edge.segment_id == id; });
+    if (found == result.segments.end()) throw std::invalid_argument("Unknown segment ID");
+    const auto original = *found;
+    const auto& segment = original.segment;
+    Vec2 point{std::lerp(segment.start.x, segment.end.x, fraction),
+               std::lerp(segment.start.y, segment.end.y, fraction)};
+    if (segment.sweep_radians != 0) {
+        const auto dx = segment.end.x - segment.start.x;
+        const auto dy = segment.end.y - segment.start.y;
+        const auto k = 0.5 / std::tan(segment.sweep_radians / 2);
+        const Vec2 center{segment.start.x + dx / 2 - dy * k,
+                          segment.start.y + dy / 2 + dx * k};
+        const auto angle = segment.sweep_radians * fraction;
+        const auto x = segment.start.x - center.x;
+        const auto y = segment.start.y - center.y;
+        point = {center.x + x * std::cos(angle) - y * std::sin(angle),
+                 center.y + x * std::sin(angle) + y * std::cos(angle)};
+    }
+    validate_finite(point);
+    found->end_vertex_id = vertex_id;
+    found->segment.end = point;
+    found->segment.sweep_radians = segment.sweep_radians * fraction;
+    result.segments.insert(found + 1, {std::move(second_id), std::move(vertex_id), original.end_vertex_id,
+        {point, segment.end, segment.sweep_radians * (1 - fraction)}});
+    validate_editable_boundary(result);
+    return result;
+}
+
 IdentifiedBoundary move_boundary_vertex(const IdentifiedBoundary& source,
                                         std::string_view id,
                                         Vec2 position) {

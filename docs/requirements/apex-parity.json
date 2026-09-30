@@ -1191,6 +1191,12 @@
       "package": 4,
       "blocker": null,
       "implementation_sources": [
+        "include/sketch/boundary_edit.hpp",
+        "include/sketch/boundary_integrity.hpp",
+        "src/core/boundary_geometry_edit.cpp",
+        "src/core/boundary_integrity.cpp",
+        "src/core/document.cpp",
+        "tests/boundary_integrity_tests.cpp",
         "include/sketch/geometry_operations.hpp",
         "src/core/geometry_operations.cpp",
         "tests/geometry_operations_tests.cpp",
@@ -1202,7 +1208,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Validated boundary vertex insertion and explicit-ID cloning are implemented; desktop vertex insertion now performs a guarded fresh-ID replacement for identified receipt-free boundaries, migrates typed references, preserves topology and exact undo/redo, and rejects legacy or receipt-bound edits. Wall/object insertion, constraint degrees-of-freedom reporting, broader lifecycle/reopen acceptance, and production qualification remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Typed vertex insertion now preserves the boundary and existing topology identities, archives original construction inputs, migrates endpoint dimensions and constraints, and creates a second-piece automatic dimension where applicable. The normal Draw First path, subsequent edits, cloning, undo/redo and save/reopen passed focused Release native regressions, including direct inserted-corner dragging and repeated split/clone replay. Six related Release checks passed: desktop workflow, workspace recovery, boundary workflow, boundary integrity, geometry operations, and project storage. Legacy anonymous geometry still requires an identity upgrade. Wall/object insertion, constraint degrees-of-freedom reporting, broader compatibility acceptance, and production qualification remain open. Historical acceptance artifacts do not certify these new changes."
     },
     {
       "id": "APX-EDIT-004",

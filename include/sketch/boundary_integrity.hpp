@@ -39,5 +39,6 @@ void record_boundary_identity_transition(BoundaryIdentityHistory& history,
     const std::map<std::string, Entity, std::less<>>& after);
 void validate_boundary_identity_transition(const BoundaryIdentityHistory& history,
     const std::map<std::string, Entity, std::less<>>& before,
-    const std::map<std::string, Entity, std::less<>>& after);
+    const std::map<std::string, Entity, std::less<>>& after,
+    const BoundaryGeometryEdit* typed_edit = nullptr);
 } // namespace sketch

@@ -523,17 +523,27 @@ and emits `boundary_transform` on its command revision. Translation-only and
 proof-free histories retain exchange versions 2 and 1, respectively.
 
 Version 7 adds nullable `revisions.boundary_edit_json`. A present value is a
-strict version-1 `move_vertex` or `resize_segment` intent. Vertex moves store the
+strict version-1 `move_vertex`, `resize_segment`, or `insert_vertex` intent. Vertex moves store the
 boundary ID, stable vertex ID, and absolute finite position. Segment resize
 intents store the boundary ID, stable segment ID, positive analytical length in
 metres, fixed endpoint (`start` or `end`), and the explicit connected-chain
-choice. The edit retains all existing boundary, segment, and vertex IDs.
+choice. Insertion stores the boundary and target segment IDs, a finite fraction
+strictly between zero and one, fresh `new_vertex_id` and `new_segment_id`, and
+`new_dimension_id` (an empty string when no automatic second-piece dimension
+is requested). The original segment ID remains on the first piece; its end
+changes to the inserted vertex, and the new second piece ends at the original
+end vertex. The edit retains all existing boundary, segment, and vertex IDs.
+Only a validated typed insertion may authorize this endpoint ownership change;
+raw entity replacement cannot rebind that ID. New IDs must not collide with
+current or retired topology IDs in that boundary; the new dimension ID must
+also be unused in retained entity history. Readers predating insertion support
+reject its unknown intent rather than silently discarding it.
 
 The first direct edit of a receipt-backed boundary moves the exact original
 `boundary_authoring` envelope into
 `extensions.boundary_geometry_derivation.source_boundary_authoring` and appends
 the edit intent to its ordered `operations` array. Subsequent coordinate edits,
-translations, rotations, and reflections append in command order. Load and
+insertions, translations, rotations, and reflections append in command order. Load and
 document restoration replay the original construction and every operation, then
 require an exact match with canonical geometry and command history.
 The original construction evidence is therefore preserved without pretending

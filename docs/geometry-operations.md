@@ -53,6 +53,14 @@ arcs. Tiny, unrepresentable or invalid resulting geometry is rejected. The new
 vertex is a geometric subdivision; this helper adds no solver constraint and
 does not calculate constraint degrees of freedom.
 
+The desktop's typed insertion command also updates dependent dimensions and
+endpoint constraints without changing their original endpoint positions.
+It preserves the exact construction receipt as derivation evidence for a
+normally drawn boundary. A second-piece automatic dimension is included in
+the same command when the original edge has one. Replay validates the complete
+split, references, and new identities; a raw entity edit cannot authorize the
+otherwise forbidden change to the retained edge's end-vertex identity.
+
 Direct vertex movement updates both incident endpoint occurrences of the stable
 vertex ID and retains every boundary, segment, and vertex identity. Direct
 segment resizing accepts an analytical target length and an explicit fixed

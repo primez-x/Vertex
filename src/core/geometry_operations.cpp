@@ -122,34 +122,6 @@ IdentifiedBoundary flip_boundary(const IdentifiedBoundary& source,Vec2 pivot,Bou
     return transform(source,[=](Vec2 p) { return axis==BoundaryFlipAxis::horizontal
         ? Vec2{p.x,pivot.y-(p.y-pivot.y)} : Vec2{pivot.x-(p.x-pivot.x),p.y}; },true);
 }
-IdentifiedBoundary insert_boundary_vertex(const IdentifiedBoundary& source,std::string_view id,
-    double fraction,std::string vertex_id,std::string second_id) {
-    valid(source);
-    if (!std::isfinite(fraction) || fraction<=0 || fraction>=1)
-        throw std::invalid_argument("Insertion fraction must be inside (0,1)");
-    auto result=source;
-    auto found=std::find_if(result.segments.begin(),result.segments.end(),[&](const auto& e){return e.segment_id==id;});
-    if(found==result.segments.end()) throw std::invalid_argument("Unknown segment ID");
-    const auto original=*found;
-    const auto& s=original.segment;
-    Vec2 p{std::lerp(s.start.x,s.end.x,fraction),std::lerp(s.start.y,s.end.y,fraction)};
-    if(s.sweep_radians!=0) {
-        const auto dx=s.end.x-s.start.x,dy=s.end.y-s.start.y;
-        const auto k=0.5/std::tan(s.sweep_radians/2);
-        const Vec2 center{s.start.x+dx/2-dy*k,s.start.y+dy/2+dx*k};
-        const auto a=s.sweep_radians*fraction,c=std::cos(a),sn=std::sin(a);
-        const auto x=s.start.x-center.x,y=s.start.y-center.y;
-        p={center.x+x*c-y*sn,center.y+x*sn+y*c};
-    }
-    finite(p);
-    found->end_vertex_id=vertex_id;
-    found->segment.end=p;
-    found->segment.sweep_radians=s.sweep_radians*fraction;
-    result.segments.insert(found+1,{std::move(second_id),std::move(vertex_id),original.end_vertex_id,
-        {p,s.end,s.sweep_radians*(1-fraction)}});
-    valid(result);
-    return result;
-}
 IdentifiedBoundary clone_boundary(const IdentifiedBoundary& source,std::string new_id,
     const LegacyBoundaryIdentityOptions& ids,Vec2 translation) {
     finite(translation);

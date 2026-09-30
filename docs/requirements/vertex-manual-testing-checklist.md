@@ -371,7 +371,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - [ ] **U064 — Insert a vertex into an edge**
   - Expected: A new editable corner appears without corrupting the area.
   - Result: Not tested
-  - Steps: Select an editable boundary created without retained construction receipts, choose **Insert vertex**, select an edge, enter `0.5`, and apply. Confirm one new handle appears halfway along the edge, the boundary remains closed, and undo removes exactly that vertex. A receipt-backed boundary must reject this operation with a clear message until topology-proof migration is supported.
+  - Steps: Draw and close a rectangle, select it, choose **Insert boundary vertex**, select an edge, enter `0.5`, and apply. Confirm a new corner appears halfway along that edge without changing the area total. Drag the new corner to reshape the area and confirm the dimensions and total update. Undo the move and insertion, redo both, then save and reopen to check that the edited shape and dimensions remain.
   - Notes / issues / screenshots: ____________________
 
 - [ ] **U065 — Move a vertex**

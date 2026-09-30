@@ -1,5 +1,11 @@
 #include "sketch/document.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/boundary_integrity.hpp"
+#include "sketch/boundary_dimension.hpp"
+#include "sketch/boundary_authoring_session.hpp"
+#include "sketch/boundary_construction.hpp"
+#include "sketch/constraint_entity.hpp"
+#include "sketch/geometry_operations.hpp"
 #include "sketch/project_store.hpp"
 #include "support/noninteractive_errors.hpp"
 #include <sqlite3.h>
@@ -650,11 +656,176 @@ void test_legacy_lineage_preserves_v1_without_laundering_identity() {
     const_cast<std::vector<RevisionRecord>&>(forged.history()).back().entities.at("boundary-1") = upgraded;
     require_invalid_snapshot_not_published(forged);
 }
+void test_typed_vertex_split_preserves_identity_and_rejects_forgery() {
+    BoundaryAuthoringOptions options;
+    options.automatic_dimension_placement = true;
+    BoundaryAuthoringSession session(BoundaryAuthoringMode::draw_first, options);
+    (void)session.anchor({0, 0});
+    (void)session.add_line_rise_run(parse_quantity("0 m"), parse_quantity("4 m"));
+    (void)session.add_line_rise_run(parse_quantity("3 m"), parse_quantity("0 m"));
+    (void)session.add_line_rise_run(parse_quantity("0 m"), parse_quantity("-4 m"));
+    (void)session.add_line_rise_run(parse_quantity("-3 m"), parse_quantity("0 m"));
+    session.classify_current_chain("living");
+    const auto accepted = session.close_chain();
+    auto owner = encode_identified_boundary_entity(accepted.boundary);
+    owner.properties["boundary_authoring"] = boundary_construction_envelope(accepted, options);
+    const auto receipt = owner.properties.at("boundary_authoring");
+    const auto& first = accepted.boundary.segments[0];
+    BoundaryDimension start_angle{"start-angle", owner.id, first.segment_id, {-0.5, 0.5}};
+    start_angle.kind = BoundaryDimensionKind::angle;
+    start_angle.secondary_segment_id = accepted.boundary.segments.back().segment_id;
+    start_angle.vertex_id = first.start_vertex_id;
+    auto end_angle = start_angle;
+    end_angle.id = "end-angle";
+    end_angle.secondary_segment_id = accepted.boundary.segments[1].segment_id;
+    end_angle.vertex_id = first.end_vertex_id;
+    auto reverse_angle = end_angle;
+    reverse_angle.id = "reverse-angle";
+    std::swap(reverse_angle.segment_id, reverse_angle.secondary_segment_id);
+    std::vector<Entity> entities{owner, encode_boundary_dimension_entity(start_angle),
+        encode_boundary_dimension_entity(end_angle), encode_boundary_dimension_entity(reverse_angle)};
+    for (const auto& dimension : accepted.dimensions)
+        entities.push_back(encode_boundary_dimension_entity(dimension));
+    auto document = Document::create(entities);
+    BoundaryGeometryEdit split;
+    split.boundary_id = owner.id;
+    split.kind = BoundaryGeometryEditKind::insert_vertex;
+    split.target_id = first.segment_id;
+    split.fraction = 0.25;
+    split.new_vertex_id = "inserted-vertex";
+    split.new_segment_id = "inserted-segment";
+    split.new_dimension_id = "inserted-dimension";
+    require(decode_boundary_geometry_edit(encode_boundary_geometry_edit(split)) == split,
+        "split intent must round trip exactly");
+    const auto before = document.snapshot();
+    const auto raw = edited_boundary_entities(before.entities(), split);
+    require_rejected_unchanged(document, raw.at(owner.id), "raw split must not bypass typed evidence");
+    document.apply(EditBoundaryGeometry{document.revision(), split});
+    const auto after = document.snapshot();
+    const auto& edited = after.entities().at(owner.id);
+    const auto geometry = decode_identified_boundary_entity(edited);
+    require(geometry == insert_boundary_vertex(accepted.boundary, first.segment_id, 0.25,
+        split.new_vertex_id, split.new_segment_id), "typed split must reproduce canonical geometry");
+    require(edited.extensions.at("boundary_geometry_derivation").at("source_boundary_authoring") == receipt,
+        "split must retain exact original receipt");
+    require(std::abs(signed_area(boundary_geometry(geometry)) - signed_area(boundary_geometry(accepted.boundary))) < 1e-9 &&
+        std::abs(perimeter(boundary_geometry(geometry)) - perimeter(boundary_geometry(accepted.boundary))) < 1e-9,
+        "split must preserve area and perimeter");
+    for (const auto& id : {"start-angle", "end-angle", "reverse-angle"}) {
+        const auto dimension = *decode_boundary_dimension_entity(after.entities().at(id)).dimension;
+        require(std::isfinite(dimension.resolve(edited).angle()), "split endpoint angle must resolve");
+        if (dimension.vertex_id == first.end_vertex_id)
+            require(dimension.segment_id == split.new_segment_id || dimension.secondary_segment_id == split.new_segment_id,
+                "angle at original end must follow the second split piece");
+        else require(dimension.segment_id == first.segment_id, "start angle must retain first piece");
+    }
+    require(std::abs(decode_boundary_dimension_entity(after.entities().at(split.new_dimension_id))
+        .dimension->resolve(edited).segment_length() - 3.0) < 1e-9,
+        "automatic dimension must be created for the second piece");
+    auto forged = after;
+    const_cast<std::vector<RevisionRecord>&>(forged.history()).back().boundary_geometry_edit->fraction = 0.5;
+    require_invalid_snapshot_not_published(forged);
+    document.undo(document.revision());
+    require(document.snapshot().entities() == before.entities(), "split undo must be exact");
+    document.redo(document.revision());
+    require(document.snapshot().entities() == after.entities(), "split redo must be exact");
+    auto invalid = split;
+    invalid.target_id = split.new_segment_id;
+    invalid.new_vertex_id = first.end_vertex_id;
+    invalid.new_segment_id = "another-segment";
+    bool rejected = false;
+    try { document.apply(EditBoundaryGeometry{document.revision(), invalid}); }
+    catch (const DocumentError&) { rejected = true; }
+    require(rejected && document.snapshot().entities() == after.entities(), "duplicate split IDs must reject atomically");
+    auto reopened = reopen(document.snapshot(), 7);
+    require(reopened.snapshot().entities() == after.entities(), "split and proof must survive save and reopen");
+    reopened.undo(reopened.revision());
+    const auto branch = reopened.snapshot();
+    for (const auto field : {0, 1, 2}) {
+        auto reused = split;
+        reused.new_vertex_id = "fresh-vertex";
+        reused.new_segment_id = "fresh-segment";
+        reused.new_dimension_id = "fresh-dimension";
+        if (field == 0) reused.new_vertex_id = split.new_vertex_id;
+        if (field == 1) reused.new_segment_id = split.new_segment_id;
+        if (field == 2) reused.new_dimension_id = split.new_dimension_id;
+        rejected = false;
+        try { reopened.apply(EditBoundaryGeometry{reopened.revision(), reused}); }
+        catch (const DocumentError&) { rejected = true; }
+        require(rejected && reopened.snapshot().entities() == branch.entities() &&
+            reopened.revision() == branch.revision(),
+            "abandoned split child and dimension IDs must reject reuse atomically");
+    }
+    auto malformed = encode_boundary_geometry_edit(split);
+    malformed["move_connected"] = true;
+    rejected = false;
+    try { (void)decode_boundary_geometry_edit(malformed); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected, "split codec must reject unrelated coordinate fields");
+
+    auto generic_retired = Document::create(entities);
+    put(generic_retired, Entity{"retired-label", "label", {{"text", "retained history"}}, false, Json::object()});
+    generic_retired.undo(generic_retired.revision());
+    const auto generic_before = generic_retired.snapshot();
+    auto generic_split = split;
+    generic_split.new_dimension_id = "retired-label";
+    rejected = false;
+    try { generic_retired.apply(EditBoundaryGeometry{generic_retired.revision(), generic_split}); }
+    catch (const DocumentError&) { rejected = true; }
+    require(rejected && generic_retired.snapshot().entities() == generic_before.entities(),
+        "split dimension must reject a retired generic entity ID from an abandoned branch");
+
+    PersistentConstraint lock;
+    lock.id = "split-lock";
+    lock.relation = ConstraintRelationKind::fixed_length;
+    lock.bindings = {{owner.id, WallEndpointRole::start, first.segment_id, first.start_vertex_id},
+        {owner.id, WallEndpointRole::end, first.segment_id, first.end_vertex_id}};
+    lock.length = parse_quantity("4 m");
+    auto lock_entity = encode_constraint_entity(lock);
+    lock_entity.properties["bindings"][1]["vendor_note"] = first.segment_id;
+    lock_entity.extensions["vendor"] = {{"opaque", true}};
+    auto constrained = Document::create({owner, lock_entity});
+    auto locked_split = split;
+    locked_split.new_dimension_id.clear();
+    constrained.apply(EditBoundaryGeometry{constrained.revision(), locked_split});
+    const auto remapped = *decode_constraint_entity(constrained.snapshot().entities().at(lock.id)).constraint;
+    require(remapped.bindings[0] == lock.bindings[0] &&
+        remapped.bindings[1].segment_id == split.new_segment_id &&
+        remapped.bindings[1].vertex_id == first.end_vertex_id &&
+        remapped.bindings[1].role == WallEndpointRole::end && remapped.length &&
+        remapped.length->metres == lock.length->metres &&
+        remapped.length->original_expression == lock.length->original_expression,
+        "split must preserve original constrained span rather than lock a shortened piece");
+    auto expected_lock = lock_entity;
+    expected_lock.properties["bindings"][1]["segment_id"] = split.new_segment_id;
+    require(constrained.snapshot().entities().at(lock.id) == expected_lock,
+        "constraint split migration must preserve quantities and opaque binding metadata exactly");
+
+    auto curved = rectangle();
+    curved.properties["segments"][0]["sweep_radians"] = std::numbers::pi / 2;
+    auto arc_document = Document::create({curved});
+    const auto arc_before = decode_identified_boundary_entity(curved);
+    auto arc_split = locked_split;
+    arc_split.boundary_id = curved.id;
+    arc_split.target_id = "edge-0";
+    arc_document.apply(EditBoundaryGeometry{arc_document.revision(), arc_split});
+    const auto arc_after = decode_identified_boundary_entity(arc_document.snapshot().entities().at(curved.id));
+    require(arc_after.segments[0].segment_id == "edge-0" &&
+        arc_after.segments[0].end_vertex_id == arc_split.new_vertex_id &&
+        arc_after.segments[1].end_vertex_id == "vertex-1" &&
+        std::abs(arc_after.segments[0].segment.sweep_radians + arc_after.segments[1].segment.sweep_radians -
+                 arc_before.segments[0].segment.sweep_radians) < 1e-12 &&
+        std::abs(signed_area(boundary_geometry(arc_after)) - signed_area(boundary_geometry(arc_before))) < 1e-9 &&
+        std::abs(perimeter(boundary_geometry(arc_after)) - perimeter(boundary_geometry(arc_before))) < 1e-9,
+        "typed analytical arc split must preserve winding, sweep, area and perimeter");
+}
+
 } // namespace
 
 int main() {
     try {
         test_raw_commands_cannot_bypass_identity_validation();
+        test_typed_vertex_split_preserves_identity_and_rejects_forgery();
         test_downgrade_is_rejected_but_upgrade_undo_is_valid();
         test_future_boundary_version_is_preserved_read_only();
         test_dimension_references_are_atomic_and_survive_history();

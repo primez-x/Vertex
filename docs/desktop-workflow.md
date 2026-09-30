@@ -533,19 +533,23 @@ in-place transform of such a boundary remains blocked until an explicit
 identity-upgrade path is provided. Unsupported boundary versions fail closed
 with a version diagnostic. **Insert boundary vertex…** is available from
 **More** and the command palette. It accepts an identified edge and a strict
-interior fraction, then replaces the boundary atomically with fresh boundary,
-edge, and vertex identities. Existing typed links are migrated to the fresh
-identities, no overlapping source geometry is left behind, and undo/redo restores
-the complete replacement. Dimension targets, annotation overrides, room
-relationships, and phase memberships follow the replacement. Boundary names,
-label content, extension metadata, and alternative IDs/names are not treated
-as references merely because their text matches an old identity.
+interior fraction, then splits that edge atomically. The area keeps its identity,
+existing corners, and unaffected edges. The first piece keeps the selected edge's
+identity; the second piece and new corner receive fresh identities. Length
+dimensions follow the first piece; when that edge has an automatic dimension,
+the second piece receives one too. Angles and endpoint constraints at the
+original end follow the second piece while retaining that original endpoint.
+Area relationships and phase memberships remain attached to the same area.
+Undo/redo restores the complete edit, including its dimensions and references.
 Per-edge metadata stays with its continuing edge identity: the first piece of
 a split retains it, the new second piece starts without it, and unaffected
 edges keep their metadata. Unhandled directional receipts on a split edge
 reject the edit atomically rather than being discarded or duplicated.
-Legacy anonymous and receipt-bound boundaries fail closed for topology-changing
-vertex insertion until their identity and derivation policies are explicit.
+Normally drawn boundaries preserve their exact original construction inputs
+and record the split as a replayable edit, including after prior corner or
+length edits. Legacy anonymous boundaries require an identity upgrade before
+vertex insertion. Invalid fractions, ID collisions, unsupported directional
+receipts, or incompatible relationships reject without changing the document.
 Linked-relationship propagation and full architectural transform qualification
 remain open. The **Create room boundary
 from selected geometry** command can also assemble the selected wall's

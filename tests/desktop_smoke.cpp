@@ -1613,9 +1613,8 @@ void test_boundary_vertex_insertion_workflow() {
                 window.document().revision() == before + 1,
             "vertex insertion must commit one semantic boundary edit");
     const auto inserted_id = window.selectedEntityId();
-    require(!inserted_id.isEmpty() && inserted_id != boundary_id &&
-                !window.document().snapshot().entities().contains(boundary_id.toStdString()),
-            "vertex insertion must replace the source with a fresh boundary identity");
+    require(inserted_id == boundary_id,
+            "vertex insertion must retain the boundary owner identity");
     const auto inserted = decode_identified_boundary_entity(
         window.document().snapshot().entities().at(inserted_id.toStdString()));
     require(inserted.segments.size() == identified.segments.size() + 1 &&
@@ -1649,7 +1648,7 @@ void test_boundary_vertex_insertion_workflow() {
         migrated_phases.alternatives().front().id==original.id &&
         migrated_phases.alternatives().front().name==original.id &&
         migrated_relationships.references().front().id==inserted.id,
-        "boundary insertion must migrate nested model memberships without changing alternative IDs or names");
+            "boundary insertion must retain nested model memberships and identities");
     require(window.undoCommand() &&
                 window.document().snapshot().entities().contains(boundary_id.toStdString()) &&
                 decode_identified_boundary_entity(window.document().snapshot().entities().at(
@@ -1672,6 +1671,128 @@ void test_boundary_vertex_insertion_workflow() {
                 QStringLiteral("0.5")) && window.document().snapshot().entities()==receipt_snapshot.entities() &&
         window.document().revision()==receipt_snapshot.revision(),
         "insertion must reject an unhandled edge receipt without discarding it or changing the document");
+}
+
+void test_interactive_receipt_boundary_insertion_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
+    using namespace sketch;
+    desktop::MainWindow window;
+    window.setAttribute(Qt::WA_DontShowOnScreen, true);
+    window.resize(1200, 800);
+    window.show();
+    QCoreApplication::processEvents();
+    window.fitView();
+    auto* canvas = dynamic_cast<desktop::PlanCanvas*>(
+        window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    require(canvas && window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, "living"),
+        "interactive split fixture must enter normal Draw First authoring");
+    for (const auto point : {Vec2{0, 0}, Vec2{4, 0}, Vec2{4, 3}, Vec2{0, 3}}) {
+        const auto center = QRectF(canvas->rect()).center();
+        const QPointF position(center.x() + point.x * 80, center.y() - point.y * 80);
+        QMouseEvent press(QEvent::MouseButtonPress, position, position,
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, position, position,
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &press);
+        QApplication::sendEvent(canvas, &release);
+    }
+    QKeyEvent close(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(canvas, &close);
+    const auto owner_id = window.selectedEntityId();
+    require(!owner_id.isEmpty(), "normal Draw First must commit and select the boundary");
+    const auto before = window.document().snapshot();
+    const auto& original = before.entities().at(owner_id.toStdString());
+    require(original.properties.contains("boundary_authoring"), "interactive boundary must carry exact receipts");
+    const auto receipt = original.properties.at("boundary_authoring");
+    const auto geometry = decode_identified_boundary_entity(original);
+    require(window.insertSelectedBoundaryVertex(QString::fromStdString(geometry.segments[0].segment_id), "0.5"),
+        "interactive receipt-backed boundary must split through its native command");
+    const auto inserted = window.document().snapshot();
+    const auto& split_entity = inserted.entities().at(owner_id.toStdString());
+    const auto split = decode_identified_boundary_entity(split_entity);
+    require(window.selectedEntityId() == owner_id && split.segments.size() == 5 &&
+        inserted.entities().size() == before.entities().size() + 1 &&
+        split_entity.extensions.at("boundary_geometry_derivation").at("source_boundary_authoring") == receipt,
+        "interactive split must retain owner/receipt and add one automatically placed dimension");
+    for (const auto& [id, entity] : inserted.entities()) {
+        (void)id;
+        if (entity.type == "dimension")
+            (void)decode_boundary_dimension_entity(entity).dimension->resolve(split_entity);
+    }
+    window.fitView();
+    QCoreApplication::processEvents();
+    const auto capture = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if (!capture.isEmpty()) {
+        require(QDir().mkpath(capture), "split capture directory must be writable");
+        require(window.grab().save(QDir(capture).filePath("boundary-insertion.png")),
+            "interactive split canvas capture must be saved");
+    }
+    require(window.undoCommand() && window.document().snapshot().entities() == before.entities() &&
+        window.redoCommand() && window.document().snapshot().entities() == inserted.entities(),
+        "interactive insertion must undo and redo the full dimension/proof state");
+    require(window.selectEntity(owner_id), "inserted boundary must remain selected for handle dragging");
+    QCoreApplication::processEvents();
+    const auto frame = canvas->selectionBounds();
+    require(frame.has_value(), "inserted boundary must expose its retained selection frame");
+    // The selected straight boundary has fixed 1.5px stroke padding. Its
+    // halfway bottom vertex shares the axis-resize handle's location; this
+    // event sequence must exercise the vertex-handle priority in Select mode.
+    const QPointF drag_start(frame->center().x(), frame->bottom() - 1.5);
+    const auto drag_end = drag_start + QPointF(0, -35);
+    const auto drag_revision = window.document().revision();
+    const auto mouse = [&](QEvent::Type type, QPointF point, Qt::MouseButton button,
+                           Qt::MouseButtons buttons) {
+        QMouseEvent event(type, point, canvas->mapToGlobal(point.toPoint()), button,
+                          buttons, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &event);
+    };
+    mouse(QEvent::MouseButtonPress, drag_start, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, drag_end, Qt::NoButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, drag_end, Qt::LeftButton, Qt::NoButton);
+    const auto dragged = decode_identified_boundary_entity(
+        window.document().snapshot().entities().at(owner_id.toStdString()));
+    require(window.document().revision() == drag_revision + 1 &&
+        dragged.segments[0].end_vertex_id == split.segments[1].start_vertex_id &&
+        dragged.segments[0].segment.end.y > 0 && dragged.segments[0].segment.start.x == 0 &&
+        dragged.segments[2].segment.end.y == 3,
+        "press/move/release on the inserted vertex must move that vertex in one command");
+    require(window.undoCommand() && window.document().snapshot().entities() == inserted.entities(),
+        "canvas inserted-vertex drag must undo exactly before the edge-length edit");
+    require(window.selectEntity(owner_id) && window.moveSelectedBoundaryVertex(
+        QString::fromStdString(split.segments[1].start_vertex_id), {2, 0.25}) &&
+        window.editSelectedBoundaryEdgeLength(QString::fromStdString(split.segments[0].segment_id),
+            "2.5 m", BoundaryFixedEndpoint::start, false),
+        "new split vertex and retained first edge must remain editable");
+    require(window.insertSelectedBoundaryVertex(QString::fromStdString(split.segments[0].segment_id), "0.4"),
+        "a retained first piece must support a second insertion");
+    const auto edited = window.document().snapshot().entities().at(owner_id.toStdString());
+    require(window.transformSelectedBoundary("0", false, false, "2 m", "1 m", true),
+        "split receipt derivation must clone through the normal desktop path");
+    const auto clone_id = window.selectedEntityId().toStdString();
+    const auto cloned = window.document().snapshot().entities().at(clone_id);
+    const auto& proof = cloned.extensions.at("boundary_geometry_derivation").at("operations")[0].at("value");
+    const auto& repeated_proof = cloned.extensions.at("boundary_geometry_derivation").at("operations")[3].at("value");
+    require(proof.at("new_vertex_id") != split.segments[1].start_vertex_id &&
+        proof.at("new_segment_id") != split.segments[1].segment_id &&
+        window.document().snapshot().entities().contains(proof.at("new_dimension_id").get<std::string>()) &&
+        window.document().snapshot().entities().at(owner_id.toStdString()) == edited,
+        "cloned split must remap inserted child/dimension IDs and preserve its source");
+    require(decode_identified_boundary_entity(cloned).segments.size() == 6 &&
+        repeated_proof.at("kind") == "insert_vertex" &&
+        repeated_proof.at("new_vertex_id") != proof.at("new_vertex_id") &&
+        window.document().snapshot().entities().contains(repeated_proof.at("new_dimension_id").get<std::string>()),
+        "repeated split clone must remap both new vertices, pieces and automatic dimensions");
+    require(window.undoCommand() && !window.document().snapshot().entities().contains(clone_id) &&
+        window.redoCommand() && window.document().snapshot().entities().at(clone_id) == cloned,
+        "split clone must navigate exactly");
+    QTemporaryDir directory;
+    const auto path = directory.filePath("interactive-split.bldproj");
+    require(directory.isValid() && window.saveProjectAs(path), "interactive split history must save");
+    desktop::MainWindow reopened;
+    require(reopened.openProject(path) && reopened.document().snapshot().entities().at(clone_id) == cloned &&
+        reopened.document().snapshot().entities().at(owner_id.toStdString()) == edited,
+        "interactive draw/split/move/resize/clone history must replay after reopen");
+    window.hide();
 }
 
 void test_direct_boundary_geometry_edit_workflow() {
@@ -1715,6 +1836,11 @@ void test_direct_boundary_geometry_edit_workflow() {
          EntityChange::upsert(angle_dimension)}, {}, "direct boundary fixture"});
     const auto id = QString::fromStdString(accepted.boundary.id);
     require(window.selectEntity(id), "direct-edit boundary fixture must be selectable");
+    require(window.insertSelectedBoundaryVertex(QString::fromStdString(first.segment_id),
+                QStringLiteral("0.5")),
+            "normal receipt-backed boundary must accept vertex insertion");
+    require(window.selectedEntityId() == id && window.undoCommand(),
+            "receipt split must retain its owner and undo exactly");
     const auto before = window.document().revision();
     require(window.moveSelectedBoundaryVertex(
                 QString::fromStdString(first.end_vertex_id), {5, 0.5}, before) &&
@@ -1858,7 +1984,7 @@ void test_direct_boundary_geometry_edit_workflow() {
     const auto persisted_transforms = std::count_if(
         reopened_snapshot.history().begin(), reopened_snapshot.history().end(),
         [](const RevisionRecord& record) { return record.boundary_transform.has_value(); });
-    require(persisted_edits == 3 && persisted_transforms == 1,
+    require(persisted_edits == 4 && persisted_transforms == 1,
             "typed edit and transform proofs must survive save and reopen");
 }
 
@@ -5615,6 +5741,13 @@ int main(int argc, char** argv) {
         std::cout << "Drawing-set ordering and PDF tests passed\n";
         return 0;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--boundary-insertion-only") {
+        test_interactive_receipt_boundary_insertion_workflow();
+        test_direct_boundary_geometry_edit_workflow();
+        test_boundary_vertex_insertion_workflow();
+        std::cout << "Boundary insertion workflow tests passed\n";
+        return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--section-overlays-only") {
         test_section_overlay_workflow();
         std::cout << "Section overlay workflow tests passed\n";
@@ -5690,6 +5823,7 @@ int main(int argc, char** argv) {
     test_delete_selection_workflow();
     test_boundary_vertex_insertion_workflow();
     test_direct_boundary_geometry_edit_workflow();
+    test_interactive_receipt_boundary_insertion_workflow();
     test_boundary_redefinition_workflow();
     test_automatic_room_boundary_detection_workflow();
     test_explicit_boundary_geometry_operations();

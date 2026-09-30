@@ -11,7 +11,7 @@
 
 namespace sketch {
 
-enum class BoundaryGeometryEditKind { move_vertex, resize_segment };
+enum class BoundaryGeometryEditKind { move_vertex, resize_segment, insert_vertex };
 enum class BoundaryFixedEndpoint { start, end };
 
 // Replayable semantic intent for a coordinate edit that retains boundary,
@@ -26,6 +26,10 @@ struct BoundaryGeometryEdit {
     double target_length_metres{};
     BoundaryFixedEndpoint fixed_endpoint{BoundaryFixedEndpoint::start};
     bool move_connected{};
+    double fraction{};
+    std::string new_vertex_id;
+    std::string new_segment_id;
+    std::string new_dimension_id;
 
     bool operator==(const BoundaryGeometryEdit& other) const {
         return boundary_id == other.boundary_id && kind == other.kind &&
@@ -33,7 +37,9 @@ struct BoundaryGeometryEdit {
             target_position.x == other.target_position.x &&
             target_position.y == other.target_position.y &&
             target_length_metres == other.target_length_metres &&
-            fixed_endpoint == other.fixed_endpoint && move_connected == other.move_connected;
+            fixed_endpoint == other.fixed_endpoint && move_connected == other.move_connected &&
+            fraction == other.fraction && new_vertex_id == other.new_vertex_id &&
+            new_segment_id == other.new_segment_id && new_dimension_id == other.new_dimension_id;
     }
 };
 
@@ -49,6 +55,10 @@ inline void validate_boundary_geometry_edit(const BoundaryGeometryEdit& edit) {
     };
     if (!valid_id(edit.boundary_id) || !valid_id(edit.target_id))
         throw std::invalid_argument("Boundary geometry edit identifiers are invalid");
+    if (edit.kind != BoundaryGeometryEditKind::insert_vertex &&
+        (edit.fraction != 0.0 || !edit.new_vertex_id.empty() || !edit.new_segment_id.empty() ||
+         !edit.new_dimension_id.empty()))
+        throw std::invalid_argument("Boundary coordinate edit contains insertion fields");
     if (edit.kind == BoundaryGeometryEditKind::move_vertex) {
         if (!std::isfinite(edit.target_position.x) || !std::isfinite(edit.target_position.y) ||
             edit.target_length_metres != 0.0 || edit.move_connected ||
@@ -61,6 +71,15 @@ inline void validate_boundary_geometry_edit(const BoundaryGeometryEdit& edit) {
             edit.target_position.y != 0.0) {
             throw std::invalid_argument("Boundary segment edit contains incompatible fields");
         }
+    } else if (edit.kind == BoundaryGeometryEditKind::insert_vertex) {
+        if (!std::isfinite(edit.fraction) || edit.fraction <= 0.0 || edit.fraction >= 1.0 ||
+            !valid_id(edit.new_vertex_id) || !valid_id(edit.new_segment_id) ||
+            (!edit.new_dimension_id.empty() && !valid_id(edit.new_dimension_id)) ||
+            edit.new_vertex_id == edit.new_segment_id || edit.new_vertex_id == edit.target_id ||
+            edit.new_segment_id == edit.target_id || edit.target_position.x != 0.0 ||
+            edit.target_position.y != 0.0 || edit.target_length_metres != 0.0 ||
+            edit.move_connected || edit.fixed_endpoint != BoundaryFixedEndpoint::start)
+            throw std::invalid_argument("Boundary insertion edit contains incompatible fields");
     } else {
         throw std::invalid_argument("Boundary geometry edit kind is unsupported");
     }
@@ -72,6 +91,12 @@ inline nlohmann::json encode_boundary_geometry_edit(const BoundaryGeometryEdit& 
         return {{"version", 1}, {"kind", "move_vertex"},
                 {"boundary_id", edit.boundary_id}, {"vertex_id", edit.target_id},
                 {"position", {edit.target_position.x, edit.target_position.y}}};
+    }
+    if (edit.kind == BoundaryGeometryEditKind::insert_vertex) {
+        return {{"version", 1}, {"kind", "insert_vertex"}, {"boundary_id", edit.boundary_id},
+                {"segment_id", edit.target_id}, {"fraction", edit.fraction},
+                {"new_vertex_id", edit.new_vertex_id}, {"new_segment_id", edit.new_segment_id},
+                {"new_dimension_id", edit.new_dimension_id}};
     }
     return {{"version", 1}, {"kind", "resize_segment"},
             {"boundary_id", edit.boundary_id}, {"segment_id", edit.target_id},
@@ -122,6 +147,21 @@ inline BoundaryGeometryEdit decode_boundary_geometry_edit(const nlohmann::json& 
         else if (fixed == "end") result.fixed_endpoint = BoundaryFixedEndpoint::end;
         else throw std::invalid_argument("Boundary segment fixed endpoint is invalid");
         result.move_connected = value.at("move_connected").get<bool>();
+    } else if (kind == "insert_vertex") {
+        const std::set<std::string> expected{"version", "kind", "boundary_id", "segment_id",
+            "fraction", "new_vertex_id", "new_segment_id", "new_dimension_id"};
+        std::set<std::string> actual;
+        for (const auto& [key, ignored] : value.items()) { (void)ignored; actual.insert(key); }
+        if (actual != expected || !value.at("segment_id").is_string() ||
+            !value.at("fraction").is_number() || !value.at("new_vertex_id").is_string() ||
+            !value.at("new_segment_id").is_string() || !value.at("new_dimension_id").is_string())
+            throw std::invalid_argument("Boundary insertion edit fields are invalid");
+        result.kind = BoundaryGeometryEditKind::insert_vertex;
+        result.target_id = value.at("segment_id").get<std::string>();
+        result.fraction = value.at("fraction").get<double>();
+        result.new_vertex_id = value.at("new_vertex_id").get<std::string>();
+        result.new_segment_id = value.at("new_segment_id").get<std::string>();
+        result.new_dimension_id = value.at("new_dimension_id").get<std::string>();
     } else {
         throw std::invalid_argument("Boundary geometry edit kind is unsupported");
     }

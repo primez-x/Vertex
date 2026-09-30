@@ -1308,6 +1308,16 @@ Asset Asset::create(std::string media_type, std::vector<std::byte> bytes,
     return create(make_stable_id(), std::move(media_type), std::move(bytes), std::move(metadata));
 }
 
+static void validate_split_dimension_lifetime(const BoundaryGeometryEdit& edit,
+                                       const std::vector<RevisionRecord>& history,
+                                       std::size_t preceding_records) {
+    if (edit.kind != BoundaryGeometryEditKind::insert_vertex || edit.new_dimension_id.empty()) return;
+    for (std::size_t i = 0; i < preceding_records; ++i) {
+        if (history[i].entities.contains(edit.new_dimension_id))
+            throw std::invalid_argument("Boundary split dimension ID was already used in retained history");
+    }
+}
+
 std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
     const std::map<std::string, Entity, std::less<>>& source,
     const ApplyBoundaryConstraintChanges& command) {
@@ -1961,9 +1971,10 @@ Revision Document::apply(const Command& command) {
                 next.action = "Edit boundary geometry";
                 next.boundary_geometry_edit = typed_command.edit;
                 try {
+                    validate_split_dimension_lifetime(typed_command.edit, history_, history_.size());
                     next.entities = edited_boundary_entities(current.entities, typed_command.edit);
                     validate_boundary_identity_transition(
-                        boundary_identity_history_, current.entities, next.entities);
+                        boundary_identity_history_, current.entities, next.entities, &typed_command.edit);
                 } catch (const std::exception& error) {
                     document_error(DocumentErrorCode::invalid_entity, error.what());
                 }
@@ -2260,10 +2271,11 @@ Document Document::restore(DocumentSnapshot snapshot) {
                                    "Boundary geometry edit action does not match proof");
                 auto expected = previous;
                 try {
+                    validate_split_dimension_lifetime(*record.boundary_geometry_edit, snapshot.history_, index);
                     expected.entities = edited_boundary_entities(
                         previous.entities, *record.boundary_geometry_edit);
                     validate_boundary_identity_transition(
-                        identity_history, previous.entities, record.entities);
+                        identity_history, previous.entities, record.entities, &*record.boundary_geometry_edit);
                 } catch (const std::exception& error) {
                     document_error(DocumentErrorCode::invalid_history, error.what());
                 }
