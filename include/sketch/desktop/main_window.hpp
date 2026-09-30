@@ -392,6 +392,10 @@ public:
     // Hosted openings and boundary dimensions are removed with their owner;
     // referenced objects are rejected by the document validator.
     [[nodiscard]] bool deleteSelection();
+    // Explicitly assigns stable edge/corner IDs to a supported anonymous
+    // legacy boundary without changing its owner, geometry or opaque metadata.
+    [[nodiscard]] bool upgradeSelectedBoundaryIdentities(
+        std::optional<Revision> expected_revision = std::nullopt);
     // Splits one identified boundary edge at a strict interior fraction,
     // preserving the original edge identity for the first piece and creating
     // fresh identities for the inserted vertex and second piece.

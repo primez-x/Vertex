@@ -13796,6 +13796,46 @@ public:
         }
     }
 
+    bool upgradeSelectedBoundaryIdentities(
+        std::optional<Revision> expected_revision = std::nullopt) {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("Boundary identity upgrade: This document is read-only. %1")
+                .arg(QString::fromStdString(m_document->read_only_reason())));
+            return false;
+        }
+        try {
+            if (m_boundary_session || m_pending_wall_start)
+                throw std::invalid_argument("Finish or cancel the active drawing before upgrading a selected boundary.");
+            if (m_selected_ids.size() != 1)
+                throw std::invalid_argument("Select one anonymous legacy boundary to upgrade its identities.");
+            const auto source = authoringSnapshot();
+            if (expected_revision && *expected_revision != source.revision())
+                throw std::invalid_argument("The boundary changed before its identity upgrade was committed.");
+            const auto found = source.entities().find(m_selected_id.toStdString());
+            if (found == source.entities().end() || !is_closed_boundary_entity(found->second.type))
+                throw std::invalid_argument("Select an anonymous legacy closed boundary to upgrade its identities.");
+            const auto version = inspect_boundary_entity_version(found->second);
+            if (version.format == BoundaryEntityFormat::identified_v1)
+                throw std::invalid_argument("This boundary already has stable edge and corner identities.");
+            if (version.format != BoundaryEntityFormat::anonymous_legacy)
+                throw std::invalid_argument("This boundary uses an unsupported model version and cannot be upgraded.");
+            // The helper never repairs geometry or rewrites opaque metadata.
+            // Normal document admission retains dependency and lineage guards.
+            const Command command = ApplyEntityChanges{source.revision(),
+                {EntityChange::upsert(upgrade_legacy_boundary_entity(found->second))}, {},
+                "Upgrade boundary identities"};
+            (void)Document::preview_command(source, command);
+            applyDocumentCommand(command);
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Boundary identity upgrade: %1")
+                .arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     EditBoundaryGeometry boundaryVertexInsertionCommand(const DocumentSnapshot& source,
         const std::string& owner_id, const QString& segment_id, const QString& fraction_text) {
         const auto found = source.entities().find(owner_id);
@@ -19137,6 +19177,7 @@ public:
             {QStringLiteral("Cut selection"), [this] { cutSelection(); }},
             {QStringLiteral("Paste selection"), [this] { pasteSelection(); }},
             {QStringLiteral("Delete selection"), [this] { deleteSelection(); }},
+            {QStringLiteral("Upgrade boundary identities"), [this] { (void)upgradeSelectedBoundaryIdentities(); }},
             {QStringLiteral("Insert boundary vertex"), [this] { showBoundaryVertexInsertion(); }},
             {QStringLiteral("Jump to boundary vertex"), [this] { showBoundaryVertexJump(); }},
             {QStringLiteral("Auto close active boundary"), [this] { autoCloseBoundaryDraft(); }},
@@ -20518,6 +20559,10 @@ private:
         m_delete_action->setShortcutContext(Qt::WindowShortcut);
         m_insert_vertex_action = new QAction(QStringLiteral("Insert boundary vertex…"), owner);
         m_insert_vertex_action->setObjectName(QStringLiteral("insertBoundaryVertex"));
+        m_upgrade_boundary_identities_action = new QAction(QStringLiteral("Upgrade boundary identities"), owner);
+        m_upgrade_boundary_identities_action->setObjectName(QStringLiteral("upgradeBoundaryIdentities"));
+        m_upgrade_boundary_identities_action->setToolTip(QStringLiteral(
+            "Assign stable edge and corner identities to an anonymous legacy boundary without changing its geometry"));
         auto* jump_vertex_action = new QAction(QStringLiteral("Jump to boundary vertex…"), owner);
         jump_vertex_action->setObjectName(QStringLiteral("jumpBoundaryVertex"));
         auto* auto_close_action = new QAction(QStringLiteral("Auto close active boundary"), owner);
@@ -20526,6 +20571,7 @@ private:
         more_menu->addAction(m_cut_action);
         more_menu->addAction(m_paste_action);
         more_menu->addAction(m_delete_action);
+        more_menu->addAction(m_upgrade_boundary_identities_action);
         more_menu->addAction(m_insert_vertex_action);
         more_menu->addAction(jump_vertex_action);
         more_menu->addAction(auto_close_action);
@@ -20614,6 +20660,8 @@ private:
         });
         QObject::connect(m_insert_vertex_action, &QAction::triggered, owner,
                          [this] { showBoundaryVertexInsertion(); });
+        QObject::connect(m_upgrade_boundary_identities_action, &QAction::triggered, owner,
+                         [this] { (void)upgradeSelectedBoundaryIdentities(); });
         QObject::connect(jump_vertex_action, &QAction::triggered, owner,
                          [this] { showBoundaryVertexJump(); });
         QObject::connect(auto_close_action, &QAction::triggered, owner,
@@ -22253,6 +22301,9 @@ private:
                     }
                 }
                 const auto selected = selectedEntity();
+                if (m_selected_ids.size() == 1 && selected && is_closed_boundary_entity(selected->type) &&
+                    inspect_boundary_entity_version(*selected).format == BoundaryEntityFormat::anonymous_legacy)
+                    menu.addAction(m_upgrade_boundary_identities_action);
                 if (selected && is_closed_boundary_entity(selected->type) &&
                     inspect_boundary_entity_version(*selected).format ==
                         BoundaryEntityFormat::identified_v1) {
@@ -27836,6 +27887,7 @@ private:
     QAction* m_paste_action{};
     QAction* m_delete_action{};
     QAction* m_insert_vertex_action{};
+    QAction* m_upgrade_boundary_identities_action{};
     QAction* m_redefine_action{};
     QAction* m_detect_areas_action{};
     QAction* m_terrain_action{};
@@ -28248,6 +28300,10 @@ bool MainWindow::deleteSelection() {
 bool MainWindow::insertSelectedBoundaryVertex(const QString& segment_id,
                                               const QString& fraction) {
     return m_impl->insertSelectedBoundaryVertex(segment_id, fraction);
+}
+
+bool MainWindow::upgradeSelectedBoundaryIdentities(std::optional<Revision> expected_revision) {
+    return m_impl->upgradeSelectedBoundaryIdentities(expected_revision);
 }
 
 bool MainWindow::moveSelectedBoundaryVertex(

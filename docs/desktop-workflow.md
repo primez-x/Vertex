@@ -546,7 +546,13 @@ Unhandled geometry-owned receipts or dependent
 semantics reject the copy without changing history. Imported anonymous legacy boundaries are promoted
 only when a command can preserve their exact geometry and metadata; an
 in-place transform of such a boundary remains blocked until an explicit
-identity-upgrade path is provided. Unsupported boundary versions fail closed
+identity upgrade is performed. Select an anonymous legacy boundary and use
+**Upgrade boundary identities** from its context menu, More, or Commands to assign
+stable edge/corner IDs without changing the owner, geometry, or opaque metadata.
+This is one explicit undoable operation; it never repairs approximate joins or
+silently rewrites ambiguous geometry or owned receipts. Undo restores the legacy
+representation, and save/reopen retains the promoted form and history.
+Unsupported boundary versions fail closed
 with a version diagnostic. **Insert boundary vertex…** is available from
 **More** and the command palette. It accepts an identified edge and a strict
 interior fraction, then splits that edge atomically. The area keeps its identity,
@@ -574,6 +580,14 @@ source walls, rejects open/branched/disconnected topology, and commits the
 room through normal document history.
 
 ## Direct boundary editing
+
+On a touch screen, one finger follows the normal select/draw/edit pointer path.
+Two fingers pan the plan and pinch to zoom around their moving midpoint. Adding
+the second finger cancels any pending object or corner edit. After either finger
+lifts, drawing stays suspended until all contacts lift and a new touch starts.
+Contact-pair changes rebase navigation without a jump; cancellation, focus loss,
+hide and modal dialogs discard touch ownership. Navigation changes only the view,
+not geometry or output scale. Real device qualification remains required.
 
 Selecting a supported closed boundary displays blue vertex handles sized in
 screen pixels, so they remain usable at different zoom levels and do not appear

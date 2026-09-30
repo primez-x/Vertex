@@ -17,6 +17,7 @@
 #include <QPointingDevice>
 #include <QTabletEvent>
 #include <QTouchEvent>
+#include <QtTest/qtesttouch.h>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -2307,6 +2308,118 @@ void test_dark_canvas_semantic_strokes_and_overrides() {
             "selection color must take precedence over both stroke overrides");
 }
 
+void test_two_finger_canvas_navigation() {
+    PlanCanvas canvas;
+    canvas.resize(640, 480);
+    canvas.setOverviewMapEnabled(false);
+    canvas.setSnapEnabled(false);
+    canvas.setTool(CanvasTool::boundary);
+    const CanvasEntity original{"touch-room", "boundary", {{{-1,-1},{1,-1},0},
+        {{1,-1},{1,1},0},{{1,1},{-1,1},0},{{-1,1},{-1,-1},0}},0,false};
+    canvas.setEntities({original});
+    const auto output_before = render(canvas,true);
+    canvas.show();
+    process_events();
+    int authored = 0, moved = 0;
+    canvas.setPointClicked([&](Vec2) { ++authored; });
+    canvas.setEntitiesMoveRequested([&](QStringList, Vec2) { ++moved; return true; });
+    auto* device = QTest::createTouchDevice();
+    auto sequence = QTest::touchEvent(&canvas, device, false);
+    const auto model_at = [&](QPointF pixel) {
+        const auto center = canvas.viewCenter();
+        return Vec2{center.x + (pixel.x()-320)/canvas.viewScale(),
+                    center.y - (pixel.y()-240)/canvas.viewScale()};
+    };
+    const auto close = [](Vec2 a, Vec2 b) {
+        return std::hypot(a.x-b.x,a.y-b.y)<1e-8;
+    };
+    const auto anchor = model_at({320,220});
+    sequence.press(1,{220,220}).press(2,{420,220}).commit();
+    sequence.move(1,{170,250}).move(2,{470,250}).commit();
+    require(std::abs(canvas.viewScale()-120)<1e-8 && close(model_at({320,250}),anchor),
+            "pinch must zoom around the moving two-finger centroid");
+    sequence.move(1,{210,270}).move(2,{510,270}).commit();
+    require(std::abs(canvas.viewScale()-120)<1e-8 && close(model_at({360,270}),anchor),
+            "two-finger translation must pan without changing scale or anchor");
+    require(images_equal(output_before,render(canvas,true)),
+            "touch navigation must not change saved/output geometry or output scale");
+    save_capture(qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR"),
+                 "touch-pinch-pan.png",render(canvas,false));
+    sequence.release(1,{210,270}).stationary(2).commit();
+    const auto before_remaining = canvas.viewCenter();
+    sequence.move(2,{540,300}).commit();
+    sequence.release(2,{540,300}).commit();
+    require(authored==0 && moved==0 && close(canvas.viewCenter(),before_remaining),
+            "lifting one finger must not resume drawing or move a selected object");
+    sequence.press(1,{160,140}).commit();
+    sequence.release(1,{160,140}).commit();
+    require(authored==1,"single-finger drawing must resume after all contacts lift");
+
+    // Adding a second finger cancels even a preview that already moved an object.
+    CanvasEntity selected{"touch-object", "symbol", {{{-1,-1},{1,-1},0},
+        {{1,-1},{1,1},0},{{1,1},{-1,1},0},{{-1,1},{-1,-1},0}},0,true};
+    canvas.setEntities({selected});
+    canvas.setTool(CanvasTool::select);
+    canvas.fitView();
+    sequence.press(1,{320,240}).commit();
+    sequence.move(1,{350,250}).commit();
+    sequence.stationary(1).press(2,{470,250}).commit();
+    sequence.move(1,{330,260}).move(2,{490,260}).commit();
+    sequence.release(1,{330,260}).release(2,{490,260}).commit();
+    require(moved==0 && canvas.entities().front().segments.front().start.x==-1,
+            "second contact must cancel the object preview without committing it");
+
+    // Replacing one of three contacts starts a new baseline without a view jump.
+    sequence.press(1,{200,200}).press(2,{400,200}).commit();
+    sequence.stationary(1).stationary(2).press(3,{300,320}).commit();
+    const auto before_replacement = canvas.viewCenter();
+    const auto scale_before_replacement = canvas.viewScale();
+    sequence.stationary(1).release(2,{400,200}).stationary(3).commit();
+    require(close(canvas.viewCenter(),before_replacement) &&
+                canvas.viewScale()==scale_before_replacement,
+            "changing touch pair must rebase without a navigation jump");
+    QTouchEvent cancel(QEvent::TouchCancel,device);
+    QApplication::sendEvent(&canvas,&cancel);
+    sequence.release(1,{200,200}).release(3,{300,320}).commit();
+    require(moved==0 && authored==1,"cancelled navigation must not complete an edit");
+
+    int cancelled_draft = 0;
+    canvas.setCancelRequested([&] { ++cancelled_draft; });
+    sequence.press(1,{220,220}).press(2,{420,220}).commit();
+    sequence.move(1,{200,250}).move(2,{440,250}).commit();
+    const auto escaped_center = canvas.viewCenter();
+    const auto escaped_scale = canvas.viewScale();
+    QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);
+    QApplication::sendEvent(&canvas,&escape);
+    sequence.move(1,{180,270}).move(2,{480,270}).commit();
+    sequence.release(1,{180,270}).release(2,{480,270}).commit();
+    require(close(canvas.viewCenter(),escaped_center) && canvas.viewScale()==escaped_scale &&
+                cancelled_draft==0 && moved==0 && authored==1,
+            "Escape must discard touch ownership without cancelling a separate drawing draft");
+
+    sequence.press(1,{220,220}).press(2,{420,220}).commit();
+    const auto replaced_center = canvas.viewCenter();
+    const auto replaced_scale = canvas.viewScale();
+    canvas.setEntities({selected});
+    sequence.move(1,{180,270}).move(2,{480,270}).commit();
+    sequence.release(1,{180,270}).release(2,{480,270}).commit();
+    require(close(canvas.viewCenter(),replaced_center) && canvas.viewScale()==replaced_scale &&
+                moved==0 && authored==1,
+            "source replacement must discard navigation baseline and ignore late contacts");
+
+    sequence.press(1,{220,220}).press(2,{420,220}).commit();
+    sequence.move(1,{-10000,250}).move(2,{10000,250}).commit();
+    require(canvas.viewScale()==4000 && std::isfinite(canvas.viewCenter().x) &&
+                std::isfinite(canvas.viewCenter().y),
+            "pinch must respect the existing zoom ceiling and keep a finite view");
+    canvas.hide();
+    const auto hidden_center = canvas.viewCenter();
+    sequence.move(1,{-9000,300}).move(2,{9000,300}).commit();
+    sequence.release(1,{-9000,300}).release(2,{9000,300}).commit();
+    require(close(canvas.viewCenter(),hidden_center) && moved==0 && authored==1,
+            "hide must discard touch ownership and ignore late contacts");
+}
+
 int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QApplication application(argc, argv);
@@ -2336,6 +2449,7 @@ int main(int argc, char** argv) {
         test_boundary_vertex_invalid_and_final_pointer();
         test_boundary_vertex_stale_and_canceled_previews();
         test_mouse_gesture_contract();
+        test_two_finger_canvas_navigation();
         test_boundary_draft_rendering_and_history();
         test_request_to_paint_telemetry();
         test_effective_cursor_matches_click();

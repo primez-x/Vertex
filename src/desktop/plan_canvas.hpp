@@ -25,6 +25,7 @@
 
 class QPainter;
 class QSvgRenderer;
+class QTouchEvent;
 
 namespace sketch::desktop {
 
@@ -385,6 +386,8 @@ private:
     void pointerRelease(QPointF position, Qt::MouseButton button,
                         Qt::KeyboardModifiers modifiers = Qt::NoModifier);
     void resetGesture();
+    void handleTouchEvent(QTouchEvent& event);
+    void resetTouchInput();
     [[nodiscard]] std::optional<std::pair<Vec2, Vec2>> contentBounds() const;
     [[nodiscard]] std::optional<QRectF> selectionBounds(const QRectF& viewport) const;
     [[nodiscard]] std::optional<QRectF> selectionFrame(const QRectF& viewport) const;
@@ -545,6 +548,14 @@ private:
     Vec2 m_pan_view_start{};
     bool m_touch_active{false};
     int m_touch_id{-1};
+    bool m_touch_navigation{false};
+    struct TouchNavigation {
+        std::pair<int, int> ids;
+        Vec2 anchor;
+        double initial_distance{};
+        double initial_scale{};
+    };
+    std::optional<TouchNavigation> m_touch_navigation_start;
     bool m_tablet_active{false};
 
     std::function<void(Vec2)> m_point_clicked;

@@ -337,11 +337,12 @@ PlanCanvas::PlanCanvas(QWidget* parent) : QWidget(parent) {
 void PlanCanvas::setEntities(std::vector<CanvasEntity> entities) {
     // Replacing the document projection invalidates the captured revision and
     // its transient host-wall geometry, even when the selected ID survives.
-    if (m_opening_width_handle || m_vertex_move_handle) resetGesture();
+    if (m_touch_active || m_opening_width_handle || m_vertex_move_handle) resetGesture();
     else {
         ++m_opening_width_preview_serial;
         ++m_boundary_vertex_preview_serial;
     }
+    resetTouchInput();
     m_entities = std::move(entities);
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     update();
@@ -349,6 +350,7 @@ void PlanCanvas::setEntities(std::vector<CanvasEntity> entities) {
 
 void PlanCanvas::setTool(CanvasTool tool) {
     resetGesture();
+    resetTouchInput();
     m_tool = tool;
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     else setCursor(tool == CanvasTool::select ? Qt::ArrowCursor : Qt::CrossCursor);
@@ -467,7 +469,8 @@ void PlanCanvas::setSelectionAxisResizeEnabled(bool enabled) {
 void PlanCanvas::setLabels(std::vector<CanvasLabel> labels) {
     // A captured projection depends on the source annotations as well as the
     // geometry, even when a replacement retains every annotation identity.
-    if (m_vertex_move_handle) resetGesture();
+    if (m_touch_active || m_vertex_move_handle) resetGesture();
+    resetTouchInput();
     m_labels = std::move(labels);
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     update();
@@ -480,12 +483,16 @@ void PlanCanvas::setReference(std::optional<CanvasReference> reference) {
 }
 
 void PlanCanvas::setReferences(std::vector<CanvasReference> references) {
+    if (m_touch_active) resetGesture();
+    resetTouchInput();
     m_references = std::move(references);
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     update();
 }
 
 void PlanCanvas::setReferenceGrids(std::vector<CanvasReferenceGrid> grids) {
+    if (m_touch_active) resetGesture();
+    resetTouchInput();
     m_reference_grids = std::move(grids);
     update();
 }
@@ -1106,11 +1113,13 @@ bool PlanCanvas::eventFilter(QObject* watched, QEvent* event) {
         if (dialog && dialog->isModal()) {
             resetPerformanceMeasurements();
             resetGesture();
+            resetTouchInput();
         }
     } else if ((event->type() == QEvent::WindowBlocked ||
                 event->type() == QEvent::WindowDeactivate) && watched == window()) {
         resetPerformanceMeasurements();
         resetGesture();
+        resetTouchInput();
     }
     return QWidget::eventFilter(watched, event);
 }
@@ -1118,7 +1127,8 @@ bool PlanCanvas::eventFilter(QObject* watched, QEvent* event) {
 bool PlanCanvas::event(QEvent* event) {
     switch (event->type()) {
     case QEvent::FocusOut:
-        if (m_opening_width_handle || m_vertex_move_handle) resetGesture();
+        if (m_touch_active || m_opening_width_handle || m_vertex_move_handle) resetGesture();
+        resetTouchInput();
         break;
     case QEvent::Hide:
     case QEvent::WindowBlocked:
@@ -1127,8 +1137,7 @@ bool PlanCanvas::event(QEvent* event) {
         resetPerformanceMeasurements();
         resetGesture();
         m_space_pan_armed = false;
-        m_touch_active = false;
-        m_touch_id = -1;
+        resetTouchInput();
         m_tablet_active = false;
         break;
     case QEvent::TouchBegin:
@@ -1144,49 +1153,11 @@ bool PlanCanvas::event(QEvent* event) {
         break;
     }
     switch (event->type()) {
-    case QEvent::TouchBegin: {
-        auto* touch = static_cast<QTouchEvent*>(event);
-        if (!m_touch_active && !touch->points().isEmpty()) {
-            const auto& point = touch->points().front();
-            m_touch_active = true;
-            m_touch_id = point.id();
-            pointerPress(point.position(), Qt::LeftButton);
-        }
-        event->accept();
-        return true;
-    }
-    case QEvent::TouchUpdate: {
-        auto* touch = static_cast<QTouchEvent*>(event);
-        if (m_touch_active) {
-            for (const auto& point : touch->points()) {
-                if (point.id() == m_touch_id) {
-                    pointerMove(point.position());
-                    break;
-                }
-            }
-        }
-        event->accept();
-        return true;
-    }
+    case QEvent::TouchBegin:
+    case QEvent::TouchUpdate:
     case QEvent::TouchEnd:
     case QEvent::TouchCancel: {
-        auto* touch = static_cast<QTouchEvent*>(event);
-        if (m_touch_active) {
-            QPointF position = m_last_mouse_position.value_or(QPointF(width() / 2.0, height() / 2.0));
-            for (const auto& point : touch->points()) {
-                if (point.id() == m_touch_id) {
-                    position = point.position();
-                    break;
-                }
-            }
-            if (event->type() == QEvent::TouchCancel) {
-                resetGesture();
-            } else {
-                pointerRelease(position, Qt::LeftButton);
-            }
-            m_touch_active = false;
-            m_touch_id = -1;
-        }
+        handleTouchEvent(*static_cast<QTouchEvent*>(event));
         event->accept();
         return true;
     }
@@ -1214,6 +1185,97 @@ bool PlanCanvas::event(QEvent* event) {
     }
     default:
         return QWidget::event(event);
+    }
+}
+
+void PlanCanvas::resetTouchInput() {
+    m_touch_active = false;
+    m_touch_id = -1;
+    m_touch_navigation = false;
+    m_touch_navigation_start.reset();
+}
+
+void PlanCanvas::handleTouchEvent(QTouchEvent& event) {
+    const auto valid = [](QPointF point) {
+        return std::isfinite(point.x()) && std::isfinite(point.y());
+    };
+    if (event.type() == QEvent::TouchBegin) {
+        resetGesture();
+        resetTouchInput();
+        setFocus();
+        m_touch_active = true;
+    }
+    if (!m_touch_active) return; // A late update/release cannot restart input.
+    if (event.type() == QEvent::TouchCancel || event.type() == QEvent::TouchEnd) {
+        const auto point = std::find_if(event.points().cbegin(), event.points().cend(),
+            [&](const auto& value) { return value.id() == m_touch_id; });
+        if (event.type() == QEvent::TouchEnd && !m_touch_navigation &&
+            point != event.points().cend() && valid(point->position()))
+            pointerRelease(point->position(), Qt::LeftButton, event.modifiers());
+        else
+            resetGesture();
+        resetTouchInput();
+        return;
+    }
+    std::vector<const QEventPoint*> contacts;
+    for (const auto& point : event.points()) {
+        if (point.state() != QEventPoint::State::Released && valid(point.position()))
+            contacts.push_back(&point);
+    }
+    std::sort(contacts.begin(), contacts.end(),
+        [](const auto* a, const auto* b) { return a->id() < b->id(); });
+    if (contacts.size() >= 2) {
+        if (!m_touch_navigation) {
+            // Never publish a one-finger object/vertex preview when navigation
+            // takes over. Keep navigation latched until every finger lifts.
+            resetGesture();
+            m_touch_navigation = true;
+        }
+        const auto* first = contacts[0];
+        const auto* second = contacts[1];
+        const auto ids = std::pair{first->id(), second->id()};
+        const auto centroid = (first->position() + second->position()) * 0.5;
+        const auto span = first->position() - second->position();
+        const auto distance = std::hypot(span.x(), span.y());
+        if (!valid(centroid) || !std::isfinite(distance)) return;
+        if (!m_touch_navigation_start || m_touch_navigation_start->ids != ids ||
+            m_touch_navigation_start->initial_distance < 4.0) {
+            // Rebase on a changed pair (or coincident contacts), without jumps.
+            m_touch_navigation_start = TouchNavigation{ids, toModel(centroid, rect()),
+                                                       distance, m_scale};
+            return;
+        }
+        const auto& start = *m_touch_navigation_start;
+        if (distance < 4.0) return;
+        const auto scale = std::clamp(start.initial_scale * distance / start.initial_distance,
+                                      minimum_scale, maximum_scale);
+        const auto center = QRectF(rect()).center();
+        const Vec2 proposed{start.anchor.x - (centroid.x()-center.x())/scale,
+                            start.anchor.y + (centroid.y()-center.y())/scale};
+        if (!std::isfinite(proposed.x) || !std::isfinite(proposed.y)) return;
+        beginPerformanceMeasurement(PerformanceMetric::navigation);
+        m_scale = scale;
+        m_view_center = proposed;
+        update();
+        return;
+    }
+    if (m_touch_navigation) {
+        m_touch_navigation_start.reset();
+        return;
+    }
+    if (contacts.empty()) return;
+    if (m_touch_id == -1) {
+        m_touch_id = contacts.front()->id();
+        pointerPress(contacts.front()->position(), Qt::LeftButton, event.modifiers());
+    } else {
+        const auto tracked = std::find_if(contacts.begin(), contacts.end(),
+            [&](const auto* point) { return point->id() == m_touch_id; });
+        if (tracked != contacts.end()) {
+            pointerMove((*tracked)->position(), event.modifiers());
+        } else {
+            resetGesture();
+            m_touch_navigation = true; // Suppress implicit finger handoff edits.
+        }
     }
 }
 
@@ -2595,8 +2657,9 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
         return;
     }
     if (event->key() == Qt::Key_Escape) {
-        if (m_gesture_button != Qt::NoButton) {
+        if (m_touch_active || m_gesture_button != Qt::NoButton) {
             resetGesture();
+            resetTouchInput();
             event->accept();
             return;
         }

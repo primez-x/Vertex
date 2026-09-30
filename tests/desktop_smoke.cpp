@@ -1576,6 +1576,163 @@ void test_delete_selection_workflow() {
             "deleted boundary must not remain in the document");
 }
 
+void test_boundary_identity_upgrade_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
+    using namespace sketch;
+    using Json = nlohmann::json;
+    const Json geometry = Json::array({
+        {{"start",{0,0}},{"end",{4,0}},{"sweep_radians",0},{"vendor_edge",{{"keep",17}}}},
+        {{"start",{4,0}},{"end",{4,2}},{"sweep_radians",0}},
+        {{"start",{4,2}},{"end",{0,2}},{"sweep_radians",0}},
+        {{"start",{0,2}},{"end",{0,0}},{"sweep_radians",0}}});
+    const Entity legacy{"legacy-upgrade", "measurement_boundary",
+        {{"segments",geometry},{"name","Imported area"},{"classification","living"},
+         {"area_m2",8},{"vendor_data",{{"reference","opaque-token"}}}}, false,
+        {{"vendor_extension",{{"keep",true}}}}};
+    desktop::MainWindow window;
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(legacy)},{},"legacy identity fixture"});
+    require(window.selectEntity(QString::fromStdString(legacy.id)),
+            "legacy boundary must remain selectable without implicit promotion");
+    const auto before = window.document().snapshot();
+    require(before.entities().at(legacy.id) == legacy,
+            "selection must preserve anonymous geometry and metadata");
+    auto* action = window.findChild<QAction*>(QStringLiteral("upgradeBoundaryIdentities"));
+    auto* more = window.findChild<QToolButton*>(QStringLiteral("moreTools"));
+    require(action && more && more->menu() && more->menu()->actions().contains(action),
+            "explicit identity upgrade must be available from More");
+    action->trigger();
+    const auto upgraded = window.document().snapshot();
+    require(window.lastError().isEmpty() && upgraded.revision() == before.revision()+1 &&
+            upgraded.history().size() == before.history().size()+1 &&
+            window.selectedEntityId() == QString::fromStdString(legacy.id),
+            "explicit identity upgrade must record exactly one command and retain its owner");
+    const auto promoted = upgraded.entities().at(legacy.id);
+    auto undecorated = promoted;
+    undecorated.properties.erase("boundary_model_version");
+    for (auto& edge : undecorated.properties["segments"]) {
+        edge.erase("segment_id"); edge.erase("start_vertex_id"); edge.erase("end_vertex_id");
+    }
+    require(undecorated == legacy,
+            "promotion must add identities without changing any geometry or opaque metadata");
+    const auto model = decode_identified_boundary_entity(promoted);
+    require(model.segments.size() == 4 && !model.segments[0].segment_id.empty() &&
+            model.segments[0].end_vertex_id == model.segments[1].start_vertex_id,
+            "promotion must create stable joined edge and corner identities");
+    require(!window.upgradeSelectedBoundaryIdentities() &&
+            window.document().revision() == upgraded.revision() &&
+            window.lastError().contains(QStringLiteral("already")),
+            "identified boundary must report a no-op without adding history");
+    require(window.undoCommand() && window.document().snapshot().entities() == before.entities() &&
+            window.redoCommand() && window.document().snapshot().entities() == upgraded.entities(),
+            "identity upgrade must undo to exact anonymous state and redo the same IDs");
+    QTemporaryDir directory;
+    const auto path = directory.filePath(QStringLiteral("boundary-identities.bldproj"));
+    require(directory.isValid() && window.saveProjectAs(path), "identity upgrade history must save");
+    {
+        desktop::MainWindow reopened;
+        require(reopened.openProject(path) && reopened.document().snapshot().entities() == upgraded.entities(),
+                "identity upgrade and stable IDs must survive normal project reopen");
+    }
+    require(window.insertSelectedBoundaryVertex(QString::fromStdString(model.segments[0].segment_id),"0.5") &&
+            window.transformSelectedBoundary("0",false,false,"1 m","0 m",false) &&
+            window.selectedEntityId() == QString::fromStdString(legacy.id),
+            "explicit promotion must enable subsequent insertion and in-place transform");
+
+    // A caller holding an earlier revision must not promote newer source data.
+    const auto add_legacy = [&](Entity entity) {
+        window.document().apply(ApplyEntityChanges{window.document().revision(),
+            {EntityChange::upsert(entity)},{},"identity refusal fixture"});
+        require(window.selectEntity(QString::fromStdString(entity.id)), "refusal fixture must select");
+    };
+    auto palette_legacy = legacy;
+    palette_legacy.id = "legacy-palette";
+    palette_legacy.type = "room_boundary";
+    palette_legacy.properties.erase("segments");
+    palette_legacy.properties["boundary"] = geometry;
+    add_legacy(palette_legacy);
+    const auto palette_revision = window.document().revision();
+    QTimer::singleShot(0,&window,[&] {
+        auto* palette = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        require(palette, "identity upgrade must open through normal command search");
+        auto* search = palette->findChild<QLineEdit*>();
+        auto* list = palette->findChild<QListWidget*>();
+        require(search && list, "command search must expose its normal controls");
+        search->setText(QStringLiteral("Upgrade boundary identities"));
+        require(list->count() == 1, "command search must find the explicit identity upgrade");
+        QMetaObject::invokeMethod(search,"returnPressed",Qt::DirectConnection);
+    });
+    window.showCommandPalette();
+    auto palette_promoted = window.document().snapshot().entities().at(palette_legacy.id);
+    for (auto& edge : palette_promoted.properties["segments"]) {
+        edge.erase("segment_id"); edge.erase("start_vertex_id"); edge.erase("end_vertex_id");
+    }
+    require(window.lastError().isEmpty() && window.document().revision() == palette_revision+1 &&
+            palette_promoted.properties.at("segments") == geometry &&
+            !palette_promoted.properties.contains("boundary") &&
+            palette_promoted.extensions == palette_legacy.extensions,
+            "command search must promote a legacy room boundary with exact canonical geometry");
+    auto stale = legacy; stale.id = "legacy-stale";
+    const auto old_revision = window.document().revision();
+    add_legacy(stale);
+    const auto unchanged = window.document().snapshot();
+    require(!window.upgradeSelectedBoundaryIdentities(old_revision) &&
+            window.document().snapshot().entities() == unchanged.entities() &&
+            window.document().revision() == unchanged.revision() &&
+            window.lastError().contains(QStringLiteral("changed")),
+            "stale identity-upgrade caller must leave the newer document unchanged");
+    for (int refusal = 0; refusal < 4; ++refusal) {
+        auto invalid = legacy;
+        invalid.id = "legacy-refusal-" + std::to_string(refusal);
+        if (refusal == 0) invalid.properties["boundary"] = geometry;
+        else if (refusal == 1) invalid.properties["segments"][1]["start"][0] = 4.000000001;
+        else if (refusal == 2) invalid.extensions["receipt"] = {{"vendor","unhandled"}};
+        else invalid.properties["segments"][0]["segment_id"] = "vendor-opaque-id";
+        add_legacy(invalid);
+        const auto original = window.document().snapshot();
+        require(!window.upgradeSelectedBoundaryIdentities() && !window.lastError().isEmpty() &&
+                window.document().revision() == original.revision() &&
+                window.document().snapshot().entities() == original.entities(),
+                "ambiguous, tolerance-joined, receipt-owned, or colliding legacy state must reject atomically");
+    }
+    require(window.selectEntity(QStringLiteral("property-1")), "unsupported selection fixture must select");
+    const auto unsupported_revision = window.document().revision();
+    require(!window.upgradeSelectedBoundaryIdentities() &&
+            window.document().revision() == unsupported_revision &&
+            window.lastError().contains(QStringLiteral("boundary")),
+            "non-boundary selection must explain the identity-upgrade requirement");
+    require(window.selectEntity(QString::fromStdString(stale.id)) &&
+            window.selectEntity(QStringLiteral("property-1"),true), "multiple selection fixture must select");
+    require(!window.upgradeSelectedBoundaryIdentities() &&
+            window.document().revision() == unsupported_revision &&
+            window.lastError().contains(QStringLiteral("one")),
+            "multiple selections must not implicitly promote one arbitrary owner");
+    {
+        desktop::MainWindow future_window;
+        auto future = legacy;
+        future.id = "future-boundary";
+        future.properties["boundary_model_version"] = 999;
+        future_window.document().apply(ApplyEntityChanges{future_window.document().revision(),
+            {EntityChange::upsert(future)},{},"future boundary fixture"});
+        require(future_window.selectEntity(QString::fromStdString(future.id)),
+                "future boundary must remain inspectable");
+        const auto original = future_window.document().snapshot();
+        require(!future_window.upgradeSelectedBoundaryIdentities() &&
+                future_window.lastError().contains(QStringLiteral("unsupported"),Qt::CaseInsensitive) &&
+                future_window.document().revision() == original.revision() &&
+                future_window.document().snapshot().entities() == original.entities(),
+                "unsupported boundary versions must explain refusal without conversion");
+    }
+    require(window.selectEntity(QString::fromStdString(stale.id)), "read-only legacy fixture must select");
+    window.document().mark_read_only("identity upgrade fixture");
+    const auto read_only = window.document().snapshot();
+    require(!window.upgradeSelectedBoundaryIdentities() &&
+            window.lastError().contains(QStringLiteral("read-only")) &&
+            window.document().snapshot().entities() == read_only.entities() &&
+            window.document().revision() == read_only.revision(),
+            "read-only document must reject identity promotion without mutation");
+}
+
 void test_boundary_vertex_insertion_workflow() {
     const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
@@ -6749,6 +6906,11 @@ int main(int argc, char** argv) {
         test_boundary_insertion_preview_freedom_workflow();
         return 0;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--boundary-identity-upgrade-only") {
+        test_boundary_identity_upgrade_workflow();
+        std::cout << "Boundary identity upgrade workflow tests passed\n";
+        return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--mixed-constraint-workspace-only") {
         test_mixed_constraint_workspace_workflow();
         test_vertex_preview_area_name_placement();
@@ -6854,6 +7016,7 @@ int main(int argc, char** argv) {
     test_material_clipboard_transfer();
     test_delete_selection_workflow();
     test_boundary_vertex_insertion_workflow();
+    test_boundary_identity_upgrade_workflow();
     test_direct_boundary_geometry_edit_workflow();
     test_mixed_constraint_workspace_workflow();
     test_boundary_insertion_preview_freedom_workflow();

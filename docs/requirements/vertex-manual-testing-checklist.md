@@ -377,6 +377,8 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Steps: Draw and close a rectangle, select it, choose **Insert boundary vertex**, and identify the edge by its number on the preview. Enter `0.5`; the green mark should appear halfway along that edge. Cancel once and confirm the drawing is unchanged, then reopen and Apply. Confirm the area total is unchanged. Drag the new corner to reshape the area and confirm the dimensions and total update. Undo the move and insertion, redo both, then save and reopen to check that the edited shape and dimensions remain. For a straight rectangle with no saved relationships, the coordinate freedom preview should show `8 → 10 (+2)`; with one saved horizontal relationship it should show `7 → 9 (+2)`.
   - Notes / issues / screenshots: ____________________
 
+  - Older Vertex projects: If the editor asks for a boundary identity upgrade, select that area and run **Upgrade boundary identities** from Commands or the right-click menu. Confirm the drawing and area total stay unchanged, then insert a vertex. Undo the insertion and upgrade separately, redo, save and reopen.
+
 - [ ] **U065 — Move a vertex**
   - Expected: Adjacent edges update and the area remains valid or a clear error explains the problem.
   - Result: Not tested
@@ -849,6 +851,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U154 — Pan and zoom with touch, if available**
+  - Steps: Place two fingers on the plan, spread/pinch them to zoom, then move both together to pan. Start dragging a selected object with one finger and add a second finger: the object edit should cancel and navigation should take over. Lift one finger and move the other, then lift both and tap again to draw or select normally.
   - Expected: Navigation does not unintentionally draw or select objects.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
